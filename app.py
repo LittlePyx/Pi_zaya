@@ -292,6 +292,16 @@ pre{ border-radius: 12px !important; }
 .msg-user{ background: #eaf3ff; border: 1px solid rgba(47,111,237,0.18); border-radius: 14px; padding: 12px 14px; }
 .msg-ai{ background: transparent; border: none; border-radius: 0px; padding: 0px; }
 .msg-ai-stream{ background: #ffffff; border: 1px solid rgba(49,51,63,0.12); border-radius: 14px; padding: 12px 14px; }
+.kb-notice{
+  font-size: 0.84rem;
+  color: rgba(120, 53, 15, 0.95);
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  border-radius: 10px;
+  padding: 0.35rem 0.55rem;
+  margin: 0 0 0.55rem 0;
+  line-height: 1.35;
+}
 .msg-meta{ color: rgba(49,51,63,0.62); font-size: 0.86rem; margin-bottom: 0.35rem; }
 .hr{ height:1px; background: rgba(49,51,63,0.10); margin: 1.0rem 0; }
 /* Small "generation details" text (GPT-ish, no chain-of-thought) */
@@ -2325,6 +2335,38 @@ def _strip_model_ref_section(answer: str) -> str:
     return answer
 
 
+def _split_kb_miss_notice(text: str) -> tuple[str, str]:
+    """
+    If the assistant starts with '未命中知识库片段...' (a UI hint, not main content),
+    split it out so we can render it with a distinct style.
+    """
+    if not text:
+        return ("", "")
+    s = text.lstrip()
+    prefix = "未命中知识库片段"
+    if not s.startswith(prefix):
+        return ("", text)
+
+    # Prefer treating the first line as the notice if present.
+    nl = s.find("\n")
+    if nl != -1:
+        notice = s[:nl].strip()
+        rest = s[nl + 1 :].lstrip("\n")
+        return (notice, rest)
+
+    # Otherwise, treat a short first sentence as notice.
+    for sep in ("。", ".", "！", "!", "？", "?", "；", ";"):
+        idx = s.find(sep)
+        if 0 <= idx <= 80:
+            notice = s[: idx + 1].strip()
+            rest = s[idx + 1 :].lstrip()
+            return (notice, rest)
+
+    # Fallback: only style the prefix.
+    rest = s[len(prefix) :].lstrip("：: \t")
+    return (prefix, rest)
+
+
 def _write_tmp_upload(pdf_dir: Path, filename: str, data: bytes) -> Path:
     stem = (Path(filename).stem or "upload").strip() or "upload"
     tmp = pdf_dir / f"__upload__{stem}.pdf"
@@ -2403,7 +2445,11 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
                 # Copy tools + markdown (no extra white box wrapper).
                 msg_key = hashlib.md5((st.session_state.get("conv_id","") + "|" + str(idx)).encode("utf-8","ignore")).hexdigest()[:10]
                 _render_answer_copy_bar(content, key_ns=f"copy_{msg_key}")
-                st.markdown(_normalize_math_markdown(content))
+                notice, body = _split_kb_miss_notice(content or "")
+                if notice:
+                    st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
+                if (body or "").strip():
+                    st.markdown(_normalize_math_markdown(body))
             st.markdown("")
 
     # References should stay above the input box.
@@ -2585,7 +2631,11 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
         with gen_panel.container():
             st.markdown("<div class='msg-meta'>AI（生成中）</div>", unsafe_allow_html=True)
             st.markdown("<div class='msg-ai-stream'>", unsafe_allow_html=True)
-            st.markdown(safe)
+            notice, body = _split_kb_miss_notice(safe)
+            if notice:
+                st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
+            if (body or "").strip():
+                st.markdown(_normalize_math_markdown(body))
             if char_count is not None:
                 # Render as HTML so it won't show as literal "<div ...>"
                 st.markdown(f"<div class='genbox'>已生成：{char_count} 字符</div>", unsafe_allow_html=True)
@@ -2666,7 +2716,7 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
 
         system = (
             "你的名字是 π-zaya（其中 π 是希腊字母 pi）。\n"
-            "如果用户问‘你是谁/你叫什么/你是谁开发的’之类的问题，统一回答：我是 P&I Lab 开发的 π-zaya（π 是希腊字母 pi）。\n"
+            "如果用户问‘你是谁/你叫什么/你是谁开发的’之类的问题，统一回答：我是 P&I Lab 开发的 π-zaya。\n"
             "你是我的个人知识库助手。优先基于我提供的检索片段回答问题。\n"
             "规则：\n"
             "1) 如果检索片段存在：优先基于片段回答；需要引用时，用 [1] [2] 这样的编号标注。\n"
