@@ -1,7 +1,7 @@
 ﻿streamlit==1.12.0
 altair==4.2.2
 Jinja2>=3.1
-openai>=1.12
-pymupdf>=1.23
-rank-bm25>=0.2.2
-tqdm>=4.66
+openai==2.16.0
+pymupdf==1.26.5
+rank-bm25==0.2.2
+tqdm==4.67.1
