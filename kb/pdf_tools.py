@@ -500,11 +500,57 @@ def run_pdf_to_md(
     eq_image_fallback: bool,
 ) -> tuple[bool, str]:
     """
-    Call the existing converter script test2.py.
+    Convert a PDF into a markdown folder under out_root/pdf_stem.
+
+    Preferred path:
+    - Use an external converter script (more capable) if provided via KB_PDF_CONVERTER
+      or if a repo-local test2.py exists.
+    Fallback:
+    - Use a built-in fast text extractor (PyMuPDF) so conversion works out-of-the-box
+      for collaborators.
     """
     pdf_path = Path(pdf_path)
     out_root = Path(out_root)
     ensure_dir(out_root)
+
+    def _fallback_convert() -> tuple[bool, str]:
+        out_dir = out_root / pdf_path.stem
+        ensure_dir(out_dir)
+        md_path = out_dir / f"{pdf_path.stem}.en.md"
+
+        try:
+            doc = fitz.open(str(pdf_path))
+        except Exception as e:
+            return False, f"open pdf failed: {e}"
+
+        parts: list[str] = []
+        try:
+            for i in range(int(getattr(doc, "page_count", 0) or 0)):
+                try:
+                    page = doc.load_page(i)
+                    txt = (page.get_text("text") or "").strip()
+                except Exception:
+                    txt = ""
+                if txt:
+                    parts.append(txt)
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+        body = "\n\n---\n\n".join(parts).strip()
+        if not body:
+            body = "（未能从 PDF 提取到可检索的文本：可能是扫描版，或文本被嵌入为图片。）"
+
+        try:
+            md_path.write_text(body, encoding="utf-8")
+            if keep_debug:
+                (out_dir / "_converter.txt").write_text("fallback=pymupdf_text\n", encoding="utf-8")
+        except Exception as e:
+            return False, f"write md failed: {e}"
+
+        return True, str(out_dir)
 
     # Prefer an explicit path override (portable across machines / folders):
     # - KB_PDF_CONVERTER: absolute path to a converter script (e.g. test2.py)
@@ -515,7 +561,8 @@ def run_pdf_to_md(
     else:
         script = Path(__file__).resolve().parents[2] / "test2.py"
     if not script.exists():
-        return False, f"missing converter: {script}"
+        # Collaborator-friendly fallback: still produce an .en.md so the app can run.
+        return _fallback_convert()
 
     args = [sys.executable, str(script), "--pdf", str(pdf_path), "--out", str(out_root)]
     if keep_debug:
@@ -528,10 +575,18 @@ def run_pdf_to_md(
     try:
         cp = subprocess.run(args, capture_output=True, text=True, check=False)
     except Exception as e:
+        # If the external converter is misconfigured on collaborator machines, don't hard-fail.
+        ok2, out2 = _fallback_convert()
+        if ok2:
+            return True, out2
         return False, str(e)
 
     if cp.returncode != 0:
         tail = (cp.stderr or cp.stdout or "").strip()[-800:]
+        # Fall back to built-in extraction so users still get something usable.
+        ok2, out2 = _fallback_convert()
+        if ok2:
+            return True, out2
         return False, f"exit={cp.returncode} {tail}"
 
     return True, str(out_root / pdf_path.stem)
