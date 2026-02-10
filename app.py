@@ -10,6 +10,7 @@ import subprocess
 import shutil
 import time
 import threading
+import uuid
 from pathlib import Path
 from typing import Optional
 import re
@@ -107,6 +108,375 @@ _BG_STATE = {
     "last": "",
 }
 _BG_THREAD: Optional[threading.Thread] = None
+
+
+# ----------------------
+# Chat answer queue (QA)
+# ----------------------
+
+_QA_LOCK = threading.Lock()
+_QA_STATE: dict = {
+    "queue": [],  # list[dict]
+    "running": False,
+    "current": None,  # dict | None
+    "cancel_id": "",  # current task id to cancel
+    "recent": [],  # last N completed tasks (for refs panel)
+    "last": "",
+}
+_QA_THREAD: Optional[threading.Thread] = None
+
+
+_CACHE_LOCK = threading.Lock()
+_CACHE: dict[str, dict] = {
+    "file_text": {},
+    "deep_read": {},
+    "trans": {},
+    "rerank": {},
+    "refs_pack": {},
+}
+
+
+def _cache_get(bucket: str, key: str):
+    with _CACHE_LOCK:
+        d = _CACHE.get(bucket) or {}
+        return d.get(key)
+
+
+def _cache_set(bucket: str, key: str, val, *, max_items: int = 600) -> None:
+    with _CACHE_LOCK:
+        d = _CACHE.setdefault(bucket, {})
+        d[key] = val
+        # Simple bound to avoid unbounded growth.
+        if len(d) > int(max_items):
+            try:
+                # Drop about half (oldest insertion order in Py>=3.7 dict).
+                for k in list(d.keys())[: max(1, len(d) // 2)]:
+                    d.pop(k, None)
+            except Exception:
+                d.clear()
+
+
+def _qa_enqueue(task: dict) -> None:
+    with _QA_LOCK:
+        _QA_STATE["queue"].append(dict(task))
+
+
+def _qa_cancel(task_id: str) -> None:
+    tid = (task_id or "").strip()
+    if not tid:
+        return
+    with _QA_LOCK:
+        cur = _QA_STATE.get("current") or {}
+        if isinstance(cur, dict) and str(cur.get("id") or "") == tid:
+            _QA_STATE["cancel_id"] = tid
+            return
+        q = list(_QA_STATE.get("queue") or [])
+        kept = [t for t in q if str((t or {}).get("id") or "") != tid]
+        _QA_STATE["queue"] = kept
+
+
+def _qa_cancel_all(session_id: str | None = None) -> None:
+    sid = (session_id or "").strip()
+    with _QA_LOCK:
+        if sid:
+            q = list(_QA_STATE.get("queue") or [])
+            _QA_STATE["queue"] = [t for t in q if str((t or {}).get("session_id") or "") != sid]
+            cur = _QA_STATE.get("current") or {}
+            if isinstance(cur, dict) and str(cur.get("session_id") or "") == sid:
+                _QA_STATE["cancel_id"] = str(cur.get("id") or "")
+        else:
+            _QA_STATE["queue"].clear()
+            cur = _QA_STATE.get("current") or {}
+            if isinstance(cur, dict):
+                _QA_STATE["cancel_id"] = str(cur.get("id") or "")
+
+
+def _qa_snapshot(*, session_id: str | None = None) -> dict:
+    sid = (session_id or "").strip()
+    with _QA_LOCK:
+        snap = dict(_QA_STATE)
+        snap["queue"] = [dict(t) for t in (_QA_STATE.get("queue") or []) if isinstance(t, dict) and ((not sid) or str(t.get("session_id") or "") == sid)]
+        cur = _QA_STATE.get("current")
+        if isinstance(cur, dict) and (sid and str(cur.get("session_id") or "") != sid):
+            snap["current"] = None
+        else:
+            snap["current"] = dict(cur) if isinstance(cur, dict) else None
+        snap["recent"] = [dict(t) for t in (_QA_STATE.get("recent") or []) if isinstance(t, dict) and ((not sid) or str(t.get("session_id") or "") == sid)]
+        return snap
+
+
+def _qa_should_cancel(task_id: str) -> bool:
+    tid = (task_id or "").strip()
+    if not tid:
+        return False
+    with _QA_LOCK:
+        return str(_QA_STATE.get("cancel_id") or "") == tid
+
+
+def _qa_push_recent(task: dict) -> None:
+    with _QA_LOCK:
+        arr = list(_QA_STATE.get("recent") or [])
+        arr.append(dict(task))
+        # Keep it small: only the last 16 tasks.
+        _QA_STATE["recent"] = arr[-16:]
+
+
+def _qa_worker_loop() -> None:
+    while True:
+        task = None
+        with _QA_LOCK:
+            cur = _QA_STATE.get("current")
+            if isinstance(cur, dict) and cur.get("status") == "running":
+                task = dict(cur)
+            elif _QA_STATE.get("queue"):
+                task = dict((_QA_STATE["queue"] or []).pop(0))
+                task.setdefault("status", "running")
+                task.setdefault("stage", "starting")
+                task.setdefault("partial", "")
+                task.setdefault("char_count", 0)
+                task.setdefault("refs_done", False)
+                task.setdefault("answer_done", False)
+                task.setdefault("started_at", time.time())
+                _QA_STATE["current"] = dict(task)
+                _QA_STATE["running"] = True
+                _QA_STATE["cancel_id"] = ""
+            else:
+                _QA_STATE["running"] = False
+                _QA_STATE["current"] = None
+                task = None
+
+        if not task:
+            time.sleep(0.12)
+            continue
+
+        tid = str(task.get("id") or "")
+        try:
+            if _qa_should_cancel(tid):
+                raise RuntimeError("canceled")
+
+            # Lazily construct stores/objects per task (thread-safe; sqlite uses WAL).
+            chat_db = Path(str(task.get("chat_db") or "")).expanduser()
+            chat_store = ChatStore(chat_db)
+
+            db_dir = Path(str(task.get("db_dir") or "")).expanduser().resolve()
+            top_k = int(task.get("top_k") or 6)
+            temperature = float(task.get("temperature") or 0.2)
+            max_tokens = int(task.get("max_tokens") or 1200)
+            deep_read = bool(task.get("deep_read") or False)
+            llm_rerank = bool(task.get("llm_rerank") if ("llm_rerank" in task) else True)
+
+            prompt = str(task.get("prompt") or "").strip()
+            conv_id = str(task.get("conv_id") or "").strip()
+
+            # Load retriever fresh (DB may change over time).
+            chunks = load_all_chunks(db_dir)
+            retriever = BM25Retriever(chunks)
+
+            with _QA_LOCK:
+                if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                    _QA_STATE["current"]["stage"] = "retrieve"
+
+            hits_raw, scores_raw, used_query, used_translation = _search_hits_with_fallback(
+                prompt,
+                retriever,
+                top_k=top_k,
+                settings=task.get("settings_obj"),
+            )
+            hits = _group_hits_by_top_heading(hits_raw, top_k=top_k)
+            effective_deep_read = bool(deep_read) or bool(hits)
+
+            # Refs pack (for UI panel; can be slower but runs in background).
+            grouped_docs: list[dict] = []
+            if (not getattr(retriever, "is_empty", False)) and prompt:
+                with _QA_LOCK:
+                    if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                        _QA_STATE["current"]["stage"] = "refs"
+                try:
+                    grouped_docs = _group_hits_by_doc_for_refs(
+                        hits_raw,
+                        prompt_text=prompt,
+                        top_k_docs=top_k,
+                        deep_query=str(used_query or ""),
+                        deep_read=bool(effective_deep_read),
+                        llm_rerank=bool(llm_rerank),
+                        settings=task.get("settings_obj"),
+                    )
+                except Exception:
+                    grouped_docs = []
+
+            # Build context (coarse hits + deep-read snippets).
+            with _QA_LOCK:
+                if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                    _QA_STATE["current"]["stage"] = "context"
+                    _QA_STATE["current"]["used_query"] = used_query
+                    _QA_STATE["current"]["used_translation"] = bool(used_translation)
+                    _QA_STATE["current"]["refs_hits"] = grouped_docs
+                    _QA_STATE["current"]["refs_done"] = True
+                    _QA_STATE["current"]["refs_scores"] = list(scores_raw or [])
+
+            ctx_parts: list[str] = []
+            doc_first_idx: dict[str, int] = {}
+            for i, h in enumerate(hits, start=1):
+                meta = h.get("meta", {}) or {}
+                src = (meta.get("source_path", "") or "").strip()
+                if src and src not in doc_first_idx:
+                    doc_first_idx[src] = i
+                src_name = Path(src).name if src else ""
+                top = meta.get("top_heading") or _top_heading(meta.get("heading_path", ""))
+                top = "" if _is_probably_bad_heading(top) else top
+                header = f"[{i}] {src_name or 'unknown'}" + (f" | {top}" if top else "")
+                body = h.get("text", "") or ""
+                ctx_parts.append(header + "\n" + body)
+
+            deep_added = 0
+            deep_docs = 0
+            if effective_deep_read and hits:
+                q_fine = (used_query or prompt or "").strip()
+                q_alt = (prompt or "").strip()
+                items = list(doc_first_idx.items())[:3]
+                for (src, idx0) in items:
+                    if _qa_should_cancel(tid):
+                        raise RuntimeError("canceled")
+                    p = Path(src)
+                    extras: list[dict] = []
+                    if q_fine:
+                        extras.extend(_deep_read_md_for_context(p, q_fine, max_snippets=2, snippet_chars=1400))
+                    if q_alt and q_alt != q_fine:
+                        extras.extend(_deep_read_md_for_context(p, q_alt, max_snippets=1, snippet_chars=1400))
+                    if not extras:
+                        continue
+                    deep_docs += 1
+                    seen_snip = set()
+                    extras2: list[str] = []
+                    for ex in sorted(extras, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True):
+                        t = (ex.get("text") or "").strip()
+                        if not t:
+                            continue
+                        k = hashlib.sha1(t.encode("utf-8", "ignore")).hexdigest()[:12]
+                        if k in seen_snip:
+                            continue
+                        seen_snip.add(k)
+                        extras2.append(t)
+                        if len(extras2) >= 3:
+                            break
+                    if not extras2:
+                        continue
+                    try:
+                        base = ctx_parts[idx0 - 1]
+                    except Exception:
+                        continue
+                    for t in extras2:
+                        if t in base:
+                            continue
+                        base += "\n\n（深读补充定位：来自原文）\n" + t
+                        deep_added += 1
+                    ctx_parts[idx0 - 1] = base
+
+            ctx = "\n\n---\n\n".join(ctx_parts)
+
+            with _QA_LOCK:
+                if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                    _QA_STATE["current"]["deep_read_docs"] = int(deep_docs)
+                    _QA_STATE["current"]["deep_read_added"] = int(deep_added)
+
+            system = (
+                "你的名字是 π-zaya。\n"
+                "如果用户问‘你是谁/你叫什么/你是谁开发的’之类的问题，统一回答：我是 P&I Lab 开发的 π-zaya。\n"
+                "你是我的个人知识库助手。优先基于我提供的检索片段回答问题。\n"
+                "规则：\n"
+                "1) 如果检索片段存在：优先基于片段回答；需要引用时，用 [1] [2] 这样的编号标注。\n"
+                "2) 如果检索片段为空：也要给出可用的通用回答，但开头必须写明‘未命中知识库片段’。\n"
+                "3) 不要编造不存在的论文、公式、数据或结论。\n"
+                "4) 不要输出‘参考定位/Top-K/引用列表’之类的额外段落（我会在页面里单独展示）。\n"
+                "5) 数学公式输出格式：短的变量/符号用 $...$（行内）；较长的等式/推导用 $$...$$（行间）。不要用反引号包裹公式。\n"
+            )
+
+            user = f"问题：\n{prompt}\n\n检索片段（含深读补充定位）：\n{ctx if ctx else '(无)'}\n"
+            history = chat_store.get_messages(conv_id)
+            hist = [m for m in history if m.get("role") in ("user", "assistant")][-10:]
+            messages = [{"role": "system", "content": system}, *hist, {"role": "user", "content": user}]
+
+            with _QA_LOCK:
+                if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                    _QA_STATE["current"]["stage"] = "answer"
+
+            settings_obj = task.get("settings_obj")
+            ds = DeepSeekChat(settings_obj)
+            partial = ""
+            last_ui = time.monotonic()
+            for piece in ds.chat_stream(messages=messages, temperature=temperature, max_tokens=max_tokens):
+                if _qa_should_cancel(tid):
+                    raise RuntimeError("canceled")
+                partial += piece
+                now = time.monotonic()
+                if (now - last_ui) >= 0.20 or ("\n\n" in piece):
+                    with _QA_LOCK:
+                        if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                            _QA_STATE["current"]["partial"] = partial
+                            _QA_STATE["current"]["char_count"] = int(len(partial))
+                    last_ui = now
+
+            answer = _normalize_math_markdown(_strip_model_ref_section(partial or "")).strip() or "（未返回文本）"
+            chat_store.append_message(conv_id, "assistant", answer)
+
+            done_task = None
+            with _QA_LOCK:
+                if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                    _QA_STATE["current"]["status"] = "done"
+                    _QA_STATE["current"]["answer_done"] = True
+                    _QA_STATE["current"]["answer"] = answer
+                    _QA_STATE["current"]["finished_at"] = time.time()
+                    _QA_STATE["last"] = "done"
+                    done_task = dict(_QA_STATE["current"])
+            if isinstance(done_task, dict):
+                _qa_push_recent(done_task)
+        except Exception as e:
+            canceled = str(e) == "canceled"
+            done_task = None
+            with _QA_LOCK:
+                cur = _QA_STATE.get("current") or {}
+                if isinstance(cur, dict) and str(cur.get("id") or "") == tid:
+                    cur["finished_at"] = time.time()
+                    if canceled:
+                        cur["status"] = "canceled"
+                        cur["answer_done"] = True
+                        cur["answer"] = (str(cur.get("partial") or "").strip() + "\n\n（已停止生成）").strip() or "（已停止生成）"
+                        try:
+                            chat_db = Path(str(cur.get("chat_db") or "")).expanduser()
+                            ChatStore(chat_db).append_message(str(cur.get("conv_id") or ""), "assistant", str(cur["answer"]))
+                        except Exception:
+                            pass
+                        _QA_STATE["cancel_id"] = ""
+                    else:
+                        cur["status"] = "error"
+                        cur["error"] = str(e)
+                        cur["answer_done"] = True
+                        cur["answer"] = S["llm_fail"].format(err=str(e))
+                        try:
+                            chat_db = Path(str(cur.get("chat_db") or "")).expanduser()
+                            ChatStore(chat_db).append_message(str(cur.get("conv_id") or ""), "assistant", str(cur["answer"]))
+                        except Exception:
+                            pass
+                    _QA_STATE["current"] = dict(cur)
+                    done_task = dict(cur)
+            if isinstance(done_task, dict):
+                _qa_push_recent(done_task)
+        finally:
+            with _QA_LOCK:
+                cur2 = _QA_STATE.get("current") or {}
+                if isinstance(cur2, dict) and str(cur2.get("id") or "") == tid:
+                    # Clear current so next task can start.
+                    _QA_STATE["current"] = None
+                    _QA_STATE["running"] = bool(_QA_STATE.get("queue"))
+            time.sleep(0.05)
+
+
+def _qa_ensure_started() -> None:
+    global _QA_THREAD
+    if _QA_THREAD is not None and _QA_THREAD.is_alive():
+        return
+    _QA_THREAD = threading.Thread(target=_qa_worker_loop, daemon=True)
+    _QA_THREAD.start()
 
 
 def _bg_enqueue(task: dict) -> None:
@@ -955,11 +1325,10 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
     if not getattr(settings, "api_key", None):
         return None
 
-    cache = st.session_state.setdefault("query_translate_cache", {})
-    key = hashlib.sha1(q.encode("utf-8", "ignore")).hexdigest()[:16]
-    if key in cache:
-        v = (cache.get(key) or "").strip()
-        return v or None
+    key = hashlib.sha1((str(getattr(settings, "api_key", None)) + "|" + q).encode("utf-8", "ignore")).hexdigest()[:16]
+    cached = _cache_get("trans", key)
+    if isinstance(cached, str) and cached.strip():
+        return cached.strip()
 
     ds = DeepSeekChat(settings)
     system = (
@@ -981,7 +1350,7 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
     except Exception:
         out = ""
     out = " ".join(out.split())
-    cache[key] = out
+    _cache_set("trans", key, out, max_items=500)
     return out or None
 
 
@@ -1069,12 +1438,11 @@ def _llm_semantic_rerank_score(settings, *, question: str, doc_headings: list[st
     if not sn:
         return 0.0, ""
 
-    cache = st.session_state.setdefault("rerank_cache", {})
     cache_key = hashlib.sha1(("\n".join(sn) + "|" + q).encode("utf-8", "ignore")).hexdigest()[:16]
-    if cache_key in cache:
-        v = cache.get(cache_key) or {}
+    v0 = _cache_get("rerank", cache_key)
+    if isinstance(v0, dict):
         try:
-            return float(v.get("score", 0.0) or 0.0), str(v.get("why", "") or "")
+            return float(v0.get("score", 0.0) or 0.0), str(v0.get("why", "") or "")
         except Exception:
             return 0.0, ""
 
@@ -1128,7 +1496,7 @@ def _llm_semantic_rerank_score(settings, *, question: str, doc_headings: list[st
         score = 0.0
     score = max(0.0, min(100.0, score))
     why = str(data.get("why") or "").strip()
-    cache[cache_key] = {"score": score, "why": why}
+    _cache_set("rerank", cache_key, {"score": score, "why": why}, max_items=600)
     return score, why
 
 
@@ -1607,14 +1975,14 @@ def _read_text_cached(path: Path) -> str:
     except Exception:
         mtime = 0.0
     key = f"{str(p)}|{mtime}"
-    cache = st.session_state.setdefault("file_text_cache", {})
-    if key in cache:
-        return str(cache.get(key) or "")
+    v0 = _cache_get("file_text", key)
+    if isinstance(v0, str):
+        return v0
     try:
         text = p.read_text(encoding="utf-8", errors="replace")
     except Exception:
         text = ""
-    cache[key] = text
+    _cache_set("file_text", key, text, max_items=220)
     return text
 
 
@@ -1717,19 +2085,18 @@ def _deep_read_md_for_context(md_path: Path, query: str, *, max_snippets: int = 
     if not q_tokens:
         return []
 
-    # Cache per (file mtime, query) to avoid repeated full-doc scans across reruns.
+    # Cache per (file mtime, query) to avoid repeated full-doc scans across reruns / background tasks.
     try:
         mtime = float(md_path.stat().st_mtime)
     except Exception:
         mtime = 0.0
-    cache = st.session_state.setdefault("deep_read_cache", {})
     cache_key = hashlib.sha1((str(md_path) + "|" + str(mtime) + "|" + (query or "")).encode("utf-8", "ignore")).hexdigest()[:16]
-    if cache_key in cache:
+    v0 = _cache_get("deep_read", cache_key)
+    if isinstance(v0, list):
         try:
-            val = cache.get(cache_key) or []
-            return list(val) if isinstance(val, list) else []
+            return list(v0)
         except Exception:
-            pass
+            return []
 
     chunks = chunk_markdown(text, source_path=str(md_path), chunk_size=900, overlap=0)
     scored: list[tuple[float, dict]] = []
@@ -1752,7 +2119,7 @@ def _deep_read_md_for_context(md_path: Path, query: str, *, max_snippets: int = 
         if len(body) > snippet_chars:
             body = body[:snippet_chars].rstrip() + "…"
         out.append({"score": float(s), "id": f"deep:{hashlib.sha1((str(md_path)+'|'+str(rank)).encode('utf-8','ignore')).hexdigest()[:12]}", "text": body, "meta": meta})
-    cache[cache_key] = out
+    _cache_set("deep_read", cache_key, out, max_items=320)
     return out
 
 
@@ -1806,10 +2173,9 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
     except Exception:
         cache_key = hashlib.sha1(q.encode("utf-8", "ignore")).hexdigest()[:16]
 
-    cache = st.session_state.setdefault("refs_pack_cache", {})
-    if cache_key in cache:
-        val = cache.get(cache_key) or {}
-        return val if isinstance(val, dict) else {}
+    v0 = _cache_get("refs_pack", cache_key)
+    if isinstance(v0, dict):
+        return v0
 
     ds = DeepSeekChat(settings)
     en = _has_latin(q) and (not _has_cjk(q))
@@ -1878,7 +2244,7 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
             "section": str(it.get("section") or "").strip(),
         }
 
-    cache[cache_key] = result
+    _cache_set("refs_pack", cache_key, result, max_items=260)
     return result
 
 
@@ -2747,23 +3113,34 @@ def _select_recent_pdf_paths(pdf_dir: Path, n: int) -> list[Path]:
     return [Path(p) for _, p in heap]
 
 
-def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k: int, temperature: float, max_tokens: int, show_context: bool, deep_read: bool) -> None:
+def _page_chat(
+    settings,
+    chat_store: ChatStore,
+    retriever: BM25Retriever,
+    db_dir: Path,
+    top_k: int,
+    temperature: float,
+    max_tokens: int,
+    show_context: bool,
+    deep_read: bool,
+) -> None:
     st.subheader(S["chat"])
     _inject_copy_js()
+    _qa_ensure_started()
+    if "session_id" not in st.session_state:
+        st.session_state["session_id"] = uuid.uuid4().hex[:10]
+    session_id = str(st.session_state.get("session_id") or "").strip()
+    conv_id = str(st.session_state.get("conv_id") or "").strip()
     st.session_state["show_context"] = bool(show_context)
     st.session_state["deep_read"] = bool(deep_read)
 
     if bool(getattr(retriever, "is_empty", False)):
         _render_kb_empty_hint()
 
-    # If there's a pending prompt, append it first so the user can see what they just asked
-    # while the model is thinking (same run).
-    prompt_to_answer = (st.session_state.get("pending_prompt") or "").strip()
-    if prompt_to_answer:
-        st.session_state["pending_prompt"] = ""
-        chat_store.append_message(st.session_state["conv_id"], "user", prompt_to_answer)
-        chat_store.set_title_if_default(st.session_state["conv_id"], prompt_to_answer)
-        st.session_state["messages"] = chat_store.get_messages(st.session_state["conv_id"])
+    # Legacy sync path used 'pending_prompt'. We keep the variable for the early-return guard below,
+    # but the new chat pipeline uses the background answer queue instead.
+    st.session_state["pending_prompt"] = ""
+    prompt_to_answer = ""
 
     msgs = st.session_state.get("messages") or []
     if not msgs:
@@ -2803,6 +3180,39 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
     refs_key_ns = f"latest_{st.session_state.get('conv_id','')}"
     with refs_slot.container():
         if last_user:
+            # Sync refs cache from background QA results (so refs won't "disappear" across reruns).
+            try:
+                qa = _qa_snapshot(session_id=session_id)
+                prompt_sig = hashlib.sha1(last_user.encode("utf-8", "ignore")).hexdigest()[:12]
+                cand = None
+                cur = qa.get("current") or {}
+                if isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id and str(cur.get("prompt_sig") or "") == prompt_sig:
+                    cand = cur
+                else:
+                    for t in reversed(list(qa.get("recent") or [])):
+                        if not isinstance(t, dict):
+                            continue
+                        if str(t.get("conv_id") or "") == conv_id and str(t.get("prompt_sig") or "") == prompt_sig:
+                            cand = t
+                            break
+                if isinstance(cand, dict):
+                    cache2 = st.session_state.setdefault("refs_cache2", {})
+                    ck = _refs_cache2_key(last_user, top_k=top_k, settings=settings)
+                    if bool(cand.get("refs_done")):
+                        cache2[ck] = {
+                            "hits": cand.get("refs_hits") or [],
+                            "scores": cand.get("refs_scores") or [],
+                            "used_query": str(cand.get("used_query") or "").strip(),
+                            "used_translation": bool(cand.get("used_translation") or False),
+                            "done": True,
+                            "computed_at": float(cand.get("started_at") or time.time()),
+                        }
+                    else:
+                        cache2[ck] = {"done": False}
+                if isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id and str(cur.get("prompt_sig") or "") == prompt_sig and not bool(cur.get("refs_done")):
+                    st.markdown("<div class='refbox'>参考定位：生成中…</div>", unsafe_allow_html=True)
+            except Exception:
+                pass
             _render_refs_panel(last_user, retriever, top_k=top_k, settings=settings, key_ns=refs_key_ns)
         else:
             _render_refs_panel("", retriever, top_k=top_k, settings=settings, key_ns=refs_key_ns)
@@ -2810,6 +3220,97 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
     # "Thinking / generation" should appear BEFORE the input box. We'll update these placeholders later.
     gen_panel = st.empty()
     gen_details_panel = st.empty()
+
+    # Answer queue + stop button + partial output (non-blocking; background worker does the heavy work).
+    qa = _qa_snapshot(session_id=session_id)
+    cur = qa.get("current") or None
+    q_items = list(qa.get("queue") or [])
+    running_this = isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id and str(cur.get("status") or "") == "running"
+
+    with gen_details_panel.container():
+        with st.expander("回答队列（可展开）", expanded=running_this or bool(q_items)):
+            if running_this and isinstance(cur, dict):
+                stage = str(cur.get("stage") or "").strip()
+                char_count = int(cur.get("char_count") or 0)
+                c0 = st.columns([1.2, 1.6, 9.2])
+                with c0[0]:
+                    if st.button("停止", key="qa_stop_btn", help="停止当前回答生成"):
+                        _qa_cancel(str(cur.get("id") or ""))
+                        st.experimental_rerun()
+                with c0[1]:
+                    if st.button("清空队列", key="qa_clear_btn", help="清空未开始的回答队列"):
+                        _qa_cancel_all(session_id=session_id)
+                        st.experimental_rerun()
+                with c0[2]:
+                    ptxt = str(cur.get("prompt") or "")
+                    ptxt_s = (ptxt[:60] + "…") if len(ptxt) > 60 else ptxt
+                    st.caption(f"当前：{ptxt_s} | 阶段：{stage or '-'} | 已生成：{char_count}")
+            elif q_items:
+                c1 = st.columns([1.6, 10.4])
+                with c1[0]:
+                    if st.button("清空队列", key="qa_clear_btn2"):
+                        _qa_cancel_all(session_id=session_id)
+                        st.experimental_rerun()
+                with c1[1]:
+                    st.caption(f"队列中共有 {len(q_items)} 条待回答。")
+            else:
+                st.caption("（队列为空）")
+
+            if q_items:
+                for i, t in enumerate(q_items, start=1):
+                    if not isinstance(t, dict):
+                        continue
+                    pid = str(t.get("id") or "")
+                    ptxt = str(t.get("prompt") or "")
+                    cc = st.columns([1.0, 11.0])
+                    with cc[0]:
+                        if st.button("×", key=f"qa_rm_{pid}", help="从队列中移除这条问题"):
+                            _qa_cancel(pid)
+                            st.experimental_rerun()
+                    with cc[1]:
+                        st.caption(f"[{i}] {ptxt[:120]}{'…' if len(ptxt) > 120 else ''}")
+
+    if running_this and isinstance(cur, dict):
+        with gen_panel.container():
+            c_stop = st.columns([1.6, 10.4])
+            with c_stop[0]:
+                if st.button("停止生成", key="qa_stop_btn_inline"):
+                    _qa_cancel(str(cur.get("id") or ""))
+                    st.experimental_rerun()
+            with c_stop[1]:
+                st.caption("生成中…你可以继续输入新问题，它会进入队列。")
+
+            st.markdown("<div class='msg-meta'>AI（生成中）</div>", unsafe_allow_html=True)
+            partial = str(cur.get("partial") or "").strip()
+            notice, body = _split_kb_miss_notice(partial)
+            if notice:
+                st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
+            if (body or "").strip():
+                st.markdown(_normalize_math_markdown(body))
+            else:
+                st.caption("（生成中…）")
+
+        # Auto refresh while running so partial output updates.
+        components.html(
+            """
+<script>
+(function () {
+  try {
+    const root = window.parent;
+    if (!root) return;
+    if (root._kbQaAutoRefreshTimer) return;
+    root._kbQaAutoRefreshTimer = setTimeout(function () {
+      try {
+        root._kbQaAutoRefreshTimer = null;
+        root.postMessage({ isStreamlitMessage: true, type: "streamlit:rerunScript" }, "*");
+      } catch (e) {}
+    }, 800);
+  } catch (e) {}
+})();
+</script>
+            """,
+            height=0,
+        )
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
     st.subheader(S["input"])
@@ -2877,7 +3378,27 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
     if submitted:
         txt = (prompt_val or "").strip()
         if txt:
-            st.session_state["pending_prompt"] = txt
+            chat_store.append_message(conv_id, "user", txt)
+            chat_store.set_title_if_default(conv_id, txt)
+            _qa_enqueue(
+                {
+                    "id": uuid.uuid4().hex[:12],
+                    "session_id": session_id,
+                    "conv_id": conv_id,
+                    "prompt": txt,
+                    "prompt_sig": hashlib.sha1(txt.encode("utf-8", "ignore")).hexdigest()[:12],
+                    "created_at": time.time(),
+                    "chat_db": str(getattr(settings, "chat_db_path", "") or ""),
+                    "db_dir": str(db_dir),
+                    "top_k": int(top_k),
+                    "temperature": float(temperature),
+                    "max_tokens": int(max_tokens),
+                    "deep_read": bool(deep_read),
+                    "llm_rerank": bool(st.session_state.get("llm_rerank")),
+                    "settings_obj": settings,
+                }
+            )
+            st.session_state["pending_prompt"] = ""
             st.experimental_rerun()
 
     if not prompt_to_answer:
@@ -3079,7 +3600,7 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
         ctx = "\n\n---\n\n".join(ctx_parts)
 
         system = (
-            "你的名字是 π-zaya（其中 π 是希腊字母 pi）。\n"
+            "你的名字是 π-zaya。\n"
             "如果用户问‘你是谁/你叫什么/你是谁开发的’之类的问题，统一回答：我是 P&I Lab 开发的 π-zaya。\n"
             "你是我的个人知识库助手。优先基于我提供的检索片段回答问题。\n"
             "规则：\n"
@@ -4162,6 +4683,7 @@ def main() -> None:
             settings,
             chat_store,
             st.session_state["retriever"],
+            db_dir,
             top_k=top_k,
             temperature=temperature,
             max_tokens=max_tokens,
