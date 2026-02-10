@@ -2785,25 +2785,30 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
         existing = cache2.get(ck2) or {}
         if not (isinstance(existing, dict) and (existing.get("hits") or [])):
             with refs_slot.container():
+                # Visible feedback (even when the expander is collapsed).
+                st.markdown("<div class='refbox'>参考定位：生成中…</div>", unsafe_allow_html=True)
+                if used_translation:
+                    st.caption("（已将中文问题转换为英文检索关键词后再检索。）")
+
+                with st.spinner("正在定位参考文献（合并同一篇文献 → 深读少量命中 → 语义重排）..."):
+                    grouped_docs = _group_hits_by_doc_for_refs(
+                        hits_raw,
+                        prompt_text=prompt_to_answer,
+                        top_k_docs=top_k,
+                        deep_query=str(used_query or ""),
+                        deep_read=bool(st.session_state.get("deep_read")),
+                        llm_rerank=bool(st.session_state.get("llm_rerank")),
+                        settings=settings,
+                    )
+
+                cache2[ck2] = {
+                    "hits": grouped_docs,
+                    "scores": _scores_raw,
+                    "used_query": used_query,
+                    "used_translation": bool(used_translation),
+                }
+
                 with st.expander(S["refs"], expanded=False):
-                    if used_translation:
-                        st.caption("（已将中文问题转换为英文检索关键词后再检索。）")
-                    with st.spinner("正在定位参考文献（合并同一篇文献 → 深读少量命中 → 语义重排）..."):
-                        grouped_docs = _group_hits_by_doc_for_refs(
-                            hits_raw,
-                            prompt_text=prompt_to_answer,
-                            top_k_docs=top_k,
-                            deep_query=str(used_query or ""),
-                            deep_read=bool(st.session_state.get("deep_read")),
-                            llm_rerank=bool(st.session_state.get("llm_rerank")),
-                            settings=settings,
-                        )
-                    cache2[ck2] = {
-                        "hits": grouped_docs,
-                        "scores": _scores_raw,
-                        "used_query": used_query,
-                        "used_translation": bool(used_translation),
-                    }
                     if bool(st.session_state.get("debug_rank")) and used_query:
                         st.caption(f"rank debug: query={used_query}")
                     _render_refs(grouped_docs, prompt=prompt_to_answer, show_heading=False, key_ns=refs_key_ns, settings=settings)
@@ -2851,7 +2856,6 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
             safe = "（生成中…）"
         with gen_panel.container():
             st.markdown("<div class='msg-meta'>AI（生成中）</div>", unsafe_allow_html=True)
-            st.markdown("<div class='msg-ai-stream'>", unsafe_allow_html=True)
             notice, body = _split_kb_miss_notice(safe)
             if notice:
                 st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
@@ -2860,7 +2864,6 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
             if char_count is not None:
                 # Render as HTML so it won't show as literal "<div ...>"
                 st.markdown(f"<div class='genbox'>已生成：{char_count} 字符</div>", unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
 
     ds = DeepSeekChat(settings)
     partial = ""
