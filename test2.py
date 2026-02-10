@@ -161,6 +161,85 @@ def _join_lines_preserving_words(lines: list[str]) -> str:
     return _normalize_text(" ".join(out))
 
 
+_TOC_SECTION_PAT = re.compile(r"(?<!\d)(\d+\.\d+(?:\.\d+)*)(?!\d)")
+
+
+def _looks_like_toc_lines(lines: list[str]) -> bool:
+    """
+    Heuristic detection for Table-of-Contents-like blocks.
+
+    Typical symptom we want to fix:
+    - PDF text extractor gives multiple TOC entries as multiple lines
+      but our paragraph join collapses them into ONE long line.
+
+    We keep line breaks for blocks that look like:
+      "2.1.1 ... 2"
+      "2.1.2 ... 4"
+      "2.1.3 ... 5"
+    """
+    if not lines or len(lines) < 2:
+        return False
+    # Many TOCs contain section-like numbers with dots and a trailing page number.
+    toc_like = 0
+    for ln in lines[:20]:
+        t = _normalize_text(ln)
+        if not t:
+            continue
+        if _TOC_SECTION_PAT.search(t) and re.search(r"\b\d{1,4}\s*$", t):
+            toc_like += 1
+    return toc_like >= 2
+
+
+def _split_toc_run_line(line: str) -> list[str]:
+    """
+    Split a single long TOC run into multiple lines.
+
+    Example input:
+      "2.1.1 AAA 2 2.1.2 BBB 4 2.1.3 CCC 5"
+    Output:
+      ["2.1.1 AAA 2", "2.1.2 BBB 4", "2.1.3 CCC 5"]
+    """
+    s = _normalize_text(line)
+    if not s:
+        return []
+    ms = list(_TOC_SECTION_PAT.finditer(s))
+    if len(ms) < 2:
+        return [s]
+    # Must also end like a TOC (page number at end), otherwise it's likely normal prose.
+    if not re.search(r"\b\d{1,4}\s*$", s):
+        return [s]
+    parts: list[str] = []
+    for i, m in enumerate(ms):
+        start = m.start()
+        end = ms[i + 1].start() if i + 1 < len(ms) else len(s)
+        chunk = s[start:end].strip()
+        if chunk:
+            parts.append(chunk)
+    return parts or [s]
+
+
+def _strip_trailing_page_no_from_heading_text(text: str) -> str:
+    """
+    Fix common TOC heading artifacts like:
+      "2 Working mechanisms of single photon detector 2"
+    where the trailing number is a page number, not part of the title.
+    """
+    t = _normalize_text(text)
+    if not t:
+        return t
+    # Only strip small trailing integers (avoid removing years like 2024).
+    m = re.match(r"^(\d+(?:\.\d+)*\s+.+?)\s+(\d{1,3})\s*$", t)
+    if not m:
+        return t
+    try:
+        n = int(m.group(2))
+    except Exception:
+        return t
+    if 0 <= n <= 500:
+        return m.group(1).rstrip()
+    return t
+
+
 def _bbox_width(bbox: Iterable[float]) -> float:
     x0, _, x1, _ = bbox
     return float(x1) - float(x0)
@@ -1281,7 +1360,7 @@ def extract_text_blocks(
         is_math = (not is_table) and _looks_like_math_block(probe)
         is_code = (not is_table) and (not is_math) and _looks_like_code_block(probe)
 
-        if is_table or is_math or is_code or preserve_body_linebreaks:
+        if is_table or is_math or is_code or preserve_body_linebreaks or _looks_like_toc_lines(probe):
             norm_lines = [_normalize_line_keep_indent(x) for x in raw_lines]
             text = "\n".join([ln.rstrip() for ln in norm_lines if ln.strip()])
         else:
@@ -3408,18 +3487,26 @@ INPUT JSON:
 
             line = raw.rstrip()
             if line.startswith("[H1] "):
-                out.append("# " + line[len("[H1] ") :])
+                h = _strip_trailing_page_no_from_heading_text(line[len("[H1] ") :])
+                out.append("# " + h)
             elif line.startswith("[H2] "):
-                out.append("## " + line[len("[H2] ") :])
+                h = _strip_trailing_page_no_from_heading_text(line[len("[H2] ") :])
+                out.append("## " + h)
             elif line.startswith("[H3] "):
-                out.append("### " + line[len("[H3] ") :])
+                h = _strip_trailing_page_no_from_heading_text(line[len("[H3] ") :])
+                out.append("### " + h)
             else:
                 m = re.match(r"^\[IMAGE:\s*([^\]]+)\]\s*$", line)
                 if m:
                     # Use "./assets/..." for better compatibility across Markdown renderers.
                     out.append(f"![Figure](./assets/{m.group(1).strip()})")
                 else:
-                    out.append(line)
+                    # Fix TOC runs that got collapsed into a single long line.
+                    parts = _split_toc_run_line(line)
+                    if len(parts) > 1:
+                        out.extend(parts)
+                    else:
+                        out.append(line)
         return "\n".join(out).strip()
 
     def convert(self) -> None:
