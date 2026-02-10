@@ -1,4 +1,7 @@
-﻿# kb_chat
+﻿# lzy更改事项
+app.py ui代码改动以及main函数开头修改以及with st.sidebar: 后修改
+
+# kb_chat
 
 这份 README 是我写给你（合作者）看的：帮你在**你自己的电脑**上跑起来 kb_chat，并且用**你自己的 PDF/目录**，同时我这边更新代码后你也能很快用到最新版。
 
@@ -174,3 +177,5 @@ $env:DEEPSEEK_API_KEY="你的正确key"
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
+
+

@@ -733,354 +733,122 @@ def _bg_ensure_started() -> None:
     t = threading.Thread(target=_bg_worker_loop, daemon=True)
     RUNTIME.BG_THREAD = t
     t.start()
-def _init_theme_css() -> None:
-    st.markdown(
+
+
+def _init_theme_css(theme_mode: str = "dark") -> None:
+    # 1. 根据传入的 mode 决定颜色变量
+    if theme_mode == "light":
+        # === 浅色模式变量 ===
+        css_vars = """
+        --bg: #ffffff;
+        --panel: #f0f2f6;
+        --text-main: #31333F;
+        --text-muted: rgba(49, 51, 63, 0.64);
+        --line: rgba(49, 51, 63, 0.2);
+        --btn-bg: #ffffff;
+        --btn-border: rgba(49, 51, 63, 0.2);
+        --btn-text: #31333F;
+        --btn-hover: #f0f2f6;
+        --input-bg: #ffffff;
+        --input-border: rgba(49, 51, 63, 0.2);
+        --msg-user-bg: #eaf2ff;
+        --msg-user-border: rgba(47,111,237,0.18);
+        --msg-ai-color: #31333F;
+
+        --pill-ok-bg: #d1fae5; --pill-ok: #065f46;
+        --pill-warn-bg: #fef3c7; --pill-warn: #92400e;
+        --pill-run-bg: #dbeafe; --pill-run: #1e40af;
         """
+        sidebar_bg = "#f0f2f6"
+    else:
+        # === 深色模式变量  ===
+        css_vars = """
+        --bg: #0e1117;
+        --panel: #262730;
+        --text-main: #fafafa;
+        --text-muted: rgba(250, 250, 250, 0.60);
+        --line: rgba(250, 250, 250, 0.15);
+        --btn-bg: #1a1c24;
+        --btn-border: rgba(255, 255, 255, 0.20);
+        --btn-text: #ffffff;
+        --btn-hover: rgba(255, 255, 255, 0.10);
+        --input-bg: #000000;
+        --input-border: rgba(255, 255, 255, 0.20);
+        --msg-user-bg: #1e3a8a;
+        --msg-user-border: rgba(59, 130, 246, 0.4);
+        --msg-ai-color: #fafafa;
+
+        --pill-ok-bg: rgba(22, 163, 74, 0.20); --pill-ok: #4ade80;
+        --pill-warn-bg: rgba(245, 158, 11, 0.20); --pill-warn: #fbbf24;
+        --pill-run-bg: rgba(29, 78, 216, 0.30); --pill-run: #60a5fa;
+        """
+        sidebar_bg = "#262730"
+
+    # 2. 注入全局 CSS
+    st.markdown(
+        f"""
 <style>
-:root{
-  --bg: #f7f8fb;
-  --panel: #ffffff;
-  --line: rgba(49, 51, 63, 0.12);
-  --muted: rgba(49, 51, 63, 0.64);
-  --blue-weak: #eef5ff;
-  --blue-line: rgba(47, 111, 237, 0.28);
-  --font-display: "LittleP", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
-  --font-body: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
-  --btn-bg: #ffffff;
-  --btn-border: rgba(49, 51, 63, 0.15);
-  --btn-text: #1f2a37;
-  --btn-hover: rgba(47, 111, 237, 0.06);
-  --btn-active: rgba(47, 111, 237, 0.10);
-  --btn-shadow: 0 1px 0 rgba(16, 24, 40, 0.04), 0 10px 24px rgba(16, 24, 40, 0.06);
-  --pill-ok-bg: rgba(22, 163, 74, 0.10);
-  --pill-ok: rgba(22, 163, 74, 0.90);
-  --pill-warn-bg: rgba(245, 158, 11, 0.12);
-  --pill-warn: rgba(180, 83, 9, 0.95);
-  --pill-run-bg: rgba(47, 111, 237, 0.12);
-  --pill-run: rgba(29, 78, 216, 0.95);
-}
-html, body { background: var(--bg); font-family: var(--font-body); }
-.block-container{ max-width: 1020px; padding-top: 1.6rem; padding-bottom: 6.2rem; }
-section[data-testid="stSidebar"] > div:first-child{ background: #fbfdff; border-right: 1px solid var(--line); }
-h1, h2, h3 { color: #1f2a37; letter-spacing: -0.01em; }
-h1 { font-family: var(--font-display); font-weight: 800; }
-small, .stCaption { color: var(--muted) !important; }
-div.stButton > button{
-  background: var(--btn-bg);
-  border: 1px solid var(--btn-border);
-  color: var(--btn-text);
-  border-radius: 12px;
-  padding: 0.44rem 0.88rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-  width: auto;
-  min-width: 0px;
-  min-height: 38px;
-  line-height: 1.0;
-  transition: background 120ms ease, box-shadow 120ms ease, transform 120ms ease, border-color 120ms ease;
-  box-shadow: 0 1px 0 rgba(16, 24, 40, 0.03);
-  -webkit-tap-highlight-color: transparent;
-}
-section[data-testid="stSidebar"] div.stButton > button{
-  width: 100%;
-}
-div.stButton > button *{
-  white-space: nowrap !important;
-}
-div.stButton > button:hover{
-  background: var(--btn-hover);
-  border-color: rgba(47, 111, 237, 0.28);
+/* 定义变量 */
+:root {{
+    {css_vars}
+    --font-body: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+}}
+
+/* 应用背景和文字颜色 */
+html, body {{ background-color: var(--bg) !important; color: var(--text-main) !important; font-family: var(--font-body); }}
+
+/* 强制修正侧边栏背景 */
+section[data-testid="stSidebar"] > div:first-child {{
+    background-color: {sidebar_bg} !important;
+    border-right: 1px solid var(--line) !important;
+}}
+
+/* 侧边栏顶部空白消除 */
+section[data-testid="stSidebar"] .block-container {{
+    padding-top: 1rem !important;
+    margin-top: -3rem !important;
+}}
+section[data-testid="stSidebar"] h3 {{ margin-top: 0 !important; }}
+
+/* 通用组件 */
+h1, h2, h3, h4, h5, h6, span, div, p, li {{ color: var(--text-main); }}
+small, .stCaption {{ color: var(--text-muted) !important; }}
+
+div.stButton > button {{
+  background: var(--btn-bg) !important;
+  border: 1px solid var(--btn-border) !important;
   color: var(--btn-text) !important;
-  box-shadow: var(--btn-shadow);
-  transform: translateY(-1px);
-}
-div.stButton > button:active{
-  background: var(--btn-active);
-  border-color: rgba(47, 111, 237, 0.32);
-  color: var(--btn-text) !important;
-  transform: translateY(0px);
-  box-shadow: 0 1px 0 rgba(16, 24, 40, 0.03);
-}
-div.stButton > button:focus,
-div.stButton > button:focus-visible{
-  outline: none !important;
-  box-shadow: 0 1px 0 rgba(16, 24, 40, 0.03) !important;
-}
-textarea, input{ background: var(--panel) !important; border-radius: 12px !important; }
-pre{ border-radius: 12px !important; }
-.refbox { font-size: 0.92rem; color: rgba(49, 51, 63, 0.62); }
-.refbox code { color: rgba(49, 51, 63, 0.70); }
-.snipbox{
-  background: rgba(49,51,63,0.04);
-  border: 1px solid rgba(49,51,63,0.10);
   border-radius: 12px;
-  padding: 10px 12px;
-  margin: 0.35rem 0 0.55rem 0;
-}
-.snipbox pre{
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 0.86rem;
-  line-height: 1.38;
-  color: rgba(15, 23, 42, 0.86);
-  background: transparent !important;
-}
-.msg-user{
-  background: #eaf2ff;
-  border: 1px solid rgba(47,111,237,0.18);
-  border-radius: 16px;
-  padding: 10px 14px;
-  width: fit-content;
-  max-width: min(820px, 88%);
-  margin-left: auto;
-  box-shadow: 0 1px 0 rgba(16,24,40,0.03);
-}
-.msg-ai{
-  background: transparent;
-  border: none;
-  border-radius: 0px;
-  padding: 0px;
-  max-width: min(900px, 94%);
-}
-.msg-ai-stream{
-  background: #ffffff;
-  border: 1px solid rgba(49,51,63,0.10);
-  border-radius: 14px;
-  padding: 12px 14px;
-  box-shadow: 0 1px 0 rgba(16,24,40,0.03);
-}
-.kb-notice{
-  font-size: 0.84rem;
-  color: rgba(120, 53, 15, 0.95);
-  background: rgba(245, 158, 11, 0.10);
-  border: 1px solid rgba(245, 158, 11, 0.18);
-  border-radius: 10px;
-  padding: 0.35rem 0.55rem;
-  margin: 0 0 0.55rem 0;
-  line-height: 1.35;
-}
-.kb-modal-overlay{
-  position: fixed;
-  inset: 0;
-  background: rgba(2, 6, 23, 0.40);
-  z-index: 999;
-}
-.kb-modal{
-  position: fixed;
-  top: 7vh;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(980px, 92vw);
-  max-height: 86vh;
-  overflow: auto;
-  background: var(--panel);
-  border: 1px solid rgba(49,51,63,0.18);
-  border-radius: 16px;
-  padding: 14px 14px 10px 14px;
-  z-index: 1000;
-  box-shadow: 0 22px 60px rgba(15, 23, 42, 0.35);
-}
-.kb-modal h3{
-  margin: 0.2rem 0 0.65rem 0;
-  font-size: 1.08rem;
-  font-weight: 800;
-  letter-spacing: -0.01em;
-}
-.kb-modal .refbox{ margin-top: 0.35rem; }
-.msg-meta{ color: rgba(49,51,63,0.62); font-size: 0.86rem; margin-bottom: 0.35rem; }
-.hr{ height:1px; background: rgba(49,51,63,0.10); margin: 1.0rem 0; }
-.msg-refs{
-  margin: 0.35rem 0 0.80rem 0;
-  padding: 0.20rem 0.30rem;
-  border-left: 2px solid rgba(47,111,237,0.16);
-}
-.queue-inline-head{
-  font-size: 0.84rem;
-  color: rgba(49,51,63,0.68);
-  margin: 0.10rem 0 0.25rem 0;
-  font-weight: 600;
-}
-.queue-inline-hint{
-  font-size: 0.82rem;
-  color: rgba(49,51,63,0.56);
-  margin: 0.08rem 0 0.42rem 0;
-}
-/* Small "generation details" text (GPT-ish, no chain-of-thought) */
-.genbox { font-size: 0.86rem; color: rgba(49,51,63,0.62); }
-.genbox code { font-size: 0.84rem; }
+}}
+div.stButton > button:hover {{ background: var(--btn-hover) !important; }}
 
-/* Reference list: make per-item buttons compact and not full-width */
-.refslist div.stButton > button{
-  width: 100% !important;
-  text-align: left !important;
-  white-space: normal !important;
-  line-height: 1.35 !important;
-  min-height: 0px !important;
-  padding: 0.35rem 0.10rem !important;
-  border-radius: 10px !important;
-  font-weight: 600 !important;
-  background: transparent !important;
-  border: 1px solid transparent !important;
-  box-shadow: none !important;
-}
-.refslist div.stButton > button:hover{
-  background: rgba(47,111,237,0.05) !important;
-  border-color: rgba(47,111,237,0.12) !important;
-  transform: none !important;
-  box-shadow: none !important;
-}
-.refslist div.stButton > button:active{
-  background: rgba(47,111,237,0.08) !important;
-  border-color: rgba(47,111,237,0.16) !important;
-  transform: none !important;
-  box-shadow: none !important;
-}
+textarea, input[type="text"], div[data-testid="stTextInput"] input, div[data-testid="stSelectbox"] > div > div {{
+    background-color: var(--input-bg) !important;
+    color: var(--text-main) !important;
+    border: 1px solid var(--input-border) !important;
+    border-radius: 12px !important;
+}}
 
-/* Subtle progress bar (use blue, not green) */
-div[data-testid="stProgress"] > div > div{
-  background-color: rgba(47, 111, 237, 0.12) !important;
-  border-radius: 999px !important;
-}
-div[data-testid="stProgress"] > div > div > div{
-  background-color: rgba(47, 111, 237, 0.50) !important;
-  border-radius: 999px !important;
-}
+ul[data-testid="stSelectboxVirtualDropdown"] {{ background-color: var(--bg) !important; }}
+li[data-testid="stSelectboxVirtualDropdownOption"] {{ color: var(--text-main) !important; }}
 
-/* Small pills for statuses */
-.pill{
-  display: inline-flex;
-  align-items: center;
-  padding: 0.18rem 0.55rem;
-  border-radius: 999px;
-  font-size: 0.80rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  border: 1px solid rgba(49, 51, 63, 0.14);
-  margin-right: 0.45rem;
-}
-.pill.ok{ background: var(--pill-ok-bg); color: var(--pill-ok); }
-.pill.warn{ background: var(--pill-warn-bg); color: var(--pill-warn); }
-.pill.run{ background: var(--pill-run-bg); color: var(--pill-run); }
-.meta-kv{ color: rgba(49,51,63,0.58); font-size: 0.86rem; line-height: 1.35; }
+.msg-user {{
+  background: var(--msg-user-bg);
+  border: 1px solid var(--msg-user-border);
+  color: var(--text-main) !important;
+  border-radius: 16px; padding: 10px 14px; margin-left: auto;
+}}
+.msg-ai {{ color: var(--msg-ai-color) !important; }}
 
-/* Prompt textarea: show a subtle shortcut hint in the corner */
-.stTextArea{ position: relative; }
-.stTextArea::after,
-div[data-testid="stTextArea"]::after{
-  content: "Ctrl+Enter 发送";
-  position: absolute;
-  right: 14px;
-  bottom: 10px;
-  font-size: 12px;
-  color: rgba(49,51,63,0.48);
-  pointer-events: none;
-}
-
-/* ChatGPT/Codex-like composer dock */
-.kb-input-dock{
-  position: sticky !important;
-  bottom: 0.35rem;
-  z-index: 24;
-  background: linear-gradient(180deg, rgba(246,248,252,0.72) 0%, rgba(246,248,252,0.96) 18%, rgba(246,248,252,0.99) 100%);
-  border: 1px solid rgba(49,51,63,0.10);
-  border-radius: 16px;
-  padding: 0.52rem 0.56rem 0.22rem 0.56rem;
-  box-shadow: 0 -8px 26px rgba(16,24,40,0.08);
-  backdrop-filter: blur(5px);
-}
-.kb-input-dock div[data-testid="stForm"]{
-  margin-bottom: 0 !important;
-}
-.kb-input-dock div[data-testid="stTextInput"]{
-  margin-bottom: 0.05rem !important;
-}
-.kb-input-dock div[data-testid="stTextInput"] input{
-  min-height: 34px !important;
-  font-size: 13px !important;
-}
-
-/* Copy bar above assistant answers */
-.kb-copybar{
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  margin: 6px 0 10px 0;
-}
-.kb-copybtn{
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(49, 51, 63, 0.14);
-  background: rgba(255,255,255,0.8);
-  color: rgba(31, 42, 55, 0.86);
-  font-weight: 600;
-  font-size: 12px;
-  cursor: pointer;
-  user-select: none;
-}
-.kb-copybtn:hover{
-  background: rgba(47,111,237,0.06);
-  border-color: rgba(47,111,237,0.22);
-  color: rgba(31, 42, 55, 0.86);
-}
-.kb-copybtn:active{
-  background: rgba(47,111,237,0.10);
-  border-color: rgba(47,111,237,0.26);
-  color: rgba(31, 42, 55, 0.86);
-}
-
-/* Code-block copy button (in-page, not Streamlit built-in) */
-.kb-codecopy{
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  padding: 4px 8px;
-  border-radius: 10px;
-  border: 1px solid rgba(49, 51, 63, 0.12);
-  background: rgba(255,255,255,0.78);
-  color: rgba(31, 42, 55, 0.80);
-  font-weight: 600;
-  font-size: 12px;
-  cursor: pointer;
-}
-.kb-codecopy:hover{
-  background: rgba(47,111,237,0.06);
-  border-color: rgba(47,111,237,0.22);
-}
-
-/* Toast */
-.kb-toast{
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid rgba(49,51,63,0.14);
-  background: rgba(255,255,255,0.92);
-  color: rgba(31,42,55,0.88);
-  font-weight: 600;
-  font-size: 12px;
-  box-shadow: 0 1px 0 rgba(16, 24, 40, 0.04), 0 14px 34px rgba(16, 24, 40, 0.10);
-  opacity: 0;
-  transform: translateY(6px);
-  transition: opacity 120ms ease, transform 120ms ease;
-  z-index: 999999;
-  pointer-events: none;
-}
-.kb-toast.show{ opacity: 1; transform: translateY(0px); }
-
-/* Make <pre> relative for overlay button */
-pre { position: relative; }
+pre {{ background: var(--bg) !important; border: 1px solid var(--line); }}
+code {{ color: var(--text-main) !important; }}
+.kb-notice {{ background: var(--pill-warn-bg); color: var(--pill-warn); border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem; }}
+.refbox {{ color: var(--text-muted); }}
+div[data-testid="stProgress"] > div > div {{ background-color: var(--line) !important; }}
 </style>
 """,
         unsafe_allow_html=True,
     )
-
-
 def _top_heading(heading_path: str) -> str:
     hp = (heading_path or "").strip()
     if not hp:
@@ -5256,7 +5024,9 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
 
 def main() -> None:
     st.set_page_config(page_title=S["title"], layout="wide")
-    _init_theme_css()
+    if "ui_theme" not in st.session_state:
+        st.session_state["ui_theme"] = "light"
+    _init_theme_css(st.session_state["ui_theme"])
     st.title(S["title"])
 
     settings = load_settings()
@@ -5288,7 +5058,11 @@ def main() -> None:
             st.session_state["pdf_dir"] = str(default_pdf_dir)
 
     if "conv_id" not in st.session_state:
-        st.session_state["conv_id"] = chat_store.create_conversation()
+        recent = chat_store.list_conversations(limit=1)
+        if recent:
+            st.session_state["conv_id"] = recent[0]["id"]
+        else:
+            st.session_state["conv_id"] = chat_store.create_conversation()
 
     if "debug_rank" not in st.session_state:
         st.session_state["debug_rank"] = False
@@ -5300,6 +5074,14 @@ def main() -> None:
     retriever_reload_flag: dict[str, bool] = {"reload": False}
 
     with st.sidebar:
+        c_mode = st.columns([3, 1])
+        with c_mode[0]:
+            st.subheader(S["settings"])
+        with c_mode[1]:
+            btn_icon = "🌞" if st.session_state["ui_theme"] == "dark" else "🌙"
+            if st.button(btn_icon, key="theme_toggle_btn"):
+                st.session_state["ui_theme"] = "light" if st.session_state["ui_theme"] == "dark" else "dark"
+                st.experimental_rerun()
         st.subheader(S["settings"])
         if bool(st.session_state.get("debug_rank")):
             try:
@@ -5420,7 +5202,16 @@ def main() -> None:
 
         if st.button(S["del_chat"], key="delete_chat") and st.session_state.get("conv_id"):
             chat_store.delete_conversation(st.session_state["conv_id"])
-            st.session_state["conv_id"] = chat_store.create_conversation()
+            remaining = chat_store.list_conversations(limit=1)
+            if remaining:
+                st.session_state["conv_id"] = remaining[0]["id"]
+            else:
+                st.session_state["conv_id"] = chat_store.create_conversation()
+
+            if "conv_select" in st.session_state:
+                del st.session_state["conv_select"]
+
+            st.experimental_rerun()
 
     # Retriever (auto-reload when DB changes)
     docs_json = db_dir / "docs.json"
