@@ -12,6 +12,7 @@ __pycache__/
 # Local DB / prefs (per-user, should not be shared)
 chat.sqlite3
 library.sqlite3
+tmp_*.sqlite3
 user_prefs.json
 db/
 

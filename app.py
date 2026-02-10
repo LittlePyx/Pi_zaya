@@ -16,6 +16,7 @@ from typing import Optional
 import re
 from collections import Counter
 import json
+from dataclasses import replace
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -25,6 +26,7 @@ from kb.chunking import chunk_markdown
 from kb.config import load_settings
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
+from kb import runtime_state as RUNTIME
 from kb.pdf_tools import PDF_META_EXTRACT_VERSION, PdfMetaSuggestion, build_base_name, ensure_dir, extract_pdf_meta_suggestion, open_in_explorer, run_pdf_to_md
 from kb.prefs import load_prefs, save_prefs
 from kb.retriever import BM25Retriever
@@ -93,57 +95,14 @@ S = {
 
 
 
-# Background conversion queue so you can switch pages while converting.
-# NOTE: Streamlit re-runs the script from top to bottom; guard globals so background threads
-# keep writing to the same state dict across reruns (otherwise UI reads a new dict and "freezes").
-if "_BG_LOCK" not in globals():
-    _BG_LOCK = threading.Lock()
-if "_BG_STATE" not in globals():
-    _BG_STATE = {
-        "queue": [],
-        "running": False,
-        "done": 0,
-        "total": 0,
-        "current": "",
-        "cur_page_done": 0,
-        "cur_page_total": 0,
-        "cur_page_msg": "",
-        "cancel": False,
-        "last": "",
-    }
-if "_BG_THREAD" not in globals():
-    _BG_THREAD: Optional[threading.Thread] = None
-
-
-# ----------------------
-# Chat answer queue (QA)
-# ----------------------
-
-if "_QA_LOCK" not in globals():
-    _QA_LOCK = threading.Lock()
-if "_QA_STATE" not in globals():
-    _QA_STATE: dict = {
-        "queue": [],  # list[dict]
-        "running": False,
-        "current": None,  # dict | None
-        "cancel_id": "",  # current task id to cancel
-        "recent": [],  # last N completed tasks (for refs panel)
-        "last": "",
-    }
-if "_QA_THREAD" not in globals():
-    _QA_THREAD: Optional[threading.Thread] = None
-
-
-if "_CACHE_LOCK" not in globals():
-    _CACHE_LOCK = threading.Lock()
-if "_CACHE" not in globals():
-    _CACHE: dict[str, dict] = {
-        "file_text": {},
-        "deep_read": {},
-        "trans": {},
-        "rerank": {},
-        "refs_pack": {},
-    }
+# Background conversion queue and QA queue state are kept in an imported module.
+# This survives Streamlit reruns more reliably than script-level globals.
+_BG_LOCK = RUNTIME.BG_LOCK
+_BG_STATE = RUNTIME.BG_STATE
+_QA_LOCK = RUNTIME.QA_LOCK
+_QA_STATE = RUNTIME.QA_STATE
+_CACHE_LOCK = RUNTIME.CACHE_LOCK
+_CACHE = RUNTIME.CACHE
 
 
 def _cache_get(bucket: str, key: str):
@@ -183,6 +142,29 @@ def _qa_cancel(task_id: str) -> None:
         q = list(_QA_STATE.get("queue") or [])
         kept = [t for t in q if str((t or {}).get("id") or "") != tid]
         _QA_STATE["queue"] = kept
+
+
+def _qa_update_queued(task_id: str, *, prompt: str) -> bool:
+    tid = (task_id or "").strip()
+    new_prompt = (prompt or "").strip()
+    if (not tid) or (not new_prompt):
+        return False
+    changed = False
+    with _QA_LOCK:
+        q = list(_QA_STATE.get("queue") or [])
+        for i, t in enumerate(q):
+            if str((t or {}).get("id") or "") != tid:
+                continue
+            nt = dict(t or {})
+            nt["prompt"] = new_prompt
+            nt["prompt_sig"] = hashlib.sha1(new_prompt.encode("utf-8", "ignore")).hexdigest()[:12]
+            nt["updated_at"] = time.time()
+            q[i] = nt
+            changed = True
+            break
+        if changed:
+            _QA_STATE["queue"] = q
+    return changed
 
 
 def _qa_cancel_all(session_id: str | None = None) -> None:
@@ -237,6 +219,12 @@ def _qa_worker_loop() -> None:
         with _QA_LOCK:
             cur = _QA_STATE.get("current")
             if isinstance(cur, dict) and cur.get("status") == "running":
+                if not cur.get("started_at"):
+                    try:
+                        cur["started_at"] = float(cur.get("created_at") or time.time())
+                    except Exception:
+                        cur["started_at"] = time.time()
+                    _QA_STATE["current"] = dict(cur)
                 task = dict(cur)
             elif _QA_STATE.get("queue"):
                 task = dict((_QA_STATE["queue"] or []).pop(0))
@@ -246,7 +234,7 @@ def _qa_worker_loop() -> None:
                 task.setdefault("char_count", 0)
                 task.setdefault("refs_done", False)
                 task.setdefault("answer_done", False)
-                task.setdefault("started_at", time.time())
+                task.setdefault("started_at", float(task.get("created_at") or time.time()))
                 _QA_STATE["current"] = dict(task)
                 _QA_STATE["running"] = True
                 _QA_STATE["cancel_id"] = ""
@@ -278,6 +266,42 @@ def _qa_worker_loop() -> None:
             prompt = str(task.get("prompt") or "").strip()
             conv_id = str(task.get("conv_id") or "").strip()
 
+            quick_answer = _quick_answer_for_prompt(prompt)
+            if quick_answer:
+                try:
+                    umid_q = int(task.get("user_msg_id") or 0)
+                except Exception:
+                    umid_q = 0
+                if umid_q > 0:
+                    try:
+                        chat_store.upsert_message_refs(
+                            user_msg_id=umid_q,
+                            conv_id=conv_id,
+                            prompt=prompt,
+                            prompt_sig=str(task.get("prompt_sig") or ""),
+                            hits=[],
+                            scores=[],
+                            used_query="",
+                            used_translation=False,
+                        )
+                    except Exception:
+                        pass
+                chat_store.append_message(conv_id, "assistant", quick_answer)
+                done_task = None
+                with _QA_LOCK:
+                    if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                        _QA_STATE["current"]["stage"] = "answer"
+                        _QA_STATE["current"]["refs_done"] = True
+                        _QA_STATE["current"]["status"] = "done"
+                        _QA_STATE["current"]["answer_done"] = True
+                        _QA_STATE["current"]["answer"] = quick_answer
+                        _QA_STATE["current"]["finished_at"] = time.time()
+                        _QA_STATE["last"] = "done"
+                        done_task = dict(_QA_STATE["current"])
+                if isinstance(done_task, dict):
+                    _qa_push_recent(done_task)
+                continue
+
             # Load retriever fresh (DB may change over time).
             chunks = load_all_chunks(db_dir)
             retriever = BM25Retriever(chunks)
@@ -291,9 +315,14 @@ def _qa_worker_loop() -> None:
                 retriever,
                 top_k=top_k,
                 settings=task.get("settings_obj"),
+                allow_translate=True,
             )
             hits = _group_hits_by_top_heading(hits_raw, top_k=top_k)
-            effective_deep_read = bool(deep_read) or bool(hits)
+            with _QA_LOCK:
+                if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                    _QA_STATE["current"]["hits_count"] = int(len(hits_raw or []))
+            # Background worker must stay responsive: skip heavy full-md deep read here.
+            effective_deep_read = False
 
             # Refs pack (for UI panel; can be slower but runs in background).
             grouped_docs: list[dict] = []
@@ -302,15 +331,7 @@ def _qa_worker_loop() -> None:
                     if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
                         _QA_STATE["current"]["stage"] = "refs"
                 try:
-                    grouped_docs = _group_hits_by_doc_for_refs(
-                        hits_raw,
-                        prompt_text=prompt,
-                        top_k_docs=top_k,
-                        deep_query=str(used_query or ""),
-                        deep_read=bool(effective_deep_read),
-                        llm_rerank=bool(llm_rerank),
-                        settings=task.get("settings_obj"),
-                    )
+                    grouped_docs = _group_hits_by_doc_for_refs_fast(hits_raw, top_k_docs=top_k)
                 except Exception:
                     grouped_docs = []
 
@@ -323,6 +344,27 @@ def _qa_worker_loop() -> None:
                     _QA_STATE["current"]["refs_hits"] = grouped_docs
                     _QA_STATE["current"]["refs_done"] = True
                     _QA_STATE["current"]["refs_scores"] = list(scores_raw or [])
+
+            # Persist refs for this user message so each answered turn can keep its own
+            # "参考定位" in history (not only the latest one).
+            try:
+                umid = int(task.get("user_msg_id") or 0)
+            except Exception:
+                umid = 0
+            if umid > 0:
+                try:
+                    chat_store.upsert_message_refs(
+                        user_msg_id=umid,
+                        conv_id=conv_id,
+                        prompt=prompt,
+                        prompt_sig=str(task.get("prompt_sig") or ""),
+                        hits=list(grouped_docs or []),
+                        scores=list(scores_raw or []),
+                        used_query=str(used_query or ""),
+                        used_translation=bool(used_translation),
+                    )
+                except Exception:
+                    pass
 
             ctx_parts: list[str] = []
             doc_first_idx: dict[str, int] = {}
@@ -402,7 +444,14 @@ def _qa_worker_loop() -> None:
             )
 
             user = f"问题：\n{prompt}\n\n检索片段（含深读补充定位）：\n{ctx if ctx else '(无)'}\n"
-            history = chat_store.get_messages(conv_id)
+            try:
+                user_msg_id = int(task.get("user_msg_id") or 0)
+            except Exception:
+                user_msg_id = 0
+            if user_msg_id > 0:
+                history = chat_store.get_messages_upto_id(conv_id, user_msg_id)
+            else:
+                history = chat_store.get_messages(conv_id)
             hist = [m for m in history if m.get("role") in ("user", "assistant")][-10:]
             messages = [{"role": "system", "content": system}, *hist, {"role": "user", "content": user}]
 
@@ -414,17 +463,54 @@ def _qa_worker_loop() -> None:
             ds = DeepSeekChat(settings_obj)
             partial = ""
             last_ui = time.monotonic()
-            for piece in ds.chat_stream(messages=messages, temperature=temperature, max_tokens=max_tokens):
-                if _qa_should_cancel(tid):
+            stream_err: Exception | None = None
+            try:
+                for piece in ds.chat_stream(messages=messages, temperature=temperature, max_tokens=max_tokens):
+                    if _qa_should_cancel(tid):
+                        raise RuntimeError("canceled")
+                    if not piece:
+                        continue
+                    partial += piece
+                    now = time.monotonic()
+                    if (now - last_ui) >= 0.05 or ("\n" in piece) or ("。" in piece) or ("，" in piece):
+                        with _QA_LOCK:
+                            if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                                _QA_STATE["current"]["stage"] = "answer"
+                                _QA_STATE["current"]["partial"] = partial
+                                _QA_STATE["current"]["char_count"] = int(len(partial))
+                        last_ui = now
+            except Exception as e:
+                stream_err = e
+
+            if _qa_should_cancel(tid):
+                raise RuntimeError("canceled")
+
+            # Fallback to non-streaming when streaming yields nothing.
+            if not (partial or "").strip():
+                if isinstance(stream_err, Exception) and str(stream_err) == "canceled":
                     raise RuntimeError("canceled")
-                partial += piece
-                now = time.monotonic()
-                if (now - last_ui) >= 0.20 or ("\n\n" in piece):
-                    with _QA_LOCK:
-                        if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
-                            _QA_STATE["current"]["partial"] = partial
-                            _QA_STATE["current"]["char_count"] = int(len(partial))
-                    last_ui = now
+                resp = (ds.chat(messages=messages, temperature=temperature, max_tokens=max_tokens) or "")
+                # Progressive replay: keep UI incremental even when provider returns full text at once.
+                if resp:
+                    piece_len = 32
+                    buf = ""
+                    for i in range(0, len(resp), piece_len):
+                        if _qa_should_cancel(tid):
+                            raise RuntimeError("canceled")
+                        buf += resp[i : i + piece_len]
+                        partial = buf
+                        with _QA_LOCK:
+                            if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                                _QA_STATE["current"]["partial"] = partial
+                                _QA_STATE["current"]["char_count"] = int(len(partial))
+                        time.sleep(0.006)
+                else:
+                    partial = resp
+
+            with _QA_LOCK:
+                if isinstance(_QA_STATE.get("current"), dict) and str(_QA_STATE["current"].get("id") or "") == tid:
+                    _QA_STATE["current"]["partial"] = partial
+                    _QA_STATE["current"]["char_count"] = int(len(partial))
 
             answer = _normalize_math_markdown(_strip_model_ref_section(partial or "")).strip() or "（未返回文本）"
             chat_store.append_message(conv_id, "assistant", answer)
@@ -482,12 +568,13 @@ def _qa_worker_loop() -> None:
 
 
 def _qa_ensure_started() -> None:
-    global _QA_THREAD
-    if _QA_THREAD is not None and _QA_THREAD.is_alive():
+    t = getattr(RUNTIME, "QA_THREAD", None)
+    if t is not None and t.is_alive():
         return
     try:
-        _QA_THREAD = threading.Thread(target=_qa_worker_loop, daemon=True)
-        _QA_THREAD.start()
+        t = threading.Thread(target=_qa_worker_loop, daemon=True)
+        RUNTIME.QA_THREAD = t
+        t.start()
     except Exception as e:
         with _QA_LOCK:
             _QA_STATE["last"] = f"thread_start_fail: {e}"
@@ -640,26 +727,27 @@ def _bg_worker_loop() -> None:
 
 
 def _bg_ensure_started() -> None:
-    global _BG_THREAD
-    if _BG_THREAD is not None and _BG_THREAD.is_alive():
+    t = getattr(RUNTIME, "BG_THREAD", None)
+    if t is not None and t.is_alive():
         return
-    _BG_THREAD = threading.Thread(target=_bg_worker_loop, daemon=True)
-    _BG_THREAD.start()
+    t = threading.Thread(target=_bg_worker_loop, daemon=True)
+    RUNTIME.BG_THREAD = t
+    t.start()
 def _init_theme_css() -> None:
     st.markdown(
         """
 <style>
 :root{
-  --bg: #f6f8fc;
+  --bg: #f7f8fb;
   --panel: #ffffff;
-  --line: rgba(49, 51, 63, 0.16);
-  --muted: rgba(49, 51, 63, 0.62);
+  --line: rgba(49, 51, 63, 0.12);
+  --muted: rgba(49, 51, 63, 0.64);
   --blue-weak: #eef5ff;
   --blue-line: rgba(47, 111, 237, 0.28);
   --font-display: "LittleP", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
   --font-body: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
   --btn-bg: #ffffff;
-  --btn-border: rgba(49, 51, 63, 0.18);
+  --btn-border: rgba(49, 51, 63, 0.15);
   --btn-text: #1f2a37;
   --btn-hover: rgba(47, 111, 237, 0.06);
   --btn-active: rgba(47, 111, 237, 0.10);
@@ -672,7 +760,7 @@ def _init_theme_css() -> None:
   --pill-run: rgba(29, 78, 216, 0.95);
 }
 html, body { background: var(--bg); font-family: var(--font-body); }
-.block-container{ max-width: 1120px; padding-top: 1.6rem; padding-bottom: 2.0rem; }
+.block-container{ max-width: 1020px; padding-top: 1.6rem; padding-bottom: 6.2rem; }
 section[data-testid="stSidebar"] > div:first-child{ background: #fbfdff; border-right: 1px solid var(--line); }
 h1, h2, h3 { color: #1f2a37; letter-spacing: -0.01em; }
 h1 { font-family: var(--font-display); font-weight: 800; }
@@ -682,17 +770,20 @@ div.stButton > button{
   border: 1px solid var(--btn-border);
   color: var(--btn-text);
   border-radius: 12px;
-  padding: 0.55rem 0.95rem;
+  padding: 0.44rem 0.88rem;
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
-  width: 100%;
+  width: auto;
   min-width: 0px;
-  min-height: 44px;
+  min-height: 38px;
   line-height: 1.0;
   transition: background 120ms ease, box-shadow 120ms ease, transform 120ms ease, border-color 120ms ease;
   box-shadow: 0 1px 0 rgba(16, 24, 40, 0.03);
   -webkit-tap-highlight-color: transparent;
+}
+section[data-testid="stSidebar"] div.stButton > button{
+  width: 100%;
 }
 div.stButton > button *{
   white-space: nowrap !important;
@@ -736,9 +827,30 @@ pre{ border-radius: 12px !important; }
   color: rgba(15, 23, 42, 0.86);
   background: transparent !important;
 }
-.msg-user{ background: #eaf3ff; border: 1px solid rgba(47,111,237,0.18); border-radius: 14px; padding: 12px 14px; }
-.msg-ai{ background: transparent; border: none; border-radius: 0px; padding: 0px; }
-.msg-ai-stream{ background: #ffffff; border: 1px solid rgba(49,51,63,0.12); border-radius: 14px; padding: 12px 14px; }
+.msg-user{
+  background: #eaf2ff;
+  border: 1px solid rgba(47,111,237,0.18);
+  border-radius: 16px;
+  padding: 10px 14px;
+  width: fit-content;
+  max-width: min(820px, 88%);
+  margin-left: auto;
+  box-shadow: 0 1px 0 rgba(16,24,40,0.03);
+}
+.msg-ai{
+  background: transparent;
+  border: none;
+  border-radius: 0px;
+  padding: 0px;
+  max-width: min(900px, 94%);
+}
+.msg-ai-stream{
+  background: #ffffff;
+  border: 1px solid rgba(49,51,63,0.10);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 1px 0 rgba(16,24,40,0.03);
+}
 .kb-notice{
   font-size: 0.84rem;
   color: rgba(120, 53, 15, 0.95);
@@ -779,6 +891,22 @@ pre{ border-radius: 12px !important; }
 .kb-modal .refbox{ margin-top: 0.35rem; }
 .msg-meta{ color: rgba(49,51,63,0.62); font-size: 0.86rem; margin-bottom: 0.35rem; }
 .hr{ height:1px; background: rgba(49,51,63,0.10); margin: 1.0rem 0; }
+.msg-refs{
+  margin: 0.35rem 0 0.80rem 0;
+  padding: 0.20rem 0.30rem;
+  border-left: 2px solid rgba(47,111,237,0.16);
+}
+.queue-inline-head{
+  font-size: 0.84rem;
+  color: rgba(49,51,63,0.68);
+  margin: 0.10rem 0 0.25rem 0;
+  font-weight: 600;
+}
+.queue-inline-hint{
+  font-size: 0.82rem;
+  color: rgba(49,51,63,0.56);
+  margin: 0.08rem 0 0.42rem 0;
+}
 /* Small "generation details" text (GPT-ish, no chain-of-thought) */
 .genbox { font-size: 0.86rem; color: rgba(49,51,63,0.62); }
 .genbox code { font-size: 0.84rem; }
@@ -848,6 +976,29 @@ div[data-testid="stTextArea"]::after{
   font-size: 12px;
   color: rgba(49,51,63,0.48);
   pointer-events: none;
+}
+
+/* ChatGPT/Codex-like composer dock */
+.kb-input-dock{
+  position: sticky !important;
+  bottom: 0.35rem;
+  z-index: 24;
+  background: linear-gradient(180deg, rgba(246,248,252,0.72) 0%, rgba(246,248,252,0.96) 18%, rgba(246,248,252,0.99) 100%);
+  border: 1px solid rgba(49,51,63,0.10);
+  border-radius: 16px;
+  padding: 0.52rem 0.56rem 0.22rem 0.56rem;
+  box-shadow: 0 -8px 26px rgba(16,24,40,0.08);
+  backdrop-filter: blur(5px);
+}
+.kb-input-dock div[data-testid="stForm"]{
+  margin-bottom: 0 !important;
+}
+.kb-input-dock div[data-testid="stTextInput"]{
+  margin-bottom: 0.05rem !important;
+}
+.kb-input-dock div[data-testid="stTextInput"] input{
+  min-height: 34px !important;
+  font-size: 13px !important;
 }
 
 /* Copy bar above assistant answers */
@@ -1344,6 +1495,31 @@ def _extract_keywords_for_desc(text: str, *, max_n: int = 4) -> list[str]:
     return out2
 
 
+def _quick_answer_for_prompt(prompt_text: str) -> str | None:
+    """
+    Fast local answers for trivial identity prompts.
+    This avoids unnecessary queue stalls for basic "who are you" questions.
+    """
+    q = (prompt_text or "").strip().lower()
+    if not q:
+        return None
+    keys = [
+        "你是谁",
+        "你叫什么",
+        "你是谁开发的",
+        "你是哪家开发的",
+        "介绍一下你自己",
+        "自我介绍",
+        "who are you",
+        "what is your name",
+        "who made you",
+        "who developed you",
+    ]
+    if any(k in q for k in keys):
+        return "我是 P&I Lab 开发的 π-zaya。"
+    return None
+
+
 def _translate_query_for_search(settings, prompt_text: str) -> str | None:
     """
     Translate a CJK-only query to a compact English search query (keywords),
@@ -1362,7 +1538,53 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
     if isinstance(cached, str) and cached.strip():
         return cached.strip()
 
-    ds = DeepSeekChat(settings)
+    # Fast dictionary-based fallback for common KB terms.
+    # This keeps retrieval responsive even when translation LLM is slow/unavailable.
+    terms: list[str] = []
+    mapping = [
+        ("单像素", "single-pixel"),
+        ("单光子", "single-photon"),
+        ("单曝光", "single-shot"),
+        ("单次曝光", "single-shot"),
+        ("压缩成像", "compressive imaging"),
+        ("压缩感知", "compressed sensing"),
+        ("小波", "wavelet"),
+        ("成像", "imaging"),
+        ("重建", "reconstruction"),
+        ("采样", "sampling"),
+        ("掩膜", "mask pattern"),
+        ("编码", "coding"),
+        ("光谱", "spectral"),
+        ("超材料", "metamaterial"),
+        ("超表面", "metasurface"),
+        ("复用", "multiplexing"),
+        ("频分", "frequency-division"),
+    ]
+    for zh, en_term in mapping:
+        if zh in q:
+            terms.append(en_term)
+    if terms:
+        uniq: list[str] = []
+        seen = set()
+        for t in terms:
+            if t in seen:
+                continue
+            seen.add(t)
+            uniq.append(t)
+        heuristic = " ".join(uniq[:8]).strip()
+        if heuristic:
+            _cache_set("trans", key, heuristic, max_items=500)
+            return heuristic
+
+    try:
+        settings_fast = replace(
+            settings,
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), 8.0),
+            max_retries=0,
+        )
+    except Exception:
+        settings_fast = settings
+    ds = DeepSeekChat(settings_fast)
     system = (
         "You translate Chinese research questions into an English search query for academic retrieval.\n"
         "Rules:\n"
@@ -1532,7 +1754,14 @@ def _llm_semantic_rerank_score(settings, *, question: str, doc_headings: list[st
     return score, why
 
 
-def _search_hits_with_fallback(prompt_text: str, retriever: BM25Retriever, top_k: int, settings) -> tuple[list[dict], list[float], str, bool]:
+def _search_hits_with_fallback(
+    prompt_text: str,
+    retriever: BM25Retriever,
+    top_k: int,
+    settings,
+    *,
+    allow_translate: bool = True,
+) -> tuple[list[dict], list[float], str, bool]:
     """
     Returns: (hits_raw, scores, used_query, used_translation)
     """
@@ -1544,7 +1773,7 @@ def _search_hits_with_fallback(prompt_text: str, retriever: BM25Retriever, top_k
     # If the query is CJK-only, BM25 over English corpora can return all-zeros (but still returns arbitrary docs).
     # Try translating to English to get meaningful retrieval.
     used_trans = False
-    q2 = _translate_query_for_search(settings, q1)
+    q2 = _translate_query_for_search(settings, q1) if bool(allow_translate) else None
     if q2:
         hits2 = retriever.search(q2, top_k=max(10, top_k * 6))
         scores2 = [float(h.get("score", 0.0) or 0.0) for h in hits2]
@@ -2001,6 +2230,52 @@ def _group_hits_by_doc_for_refs(
                 meta["ref_rank"] = {"bm25": bm25, "deep": deep_best, "term_bonus": term_bonus, "llm": llm_score, "why": llm_why, "score": combined2}
                 d["meta"] = meta
 
+    docs.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+    return docs[: max(1, int(top_k_docs))]
+
+
+def _group_hits_by_doc_for_refs_fast(hits_raw: list[dict], top_k_docs: int) -> list[dict]:
+    """
+    Fast fallback for background QA worker:
+    - no full-md deep read
+    - no LLM rerank
+    - no heading extraction from file
+    """
+    by_doc: dict[str, dict] = {}
+    for h in hits_raw or []:
+        meta = h.get("meta", {}) or {}
+        src = (meta.get("source_path") or "").strip()
+        if not src:
+            continue
+        cur = by_doc.get(src)
+        sc = float(h.get("score", 0.0) or 0.0)
+        top = (meta.get("top_heading") or _top_heading(meta.get("heading_path", "")) or "").strip()
+        txt = (h.get("text") or "").strip()
+        if (cur is None) or (sc > float(cur.get("score", 0.0) or 0.0)):
+            by_doc[src] = {
+                "score": sc,
+                "id": f"doc:{hashlib.sha1(src.encode('utf-8','ignore')).hexdigest()[:12]}",
+                "text": txt,
+                "meta": {
+                    "source_path": src,
+                    "top_heading": ("" if _is_probably_bad_heading(top) else top),
+                    "ref_snippets": [txt] if txt else [],
+                    "ref_show_snippets": [_clean_snippet_for_display(txt, max_chars=900)] if txt else [],
+                    "ref_locs": ([{"heading": top, "score": sc}] if top and (not _is_probably_bad_heading(top)) else []),
+                    "ref_headings": ([top] if top and (not _is_probably_bad_heading(top)) else []),
+                    "ref_aspects": [],
+                    "ref_rank": {"bm25": sc, "deep": 0.0, "term_bonus": 0.0, "llm": 0.0, "why": "", "score": sc},
+                },
+            }
+        elif txt:
+            m = by_doc[src].get("meta") or {}
+            arr = list(m.get("ref_snippets") or [])
+            if txt not in arr and len(arr) < 2:
+                arr.append(txt)
+                m["ref_snippets"] = arr
+                m["ref_show_snippets"] = [_clean_snippet_for_display(x, max_chars=900) for x in arr]
+                by_doc[src]["meta"] = m
+    docs = list(by_doc.values())
     docs.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
     return docs[: max(1, int(top_k_docs))]
 
@@ -3073,6 +3348,10 @@ def _render_refs_panel(prompt: str | None, retriever: BM25Retriever, top_k: int,
         used_query = str(data.get("used_query") or "").strip()
 
         if not done:
+            if hits:
+                st.caption("（参考定位生成中：先展示当前候选，完成后会自动更新排序/说明。）")
+                _render_refs(hits, prompt=prompt, show_heading=False, key_ns=key_ns, settings=settings)
+                return
             st.caption("（参考定位生成中…如果你刚发送问题，这里会在检索/深读后自动更新。）")
             return
         if not hits:
@@ -3299,6 +3578,10 @@ def _page_chat(
     prompt_to_answer = ""
 
     msgs = st.session_state.get("messages") or []
+    try:
+        refs_by_user = chat_store.list_message_refs(conv_id)
+    except Exception:
+        refs_by_user = {}
     last_role = str((msgs[-1] or {}).get("role") or "") if msgs else ""
     # Track "awaiting answer" so the UI doesn't look stuck when the background worker finishes quickly.
     await_sig_state = str(st.session_state.get("await_prompt_sig") or "").strip()
@@ -3310,15 +3593,23 @@ def _page_chat(
         st.caption(S["no_msgs"])
     else:
         last_user_for_refs = None
+        last_user_msg_id = 0
+        shown_refs_user_ids: set[int] = set()
         for idx, m in enumerate(msgs):
             role = m.get("role", "user")
             content = m.get("content", "") or ""
+            try:
+                msg_id = int(m.get("id") or 0)
+            except Exception:
+                msg_id = 0
             if role == "user":
                 st.markdown("<div class='msg-meta'>你</div>", unsafe_allow_html=True)
                 # Avoid empty HTML wrappers (they render as ugly blue bars). Plain text is enough for user messages.
                 safe = html.escape(content).replace("\n", "<br/>")
                 st.markdown(f"<div class='msg-user'>{safe}</div>", unsafe_allow_html=True)
                 last_user_for_refs = content
+                if msg_id > 0:
+                    last_user_msg_id = msg_id
             else:
                 st.markdown("<div class='msg-meta'>AI</div>", unsafe_allow_html=True)
                 # Copy tools + markdown (no extra white box wrapper).
@@ -3329,6 +3620,31 @@ def _page_chat(
                     st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
                 if (body or "").strip():
                     st.markdown(_normalize_math_markdown(body))
+                if (last_user_msg_id > 0) and (last_user_msg_id not in shown_refs_user_ids):
+                    ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
+                    hits_hist = []
+                    prompt_hist = str(last_user_for_refs or "").strip()
+                    if isinstance(ref_pack, dict):
+                        hits_hist = list(ref_pack.get("hits") or [])
+                        if str(ref_pack.get("prompt") or "").strip():
+                            prompt_hist = str(ref_pack.get("prompt") or "").strip()
+                    with st.container():
+                        st.markdown("<div class='msg-refs'>", unsafe_allow_html=True)
+                        p_sig_hist = hashlib.sha1(prompt_hist.encode("utf-8", "ignore")).hexdigest()[:8] if prompt_hist else f"msg{last_user_msg_id}"
+                        open_key_hist = f"hist_{conv_id}_{last_user_msg_id}_refs_open_{p_sig_hist}"
+                        with st.expander(S["refs"], expanded=bool(st.session_state.get(open_key_hist) or False)):
+                            if hits_hist:
+                                _render_refs(
+                                    hits_hist,
+                                    prompt=prompt_hist,
+                                    show_heading=False,
+                                    key_ns=f"hist_{conv_id}_{last_user_msg_id}",
+                                    settings=settings,
+                                )
+                            else:
+                                st.caption("（未命中知识库片段：这条回答没有可定位的参考位置。）")
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    shown_refs_user_ids.add(last_user_msg_id)
             st.markdown("")
 
     # Clear awaiting flag once we have an assistant reply.
@@ -3345,19 +3661,23 @@ def _page_chat(
             last_user = (m.get("content") or "").strip()
             break
     last_user_sig = hashlib.sha1(last_user.encode("utf-8", "ignore")).hexdigest()[:12] if last_user else ""
-    awaiting_recent = bool(last_role == "user" and last_user_sig and (await_sig_state == last_user_sig) and (time.time() - float(await_ts_state or 0.0) < 45.0))
+    awaiting_recent = bool(last_role == "user" and last_user_sig and (await_sig_state == last_user_sig) and (time.time() - float(await_ts_state or 0.0) < 600.0))
     refs_slot = st.empty()
     refs_key_ns = f"latest_{st.session_state.get('conv_id','')}"
     with refs_slot.container():
         if last_user:
+            show_live_refs = bool(awaiting_recent)
             # Sync refs cache from background QA results (so refs won't "disappear" across reruns).
             try:
-                qa = _qa_snapshot(session_id=session_id)
+                # Do not scope by session_id here: a browser rerun can reset session_id,
+                # but refs should still sync by conv_id + prompt_sig.
+                qa = _qa_snapshot()
                 prompt_sig = hashlib.sha1(last_user.encode("utf-8", "ignore")).hexdigest()[:12]
                 cand = None
                 cur = qa.get("current") or {}
                 if isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id and str(cur.get("prompt_sig") or "") == prompt_sig:
                     cand = cur
+                    show_live_refs = True
                 else:
                     for t in reversed(list(qa.get("recent") or [])):
                         if not isinstance(t, dict):
@@ -3378,27 +3698,56 @@ def _page_chat(
                             "computed_at": float(cand.get("started_at") or time.time()),
                         }
                     else:
-                        cache2[ck] = {"done": False}
+                        cache2[ck] = {
+                            "hits": cand.get("refs_hits") or [],
+                            "scores": cand.get("refs_scores") or [],
+                            "used_query": str(cand.get("used_query") or "").strip(),
+                            "used_translation": bool(cand.get("used_translation") or False),
+                            "done": False,
+                            "computed_at": float(cand.get("started_at") or time.time()),
+                        }
                 # Show an always-visible progress hint even when the expander is collapsed.
                 has_task = bool(isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id and str(cur.get("prompt_sig") or "") == prompt_sig)
                 if (has_task and (not bool(cur.get("refs_done")))) or awaiting_recent:
-                    st.markdown("<div class='refbox'>参考定位：生成中…</div>", unsafe_allow_html=True)
+                    stage_now = ""
+                    hits_now = 0
+                    wait_s = 0.0
+                    try:
+                        if isinstance(cur, dict):
+                            stage_now = str(cur.get("stage") or "").strip()
+                            hits_now = int(cur.get("hits_count") or 0)
+                            wait_s = _elapsed_task_sec(cur)
+                    except Exception:
+                        stage_now = ""
+                        hits_now = 0
+                        wait_s = 0.0
+                    if (wait_s <= 0.0) and await_sig_state and (await_sig_state == prompt_sig):
+                        try:
+                            wait_s = max(0.0, time.time() - float(await_ts_state or 0.0))
+                        except Exception:
+                            wait_s = 0.0
+                    msg = f"参考定位：生成中…（阶段：{stage_now or '-'}"
+                    if hits_now > 0:
+                        msg += f"，候选片段：{hits_now}"
+                    msg += f"，已等待：{wait_s:.0f}s）"
+                    st.markdown(f"<div class='refbox'>{html.escape(msg)}</div>", unsafe_allow_html=True)
             except Exception:
                 pass
-            _render_refs_panel(last_user, retriever, top_k=top_k, settings=settings, key_ns=refs_key_ns)
-        else:
-            _render_refs_panel("", retriever, top_k=top_k, settings=settings, key_ns=refs_key_ns)
+            if show_live_refs:
+                _render_refs_panel(last_user, retriever, top_k=top_k, settings=settings, key_ns=refs_key_ns)
 
     # "Thinking / generation" should appear BEFORE the input box. We'll update these placeholders later.
     gen_panel = st.empty()
     gen_details_panel = st.empty()
 
     # Answer queue + stop button + partial output (non-blocking; background worker does the heavy work).
-    qa = _qa_snapshot(session_id=session_id)
+    # Do not filter by session_id here: reruns/reloads can change Streamlit session id.
+    qa = _qa_snapshot()
     cur = qa.get("current") or None
-    q_items = list(qa.get("queue") or [])
+    all_q_items = list(qa.get("queue") or [])
+    q_items = [t for t in all_q_items if isinstance(t, dict) and str(t.get("conv_id") or "") == conv_id]
     running_this = isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id and str(cur.get("status") or "") == "running"
-    running_session = isinstance(cur, dict) and str(cur.get("status") or "") == "running"
+    running_any = isinstance(cur, dict) and str(cur.get("status") or "") == "running"
     has_any_for_conv = False
     try:
         if isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id:
@@ -3411,71 +3760,45 @@ def _page_chat(
     except Exception:
         has_any_for_conv = False
     awaiting = bool(last_role == "user" and last_user_sig and (has_any_for_conv or awaiting_recent))
+    try:
+        pending_wait_flag = bool(
+            last_role == "user"
+            and await_sig_state
+            and (await_sig_state == last_user_sig)
+            and float(await_ts_state or 0.0) > 0.0
+            and (time.time() - float(await_ts_state or 0.0) < 180.0)
+        )
+    except Exception:
+        pending_wait_flag = False
+    # Hard pending fallback: if the latest message is still user, keep polling briefly
+    # even when queue snapshot is transiently empty. Bound this window to avoid
+    # runaway reruns for very old/stale requests.
+    try:
+        hard_pending = bool(
+            last_role == "user"
+            and last_user_sig
+            and float(await_ts_state or 0.0) > 0.0
+            and (time.time() - float(await_ts_state or 0.0) < 180.0)
+        )
+    except Exception:
+        hard_pending = False
+    try:
+        await_elapsed = max(0.0, time.time() - float(await_ts_state or 0.0))
+    except Exception:
+        await_elapsed = 0.0
+
+    def _elapsed_task_sec(task_obj: dict | None) -> float:
+        try:
+            if isinstance(task_obj, dict):
+                start = float(task_obj.get("started_at") or task_obj.get("created_at") or 0.0)
+                if start > 0:
+                    return max(0.0, time.time() - start)
+        except Exception:
+            pass
+        return float(await_elapsed)
 
     with gen_details_panel.container():
-        with st.expander("回答队列（可展开）", expanded=running_session or running_this or bool(q_items) or awaiting):
-            if running_session and isinstance(cur, dict):
-                stage = str(cur.get("stage") or "").strip()
-                char_count = int(cur.get("char_count") or 0)
-                try:
-                    elapsed = max(0.0, time.time() - float(cur.get("started_at") or time.time()))
-                except Exception:
-                    elapsed = 0.0
-                c0 = st.columns([1.2, 1.6, 9.2])
-                with c0[0]:
-                    if st.button("停止", key="qa_stop_btn", help="停止当前回答生成"):
-                        _qa_cancel(str(cur.get("id") or ""))
-                        st.experimental_rerun()
-                with c0[1]:
-                    if st.button("清空队列", key="qa_clear_btn", help="清空未开始的回答队列"):
-                        _qa_cancel_all(session_id=session_id)
-                        st.experimental_rerun()
-                with c0[2]:
-                    ptxt = str(cur.get("prompt") or "")
-                    ptxt_s = (ptxt[:60] + "…") if len(ptxt) > 60 else ptxt
-                    other = ""
-                    try:
-                        other = "（其他对话）" if str(cur.get("conv_id") or "") != conv_id else ""
-                    except Exception:
-                        other = ""
-                    st.caption(f"当前{other}：{ptxt_s} | 阶段：{stage or '-'} | 已等待：{elapsed:.0f}s | 已生成：{char_count}")
-            elif q_items:
-                c1 = st.columns([1.6, 10.4])
-                with c1[0]:
-                    if st.button("清空队列", key="qa_clear_btn2"):
-                        _qa_cancel_all(session_id=session_id)
-                        st.experimental_rerun()
-                with c1[1]:
-                    st.caption(f"队列中共有 {len(q_items)} 条待回答。")
-            else:
-                if awaiting and last_user:
-                    st.caption("已提交问题，后台处理中…")
-                    last_note = str(qa.get("last") or "").strip()
-                    if isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id:
-                        st.caption(f"阶段：{str(cur.get('stage') or '-')}")
-                        try:
-                            elapsed2 = max(0.0, time.time() - float(cur.get('started_at') or time.time()))
-                            st.caption(f"已等待：{elapsed2:.0f}s")
-                        except Exception:
-                            pass
-                    if last_note:
-                        st.caption(f"状态：{last_note}")
-                else:
-                    st.caption("（队列为空）")
-
-            if q_items:
-                for i, t in enumerate(q_items, start=1):
-                    if not isinstance(t, dict):
-                        continue
-                    pid = str(t.get("id") or "")
-                    ptxt = str(t.get("prompt") or "")
-                    cc = st.columns([1.0, 11.0])
-                    with cc[0]:
-                        if st.button("×", key=f"qa_rm_{pid}", help="从队列中移除这条问题"):
-                            _qa_cancel(pid)
-                            st.experimental_rerun()
-                    with cc[1]:
-                        st.caption(f"[{i}] {ptxt[:120]}{'…' if len(ptxt) > 120 else ''}")
+        pass
 
     if running_this and isinstance(cur, dict):
         with gen_panel.container():
@@ -3496,7 +3819,7 @@ def _page_chat(
                 st.markdown(_normalize_math_markdown(body))
             else:
                 st.caption("（生成中…）")
-    elif running_session and isinstance(cur, dict):
+    elif running_any and isinstance(cur, dict):
         # There's a running task in this browser session, but it's not for this conversation.
         with gen_panel.container():
             st.markdown("<div class='msg-meta'>AI（后台处理中）</div>", unsafe_allow_html=True)
@@ -3507,28 +3830,56 @@ def _page_chat(
         with gen_panel.container():
             st.markdown("<div class='msg-meta'>AI（处理中）</div>", unsafe_allow_html=True)
             stage_txt = ""
+            wait_s = 0.0
             if isinstance(cur, dict) and str(cur.get("conv_id") or "") == conv_id:
                 stage_txt = str(cur.get("stage") or "").strip()
                 if str(cur.get("status") or "").strip():
                     stage_txt = (stage_txt + f" / {str(cur.get('status') or '').strip()}").strip(" /")
-            st.caption(f"正在检索/阅读知识库…{('（阶段：' + stage_txt + '）') if stage_txt else ''}")
+                wait_s = _elapsed_task_sec(cur)
+            if (wait_s <= 0.0) and bool(pending_wait_flag):
+                wait_s = float(await_elapsed)
+            st.caption(f"正在检索/阅读知识库…{('（阶段：' + stage_txt + '）') if stage_txt else ''}{(f' 已等待 {wait_s:.0f}s') if wait_s > 0 else ''}")
+            if wait_s >= 18.0:
+                st.warning("当前问题耗时较长。你可以继续提问（进入队列），或点击“停止”后重试更短的问题。")
 
     # Auto refresh while running/queued/awaiting so the UI doesn't look "stuck" without manual clicks.
-    if bool(running_session) or bool(q_items) or bool(awaiting):
+    active_poll = bool(running_any) or bool(q_items) or bool(awaiting) or bool(pending_wait_flag) or bool(hard_pending)
+    if active_poll:
         components.html(
             """
 <script>
 (function () {
   try {
-    const root = window.parent;
+    const root = window.parent || window.top || window;
     if (!root) return;
-    if (root._kbQaAutoRefreshTimer) return;
-    root._kbQaAutoRefreshTimer = setTimeout(function () {
+    if (root._kbQaAutoRefreshInterval) return;
+    root._kbQaAutoRefreshInterval = setInterval(function () {
       try {
-        root._kbQaAutoRefreshTimer = null;
-        root.postMessage({ isStreamlitMessage: true, type: "streamlit:rerunScript" }, "*");
+        const msg = { isStreamlitMessage: true, type: "streamlit:rerunScript" };
+        root.postMessage(msg, "*");
+        if (window.top && window.top !== root) window.top.postMessage(msg, "*");
+        if (window.parent && window.parent !== root) window.parent.postMessage(msg, "*");
       } catch (e) {}
-    }, 700);
+    }, 240);
+  } catch (e) {}
+})();
+</script>
+            """,
+            height=0,
+        )
+    else:
+        # Ensure the interval is cleared when idle; avoid unnecessary reruns.
+        components.html(
+            """
+<script>
+(function () {
+  try {
+    const root = window.parent || window.top || window;
+    if (!root) return;
+    if (root._kbQaAutoRefreshInterval) {
+      clearInterval(root._kbQaAutoRefreshInterval);
+      root._kbQaAutoRefreshInterval = null;
+    }
   } catch (e) {}
 })();
 </script>
@@ -3536,11 +3887,121 @@ def _page_chat(
             height=0,
         )
 
-    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-    st.subheader(S["input"])
+    # Keep polling non-blocking here; do not call server-side rerun before rendering input widgets.
+
+    st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
 
     if "pending_prompt" not in st.session_state:
         st.session_state["pending_prompt"] = ""
+
+    # Inline queue controls, attached to the composer area (ChatGPT/Codex-like).
+    if running_any or q_items or awaiting:
+        with st.container():
+            st.markdown("<div class='queue-inline-head'>队列</div>", unsafe_allow_html=True)
+            if running_any and isinstance(cur, dict):
+                stage = str(cur.get("stage") or "").strip()
+                char_count = int(cur.get("char_count") or 0)
+                elapsed = _elapsed_task_sec(cur)
+                if (elapsed <= 0.0) and bool(pending_wait_flag):
+                    elapsed = float(await_elapsed)
+                ptxt = str(cur.get("prompt") or "")
+                ptxt_s = (ptxt[:56] + "…") if len(ptxt) > 56 else ptxt
+                other = ""
+                try:
+                    other = "（其他对话）" if str(cur.get("conv_id") or "") != conv_id else ""
+                except Exception:
+                    other = ""
+                st.markdown(
+                    f"<div class='queue-inline-hint'>当前{html.escape(other)}：{html.escape(ptxt_s)} | 阶段：{html.escape(stage or '-')} | 已等待：{elapsed:.0f}s | 已生成：{char_count}</div>",
+                    unsafe_allow_html=True,
+                )
+                c0 = st.columns([1.2, 1.6, 9.2])
+                with c0[0]:
+                    if st.button("停止", key="qa_stop_btn_comp", help="停止当前回答生成"):
+                        _qa_cancel(str(cur.get("id") or ""))
+                        st.experimental_rerun()
+                with c0[1]:
+                    if st.button("清空队列", key="qa_clear_btn_comp", help="清空未开始的回答队列"):
+                        for tq in list(all_q_items):
+                            try:
+                                if str((tq or {}).get("session_id") or "") != session_id:
+                                    continue
+                                umid = int((tq or {}).get("user_msg_id") or 0)
+                                if umid > 0:
+                                    chat_store.delete_message(umid)
+                            except Exception:
+                                pass
+                        _qa_cancel_all(session_id=session_id)
+                        st.session_state["messages"] = chat_store.get_messages(conv_id)
+                        st.experimental_rerun()
+            elif awaiting and last_user:
+                last_note = str(qa.get("last") or "").strip()
+                wait_txt = f"{await_elapsed:.0f}s" if await_elapsed > 0 else "0s"
+                st.markdown(
+                    f"<div class='queue-inline-hint'>已提交问题，后台处理中… 已等待：{html.escape(wait_txt)}</div>",
+                    unsafe_allow_html=True,
+                )
+                if last_note:
+                    st.markdown(f"<div class='queue-inline-hint'>状态：{html.escape(last_note)}</div>", unsafe_allow_html=True)
+            elif q_items:
+                c1 = st.columns([1.6, 10.4])
+                with c1[0]:
+                    if st.button("清空队列", key="qa_clear_btn_comp2"):
+                        for tq in list(all_q_items):
+                            try:
+                                if str((tq or {}).get("session_id") or "") != session_id:
+                                    continue
+                                umid = int((tq or {}).get("user_msg_id") or 0)
+                                if umid > 0:
+                                    chat_store.delete_message(umid)
+                            except Exception:
+                                pass
+                        _qa_cancel_all(session_id=session_id)
+                        st.session_state["messages"] = chat_store.get_messages(conv_id)
+                        st.experimental_rerun()
+                with c1[1]:
+                    st.markdown(f"<div class='queue-inline-hint'>队列中共有 {len(q_items)} 条待回答。</div>", unsafe_allow_html=True)
+
+            if q_items:
+                st.markdown("<div class='queue-inline-hint'>待处理问题（可编辑/删除）：</div>", unsafe_allow_html=True)
+                for i, t in enumerate(q_items, start=1):
+                    if not isinstance(t, dict):
+                        continue
+                    pid = str(t.get("id") or "")
+                    ptxt = str(t.get("prompt") or "")
+                    try:
+                        msg_id = int(t.get("user_msg_id") or 0)
+                    except Exception:
+                        msg_id = 0
+                    draft_key = f"qa_edit_draft_{pid}"
+                    if draft_key not in st.session_state:
+                        st.session_state[draft_key] = ptxt
+                    cc = st.columns([0.8, 8.9, 1.4, 1.4])
+                    with cc[0]:
+                        st.caption(f"[{i}]")
+                    with cc[1]:
+                        st.text_input(
+                            " ",
+                            key=draft_key,
+                            placeholder="可编辑队列问题",
+                        )
+                    with cc[2]:
+                        if st.button("保存", key=f"qa_save_comp_{pid}", help="保存队列问题修改"):
+                            new_prompt = str(st.session_state.get(draft_key) or "").strip()
+                            if new_prompt and (new_prompt != ptxt):
+                                if _qa_update_queued(pid, prompt=new_prompt):
+                                    if msg_id > 0:
+                                        chat_store.update_message_content(msg_id, new_prompt)
+                                    st.session_state["messages"] = chat_store.get_messages(conv_id)
+                            st.experimental_rerun()
+                    with cc[3]:
+                        if st.button("删除", key=f"qa_rm_comp_{pid}", help="从队列中移除这条问题"):
+                            _qa_cancel(pid)
+                            if msg_id > 0:
+                                chat_store.delete_message(msg_id)
+                            st.session_state.pop(draft_key, None)
+                            st.session_state["messages"] = chat_store.get_messages(conv_id)
+                            st.experimental_rerun()
 
     with st.form(key="prompt_form", clear_on_submit=True):
         prompt_val = st.text_area(S["prompt_label"], height=120, key="prompt_text")
@@ -3580,6 +4041,12 @@ def _page_chat(
   function hook() {
     const ta = findPromptTextarea();
     if (!ta) return;
+    const form =
+      (ta && ta.closest('div[data-testid="stForm"]')) ||
+      (ta && ta.closest('form'));
+    if (form && !form.classList.contains('kb-input-dock')) {
+      form.classList.add('kb-input-dock');
+    }
     if (ta.dataset.kbCtrlEnterHooked === "1") return;
     ta.dataset.kbCtrlEnterHooked = "1";
     ta.addEventListener('keydown', function (e) {
@@ -3602,8 +4069,12 @@ def _page_chat(
     if submitted:
         txt = (prompt_val or "").strip()
         if txt:
-            chat_store.append_message(conv_id, "user", txt)
+            try:
+                user_msg_id = int(chat_store.append_message(conv_id, "user", txt) or 0)
+            except Exception:
+                user_msg_id = 0
             chat_store.set_title_if_default(conv_id, txt)
+            st.session_state["messages"] = chat_store.get_messages(conv_id)
             st.session_state["await_prompt_sig"] = hashlib.sha1(txt.encode("utf-8", "ignore")).hexdigest()[:12]
             st.session_state["await_prompt_ts"] = time.time()
             _qa_enqueue(
@@ -3622,10 +4093,40 @@ def _page_chat(
                     "deep_read": bool(deep_read),
                     "llm_rerank": bool(st.session_state.get("llm_rerank")),
                     "settings_obj": settings,
+                    "user_msg_id": int(user_msg_id),
                 }
             )
             st.session_state["pending_prompt"] = ""
             st.experimental_rerun()
+
+    # Server-side fallback polling (after input widgets are rendered):
+    # keep a self-sustained heartbeat rerun while active polling is needed.
+    # This avoids "must click another button to refresh" when front-end postMessage
+    # refresh is dropped by browser/runtime.
+    if active_poll and (not submitted) and (not prompt_to_answer):
+        try:
+            now = time.time()
+            last_poll = float(st.session_state.get("_qa_server_poll_at") or 0.0)
+            # Running task => tighter cadence for smoother partial output.
+            # Queue-only / pending-only => slightly slower cadence to reduce load.
+            if running_any or running_this:
+                poll_interval = 0.12
+            elif q_items:
+                poll_interval = 0.22
+            else:
+                poll_interval = 0.28
+        except Exception:
+            now = time.time()
+            last_poll = 0.0
+            poll_interval = 0.18
+        remain = float(poll_interval) - max(0.0, now - last_poll)
+        if remain > 0.0:
+            # Sleep a little before rerun so polling is periodic even without JS events.
+            time.sleep(min(remain, float(poll_interval)))
+        st.session_state["_qa_server_poll_at"] = time.time()
+        st.experimental_rerun()
+    elif not active_poll:
+        st.session_state["_qa_server_poll_at"] = 0.0
 
     if not prompt_to_answer:
         return
@@ -3873,6 +4374,18 @@ def _page_chat(
 
 def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: Path, prefs: dict, retriever_reload_flag: dict) -> None:
     _bg_ensure_started()
+
+    retriever_err = str(st.session_state.get("retriever_load_error") or "").strip()
+    if retriever_err:
+        st.error(f"\u77e5\u8bc6\u5e93\u52a0\u8f7d\u5931\u8d25\uff1a{retriever_err}")
+        st.caption("\u4f60\u4ecd\u7136\u53ef\u4ee5\u5728\u8fd9\u4e2a\u9875\u9762\u8f6c\u6362/\u66f4\u65b0\u77e5\u8bc6\u5e93\uff0c\u4fee\u590d\u540e\u56de\u5230\u300c\u5bf9\u8bdd\u300d\u9875\u5373\u53ef\u6b63\u5e38\u68c0\u7d22\u3002")
+
+    try:
+        r = st.session_state.get("retriever")
+        if bool(getattr(r, "is_empty", False)):
+            st.info("\u5f53\u524d DB \u8fd8\u6ca1\u6709\u4efb\u4f55 chunks\u3002\u7b2c\u4e00\u6b21\u4f7f\u7528\u8bf7\uff1a\u9009\u62e9 PDF \u76ee\u5f55 \u2192 \u8f6c\u6362\u6210 MD \u2192 \u70b9\u51fb\u300c\u66f4\u65b0\u77e5\u8bc6\u5e93\u300d\u3002")
+    except Exception:
+        pass
 
     def _guess_default_pdf_dir() -> Path:
         env = (os.environ.get("KB_PDF_DIR") or "").strip().strip("'\"")
@@ -4916,7 +5429,13 @@ def main() -> None:
     need_reload = ("retriever" not in st.session_state) or bool(reload_btn) or (cur_mtime and prev_mtime and cur_mtime > prev_mtime + 1e-6)
     if need_reload:
         with st.spinner("\u52a0\u8f7d\u77e5\u8bc6\u5e93..."):
-            st.session_state["retriever"] = _load_retriever(db_dir)
+            st.session_state.pop("retriever_load_error", None)
+            try:
+                st.session_state["retriever"] = _load_retriever(db_dir)
+            except Exception as e:
+                # Never crash the UI for new users / empty DB / corrupt chunks; fall back to an empty retriever.
+                st.session_state["retriever"] = BM25Retriever([])
+                st.session_state["retriever_load_error"] = f"{type(e).__name__}: {e}"
             st.session_state["db_mtime"] = cur_mtime or time.time()
 
     if clear_btn:
