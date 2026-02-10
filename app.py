@@ -558,9 +558,21 @@ def _group_hits_by_top_heading(hits: list[dict], top_k: int) -> list[dict]:
 
 def _load_retriever(db_dir: Path) -> BM25Retriever:
     chunks = load_all_chunks(db_dir)
-    if not chunks:
-        raise RuntimeError(S["kb_empty"].format(db=db_dir))
     return BM25Retriever(chunks)
+
+
+def _render_kb_empty_hint(*, compact: bool = False) -> None:
+    msg = "知识库还没有建好（DB 为空）。请到「文献管理」页：设置 PDF 目录 → 转换成 MD → 点击「更新知识库」。"
+    if compact:
+        st.caption(f"（{msg}）")
+    else:
+        c = st.columns([1.6, 10.4])
+        with c[0]:
+            if st.button("去文献管理", key="kb_empty_go_library"):
+                st.session_state["page_radio"] = S["page_library"]
+                st.experimental_rerun()
+        with c[1]:
+            st.info(msg)
 
 
 def _normalize_math_markdown(text: str) -> str:
@@ -2450,15 +2462,23 @@ def _render_refs_panel(prompt: str | None, retriever: BM25Retriever, top_k: int,
             st.caption("（暂无可定位的问题）")
             return
 
+        if bool(getattr(retriever, "is_empty", False)):
+            _render_kb_empty_hint(compact=True)
+            return
+
         cache = st.session_state.setdefault("refs_cache2", {})
         ck = _refs_cache2_key(prompt, top_k=top_k, settings=settings)
         data = cache.get(ck) or {}
+        done = bool(data.get("done") or False)
         hits = data.get("hits") or []
         used_translation = bool(data.get("used_translation") or False)
         used_query = str(data.get("used_query") or "").strip()
 
-        if not hits:
+        if not done:
             st.caption("（参考定位生成中…如果你刚发送问题，这里会在检索/深读后自动更新。）")
+            return
+        if not hits:
+            st.caption("（未命中知识库片段：本次问题在知识库中没有找到可定位的原文位置。）")
             return
 
         if used_translation:
@@ -2653,6 +2673,9 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
     st.session_state["show_context"] = bool(show_context)
     st.session_state["deep_read"] = bool(deep_read)
 
+    if bool(getattr(retriever, "is_empty", False)):
+        _render_kb_empty_hint()
+
     # If there's a pending prompt, append it first so the user can see what they just asked
     # while the model is thinking (same run).
     prompt_to_answer = (st.session_state.get("pending_prompt") or "").strip()
@@ -2799,14 +2822,25 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
         cache2 = st.session_state.setdefault("refs_cache2", {})
         ck2 = _refs_cache2_key(prompt_to_answer, top_k=top_k, settings=settings)
         existing = cache2.get(ck2) or {}
-        if not (isinstance(existing, dict) and (existing.get("hits") or [])):
+        if not (isinstance(existing, dict) and bool(existing.get("done") or False)):
             with refs_slot.container():
-                # Visible feedback (even when the expander is collapsed).
-                st.markdown("<div class='refbox'>参考定位：生成中…</div>", unsafe_allow_html=True)
-                if used_translation:
-                    st.caption("（已将中文问题转换为英文检索关键词后再检索。）")
+                if bool(getattr(retriever, "is_empty", False)):
+                    st.markdown("<div class='refbox'>参考定位：知识库为空（请先在“文献管理”里更新知识库）</div>", unsafe_allow_html=True)
+                    cache2[ck2] = {
+                        "hits": [],
+                        "scores": _scores_raw,
+                        "used_query": used_query,
+                        "used_translation": bool(used_translation),
+                        "done": True,
+                        "computed_at": time.time(),
+                    }
+                else:
+                    # Visible feedback (even when the expander is collapsed).
+                    st.markdown("<div class='refbox'>参考定位：生成中…</div>", unsafe_allow_html=True)
+                    if used_translation:
+                        st.caption("（已将中文问题转换为英文检索关键词后再检索。）")
 
-                with st.spinner("正在定位参考文献（合并同一篇文献 → 深读少量命中 → 语义重排）..."):
+                    with st.spinner("正在定位参考文献（合并同一篇文献 → 深读少量命中 → 语义重排）..."):
                         grouped_docs = _group_hits_by_doc_for_refs(
                             hits_raw,
                             prompt_text=prompt_to_answer,
@@ -2817,12 +2851,14 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
                             settings=settings,
                         )
 
-                cache2[ck2] = {
-                    "hits": grouped_docs,
-                    "scores": _scores_raw,
-                    "used_query": used_query,
-                    "used_translation": bool(used_translation),
-                }
+                    cache2[ck2] = {
+                        "hits": grouped_docs,
+                        "scores": _scores_raw,
+                        "used_query": used_query,
+                        "used_translation": bool(used_translation),
+                        "done": True,
+                        "computed_at": time.time(),
+                    }
 
                 p_sig2 = hashlib.sha1(prompt_to_answer.encode("utf-8", "ignore")).hexdigest()[:8] if prompt_to_answer else "noprompt"
                 open_key2 = f"{refs_key_ns}_refs_open_{p_sig2}"
@@ -2831,7 +2867,11 @@ def _page_chat(settings, chat_store: ChatStore, retriever: BM25Retriever, top_k:
                 with st.expander(S["refs"], expanded=expanded2):
                     if bool(st.session_state.get("debug_rank")) and used_query:
                         st.caption(f"rank debug: query={used_query}")
-                    _render_refs(grouped_docs, prompt=prompt_to_answer, show_heading=False, key_ns=refs_key_ns, settings=settings)
+                    grouped_docs2 = (cache2.get(ck2) or {}).get("hits") or []
+                    if grouped_docs2:
+                        _render_refs(grouped_docs2, prompt=prompt_to_answer, show_heading=False, key_ns=refs_key_ns, settings=settings)
+                    else:
+                        _render_kb_empty_hint(compact=True) if bool(getattr(retriever, "is_empty", False)) else st.caption("（未命中知识库片段：本次问题在知识库中没有找到可定位的原文位置。）")
     except Exception:
         # Never fail the main answering flow because refs failed.
         pass

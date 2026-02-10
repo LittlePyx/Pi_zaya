@@ -17,11 +17,19 @@ class Hit:
 
 class BM25Retriever:
     def __init__(self, chunks: list[dict]) -> None:
-        self._chunks = chunks
-        self._corpus_tokens = [tokenize(c.get("text", "")) for c in chunks]
-        self._bm25 = BM25Okapi(self._corpus_tokens)
+        # New users may run the app before ingesting any Markdown into the DB.
+        # BM25Okapi cannot be initialized with an empty corpus, so we treat empty DB as "no hits".
+        self._chunks = list(chunks or [])
+        self._corpus_tokens = [tokenize(c.get("text", "")) for c in self._chunks]
+        self._bm25 = BM25Okapi(self._corpus_tokens) if self._corpus_tokens else None
+
+    @property
+    def is_empty(self) -> bool:
+        return not self._chunks
 
     def search(self, query: str, top_k: int = 6) -> list[dict]:
+        if self._bm25 is None:
+            return []
         q = tokenize(query)
         if not q:
             return []
