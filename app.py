@@ -2231,8 +2231,12 @@ def _render_refs(
             if pdf_path and pdf_path.exists():
                 k = hashlib.md5((src + "|" + str(pdf_path)).encode("utf-8", "ignore")).hexdigest()[:10]
                 if st.button("打开PDF", key=f"{key_ns}_openpdf_{i}_{k}", help=str(pdf_path)):
-                    ok, msg = _open_pdf_at(pdf_path, page=int(p0) if (p0 is not None) else None)
-                    (st.caption if ok else st.warning)(msg)
+                    page_to_open = int(p0) if (p0 is not None) else None
+                    ok, _msg = _open_pdf_at(pdf_path, page=page_to_open)
+                    if ok:
+                        st.caption(f"已打开（p.{page_to_open}）" if page_to_open else "已打开")
+                    else:
+                        st.warning("打开失败（可尝试在资源管理器中手动打开）")
 
     for i, h in enumerate(head, start=1):
         _render_one(i, h)
