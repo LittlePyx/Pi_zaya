@@ -1000,6 +1000,7 @@ def _query_term_profile(prompt_text: str, used_query: str) -> dict[str, bool]:
     p = {
         "wants_single_shot": ("单曝光" in zh) or ("单次曝光" in zh) or ("single-shot" in en) or ("single shot" in en) or ("single exposure" in en) or ("snapshot" in en),
         "wants_single_pixel": ("单像素" in zh) or ("single-pixel" in en) or ("single pixel" in en),
+        "wants_single_photon": ("单光子" in zh) or ("single photon" in en) or ("spad" in en) or ("sns" in en) or ("nanowire" in en),
         "wants_compressive": ("压缩" in zh) or ("compressive" in en),
         "wants_spectral": ("光谱" in zh) or ("spectral" in en),
     }
@@ -1013,6 +1014,7 @@ def _doc_term_bonus(profile: dict[str, bool], doc_name: str, snippets: list[str]
     hay = _norm_text_for_match(doc_name or "") + "\n" + _norm_text_for_match("\n".join(snippets or []))
     has_single_shot = any(k in hay for k in ["single-shot", "single shot", "single exposure", "snapshot"])
     has_single_pixel = any(k in hay for k in ["single-pixel", "single pixel"])
+    has_single_photon = any(k in hay for k in ["single-photon", "single photon", "spad", "sns", "snspd", "nanowire"])
     has_spectral = "spectral" in hay
     has_compressive = "compressive" in hay
 
@@ -1026,6 +1028,13 @@ def _doc_term_bonus(profile: dict[str, bool], doc_name: str, snippets: list[str]
         if has_single_pixel:
             bonus += 2.2
         if has_single_shot and (not has_single_pixel):
+            bonus -= 1.6
+        if has_single_photon and (not has_single_pixel):
+            bonus -= 2.0
+    if profile.get("wants_single_photon"):
+        if has_single_photon:
+            bonus += 2.0
+        if has_single_pixel and (not has_single_photon):
             bonus -= 1.6
     if profile.get("wants_spectral"):
         bonus += 0.9 if has_spectral else -0.6
@@ -1237,6 +1246,8 @@ def _preferred_section_keys(prompt_text: str) -> list[str]:
         return ["references", "bibliography"]
     if re.search(r"(是什么|定义|含义|概念|what is|definition)", prompt_text or "", flags=re.I):
         return ["abstract", "introduction", "overview", "background"]
+    if re.search(r"(编码|掩膜|码|pattern|mask|sampling|coded|coding|hadamard|fourier|dmd|metamaterial|multiplex)", prompt_text or "", flags=re.I):
+        return ["method", "approach", "model", "coding", "encoding", "pattern", "mask", "sampling", "implementation"]
     if re.search(r"(公式|推导|证明|算法|方法|实现|derive|equation|method|approach|model)", prompt_text or "", flags=re.I):
         return ["method", "approach", "model", "algorithm", "theory"]
     if re.search(r"(实验|结果|指标|性能|对比|消融|experiment|result|evaluation|ablation|baseline|compare)", prompt_text or "", flags=re.I):
@@ -1286,16 +1297,80 @@ def _aspects_from_snippets(snippets: list[str], prompt_text: str) -> list[str]:
         if any(k in text for k in keys):
             out.append(label)
 
-    # Imaging / compressive sensing / NeRF-ish common aspects
-    add("测量/前向模型", "forward model", "measurement model", "measurement", "sensing", "编码", "光谱", "snapshot", "compressive")
-    add("光学/硬件架构", "hardware", "optical", "disperser", "camera", "mask", "sensor", "system")
-    add("重建/反演算法", "reconstruction", "inverse", "recover", "optimization", "solver", "iter", "algorithm")
-    add("损失/目标函数", "loss", "objective", "regular", "prior", "constraint")
+    q = (prompt_text or "")
+    wants_encoding = bool(re.search(r"(编码|掩膜|pattern|mask|sampling|hadamard|fourier|dmd|metamaterial|multiplex|coded|coding)", q, flags=re.I))
+    wants_detector = bool(re.search(r"(单光子|探测器|spad|snspd|nanowire|dark count|jitter|quantum efficiency|detector)", q, flags=re.I))
+    wants_compare = bool(re.search(r"(对比|比较|baseline|compare|ablation|消融)", q, flags=re.I))
+    wants_metrics = bool(re.search(r"(指标|性能|效率|灵敏度|暗计数|jitter|psnr|ssim|efficiency|dcr)", q, flags=re.I))
+
+    # If user clearly asks about detectors, prioritize detector aspects.
+    if wants_detector:
+        add("探测原理/工作机制", "spad", "avalanche", "geiger", "nanowire", "snspd", "superconduct", "transition edge", "tes")
+        add("器件结构/材料体系", "semiconductor", "bulk", "low-dimensional", "perovskite", "superconduct", "nanowire", "material")
+        add("关键指标与权衡", "dark count", "dcr", "time jitter", "jitter", "efficiency", "quantum efficiency", "snr", "time resolution")
+        add("应用场景", "application", "lidar", "imaging", "communication", "quantum", "bio")
+        if wants_compare:
+            add("对比/优缺点总结", "compare", "comparison", "advantage", "disadvantage", "trade-off", "baseline")
+        # Add a couple of anchor terms (makes the hint less template-like).
+        anchors = []
+        for k, lab in [
+            ("spad", "SPAD"),
+            ("snspd", "SNSPD"),
+            ("nanowire", "纳米线"),
+            ("transition edge", "TES"),
+            ("perovskite", "钙钛矿"),
+        ]:
+            if k in text and lab not in anchors:
+                anchors.append(lab)
+        if anchors and out:
+            out[0] = out[0] + "（" + "、".join(anchors[:2]) + "）"
+        return out[:4]
+
+    # Imaging / compressive sensing / single-pixel etc.
+    if wants_encoding:
+        add("编码/采样策略", "hadamard", "fourier", "pattern", "mask", "dmd", "coded", "coding", "sampling", "multiplex", "frequency-division", "metamaterial", "metasurface", "speckle")
+
+    add("测量/前向模型", "forward model", "measurement model", "measurement", "sensing", "compressive", "snapshot", "ghost imaging", "single-pixel", "single pixel", "spi")
+    add("光学/硬件架构", "hardware", "optical", "disperser", "camera", "mask", "sensor", "system", "metamaterial", "metasurface")
+    add("重建/反演算法", "reconstruction", "inverse", "recover", "optimization", "solver", "iter", "algorithm", "unrolling", "tv", "l1")
     add("训练设置/实现细节", "implementation", "training", "hyperparameter", "batch", "lr", "learning rate")
+    add("损失/正则项", "loss", "objective", "regular", "prior", "constraint")
     add("实验设置/数据集", "dataset", "benchmark", "setup", "scene", "real data", "simulated")
     add("评价指标/对比结果", "psnr", "ssim", "metric", "performance", "compare", "baseline", "ablation", "result")
     add("局限/失败案例", "limitation", "failure", "future work", "discussion")
     add("可追溯参考文献", "references", "bibliography")
+
+    # Make aspects more query-driven: if user asked for metrics/compare, prioritize those.
+    if wants_metrics and ("评价指标/对比结果" in out):
+        out.remove("评价指标/对比结果")
+        out.insert(0, "评价指标/对比结果")
+    if wants_compare and ("评价指标/对比结果" in out) and out[0] != "评价指标/对比结果":
+        try:
+            out.remove("评价指标/对比结果")
+        except Exception:
+            pass
+        out.insert(0, "评价指标/对比结果")
+
+    # Add anchor terms to the encoding aspect for better specificity.
+    if any(x.startswith("编码/采样策略") for x in out):
+        anchors = []
+        for k, lab in [
+            ("hadamard", "Hadamard"),
+            ("fourier", "Fourier"),
+            ("dmd", "DMD"),
+            ("frequency-division", "频分复用"),
+            ("multiplex", "复用"),
+            ("metamaterial", "超材料"),
+            ("metasurface", "超表面"),
+            ("speckle", "散斑"),
+        ]:
+            if k in text and lab not in anchors:
+                anchors.append(lab)
+        if anchors:
+            for i, v in enumerate(out):
+                if v.startswith("编码/采样策略"):
+                    out[i] = "编码/采样策略（" + "、".join(anchors[:2]) + "）"
+                    break
 
     # If user asks definition-like questions, ensure '概念定义' appears when possible.
     if re.search(r"(是什么|定义|含义|概念|what is|definition)", prompt_text or "", flags=re.I):
@@ -1341,7 +1416,9 @@ def _group_hits_by_doc_for_refs(
     # Keep it fast: do NOT do full-doc deep scoring for every hit.
     # Deep-read expansion (reading full md) is only applied to a couple of top docs.
     deep_expand_docs = 2 if deep_read else 0
-    for _best, src in doc_order:
+    # Bound work: only consider a limited number of candidate docs.
+    max_docs_consider = max(int(top_k_docs) * 2, 12)
+    for _best, src in doc_order[:max_docs_consider]:
         hs = by_doc.get(src) or []
         hs2 = sorted(hs, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
         best_score = float(hs2[0].get("score", 0.0) or 0.0) if hs2 else 0.0
@@ -1381,21 +1458,20 @@ def _group_hits_by_doc_for_refs(
                     pass
 
         # Final heading MUST be a real heading from this doc.
-        # Prefer headings already attached to hits (grounded), and only read full heading list for a couple top docs.
+        # Prefer headings already attached to hits (grounded), but also read real md headings for navigation.
         best_heading = _pick_best_heading_for_doc(cand, prompt_text)
         headings_for_pack: list[str] = []
-        if deep_read and (len(docs) < deep_expand_docs):
-            try:
-                prefer = _preferred_section_keys(prompt_text)
-                picked = _pick_heading_from_md(Path(src), deep_query or prompt_text, prefer=prefer)
-                if picked:
-                    best_heading = picked
-            except Exception:
-                pass
-            try:
-                headings_for_pack = _extract_md_headings(Path(src), max_n=40)
-            except Exception:
-                headings_for_pack = []
+        try:
+            prefer = _preferred_section_keys(prompt_text)
+            picked = _pick_heading_from_md(Path(src), deep_query or prompt_text, prefer=prefer)
+            if picked:
+                best_heading = picked
+        except Exception:
+            pass
+        try:
+            headings_for_pack = _extract_md_headings(Path(src), max_n=40)
+        except Exception:
+            headings_for_pack = []
         if not headings_for_pack:
             # Minimal heading set: only what we have seen from hits/deep-read.
             seen_h2: list[str] = []
@@ -1951,6 +2027,8 @@ def _render_refs(
             if en:
                 if any(x in t for x in ["what is", "meaning", "define", "definition"]):
                     return "definition / problem setup"
+                if any(x in t for x in ["coding", "coded", "pattern", "mask", "sampling", "hadamard", "fourier", "dmd", "metamaterial", "multiplex"]):
+                    return "coding / sampling patterns"
                 if any(x in t for x in ["how", "algorithm", "method", "derive", "equation", "formula", "implementation"]):
                     return "method / key equations"
                 if any(x in t for x in ["compare", "difference", "vs", "baseline", "ablation"]):
@@ -1961,6 +2039,8 @@ def _render_refs(
             else:
                 if re.search(r"(是什么|定义|含义|概念)", text or ""):
                     return "概念定义/问题设定"
+                if re.search(r"(编码|掩膜|pattern|mask|采样|hadamard|fourier|dmd|超材料|复用|coded|coding)", text or "", flags=re.I):
+                    return "编码/采样方案"
                 if re.search(r"(怎么|如何|步骤|实现|算法|公式|推导)", text or ""):
                     return "方法/关键公式/实现细节"
                 if re.search(r"(对比|区别|优缺点|比较|消融)", text or ""):
