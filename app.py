@@ -704,6 +704,22 @@ textarea, input{ background: var(--panel) !important; border-radius: 12px !impor
 pre{ border-radius: 12px !important; }
 .refbox { font-size: 0.92rem; color: rgba(49, 51, 63, 0.62); }
 .refbox code { color: rgba(49, 51, 63, 0.70); }
+.snipbox{
+  background: rgba(49,51,63,0.04);
+  border: 1px solid rgba(49,51,63,0.10);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin: 0.35rem 0 0.55rem 0;
+}
+.snipbox pre{
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.86rem;
+  line-height: 1.38;
+  color: rgba(15, 23, 42, 0.86);
+  background: transparent !important;
+}
 .msg-user{ background: #eaf3ff; border: 1px solid rgba(47,111,237,0.18); border-radius: 14px; padding: 12px 14px; }
 .msg-ai{ background: transparent; border: none; border-radius: 0px; padding: 0px; }
 .msg-ai-stream{ background: #ffffff; border: 1px solid rgba(49,51,63,0.12); border-radius: 14px; padding: 12px 14px; }
@@ -1600,6 +1616,11 @@ def _clean_snippet_for_display(t: str, *, max_chars: int = 900) -> str:
     Display as plain text (no markdown rendering); keep line breaks but trim.
     """
     s = (t or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    # Drop pure image lines (common in converted markdown).
+    try:
+        s = "\n".join([ln for ln in s.split("\n") if not re.match(r"^\s*!\[[^\]]*\]\([^)]+\)\s*$", ln)])
+    except Exception:
+        pass
     # Remove very long runs of whitespace
     s = re.sub(r"[ \t]{3,}", "  ", s)
     if len(s) > max_chars:
@@ -2567,6 +2588,113 @@ def _render_refs(
         cache[key] = line
         return line
 
+    def _ref_one_liner_no_llm(meta: dict, prompt_text: str, *, fallback_heading: str = "") -> str:
+        """
+        Build a strong, doc-specific one-liner without calling LLM.
+        Uses only snippets/headings signals (NOT filenames).
+        """
+        en = _wants_english(prompt_text)
+        profile = _query_term_profile(prompt_text, "")
+
+        snips = meta.get("ref_snippets") or []
+        if not isinstance(snips, list):
+            snips = []
+        locs = meta.get("ref_locs") or []
+        if not isinstance(locs, list):
+            locs = []
+
+        hay = _norm_text_for_match("\n".join([str(s) for s in snips if str(s).strip()][:4]) + "\n" + str(fallback_heading or ""))
+        has_single_shot = any(k in hay for k in ["single-shot", "single shot", "single exposure", "snapshot"])
+        has_single_pixel = any(k in hay for k in ["single-pixel", "single pixel", "spi", "ghost imaging"])
+        has_single_photon = any(k in hay for k in ["single-photon", "single photon", "spad", "snspd", "nanowire", "avalanche"])
+
+        wants_refs = bool(re.search(r"(参考文献|引用|cite|citation|reference)", prompt_text or "", flags=re.I))
+
+        # Recommended section
+        sec = (meta.get("top_heading") or fallback_heading or "").strip()
+        if _is_probably_bad_heading(sec):
+            sec = ""
+        if sec and (("references" in sec.lower()) or ("bibliography" in sec.lower())) and (not wants_refs):
+            sec = ""
+        if not sec:
+            for it in locs:
+                if not isinstance(it, dict):
+                    continue
+                hh = str(it.get("heading") or "").strip()
+                if not hh or _is_probably_bad_heading(hh):
+                    continue
+                if (("references" in hh.lower()) or ("bibliography" in hh.lower())) and (not wants_refs):
+                    continue
+                sec = hh
+                break
+
+        # Domain-specific "find" phrases (grounded on terms seen in snippets).
+        find: list[str] = []
+        if profile.get("wants_single_photon"):
+            if ("spad" in hay) or ("avalanche" in hay):
+                find.append("SPAD/雪崩二极管原理")
+            if ("snspd" in hay) or ("nanowire" in hay):
+                find.append("SNSPD/纳米线原理")
+            if ("dark count" in hay) or ("dcr" in hay):
+                find.append("暗计数(DCR)")
+            if "jitter" in hay:
+                find.append("时间抖动(jitter)")
+            if ("quantum efficiency" in hay) or ("detection efficiency" in hay) or ("efficiency" in hay):
+                find.append("探测效率/量子效率")
+            if not find:
+                find = ["工作机制", "关键指标", "应用场景"]
+        else:
+            if "frequency-division" in hay or "frequency division" in hay:
+                find.append("频分复用编码")
+            if "metamaterial" in hay or "metasurface" in hay:
+                find.append("超材料/超表面编码")
+            if "hadamard" in hay:
+                find.append("Hadamard 编码")
+            if "fourier" in hay:
+                find.append("Fourier 编码")
+            if "dmd" in hay:
+                find.append("DMD 实现细节")
+            if "foveated" in hay or "supersampling" in hay:
+                find.append("注视/自适应采样策略")
+            if any(k in hay for k in ["reconstruction", "inverse", "recover", "optimization", "solver", "unrolling"]):
+                find.append("重建/反演算法")
+            if any(k in hay for k in ["learning rate", "hyperparameter", "batch", "epoch", "pytorch", "cuda"]):
+                find.append("训练/实现参数")
+            if not find:
+                aspects = meta.get("ref_aspects") or []
+                if isinstance(aspects, list):
+                    find = [str(x).strip() for x in aspects if str(x).strip()]
+            if not find:
+                find = ["关键定义/方法/实验"]
+
+        # Tag: review vs method vs principle (best-effort).
+        tag = ""
+        if any(k in hay for k in ["review", "survey", "prospect", "perspective", "tutorial"]):
+            tag = "综述"
+        elif any(k in hay for k in ["we propose", "propose a", "our method", "framework", "approach"]):
+            tag = "方法"
+        elif any(k in hay for k in ["principle", "mechanism", "avalanche", "nanowire"]):
+            tag = "原理/机制"
+
+        # Mismatch warnings (helps users trust ranking).
+        warn = ""
+        if profile.get("wants_single_photon") and (not has_single_photon) and has_single_pixel:
+            warn = "(more imaging, fewer detector details)" if en else "（更偏成像方法，探测器机制较少）"
+        if profile.get("wants_single_shot") and (not has_single_shot) and has_single_pixel:
+            warn = "(single-pixel, not single-shot)" if en else "（偏单像素成像，非单曝光/快照）"
+
+        find_s = (", ".join(find[:3]) if en else "、".join(find[:3]))
+        if en:
+            core = (f"{tag + ' ' if tag else ''}Find: {find_s or 'key definitions/method/experiments'}").strip()
+            if sec:
+                return (core + f"; See: {sec}.") + (f" {warn}" if warn else "")
+            return core + (f" {warn}" if warn else "")
+
+        core = f"讲：{tag or '相关内容'}{warn}；可找：{find_s or '关键定义/方法/实验'}"
+        if sec:
+            core += f"；建议看：{sec}"
+        return core + "。"
+
     def _brief_ref_line(i: int, h: dict, prompt_text: str) -> tuple[str, str, str, str]:
         meta = h.get("meta", {}) or {}
         src = (meta.get("source_path") or "").strip()
@@ -2602,7 +2730,7 @@ def _render_refs(
                         what = f"讲：{w}；可找：{find_s or '关键定义/方法/实验'}。"
 
         if not what:
-            what = _rel_desc(prompt_text, top, aspects)
+            what = _ref_one_liner_no_llm(meta, prompt_text, fallback_heading=top)
         return (src, main, what, src_name)
 
     if show_heading:
@@ -2642,6 +2770,7 @@ def _render_refs(
         src, main, what, _src_name = _brief_ref_line(i, h, prompt)
         meta_h = h.get("meta", {}) or {}
         pdf_path = _find_pdf_for_source(src)
+        uid = hashlib.md5(src.encode("utf-8", "ignore")).hexdigest()[:10]
         # Optional page range (from converter markers -> chunking -> retriever).
         p0 = meta_h.get("page_start", None)
         p1 = meta_h.get("page_end", None)
@@ -2669,20 +2798,27 @@ def _render_refs(
                 if bool(st.session_state.get("show_context")):
                     locs = meta_h.get("ref_locs") or []
                     if isinstance(locs, list) and locs:
+                        wants_refs = bool(re.search(r"(参考文献|引用|cite|citation|reference)", prompt or "", flags=re.I))
                         hs = [str(x.get("heading") or "").strip() for x in locs if isinstance(x, dict)]
                         hs = [x for x in hs if x]
+                        if not wants_refs:
+                            hs = [x for x in hs if ("references" not in x.lower()) and ("bibliography" not in x.lower())]
                         if hs:
                             st.caption("定位建议：" + " | ".join(hs[:3]))
-                    snips = meta_h.get("ref_show_snippets") or []
-                    if isinstance(snips, list) and snips:
-                        for s in snips[:2]:
-                            s2 = _clean_snippet_for_display(str(s), max_chars=900)
-                            if s2:
-                                st.code(s2, language="text")
-                    else:
-                        t = (h.get("text") or "").strip()
-                        if t and (not _is_noise_snippet_text(t)):
-                            st.code(_clean_snippet_for_display(t, max_chars=900), language="text")
+                    show_key = f"{key_ns}_show_snip_{p_sig}_{i}_{uid}"
+                    if st.checkbox("显示命中片段（纯文本）", value=False, key=show_key):
+                        snips = meta_h.get("ref_show_snippets") or []
+                        if isinstance(snips, list) and snips:
+                            for s in snips[:2]:
+                                s2 = _clean_snippet_for_display(str(s), max_chars=900)
+                                if s2:
+                                    st.markdown(f"<div class='snipbox'><pre>{html.escape(s2)}</pre></div>", unsafe_allow_html=True)
+                        else:
+                            t = (h.get("text") or "").strip()
+                            if t and (not _is_noise_snippet_text(t)):
+                                s2 = _clean_snippet_for_display(t, max_chars=900)
+                                if s2:
+                                    st.markdown(f"<div class='snipbox'><pre>{html.escape(s2)}</pre></div>", unsafe_allow_html=True)
             except Exception:
                 pass
         with cols[1]:
