@@ -1335,6 +1335,44 @@ body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary div{
   -webkit-text-fill-color: #e7eaef !important;
   opacity: 1 !important;
 }
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary,
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary *,
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary svg,
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary path,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary *,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary svg,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary path{
+  color: #e7eaef !important;
+  -webkit-text-fill-color: #e7eaef !important;
+  fill: #e7eaef !important;
+  stroke: #e7eaef !important;
+}
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] [data-testid="stMarkdownContainer"] *,
+html[data-theme="dark"] .msg-refs .refbox,
+html[data-theme="dark"] .msg-refs .refbox *,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] [data-testid="stMarkdownContainer"] *,
+body[data-theme="dark"] .msg-refs .refbox,
+body[data-theme="dark"] .msg-refs .refbox *{
+  color: #dbe4f0 !important;
+  -webkit-text-fill-color: #dbe4f0 !important;
+}
+html[data-theme="light"] .msg-refs details[data-testid="stExpander"] summary,
+html[data-theme="light"] .msg-refs details[data-testid="stExpander"] summary *,
+body[data-theme="light"] .msg-refs details[data-testid="stExpander"] summary,
+body[data-theme="light"] .msg-refs details[data-testid="stExpander"] summary *{
+  color: #1f2329 !important;
+  -webkit-text-fill-color: #1f2329 !important;
+}
+html[data-theme="light"] .msg-refs details[data-testid="stExpander"] [data-testid="stMarkdownContainer"] *,
+html[data-theme="light"] .msg-refs .refbox,
+html[data-theme="light"] .msg-refs .refbox *,
+body[data-theme="light"] .msg-refs details[data-testid="stExpander"] [data-testid="stMarkdownContainer"] *,
+body[data-theme="light"] .msg-refs .refbox,
+body[data-theme="light"] .msg-refs .refbox *{
+  color: #4b5563 !important;
+  -webkit-text-fill-color: #4b5563 !important;
+}
 
 .snipbox{
   background: var(--snip-bg);
@@ -2027,76 +2065,19 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
       const soft = mode === "dark" ? "#dbe4f0" : "#5a6472";
       const accent = mode === "dark" ? "#4daafc" : "#0f6cbd";
       const mainText = mode === "dark" ? "#e7eaef" : "#1f2329";
-      const sidebars = doc.querySelectorAll('section[data-testid="stSidebar"]');
-      for (const sb of sidebars) {{
-        paint(sb, mainText);
-        try {{
-          sb.style.setProperty("--text-color", mainText, "important");
-          sb.style.setProperty("--secondary-text-color", soft, "important");
-          sb.style.setProperty("--body-text-color", mainText, "important");
-        }} catch (e) {{}}
-      }}
-      const sliders = doc.querySelectorAll('div[data-testid="stSlider"]');
-      for (const slider of sliders) {{
-        try {{
-          slider.style.setProperty("--text-color", soft, "important");
-          slider.style.setProperty("--secondary-text-color", soft, "important");
-        }} catch (e) {{}}
-        const tickNodes = slider.querySelectorAll(
-          '[data-testid="stTickBarMin"], [data-testid="stTickBarMax"], [data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"], [data-testid="stSliderTickBar"], [data-testid*="TickBar"], .stSliderTickBar, .stSliderTickBar *, [class*="tickBar"], [class*="TickBar"]'
-        );
-        for (const node of tickNodes) {{
-          paint(node, soft);
-        }}
-
-        const thumbNodes = slider.querySelectorAll(
-          '[data-testid="stThumbValue"], [data-testid="stSliderValue"], [data-testid*="ThumbValue"], [class*="ThumbValue"]'
-        );
-        for (const node of thumbNodes) {{
-          paint(node, accent);
-        }}
-
-        // Fallback: paint bare numeric nodes near slider tracks.
-        const allNodes = slider.querySelectorAll("div, span, p, small");
-        for (const node of allNodes) {{
-          const text = String(node.textContent || "").trim();
-          if (!text) continue;
-          if (!/^-?\\d+(\\.\\d+)?$/.test(text)) continue;
-          const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
-          if (!rect || !isFinite(rect.width) || !isFinite(rect.height)) continue;
-          if (rect.width <= 0 || rect.height <= 0) continue;
-          paint(node, soft);
-        }}
-      }}
-
-      const expanderSummaries = doc.querySelectorAll('details[data-testid="stExpander"] summary');
-      for (const summary of expanderSummaries) {{
-        const txt = String(summary.innerText || summary.textContent || "").trim();
-        if (!txt) continue;
-        if (txt.includes("参考定位") || txt.toLowerCase().includes("refs") || txt.toLowerCase().includes("reference")) {{
-          paint(summary, mainText);
-          const ds = summary.querySelectorAll("*");
-          for (const d of ds) {{
-            paint(d, mainText);
-          }}
-        }}
-      }}
-
-      const refBodyText = mode === "dark" ? "#dbe4f0" : "#4b5563";
-      const refBodies = doc.querySelectorAll(
-        '.msg-refs details[data-testid="stExpander"] [data-testid="stMarkdownContainer"], .msg-refs .refbox'
+      const refsNodes = doc.querySelectorAll(
+        '.msg-refs details[data-testid="stExpander"] summary, .msg-refs details[data-testid="stExpander"] summary *, .msg-refs [data-testid="stMarkdownContainer"], .msg-refs [data-testid="stMarkdownContainer"] *'
       );
-      for (const box of refBodies) {{
-        paint(box, refBodyText);
-        const ns = box.querySelectorAll("*");
-        for (const n of ns) {{
-          paint(n, refBodyText);
-        }}
-      }}
-
-      const mathNodes = doc.querySelectorAll(".katex, .katex *, .katex-display, .katex-display *, mjx-container, mjx-container *");
-      for (const node of mathNodes) {{
-        paint(node, mainText);
+      for (const n of refsNodes) {{
+        if (!n || !n.style) continue;
+        try {{
+          n.style.removeProperty("color");
+          n.style.removeProperty("-webkit-text-fill-color");
+          n.style.removeProperty("fill");
+          n.style.removeProperty("stroke");
+          n.style.removeProperty("opacity");
+          n.style.removeProperty("filter");
+        }} catch (e) {{}}
       }}
 
       const sidebars2 = doc.querySelectorAll('section[data-testid="stSidebar"]');
@@ -2148,7 +2129,7 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
 
   apply();
   try {{
-    host[KEY] = host.setInterval(apply, 160);
+    host[KEY] = host.setInterval(apply, 420);
   }} catch (e) {{}}
 }})();
 </script>
