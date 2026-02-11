@@ -680,10 +680,13 @@ def _init_theme_css(theme_mode: str = "dark") -> None:
   --bg: #1f1f1f;
   --panel: #252526;
   --sidebar-bg: #181818;
-  --line: rgba(156, 163, 175, 0.34);
-  --muted: #b6beca;
+  --line: rgba(168, 176, 189, 0.42);
+  --muted: #d2d9e4;
   --text-main: #e7eaef;
-  --text-soft: #c6ceda;
+  --text-soft: #e0e7f0;
+  --sidebar-strong-text: #e9eff8;
+  --sidebar-soft-text: #d5deea;
+  --slider-tick-text: #d9e1ec;
   --accent: #4daafc;
   --blue-weak: rgba(77, 170, 252, 0.18);
   --blue-line: rgba(77, 170, 252, 0.58);
@@ -722,17 +725,24 @@ def _init_theme_css(theme_mode: str = "dark") -> None:
   --toast-bg: rgba(36, 39, 45, 0.96);
   --toast-border: rgba(148, 163, 184, 0.30);
   --toast-text: #ebf1f8;
-  --hint-text: #bac3d0;
+  --hint-text: #d2d9e4;
+  --code-bg: #171d28;
+  --code-border: #3d4658;
+  --code-text: #e6edf3;
+  --code-inline-bg: rgba(77, 170, 252, 0.14);
 """
     else:
         tokens = """
-  --bg: #f6f8fc;
+  --bg: #fcfcfd;
   --panel: #ffffff;
-  --sidebar-bg: #f3f6fb;
+  --sidebar-bg: #f7f8fa;
   --line: rgba(90, 98, 112, 0.24);
   --muted: rgba(55, 65, 81, 0.76);
   --text-main: #1f2329;
   --text-soft: #4b5563;
+  --sidebar-strong-text: #1f2329;
+  --sidebar-soft-text: #5a6472;
+  --slider-tick-text: #5a6472;
   --accent: #0f6cbd;
   --blue-weak: rgba(15, 108, 189, 0.10);
   --blue-line: rgba(15, 108, 189, 0.40);
@@ -762,7 +772,7 @@ def _init_theme_css(theme_mode: str = "dark") -> None:
   --notice-bg: rgba(245, 158, 11, 0.10);
   --notice-border: rgba(245, 158, 11, 0.20);
   --ref-accent: rgba(15, 108, 189, 0.24);
-  --dock-bg: linear-gradient(180deg, rgba(246, 248, 252, 0.74) 0%, rgba(246, 248, 252, 0.96) 18%, rgba(246, 248, 252, 0.99) 100%);
+  --dock-bg: linear-gradient(180deg, rgba(252, 252, 253, 0.76) 0%, rgba(252, 252, 253, 0.96) 18%, rgba(252, 252, 253, 0.99) 100%);
   --dock-border: rgba(49, 51, 63, 0.12);
   --dock-shadow: 0 -8px 26px rgba(16, 24, 40, 0.08);
   --copy-btn-bg: rgba(255, 255, 255, 0.88);
@@ -772,12 +782,19 @@ def _init_theme_css(theme_mode: str = "dark") -> None:
   --toast-border: rgba(49, 51, 63, 0.16);
   --toast-text: rgba(31, 42, 55, 0.88);
   --hint-text: rgba(75, 85, 99, 0.62);
+  --code-bg: #f5f7fb;
+  --code-border: rgba(31, 35, 41, 0.16);
+  --code-text: #1f2329;
+  --code-inline-bg: rgba(15, 108, 189, 0.10);
 """
 
     css = """
 <style>
 :root{
 __TOKENS__
+  --text-color: var(--text-main);
+  --secondary-text-color: var(--text-soft);
+  --body-text-color: var(--text-main);
   --content-max: 1220px;
 }
 html, body{
@@ -809,10 +826,17 @@ div[data-testid="stStatusWidget"] *{
   transition: none !important;
 }
 body.kb-resizing [data-testid="stAppViewContainer"],
-body.kb-resizing [data-testid="stAppViewContainer"] *{
+body.kb-resizing [data-testid="stAppViewContainer"]{
   opacity: 1 !important;
-  visibility: visible !important;
   filter: none !important;
+}
+body.kb-resizing [data-testid="stAppViewContainer"] *{
+  filter: none !important;
+}
+body.kb-resizing [data-stale="true"]{
+  opacity: 1 !important;
+  filter: none !important;
+  transition: none !important;
 }
 body.kb-resizing section[data-testid="stSidebar"]{
   background: var(--sidebar-bg) !important;
@@ -839,22 +863,184 @@ section[data-testid="stSidebar"] > div:first-child{
 }
 section[data-testid="stSidebar"]{
   background: var(--sidebar-bg) !important;
+  --text-color: var(--sidebar-strong-text) !important;
+  --secondary-text-color: var(--sidebar-soft-text) !important;
+  --body-text-color: var(--sidebar-strong-text) !important;
 }
 section[data-testid="stSidebar"] > div,
 section[data-testid="stSidebar"] > div > div{
   background: var(--sidebar-bg) !important;
 }
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button,
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="Close"],
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="关闭"]{
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--btn-border) !important;
+  background: color-mix(in srgb, var(--sidebar-bg) 76%, var(--panel)) !important;
+  box-shadow: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button:hover,
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="Close"]:hover,
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="关闭"]:hover{
+  background: var(--btn-hover) !important;
+  border-color: var(--blue-line) !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button:active,
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="Close"]:active,
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="关闭"]:active{
+  background: var(--btn-active) !important;
+  border-color: var(--blue-line) !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button svg,
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="Close"] svg,
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="关闭"] svg,
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button [data-testid="stIcon"],
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="Close"] [data-testid="stIcon"],
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="关闭"] [data-testid="stIcon"]{
+  display: none !important;
+}
+section[data-testid="stSidebar"] .kb-close-glyph{
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 24px !important;
+  line-height: 1 !important;
+  font-weight: 500 !important;
+  color: var(--text-main) !important;
+  transform: translateY(-1px);
+  pointer-events: none !important;
+}
 section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
 section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *{
-  color: var(--text-main) !important;
+  color: var(--sidebar-strong-text) !important;
   opacity: 1 !important;
 }
 section[data-testid="stSidebar"] small,
 section[data-testid="stSidebar"] .stCaption,
 section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] *{
-  color: var(--text-soft) !important;
+  color: var(--sidebar-soft-text) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label *,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] p,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] span,
+section[data-testid="stSidebar"] [role="radiogroup"] label,
+section[data-testid="stSidebar"] [role="radiogroup"] label *,
+section[data-testid="stSidebar"] [role="radiogroup"] p,
+section[data-testid="stSidebar"] [role="radiogroup"] span{
+  color: var(--text-main) !important;
+  fill: var(--text-main) !important;
+  opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label *,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] p,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] span{
+  color: var(--text-main) !important;
+  opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stTickBarMin"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stTickBarMax"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stSliderTickBarMin"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stSliderTickBar"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stThumbValue"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stSliderValue"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-baseweb="slider"] *,
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid*="TickBar"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid*="tick"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [class*="stSlider"] *,
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [style*="color"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] div[style*="color"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] small,
+section[data-testid="stSidebar"] div[data-testid="stSlider"] p,
+section[data-testid="stSidebar"] div[data-testid="stSlider"] span{
+  color: var(--sidebar-soft-text) !important;
+  -webkit-text-fill-color: var(--sidebar-soft-text) !important;
+  fill: var(--sidebar-soft-text) !important;
+  opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"],
+section[data-testid="stSidebar"] div[data-testid="stSlider"] > div,
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid*="TickBar"]{
+  opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid*="TickBar"]::before,
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid*="TickBar"]::after{
+  color: var(--sidebar-soft-text) !important;
+  -webkit-text-fill-color: var(--sidebar-soft-text) !important;
+  opacity: 1 !important;
+}
+div[data-testid="stSlider"] [data-testid="stTickBarMin"],
+div[data-testid="stSlider"] [data-testid="stTickBarMax"],
+div[data-testid="stSlider"] [data-testid="stSliderTickBarMin"],
+div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"],
+div[data-testid="stSlider"] [data-testid="stSliderTickBar"],
+div[data-testid="stSlider"] [data-testid*="TickBarMin"],
+div[data-testid="stSlider"] [data-testid*="TickBarMax"],
+div[data-testid="stSlider"] [class*="TickBarMin"],
+div[data-testid="stSlider"] [class*="TickBarMax"],
+div[data-testid="stSlider"] [class*="tickBarMin"],
+div[data-testid="stSlider"] [class*="tickBarMax"],
+div[data-testid="stSlider"] .stSliderTickBar,
+div[data-testid="stSlider"] .stSliderTickBar *,
+div[data-testid="stSlider"] [data-testid*="TickBar"]{
+  color: var(--slider-tick-text) !important;
+  -webkit-text-fill-color: var(--slider-tick-text) !important;
+  fill: var(--slider-tick-text) !important;
+  stroke: var(--slider-tick-text) !important;
+  opacity: 1 !important;
+  filter: brightness(1.12) contrast(1.08) !important;
+}
+div[data-testid="stSlider"] [data-testid*="ThumbValue"],
+div[data-testid="stSlider"] [data-testid="stSliderValue"],
+div[data-testid="stSlider"] [class*="ThumbValue"]{
+  color: var(--accent) !important;
+  -webkit-text-fill-color: var(--accent) !important;
+  fill: var(--accent) !important;
+  opacity: 1 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stThumbValue"]{
+  color: var(--accent) !important;
+  -webkit-text-fill-color: var(--accent) !important;
+  fill: var(--accent) !important;
+  opacity: 1 !important;
+}
+.stMarkdown .katex,
+.stMarkdown .katex *,
+.stMarkdown .katex-display,
+.stMarkdown .katex-display *,
+.msg-ai .katex,
+.msg-ai .katex *,
+.msg-ai .katex-display,
+.msg-ai .katex-display *{
+  color: var(--text-main) !important;
+  fill: var(--text-main) !important;
+  opacity: 1 !important;
+}
+.stMarkdown mjx-container,
+.stMarkdown mjx-container *,
+.msg-ai mjx-container,
+.msg-ai mjx-container *{
+  color: var(--text-main) !important;
+  fill: currentColor !important;
+  stroke: currentColor !important;
+  opacity: 1 !important;
 }
 .kb-sidebar-logo-wrap{
   display: flex;
@@ -978,8 +1164,81 @@ details[data-testid="stExpander"] summary *{ color: var(--text-main) !important;
 [data-testid="stFileUploaderDropzone"] *{ color: var(--text-soft) !important; }
 
 pre{
-  border-radius: 12px !important;
   position: relative;
+  border-radius: 12px !important;
+  background: var(--code-bg) !important;
+  border: 1px solid var(--code-border) !important;
+  color: var(--code-text) !important;
+  overflow: auto !important;
+  box-shadow: none !important;
+}
+pre code{
+  background: transparent !important;
+  color: var(--code-text) !important;
+  text-decoration: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+pre span{
+  background: transparent !important;
+  text-decoration: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+pre, pre *{
+  text-decoration: none !important;
+  background-image: none !important;
+}
+div[data-testid="stCodeBlock"],
+div[data-testid="stCode"],
+.stCodeBlock{
+  background: var(--code-bg) !important;
+  border: 1px solid var(--code-border) !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+}
+div[data-testid="stCodeBlock"] > div,
+div[data-testid="stCodeBlock"] pre,
+div[data-testid="stCode"] > div,
+div[data-testid="stCode"] pre,
+.stCodeBlock > div,
+.stCodeBlock pre{
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 12px !important;
+  color: var(--code-text) !important;
+  box-shadow: none !important;
+}
+div[data-testid="stCodeBlock"] code,
+div[data-testid="stCodeBlock"] pre code,
+div[data-testid="stCode"] code,
+div[data-testid="stCode"] pre code,
+.stCodeBlock code,
+.stCodeBlock pre code,
+.stMarkdown div[data-testid="stMarkdownContainer"] pre code,
+.stMarkdown pre code,
+.msg-ai pre code{
+  background: transparent !important;
+  color: var(--code-text) !important;
+}
+div[data-testid="stCodeBlock"] span,
+div[data-testid="stCode"] span,
+.stCodeBlock span,
+.stMarkdown div[data-testid="stMarkdownContainer"] pre span,
+.stMarkdown pre span,
+.msg-ai pre span{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+}
+.stMarkdown :not(pre) > code,
+.msg-ai :not(pre) > code{
+  background: var(--code-inline-bg) !important;
+  color: var(--code-text) !important;
+  border: 1px solid var(--code-border) !important;
+  border-radius: 6px !important;
+  padding: 0.08em 0.32em !important;
 }
 .refbox code, .meta-kv{ color: var(--text-soft) !important; }
 .hr{ height: 1px; background: var(--line); margin: 1rem 0; }
@@ -1025,7 +1284,57 @@ pre{
   border-radius: 14px;
   padding: 12px 14px;
 }
-.msg-refs{ margin: 0.35rem 0 0.80rem 0; padding: 0.20rem 0.30rem; border-left: 2px solid var(--ref-accent); }
+.msg-refs{
+  margin: 0.35rem 0 0.80rem 0;
+  padding: 0.06rem 0 0.80rem 0;
+  border-left: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+.msg-refs::before,
+.msg-refs::after{
+  display: none !important;
+  content: none !important;
+}
+.msg-refs details[data-testid="stExpander"]{
+  background: var(--panel) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+}
+.msg-refs details[data-testid="stExpander"] summary,
+.msg-refs details[data-testid="stExpander"] summary *,
+.msg-refs details[data-testid="stExpander"] summary p,
+.msg-refs details[data-testid="stExpander"] summary span{
+  color: var(--text-main) !important;
+  opacity: 1 !important;
+  -webkit-text-fill-color: var(--text-main) !important;
+}
+.msg-refs [data-testid="stMarkdownContainer"] *,
+.msg-refs .refbox,
+.msg-refs .refbox *{
+  color: var(--text-soft) !important;
+  opacity: 1 !important;
+}
+.msg-refs details[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] *,
+.msg-refs details[data-testid="stExpander"] summary p,
+.msg-refs details[data-testid="stExpander"] summary span,
+.msg-refs details[data-testid="stExpander"] summary div{
+  color: var(--text-main) !important;
+  -webkit-text-fill-color: var(--text-main) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] *,
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary p,
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary span,
+html[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary div,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary [data-testid="stMarkdownContainer"] *,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary p,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary span,
+body[data-theme="dark"] .msg-refs details[data-testid="stExpander"] summary div{
+  color: #e7eaef !important;
+  -webkit-text-fill-color: #e7eaef !important;
+  opacity: 1 !important;
+}
 
 .snipbox{
   background: var(--snip-bg);
@@ -1034,7 +1343,15 @@ pre{
   padding: 10px 12px;
   margin: 0.35rem 0 0.55rem 0;
 }
-.snipbox pre{ margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--snip-text) !important; background: transparent !important; }
+.snipbox pre{
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--snip-text) !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
 .snipquote{ border-left: 3px solid var(--snip-quote-border); background: var(--snip-quote-bg); border-radius: 10px; padding: 9px 11px; margin: 0.15rem 0 0.45rem 0; }
 .snipquote .snipquote-title{ font-size: 0.78rem; color: var(--muted) !important; margin: 0 0 0.25rem 0; }
 .snipquote .snipquote-body{ font-size: 0.88rem; line-height: 1.42; color: var(--text-main) !important; }
@@ -1070,13 +1387,37 @@ div[data-testid="stTextArea"]::after{
   transform: translateX(-50%);
   width: min(var(--content-max), calc(100vw - 1.6rem));
   box-sizing: border-box;
-  background: var(--dock-bg);
-  border: 1px solid var(--dock-border);
+  background: var(--dock-bg) !important;
+  border: 1px solid var(--dock-border) !important;
   border-radius: 20px;
   padding: 0.48rem 0.56rem 0.18rem 0.56rem;
   box-shadow: var(--dock-shadow);
   backdrop-filter: blur(5px);
   margin: 0 !important;
+}
+.kb-input-dock,
+.kb-input-dock > div,
+.kb-input-dock div[data-testid="stForm"]{
+  background: var(--dock-bg) !important;
+  border-color: var(--dock-border) !important;
+}
+.kb-input-dock textarea,
+.kb-input-dock div[data-testid="stTextArea"] textarea{
+  border-color: var(--input-border) !important;
+}
+.kb-input-dock textarea:focus,
+.kb-input-dock div[data-testid="stTextArea"] textarea:focus{
+  border-color: var(--blue-line) !important;
+  box-shadow: 0 0 0 1px var(--blue-weak) !important;
+}
+html[data-theme="dark"] .kb-input-dock,
+body[data-theme="dark"] .kb-input-dock{
+  background: var(--dock-bg) !important;
+  border-color: var(--dock-border) !important;
+}
+body.kb-resizing .kb-input-dock,
+body.kb-resizing .kb-input-dock *{
+  border-color: var(--dock-border) !important;
 }
 .kb-input-dock.kb-dock-positioned{ max-width: none !important; }
 .kb-input-dock div[data-testid="stForm"]{ margin-bottom: 0 !important; }
@@ -1127,8 +1468,14 @@ div[data-testid="stTextArea"]::after{
   font-weight: 600;
   font-size: 12px;
   cursor: pointer;
+  z-index: 2;
 }
 .kb-codecopy:hover{ background: var(--btn-hover); border-color: var(--blue-line); }
+div[data-testid="stCodeBlock"] .kb-codecopy,
+div[data-testid="stCode"] .kb-codecopy,
+.stCodeBlock .kb-codecopy{
+  display: none !important;
+}
 .kb-toast{
   position: fixed;
   right: 18px;
@@ -1147,15 +1494,168 @@ div[data-testid="stTextArea"]::after{
   pointer-events: none;
 }
 .kb-toast.show{ opacity: 1; transform: translateY(0); }
+html[data-theme="dark"] small,
+html[data-theme="dark"] .stCaption,
+html[data-theme="dark"] div[data-testid="stCaptionContainer"] *,
+body[data-theme="dark"] small,
+body[data-theme="dark"] .stCaption,
+body[data-theme="dark"] div[data-testid="stCaptionContainer"] *{
+  color: var(--text-soft) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] div[data-testid="stWidgetLabel"],
+html[data-theme="dark"] div[data-testid="stWidgetLabel"] *,
+body[data-theme="dark"] div[data-testid="stWidgetLabel"],
+body[data-theme="dark"] div[data-testid="stWidgetLabel"] *{
+  color: var(--text-main) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *,
+html[data-theme="dark"] section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+html[data-theme="dark"] section[data-testid="stSidebar"] p,
+html[data-theme="dark"] section[data-testid="stSidebar"] span,
+body[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stMarkdownContainer"] *,
+body[data-theme="dark"] section[data-testid="stSidebar"] [data-testid="stWidgetLabel"] *,
+body[data-theme="dark"] section[data-testid="stSidebar"] p,
+body[data-theme="dark"] section[data-testid="stSidebar"] span{
+  color: var(--text-main) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] div[data-testid="stRadio"] label,
+html[data-theme="dark"] div[data-testid="stRadio"] label *,
+html[data-theme="dark"] div[data-testid="stCheckbox"] label,
+html[data-theme="dark"] div[data-testid="stCheckbox"] label *,
+body[data-theme="dark"] div[data-testid="stRadio"] label,
+body[data-theme="dark"] div[data-testid="stRadio"] label *,
+body[data-theme="dark"] div[data-testid="stCheckbox"] label,
+body[data-theme="dark"] div[data-testid="stCheckbox"] label *{
+  color: var(--text-main) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] div[data-testid="stSlider"] label,
+html[data-theme="dark"] div[data-testid="stSlider"] label *,
+html[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stTickBarMin"],
+html[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stTickBarMax"],
+html[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderTickBarMin"],
+html[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"],
+html[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderTickBar"],
+html[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stThumbValue"],
+html[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderValue"],
+html[data-theme="dark"] div[data-testid="stSlider"] [data-baseweb="slider"] *,
+body[data-theme="dark"] div[data-testid="stSlider"] label,
+body[data-theme="dark"] div[data-testid="stSlider"] label *,
+body[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stTickBarMin"],
+body[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stTickBarMax"],
+body[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderTickBarMin"],
+body[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderTickBarMax"],
+body[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderTickBar"],
+body[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stThumbValue"],
+body[data-theme="dark"] div[data-testid="stSlider"] [data-testid="stSliderValue"],
+body[data-theme="dark"] div[data-testid="stSlider"] [data-baseweb="slider"] *{
+  color: var(--text-soft) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] details[data-testid="stExpander"] summary,
+html[data-theme="dark"] details[data-testid="stExpander"] summary *,
+body[data-theme="dark"] details[data-testid="stExpander"] summary,
+body[data-theme="dark"] details[data-testid="stExpander"] summary *{
+  color: var(--text-main) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] [data-testid="stMarkdownContainer"] p,
+html[data-theme="dark"] [data-testid="stMarkdownContainer"] li,
+html[data-theme="dark"] [data-testid="stMarkdownContainer"] span,
+body[data-theme="dark"] [data-testid="stMarkdownContainer"] p,
+body[data-theme="dark"] [data-testid="stMarkdownContainer"] li,
+body[data-theme="dark"] [data-testid="stMarkdownContainer"] span{
+  color: var(--text-soft) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] .msg-meta,
+html[data-theme="dark"] .refbox,
+html[data-theme="dark"] .genbox,
+html[data-theme="dark"] .chat-empty-state,
+body[data-theme="dark"] .msg-meta,
+body[data-theme="dark"] .refbox,
+body[data-theme="dark"] .genbox,
+body[data-theme="dark"] .chat-empty-state{
+  color: var(--text-soft) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stSlider"] *,
+body[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stSlider"] *{
+  color: var(--text-soft) !important;
+  fill: var(--text-soft) !important;
+  stroke: var(--text-soft) !important;
+  opacity: 1 !important;
+}
+html[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stSlider"] [style*="color"],
+body[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stSlider"] [style*="color"]{
+  color: var(--text-soft) !important;
+  opacity: 1 !important;
+}
 </style>
 <script>
 (function () {
   const host = window.parent || window;
   const doc = host.document || document;
   const mode = "__MODE__";
+  const FIX_TIMER_NS = "__kbSidebarSliderTextFixTimer";
+  try {
+    if (host[FIX_TIMER_NS]) {
+      host.clearInterval(host[FIX_TIMER_NS]);
+      host[FIX_TIMER_NS] = 0;
+    }
+  } catch (e) {}
   try {
     doc.documentElement.setAttribute("data-theme", mode);
     if (doc.body) doc.body.setAttribute("data-theme", mode);
+  } catch (e) {}
+
+  function paintNode(node, color) {
+    if (!node || !node.style) return;
+    try {
+      node.style.setProperty("color", color, "important");
+      node.style.setProperty("-webkit-text-fill-color", color, "important");
+      node.style.setProperty("fill", color, "important");
+      node.style.setProperty("stroke", color, "important");
+      node.style.setProperty("opacity", "1", "important");
+    } catch (e) {}
+  }
+
+  function applySidebarSliderTextFix() {
+    try {
+      if (mode !== "dark") return;
+      const rootStyle = host.getComputedStyle(doc.documentElement);
+      const soft = (rootStyle.getPropertyValue("--sidebar-soft-text") || "#d5deea").trim();
+      const accent = (rootStyle.getPropertyValue("--accent") || "#4daafc").trim();
+      const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+      if (!sidebar) return;
+      const sliders = sidebar.querySelectorAll('div[data-testid="stSlider"]');
+      for (const slider of sliders) {
+        paintNode(slider, soft);
+        const nodes = slider.querySelectorAll("*");
+        for (const n of nodes) {
+          const tid = String((n.getAttribute && n.getAttribute("data-testid")) || "");
+          const t = String(n.textContent || "").trim();
+          const isNumeric = /^-?\d+(\.\d+)?$/.test(t);
+          const isTick =
+            tid.toLowerCase().includes("tick") ||
+            tid.toLowerCase().includes("min") ||
+            tid.toLowerCase().includes("max");
+          if (tid.toLowerCase().includes("thumbvalue")) {
+            paintNode(n, accent);
+          } else if (isTick || isNumeric) {
+            paintNode(n, soft);
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  applySidebarSliderTextFix();
+  try {
+    host[FIX_TIMER_NS] = host.setInterval(applySidebarSliderTextFix, 220);
   } catch (e) {}
 })();
 </script>
@@ -1410,8 +1910,33 @@ def _inject_copy_js() -> None:
   }
 
   function hookCodeBlocks() {
+    function hasNativeCopy(pre) {
+      if (!pre) return false;
+      try {
+        if (pre.closest('div[data-testid="stCodeBlock"], div[data-testid="stCode"], .stCodeBlock')) {
+          return true;
+        }
+        const host = pre.parentElement;
+        if (!host) return false;
+        const nativeBtn = host.querySelector(
+          'button[aria-label*="copy" i], button[title*="copy" i], button[aria-label*="复制"], button[title*="复制"], [data-testid*="copy" i]'
+        );
+        return !!nativeBtn;
+      } catch (e) {
+        return false;
+      }
+    }
+
     const pres = root.querySelectorAll("pre");
     for (const pre of pres) {
+      if (hasNativeCopy(pre)) {
+        const oldBtn = pre.querySelector(".kb-codecopy");
+        if (oldBtn) {
+          try { oldBtn.remove(); } catch (e) {}
+        }
+        pre.dataset.kbCodeHooked = "1";
+        continue;
+      }
       if (pre.dataset.kbCodeHooked === "1") continue;
       const code = pre.querySelector("code");
       if (!code) continue;
@@ -1462,6 +1987,170 @@ def _inject_copy_js() -> None:
   tick();
   setInterval(tick, 900);
 })();
+</script>
+        """,
+        height=0,
+    )
+
+
+def _inject_runtime_ui_fixes(theme_mode: str) -> None:
+    mode = "dark" if str(theme_mode or "").lower() == "dark" else "light"
+    components.html(
+        f"""
+<script>
+(function () {{
+  const host = window.parent || window;
+  const doc = host.document || document;
+  const KEY = "__kbSliderTickRuntimeFixV1";
+  const mode = "{mode}";
+  try {{
+    if (host[KEY]) {{
+      host.clearInterval(host[KEY]);
+      host[KEY] = 0;
+    }}
+  }} catch (e) {{}}
+
+  function paint(el, color) {{
+    if (!el || !el.style) return;
+    try {{
+      el.style.setProperty("color", color, "important");
+      el.style.setProperty("-webkit-text-fill-color", color, "important");
+      el.style.setProperty("fill", color, "important");
+      el.style.setProperty("stroke", color, "important");
+      el.style.setProperty("opacity", "1", "important");
+      el.style.setProperty("filter", "none", "important");
+    }} catch (e) {{}}
+  }}
+
+  function apply() {{
+    try {{
+      const soft = mode === "dark" ? "#dbe4f0" : "#5a6472";
+      const accent = mode === "dark" ? "#4daafc" : "#0f6cbd";
+      const mainText = mode === "dark" ? "#e7eaef" : "#1f2329";
+      const sidebars = doc.querySelectorAll('section[data-testid="stSidebar"]');
+      for (const sb of sidebars) {{
+        paint(sb, mainText);
+        try {{
+          sb.style.setProperty("--text-color", mainText, "important");
+          sb.style.setProperty("--secondary-text-color", soft, "important");
+          sb.style.setProperty("--body-text-color", mainText, "important");
+        }} catch (e) {{}}
+      }}
+      const sliders = doc.querySelectorAll('div[data-testid="stSlider"]');
+      for (const slider of sliders) {{
+        try {{
+          slider.style.setProperty("--text-color", soft, "important");
+          slider.style.setProperty("--secondary-text-color", soft, "important");
+        }} catch (e) {{}}
+        const tickNodes = slider.querySelectorAll(
+          '[data-testid="stTickBarMin"], [data-testid="stTickBarMax"], [data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"], [data-testid="stSliderTickBar"], [data-testid*="TickBar"], .stSliderTickBar, .stSliderTickBar *, [class*="tickBar"], [class*="TickBar"]'
+        );
+        for (const node of tickNodes) {{
+          paint(node, soft);
+        }}
+
+        const thumbNodes = slider.querySelectorAll(
+          '[data-testid="stThumbValue"], [data-testid="stSliderValue"], [data-testid*="ThumbValue"], [class*="ThumbValue"]'
+        );
+        for (const node of thumbNodes) {{
+          paint(node, accent);
+        }}
+
+        // Fallback: paint bare numeric nodes near slider tracks.
+        const allNodes = slider.querySelectorAll("div, span, p, small");
+        for (const node of allNodes) {{
+          const text = String(node.textContent || "").trim();
+          if (!text) continue;
+          if (!/^-?\\d+(\\.\\d+)?$/.test(text)) continue;
+          const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+          if (!rect || !isFinite(rect.width) || !isFinite(rect.height)) continue;
+          if (rect.width <= 0 || rect.height <= 0) continue;
+          paint(node, soft);
+        }}
+      }}
+
+      const expanderSummaries = doc.querySelectorAll('details[data-testid="stExpander"] summary');
+      for (const summary of expanderSummaries) {{
+        const txt = String(summary.innerText || summary.textContent || "").trim();
+        if (!txt) continue;
+        if (txt.includes("参考定位") || txt.toLowerCase().includes("refs") || txt.toLowerCase().includes("reference")) {{
+          paint(summary, mainText);
+          const ds = summary.querySelectorAll("*");
+          for (const d of ds) {{
+            paint(d, mainText);
+          }}
+        }}
+      }}
+
+      const refBodyText = mode === "dark" ? "#dbe4f0" : "#4b5563";
+      const refBodies = doc.querySelectorAll(
+        '.msg-refs details[data-testid="stExpander"] [data-testid="stMarkdownContainer"], .msg-refs .refbox'
+      );
+      for (const box of refBodies) {{
+        paint(box, refBodyText);
+        const ns = box.querySelectorAll("*");
+        for (const n of ns) {{
+          paint(n, refBodyText);
+        }}
+      }}
+
+      const mathNodes = doc.querySelectorAll(".katex, .katex *, .katex-display, .katex-display *, mjx-container, mjx-container *");
+      for (const node of mathNodes) {{
+        paint(node, mainText);
+      }}
+
+      const sidebars2 = doc.querySelectorAll('section[data-testid="stSidebar"]');
+      for (const sidebar of sidebars2) {{
+        const sbRect = sidebar.getBoundingClientRect ? sidebar.getBoundingClientRect() : null;
+        const btns = sidebar.querySelectorAll("button");
+        for (const b of btns) {{
+          const aria = String(b.getAttribute("aria-label") || "").toLowerCase();
+          const rect = b.getBoundingClientRect ? b.getBoundingClientRect() : null;
+          const nearTopRight = !!(sbRect && rect && rect.top <= (sbRect.top + 90) && rect.left >= (sbRect.right - 100));
+          const maybeClose = aria.includes("close") || aria.includes("collapse") || aria.includes("关闭") || nearTopRight;
+          if (!maybeClose) continue;
+
+          try {{
+            b.style.setProperty("width", "34px", "important");
+            b.style.setProperty("height", "34px", "important");
+            b.style.setProperty("min-width", "34px", "important");
+            b.style.setProperty("min-height", "34px", "important");
+            b.style.setProperty("padding", "0", "important");
+            b.style.setProperty("font-size", "0", "important");
+            b.style.setProperty("line-height", "0", "important");
+            b.style.setProperty("display", "inline-flex", "important");
+            b.style.setProperty("align-items", "center", "important");
+            b.style.setProperty("justify-content", "center", "important");
+          }} catch (e) {{}}
+
+          const svgs = b.querySelectorAll("svg");
+          for (const s of svgs) {{
+            try {{ s.style.setProperty("display", "none", "important"); }} catch (e) {{}}
+          }}
+          const icons = b.querySelectorAll('[data-testid="stIcon"]');
+          for (const ic of icons) {{
+            try {{ ic.style.setProperty("display", "none", "important"); }} catch (e) {{}}
+          }}
+
+          let glyph = b.querySelector(".kb-close-glyph");
+          if (!glyph) {{
+            glyph = doc.createElement("span");
+            glyph.className = "kb-close-glyph";
+            glyph.textContent = "×";
+            glyph.setAttribute("aria-hidden", "true");
+            b.appendChild(glyph);
+          }}
+          paint(glyph, mainText);
+        }}
+      }}
+    }} catch (e) {{}}
+  }}
+
+  apply();
+  try {{
+    host[KEY] = host.setInterval(apply, 160);
+  }} catch (e) {{}}
+}})();
 </script>
         """,
         height=0,
@@ -4032,98 +4721,70 @@ def _page_chat(
 (function () {
   const host = window.parent || window;
   const root = host.document;
+  if (!root || !root.body) return;
+
+  const NS = "__kbDockManagerStableV3";
+  if (host[NS] && typeof host[NS].destroy === "function") {
+    try { host[NS].destroy(); } catch (e) {}
+  }
+
   const RESIZE_CLASS = "kb-resizing";
   const DOCK_SIDE_GAP = 35;
   const DOCK_RIGHT_GAP = 35;
+  const MIN_WIDTH = 320;
+  const state = {
+    raf: 0,
+    timer: 0,
+    ro: null,
+    mo: null,
+    dragging: false,
+    form: null,
+    ta: null,
+    onMouseDown: null,
+    onPointerDown: null,
+    onTouchStart: null,
+    onMouseMove: null,
+    onPointerMove: null,
+    onMouseUp: null,
+    onPointerUp: null,
+    onPointerCancel: null,
+    onTouchEnd: null,
+    onBlur: null,
+    onResize: null,
+  };
+
   function isInsideStaleNode(el) {
-    try {
-      return !!(el && el.closest && el.closest('[data-stale="true"]'));
-    } catch (e) {
-      return false;
-    }
+    try { return !!(el && el.closest && el.closest('[data-stale="true"]')); } catch (e) { return false; }
   }
-  function findMainRegion() {
-    const nodes = root.querySelectorAll('section.main');
-    for (const n of nodes) {
+  function pickFresh(nodes) {
+    for (const n of (nodes || [])) {
+      if (!n) continue;
       if (!isInsideStaleNode(n)) return n;
     }
-    return nodes.length ? nodes[0] : null;
+    return (nodes && nodes.length) ? nodes[0] : null;
+  }
+  function findMainRegion() {
+    return pickFresh(root.querySelectorAll('section.main'));
   }
   function findMainContainer() {
-    const nodes = [
+    return pickFresh([
       ...root.querySelectorAll('section.main .block-container'),
       ...root.querySelectorAll('[data-testid="stMainBlockContainer"]'),
       ...root.querySelectorAll('.block-container')
-    ];
-    for (const n of nodes) {
-      if (!isInsideStaleNode(n)) return n;
-    }
-    return nodes.length ? nodes[0] : null;
+    ]);
   }
   function findSidebar() {
-    const nodes = root.querySelectorAll('section[data-testid="stSidebar"]');
-    for (const n of nodes) {
-      if (!isInsideStaleNode(n)) return n;
-    }
-    return nodes.length ? nodes[0] : null;
+    return pickFresh(root.querySelectorAll('section[data-testid="stSidebar"]'));
   }
   function isSendBtnText(t) {
-    return t === '发送' || t === '↑' || t === '■';
-  }
-  function setResizing(on) {
-    if (!root.body) return;
-    if (on) {
-      root.body.classList.add(RESIZE_CLASS);
-    } else {
-      root.body.classList.remove(RESIZE_CLASS);
-    }
-  }
-  function installSidebarResizeFlag() {
-    if (!root.body || root.body.dataset.kbResizeFlagInstalled === "1") return;
-    root.body.dataset.kbResizeFlagInstalled = "1";
-    let dragging = false;
-    const onMove = function () {
-      if (!dragging) return;
-      scheduleHook();
-    };
-    const stop = function () {
-      if (!dragging) return;
-      dragging = false;
-      setResizing(false);
-      scheduleHook();
-    };
-    const startIfNearSidebarEdge = function (e) {
-      const sidebar = root.querySelector('section[data-testid="stSidebar"]');
-      if (!sidebar || !e) return;
-      const clientX = Number(e.clientX);
-      if (!isFinite(clientX)) return;
-      const rect = sidebar.getBoundingClientRect();
-      const nearEdge = Math.abs(rect.right - clientX) <= 24;
-      if (!nearEdge) return;
-      dragging = true;
-      setResizing(true);
-      scheduleHook();
-    };
-    root.addEventListener('mousedown', startIfNearSidebarEdge, true);
-    root.addEventListener('pointerdown', startIfNearSidebarEdge, true);
-    root.addEventListener('touchstart', function (e) {
-      const t = (e.touches && e.touches[0]) ? e.touches[0] : null;
-      if (t) startIfNearSidebarEdge(t);
-    }, true);
-    root.addEventListener('mousemove', onMove, true);
-    root.addEventListener('pointermove', onMove, true);
-    root.addEventListener('mouseup', stop, true);
-    root.addEventListener('pointerup', stop, true);
-    root.addEventListener('pointercancel', stop, true);
-    root.addEventListener('touchend', stop, true);
-    host.addEventListener('blur', stop, true);
+    const s = String(t || "").trim();
+    return s === "发送" || s === "↑" || s === "■" || s.toLowerCase() === "send";
   }
   function hasSendButton(form) {
     if (!form) return false;
     const btns = form.querySelectorAll('button');
     for (const b of btns) {
-      const t = (b.innerText || '').trim();
-      if (isSendBtnText(t)) return true;
+      if (isSendBtnText(b.innerText || b.textContent || "")) return true;
     }
     return false;
   }
@@ -4135,11 +4796,14 @@ def _page_chat(
         form.querySelector('div[data-testid="stTextArea"] textarea') ||
         form.querySelector('.stTextArea textarea') ||
         form.querySelector('textarea');
-      if (!ta) continue;
-      if (isInsideStaleNode(ta)) continue;
+      if (!ta || isInsideStaleNode(ta)) continue;
       if (hasSendButton(form)) return { form, ta };
     }
     return { form: null, ta: null };
+  }
+  function setResizing(on) {
+    if (on) root.body.classList.add(RESIZE_CLASS);
+    else root.body.classList.remove(RESIZE_CLASS);
   }
   function placeDock(form) {
     if (!form) return;
@@ -4147,107 +4811,164 @@ def _page_chat(
     const mainRegion = findMainRegion();
     const sidebar = findSidebar();
     const anchor = mainContainer || mainRegion;
-    if (!anchor && !sidebar) {
-      form.classList.remove('kb-dock-positioned');
-      form.style.left = '';
-      form.style.right = '';
-      form.style.width = '';
-      form.style.transform = '';
-      return;
-    }
+    if (!anchor && !sidebar) return;
 
     const viewportW = Math.max(0, (host.innerWidth || root.documentElement.clientWidth || 0));
-    const minWidth = 320;
     const anchorRect = (anchor && anchor.getBoundingClientRect) ? anchor.getBoundingClientRect() : null;
     const sidebarRect = (sidebar && sidebar.getBoundingClientRect) ? sidebar.getBoundingClientRect() : null;
 
     let leftBound = DOCK_SIDE_GAP;
-    let rightBound = Math.max(leftBound + minWidth, viewportW - DOCK_RIGHT_GAP);
+    let rightBound = Math.max(leftBound + MIN_WIDTH, viewportW - DOCK_RIGHT_GAP);
 
     if (anchorRect && isFinite(anchorRect.left) && isFinite(anchorRect.right) && anchorRect.width > 10) {
       leftBound = Math.max(leftBound, Math.floor(anchorRect.left) + DOCK_SIDE_GAP);
       rightBound = Math.min(rightBound, Math.floor(anchorRect.right) - DOCK_SIDE_GAP);
     }
-
     if (sidebarRect && isFinite(sidebarRect.right) && sidebarRect.width > 10) {
       leftBound = Math.max(leftBound, Math.floor(sidebarRect.right) + DOCK_SIDE_GAP);
     }
+    if (!isFinite(leftBound) || !isFinite(rightBound)) return;
 
-    if (!isFinite(rightBound) || !isFinite(leftBound)) return;
-
-    if (rightBound - leftBound < minWidth) {
-      rightBound = Math.max(leftBound + minWidth, viewportW - DOCK_RIGHT_GAP);
-    }
+    rightBound = Math.min(rightBound, viewportW - DOCK_RIGHT_GAP);
+    if (rightBound - leftBound < MIN_WIDTH) rightBound = leftBound + MIN_WIDTH;
     if (rightBound > viewportW - DOCK_RIGHT_GAP) {
       rightBound = viewportW - DOCK_RIGHT_GAP;
-    }
-    if (rightBound - leftBound < minWidth) {
-      leftBound = Math.max(DOCK_SIDE_GAP, rightBound - minWidth);
+      leftBound = Math.max(DOCK_SIDE_GAP, rightBound - MIN_WIDTH);
     }
 
     const dockLeft = Math.max(DOCK_SIDE_GAP, Math.floor(leftBound));
-    const dockRight = Math.max(dockLeft + minWidth, Math.floor(rightBound));
-    const dockWidth = Math.max(minWidth, dockRight - dockLeft);
+    const dockWidth = Math.max(MIN_WIDTH, Math.floor(rightBound - dockLeft));
 
-    form.classList.add('kb-dock-positioned');
+    form.classList.add('kb-input-dock', 'kb-dock-positioned');
     form.style.left = dockLeft + 'px';
     form.style.right = 'auto';
     form.style.width = dockWidth + 'px';
     form.style.transform = 'none';
   }
-  function scheduleHook() {
-    if (host._kbDockRaf) return;
-    host._kbDockRaf = host.requestAnimationFrame(function () {
-      host._kbDockRaf = 0;
-      hook();
-    });
-  }
-  function installResizeObservers() {
-    if (host._kbDockObsInstalled === "1") return;
-    if (typeof ResizeObserver === "undefined") return;
-    try {
-      const obs = new ResizeObserver(function () { scheduleHook(); });
-      const targets = [findMainContainer(), findMainRegion(), findSidebar()];
-      for (const t of targets) {
-        if (t) obs.observe(t);
-      }
-      host._kbDockResizeObserver = obs;
-      host._kbDockObsInstalled = "1";
-    } catch (e) {}
-  }
-  function hook() {
-    const hit = findPromptFormAndTextarea();
-    const ta = hit.ta;
-    const form = hit.form;
-    if (!ta) return;
-    if (form && !form.classList.contains('kb-input-dock')) {
-      form.classList.add('kb-input-dock');
-    }
-    placeDock(form);
-    if (ta.dataset.kbCtrlEnterHooked === "1") return;
+  function bindCtrlEnter(ta, form) {
+    if (!ta || ta.dataset.kbCtrlEnterHooked === "1") return;
     ta.dataset.kbCtrlEnterHooked = "1";
-    ta.addEventListener('keydown', function (e) {
-      const isCtrlEnter = (e.ctrlKey || e.metaKey) && (e.key === 'Enter');
+    ta.addEventListener("keydown", function (e) {
+      const isCtrlEnter = (e.ctrlKey || e.metaKey) && e.key === "Enter";
       if (!isCtrlEnter) return;
       e.preventDefault();
-      const btns = (form || root).querySelectorAll('button');
+      const btns = (form || root).querySelectorAll("button");
       for (const b of btns) {
-        const t = (b.innerText || '').trim();
-        if (t === '↑') {
+        if ((b.innerText || b.textContent || "").trim() === "↑") {
           b.click();
           break;
         }
       }
     }, { capture: true });
   }
-  hook();
-  installSidebarResizeFlag();
-  installResizeObservers();
-  if (root.body && !root.body.dataset.kbDockSimpleHookTimer) {
-    root.body.dataset.kbDockSimpleHookTimer = "1";
-    setInterval(hook, 120);
-    host.addEventListener('resize', scheduleHook, { passive: true });
+  function hook() {
+    const hit = findPromptFormAndTextarea();
+    if (!hit.form || !hit.ta) return;
+    state.form = hit.form;
+    state.ta = hit.ta;
+    state.form.classList.add("kb-input-dock");
+    placeDock(state.form);
+    bindCtrlEnter(state.ta, state.form);
   }
+  function scheduleHook() {
+    if (state.raf) return;
+    state.raf = host.requestAnimationFrame(function () {
+      state.raf = 0;
+      hook();
+    });
+  }
+  function startDragIfNearSidebarEdge(e) {
+    const sidebar = findSidebar();
+    if (!sidebar || !e) return;
+    const clientX = Number(e.clientX);
+    if (!isFinite(clientX)) return;
+    const rect = sidebar.getBoundingClientRect();
+    if (!rect || !isFinite(rect.right)) return;
+    const nearEdge = Math.abs(rect.right - clientX) <= 24;
+    if (!nearEdge) return;
+    state.dragging = true;
+    setResizing(true);
+    scheduleHook();
+  }
+  function onDragMove() {
+    if (!state.dragging) return;
+    scheduleHook();
+  }
+  function stopDrag() {
+    if (!state.dragging) return;
+    state.dragging = false;
+    setResizing(false);
+    scheduleHook();
+  }
+  function installListeners() {
+    state.onMouseDown = startDragIfNearSidebarEdge;
+    state.onPointerDown = startDragIfNearSidebarEdge;
+    state.onTouchStart = function (e) {
+      const t = (e.touches && e.touches[0]) ? e.touches[0] : null;
+      if (t) startDragIfNearSidebarEdge(t);
+    };
+    state.onMouseMove = onDragMove;
+    state.onPointerMove = onDragMove;
+    state.onMouseUp = stopDrag;
+    state.onPointerUp = stopDrag;
+    state.onPointerCancel = stopDrag;
+    state.onTouchEnd = stopDrag;
+    state.onBlur = stopDrag;
+    state.onResize = scheduleHook;
+
+    root.addEventListener("mousedown", state.onMouseDown, true);
+    root.addEventListener("pointerdown", state.onPointerDown, true);
+    root.addEventListener("touchstart", state.onTouchStart, true);
+    root.addEventListener("mousemove", state.onMouseMove, true);
+    root.addEventListener("pointermove", state.onPointerMove, true);
+    root.addEventListener("mouseup", state.onMouseUp, true);
+    root.addEventListener("pointerup", state.onPointerUp, true);
+    root.addEventListener("pointercancel", state.onPointerCancel, true);
+    root.addEventListener("touchend", state.onTouchEnd, true);
+    host.addEventListener("blur", state.onBlur, true);
+    host.addEventListener("resize", state.onResize, { passive: true });
+  }
+  function installObservers() {
+    if (typeof ResizeObserver !== "undefined") {
+      try {
+        state.ro = new ResizeObserver(function () { scheduleHook(); });
+        const candidates = [root.documentElement, root.body, findSidebar(), findMainContainer(), findMainRegion()];
+        for (const c of candidates) {
+          if (c) state.ro.observe(c);
+        }
+      } catch (e) {}
+    }
+    if (typeof MutationObserver !== "undefined") {
+      try {
+        state.mo = new MutationObserver(function () { scheduleHook(); });
+        state.mo.observe(root.body, { childList: true, subtree: true, attributes: true });
+      } catch (e) {}
+    }
+  }
+  function destroy() {
+    try { if (state.timer) host.clearInterval(state.timer); } catch (e) {}
+    try { if (state.raf) host.cancelAnimationFrame(state.raf); } catch (e) {}
+    try { if (state.ro) state.ro.disconnect(); } catch (e) {}
+    try { if (state.mo) state.mo.disconnect(); } catch (e) {}
+    try { root.removeEventListener("mousedown", state.onMouseDown, true); } catch (e) {}
+    try { root.removeEventListener("pointerdown", state.onPointerDown, true); } catch (e) {}
+    try { root.removeEventListener("touchstart", state.onTouchStart, true); } catch (e) {}
+    try { root.removeEventListener("mousemove", state.onMouseMove, true); } catch (e) {}
+    try { root.removeEventListener("pointermove", state.onPointerMove, true); } catch (e) {}
+    try { root.removeEventListener("mouseup", state.onMouseUp, true); } catch (e) {}
+    try { root.removeEventListener("pointerup", state.onPointerUp, true); } catch (e) {}
+    try { root.removeEventListener("pointercancel", state.onPointerCancel, true); } catch (e) {}
+    try { root.removeEventListener("touchend", state.onTouchEnd, true); } catch (e) {}
+    try { host.removeEventListener("blur", state.onBlur, true); } catch (e) {}
+    try { host.removeEventListener("resize", state.onResize, false); } catch (e) {}
+    setResizing(false);
+  }
+
+  host[NS] = { destroy, schedule: scheduleHook };
+  installListeners();
+  installObservers();
+  state.timer = host.setInterval(scheduleHook, 120);
+  scheduleHook();
 })();
 </script>
         """,
@@ -5234,6 +5955,7 @@ def main() -> None:
     if "ui_theme" not in st.session_state:
         st.session_state["ui_theme"] = "light"
     _init_theme_css(st.session_state["ui_theme"])
+    _inject_runtime_ui_fixes(st.session_state["ui_theme"])
     _render_app_title()
 
     settings = load_settings()
@@ -5349,7 +6071,11 @@ def main() -> None:
 
         top_k = st.slider(S["top_k"], min_value=2, max_value=20, value=int(prefs.get("top_k") or 6), step=1)
         temperature = st.slider(S["temp"], min_value=0.0, max_value=1.0, value=float(prefs.get("temperature") or 0.2), step=0.05)
-        max_tokens = st.slider(S["max_tokens"], min_value=256, max_value=4096, value=int(prefs.get("max_tokens") or 1200), step=64)
+        max_tokens_pref = int(prefs.get("max_tokens") or 1216)
+        max_tokens_pref = max(256, min(4096, max_tokens_pref))
+        max_tokens_pref = 256 + int(round((max_tokens_pref - 256) / 64.0)) * 64
+        max_tokens_pref = max(256, min(4096, max_tokens_pref))
+        max_tokens = st.slider(S["max_tokens"], min_value=256, max_value=4096, value=int(max_tokens_pref), step=64)
         show_context = st.checkbox(S["show_ctx"], value=bool(prefs.get("show_context") or False))
         deep_read = st.checkbox(S["deep_read"], value=bool(prefs.get("deep_read") if ("deep_read" in prefs) else True))
         llm_rerank = True
