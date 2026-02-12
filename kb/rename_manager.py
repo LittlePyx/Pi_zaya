@@ -174,6 +174,7 @@ def _scan_rows(
                 size = int(stat.st_size)
             except Exception:
                 modified, size = 0.0, 0
+            llm_flag = "llm1" if use_llm else "llm0"
 
             cache_key = hashlib.sha1(
                 (f"{pdf}|{modified}|{size}|{llm_flag}|ver:{expected_ver}").encode("utf-8", "ignore")
@@ -371,7 +372,9 @@ def _apply_renames(
         if fail_n:
             st.warning(f"\u5931\u8d25\uff1a{fail_n} \u4e2a\u6587\u4ef6\uff08\u53ef\u80fd\u662f\u6587\u4ef6\u6b63\u88ab\u5360\u7528\uff09")
         if operations:
-            with st.expander("\u67e5\u770b\u8be6\u60c5", expanded=False):
+            st.markdown("---")
+            st.markdown("**处理详情：**")
+            with st.container():
                 for status, message in operations[:200]:
                     (st.caption if status in ("ok", "skip") else st.warning)(message)
 
