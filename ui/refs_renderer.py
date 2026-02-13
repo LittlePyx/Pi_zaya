@@ -8,9 +8,9 @@ import subprocess
 from pathlib import Path
 from urllib.parse import quote
 
-import requests
 import streamlit as st
 
+from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.pdf_tools import open_in_explorer
 from ui.strings import S
 
@@ -183,72 +183,90 @@ def _resolve_pdf_for_source(pdf_root: Path | None, source_path: str) -> Path | N
 
 # --- Citation Utilities ---
 
-def fetch_crossref_meta(title: str) -> dict | None:
-    """Synchronous fetch. Blocks the thread but returns clean data."""
-    if not title or len(title) < 5:
+def _resolve_source_doc_path(source_path: str) -> Path | None:
+    raw = (source_path or "").strip()
+    if not raw:
+        return None
+    p = Path(raw)
+    if p.exists():
+        return p
+    if p.is_absolute():
         return None
 
-    # Clean title
-    search_title = re.sub(r"\.(pdf|md)$", "", title, flags=re.IGNORECASE).replace("-", " ")
+    md_root_str = str(st.session_state.get("md_dir") or "").strip()
+    if not md_root_str:
+        return None
+    md_root = Path(md_root_str)
 
-    url = "https://api.crossref.org/works"
-    params = {
-        "query.title": search_title,
-        "rows": 1,
-        "select": "author,published-print,published-online,container-title,volume,issue,page,DOI,title"
-    }
+    c1 = md_root / p
+    if c1.exists():
+        return c1
+    c2 = md_root / p.name
+    if c2.exists():
+        return c2
 
     try:
-        headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
-        resp = requests.get(url, params=params, headers=headers, timeout=5)
-        if resp.status_code != 200:
-            return None
-
-        data = resp.json()
-        items = data.get("message", {}).get("items", [])
-        if not items:
-            return None
-
-        item = items[0]
-
-        # Year
-        issued = item.get("published-print") or item.get("published-online") or {}
-        year_parts = issued.get("date-parts", [[]])[0]
-        year = str(year_parts[0]) if year_parts else ""
-
-        # Venue
-        venue_list = item.get("container-title", [])
-        venue = venue_list[0] if venue_list else ""
-
-        # Authors (Cleaned)
-        authors_list = item.get("author", [])
-        formatted_authors = []
-        for a in authors_list:
-            last = a.get("family", "").strip()
-            first = a.get("given", "").strip()
-            if last:
-                first_clean = re.sub(r"[.,]", "", first).strip()
-                initial = first_clean[0] if first_clean else ""
-                name_str = f"{last} {initial}".strip()
-                formatted_authors.append(name_str)
-
-        if len(formatted_authors) > 3:
-            authors_str = ", ".join(formatted_authors[:3]) + ", et al"
-        else:
-            authors_str = ", ".join(formatted_authors)
-
-        return {
-            "title": item.get("title", [title])[0],
-            "authors": authors_str or "[Unknown Authors]",
-            "venue": venue,
-            "year": year,
-            "volume": item.get("volume", ""),
-            "issue": item.get("issue", ""),
-            "pages": item.get("page", ""),
-            "doi": item.get("DOI", "")
-        }
+        for hit in md_root.rglob(p.name):
+            return hit
     except Exception:
         return None
+    return None
+
+
+def _load_source_preview_text(source_path: str, *, max_chars: int = 12000) -> str:
+    p = _resolve_source_doc_path(source_path)
+    if not p:
+        return ""
+    try:
+        txt = p.read_text(encoding="utf-8", errors="ignore")
+        if not txt:
+            return ""
+        return txt[: max(1000, int(max_chars))]
+    except Exception:
+        return ""
+
+
+def _infer_title_from_source_text(source_path: str, fallback_title: str) -> str:
+    txt = _load_source_preview_text(source_path, max_chars=9000)
+    if not txt:
+        return fallback_title
+
+    for raw_line in txt.splitlines()[:120]:
+        line = (raw_line or "").strip()
+        if not line:
+            continue
+        line = re.sub(r"^#{1,6}\s*", "", line).strip()
+        if len(line) < 12:
+            continue
+        low = line.lower()
+        if low.startswith(("abstract", "references", "bibliography")):
+            continue
+        if re.search(r"^(keywords?|introduction)\b", low):
+            continue
+        return line
+    return fallback_title
+
+
+def fetch_crossref_meta(title: str, *, source_path: str = "", expected_venue: str = "", expected_year: str = "") -> dict | None:
+    """
+    Synchronous fetch with strict confidence gate.
+    Return None when not reliable enough.
+    """
+    q = (title or "").strip()
+    if not q or len(q) < 5:
+        return None
+
+    doi_hint = extract_first_doi(source_path)
+    if not doi_hint:
+        doi_hint = extract_first_doi(_load_source_preview_text(source_path))
+
+    return fetch_best_crossref_meta(
+        query_title=q,
+        expected_year=expected_year,
+        expected_venue=expected_venue,
+        doi_hint=doi_hint,
+        min_score=0.90,
+    )
 
 
 def _parse_filename_meta(path_str: str) -> tuple[str, str, str]:
@@ -278,12 +296,20 @@ def _on_cite_click(cite_key: str, net_key: str, source_path: str):
             # Infer title
             l_venue, l_year, l_title = _parse_filename_meta(source_path)
             search_title = l_title if l_title else Path(source_path).stem
+            search_title = _infer_title_from_source_text(source_path, search_title)
 
             # Fetch (This will block for ~1-2s, user feels a slight wait)
-            found = fetch_crossref_meta(search_title)
+            found = fetch_crossref_meta(
+                search_title,
+                source_path=source_path,
+                expected_venue=l_venue,
+                expected_year=l_year,
+            )
             if found:
                 st.session_state[net_key] = found
+                st.session_state.pop(f"{net_key}_failed", None)
             else:
+                st.session_state.pop(net_key, None)
                 st.session_state[f"{net_key}_failed"] = True
 
 
@@ -401,29 +427,43 @@ def _render_refs(
 def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
     net_key = f"{key_ns}_net_meta_v5_{uid}"
     net_data = st.session_state.get(net_key)
-    fetch_failed = st.session_state.get(f"{net_key}_failed", False)
+    fetch_failed = bool(st.session_state.get(f"{net_key}_failed", False))
 
-    l_venue, l_year, l_title = _parse_filename_meta(source_path)
-    if not l_title:
-        l_title = Path(source_path).stem
+    if not isinstance(net_data, dict):
+        with st.container():
+            st.markdown(
+                "<div style='background:rgba(128,128,128,0.06); padding:10px; border-radius:8px; margin-top:5px; margin-bottom:10px; border:1px solid rgba(128,128,128,0.15);'>"
+                "<div style='margin-bottom:8px; font-weight:600; font-size:0.9em;'>Citation Export</div>",
+                unsafe_allow_html=True,
+            )
+            if fetch_failed:
+                st.info("未识别出可靠引用信息。为保证准确性，此条不自动生成 Cite。")
+            else:
+                st.info("点击 Cite 后未获得可用元数据。")
+            st.markdown("</div>", unsafe_allow_html=True)
+        return
 
-    if net_data:
-        d_title = net_data["title"]
-        d_authors = net_data["authors"]
-        d_venue = net_data["venue"]
-        d_year = net_data["year"]
-        d_vol = net_data.get("volume", "")
-        d_issue = net_data.get("issue", "")
-        d_pages = net_data.get("pages", "")
-        d_doi = net_data.get("doi", "")
-        is_perfect = True
-    else:
-        d_title = l_title
-        d_venue = l_venue or "Unknown Venue"
-        d_year = l_year or "20xx"
-        d_authors = "[Authors]"
-        d_vol, d_issue, d_pages, d_doi = "", "", "", ""
-        is_perfect = False
+    d_title = str(net_data.get("title") or "").strip()
+    d_authors = str(net_data.get("authors") or "").strip() or "[Unknown Authors]"
+    d_venue = str(net_data.get("venue") or "").strip() or "Unknown Venue"
+    d_year = str(net_data.get("year") or "").strip() or "20xx"
+    d_vol = str(net_data.get("volume") or "").strip()
+    d_issue = str(net_data.get("issue") or "").strip()
+    d_pages = str(net_data.get("pages") or "").strip()
+    d_doi = str(net_data.get("doi") or "").strip()
+    match_method = str(net_data.get("match_method") or "").strip() or "title"
+    match_score = float(net_data.get("match_score") or 0.0)
+
+    if not d_title:
+        with st.container():
+            st.markdown(
+                "<div style='background:rgba(128,128,128,0.06); padding:10px; border-radius:8px; margin-top:5px; margin-bottom:10px; border:1px solid rgba(128,128,128,0.15);'>"
+                "<div style='margin-bottom:8px; font-weight:600; font-size:0.9em;'>Citation Export</div>",
+                unsafe_allow_html=True,
+            )
+            st.info("未识别出可靠标题。为保证准确性，此条不自动生成 Cite。")
+            st.markdown("</div>", unsafe_allow_html=True)
+        return
 
     gbt_suffix = f", {d_year}"
     if d_vol: gbt_suffix += f", {d_vol}"
@@ -450,6 +490,7 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
             "<div style='margin-bottom:8px; font-weight:600; font-size:0.9em;'>Citation Export</div>",
             unsafe_allow_html=True
         )
+        st.caption(f"Source: Crossref ({match_method}, confidence {match_score:.2f})")
 
 
         t1, t2 = st.tabs(["GB/T 7714", "BibTeX"])

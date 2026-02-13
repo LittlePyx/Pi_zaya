@@ -7,12 +7,14 @@ import subprocess
 import sys
 import threading
 import time
+import html as html_lib
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 import fitz  # PyMuPDF
+from .citation_meta import extract_first_doi, fetch_best_crossref_meta, title_similarity
 
 
 @dataclass
@@ -22,9 +24,117 @@ class PdfMetaSuggestion:
     title: str = ""
 
 
+# Keep abbreviations explicit and deterministic (avoid LLM guessing for filenames).
+_VENUE_ABBR_MAP: dict[str, str] = {
+    # Optics / photonics
+    "laser photonics reviews": "LPR",
+    "light science applications": "LSA",
+    "advanced photonics": "AdvPhoton",
+    "photonics research": "PhotonicsRes",
+    "optica": "Optica",
+    "optics express": "OE",
+    "optics letters": "OL",
+    "applied optics": "AO",
+    "journal of lightwave technology": "JLT",
+    "ieee photonics technology letters": "PTL",
+    "ieee journal of selected topics in quantum electronics": "JSTQE",
+    "laser physics letters": "LaserPhysLett",
+    # Nature / Science / Cell families
+    "nature": "Nature",
+    "science": "Science",
+    "ieee transactions on image processing": "IEEE-TIP",
+    "ieee trans image process": "IEEE-TIP",
+    "ieee transactions on pattern analysis and machine intelligence": "IEEE-TPAMI",
+    "ieee trans pattern anal mach intell": "IEEE-TPAMI",
+    "ieee transactions on visualization and computer graphics": "IEEE-TVCG",
+    "ieee transactions on circuits and systems for video technology": "IEEE-TCSVT",
+    "ieee transactions on medical imaging": "IEEE-TMI",
+    "ieee transactions on multimedia": "IEEE-TMM",
+    "ieee transactions on neural networks and learning systems": "IEEE-TNNLS",
+    "ieee journal of biomedical and health informatics": "IEEE-JBHI",
+    "pattern recognition": "PR",
+    "international journal of computer vision": "IJCV",
+    "computer vision and image understanding": "CVIU",
+    "medical image analysis": "MedIA",
+    "knowledge based systems": "KBS",
+    "information fusion": "InfoFusion",
+    "signal processing": "SignalProcess",
+    "expert systems with applications": "ESWA",
+    "journal of machine learning research": "JMLR",
+    "acm transactions on graphics": "ACM-TOG",
+    "acm tog": "ACM-TOG",
+    "proceedings of the acm on computer graphics and interactive techniques": "PACM-CGIT",
+    "acm computing surveys": "ACM-CSUR",
+    "acm transactions on intelligent systems and technology": "ACM-TIST",
+    "acm transactions on information systems": "ACM-TOIS",
+    "nature machine intelligence": "NatMachIntell",
+    "nature methods": "NatMethods",
+    "nature materials": "NatMater",
+    "nature physics": "NatPhys",
+    "nature electronics": "NatElectron",
+    "nature biotechnology": "NatBiotechnol",
+    "nature biomedical engineering": "NatBiomedEng",
+    "nature computational science": "NatComputSci",
+    "nature communications": "NatCommun",
+    "nature photonics": "NatPhoton",
+    "science advances": "SciAdv",
+    "cell": "Cell",
+    "cell reports": "CellRep",
+    "the lancet": "Lancet",
+    "new england journal of medicine": "NEJM",
+    "jama": "JAMA",
+    # APS / physics
+    "physical review letters": "PRL",
+    "physical review x": "PRX",
+    "physical review applied": "PRApplied",
+    "physical review research": "PRResearch",
+    "physical review a": "PRA",
+    "physical review b": "PRB",
+    "physical review c": "PRC",
+    "physical review d": "PRD",
+    "physical review e": "PRE",
+    # CV/ML/NLP conferences
+    "cvpr": "CVPR",
+    "conference on computer vision and pattern recognition": "CVPR",
+    "proceedings of the ieee cvf conference on computer vision and pattern recognition": "CVPR",
+    "proceedings of the ieee cvf international conference on computer vision": "ICCV",
+    "european conference on computer vision": "ECCV",
+    "iccv": "ICCV",
+    "eccv": "ECCV",
+    "wacv": "WACV",
+    "accv": "ACCV",
+    "icip": "ICIP",
+    "icassp": "ICASSP",
+    "icme": "ICME",
+    "neurips": "NeurIPS",
+    "icml": "ICML",
+    "iclr": "ICLR",
+    "aaai": "AAAI",
+    "ijcai": "IJCAI",
+    "kdd": "KDD",
+    "www": "WWW",
+    "the web conference": "WWW",
+    "sigir": "SIGIR",
+    "acl": "ACL",
+    "emnlp": "EMNLP",
+    "naacl": "NAACL",
+    "coling": "COLING",
+    # HCI / robotics
+    "chi": "CHI",
+    "uist": "UIST",
+    "icra": "ICRA",
+    "iros": "IROS",
+    "robotics science and systems": "RSS",
+    # Archives / preprints
+    "siggraph asia": "SIGGRAPH-Asia",
+    "siggraph": "SIGGRAPH",
+    "arxiv": "arXiv",
+}
+
+
 # Bump this whenever the PDF meta extraction heuristics change in a way that should
 # invalidate any UI/session caches that store extracted metadata.
-PDF_META_EXTRACT_VERSION = "2026-02-09.1"
+PDF_META_EXTRACT_VERSION = "2026-02-13.3"
 
 
 def ensure_dir(p: Path) -> None:
@@ -32,7 +142,7 @@ def ensure_dir(p: Path) -> None:
 
 
 def _sanitize_component(s: str) -> str:
-    s = (s or "").strip()
+    s = html_lib.unescape((s or "").strip())
     s = re.sub(r"\s+", " ", s)
     # Windows file name forbidden chars
     s = re.sub(r'[<>:"/\\\\|?*]+', "-", s)
@@ -42,8 +152,56 @@ def _sanitize_component(s: str) -> str:
     return s
 
 
-def build_base_name(venue: str, year: str, title: str) -> str:
-    venue = _sanitize_component(venue)
+def _venue_key(venue: str) -> str:
+    v = html_lib.unescape((venue or "").strip()).lower()
+    v = v.replace("&", " ")
+    v = re.sub(r"[^a-z0-9]+", " ", v)
+    v = re.sub(r"\s+", " ", v).strip()
+    return v
+
+
+def abbreviate_venue(venue: str) -> str:
+    raw = _sanitize_component(venue)
+    if not raw:
+        return ""
+    key = _venue_key(raw)
+    if key in _VENUE_ABBR_MAP:
+        return _VENUE_ABBR_MAP[key]
+    return raw
+
+
+def venue_abbreviation_pairs() -> list[tuple[str, str]]:
+    pairs = [
+        ("Laser & Photonics Reviews", "LPR"),
+        ("Light: Science & Applications", "LSA"),
+        ("Optica", "Optica"),
+        ("Optics Express", "OE"),
+        ("Optics Letters", "OL"),
+        ("Applied Optics", "AO"),
+        ("Photonics Research", "PhotonicsRes"),
+        ("IEEE Transactions on Image Processing", "IEEE-TIP"),
+        ("IEEE Transactions on Pattern Analysis and Machine Intelligence", "IEEE-TPAMI"),
+        ("ACM Transactions on Graphics", "ACM-TOG"),
+        ("Physical Review Letters", "PRL"),
+        ("Physical Review X", "PRX"),
+        ("Nature Communications", "NatCommun"),
+        ("Nature Photonics", "NatPhoton"),
+        ("Science Advances", "SciAdv"),
+        ("CVPR", "CVPR"),
+        ("ICCV", "ICCV"),
+        ("ECCV", "ECCV"),
+        ("WACV", "WACV"),
+        ("NeurIPS", "NeurIPS"),
+        ("ICML", "ICML"),
+        ("AAAI", "AAAI"),
+        ("ACL", "ACL"),
+        ("EMNLP", "EMNLP"),
+    ]
+    return pairs
+
+
+def build_base_name(venue: str, year: str, title: str, *, shorten_venue: bool = True) -> str:
+    venue = abbreviate_venue(venue) if shorten_venue else _sanitize_component(venue)
     year = _sanitize_component(year)
     title = _sanitize_component(title)
 
@@ -140,12 +298,20 @@ def _guess_venue(text: str) -> str:
         # Science family (specific) — must come before generic Science markers.
         (r"\bScience\s+Advances\b", "Science Advances"),
         (r"\bSci\.\s*Adv\.\b", "Science Advances"),
+        (r"\bSci\s*\.?\s*Adv\.?\b", "Science Advances"),
+        (r"\bSciAdv\b", "Science Advances"),
         (r"\badvances\.science(?:mag)?\.org\b", "Science Advances"),
         (r"\bscienceadvances\.org\b", "Science Advances"),
 
         # Nature family (specific) — must come before generic Nature markers.
         (r"\bNature\s+Communications\b", "Nature Communications"),
         (r"\bNat\.\s*Commun\.\b", "Nature Communications"),
+        (r"\bNature\s+Photonics\b", "Nature Photonics"),
+        (r"\bNat\.\s*Photon\.\b", "Nature Photonics"),
+        (r"\bnaturecommunications\.com\b", "Nature Communications"),
+        (r"\bnature(?:-|\.)?photonics\b", "Nature Photonics"),
+        (r"\bNature\s+Machine\s+Intelligence\b", "Nature Machine Intelligence"),
+        (r"\bNature\s+Methods\b", "Nature Methods"),
 
         # Strong publisher/header markers (avoid "Computer Science"/"Optical Science" false matches)
         (r"\bnature\.com\b", "Nature"),
@@ -155,9 +321,18 @@ def _guess_venue(text: str) -> str:
         (r"\bAAAS\b", "Science"),
 
         # Optics / imaging journals
+        (r"\bLight\s*:\s*Science\s*(?:&|and)\s*Applications\b", "Light: Science & Applications"),
+        (r"\bLaser\s*(?:&|and)\s*Photonics\s+Reviews\b", "Laser & Photonics Reviews"),
+        (r"\bPhotonics\s+Research\b", "Photonics Research"),
+        (r"\bAdvanced\s+Photonics\b", "Advanced Photonics"),
+        (r"\bOptica\b", "Optica"),
         (r"\bOptics\s+Express\b", "Optics Express"),
+        (r"\bOptics\s+Letters\b", "Optics Letters"),
         (r"\bApplied\s+Optics\b", "Applied Optics"),
         (r"\bAppl\.\s*Opt\.\b", "Applied Optics"),
+        (r"\bPhysical\s+Review\s+Letters\b", "Physical Review Letters"),
+        (r"\bPhys\.\s*Rev\.\s*Lett\.\b", "Physical Review Letters"),
+        (r"\bPhysical\s+Review\s+X\b", "Physical Review X"),
         # ACM / IEEE (keep existing patterns)
         (r"ACM\s+TOG\b", None),
         (r"ACM\s+Trans(?:actions)?\.?\s+Graph(?:ics)?\.?", None),
@@ -170,9 +345,26 @@ def _guess_venue(text: str) -> str:
         (r"\bCVPR\s+\d{4}\b", None),
         (r"\bICCV\s+\d{4}\b", None),
         (r"\bECCV\s+\d{4}\b", None),
+        (r"\bWACV\s+\d{4}\b", None),
         (r"\bNeurIPS\s+\d{4}\b", None),
+        (r"\bICML\s+\d{4}\b", None),
         (r"\bICLR\s+\d{4}\b", None),
+        (r"\bAAAI\s+\d{4}\b", None),
+        (r"\bIJCAI\s+\d{4}\b", None),
         (r"\bSIGGRAPH(?:\s+Asia)?\s+\d{4}\b", None),
+        # Conferences (without year)
+        (r"\bCVPR\b", "CVPR"),
+        (r"\bICCV\b", "ICCV"),
+        (r"\bECCV\b", "ECCV"),
+        (r"\bWACV\b", "WACV"),
+        (r"\bNeurIPS\b", "NeurIPS"),
+        (r"\bICML\b", "ICML"),
+        (r"\bICLR\b", "ICLR"),
+        (r"\bAAAI\b", "AAAI"),
+        (r"\bIJCAI\b", "IJCAI"),
+        (r"\bACL\b", "ACL"),
+        (r"\bEMNLP\b", "EMNLP"),
+        (r"\bNAACL\b", "NAACL"),
         # Preprints
         (r"\barXiv\b", "arXiv"),
     ]
@@ -191,7 +383,41 @@ def _guess_venue(text: str) -> str:
     m = re.search(r"European\s+Conference\s+on\s+Computer\s+Vision", t, flags=re.IGNORECASE)
     if m:
         return "ECCV"
+    m = re.search(r"Conference\s+on\s+Computer\s+Vision\s+and\s+Pattern\s+Recognition", t, flags=re.IGNORECASE)
+    if m:
+        return "CVPR"
+    m = re.search(r"International\s+Conference\s+on\s+Machine\s+Learning", t, flags=re.IGNORECASE)
+    if m:
+        return "ICML"
+    m = re.search(r"International\s+Conference\s+on\s+Learning\s+Representations", t, flags=re.IGNORECASE)
+    if m:
+        return "ICLR"
     return ""
+
+
+def _is_generic_venue(venue: str) -> bool:
+    v = _venue_key(venue)
+    return v in {"science", "nature"}
+
+
+def _parse_filename_meta(stem_or_name: str) -> tuple[str, str, str]:
+    stem = Path(stem_or_name or "").stem or (stem_or_name or "")
+    if stem.lower().endswith(".en"):
+        stem = stem[:-3]
+    parts = [p.strip() for p in stem.split("-") if p.strip()]
+    if len(parts) < 3:
+        return "", "", ""
+    year_idx = -1
+    for i, p in enumerate(parts):
+        if re.fullmatch(r"(19\d{2}|20\d{2})", p):
+            year_idx = i
+            break
+    if year_idx <= 0 or year_idx >= (len(parts) - 1):
+        return "", "", ""
+    venue = _sanitize_component("-".join(parts[:year_idx]))
+    year = parts[year_idx]
+    title = _sanitize_component("-".join(parts[year_idx + 1 :]))
+    return venue, year, title
 
 
 def _extract_top_text(page: fitz.Page, y_frac: float = 0.40) -> str:
@@ -422,6 +648,7 @@ def _llm_extract_meta_from_text(settings: Any, text: str) -> PdfMetaSuggestion |
 
 def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) -> PdfMetaSuggestion:
     pdf_path = Path(pdf_path)
+    file_venue, file_year, file_title = _parse_filename_meta(pdf_path.name)
     try:
         doc = fitz.open(str(pdf_path))
     except Exception:
@@ -458,9 +685,15 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
 
     year = _guess_year(top_text) or _guess_year(first_text)
     venue = _guess_venue(top_text) or _guess_venue(first_text)
+    if (not year) and file_year:
+        year = file_year
+    if (not venue or _is_generic_venue(venue)) and file_venue and (not _is_generic_venue(file_venue)):
+        venue = file_venue
+    if (not title) and file_title:
+        title = file_title
 
     # Optional LLM refinement when heuristics are missing/suspicious.
-    need_llm = (not title) or (not year) or (not venue)
+    need_llm = (not title) or (not year) or (not venue) or _is_generic_venue(venue)
     if need_llm and settings:
         sugg = _llm_extract_meta_from_text(settings, top_text or first_text)
         if sugg:
@@ -468,8 +701,94 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
                 title = sugg.title
             if not year and sugg.year:
                 year = sugg.year
-            if not venue and sugg.venue:
+            if sugg.venue and (not venue or _is_generic_venue(venue)):
                 venue = sugg.venue
+
+    # Crossref refinement (DOI first, then strict title search).
+    # For rename suggestions we still keep a conservative gate to avoid bad overwrites.
+    try:
+        doi_hint = extract_first_doi(str(meta.get("doi") or ""))
+    except Exception:
+        doi_hint = ""
+    if not doi_hint:
+        doi_hint = extract_first_doi(top_text) or extract_first_doi(first_text)
+
+    query_title = title or file_title
+    expected_year = year or file_year
+    expected_venue = venue
+    if (not expected_venue or _is_generic_venue(expected_venue)) and file_venue and (not _is_generic_venue(file_venue)):
+        expected_venue = file_venue
+
+    cross = None
+    cross_trusted = False
+    try:
+        cross = fetch_best_crossref_meta(
+            query_title=query_title,
+            expected_year=expected_year,
+            expected_venue=expected_venue,
+            doi_hint=doi_hint,
+            min_score=0.84,
+        )
+    except Exception:
+        cross = None
+
+    # Retry once with relaxed constraints when year guess is noisy.
+    if (not isinstance(cross, dict)) and query_title:
+        retry_venue = "" if _is_generic_venue(expected_venue) else expected_venue
+        try:
+            cross = fetch_best_crossref_meta(
+                query_title=query_title,
+                expected_year="",
+                expected_venue=retry_venue,
+                doi_hint=doi_hint,
+                min_score=0.90,
+            )
+        except Exception:
+            cross = None
+
+    # Very strict title-only fallback (for cases where venue/year extraction is empty but title is clean).
+    if (not isinstance(cross, dict)) and query_title and len(_normalize_ws(query_title)) >= 24:
+        try:
+            cross = fetch_best_crossref_meta(
+                query_title=query_title,
+                expected_year="",
+                expected_venue="",
+                doi_hint=doi_hint,
+                min_score=0.97,
+                allow_title_only=True,
+            )
+        except Exception:
+            cross = None
+
+    if isinstance(cross, dict):
+        c_title = _sanitize_component(str(cross.get("title") or "").strip())
+        c_year = _sanitize_component(str(cross.get("year") or "").strip())
+        c_venue = _sanitize_component(str(cross.get("venue") or "").strip())
+        c_method = str(cross.get("match_method") or "").strip()
+        c_score = float(cross.get("match_score") or 0.0)
+        c_trusted = (c_method == "doi") or (c_score >= 0.90)
+        cross_trusted = bool(c_trusted)
+
+        if c_title:
+            t_sim = title_similarity(title, c_title) if title else 1.0
+            if (not title) or c_trusted or (t_sim >= 0.88):
+                title = c_title
+
+        if c_trusted:
+            if c_year and re.fullmatch(r"(19\d{2}|20\d{2})", c_year):
+                year = c_year
+            if c_venue:
+                venue = c_venue
+
+    # Safety fallback: avoid generic top-level journal names when untrusted.
+    if _is_generic_venue(venue) and (not cross_trusted):
+        venue = ""
+    if (not venue) and file_venue and (not _is_generic_venue(file_venue)):
+        venue = file_venue
+    if (not year) and file_year:
+        year = file_year
+    if (not title) and file_title:
+        title = file_title
 
     # Cleanups
     title = _sanitize_component(title)
@@ -525,7 +844,9 @@ def run_pdf_to_md(
 
     if stall_timeout_s is None:
         try:
-            stall_timeout_s = float(os.environ.get("KB_PDF_PROGRESS_STALL_TIMEOUT_S", "0"))
+            # Default watchdog for web/background mode:
+            # if converter produces no stdout for too long, abort instead of hanging forever.
+            stall_timeout_s = float(os.environ.get("KB_PDF_PROGRESS_STALL_TIMEOUT_S", "180"))
         except Exception:
             stall_timeout_s = 0.0
     try:
@@ -727,6 +1048,12 @@ def run_pdf_to_md(
             )
         except Exception:
             pass
+    if progress_cb is not None:
+        try:
+            # Provide immediate total-page visibility in UI even before child stdout arrives.
+            progress_cb(0, max(0, int(page_count or 0)), "converter starting...")
+        except Exception:
+            pass
 
     if keep_debug:
         args.append("--keep-debug")
@@ -758,7 +1085,7 @@ def run_pdf_to_md(
         # Example lines:
         # - "Detected body font size: ... | pages: 12 | range: 1-12"
         # - "Processing page 3/12 ..."
-        p_total = 0
+        p_total = max(0, int(page_count or 0))
         p_done = 0
         cp_out = []
         env = dict(os.environ)
@@ -771,6 +1098,10 @@ def run_pdf_to_md(
             bufsize=1,
             env=env,
         )
+        try:
+            progress_cb and progress_cb(0, p_total, f"converter pid={int(proc.pid)}")
+        except Exception:
+            pass
         assert proc.stdout is not None
         line_q: queue.Queue[Optional[str]] = queue.Queue()
 
@@ -792,7 +1123,9 @@ def run_pdf_to_md(
         re_pages = re.compile(r"\bpages\s*:\s*(\d+)\b", flags=re.IGNORECASE)
         re_prog = re.compile(r"Processing\s+page\s+(\d+)\s*/\s*(\d+)", flags=re.IGNORECASE)
         re_done = re.compile(r"Finished\s+page\s+(\d+)\s*/\s*(\d+)", flags=re.IGNORECASE)
+        re_page_hint = re.compile(r"\bPage\s+(\d+)\s*:", flags=re.IGNORECASE)
         done_pages: set[int] = set()
+        current_page_inflight = 0
         last_line_ts = time.time()
         last_heartbeat_ts = 0.0
         rc_override: Optional[int] = None
@@ -822,6 +1155,7 @@ def run_pdf_to_md(
                 m2 = re_prog.search(s)
                 if m2:
                     try:
+                        current_page_inflight = max(current_page_inflight, int(m2.group(1)))
                         p_total = max(p_total, int(m2.group(2)))
                     except Exception:
                         pass
@@ -832,6 +1166,12 @@ def run_pdf_to_md(
                         p_total = max(p_total, int(m3.group(2)))
                         done_pages.add(pg)
                         p_done = max(p_done, len(done_pages))
+                    except Exception:
+                        pass
+                m4 = re_page_hint.search(s)
+                if m4:
+                    try:
+                        current_page_inflight = max(current_page_inflight, int(m4.group(1)))
                     except Exception:
                         pass
                 try:
@@ -860,11 +1200,15 @@ def run_pdf_to_md(
 
             if (progress_cb is not None) and ((now - last_heartbeat_ts) >= heartbeat_s):
                 last_idle_s = max(0, int(now - last_line_ts))
-                base_msg = (
-                    f"Processing page {p_done}/{p_total} ..."
-                    if p_total > 0
-                    else ("converter running..." if not cp_out else cp_out[-1])
-                )
+                if p_total > 0:
+                    if p_done >= p_total:
+                        live_page = p_total
+                    else:
+                        live_page = max(1, p_done + 1, current_page_inflight)
+                        live_page = min(p_total, live_page)
+                    base_msg = f"Processing page {live_page}/{p_total} ..."
+                else:
+                    base_msg = "converter running..." if not cp_out else cp_out[-1]
                 heartbeat_msg = f"{base_msg} (alive {last_idle_s}s)"
                 try:
                     progress_cb(p_done, p_total, heartbeat_msg)

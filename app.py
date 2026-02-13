@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import inspect
 import os
 import subprocess
 import shutil
@@ -33,6 +34,43 @@ from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
 from kb.retrieval_engine import configure_cache as configure_retrieval_cache
 from kb.task_runtime import _bg_cancel_all, _bg_enqueue, _bg_ensure_started, _bg_remove_queued_tasks_for_pdf, _bg_snapshot, _build_bg_task, _gen_get_task, _gen_mark_cancel, _gen_start_task, _is_live_assistant_text, _live_assistant_task_id, _live_assistant_text
+
+
+def _patch_streamlit_label_visibility_compat() -> None:
+    """
+    Streamlit <=1.12 does not support `label_visibility` on some widgets.
+    Keep backward compatibility so stale hot-reload modules do not crash.
+    """
+    try:
+        sig_cb = inspect.signature(st.checkbox)
+        cb_supports = "label_visibility" in sig_cb.parameters
+    except Exception:
+        cb_supports = True
+    if not cb_supports:
+        orig_cb = st.checkbox
+
+        def _checkbox_compat(*args, **kwargs):
+            kwargs.pop("label_visibility", None)
+            return orig_cb(*args, **kwargs)
+
+        st.checkbox = _checkbox_compat  # type: ignore[assignment]
+
+    try:
+        sig_ti = inspect.signature(st.text_input)
+        ti_supports = "label_visibility" in sig_ti.parameters
+    except Exception:
+        ti_supports = True
+    if not ti_supports:
+        orig_ti = st.text_input
+
+        def _text_input_compat(*args, **kwargs):
+            kwargs.pop("label_visibility", None)
+            return orig_ti(*args, **kwargs)
+
+        st.text_input = _text_input_compat  # type: ignore[assignment]
+
+
+_patch_streamlit_label_visibility_compat()
 
 # Force converter script to this workspace copy, avoiding accidental fallback
 # to an older sibling-repo script when multiple app processes are running.

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import html
@@ -13,6 +13,7 @@ from kb.library_store import LibraryStore
 from kb.pdf_tools import (
     PDF_META_EXTRACT_VERSION,
     PdfMetaSuggestion,
+    abbreviate_venue,
     build_base_name,
     extract_pdf_meta_suggestion,
     open_in_explorer,
@@ -26,6 +27,14 @@ def _sanitize_filename_component(text: str) -> str:
     normalized = normalized.replace("\u0000", "").strip()
     normalized = normalized.strip(" .-_")
     return normalized
+
+
+def _muted(text: str) -> None:
+    safe = html.escape(str(text or "").strip())
+    st.markdown(
+        f"<div style='font-size:0.76rem; color: var(--muted); opacity:0.76; line-height:1.34;'>{safe}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _is_normalized_pdf_stem(stem: str) -> bool:
@@ -84,11 +93,11 @@ def ensure_state_defaults() -> None:
     if "rename_scan_scope" not in st.session_state:
         st.session_state["rename_scan_scope"] = "\u6700\u8fd1 30 \u7bc7"
     if "rename_scan_use_llm" not in st.session_state:
-        st.session_state["rename_scan_use_llm"] = False
+        st.session_state["rename_scan_use_llm"] = True
     if "rename_only_diff" not in st.session_state:
         st.session_state["rename_only_diff"] = True
     if "rename_also_md" not in st.session_state:
-        st.session_state["rename_also_md"] = False
+        st.session_state["rename_also_md"] = True
 
 
 def render_prompt(*, pdfs: list[Path], dir_sig: str, dismissed_dirs: set[str]) -> None:
@@ -120,7 +129,7 @@ def render_prompt(*, pdfs: list[Path], dir_sig: str, dismissed_dirs: set[str]) -
         if st.button("\u67e5\u770b\u5efa\u8bae", key="rename_prompt_open"):
             st.session_state["rename_mgr_open"] = True
             st.session_state["rename_scan_scope"] = "\u6700\u8fd1 30 \u7bc7"
-            st.session_state["rename_scan_use_llm"] = False
+            st.session_state["rename_scan_use_llm"] = True
     with prompt_cols[1]:
         if st.button("\u4ee5\u540e\u518d\u8bf4", key="rename_prompt_dismiss"):
             try:
@@ -138,12 +147,18 @@ def _scan_rows(
     use_llm: bool,
     settings: Any,
     expected_ver: str,
+    force_refresh: bool = False,
 ) -> list[dict[str, Any]]:
     scan_key = _scan_cache_key(dir_sig=dir_sig, scope=scope, use_llm=use_llm, expected_ver=expected_ver)
     results_cache = st.session_state.setdefault("rename_scan_results_cache", {})
+    if force_refresh:
+        try:
+            results_cache.pop(scan_key, None)
+        except Exception:
+            pass
 
     cached_rows = results_cache.get(scan_key)
-    if isinstance(cached_rows, list):
+    if (not force_refresh) and isinstance(cached_rows, list):
         return cached_rows
 
     meta_cache = st.session_state.setdefault("rename_pdf_meta_cache", {})
@@ -179,7 +194,7 @@ def _scan_rows(
             cache_key = hashlib.sha1(
                 (f"{pdf}|{modified}|{size}|{llm_flag}|ver:{expected_ver}").encode("utf-8", "ignore")
             ).hexdigest()[:16]
-            suggestion = meta_cache.get(cache_key)
+            suggestion = None if force_refresh else meta_cache.get(cache_key)
             if not isinstance(suggestion, PdfMetaSuggestion):
                 try:
                     suggestion = extract_pdf_meta_suggestion(pdf, settings=None)
@@ -223,13 +238,13 @@ def _render_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows = [row for row in rows if bool(row.get("diff"))]
 
     if not rows:
-        st.caption("\uff08\u6ca1\u6709\u9700\u8981\u6539\u540d\u7684\u6587\u4ef6\uff0c\u6216\u8bc6\u522b\u4e0d\u5230\u53ef\u7528\u4fe1\u606f\uff09")
+        _muted("\u6ca1\u6709\u9700\u8981\u6539\u540d\u7684\u6587\u4ef6\u3002")
         return []
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-    st.caption(f"\u5171 {len(rows)} \u6761\u5efa\u8bae\uff08\u53ea\u4f1a\u5728\u4f60\u70b9\u51fb\u300c\u5e94\u7528\u91cd\u547d\u540d\u300d\u540e\u771f\u6b63\u6539\u540d\uff09")
+    _muted(f"\u5171 {len(rows)} \u6761\u5efa\u8bae")
 
-    bulk_cols = st.columns([1.4, 1.4, 7.2])
+    bulk_cols = st.columns([1.25, 1.25, 7.5])
     with bulk_cols[0]:
         if st.button("\u5168\u9009", key="rename_sel_all"):
             for row in rows:
@@ -240,12 +255,12 @@ def _render_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for row in rows:
                 uid = hashlib.md5(str(row.get("path") or "").encode("utf-8", "ignore")).hexdigest()[:10]
                 st.session_state[f"rename_sel_{uid}"] = False
-    with bulk_cols[2]:
-        st.caption("\u5efa\u8bae\u683c\u5f0f\uff1a\u671f\u520a-\u5e74\u4efd-\u6807\u9898\uff08\u53ef\u7f16\u8f91\uff09")
 
     for row in rows[:400]:
         pdf_path_str = str(row.get("path") or "")
         uid = hashlib.md5(pdf_path_str.encode("utf-8", "ignore")).hexdigest()[:10]
+        sel_key = f"rename_sel_{uid}"
+        new_key = f"rename_new_{uid}"
         old_name = str(row.get("old") or "")
         suggestion = str(row.get("suggest") or "")
         meta = row.get("meta") or {}
@@ -253,24 +268,34 @@ def _render_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         year = str(meta.get("year") or "")
         title = str(meta.get("title") or "")
 
+        if sel_key not in st.session_state:
+            st.session_state[sel_key] = False
+        if new_key not in st.session_state:
+            st.session_state[new_key] = suggestion
+
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-        row_cols = st.columns([0.9, 4.9, 5.6, 1.6])
+        row_cols = st.columns([0.5, 4.7, 6.0, 1.5])
 
         with row_cols[0]:
-            st.checkbox("\u9009\u62e9", value=bool(st.session_state.get(f"rename_sel_{uid}", False)), key=f"rename_sel_{uid}")
+            st.checkbox(" ", key=sel_key)
 
         with row_cols[1]:
-            st.markdown(f"<div class='meta-kv'><b>\u5f53\u524d</b>\uff1a{html.escape(old_name)}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='meta-kv'><b>\u6587\u4ef6</b>\uff1a{html.escape(old_name)}</div>", unsafe_allow_html=True)
             title_short = title[:80] + ("\u2026" if len(title) > 80 else "")
-            meta_line = " | ".join([value for value in [venue, year, title_short] if value])
+            venue_short = abbreviate_venue(venue)
+            if venue and venue_short and (venue_short != venue):
+                venue_label = f"{venue} ({venue_short})"
+            else:
+                venue_label = venue
+            meta_line = " | ".join([value for value in [venue_label, year, title_short] if value])
             if meta_line:
-                st.caption(f"\u8bc6\u522b\uff1a{meta_line}")
+                _muted(meta_line)
 
         with row_cols[2]:
             if not suggestion:
-                st.caption("\uff08\u8bc6\u522b\u4e0d\u5230\u53ef\u7528\u4fe1\u606f\uff0c\u8df3\u8fc7\uff09")
+                _muted("\u672a\u8bc6\u522b\u51fa\u53ef\u7528\u5efa\u8bae")
             else:
-                st.text_input("\u5efa\u8bae\u65b0\u6587\u4ef6\u540d\uff08\u4e0d\u542b .pdf\uff09", value=suggestion, key=f"rename_new_{uid}")
+                st.text_input(" ", key=new_key)
 
         with row_cols[3]:
             pdf_path = Path(pdf_path_str)
@@ -303,95 +328,114 @@ def _apply_renames(
 ) -> None:
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
     apply_cols = st.columns([1.8, 8.2])
-
     with apply_cols[0]:
-        if not st.button("\u5e94\u7528\u91cd\u547d\u540d", key="rename_apply_btn"):
-            return
-
-        operations: list[tuple[str, str]] = []
-        also_md = bool(st.session_state.get("rename_also_md"))
-
-        for row in rows:
-            pdf_path_str = str(row.get("path") or "")
-            uid = hashlib.md5(pdf_path_str.encode("utf-8", "ignore")).hexdigest()[:10]
-            if not bool(st.session_state.get(f"rename_sel_{uid}", False)):
-                continue
-
-            src = Path(pdf_path_str)
-            if not src.exists():
-                operations.append(("fail", f"\u4e0d\u5b58\u5728\uff1a{src}"))
-                continue
-
-            new_base = str(st.session_state.get(f"rename_new_{uid}") or "").strip()
-            new_base = _sanitize_filename_component(new_base)
-            if not new_base:
-                operations.append(("skip", f"\u8df3\u8fc7\uff08\u7a7a\u540d\u5b57\uff09\uff1a{src.name}"))
-                continue
-            if new_base == src.stem:
-                operations.append(("skip", f"\u8df3\u8fc7\uff08\u672a\u53d8\u5316\uff09\uff1a{src.name}"))
-                continue
-
-            dest = _unique_pdf_path(pdf_dir, new_base)
-            try:
-                src.rename(dest)
-                try:
-                    lib_store.update_path(src, dest)
-                except Exception:
-                    pass
-                operations.append(("ok", f"{src.name} \u2192 {dest.name}"))
-            except Exception as e:
-                operations.append(("fail", f"{src.name} \u91cd\u547d\u540d\u5931\u8d25\uff1a{e}"))
-                continue
-
-            if also_md:
-                try:
-                    old_folder = Path(md_out_root) / src.stem
-                    new_folder = Path(md_out_root) / dest.stem
-                    if old_folder.exists() and (not new_folder.exists()):
-                        old_folder.rename(new_folder)
-                        old_main = new_folder / f"{src.stem}.en.md"
-                        if old_main.exists():
-                            new_main = new_folder / f"{dest.stem}.en.md"
-                            try:
-                                old_main.rename(new_main)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-
-        try:
-            results_cache = st.session_state.setdefault("rename_scan_results_cache", {})
-            results_cache.pop(scan_key, None)
-        except Exception:
-            pass
-
-        ok_n = sum(1 for status, _ in operations if status == "ok")
-        fail_n = sum(1 for status, _ in operations if status == "fail")
-        if ok_n:
-            st.success(f"\u5df2\u91cd\u547d\u540d\uff1a{ok_n} \u4e2a\u6587\u4ef6")
-        if fail_n:
-            st.warning(f"\u5931\u8d25\uff1a{fail_n} \u4e2a\u6587\u4ef6\uff08\u53ef\u80fd\u662f\u6587\u4ef6\u6b63\u88ab\u5360\u7528\uff09")
-        if operations:
-            st.markdown("---")
-            st.markdown("**处理详情：**")
-            with st.container():
-                for status, message in operations[:200]:
-                    (st.caption if status in ("ok", "skip") else st.warning)(message)
-
-        try:
-            dismissed_dirs.add(dir_sig)
-        except Exception:
-            pass
-
+        apply_now = st.button("\u5e94\u7528\u91cd\u547d\u540d", key="rename_apply_btn")
     with apply_cols[1]:
+        _muted("重命名后，建议点一次“更新知识库”。")
+
+    if not apply_now:
+        return
+
+    operations: list[tuple[str, str]] = []
+    also_md = bool(st.session_state.get("rename_also_md"))
+
+    for row in rows:
+        pdf_path_str = str(row.get("path") or "")
+        uid = hashlib.md5(pdf_path_str.encode("utf-8", "ignore")).hexdigest()[:10]
+        if not bool(st.session_state.get(f"rename_sel_{uid}", False)):
+            continue
+
+        src = Path(pdf_path_str)
+        if not src.exists():
+            operations.append(("fail", f"\u4e0d\u5b58\u5728\uff1a{src}"))
+            continue
+
+        new_base = str(st.session_state.get(f"rename_new_{uid}") or "").strip()
+        new_base = _sanitize_filename_component(new_base)
+        if not new_base:
+            operations.append(("skip", f"\u8df3\u8fc7\uff08\u7a7a\u540d\u5b57\uff09\uff1a{src.name}"))
+            continue
+        if new_base == src.stem:
+            operations.append(("skip", f"\u8df3\u8fc7\uff08\u672a\u53d8\u5316\uff09\uff1a{src.name}"))
+            continue
+
+        dest = _unique_pdf_path(pdf_dir, new_base)
+        try:
+            src.rename(dest)
+            try:
+                lib_store.update_path(src, dest)
+            except Exception:
+                pass
+            operations.append(("ok", f"{src.name} \u2192 {dest.name}"))
+        except Exception as e:
+            operations.append(("fail", f"{src.name} \u91cd\u547d\u540d\u5931\u8d25\uff1a{e}"))
+            continue
+
+        if also_md:
+            try:
+                old_folder = Path(md_out_root) / src.stem
+                new_folder = Path(md_out_root) / dest.stem
+                if old_folder.exists() and (not new_folder.exists()):
+                    old_folder.rename(new_folder)
+                    old_main = new_folder / f"{src.stem}.en.md"
+                    if old_main.exists():
+                        new_main = new_folder / f"{dest.stem}.en.md"
+                        try:
+                            old_main.rename(new_main)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+    try:
+        results_cache = st.session_state.setdefault("rename_scan_results_cache", {})
+        results_cache.pop(scan_key, None)
+    except Exception:
+        pass
+
+    ok_n = sum(1 for status, _ in operations if status == "ok")
+    skip_n = sum(1 for status, _ in operations if status == "skip")
+    fail_n = sum(1 for status, _ in operations if status == "fail")
+
+    st.markdown(
+        (
+            "<div style='display:flex;gap:0.45rem;flex-wrap:wrap;margin:0.30rem 0 0.56rem 0;'>"
+            f"<span style='font-size:0.78rem;padding:0.16rem 0.50rem;border-radius:999px;border:1px solid rgba(34,197,94,0.35);background:rgba(34,197,94,0.14);color:#22c55e;'>已重命名 {ok_n}</span>"
+            f"<span style='font-size:0.78rem;padding:0.16rem 0.50rem;border-radius:999px;border:1px solid rgba(148,163,184,0.34);background:rgba(148,163,184,0.12);color:var(--text-soft);'>跳过 {skip_n}</span>"
+            f"<span style='font-size:0.78rem;padding:0.16rem 0.50rem;border-radius:999px;border:1px solid rgba(248,113,113,0.34);background:rgba(248,113,113,0.12);color:#f87171;'>失败 {fail_n}</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    if fail_n:
+        _muted("\u6709\u5931\u8d25\u9879\uff0c\u8bf7\u5728\u300c\u5904\u7406\u8be6\u60c5\u300d\u91cc\u67e5\u770b\u539f\u56e0\u3002")
+
+    if operations:
+        detail_lines: list[str] = []
+        for status, message in operations[:250]:
+            tag = "OK" if status == "ok" else ("SKIP" if status == "skip" else "FAIL")
+            one_line = " ".join(str(message or "").replace("\r", " ").replace("\n", " ").split())
+            detail_lines.append(f"[{tag}] {one_line}")
+        sel_key = f"rename_detail_sel_{scan_key}"
+        if sel_key not in st.session_state:
+            st.session_state[sel_key] = detail_lines[0]
+        selected_detail = st.selectbox("处理详情", options=detail_lines, key=sel_key)
         st.markdown(
-            "<div class='refbox'>"
-            "\u63d0\u793a\uff1a\u5982\u679c\u4f60\u5df2\u7ecf\u628a\u67d0\u4e9b PDF \u8f6c\u6362\u6210 MD \u5e76\u4e14\u5df2\u5efa\u5e93\uff0c"
-            "\u91cd\u547d\u540d\u540e\u5efa\u8bae\u70b9\u4e00\u6b21\u300c\u66f4\u65b0\u77e5\u8bc6\u5e93\u300d\u91cd\u65b0\u7d22\u5f15\uff0c"
-            "\u4ee5\u514d\u65e7\u8def\u5f84\u6b8b\u7559\u3002"
-            "</div>",
+            (
+                "<div style='margin-top:0.18rem; padding:0.38rem 0.50rem; border-radius:8px; border:1px solid var(--line); "
+                "background:rgba(148,163,184,0.08); font-family:Consolas, monospace; font-size:0.78rem; "
+                "white-space:nowrap; overflow-x:auto; color:var(--text-soft);'>"
+                f"{html.escape(selected_detail)}"
+                "</div>"
+            ),
             unsafe_allow_html=True,
         )
+
+    try:
+        dismissed_dirs.add(dir_sig)
+    except Exception:
+        pass
 
 
 def render_panel(
@@ -415,7 +459,12 @@ def render_panel(
         st.session_state.pop("rename_scan_results_cache", None)
 
     with st.expander("\u6587\u4ef6\u540d\u7ba1\u7406\uff08\u671f\u520a-\u5e74\u4efd-\u6807\u9898\uff09", expanded=True):
-        top_cols = st.columns([1.0, 1.8, 1.6, 1.6, 6.0])
+        # Fixed defaults (not user-configurable)
+        st.session_state["rename_only_diff"] = True
+        st.session_state["rename_also_md"] = True
+        st.session_state["rename_scan_use_llm"] = True
+
+        top_cols = st.columns([1.0, 2.2, 1.8])
         with top_cols[0]:
             if st.button("\u5173\u95ed", key="rename_mgr_close"):
                 st.session_state["rename_mgr_open"] = False
@@ -423,40 +472,16 @@ def render_panel(
         with top_cols[1]:
             options = ["\u6700\u8fd1 30 \u7bc7", "\u6700\u8fd1 50 \u7bc7", "\u6700\u8fd1 100 \u7bc7", "\u5168\u90e8"]
             current_scope = str(st.session_state.get("rename_scan_scope") or "\u6700\u8fd1 30 \u7bc7")
-            index = options.index(current_scope) if current_scope in options else 0
-            scope = st.selectbox("\u626b\u63cf\u8303\u56f4", options=options, index=index, key="rename_scan_scope")
+            if current_scope not in options:
+                st.session_state["rename_scan_scope"] = options[0]
+            scope = st.selectbox("\u626b\u63cf\u8303\u56f4", options=options, key="rename_scan_scope")
         with top_cols[2]:
-            st.checkbox("\u53ea\u663e\u793a\u9700\u6539\u540d", value=bool(st.session_state.get("rename_only_diff", True)), key="rename_only_diff")
-        with top_cols[3]:
-            st.checkbox(
-                "\u540c\u65f6\u6539\u540d MD",
-                value=bool(st.session_state.get("rename_also_md", False)),
-                key="rename_also_md",
-                help="\u5982\u679c\u5df2\u751f\u6210 Markdown\uff0c\u4f1a\u5c1d\u8bd5\u628a\u5bf9\u5e94\u6587\u4ef6\u5939/\u4e3b md \u4e00\u8d77\u6539\u540d\u3002",
-            )
-        with top_cols[4]:
-            st.checkbox(
-                "\u8bc6\u522b\u7528 LLM\uff08\u66f4\u51c6\uff09",
-                value=bool(st.session_state.get("rename_scan_use_llm", False)),
-                key="rename_scan_use_llm",
-                help="\u53ea\u5728\u5173\u952e\u4fe1\u606f\u7f3a\u5931\u65f6\u5c11\u91cf\u8c03\u7528 LLM \u8865\u5168\uff08\u66f4\u51c6\u4f46\u66f4\u6162\uff09\u3002",
-            )
+            st.markdown("<div style='height:1.82rem;'></div>", unsafe_allow_html=True)
+            scan_now = st.button("\u5f00\u59cb\u8bc6\u522b/\u5237\u65b0", key="rename_scan_btn")
         use_llm = bool(st.session_state.get("rename_scan_use_llm"))
         scan_key = _scan_cache_key(dir_sig=dir_sig, scope=str(scope), use_llm=use_llm, expected_ver=expected_ver)
         results_cache = st.session_state.setdefault("rename_scan_results_cache", {})
         cached_rows = results_cache.get(scan_key) if isinstance(results_cache.get(scan_key), list) else None
-
-        action_cols = st.columns([1.2, 8.8])
-        with action_cols[0]:
-            scan_now = st.button("\u5f00\u59cb\u8bc6\u522b/\u5237\u65b0", key="rename_scan_btn")
-        with action_cols[1]:
-            st.markdown(
-                "<div class='refbox'>"
-                "\u8bfb\u53d6 PDF \u5185\u5bb9\uff08\u4e0d\u662f\u770b\u6587\u4ef6\u540d\uff09\u8bc6\u522b\u300c\u671f\u520a/\u4f1a\u8bae-\u5e74\u4efd-\u6807\u9898\u300d\uff0c"
-                "\u7136\u540e\u7ed9\u51fa\u5efa\u8bae\u6587\u4ef6\u540d\u3002\u4f60\u53ef\u4ee5\u624b\u52a8\u7f16\u8f91\u540e\u518d\u5e94\u7528\u3002"
-                "</div>",
-                unsafe_allow_html=True,
-            )
 
         if scan_now:
             rows = _scan_rows(
@@ -467,12 +492,13 @@ def render_panel(
                 use_llm=use_llm,
                 settings=settings,
                 expected_ver=expected_ver,
+                force_refresh=True,
             )
         else:
             rows = list(cached_rows or [])
 
         if not rows:
-            st.caption("\u70b9\u51fb\u300c\u5f00\u59cb\u8bc6\u522b/\u5237\u65b0\u300d\u540e\u624d\u4f1a\u8bfb\u53d6 PDF \u8fdb\u884c\u8bc6\u522b\uff08\u907f\u514d\u6253\u5f00\u7a97\u53e3\u5c31\u5361\u4f4f\uff09\u3002")
+            _muted("\u8fd8\u6ca1\u6709\u53ef\u7528\u5efa\u8bae\uff0c\u70b9\u201c\u5f00\u59cb\u8bc6\u522b/\u5237\u65b0\u201d\u3002")
             return
 
         rows = _render_rows(rows)
@@ -486,3 +512,5 @@ def render_panel(
                 dismissed_dirs=dismissed_dirs,
                 scan_key=scan_key,
             )
+
+

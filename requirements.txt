@@ -6,3 +6,4 @@ pymupdf==1.26.5
 pdfplumber==0.11.8
 rank-bm25==0.2.2
 tqdm==4.67.1
+requests>=2.31
