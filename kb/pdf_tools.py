@@ -23,6 +23,7 @@ class PdfMetaSuggestion:
     venue: str = ""
     year: str = ""
     title: str = ""
+    crossref_meta: dict | None = None  # Stored Crossref metadata if trusted
 
 
 # Keep abbreviations explicit and deterministic (avoid LLM guessing for filenames).
@@ -787,6 +788,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
         except Exception:
             cross = None
 
+    crossref_meta_stored = None
     if isinstance(cross, dict):
         c_title = _sanitize_component(str(cross.get("title") or "").strip())
         c_year = _sanitize_component(str(cross.get("year") or "").strip())
@@ -808,6 +810,8 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
                 year = ""
             if c_venue:
                 venue = c_venue
+            # Store trusted Crossref metadata for later use
+            crossref_meta_stored = dict(cross)
         else:
             # For filename suggestions, prefer empty year over a potentially wrong year.
             year = ""
@@ -828,7 +832,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
     venue = _sanitize_component(venue)
     year = _sanitize_component(year)
 
-    return PdfMetaSuggestion(venue=venue, year=year, title=title)
+    return PdfMetaSuggestion(venue=venue, year=year, title=title, crossref_meta=crossref_meta_stored)
 
 
 def open_in_explorer(path: Path) -> None:

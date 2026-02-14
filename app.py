@@ -1310,6 +1310,8 @@ def main() -> None:
     settings = load_settings()
     chat_store = ChatStore(settings.chat_db_path)
     lib_store = LibraryStore(settings.library_db_path)
+    # Store lib_store in session_state for refs_renderer to access
+    st.session_state["lib_store"] = lib_store
 
     prefs_path = Path(__file__).resolve().parent / "user_prefs.json"
     prefs = load_prefs(prefs_path)

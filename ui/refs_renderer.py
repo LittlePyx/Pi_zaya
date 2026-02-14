@@ -453,22 +453,41 @@ def _parse_filename_meta(path_str: str) -> tuple[str, str, str]:
 def _bg_citation_worker(task_id: str, net_key: str, source_path: str, venue_hint: str, year_hint: str):
     from kb import runtime_state as RUNTIME
     
-    # 1. Infer title
-    l_title_hint = os.path.basename(source_path)
+    # 0. Try to load stored citation metadata from library_store first
+    found = None
     try:
-        if l_title_hint.lower().endswith(".pdf"):
-            l_title_hint = l_title_hint[:-4]
-        search_title = _infer_title_from_source_text(source_path, l_title_hint)
+        # Get library_store from session_state (set by app.py)
+        lib_store = st.session_state.get("lib_store")
+        if lib_store:
+            # Try to resolve PDF path from source_path
+            pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
+            if pdf_root_str:
+                pdf_root = Path(pdf_root_str)
+                pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
+                if pdf_path and pdf_path.exists():
+                    stored_meta = lib_store.get_citation_meta(pdf_path)
+                    if stored_meta and isinstance(stored_meta, dict):
+                        found = stored_meta
     except Exception:
-        search_title = l_title_hint
+        pass  # Fallback to fetching if stored metadata not available
+    
+    # 1. If no stored metadata, fetch from Crossref
+    if not found:
+        l_title_hint = os.path.basename(source_path)
+        try:
+            if l_title_hint.lower().endswith(".pdf"):
+                l_title_hint = l_title_hint[:-4]
+            search_title = _infer_title_from_source_text(source_path, l_title_hint)
+        except Exception:
+            search_title = l_title_hint
 
-    # 2. Fetch (Blocking I/O)
-    found = fetch_crossref_meta(
-        search_title,
-        source_path=source_path,
-        expected_venue=venue_hint,
-        expected_year=year_hint,
-    )
+        # 2. Fetch (Blocking I/O)
+        found = fetch_crossref_meta(
+            search_title,
+            source_path=source_path,
+            expected_venue=venue_hint,
+            expected_year=year_hint,
+        )
 
     # 3. Update State
     with RUNTIME.CITATION_LOCK:

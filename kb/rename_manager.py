@@ -220,6 +220,7 @@ def _scan_rows(
                     "suggest": base,
                     "diff": bool(base) and (base != pdf.stem),
                     "meta": {"venue": suggestion.venue, "year": suggestion.year, "title": suggestion.title},
+                    "crossref_meta": suggestion.crossref_meta,  # Store for later use
                 }
             )
 
@@ -367,6 +368,10 @@ def _apply_renames(
             src.rename(dest)
             try:
                 lib_store.update_path(src, dest)
+                # Store Crossref metadata if available and trusted
+                crossref_meta = row.get("crossref_meta")
+                if isinstance(crossref_meta, dict):
+                    lib_store.set_citation_meta(dest, crossref_meta)
             except Exception:
                 pass
             operations.append(("ok", f"{src.name} \u2192 {dest.name}"))
