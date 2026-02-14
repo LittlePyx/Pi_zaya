@@ -24,6 +24,7 @@ except Exception:  # pragma: no cover
 OpenAI = None  # type: ignore[assignment]
 pdfplumber = None  # type: ignore[assignment]
 _PROGRESS_PRINT_LOCK = threading.Lock()
+ASSET_REV_TAG = "r2"
 
 
 def _progress_log(msg: str) -> None:
@@ -367,6 +368,7 @@ class ConvertConfig:
     llm_auto_page_render_threshold: int = 12
     llm_workers: int = 1
     workers: int = 1
+    speed_mode: str = "balanced"
 
 
 @dataclass(frozen=True)
@@ -1036,10 +1038,10 @@ def _is_caption_like_text(text: str) -> bool:
     )
 
 
-def _collect_image_rects(page) -> list["fitz.Rect"]:
+def _collect_image_regions(page) -> list[dict[str, object]]:
     if fitz is None:
         return []
-    out: list[fitz.Rect] = []
+    out: list[dict[str, object]] = []
     for info in (page.get_image_info() or []):
         if "bbox" not in info:
             continue
@@ -1049,7 +1051,29 @@ def _collect_image_rects(page) -> list["fitz.Rect"]:
             continue
         if r.width <= 1.0 or r.height <= 1.0:
             continue
-        out.append(r)
+        w = 0
+        h = 0
+        try:
+            w = int(info.get("width") or 0)
+        except Exception:
+            w = 0
+        try:
+            h = int(info.get("height") or 0)
+        except Exception:
+            h = 0
+        out.append({"rect": r, "width": w, "height": h})
+    return out
+
+
+def _collect_image_rects(page) -> list["fitz.Rect"]:
+    if fitz is None:
+        return []
+    out: list[fitz.Rect] = []
+    for it in _collect_image_regions(page):
+        try:
+            out.append(fitz.Rect(it["rect"]))
+        except Exception:
+            continue
     return out
 
 
@@ -1115,13 +1139,80 @@ def _pick_render_scale(page_rect: "fitz.Rect", crop_rect: "fitz.Rect", *, base_s
     crop_area = max(1.0, float(crop_rect.width) * float(crop_rect.height))
     ratio = crop_area / page_area
     scale = float(base_scale)
-    if ratio >= 0.58:
-        scale = float(base_scale) * 0.62
-    elif ratio >= 0.38:
-        scale = float(base_scale) * 0.74
-    elif ratio >= 0.22:
-        scale = float(base_scale) * 0.86
+    # Keep large crops readable: avoid aggressive down-sampling that blurs plot labels.
+    if ratio >= 0.72:
+        scale = float(base_scale) * 0.92
+    elif ratio >= 0.52:
+        scale = float(base_scale) * 0.96
+    elif ratio >= 0.34:
+        scale = float(base_scale) * 1.00
     return max(float(min_scale), min(float(base_scale), float(scale)))
+
+
+def _intrinsic_image_scale_hint(
+    crop_rect: "fitz.Rect",
+    image_regions: list[dict[str, object]],
+    *,
+    overlap_threshold: float = 0.70,
+) -> float:
+    if fitz is None or (not image_regions):
+        return 0.0
+    crop_area = max(1.0, _rect_area(crop_rect))
+    best = 0.0
+    for it in image_regions:
+        try:
+            r = fitz.Rect(it["rect"])
+        except Exception:
+            continue
+        inter = _rect_intersection_area(crop_rect, r)
+        if (inter / crop_area) < float(overlap_threshold):
+            continue
+        try:
+            w_px = int(it.get("width") or 0)
+        except Exception:
+            w_px = 0
+        try:
+            h_px = int(it.get("height") or 0)
+        except Exception:
+            h_px = 0
+        sx = (float(w_px) / max(1.0, float(r.width))) if w_px > 0 else 0.0
+        sy = (float(h_px) / max(1.0, float(r.height))) if h_px > 0 else 0.0
+        best = max(best, sx, sy)
+    return float(best)
+
+
+def _render_clip_pixmap(
+    page,
+    crop_rect: "fitz.Rect",
+    *,
+    base_scale: float,
+    image_alpha: bool = False,
+    min_scale: float = 1.45,
+    max_scale: float = 4.8,
+    min_long_edge_px: int = 2200,
+    min_short_edge_px: int = 980,
+    max_pixels: int = 16_000_000,
+    image_regions: Optional[list[dict[str, object]]] = None,
+):
+    crop = fitz.Rect(crop_rect)
+    scale = _pick_render_scale(page.rect, crop, base_scale=float(base_scale), min_scale=float(min_scale))
+
+    w_pt = max(1.0, float(crop.width))
+    h_pt = max(1.0, float(crop.height))
+    long_pt = max(w_pt, h_pt)
+    short_pt = min(w_pt, h_pt)
+    scale = max(scale, float(min_long_edge_px) / long_pt, float(min_short_edge_px) / short_pt)
+
+    if image_regions:
+        scale = max(scale, _intrinsic_image_scale_hint(crop, image_regions))
+
+    scale = min(float(max_scale), max(float(min_scale), float(scale)))
+    pred_pixels = (w_pt * scale) * (h_pt * scale)
+    if pred_pixels > float(max_pixels):
+        shrink = (float(max_pixels) / max(1.0, pred_pixels)) ** 0.5
+        scale = max(float(min_scale), float(scale) * float(shrink))
+
+    return page.get_pixmap(matrix=fitz.Matrix(float(scale), float(scale)), clip=crop, alpha=bool(image_alpha))
 
 
 def _escape_md_table_cell(value: str) -> str:
@@ -1940,6 +2031,7 @@ def extract_figures_by_captions(
 ) -> tuple[dict[int, str], list["fitz.Rect"]]:
     caption_re = re.compile(r"^\s*(?:Fig\.|FIG\.|Figure|FIGURE)\s*([0-9]+)", re.IGNORECASE)
     visual_rects = [fitz.Rect(r) for r in (visual_rects or _collect_visual_rects(page))]
+    image_regions = _collect_image_regions(page)
     page_w = float(page.rect.width)
     page_h = float(page.rect.height)
 
@@ -2075,6 +2167,30 @@ def extract_figures_by_captions(
                         changed = True
                         continue
 
+            # Very relaxed bridge pass for multi-panel figures:
+            # if a panel sits in the same y-band and close in x, include it to avoid half-cut crops.
+            changed = True
+            while changed and selected_rects:
+                changed = False
+                u0 = _union_rect(selected_rects)
+                if u0 is None:
+                    break
+                y0_band = max(0.0, float(u0.y0) - page_h * 0.12)
+                y1_band = min(page_h, float(u0.y1) + page_h * 0.12)
+                for r in visual_rects:
+                    if r in selected_rects:
+                        continue
+                    if r.y1 > caption_rect.y0 + 14.0:
+                        continue
+                    gap = float(caption_rect.y0) - float(r.y1)
+                    if gap < -8.0 or gap > page_h * 0.62:
+                        continue
+                    y_band_overlap = _overlap_1d(float(r.y0), float(r.y1), y0_band, y1_band)
+                    hgap = max(0.0, float(u0.x0) - float(r.x1), float(r.x0) - float(u0.x1))
+                    if y_band_overlap >= max(12.0, float(r.height) * 0.20) and hgap <= max(84.0, page_w * 0.14):
+                        selected_rects.append(r)
+                        changed = True
+
         if selected_rects:
             u = _union_rect(selected_rects)
             assert u is not None
@@ -2114,9 +2230,18 @@ def extract_figures_by_captions(
                 min(page_h, float(caption_rect.y1) + pad),
             )
 
-        img_name = f"figure_{fig_num}_p{page_index + 1:03d}.png"
-        render_scale = _pick_render_scale(page.rect, crop, base_scale=float(image_scale), min_scale=1.45)
-        pix = page.get_pixmap(matrix=fitz.Matrix(render_scale, render_scale), clip=crop, alpha=bool(image_alpha))
+        img_name = f"figure_{fig_num}_p{page_index + 1:03d}_{ASSET_REV_TAG}.png"
+        pix = _render_clip_pixmap(
+            page,
+            crop,
+            base_scale=float(image_scale),
+            image_alpha=bool(image_alpha),
+            min_scale=1.55,
+            max_scale=4.8,
+            min_long_edge_px=2300,
+            min_short_edge_px=1024,
+            image_regions=image_regions,
+        )
         pix.save(str(asset_dir / img_name))
         out[bi] = img_name
 
@@ -2139,6 +2264,7 @@ def extract_images_fallback(
     Goal: maximize recall (avoid missing figures), while filtering obvious tiny logos/icons.
     """
     img_rects = [fitz.Rect(r) for r in (visual_rects or _collect_visual_rects(page))]
+    image_regions = _collect_image_regions(page)
     if not img_rects:
         return {}
 
@@ -2202,9 +2328,18 @@ def extract_images_fallback(
             min(page_h, r.y1 + pad),
         )
         auto_i += 1
-        img_name = f"image_auto_{auto_i:02d}_p{page_index + 1:03d}.png"
-        render_scale = _pick_render_scale(page.rect, crop, base_scale=float(image_scale), min_scale=1.30)
-        pix = page.get_pixmap(matrix=fitz.Matrix(render_scale, render_scale), clip=crop, alpha=bool(image_alpha))
+        img_name = f"image_auto_{auto_i:02d}_p{page_index + 1:03d}_{ASSET_REV_TAG}.png"
+        pix = _render_clip_pixmap(
+            page,
+            crop,
+            base_scale=float(image_scale),
+            image_alpha=bool(image_alpha),
+            min_scale=1.45,
+            max_scale=4.6,
+            min_long_edge_px=1900,
+            min_short_edge_px=860,
+            image_regions=image_regions,
+        )
         pix.save(str(asset_dir / img_name))
         out.setdefault(best_i, img_name)
     return out
@@ -2249,15 +2384,21 @@ def extract_equation_images_for_garbled_math(
 
         eqno = (eqno_by_block or {}).get(bi, "").strip()
         if eqno and re.fullmatch(r"\d{1,4}", eqno):
-            img_name = f"equation_{eqno}_p{page_index + 1:03d}_b{bi:02d}.png"
+            img_name = f"equation_{eqno}_p{page_index + 1:03d}_b{bi:02d}_{ASSET_REV_TAG}.png"
         else:
-            img_name = f"equation_auto_p{page_index + 1:03d}_b{bi:02d}.png"
+            img_name = f"equation_auto_p{page_index + 1:03d}_b{bi:02d}_{ASSET_REV_TAG}.png"
 
         try:
-            pix = page.get_pixmap(
-                matrix=fitz.Matrix(float(image_scale), float(image_scale)),
-                clip=crop,
-                alpha=bool(image_alpha),
+            pix = _render_clip_pixmap(
+                page,
+                crop,
+                base_scale=float(image_scale),
+                image_alpha=bool(image_alpha),
+                min_scale=1.6,
+                max_scale=5.2,
+                min_long_edge_px=1800,
+                min_short_edge_px=720,
+                image_regions=None,
             )
             pix.save(str(asset_dir / img_name))
             out[bi] = img_name
@@ -6175,6 +6316,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
     )
     ap.add_argument("--classify-batch-size", type=int, default=40, help="LLM classify blocks batch size (higher=fewer calls)")
     ap.add_argument("--classify-always", action="store_true", help="Always classify every page with LLM (slower)")
+    ap.add_argument("--speed-mode", type=str, default="balanced", choices=["full_llm", "balanced", "fast", "ultra_fast"], help="Speed mode: full_llm (best quality), balanced (~30s), fast (~10s), ultra_fast (~5s)")
     ap.add_argument("--image-scale", type=float, default=2.2, help="Image render scale for figure/equation crops (lower=faster)")
     ap.add_argument("--image-alpha", action="store_true", help="Render images with alpha channel (slower)")
     ap.add_argument("--no-table-detect", action="store_true", help="Disable structural table detection from PDF layout")
@@ -6287,12 +6429,135 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
         llm_auto_page_render_threshold=max(0, int(args.auto_page_llm_threshold)),
         llm_workers=max(1, int(llm_workers)),
         workers=max(1, int(workers)),
+        speed_mode=str(args.speed_mode) if hasattr(args, 'speed_mode') else 'balanced',
     )
 
 
 def main() -> None:
+    """Main entry point - uses test_converter.py logic directly."""
     cfg = _parse_args()
-    PdfToMarkdown(cfg).convert()
+    
+    # DIRECTLY USE test_converter.py LOGIC - proven to work
+    import sys
+    import os
+    from pathlib import Path
+    
+    # Add project root to path (exactly like test_converter.py)
+    project_root = Path(__file__).parent
+    sys.path.insert(0, str(project_root))
+    
+    print("=" * 80, flush=True)
+    print("USING test_converter.py LOGIC DIRECTLY", flush=True)
+    print(f"Project root: {project_root}", flush=True)
+    print("=" * 80, flush=True)
+    
+    try:
+        # Import exactly like test_converter.py
+        from kb.converter import PDFConverter, ConvertConfig, LlmConfig
+        
+        print("Successfully imported PDFConverter from kb.converter", flush=True)
+        
+        # Get parameters from cfg (parsed from command line)
+        pdf_path = Path(cfg.pdf_path)
+        out_dir = Path(cfg.out_dir)
+        
+        if not pdf_path.exists():
+            print(f"Error: PDF file not found: {pdf_path}", flush=True)
+            raise SystemExit(1)
+        
+        # Create output directory (paper_name subdirectory)
+        paper_name = pdf_path.stem
+        output_dir = out_dir / paper_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        print(f"PDF: {pdf_path}", flush=True)
+        print(f"Output dir: {output_dir}", flush=True)
+        
+        # LLM config - match test_converter.py logic
+        llm_config = None
+        use_llm = False
+        
+        # First check if cfg.llm is set (from command line args)
+        if cfg.llm:
+            llm_config = LlmConfig(
+                api_key=cfg.llm.api_key,
+                base_url=cfg.llm.base_url,
+                model=cfg.llm.model,
+                max_tokens=getattr(cfg.llm, 'max_tokens', 8192),
+                temperature=getattr(cfg.llm, 'temperature', 0.0),
+                request_sleep_s=getattr(cfg.llm, 'request_sleep_s', 0.0),
+                timeout_s=getattr(cfg.llm, 'timeout_s', 45.0),
+                max_retries=getattr(cfg.llm, 'max_retries', 0),
+            )
+            use_llm = True
+            print(f"LLM enabled from config: {cfg.llm.model} at {cfg.llm.base_url}", flush=True)
+        else:
+            # Respect parsed args strictly:
+            # if --no-llm is set (or llm is otherwise disabled), do NOT auto-enable from env.
+            print("LLM disabled by args/config", flush=True)
+        
+        # Get speed mode
+        speed_mode = getattr(cfg, 'speed_mode', 'balanced')
+        print(f"Speed mode: {speed_mode}", flush=True)
+        
+        # Create config EXACTLY like test_converter.py
+        print("Creating ConvertConfig (exactly like test_converter.py)...", flush=True)
+        new_cfg = ConvertConfig(
+            pdf_path=pdf_path,
+            out_dir=output_dir,  # Final output directory (paper_name subdir)
+            translate_zh=cfg.translate_zh,
+            start_page=cfg.start_page,
+            end_page=cfg.end_page if cfg.end_page >= 0 else -1,  # -1 means all pages
+            skip_existing=cfg.skip_existing,
+            keep_debug=cfg.keep_debug,
+            llm=llm_config,
+            speed_mode=speed_mode,
+        )
+        print("ConvertConfig created", flush=True)
+        
+        # Create converter EXACTLY like test_converter.py
+        print("Creating PDFConverter (exactly like test_converter.py)...", flush=True)
+        converter = PDFConverter(new_cfg)
+        converter.dpi = 200
+        converter.analyze_quality = True
+        print("PDFConverter created (dpi=200, analyze_quality=True)", flush=True)
+        
+        # Convert EXACTLY like test_converter.py
+        print(f"Converting {pdf_path.name}...", flush=True)
+        print("=" * 80, flush=True)
+        
+        converter.convert(str(pdf_path), str(output_dir))
+        
+        print("=" * 80, flush=True)
+        print(f"\n[OK] Conversion completed!", flush=True)
+        print(f"  Output: {output_dir / 'output.md'}", flush=True)
+        
+        # Keep conversion success even on long Windows paths.
+        # output.md is already sufficient for UI discovery (_resolve_md_output_paths falls back to any *.md).
+        output_md = output_dir / "output.md"
+        if output_md.exists():
+            final_md = output_dir / f"{paper_name}.en.md"
+            try:
+                if final_md.exists():
+                    final_md.unlink()
+                output_md.replace(final_md)
+                print(f"  Renamed to: {final_md}", flush=True)
+            except Exception as e:
+                print(f"  Skip rename to .en.md ({e}); keep output.md", flush=True)
+        
+        if (output_dir / "quality_report.md").exists():
+            print(f"  Quality report: {output_dir / 'quality_report.md'}", flush=True)
+        
+    except ImportError as e:
+        print(f"CRITICAL ERROR: Cannot import converter ({e})", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise SystemExit(1)
+    except Exception as e:
+        print(f"ERROR during conversion: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -861,6 +861,7 @@ def run_pdf_to_md(
     cancel_cb: Callable[[], bool] | None = None,
     heartbeat_s: float = 1.0,
     stall_timeout_s: float | None = None,
+    speed_mode: str | None = None,
 ) -> tuple[bool, str]:
     """
     Convert a PDF into a markdown folder under out_root/pdf_stem.
@@ -990,11 +991,11 @@ def run_pdf_to_md(
         elif pages <= 8:
             workers = 2
         elif pages <= 20:
-            workers = 3
-        else:
             workers = 4
+        else:
+            workers = 6
 
-        llm_workers = 1 if pages <= 4 else 2
+        llm_workers = 1 if pages <= 4 else 3
 
         if cpu <= 2:
             workers = 1
@@ -1004,9 +1005,9 @@ def run_pdf_to_md(
         elif cpu <= 6:
             workers = min(workers, 3)
         else:
-            workers = min(workers, 4)
+            workers = min(workers, 6)
 
-        max_inflight = 6
+        max_inflight = 12
         while (workers * llm_workers) > max_inflight:
             if llm_workers > 1:
                 llm_workers -= 1
@@ -1098,6 +1099,11 @@ def run_pdf_to_md(
         args.append("--no-llm")
     if eq_image_fallback:
         args.append("--eq-image-fallback")
+    
+    # Add speed mode from parameter or environment variable
+    if speed_mode is None:
+        speed_mode = os.environ.get("KB_PDF_SPEED_MODE", "balanced")
+    args.extend(["--speed-mode", str(speed_mode)])
 
     def _terminate_proc(proc: subprocess.Popen) -> None:
         try:
@@ -1239,11 +1245,11 @@ def run_pdf_to_md(
                 last_idle_s = max(0, int(now - last_line_ts))
                 if p_total > 0:
                     if p_done >= p_total:
-                        live_page = p_total
+                        base_msg = f"Post-processing after pages {p_total}/{p_total} ..."
                     else:
                         live_page = max(1, p_done + 1, current_page_inflight)
                         live_page = min(p_total, live_page)
-                    base_msg = f"Processing page {live_page}/{p_total} ..."
+                        base_msg = f"Processing page {live_page}/{p_total} ..."
                 else:
                     base_msg = "converter running..." if not cp_out else cp_out[-1]
                 heartbeat_msg = f"{base_msg} (alive {last_idle_s}s)"

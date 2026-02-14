@@ -910,7 +910,55 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
     st.subheader(S["convert_opts"])
-    no_llm = st.checkbox(S["no_llm"], value=False, key="lib_no_llm")
+    
+    # Speed mode selection
+    speed_mode_options = {
+        "full_llm": "全LLM模式 - 最高质量（无时间限制）",
+        "balanced": "平衡模式 - 约30秒/篇，质量良好（推荐）",
+        "fast": "快速模式 - 约10秒/篇，质量可接受",
+        "ultra_fast": "超快模式 - 约5秒/篇，基础质量"
+    }
+    
+    # Get current speed mode from session state or default
+    current_speed_mode = st.session_state.get("lib_speed_mode", "balanced")
+    
+    # Create a nice UI for speed mode selection
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        speed_mode = st.selectbox(
+            "转换速度模式",
+            options=list(speed_mode_options.keys()),
+            format_func=lambda x: speed_mode_options[x],
+            index=list(speed_mode_options.keys()).index(current_speed_mode) if current_speed_mode in speed_mode_options else 1,
+            key="lib_speed_mode",
+            help="选择转换速度和质量的平衡点。平衡模式推荐用于大多数情况。"
+        )
+        # Note: st.selectbox automatically updates st.session_state["lib_speed_mode"]
+        # No need to manually set it
+    
+    with col2:
+        # Show mode icon/indicator
+        mode_icons = {
+            "full_llm": "⭐",
+            "balanced": "⚡",
+            "fast": "🚀",
+            "ultra_fast": "💨"
+        }
+        st.markdown(f"### {mode_icons.get(speed_mode, '⚡')}")
+    
+    # Show mode description with styling
+    mode_colors = {
+        "full_llm": "🔵",
+        "balanced": "🟢",
+        "fast": "🟡",
+        "ultra_fast": "🟠"
+    }
+    st.info(f"{mode_colors.get(speed_mode, '🟢')} **当前模式：{speed_mode_options[speed_mode]}**")
+    
+    no_llm_ui = st.checkbox(S["no_llm"], value=False, key="lib_no_llm")
+    no_llm = bool(no_llm_ui or (speed_mode == "ultra_fast"))
+    if speed_mode == "ultra_fast":
+        st.caption("超快模式已强制关闭 LLM，并跳过自动入库以优先速度。")
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
     st.subheader("\u5df2\u6709\u6587\u732e")
@@ -960,6 +1008,10 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             running = bg_is_running_snapshot(bg2)
             if not running:
                 return
+            # Auto-refresh should only run in the pending-task progress area.
+            # Triggering rerun inside "done/all" tabs interrupts list rendering.
+            allow_auto_refresh = (key_ns == "tab_pending_bottom")
+            
             done = int(bg2.get("done", 0) or 0)
             total = int(bg2.get("total", 0) or 0)
             cur = str(bg2.get("current") or "")
@@ -970,45 +1022,82 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             p_profile = str(bg2.get("cur_profile") or "").strip()
             p_llm = str(bg2.get("cur_llm_profile") or "").strip()
             p_tail = list(bg2.get("cur_log_tail") or [])
-            st.markdown("<div class='refbox'>\u540e\u53f0\u8f6c\u6362\u8fdb\u5ea6</div>", unsafe_allow_html=True)
-            st.caption(f"{done}/{total}{(' | ' + cur) if cur else ''}")
-            if p_profile:
-                st.caption(p_profile)
-            if p_llm:
-                st.caption(p_llm)
+            
+            # Enhanced progress display
+            st.markdown("<div class='refbox'><strong>📊 后台转换进度</strong></div>", unsafe_allow_html=True)
+            
+            # Overall progress section
             if total > 0:
-                st.progress(min(1.0, done / max(1, total)))
-            if p_total > 0:
-                st.caption(f"\u5f53\u524d\u6587\u4ef6\u9875\u8fdb\u5ea6\uff1a{p_done}/{p_total}")
-                st.progress(min(1.0, p_done / max(1, p_total)))
-            elif bool(bg2.get("running")):
-                st.caption("\u5f53\u524d\u6587\u4ef6\u5904\u7406\u4e2d\u2026")
-            if p_msg and bool(bg2.get("running")) and (p_msg not in {p_profile, p_llm}):
-                st.caption(p_msg)
+                overall_progress = done / max(1, total)
+                st.markdown(f"**整体进度：{done}/{total} 篇** ({overall_progress*100:.1f}%)")
+                st.progress(overall_progress)
+            else:
+                st.caption("等待任务...")
+            
+            # Current file progress section
+            if cur:
+                st.markdown("---")
+                st.markdown(f"**当前文件：** `{cur}`")
+                
+                if p_total > 0:
+                    file_progress = p_done / max(1, p_total)
+                    st.markdown(f"**页面进度：{p_done}/{p_total} 页** ({file_progress*100:.1f}%)")
+                    st.progress(file_progress)
+                elif bool(bg2.get("running")):
+                    st.caption("🔄 正在处理文件...")
+                
+                # Show current status message
+                if p_msg and (p_msg not in {p_profile, p_llm}):
+                    # Filter out profile messages for cleaner display
+                    if not p_msg.startswith("converter profile:") and not p_msg.startswith("LLM concurrency:"):
+                        st.caption(f"💬 {p_msg}")
+            elif done > 0:
+                st.markdown("---")
+                st.success(f"✅ 已完成：{last}" if last else f"✅ 已完成 {done} 篇")
+            
+            # Technical info (collapsible)
+            if p_profile or p_llm:
+                with st.expander("🔧 技术信息", expanded=False):
+                    if p_profile:
+                        st.code(p_profile, language=None)
+                    if p_llm:
+                        st.code(p_llm, language=None)
 
-            c_bg = st.columns([1.0, 1.0, 6.0])
+            # Control buttons
+            c_bg = st.columns([1.0, 1.0, 1.0])
             with c_bg[0]:
-                if st.button("\u5237\u65b0", key=f"bg_refresh_under_{key_ns}"):
+                # Refresh button - just rerun, don't affect background tasks
+                if st.button("🔄 刷新", key=f"{key_ns}_refresh"):
+                    # Use a small delay to ensure state is read before rerun
+                    import time
+                    time.sleep(0.1)
                     st.experimental_rerun()
             with c_bg[1]:
-                if st.button("\u505c\u6b62", key=f"bg_cancel_under_{key_ns}"):
+                if st.button("⏹️ 停止", key=f"{key_ns}_stop"):
                     _bg_cancel_all()
+                    # Small delay before rerun to ensure cancel is processed
+                    import time
+                    time.sleep(0.1)
                     st.experimental_rerun()
             with c_bg[2]:
-                if last:
-                    st.caption(f"\u6700\u8fd1\u4e00\u6761\uff1a{last}")
-
-            auto_key = f"bg_auto_refresh_{key_ns}"
-            if auto_key not in st.session_state:
-                st.session_state[auto_key] = True
-            auto = st.checkbox("\u81ea\u52a8\u5237\u65b0\u8fdb\u5ea6", key=auto_key)
-            if auto and running:
-                _inject_auto_rerun_once(delay_ms=3500)
-
+                # Always auto-refresh while background conversion is running.
+                # Removing the toggle avoids "stuck at 100%" caused by manual refresh being off.
+                st.caption("自动刷新中")
+                if running and allow_auto_refresh:
+                    _inject_auto_rerun_once(delay_ms=1500)
+            
             if p_tail:
-                with st.expander("\u8fdb\u5ea6\u65e5\u5fd7", expanded=False):
+                with st.expander("📋 进度日志", expanded=False):
                     for ln in p_tail[-12:]:
                         st.caption(ln)
+
+            # Server-side fallback auto-refresh:
+            # Some environments block the front-end postMessage rerun path.
+            # This guarantees progress moves without manual clicks.
+            if running and allow_auto_refresh:
+                import time as _t
+                _t.sleep(1.5)
+                st.experimental_rerun()
 
         def render_items(items: list[dict], *, show_missing_badge: bool, key_ns: str) -> None:
             from typing import Optional
@@ -1104,6 +1193,7 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                                         db_dir=db_dir,
                                         no_llm=bool(no_llm),
                                         replace=bool(replace),
+                                        speed_mode=str(speed_mode),
                                     )
                                 )
                                 st.info("\u5df2\u52a0\u5165\u540e\u53f0\u961f\u5217\uff08\u4e0d\u4f1a\u5361\u4f4f\u9875\u9762\uff09\uff0c\u4f60\u53ef\u4ee5\u5207\u6362\u53bb\u201c\u5bf9\u8bdd\u201d\u9875\u7ee7\u7eed\u4f7f\u7528\u3002")
@@ -1202,6 +1292,7 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                                     db_dir=db_dir,
                                     no_llm=bool(no_llm),
                                     replace=False,
+                                    speed_mode=str(speed_mode),
                                 )
                             )
                         st.info(f"\u5df2\u628a {len(pending)} \u4e2a\u6587\u4ef6\u52a0\u5165\u540e\u53f0\u961f\u5217\u3002")
@@ -1289,6 +1380,7 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                                 db_dir=db_dir,
                                 no_llm=bool(no_llm),
                                 replace=False,
+                                speed_mode=str(speed_mode),
                             )
                         )
                         st.info("\u5df2\u52a0\u5165\u540e\u53f0\u961f\u5217\uff0c\u4f60\u53ef\u4ee5\u5207\u6362\u9875\u9762\u7ee7\u7eed\u4f7f\u7528\u3002")

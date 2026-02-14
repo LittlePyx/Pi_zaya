@@ -456,6 +456,11 @@ def _bg_worker_loop() -> None:
         no_llm = bool(task.get("no_llm", False))
         eq_image_fallback = bool(task.get("eq_image_fallback", True))
         replace = bool(task.get("replace", False))
+        speed_mode = str(task.get("speed_mode", "balanced"))
+        if speed_mode == "ultra_fast":
+            # Enforce latency-first behavior in ultra_fast profile.
+            no_llm = True
+            eq_image_fallback = False
         task_id = str(task.get("_tid") or "")
 
         try:
@@ -489,6 +494,7 @@ def _bg_worker_loop() -> None:
                 eq_image_fallback=eq_image_fallback,
                 progress_cb=_on_progress,
                 cancel_cb=_should_cancel,
+                speed_mode=speed_mode,
             )
             if ok:
                 msg = f"OK: {out_folder}"
@@ -496,8 +502,10 @@ def _bg_worker_loop() -> None:
                 txt = str(out_folder or "").strip().lower()
                 msg = "CANCELLED" if txt == "cancelled" else f"FAIL: {out_folder}"
 
-            # Auto-ingest the generated markdown so chat can retrieve it after DB reload.
-            if ok and db_dir:
+            # Auto-ingest can add noticeable latency in the conversion UI.
+            # Skip it in ultra_fast mode to keep end-to-end time near the 5s target.
+            do_auto_ingest = ok and bool(db_dir) and (speed_mode != "ultra_fast")
+            if do_auto_ingest and db_dir:
                 try:
                     ingest_py = Path(__file__).resolve().parent / "ingest.py"
                     _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
@@ -542,16 +550,20 @@ def _build_bg_task(
     db_dir: Path,
     no_llm: bool,
     replace: bool = False,
+    speed_mode: str = "balanced",
 ) -> dict:
     pdf = Path(pdf_path)
+    mode = str(speed_mode)
+    ultra_fast = (mode == "ultra_fast")
     return {
         "_tid": uuid.uuid4().hex,
         "pdf": str(pdf),
         "out_root": str(out_root),
         "db_dir": str(db_dir),
-        "no_llm": bool(no_llm),
-        "eq_image_fallback": True,
+        "no_llm": bool(no_llm or ultra_fast),
+        "eq_image_fallback": False if ultra_fast else True,
         "replace": bool(replace),
+        "speed_mode": mode,
         "name": pdf.name,
     }
 
