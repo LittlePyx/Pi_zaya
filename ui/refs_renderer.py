@@ -14,6 +14,7 @@ import streamlit as st
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.pdf_tools import open_in_explorer
 from ui.strings import S
+import json
 
 
 def _trim_middle(text: str, *, max_len: int) -> str:
@@ -274,6 +275,32 @@ def _resolve_pdf_for_source(pdf_root: Path | None, source_path: str) -> Path | N
 
 # --- Citation Utilities ---
 
+def _expand_venue_abbr(abbr: str) -> str:
+    """
+    Try to expand venue abbreviation to full name for better Crossref matching.
+    Returns the original abbr if no expansion found.
+    """
+    if not abbr or len(abbr) < 2:
+        return abbr
+    
+    abbr_lower = abbr.lower().strip()
+    
+    # Load venue map (reverse lookup: abbr -> full name)
+    try:
+        venue_map_path = Path(__file__).resolve().parent.parent / "kb" / "venue_abbr_map.json"
+        if venue_map_path.exists():
+            with open(venue_map_path, "r", encoding="utf-8") as f:
+                venue_map = json.load(f)
+                # Reverse lookup: find full name by abbreviation
+                for full_name, mapped_abbr in venue_map.items():
+                    if mapped_abbr.lower() == abbr_lower:
+                        return full_name
+    except Exception:
+        pass
+    
+    return abbr
+
+
 def _resolve_source_doc_path(source_path: str) -> Path | None:
     raw = (source_path or "").strip()
     if not raw:
@@ -351,6 +378,13 @@ def fetch_crossref_meta(title: str, *, source_path: str = "", expected_venue: st
     if not doi_hint:
         doi_hint = extract_first_doi(_load_source_preview_text(source_path))
     venue = (expected_venue or "").strip()
+    # Try to expand venue abbreviation to full name for better matching
+    if venue:
+        venue_expanded = _expand_venue_abbr(venue)
+        # Use both original and expanded for better matching
+        venues_to_try = [venue_expanded] if venue_expanded != venue else [venue]
+    else:
+        venues_to_try = [venue]
     year = (expected_year or "").strip()
 
     def _try(query_title: str, *, y: str, v: str, min_score: float, allow_title_only: bool = False) -> dict | None:
@@ -363,21 +397,23 @@ def fetch_crossref_meta(title: str, *, source_path: str = "", expected_venue: st
             allow_title_only=allow_title_only,
         )
 
-    # 1) Strict: year + venue (or what we currently know).
-    out = _try(q, y=year, v=venue, min_score=0.90)
-    if isinstance(out, dict):
-        return out
-
-    # 2) Safe fallback for citation rendering:
-    #    keep venue constraint, relax year (Crossref often stores online/print year differently).
-    if year:
-        out = _try(q, y="", v=venue, min_score=0.90)
+    # Try with each venue variant (original and expanded)
+    for v_try in venues_to_try:
+        # 1) Strict: year + venue (or what we currently know).
+        out = _try(q, y=year, v=v_try, min_score=0.90)
         if isinstance(out, dict):
             return out
 
-    # 3) Very strict title-only fallback.
-    if len(q) >= 24:
-        out = _try(q, y="", v="", min_score=0.97, allow_title_only=True)
+        # 2) Safe fallback for citation rendering:
+        #    keep venue constraint, relax year (Crossref often stores online/print year differently).
+        if year:
+            out = _try(q, y="", v=v_try, min_score=0.90)
+            if isinstance(out, dict):
+                return out
+
+    # 3) Relaxed title-only fallback (lower threshold for better recall).
+    if len(q) >= 20:
+        out = _try(q, y="", v="", min_score=0.92, allow_title_only=True)
         if isinstance(out, dict):
             return out
 
@@ -385,15 +421,16 @@ def fetch_crossref_meta(title: str, *, source_path: str = "", expected_venue: st
     _, _, file_title = _parse_filename_meta(source_path)
     file_q = (file_title or "").strip()
     if file_q and file_q != q:
-        out = _try(file_q, y=year, v=venue, min_score=0.90)
-        if isinstance(out, dict):
-            return out
-        if year:
-            out = _try(file_q, y="", v=venue, min_score=0.90)
+        for v_try in venues_to_try:
+            out = _try(file_q, y=year, v=v_try, min_score=0.90)
             if isinstance(out, dict):
                 return out
-        if len(file_q) >= 24:
-            out = _try(file_q, y="", v="", min_score=0.97, allow_title_only=True)
+            if year:
+                out = _try(file_q, y="", v=v_try, min_score=0.90)
+                if isinstance(out, dict):
+                    return out
+        if len(file_q) >= 20:
+            out = _try(file_q, y="", v="", min_score=0.92, allow_title_only=True)
             if isinstance(out, dict):
                 return out
 
