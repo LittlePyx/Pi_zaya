@@ -137,3 +137,10 @@ def _is_letter(ch: str) -> bool:
         return unicodedata.category(ch).startswith("L")
     except Exception:
         return False
+
+
+def _common_prefix_length(s1: str, s2: str) -> int:
+    i = 0
+    while i < min(len(s1), len(s2)) and s1[i] == s2[i]:
+        i += 1
+    return i

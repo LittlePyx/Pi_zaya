@@ -39,6 +39,7 @@ def _parse_blocks(md: str) -> list[Block]:
         m_page = re_page.match(stripped)
         if m_page:
             # Update current page and drop the marker from text (avoid polluting retrieval).
+            flush_buf()
             try:
                 cur_page = int(m_page.group(1))
             except Exception:
@@ -62,7 +63,7 @@ def _parse_blocks(md: str) -> list[Block]:
 
         # Keep paragraph structure; blank lines separate paragraphs.
         if stripped == "":
-            buf.append("")
+            flush_buf()
         else:
             buf.append(line)
 

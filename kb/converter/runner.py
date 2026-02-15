@@ -1,6 +1,6 @@
 import argparse
 import sys
-from .config import ConverterConfig
+from .config import ConvertConfig
 from .pipeline import PDFConverter
 
 def main():
@@ -23,7 +23,7 @@ def main():
     args = parser.parse_args()
     
     # Build config
-    cfg = ConverterConfig()
+    cfg = ConvertConfig()
     cfg.dpi = args.dpi
     # ... map other args ...
     

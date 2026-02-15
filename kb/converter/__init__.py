@@ -1,5 +1,5 @@
 from .runner import main
 from .pipeline import PDFConverter
-from .config import ConverterConfig
+from .config import ConvertConfig
 
-__all__ = ["PDFConverter", "ConverterConfig", "main"]
+__all__ = ["PDFConverter", "ConvertConfig", "main"]

@@ -11,13 +11,13 @@ try:
 except ImportError:
     OpenAI = None
 
-from .config import ConverterConfig
+from .config import ConvertConfig
 from .models import TextBlock
 from .text_utils import _normalize_text
 from .tables import _is_markdown_table_sane
 
 class LLMWorker:
-    def __init__(self, cfg: ConverterConfig):
+    def __init__(self, cfg: ConvertConfig):
         self.cfg = cfg
         self._client = None
         if self.cfg.llm:
