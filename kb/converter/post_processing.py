@@ -90,6 +90,97 @@ def _cleanup_noise_lines(md: str) -> str:
         out.append(ln)
     return "\n".join(out)
 
+
+def _drop_ocr_placeholder_lines(md: str) -> str:
+    if not md:
+        return md
+    pat = re.compile(
+        r"\((?:incomplete\s+visible|partially\s+visible|not\s+fully\s+visible)\)|\b(?:unreadable|illegible)\b",
+        flags=re.IGNORECASE,
+    )
+    lines = md.splitlines()
+    out: list[str] = []
+    in_fence = False
+    in_math = False
+    for ln in lines:
+        st = ln.strip()
+        if re.match(r"^\s*```", ln):
+            in_fence = not in_fence
+            out.append(ln)
+            continue
+        if st == "$$":
+            in_math = not in_math
+            out.append(ln)
+            continue
+        if (not in_fence) and (not in_math) and pat.search(st):
+            continue
+        out.append(ln)
+    return "\n".join(out)
+
+def _fix_malformed_code_fences(md: str) -> str:
+    """
+    Recover from OCR/VL malformed fenced code blocks, e.g.:
+      ```
+      10010001
+      10101100 ```
+    where the closing fence is not on a standalone line and causes the rest
+    of the document to render as a giant code block in Markdown viewers.
+    """
+    lines = md.splitlines()
+    out: list[str] = []
+    in_fence = False
+
+    open_re = re.compile(r"^\s*```[A-Za-z0-9_-]*\s*$")
+    close_only_re = re.compile(r"^\s*```\s*$")
+    close_tail_re = re.compile(r"^(.*\S)\s+```\s*$")
+    heading_re = re.compile(r"^\s*#{1,6}\s+\S")
+    image_re = re.compile(r"^\s*!\[[^\]]*\]\([^)]+\)\s*$")
+
+    for ln in lines:
+        st = ln.strip()
+
+        if not in_fence:
+            if open_re.match(st):
+                out.append(st)
+                in_fence = True
+                continue
+            # Stray trailing fences outside code blocks: drop only the fence tail.
+            m_tail = close_tail_re.match(ln)
+            if m_tail:
+                out.append((m_tail.group(1) or "").rstrip())
+                continue
+            out.append(ln)
+            continue
+
+        # Inside fence:
+        # If structural markdown starts, the fence was likely malformed/open too long.
+        if heading_re.match(st) or image_re.match(st):
+            out.append("```")
+            in_fence = False
+            out.append(ln)
+            continue
+
+        if close_only_re.match(st):
+            out.append("```")
+            in_fence = False
+            continue
+
+        # Handle inline closing fence at end of content line.
+        m_close_tail = close_tail_re.match(ln)
+        if m_close_tail:
+            out.append((m_close_tail.group(1) or "").rstrip())
+            out.append("```")
+            in_fence = False
+            continue
+
+        out.append(ln)
+
+    # Ensure fenced block balance.
+    if in_fence:
+        out.append("```")
+
+    return "\n".join(out)
+
 def _convert_caption_following_tabular_lines(md: str) -> str:
     # Logic to attach captions to tables if they got separated
     # This is a bit complex in regex, maybe simplified version here
@@ -224,19 +315,54 @@ def _split_inline_heading_markers(md: str) -> str:
 
 def _fix_split_numbered_headings(md: str) -> str:
     # "1\nIntroduction" -> "1 Introduction"
-    # Copied from test2.py logic roughly
+    # Copied from legacy converter logic roughly
     lines = md.splitlines()
-    out = []
+    out: list[str] = []
     i = 0
+    in_fence = False
+    in_math = False
     while i < len(lines):
         line = lines[i]
+        st = line.strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            out.append(line)
+            i += 1
+            continue
+        if st == "$$":
+            in_math = not in_math
+            out.append(line)
+            i += 1
+            continue
+        if in_fence or in_math:
+            out.append(line)
+            i += 1
+            continue
+
         if i + 1 < len(lines):
             next_line = lines[i+1]
-            # If line is just a number/letter
-            if re.fullmatch(r"\d+(\.\d+)*\.?", line.strip()) or re.fullmatch(r"[A-Z]\.?", line.strip()):
-                if next_line.strip() and not _parse_numbered_heading_level(next_line):
-                    # Merge
-                    out.append(f"{line.strip()} {next_line.strip()}")
+            next_st = next_line.strip()
+            # If line is just a small section token (number/letter), not arbitrary digits.
+            is_small_number_token = bool(
+                re.fullmatch(r"\d{1,2}(?:\.\d{1,2}){0,3}\.?", st)
+            )
+            is_letter_token = bool(re.fullmatch(r"[A-Z]\.?", st))
+            next_is_heading_like = bool(
+                re.match(
+                    r"^(?:[A-Z][A-Za-z0-9][^\n]{0,140}|"
+                    r"(?:abstract|introduction|related work|method(?:s|ology)?|"
+                    r"experiment(?:s|al)?|results?|discussion|conclusion|references|appendix)\b)",
+                    next_st,
+                    re.IGNORECASE,
+                )
+            )
+            next_is_structure = bool(
+                re.match(r"^(?:#{1,6}\s+|```|\$\$|!\[[^\]]*\]\([^)]+\)|\|)", next_st)
+            )
+            if (is_small_number_token or is_letter_token):
+                if next_st and next_is_heading_like and (not next_is_structure) and (not _parse_numbered_heading_level(next_st)):
+                    # Merge split heading token + title line.
+                    out.append(f"{st} {next_st}")
                     i += 2
                     continue
         out.append(line)
@@ -254,9 +380,22 @@ def _looks_like_promotable_numbered_heading_line(line: str) -> bool:
     head = (m.group(2) or "").strip()
     if not head:
         return False
+    # OCR/VL placeholders should never be promoted to headings.
+    if re.search(
+        r"\((?:incomplete\s+visible|partially\s+visible|not\s+fully\s+visible)\)|\b(?:unreadable|illegible)\b",
+        head,
+        flags=re.IGNORECASE,
+    ):
+        return False
     # Avoid converting body sentences like "1. this method ...".
     if re.match(r"^[a-z]", head):
         return False
+    # Reject references-like initials (e.g., "4. J. R. ...") that often appear
+    # when references are partially visible on dense pages.
+    if re.match(r"^(?:[A-Z]\.\s*){1,6}(?:[A-Z][A-Za-z'\-]+\.?)?(?:\s*\(|\s*,|$)", head):
+        long_words = re.findall(r"[A-Za-z]{4,}", head)
+        if len(long_words) <= 1:
+            return False
     if len(head) > 140:
         return False
     if head.endswith((".", "!", "?", ";", ":")):
@@ -426,6 +565,14 @@ def _enforce_heading_policy(md: str) -> str:
             authorish = True
         if (len(re.findall(r"\d", title)) >= 2) and (title.count(",") >= 2):
             authorish = True
+        if re.search(
+            r"\((?:incomplete\s+visible|partially\s+visible|not\s+fully\s+visible)\)|\b(?:unreadable|illegible)\b",
+            title,
+            flags=re.IGNORECASE,
+        ):
+            authorish = True
+        if re.match(r"^\d{1,3}\.?\s+(?:[A-Z]\.\s*){1,6}(?:[A-Z][A-Za-z'\-]+\.?)?(?:\s*\(|\s*,|$)", title):
+            authorish = True
         cap_words = re.findall(r"\b[A-Z][a-z]{1,}\b", title)
         numbered_like = bool(
             _parse_numbered_heading_level(title) is not None
@@ -538,6 +685,18 @@ def _format_references(md: str) -> str:
             return True
         return False
 
+    heading_any_re = re.compile(r"^#{1,6}\s+")
+    plain_section_re = re.compile(
+        r"^\s*(?:\d+(?:\.\d+)*\.?\s+)?"
+        r"(?:introduction|background|related work|method(?:s|ology)?|"
+        r"experiment(?:s|al)?|results?|discussion|conclusion|appendix|"
+        r"acknowledg(?:e)?ments?)\b",
+        re.IGNORECASE,
+    )
+
+    def _heading_title(ln: str) -> str:
+        return re.sub(r"^#{1,6}\s+", "", (ln or "").strip()).strip()
+
     lines = [_unwrap_sup_cites(ln) for ln in md.splitlines()]
     if not lines:
         return md
@@ -629,10 +788,64 @@ def _format_references(md: str) -> str:
     else:
         head = lines[:ref_i]
         tail = lines[tail_start:]
+
+    # Bound the references tail to avoid swallowing body content when a paper
+    # places a references block early (or headings are partially missing).
+    tail_end = len(lines)
+    if not inferred_heading:
+        ref_signal = 0
+        non_ref_run = 0
+        non_ref_start = -1
+        for j in range(tail_start, len(lines)):
+            st = lines[j].strip()
+            if not st:
+                continue
+            if re.match(r"^#{1,6}\s+(?:References|Bibliography)\b", st, re.IGNORECASE):
+                continue
+
+            # Strong section boundary (markdown heading).
+            if heading_any_re.match(st):
+                title = _heading_title(st)
+                if (
+                    plain_section_re.match(title)
+                    or re.match(r"^(?:\d+(?:\.\d+)*|[IVXLCM]+)\.?\s+", title, re.IGNORECASE)
+                    or re.match(r"^(?:appendix|acknowledg(?:e)?ments?)\b", title, re.IGNORECASE)
+                ):
+                    tail_end = j
+                    break
+
+            # Plain-text section boundary (no markdown heading marker).
+            if plain_section_re.match(st) and ref_signal >= 3:
+                tail_end = j
+                break
+
+            if _looks_reference_payload_line(st):
+                ref_signal += 1
+                non_ref_run = 0
+                non_ref_start = -1
+            else:
+                if non_ref_run == 0:
+                    non_ref_start = j
+                non_ref_run += 1
+                # After enough reference signal, a long run of non-reference lines
+                # means we've crossed back into normal body content.
+                if ref_signal >= 8 and non_ref_run >= 8 and non_ref_start >= tail_start:
+                    tail_end = non_ref_start
+                    break
+
+    if tail_end < tail_start:
+        tail_end = tail_start
+    body_tail = lines[tail_end:]
+    if pre_tail:
+        tail = pre_tail + lines[tail_start:tail_end]
+    else:
+        tail = lines[tail_start:tail_end]
     head.append("## References")
 
     blob = "\n".join(tail).strip()
     if not blob:
+        if body_tail:
+            return "\n".join(head + [""] + body_tail)
         return "\n".join(head)
 
     # Normalize superscript-citation wrappers before reference parsing.
@@ -659,6 +872,14 @@ def _format_references(md: str) -> str:
         s = re.sub(r"\s+", " ", (entry or "")).strip()
         if not s:
             return s
+
+        # Drop explicit OCR placeholders from clipped column crops.
+        if re.search(
+            r"\((?:incomplete\s+visible|partially\s+visible|not\s+fully\s+visible)\)|\b(?:unreadable|illegible)\b",
+            s,
+            flags=re.IGNORECASE,
+        ):
+            return ""
 
         # Normalize stray superscript macro text leaked from OCR.
         s = re.sub(r"\\?textsuperscript\{([^{}]{0,120})\}", r"\1", s, flags=re.IGNORECASE)
@@ -832,7 +1053,10 @@ def _format_references(md: str) -> str:
         entries.append(" ".join(cur).strip())
 
     if not entries:
-        return "\n".join(head + [""] + tail)
+        out0 = head + [""] + tail
+        if body_tail:
+            out0.extend([""] + body_tail)
+        return "\n".join(out0)
 
     entries = [_trim_reference_noise(e) for e in entries if (e or "").strip()]
     entries = [e for e in entries if (e or "").strip()]
@@ -869,7 +1093,10 @@ def _format_references(md: str) -> str:
     # Keep any unknown tail lines at the end (rare)
     out_refs.extend(unknown)
 
-    return "\n".join(head + [""] + out_refs)
+    out1 = head + [""] + out_refs
+    if body_tail:
+        out1.extend([""] + body_tail)
+    return "\n".join(out1)
 
 def fix_math_markdown(md: str) -> str:
     """
@@ -1626,8 +1853,157 @@ def _normalize_body_citations_to_superscript(md: str) -> str:
 
     return "\n".join(out)
 
+
+def _normalize_figure_caption_blocks(md: str) -> str:
+    """
+    Normalize figure/table caption presentation:
+    - Keep captions visually distinct from body text (italicized line).
+    - If image alt contains a full caption but no visible caption line follows,
+      inject one deterministic caption line after the image.
+    """
+    if not md:
+        return md
+
+    image_re = re.compile(r"^\s*!\[([^\]]*)\]\([^)]+\)\s*$")
+    caption_re = re.compile(
+        r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*(?:\d+[A-Za-z]?|[IVXLC]+)\b",
+        flags=re.IGNORECASE,
+    )
+
+    def _caption_id(text: str) -> Optional[str]:
+        m = re.match(
+            r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*(\d+[A-Za-z]?|[IVXLC]+)\b",
+            _normalize_text(text or "").strip(),
+            flags=re.IGNORECASE,
+        )
+        if not m:
+            return None
+        return (m.group(1) or "").strip().lower()
+
+    def _caption_from_alt(alt: str) -> Optional[str]:
+        t = _normalize_text(alt or "").strip()
+        if not t:
+            return None
+        if not caption_re.match(t):
+            return None
+        # Skip generic alt text like "Figure" / "Fig. 3".
+        if re.fullmatch(r"(?i)(?:figure|fig\.?|table)\s*\d*[A-Za-z]?", t):
+            return None
+        words = re.findall(r"[A-Za-z]{2,}", t)
+        if len(words) < 5:
+            return None
+        if len(t) < 24:
+            return None
+        return t
+
+    def _format_caption_line(line: str) -> str:
+        t = (line or "").strip()
+        # Remove one layer of markdown emphasis and normalize spacing.
+        t = re.sub(r"^\*{1,2}\s*", "", t)
+        t = re.sub(r"\s*\*{1,2}$", "", t)
+        t = re.sub(r"\s{2,}", " ", t).strip()
+        if not t:
+            return ""
+        return f"*{t}*"
+
+    lines = md.splitlines()
+    out: list[str] = []
+    in_fence = False
+    in_math = False
+    in_refs = False
+    pending_alt_caption: Optional[str] = None
+    pending_alt_id: Optional[str] = None
+    pending_after_image = False
+
+    for ln in lines:
+        st = ln.strip()
+
+        if re.match(r"^\s*```", ln):
+            if pending_after_image and pending_alt_caption:
+                out.append(f"*{pending_alt_caption}*")
+                out.append("")
+            pending_alt_caption = None
+            pending_alt_id = None
+            pending_after_image = False
+            in_fence = not in_fence
+            out.append(ln)
+            continue
+        if st == "$$":
+            if pending_after_image and pending_alt_caption:
+                out.append(f"*{pending_alt_caption}*")
+                out.append("")
+            pending_alt_caption = None
+            pending_alt_id = None
+            pending_after_image = False
+            in_math = not in_math
+            out.append(ln)
+            continue
+        if re.match(r"^#{1,6}\s+References\b", st, re.IGNORECASE):
+            if pending_after_image and pending_alt_caption:
+                out.append(f"*{pending_alt_caption}*")
+                out.append("")
+            pending_alt_caption = None
+            pending_alt_id = None
+            pending_after_image = False
+            in_refs = True
+            out.append(ln)
+            continue
+
+        if in_fence or in_math or in_refs:
+            out.append(ln)
+            continue
+
+        if pending_after_image:
+            if not st:
+                out.append(ln)
+                continue
+            if caption_re.match(st):
+                cur_cap_id = _caption_id(st)
+                # If the detected caption clearly belongs to another figure/table,
+                # do not consume it for the previous image.
+                if pending_alt_id and cur_cap_id and (cur_cap_id != pending_alt_id):
+                    if pending_alt_caption:
+                        out.append(f"*{pending_alt_caption}*")
+                        out.append("")
+                    pending_alt_caption = None
+                    pending_alt_id = None
+                    pending_after_image = False
+                    # Continue processing current line normally below.
+                else:
+                    cap = _format_caption_line(ln)
+                    if cap:
+                        out.append(cap)
+                    pending_alt_caption = None
+                    pending_alt_id = None
+                    pending_after_image = False
+                    continue
+            # No explicit caption followed image: inject from alt if we have one.
+            if pending_after_image and pending_alt_caption:
+                out.append(f"*{pending_alt_caption}*")
+                out.append("")
+            pending_alt_caption = None
+            pending_alt_id = None
+            pending_after_image = False
+
+        m_img = image_re.match(ln)
+        if m_img:
+            out.append(ln)
+            pending_alt_caption = _caption_from_alt(m_img.group(1) or "")
+            pending_alt_id = _caption_id(m_img.group(1) or "") if pending_alt_caption else None
+            pending_after_image = True
+            continue
+
+        out.append(ln)
+
+    if pending_after_image and pending_alt_caption:
+        out.append(f"*{pending_alt_caption}*")
+
+    return "\n".join(out)
+
 def postprocess_markdown(md: str) -> str:
     md = _cleanup_noise_lines(md)
+    md = _drop_ocr_placeholder_lines(md)
+    md = _fix_malformed_code_fences(md)
     md = _convert_caption_following_tabular_lines(md)
     md = _reflow_hard_wrapped_paragraphs(md)
     md = _split_inline_heading_markers(md)
@@ -1639,6 +2015,7 @@ def postprocess_markdown(md: str) -> str:
     md = _unwrap_math_wrapped_headings(md)
     md = _enforce_heading_policy(md)
     md = _format_references(md)
+    md = _normalize_figure_caption_blocks(md)
     md = _normalize_body_citations_to_superscript(md)
     md = _split_inline_heading_markers(md)
     return md

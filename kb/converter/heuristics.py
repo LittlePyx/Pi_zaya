@@ -18,6 +18,13 @@ _NUMBERED_HEADING_RE = re.compile(
 _APPENDIX_HEADING_RE = re.compile(
     r"^(?P<letter>[A-Z])(?P<suffix>(?:\.\d+)*)\s+(?P<rest>.+)$"
 )
+_ROMAN_HEADING_RE = re.compile(
+    r"^(?P<roman>[IVXLC]+)\.\s+(?P<rest>.+)$",
+    re.IGNORECASE
+)
+_LETTER_HEADING_RE = re.compile(
+    r"^(?P<letter>[A-Z])\.\s+(?P<rest>.+)$"
+)
 
 
 def _parse_numbered_heading_level(title: str) -> Optional[int]:
@@ -163,8 +170,25 @@ def _is_reasonable_heading_text(title: str) -> bool:
         return True
     if t.upper() in _COMMON_SECTION_HEADINGS:
         return True
-    if _looks_like_equation_text(t):
+    # Import here to avoid circular dependency
+    from .block_classifier import _looks_like_math_block
+    if _looks_like_equation_text(t) or _looks_like_math_block([t]):
         return False
+    
+    # Additional checks: exclude math-like patterns that look like formulas
+    # Patterns like "M 6 n 1", "6 n ,", "2 s + k" are likely formulas, not headings
+    if re.match(r'^[A-Z]\s*\d+\s*[a-z]', t):  # "M 6 n"
+        return False
+    if re.match(r'^\d+\s*[a-z]\s*[,.]?\s*$', t):  # "6 n ,"
+        return False
+    if re.match(r'^\d+\s*[a-z]+\s*[+\-]\s*[a-z]', t):  # "2 s + k"
+        return False
+    # Very short text with numbers and letters is likely a formula
+    if len(t) <= 25 and re.search(r'\d+.*[a-z]|[a-z].*\d+', t) and not re.search(r'[A-Z]{2,}', t):
+        # But allow if it's a common heading word
+        if t.upper() not in _COMMON_SECTION_HEADINGS:
+            return False
+    
     if re.match(r"^\s*(?:Fig\.|Figure|Table|Algorithm)\s*\d+", t, flags=re.IGNORECASE):
         return False
     if re.search(r"\b(?:doi|arxiv|https?://)\b", t, flags=re.IGNORECASE):
@@ -215,6 +239,27 @@ def _suggest_heading_level(
     page_index: int,
 ) -> Optional[int]:
     t = _normalize_text(text or "").strip()
+    if not t:
+        return None
+    
+    # STRICT CHECK: If it looks like a formula, don't classify as heading
+    from .block_classifier import _looks_like_math_block
+    if _looks_like_equation_text(t) or _looks_like_math_block([t]):
+        return None
+    
+    # Additional formula pattern checks (must be before other checks)
+    if re.match(r'^[A-Z]\s*\d+\s*[a-z]', t):  # "M 6 n"
+        return None
+    if re.match(r'^\d+\s*[a-z]\s*[,.]?\s*$', t):  # "6 n ,"
+        return None
+    if re.match(r'^\d+\s*[a-z]+\s*[+\-]', t):  # "2 s + k"
+        return None
+    # Very short text with numbers and letters is likely a formula
+    if len(t) <= 25 and re.search(r'\d+.*[a-z]|[a-z].*\d+', t) and not re.search(r'[A-Z]{2,}', t):
+        # But allow if it's a common heading word
+        if t.upper() not in _COMMON_SECTION_HEADINGS:
+            return None
+    
     delta = float(max_size) - float(body_size)
     words = re.findall(r"[A-Za-z][A-Za-z0-9'\-]*", t)
     style_fallback = bool(
@@ -283,6 +328,131 @@ def _is_noise_line(text: str) -> bool:
     for pat in NOISE_LINE_PATTERNS:
         if re.match(pat, t) or re.match(pat, t2):
             return True
+    return False
+
+
+_AFFILIATION_KEYWORDS = {
+    "university",
+    "institute",
+    "department",
+    "school",
+    "college",
+    "faculty",
+    "laboratory",
+    "lab",
+    "academy",
+    "hospital",
+    "centre",
+    "center",
+    "ministry",
+    "state key",
+}
+
+_JOURNAL_FOOTER_KEYWORDS = {
+    "vol.",
+    "volume",
+    "issue",
+    "issn",
+    "eissn",
+    "all rights reserved",
+    "open access",
+    "creative commons",
+    "published by",
+    "copyright",
+}
+
+
+def _is_non_body_metadata_text(
+    text: str,
+    *,
+    page_index: int = 0,
+    y0: float = 0.0,
+    y1: float = 0.0,
+    page_height: float = 0.0,
+    max_font_size: float = 0.0,
+    body_font_size: float = 0.0,
+    is_references_page: bool = False,
+) -> bool:
+    """
+    Detect non-body metadata blocks that should not be emitted as main article text:
+    - author affiliations/contact blocks
+    - journal header/footer/copyright boilerplate
+    - DOI/ORCID/contact snippets outside references
+    """
+    t = _normalize_text(text or "").strip()
+    if not t:
+        return False
+    low = t.lower()
+
+    if is_references_page and re.match(r"^\[\d{1,4}\]\s+", t):
+        return False
+    if _is_caption_like_text(t):
+        return False
+    # Markdown/ocr variants of figure captions: *Figure 5..., **Figure 5..., [Figure 5]...
+    if re.match(r"^\s*[*_`>#\[\(]*\s*(?:fig\.?|figure|table|algorithm)\s*(?:\d+|[ivxlc]+)\b", t, flags=re.IGNORECASE):
+        return False
+    if ("reproduced with permission" in low) and (("figure" in low) or ("fig." in low)):
+        return False
+    word_n = len(re.findall(r"[A-Za-z]{2,}", t))
+    edge_zone = False
+    if page_height > 0:
+        edge_zone = (y1 <= page_height * 0.18) or (y0 >= page_height * 0.82)
+
+    has_email = bool(re.search(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", t))
+    has_orcid = "orcid" in low
+    has_url = bool(re.search(r"https?://|www\.[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", low))
+    has_doi = bool(re.search(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b", t)) or ("doi:" in low) or ("doi.org/" in low)
+    has_page_counter = bool(re.search(r"\(\s*\d+\s+of\s+\d+\s*\)", low))
+
+    if has_email or has_orcid:
+        return True
+    if has_page_counter:
+        return True
+    if has_doi and (edge_zone or word_n <= 28):
+        return True
+    if has_url and edge_zone:
+        return True
+    if re.search(r"\b(?:all rights reserved|creative commons|open access|copyright|published by)\b", low):
+        return True
+    if re.search(r"\b(?:received|accepted|published online|article history)\b", low) and (edge_zone or page_index <= 1):
+        return True
+
+    aff_n = sum(1 for k in _AFFILIATION_KEYWORDS if k in low)
+    journal_n = sum(1 for k in _JOURNAL_FOOTER_KEYWORDS if k in low)
+    zip_n = len(re.findall(r"\b\d{5,6}\b", t))
+    country_n = len(
+        re.findall(
+            r"\b(?:china|usa|united states|uk|england|france|germany|canada|australia|japan|korea|singapore|india)\b",
+            low,
+        )
+    )
+    name_pair_n = len(re.findall(r"\b[A-Z][a-z]{1,20}\s+[A-Z][a-z]{1,20}\b", t))
+    initial_name_n = len(re.findall(r"\b(?:[A-Z]\.\s*){1,3}[A-Z][a-z]{1,24}\b", t))
+    verb_n = len(
+        re.findall(
+            r"\b(?:is|are|was|were|be|been|being|have|has|had|can|may|will|would|should|could|do|does|did|show|shows|shown|propose|proposed|present|presents|discuss|discusses|demonstrate|improve|use|used)\b",
+            low,
+        )
+    )
+
+    if aff_n >= 3 and word_n <= 130 and verb_n <= 5:
+        return True
+    if (page_index <= 1 or edge_zone) and aff_n >= 2 and (zip_n + country_n >= 1 or name_pair_n + initial_name_n >= 2):
+        return True
+    if edge_zone and journal_n >= 2 and word_n <= 90:
+        return True
+    if aff_n >= 2 and has_url:
+        return True
+
+    # Running header/footer in smaller font near page edge.
+    if edge_zone and body_font_size > 0 and max_font_size > 0:
+        if max_font_size <= body_font_size * 0.92 and (has_url or has_doi or journal_n >= 1):
+            return True
+
+    # Extremely long metadata merges (common OCR/LLM collapse case).
+    if len(t) >= 260 and (aff_n >= 2 or has_url or has_doi) and verb_n <= 6:
+        return True
+
     return False
 
 
@@ -372,10 +542,14 @@ def _page_has_references_heading(page) -> bool:
     """
     Best-effort detection of a REFERENCES page.
     """
+    heading_pat = re.compile(
+        r"^\s*(?:REFERENCES|BIBLIOGRAPHY|REFERENCES\s+AND\s+NOTES|LITERATURE\s+CITED)\s*$",
+        flags=re.IGNORECASE,
+    )
     # 1) Fast path: plain text contains an isolated line.
     try:
         t = page.get_text("text") or ""
-        if re.search(r"(?mi)^\s*REFERENCES\s*$", t):
+        if any(heading_pat.match((ln or "").strip()) for ln in t.splitlines()):
             return True
     except Exception:
         pass
@@ -402,7 +576,7 @@ def _page_has_references_heading(page) -> bool:
                 line = _normalize_text(line).strip()
                 if not line:
                     continue
-                if re.fullmatch(r"REFERENCES", line, flags=re.IGNORECASE):
+                if heading_pat.fullmatch(line):
                     return True
     except Exception:
         pass
@@ -419,17 +593,47 @@ def _page_looks_like_references_content(page) -> bool:
     t = _normalize_text(t)
     if not t.strip():
         return False
-    # Many references: lots of years, commas, and URLs/DOIs.
+
+    lines = [ln.strip() for ln in t.splitlines() if (ln or "").strip()]
+    if len(lines) < 10:
+        return False
+    # Many references: lots of years, commas, and reference-like lead markers.
     years = re.findall(r"(?:19|20)\d{2}", t)
     if len(years) < 18:
         return False
-    comma_lines = sum(1 for ln in t.splitlines() if "," in ln and len(ln.strip()) >= 25)
+    comma_lines = sum(1 for ln in lines if "," in ln and len(ln) >= 25)
     if comma_lines < 10:
         return False
+
+    ref_line_pat = re.compile(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,3}\.\s+[A-Z])")
+    ref_like_lines = [i for i, ln in enumerate(lines) if ref_line_pat.match(ln)]
+    if len(ref_like_lines) < max(6, int(len(lines) * 0.18)):
+        # Dense references can still be wrapped strangely; keep a permissive fallback below.
+        if len(years) < 28:
+            return False
+
+    # Avoid classifying mixed body+references pages as full references pages.
+    first_ref = min(ref_like_lines) if ref_like_lines else len(lines)
+    if first_ref >= 6:
+        bodyish_before = 0
+        for ln in lines[:first_ref]:
+            words = re.findall(r"[A-Za-z]{3,}", ln)
+            stop_n = len(
+                re.findall(
+                    r"\b(?:the|and|with|from|that|this|these|into|through|between|while|where|which|during|using)\b",
+                    ln,
+                    flags=re.IGNORECASE,
+                )
+            )
+            if len(words) >= 8 and stop_n >= 2 and not ref_line_pat.match(ln):
+                bodyish_before += 1
+        if bodyish_before >= 5:
+            return False
+
     if ("doi" in t.lower()) or ("http" in t.lower()) or ("arxiv" in t.lower()):
         return True
-    # fallback: pure density of years is already a strong signal
-    return len(years) >= 28
+    # Fallback: pure density of years + many reference-like lines.
+    return len(years) >= 28 and len(ref_like_lines) >= 8
 
 
 def _is_frontmatter_noise_line(text: str) -> bool:

@@ -149,6 +149,10 @@ class PDFConverter:
         doc = fitz.open(pdf_path)
         total_pages = len(doc)
         print(f"PDF opened successfully, {total_pages} pages", flush=True)
+        try:
+            self._cleanup_stale_page_assets(assets_dir=assets_dir, total_pages=total_pages)
+        except Exception as e:
+            print(f"[WARN] stale asset cleanup skipped: {e}", flush=True)
         
         # Output total pages for progress tracking (must match expected format)
         print(f"Detected body font size: 12.0 | pages: {total_pages} | range: 1-{total_pages}", flush=True)
@@ -168,7 +172,7 @@ class PDFConverter:
         speed_config = self._get_speed_mode_config(speed_mode, total_pages)
         self._active_speed_config = speed_config
         
-        # Use LLM config from cfg (already set by test2.py)
+        # Use LLM config from cfg (already set by the CLI entrypoint)
         use_llm = False
         llm_config = self.cfg.llm
         
@@ -241,6 +245,43 @@ class PDFConverter:
                     print("[OK] No quality issues detected")
             except Exception as e:
                 print(f"[WARN] quality analysis failed: {e}", flush=True)
+
+    def _cleanup_stale_page_assets(self, *, assets_dir: Path, total_pages: int) -> None:
+        """
+        Remove stale page-scoped assets in the target conversion range so reruns
+        don't keep old split/cropped figure files that are no longer referenced.
+        """
+        start = max(0, int(getattr(self.cfg, "start_page", 0) or 0))
+        end = int(getattr(self.cfg, "end_page", -1) or -1)
+        if end < 0:
+            end = int(total_pages)
+        end = min(int(total_pages), int(end))
+        if start >= end:
+            return
+
+        page_set = {int(i) for i in range(start + 1, end + 1)}  # filenames are 1-based
+        pat = re.compile(
+            r"^page_(\d+)_(?:fig|eq)_\d+\.(?:png|jpg|jpeg|webp|gif)$",
+            re.IGNORECASE,
+        )
+        removed = 0
+        for p in assets_dir.glob("page_*_*.*"):
+            try:
+                m = pat.match(p.name)
+                if not m:
+                    continue
+                page_no = int(m.group(1))
+                if page_no not in page_set:
+                    continue
+                p.unlink(missing_ok=True)
+                removed += 1
+            except Exception:
+                continue
+        if removed > 0:
+            print(
+                f"[ASSET_CLEAN] removed {removed} stale page asset(s) in range {start+1}-{end}",
+                flush=True,
+            )
 
     def _collect_non_body_metadata_rects(
         self,
@@ -385,6 +426,105 @@ class PDFConverter:
             return out.getvalue()
         except Exception:
             return png_bytes
+
+    @staticmethod
+    def _looks_axis_or_panel_text(text: str) -> bool:
+        t = _normalize_text(text or "").strip()
+        if not t:
+            return False
+        low = t.lower()
+        if re.fullmatch(r"\(?[a-z]\)?", t, flags=re.IGNORECASE):
+            return True
+        if len(t) <= 24 and re.fullmatch(r"[\d\.\-\+\s,;:()/%]+", t):
+            return True
+        if len(t) <= 32 and re.search(r"\d", t):
+            return True
+        if len(t) <= 32 and re.search(r"\b(?:wavelength|intensity|frequency|time|pixel|nm|hz|a\.?u\.?|x|y)\b", low):
+            return True
+        return False
+
+    def _collect_page_text_line_boxes(self, page) -> list[tuple[fitz.Rect, str]]:
+        if fitz is None:
+            return []
+        out: list[tuple[fitz.Rect, str]] = []
+        try:
+            d = page.get_text("dict") or {}
+        except Exception:
+            return out
+        for b in (d.get("blocks", []) or []):
+            for l in (b.get("lines", []) or []):
+                spans = l.get("spans", []) or []
+                txt = "".join(str(s.get("text", "")) for s in spans)
+                txt = _normalize_text(txt).strip()
+                if not txt:
+                    continue
+                try:
+                    lb = l.get("bbox") or b.get("bbox")
+                    r = fitz.Rect(lb)
+                except Exception:
+                    continue
+                if r.width <= 0.0 or r.height <= 0.0:
+                    continue
+                out.append((r, txt))
+        return out
+
+    def _expanded_visual_crop_rect(
+        self,
+        *,
+        rect: fitz.Rect,
+        page_w: float,
+        page_h: float,
+        is_full_width: bool,
+        line_boxes: list[tuple[fitz.Rect, str]] | None = None,
+    ) -> fitz.Rect:
+        """
+        Expand figure crops conservatively, with extra bottom room for axes/ticks/panel labels,
+        while avoiding accidental bleed into nearby body paragraphs.
+        """
+        r = fitz.Rect(rect)
+        if r.width <= 0.0 or r.height <= 0.0:
+            return r
+
+        pad_x = max(2.0, float(page_w) * (0.004 if not is_full_width else 0.003))
+        pad_top = max(2.0, float(page_h) * 0.006)
+        pad_bottom = max(8.0, float(page_h) * (0.024 if not is_full_width else 0.020))
+
+        lines = line_boxes or []
+        probe_down = max(18.0, float(page_h) * 0.10)
+        axis_bottom = float(r.y1)
+        boundary_y0 = float(page_h) + 1.0
+
+        for lb, txt in lines:
+            if float(lb.y0) < float(r.y1) - 1.0:
+                continue
+            gap = float(lb.y0) - float(r.y1)
+            if gap > probe_down:
+                continue
+            x_ov = _overlap_1d(float(r.x0), float(r.x1), float(lb.x0), float(lb.x1))
+            min_w = max(1.0, min(float(r.width), float(lb.width)))
+            if (x_ov / min_w) < 0.45:
+                continue
+            if self._looks_axis_or_panel_text(txt):
+                axis_bottom = max(axis_bottom, float(lb.y1))
+            else:
+                # Long sentence-like text below figure is likely caption/body boundary.
+                if len(txt) >= 24 and (len(re.findall(r"[A-Za-z]{2,}", txt)) >= 4):
+                    boundary_y0 = min(boundary_y0, float(lb.y0))
+
+        if axis_bottom > float(r.y1):
+            pad_bottom = max(pad_bottom, axis_bottom - float(r.y1) + 2.0)
+
+        x0 = max(0.0, float(r.x0) - pad_x)
+        y0 = max(0.0, float(r.y0) - pad_top)
+        y1 = min(float(page_h), float(r.y1) + pad_bottom)
+        if boundary_y0 <= float(page_h):
+            y1 = min(y1, max(float(r.y1) + 2.0, boundary_y0 - 1.0))
+        if y1 <= y0:
+            y1 = min(float(page_h), y0 + max(4.0, float(r.height) * 0.4))
+        x1 = min(float(page_w), float(r.x1) + pad_x)
+        if x1 <= x0:
+            x1 = min(float(page_w), x0 + max(4.0, float(r.width) * 0.4))
+        return fitz.Rect(x0, y0, x1, y1)
 
     def _vision_formula_overlay_enabled(self) -> bool:
         try:
@@ -928,6 +1068,171 @@ class PDFConverter:
             raw = "1"
         return raw in {"1", "true", "yes", "y", "on"}
 
+    @staticmethod
+    def _is_reference_placeholder_line(text: str) -> bool:
+        t = _normalize_text(text or "").strip().lower()
+        if not t:
+            return False
+        if "(incomplete visible)" in t:
+            return True
+        if "(partially visible)" in t:
+            return True
+        if "(not fully visible)" in t:
+            return True
+        if "[unreadable]" in t or "[illegible]" in t:
+            return True
+        return False
+
+    def _sanitize_reference_crop_markdown(self, md: str) -> str:
+        if not md:
+            return ""
+        out: list[str] = []
+        for ln in (md or "").splitlines():
+            s = (ln or "").strip()
+            if not s:
+                continue
+            if self._is_reference_placeholder_line(s):
+                continue
+            # References crop should not contain markdown headings/code/maths.
+            if s.startswith("```"):
+                continue
+            s = s.replace("$$", "").replace("$", "").strip()
+            if re.match(r"^#{1,6}\s+", s):
+                s = re.sub(r"^#{1,6}\s+", "", s).strip()
+            out.append(s)
+        return "\n".join(out).strip()
+
+    def _merge_reference_crop_markdowns(self, parts: list[str]) -> str:
+        """
+        Merge per-column references OCR with de-duplication and stable numbering.
+        """
+        if not parts:
+            return ""
+        numbered_best: dict[int, str] = {}
+        extras: list[str] = []
+        extra_seen: set[str] = set()
+
+        for part in parts:
+            for raw in (part or "").splitlines():
+                s = _normalize_text(raw or "").strip()
+                if not s:
+                    continue
+                if self._is_reference_placeholder_line(s):
+                    continue
+                m = re.match(r"^\[?(\d{1,4})\]?[.)]?\s+(.+)$", s)
+                if m:
+                    try:
+                        n = int(m.group(1))
+                    except Exception:
+                        n = -1
+                    body = (m.group(2) or "").strip()
+                    if n <= 0 or n > 2000 or (not body):
+                        continue
+                    line = f"[{n}] {body}"
+                    prev = numbered_best.get(n)
+                    if (prev is None) or (len(line) > len(prev)):
+                        numbered_best[n] = line
+                    continue
+                key = re.sub(r"\s+", " ", s).strip().lower()
+                if key in extra_seen:
+                    continue
+                extra_seen.add(key)
+                extras.append(s)
+
+        out: list[str] = []
+        if numbered_best:
+            for n in sorted(numbered_best.keys()):
+                out.append(numbered_best[n])
+        out.extend(extras)
+        return "\n".join(out).strip()
+
+    def _build_reference_column_crop_rects(
+        self,
+        *,
+        page,
+        page_w: float,
+        page_h: float,
+    ) -> list[fitz.Rect]:
+        """
+        Build robust references column crops using text-driven split when possible.
+        Falls back to symmetric half-page crops.
+        """
+        top_pad = float(page_h) * 0.015
+        bot_pad = float(page_h) * 0.02
+        y0 = max(0.0, top_pad)
+        y1 = max(y0 + 1.0, float(page_h) - bot_pad)
+
+        mid = float(page_w) * 0.5
+        overlap = float(page_w) * 0.045
+        fallback = [
+            fitz.Rect(0.0, y0, min(float(page_w), mid + overlap), y1),
+            fitz.Rect(max(0.0, mid - overlap), y0, float(page_w), y1),
+        ]
+
+        try:
+            d = page.get_text("dict") or {}
+            line_boxes: list[tuple[float, float, float, float]] = []
+            for b in d.get("blocks", []) or []:
+                if "lines" not in b:
+                    continue
+                for l in (b.get("lines", []) or []):
+                    bbox = l.get("bbox")
+                    if not bbox or len(bbox) != 4:
+                        continue
+                    spans = l.get("spans", []) or []
+                    txt = _normalize_text("".join(str(s.get("text", "")) for s in spans)).strip()
+                    if len(txt) < 2:
+                        continue
+                    try:
+                        x0, y0b, x1, y1b = (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+                    except Exception:
+                        continue
+                    if (x1 - x0) <= 8.0 or (y1b - y0b) <= 2.0:
+                        continue
+                    if y1b < y0 or y0b > y1:
+                        continue
+                    # Ignore full-width lines when estimating column split.
+                    if (x1 - x0) >= float(page_w) * 0.75:
+                        continue
+                    line_boxes.append((x0, y0b, x1, y1b))
+
+            if len(line_boxes) < 10:
+                return fallback
+
+            centers = sorted(((x0 + x1) * 0.5 for x0, _, x1, _ in line_boxes))
+            best_gap = 0.0
+            best_mid = None
+            lo = float(page_w) * 0.22
+            hi = float(page_w) * 0.78
+            for i in range(len(centers) - 1):
+                a = float(centers[i])
+                b = float(centers[i + 1])
+                g = b - a
+                m = (a + b) * 0.5
+                if m < lo or m > hi:
+                    continue
+                if g > best_gap:
+                    best_gap = g
+                    best_mid = m
+
+            if best_mid is None or best_gap < float(page_w) * 0.075:
+                return fallback
+
+            gutter = max(10.0, float(page_w) * 0.022)
+            left_x1 = max(0.0, min(float(page_w), float(best_mid) - gutter))
+            right_x0 = max(0.0, min(float(page_w), float(best_mid) + gutter))
+            if left_x1 <= float(page_w) * 0.18 or right_x0 >= float(page_w) * 0.82:
+                return fallback
+            if (right_x0 - left_x1) < float(page_w) * 0.04:
+                return fallback
+
+            return [
+                fitz.Rect(0.0, y0, left_x1, y1),
+                fitz.Rect(right_x0, y0, float(page_w), y1),
+            ]
+        except Exception:
+            return fallback
+
     def _convert_references_page_with_column_vl(
         self,
         *,
@@ -961,33 +1266,42 @@ class PDFConverter:
                 dpi = int((getattr(self, "_active_speed_config", None) or {}).get("dpi", 220) or 220)
             except Exception:
                 dpi = int(getattr(self, "dpi", 220) or 220)
-        dpi = max(160, min(400, int(dpi)))
+        # Dense reference text tends to be tiny; keep a higher floor for OCR fidelity.
+        dpi = max(240, min(500, int(dpi)))
 
-        top_pad = float(page_h) * 0.015
-        bot_pad = float(page_h) * 0.02
-        mid = float(page_w) * 0.5
-        overlap = float(page_w) * 0.045
-        y0 = max(0.0, top_pad)
-        y1 = max(y0 + 1.0, float(page_h) - bot_pad)
-        rects = [
-            fitz.Rect(0.0, y0, min(float(page_w), mid + overlap), y1),
-            fitz.Rect(max(0.0, mid - overlap), y0, float(page_w), y1),
-        ]
+        rects = self._build_reference_column_crop_rects(
+            page=page,
+            page_w=float(page_w),
+            page_h=float(page_h),
+        )
 
-        parts: list[str] = []
+        try:
+            print(
+                f"[VISION_DIRECT][REFS] page {page_index+1}: column mode enabled ({len(rects)} crops, dpi={int(dpi)})",
+                flush=True,
+            )
+        except Exception:
+            pass
+
+        part_payloads: list[tuple[int, bytes]] = []
         for idx, rect in enumerate(rects, start=1):
             try:
                 pix = page.get_pixmap(clip=rect, dpi=int(dpi), alpha=False)
                 part_png = pix.tobytes("png")
+                if part_png:
+                    part_payloads.append((idx, part_png))
             except Exception:
                 continue
 
+        def _ocr_ref_crop(idx: int, part_png: bytes) -> tuple[int, Optional[str]]:
+            t0 = time.time()
             col_hint = (
                 (page_hint + " " if page_hint else "")
                 + f"This is column crop {idx}/2 of a references page. "
-                  "Output only references visible in this crop, one per line."
+                  "Output only complete references fully visible in this crop, one per line. "
+                  "Do NOT output placeholders like '(incomplete visible)' or 'unreadable'. "
+                  "If an entry is clipped/uncertain, skip it."
             )
-
             part_md = self.llm_worker.call_llm_page_to_markdown(
                 part_png,
                 page_number=page_index,
@@ -996,15 +1310,41 @@ class PDFConverter:
                 speed_mode=speed_mode,
                 is_references_page=True,
             )
-            if not part_md:
-                continue
-            part_md = (part_md or "").strip()
-            if part_md:
-                parts.append(part_md)
+            part_md = self._sanitize_reference_crop_markdown((part_md or "").strip())
+            part_md = part_md or None
+            try:
+                elapsed = time.time() - t0
+                s = f"{len(part_md)} chars" if part_md else "empty"
+                print(
+                    f"[VISION_DIRECT][REFS] page {page_index+1} crop {idx}/2 done ({elapsed:.1f}s, {s})",
+                    flush=True,
+                )
+            except Exception:
+                pass
+            return idx, part_md
+
+        ordered: dict[int, str] = {}
+        if len(part_payloads) <= 1:
+            for idx, part_png in part_payloads:
+                i2, md2 = _ocr_ref_crop(idx, part_png)
+                if md2:
+                    ordered[i2] = md2
+        else:
+            with ThreadPoolExecutor(max_workers=min(2, len(part_payloads))) as pool:
+                futs = [pool.submit(_ocr_ref_crop, idx, part_png) for idx, part_png in part_payloads]
+                for fut in as_completed(futs):
+                    try:
+                        i2, md2 = fut.result()
+                    except Exception:
+                        continue
+                    if md2:
+                        ordered[i2] = md2
+
+        parts = [ordered[k] for k in sorted(ordered.keys()) if ordered.get(k)]
 
         if not parts:
             return None
-        merged = "\n".join(parts).strip()
+        merged = self._merge_reference_crop_markdowns(parts)
         return merged or None
 
     def _convert_page_with_vision_guardrails(
@@ -1590,6 +1930,7 @@ class PDFConverter:
                         footer_threshold = H * 0.88
                         side_margin = W * 0.05
                         spanning_threshold = W * 0.55
+                        line_boxes = self._collect_page_text_line_boxes(page)
                         
                         img_count = 0
                         for rect_idx, rect in enumerate(visual_rects):
@@ -1608,13 +1949,12 @@ class PDFConverter:
                                 if rect.x1 > W - side_margin and rect.width < W * 0.1:
                                     continue
                             
-                            # Crop rect slightly to avoid edge artifacts
-                            crop_margin = 2.0 if not is_full_width else 1.0
-                            cropped_rect = fitz.Rect(
-                                max(0, rect.x0 + crop_margin),
-                                max(0, rect.y0 + crop_margin),
-                                min(W, rect.x1 - crop_margin),
-                                min(H, rect.y1 - crop_margin)
+                            cropped_rect = self._expanded_visual_crop_rect(
+                                rect=rect,
+                                page_w=W,
+                                page_h=H,
+                                is_full_width=bool(is_full_width),
+                                line_boxes=line_boxes,
                             )
                             
                             if cropped_rect.width <= 0 or cropped_rect.height <= 0:
@@ -1821,6 +2161,7 @@ class PDFConverter:
                         footer_threshold = H * 0.88
                         side_margin = W * 0.05
                         spanning_threshold = W * 0.55
+                        line_boxes = self._collect_page_text_line_boxes(page)
                         
                         img_count = 0
                         for rect_idx, rect in enumerate(visual_rects):
@@ -1839,13 +2180,12 @@ class PDFConverter:
                                 if rect.x1 > W - side_margin and rect.width < W * 0.1:
                                     continue
                             
-                            # Crop rect slightly to avoid edge artifacts
-                            crop_margin = 2.0 if not is_full_width else 1.0
-                            cropped_rect = fitz.Rect(
-                                max(0, rect.x0 + crop_margin),
-                                max(0, rect.y0 + crop_margin),
-                                min(W, rect.x1 - crop_margin),
-                                min(H, rect.y1 - crop_margin)
+                            cropped_rect = self._expanded_visual_crop_rect(
+                                rect=rect,
+                                page_w=W,
+                                page_h=H,
+                                is_full_width=bool(is_full_width),
+                                line_boxes=line_boxes,
                             )
                             
                             if cropped_rect.width <= 0 or cropped_rect.height <= 0:
@@ -2679,6 +3019,7 @@ class PDFConverter:
         # Detect column layout for proper image handling
         col_split = _detect_column_split_x(text_blocks, page_width=W) if text_blocks else None
         spanning_threshold = W * 0.55  # Full-width images span both columns
+        line_boxes = self._collect_page_text_line_boxes(page)
         
         img_count = 0
         for rect_idx, rect in enumerate(visual_rects):
@@ -2707,13 +3048,12 @@ class PDFConverter:
                     # Keep original rect but ensure proper cropping
                     pass
             
-            # Crop rect slightly to avoid edge artifacts (but preserve full-width images)
-            crop_margin = 2.0 if not is_full_width else 1.0  # Less cropping for full-width
-            cropped_rect = fitz.Rect(
-                max(0, rect.x0 + crop_margin),
-                max(0, rect.y0 + crop_margin),
-                min(W, rect.x1 - crop_margin),
-                min(H, rect.y1 - crop_margin)
+            cropped_rect = self._expanded_visual_crop_rect(
+                rect=rect,
+                page_w=W,
+                page_h=H,
+                is_full_width=bool(is_full_width),
+                line_boxes=line_boxes,
             )
             
             if cropped_rect.width <= 0 or cropped_rect.height <= 0:

@@ -18,6 +18,11 @@ from .config import ConvertConfig
 from .models import TextBlock
 from .text_utils import _normalize_text
 from .tables import _is_markdown_table_sane
+from .post_processing import (
+    fix_math_markdown,
+    _normalize_math_for_typora,
+    _fix_malformed_code_fences,
+)
 
 class LLMWorker:
     def __init__(self, cfg: ConvertConfig):
@@ -26,18 +31,21 @@ class LLMWorker:
         # Global-ish concurrency limiter: one LLMWorker is shared across page threads in PDFConverter.
         # This prevents "N pages in parallel" from flooding the provider and stalling on throttling.
         self._llm_sem: threading.Semaphore | None = None
+        self._llm_max_inflight: int = 8
         try:
             raw = str(os.environ.get("KB_LLM_MAX_INFLIGHT", "") or "").strip()
             if raw:
                 max_inflight = int(raw)
             else:
-                # Default: 12 for better parallel processing in vision-direct mode
-                # (was 2, but vision-direct benefits from higher concurrency)
-                max_inflight = 12
+                # Keep a stable default for full-page VL OCR.
+                # Too high concurrency commonly triggers provider-side timeout/rate-limit cascades.
+                max_inflight = 8
             max_inflight = max(1, min(32, int(max_inflight)))
+            self._llm_max_inflight = int(max_inflight)
             self._llm_sem = threading.Semaphore(max_inflight)
         except Exception:
-            self._llm_sem = threading.Semaphore(12)  # Default to 12 instead of 2
+            self._llm_max_inflight = 8
+            self._llm_sem = threading.Semaphore(self._llm_max_inflight)
         # Small in-memory caches to avoid repeated calls for identical snippets.
         # These caches live per Streamlit process and reset on restart.
         self._cache_confirm_heading: dict[str, dict] = {}
@@ -58,6 +66,30 @@ class LLMWorker:
             raise ImportError("openai module not installed.")
         return OpenAI
 
+    def get_llm_max_inflight(self) -> int:
+        try:
+            return max(1, int(self._llm_max_inflight))
+        except Exception:
+            return 8
+
+    @staticmethod
+    def _messages_contain_image_payload(messages: Any) -> bool:
+        try:
+            if not isinstance(messages, list):
+                return False
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content")
+                if not isinstance(content, list):
+                    continue
+                for item in content:
+                    if isinstance(item, dict) and str(item.get("type", "")).strip().lower() == "image_url":
+                        return True
+            return False
+        except Exception:
+            return False
+
     def _llm_create(self, **kwargs):
         if not self._client:
             raise RuntimeError("LLM client not initialized")
@@ -71,6 +103,18 @@ class LLMWorker:
         except Exception:
             timeout_s = 45.0
             max_retries = 0
+
+        # Vision page OCR is heavier than text-only calls; keep a safer timeout floor.
+        try:
+            if self._messages_contain_image_payload(kwargs.get("messages")):
+                raw_v_to = str(os.environ.get("KB_PDF_VISION_TIMEOUT_S", "120") or "120").strip()
+                try:
+                    vision_timeout_floor = float(raw_v_to)
+                except Exception:
+                    vision_timeout_floor = 120.0
+                timeout_s = max(float(timeout_s), max(30.0, min(300.0, vision_timeout_floor)))
+        except Exception:
+            pass
 
         last_err: Exception | None = None
         for attempt in range(max_retries + 1):
@@ -122,8 +166,13 @@ class LLMWorker:
         assert last_err is not None
         raise last_err
 
-    def _get_max_tokens_for_vision(self, speed_mode: str = 'normal') -> int:
-        """Get max_tokens for vision calls, allowing override via environment variable."""
+    def _get_max_tokens_for_vision(
+        self,
+        speed_mode: str = 'normal',
+        *,
+        is_references_page: bool = False,
+    ) -> int:
+        """Get max_tokens for vision calls, with an optional tighter cap for references pages."""
         try:
             raw = str(os.environ.get("KB_PDF_VISION_MAX_TOKENS", "") or "").strip()
             if raw:
@@ -137,10 +186,89 @@ class LLMWorker:
             'no_llm': 0,
         }
         default = defaults.get(speed_mode, 3072)
+        if is_references_page:
+            try:
+                raw_ref = str(os.environ.get("KB_PDF_VISION_REFS_MAX_TOKENS", "") or "").strip()
+                if raw_ref:
+                    default = max(1024, min(4096, int(raw_ref)))
+                else:
+                    # References OCR is text-dense; a lower cap cuts tail latency while preserving content.
+                    default = min(default, 2048)
+            except Exception:
+                default = min(default, 2048)
         config_val = int(getattr(self.cfg.llm, "max_tokens", 0) or 0)
         if config_val > 0:
+            if is_references_page:
+                return min(config_val, 3072)
             return min(config_val, 4096)  # Respect config but cap at 4096
         return default
+
+    def _sanitize_vl_markdown(self, md: str, *, is_references_page: bool = False) -> str:
+        """
+        Deterministic safety pass for VL page output.
+        - Cleanup false-math wrappers and split/garbled display math.
+        - For references pages, force plain-text citations (no math delimiters).
+        """
+        def _is_placeholder_line(s: str) -> bool:
+            t = (s or "").strip().lower()
+            if not t:
+                return False
+            # Common VL/OCR placeholders when text is clipped or low-confidence.
+            if "(incomplete visible)" in t:
+                return True
+            if "(partially visible)" in t:
+                return True
+            if "(not fully visible)" in t:
+                return True
+            if re.search(r"\b(?:incomplete|illegible|unreadable)\s+visible\b", t):
+                return True
+            if "[unreadable]" in t or "[illegible]" in t:
+                return True
+            return False
+
+        out = (md or "").strip()
+        if not out:
+            return ""
+
+        try:
+            out = fix_math_markdown(out)
+        except Exception:
+            pass
+        try:
+            out = _normalize_math_for_typora(out)
+        except Exception:
+            pass
+        # Repair malformed fenced code blocks early at page level so one bad fence
+        # cannot swallow all subsequent content in merged markdown.
+        try:
+            out = _fix_malformed_code_fences(out)
+        except Exception:
+            pass
+
+        if is_references_page:
+            lines = out.splitlines()
+            cleaned: list[str] = []
+            in_display_math = False
+            for ln in lines:
+                st = ln.strip()
+                if st == "$$":
+                    in_display_math = not in_display_math
+                    continue
+                if in_display_math:
+                    ln = st
+                # Remove inline math wrappers, keep content.
+                ln = re.sub(r"\$([^$\n]{1,400})\$", r"\1", ln)
+                ln = ln.replace("$$", "").replace("$", "")
+                if _is_placeholder_line(ln):
+                    continue
+                cleaned.append(ln)
+            out = "\n".join(cleaned)
+        else:
+            # Generic cleanup: drop explicit OCR placeholder lines that should
+            # never appear in final markdown content.
+            out = "\n".join(ln for ln in out.splitlines() if not _is_placeholder_line(ln))
+
+        return out.strip()
 
     def _cache_set(self, cache: dict, key: str, val) -> None:
         cache[key] = val
@@ -236,6 +364,10 @@ class LLMWorker:
         prompt = (
             f"Recover this garbled math equation from PDF page {page_number+1} {eq_hint}.\n"
             "Return ONLY the LaTeX code (no $/$$ delimiters, no \\begin{equation}/align).\n"
+            "Compatibility rules (strict):\n"
+            "- Output Typora/KaTeX-compatible LaTeX only.\n"
+            "- Do NOT use custom macros, \\newcommand, \\def, or \\DeclareMathOperator.\n"
+            "- Use standard operators: e.g., \\operatorname*{arg\\,min}, \\operatorname*{arg\\,max}.\n"
             "CRITICAL fidelity rules:\n"
             "- Do NOT invent new variable names or symbols.\n"
             "- Preserve the original identifiers as much as possible (e.g., M vs A, C vs X).\n"
@@ -346,6 +478,8 @@ class LLMWorker:
             "Return ONLY the LaTeX for the equation body.\n"
             "- No $/$$ delimiters\n"
             "- No \\begin{equation}/align environments\n"
+            "- Typora/KaTeX-compatible LaTeX only (no custom macros)\n"
+            "- No \\newcommand / \\def / \\DeclareMathOperator\n"
             "- No explanations\n"
             "Be exact and faithful to the image.\n"
         )
@@ -430,6 +564,7 @@ class LLMWorker:
         total_pages: int = 0,
         hint: str = "",
         speed_mode: str = 'normal',
+        is_references_page: bool = False,
     ) -> Optional[str]:
         """
         Vision-based full-page conversion: send a page screenshot to the VL model
@@ -451,81 +586,62 @@ class LLMWorker:
         page_hint += ")"
         extra = f"\nAdditional context: {hint}" if hint else ""
 
+        page_type_notice = ""
+        if is_references_page:
+            page_type_notice = (
+                "**PAGE TYPE: REFERENCES/BIBLIOGRAPHY**\n"
+                "- This page is references content.\n"
+                "- Output plain-text references only.\n"
+                "- One complete reference per line.\n"
+                "- If an item is clipped/uncertain, skip it (do not output placeholders).\n"
+                "- Do NOT use `$...$`, `$$...$$`, or code fences on this page.\n\n"
+            )
+
         prompt = (
-            f"Convert this PDF page image{page_hint} into **Markdown**.{extra}\n\n"
-            "**CRITICAL: Mathematical Formulas**\n"
-            "Mathematical formulas are the MOST IMPORTANT part. You must convert them with 100% accuracy:\n"
-            "- **Display equations** (centered, on their own line): Use $$...$$\n"
-            "- **Inline equations** (within text): Use $...$\n"
-            "- **Numbered equations**: Add \\tag{{N}} at the end, e.g. $$E=mc^2 \\tag{{1}}$$\n"
-            "- **CRITICAL: Keep formulas COMPLETE and on ONE line** — do NOT split long formulas across multiple lines.\n"
-            "  * If a formula is long, keep it in a single $$...$$ block, even if it wraps visually.\n"
-            "  * Do NOT break formulas at operators like =, +, -, etc.\n"
-            "- **Prime symbols and subscripts**: G'_i (NOT G' i), G'_{low} (NOT G' low)\n"
-            "- **Every symbol must be exact**: Greek letters (α, β, γ, δ, ε, θ, λ, μ, π, σ, φ, ω, etc.) → \\alpha, \\beta, \\gamma, \\delta, \\epsilon, \\theta, \\lambda, \\mu, \\pi, \\sigma, \\phi, \\omega\n"
-            "- **Subscripts are MANDATORY**: If you see a letter/number below the baseline, it MUST use _{...}\n"
-            "  * Examples: α_j (NOT \\alphaj), c_i (NOT ci), x_{ij} (NOT xij), \\partial c_j (NOT \\partial c j)\n"
-            "  * Single letter subscripts: use _{j}, _{i}, _{k}, etc.\n"
-            "  * Multi-character subscripts: use {{ij}}, {{max}}, {{min}}, etc.\n"
-            "- **Superscripts are MANDATORY**: If you see a letter/number above the baseline, it MUST use ^{...}\n"
-            "  * Examples: x^2 (NOT x2), x^{n+1} (NOT xn+1), e^{-x} (NOT e-x)\n"
-            "  * Single character superscripts: use ^2, ^n, ^T, etc.\n"
-            "  * Multi-character superscripts: use {{n+1}}, {{-1}}, {{T}}, etc.\n"
-            "- **Fractions**: Use \\frac{{numerator}}{{denominator}}\n"
-            "- **Sums, integrals, products**: Use \\sum, \\int, \\prod with proper limits: \\sum_{{i=1}}^{{n}}, \\int_{{a}}^{{b}}\n"
-            "- **Operators**: Use \\cdot, \\times, \\div, \\pm, \\mp, \\leq, \\geq, \\neq, \\approx, \\equiv\n"
-            "- **Sets and vectors**: Use \\mathbb{{R}}, \\mathbb{{N}}, \\mathbf{{x}}, \\vec{{v}}\n"
-            "- **Functions**: Use \\sin, \\cos, \\log, \\ln, \\exp, \\max, \\min\n"
-            "- **Brackets**: Use \\left(, \\right), \\left[, \\right], \\left\\{{, \\right\\}}\n"
-            "- **Special symbols**: \\infty, \\partial, \\nabla, \\forall, \\exists, \\in, \\subset, \\cup, \\cap\n"
-            "- **DO NOT simplify or approximate formulas** — reproduce them exactly as shown.\n"
-            "- **DO NOT replace symbols with words** — use LaTeX symbols only.\n"
-            "- **DO NOT skip any part of a formula** — include every term, operator, and symbol.\n\n"
-            "**CRITICAL: Tables**\n"
-            "- **ALL tables MUST be converted to Markdown format** — do NOT skip tables or convert them to plain text.\n"
-            "- Use proper Markdown table syntax:\n"
-            "  | Header 1 | Header 2 | Header 3 |\n"
-            "  | --- | --- | --- |\n"
-            "  | Cell 1 | Cell 2 | Cell 3 |\n"
-            "- **Every table row must be on a single line** — do NOT split cells across lines.\n"
-            "- **Preserve all table content** — include every cell, even if it contains formulas or special symbols.\n"
-            "- If a cell contains a formula, use $...$ or $$...$$ inside the cell.\n"
-            "- **Align columns properly** — use consistent spacing.\n\n"
-            "**CRITICAL: References Section**\n"
-            "- **References section MUST be plain text** — NO formulas, NO code blocks, NO math notation.\n"
-            "- **Each reference MUST be on a separate line** with a number label at the start.\n"
-            "- **Format**: Use numbered list format: `[1] Author, Title, Journal, Year` or `1. Author, Title, Journal, Year`\n"
-            "- **DO NOT use** `$$...$$`, `$...$`, or code blocks (```) in references.\n"
-            "- **DO NOT split** a single reference across multiple lines — keep each reference on ONE line.\n"
-            "- **If a reference spans multiple pages**, continue it on the same line (do NOT break it).\n"
-            "- **Preserve reference numbering** — if the PDF shows [1], [2], [3], keep those numbers.\n"
-            "- **Convert any formulas in references to plain text** — e.g., \"H_2O\" → \"H2O\" or \"H sub 2 O\".\n"
-            "- **Example format**:\n"
-            "  [1] Author A, Author B. Title of Paper. Journal Name, 2023.\n"
-            "  [2] Author C et al. Another Title. Conference Name, 2024.\n"
-            "  [3] Author D. Book Title. Publisher, 2022.\n\n"
-            "**Other Content**\n"
-            "1. Reproduce ALL text content faithfully — do NOT omit or summarise.\n"
-            "2. Use proper heading levels (# / ## / ###) matching the document hierarchy.\n"
-            "3. For figures / images: write ![Figure N](figure_N.png) with the caption below.\n"
-            "4. Keep bullet / numbered lists as-is.\n"
-            "5. Do NOT add any commentary, explanation, or notes of your own.\n"
-            "6. Return ONLY the Markdown content.\n"
+            f"Convert this PDF page image{page_hint} to Markdown.{extra}\n\n"
+            f"{page_type_notice}"
+            "Requirements (strict):\n"
+            "1. Reproduce all visible body text faithfully. Do not summarize.\n"
+            "2. Keep section hierarchy with Markdown headings: # / ## / ### / #### when appropriate.\n"
+            "3. Exclude non-body metadata (journal headers/footers, websites, page counters like '(n of m)', copyright/publisher boilerplate, isolated affiliation/contact/ORCID/DOI footer blocks).\n"
+            "4. Tables must be valid Markdown tables with all cells preserved.\n"
+            "5. Keep figure/image references and captions when present.\n"
+            "6. Use `$...$` or `$$...$$` ONLY for true mathematical expressions.\n"
+            "7. NEVER wrap prose, citations (`[12]`), headings, names, references, or metadata in math delimiters.\n"
+            "8. If one display equation is visually split across lines, reconstruct it into ONE coherent `$$...$$` block.\n"
+            "9. If equation number `(N)` is visible next to a display equation, append `\\tag{N}`.\n"
+            "10. LaTeX must be Typora/KaTeX-compatible. No custom macros (`\\newcommand`, `\\def`, `\\DeclareMathOperator`).\n"
+            "11. For references pages: plain-text references only, one full reference per line, keep `[N]` numbering, no math delimiters/code fences.\n"
+            "12. Never output placeholders like '(incomplete visible)', 'unreadable', 'illegible', or diagnostics.\n"
+            "13. Return ONLY Markdown content. Do not output explanations, diagnostics, or refusal text.\n"
         )
 
         if self.cfg.llm.request_sleep_s > 0:
             time.sleep(self.cfg.llm.request_sleep_s)
+
+        system_content = (
+            "You are an expert document converter. "
+            "You convert PDF page images into clean, faithful Markdown with correct LaTeX math. "
+            "All LaTeX must be Typora/KaTeX-compatible and must not rely on custom macro definitions. "
+            "Only mark true mathematical expressions with $...$ or $$...$$; never wrap prose/citations/metadata in math delimiters. "
+            "Exclude non-body metadata (author affiliation/contact blocks, journal headers/footers, DOI-only footer lines, copyright/publisher boilerplate). "
+            "Return ONLY the Markdown. No explanations."
+        )
+        if is_references_page:
+            system_content = (
+                "You are formatting an academic REFERENCES page. "
+                "Output plain text references only. One reference per line. "
+                "If an entry is cut off or uncertain, omit it instead of emitting placeholders. "
+                "Never use $...$ or $$...$$ or code fences. "
+                "Return ONLY Markdown plain-text lines."
+            )
 
         try:
             resp = self._llm_create(
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are an expert document converter. "
-                            "You convert PDF page images into clean, faithful Markdown with correct LaTeX math. "
-                            "Return ONLY the Markdown. No explanations."
-                        ),
+                        "content": system_content,
                     },
                     {
                         "role": "user",
@@ -536,10 +652,47 @@ class LLMWorker:
                     },
                 ],
                 temperature=0.0,
-                max_tokens=self._get_max_tokens_for_vision(),
+                max_tokens=self._get_max_tokens_for_vision(
+                    speed_mode=speed_mode,
+                    is_references_page=is_references_page,
+                ),
             )
         except Exception as e:
-            print(f"[VISION_PAGE] error page={page_number + 1} err={e!a}", flush=True)
+            error_str = str(e)
+            error_msg = f"[VISION_PAGE] error page={page_number + 1} err={e!a}"
+            
+            # Check for specific API errors (ASCII-only logs for Windows GBK consoles).
+            if "Access denied" in error_str or "account is in good standing" in error_str:
+                print(f"{error_msg}", flush=True)
+                print(
+                    "[VISION_PAGE] API access denied. Check API key, account balance/status, and rate limits.",
+                    flush=True,
+                )
+                print(
+                    "[VISION_PAGE] Help: https://help.aliyun.com/zh/model-studio/error",
+                    flush=True,
+                )
+            elif "400" in error_str or "BadRequestError" in error_str:
+                print(f"{error_msg}", flush=True)
+                if "image_url" in error_str and "expected `text`" in error_str:
+                    print(
+                        "[VISION_PAGE] API rejected image payload. The current model/provider endpoint likely does not support this vision message format.",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "[VISION_PAGE] API bad request (400). Check model capability and request schema.",
+                        flush=True,
+                    )
+            elif "401" in error_str or "Unauthorized" in error_str:
+                print(f"{error_msg}", flush=True)
+                print("[VISION_PAGE] API authentication failed (401). Check API key.", flush=True)
+            elif "429" in error_str or "rate limit" in error_str.lower():
+                print(f"{error_msg}", flush=True)
+                print("[VISION_PAGE] API rate limited (429). Retry later.", flush=True)
+            else:
+                print(f"{error_msg}", flush=True)
+            
             return None
 
         out = (resp.choices[0].message.content or "").strip()
@@ -556,6 +709,10 @@ class LLMWorker:
             if out.endswith("```"):
                 out = out[:-3]
             out = out.strip()
+        try:
+            out = self._sanitize_vl_markdown(out, is_references_page=is_references_page)
+        except Exception:
+            pass
         return out or None
 
     def call_llm_confirm_and_level_heading(
