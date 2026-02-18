@@ -1568,7 +1568,8 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
     st.caption(S["batch_upload"])
 
     handled: dict = st.session_state.setdefault("upload_handled", {})
-    ups = st.file_uploader("PDF", type=["pdf"], accept_multiple_files=True)
+    # Use a unique key to prevent duplicate file uploaders
+    ups = st.file_uploader("PDF", type=["pdf"], accept_multiple_files=True, key="pdf_uploader_main")
 
     if ups:
         for n, up in enumerate(ups, start=1):
