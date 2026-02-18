@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import html
@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+import difflib
 from pathlib import Path
 from urllib.parse import quote
 
@@ -579,8 +580,6 @@ def _render_refs(
     pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
     pdf_root = Path(pdf_root_str) if pdf_root_str else None
     show_context = bool(st.session_state.get("show_context") or False)
-    if not show_context:
-        st.markdown("<div class='ref-muted-note'>Snippet preview is off.</div>", unsafe_allow_html=True)
 
     for i, h in enumerate(filtered_hits, start=1):
         meta = h.get("meta", {}) or {}
@@ -591,57 +590,48 @@ def _render_refs(
 
         # Basic Info
         source_label = _display_source_name(source_path)
-        heading_label = _trim_middle(heading, max_len=60) if heading else "Section not tagged"
+        heading_label = heading if heading else ""  # Use full heading, not truncated
         score_s = f"{score:.2f}" if score > 0 else "-"
         score_tier = _score_tier(score)
 
         source_attr = html.escape(source_label, quote=True)
-        heading_attr = html.escape(heading_label, quote=True)
+        heading_attr = html.escape(heading, quote=True) if heading else ""
         source_html = html.escape(source_label)
-        heading_html = html.escape(heading_label)
+        heading_html = html.escape(heading) if heading else ""
         page_chip = f"<span class='ref-chip'>p.{int(page)}</span>" if page else ""
-
-        # Render the Reference Card
-        st.markdown(
-            (
-                "<div class='ref-item'>"
-                "<div class='ref-item-top'>"
-                f"<span class='ref-rank'>#{i}</span>"
-                f"<span class='ref-source' title='{source_attr}'>{source_html}</span>"
-                f"{page_chip}"
-                f"<span class='ref-score ref-score-{score_tier}'>score {score_s}</span>"
-                "</div>"
-                f"<div class='ref-item-sub' title='{heading_attr}'>{heading_html}</div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
-        )
-
-        # Render Snippet
-        text = _snippet(str(h.get("text") or ""), heading=heading)
-        if show_context and text:
-            st.markdown(
-                f"<div class='snipbox'><pre>{html.escape(text)}</pre></div>",
-                unsafe_allow_html=True,
-            )
 
         pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
         has_pdf = bool(pdf_path)
-        # Stable uid: independent from ranking index, so Cite toggle won't require a second click.
         uid = hashlib.sha1(str(source_path).encode("utf-8", "ignore")).hexdigest()[:10]
+        cite_key = f"{key_ns}_cite_visible_{uid}"
+        net_key = f"{key_ns}_net_meta_v5_{uid}"
+        is_cite_open = st.session_state.get(cite_key, False)
 
-        # UI: Open | Page | Cite
-        cols = st.columns([0.85, 0.85, 0.85, 7.5])
-
-        with cols[0]:
+        # Compact layout: rank, filename, buttons, score on one line
+        # Tighter spacing: buttons moved right and closer together
+        header_cols = st.columns([0.28, 3.2, 0.55, 0.55, 0.55, 0.4, 0.5])
+        
+        with header_cols[0]:
+            st.markdown(
+                f"<div style='display:flex; align-items:center; height:100%;'><span class='ref-rank'>#{i}</span></div>",
+                unsafe_allow_html=True
+            )
+        
+        with header_cols[1]:
+            st.markdown(
+                f"<div style='display:flex; align-items:center; height:100%;'><span class='ref-source-compact' title='{source_attr}'>{source_html}</span></div>",
+                unsafe_allow_html=True
+            )
+        
+        with header_cols[2]:
             if st.button("Open", key=f"{key_ns}_open_pdf_{uid}", help="Open PDF", disabled=(not has_pdf)):
                 if refs_open_key:
                     st.session_state[refs_open_key] = True
                 ok, msg = _open_pdf(pdf_path)
                 if not ok:
                     st.warning(msg)
-
-        with cols[1]:
+        
+        with header_cols[3]:
             disabled_page = (page is None) or (not has_pdf)
             if st.button("Page", key=f"{key_ns}_open_page_{uid}", disabled=disabled_page,
                          help=f"Go to page {page}" if page else "Page unknown"):
@@ -650,29 +640,517 @@ def _render_refs(
                 ok, msg = _open_pdf_at(pdf_path, page=page)
                 if not ok:
                     st.warning(msg)
-
-        with cols[2]:
-            cite_key = f"{key_ns}_cite_visible_{uid}"
-            net_key = f"{key_ns}_net_meta_v5_{uid}"  # v5 cache key
-            is_cite_open = st.session_state.get(cite_key, False)
+        
+        with header_cols[4]:
             btn_label = "Close" if is_cite_open else "Cite"
-
-            # Use CALLBACK to avoid UI flicker/rerun issues
             st.button(
                 btn_label,
                 key=f"{key_ns}_cite_btn_{uid}",
-                help="Fetch citation (Auto-fetch from Crossref)",
+                help="Fetch citation",
                 on_click=_on_cite_click,
                 args=(cite_key, net_key, source_path, refs_open_key)
+            )
+        
+        with header_cols[5]:
+            if page_chip:
+                st.markdown(f"<div style='display:flex; align-items:center; height:100%;'>{page_chip}</div>", unsafe_allow_html=True)
+        
+        with header_cols[6]:
+            st.markdown(
+                f"<div style='display:flex; align-items:center; height:100%;'><span class='ref-score ref-score-{score_tier}'>score {score_s}</span></div>",
+                unsafe_allow_html=True
+            )
+        
+        # Subtitle (heading) if available
+        if heading_label:
+            st.markdown(
+                f"<div class='ref-item-sub-compact' title='{heading_attr}'>{heading_html}</div>",
+                unsafe_allow_html=True
+            )
+
+        # Render Snippet (only if enabled and has text)
+        text = _snippet(str(h.get("text") or ""), heading=heading)
+        if show_context and text:
+            st.markdown(
+                f"<div class='snipbox-compact'><pre>{html.escape(text)}</pre></div>",
+                unsafe_allow_html=True,
             )
 
         # Render Citation UI (if open)
         if st.session_state.get(cite_key, False):
             _render_citation_ui(uid, source_path, key_ns)
-        elif not has_pdf:
-            st.caption("未定位到对应 PDF（可继续使用 Cite）。")
 
-        st.markdown("<div class='ref-item-gap'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='ref-item-gap-compact'></div>", unsafe_allow_html=True)
+
+
+# --- In-paper citation number resolver (e.g., "[45]" in body text) ---
+
+_INPAPER_CITE_RE = re.compile(r"\[(\d{1,4})\]")
+
+
+_EQ_TAG_RE = re.compile(r"\\tag\{(\d{1,4})\}")
+
+
+def _iter_display_math_blocks(md: str) -> list[tuple[int, int, str]]:
+    """
+    Return list of (start_line_idx, end_line_idx_exclusive, inner_text) for $$...$$ blocks.
+    """
+    s = (md or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not s.strip():
+        return []
+    lines = s.split("\n")
+    out: list[tuple[int, int, str]] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() != "$$":
+            i += 1
+            continue
+        j = i + 1
+        buf: list[str] = []
+        while j < len(lines) and lines[j].strip() != "$$":
+            buf.append(lines[j])
+            j += 1
+        if j < len(lines) and lines[j].strip() == "$$":
+            inner = "\n".join(buf).strip()
+            out.append((i, j + 1, inner))
+            i = j + 1
+            continue
+        # Unclosed $$, stop scanning
+        break
+    return out
+
+
+def _norm_eq_for_match(eq: str) -> str:
+    t = str(eq or "")
+    if not t:
+        return ""
+    # Drop tags and comments, normalize whitespace.
+    t = _EQ_TAG_RE.sub("", t)
+    t = re.sub(r"(?m)%.*$", "", t)
+    t = t.replace("\\left", "").replace("\\right", "")
+    t = re.sub(r"\s+", "", t)
+    return t.strip()
+
+
+def _best_eq_source_for_tag(
+    eq_inner: str,
+    tag_n: int,
+    hits: list[dict],
+) -> tuple[int, str] | None:
+    """
+    Infer which ref entry (1-based index into hits) this equation likely comes from,
+    by matching equation content against snippets in hits.
+    Returns (ref_rank, source_label) or None.
+    """
+    target = _norm_eq_for_match(eq_inner)
+    if not target or not hits:
+        return None
+
+    best_i = 0
+    best_label = ""
+    best_score = -1.0
+
+    for i, h in enumerate(hits or [], start=1):
+        meta = h.get("meta", {}) or {}
+        src = str(meta.get("source_path") or "").strip()
+        if not src:
+            continue
+        label = _display_source_name(src)
+
+        # Candidate snippet texts (small, fast): primary snippet + extra snippets if present
+        snips: list[str] = []
+        t0 = str(h.get("text") or "").strip()
+        if t0:
+            snips.append(t0)
+        rs = meta.get("ref_snippets")
+        if isinstance(rs, list):
+            for x in rs[:3]:
+                s2 = str(x or "").strip()
+                if s2 and s2 not in snips:
+                    snips.append(s2)
+
+        # Scan snippets for equations with the same tag number
+        for sn in snips:
+            for _si, _sj, inner in _iter_display_math_blocks(sn):
+                m = _EQ_TAG_RE.search(inner or "")
+                if not m:
+                    continue
+                try:
+                    n2 = int(m.group(1))
+                except Exception:
+                    continue
+                if int(n2) != int(tag_n):
+                    continue
+                cand = _norm_eq_for_match(inner)
+                if not cand:
+                    continue
+                if cand == target:
+                    return i, label
+                try:
+                    sc = difflib.SequenceMatcher(None, target, cand).ratio()
+                except Exception:
+                    sc = 0.0
+                if sc > best_score:
+                    best_score = sc
+                    best_i = i
+                    best_label = label
+
+    if best_i > 0 and best_score >= 0.72:
+        return best_i, best_label
+
+    # Fallback: if only one source, assume it's from there.
+    if len(hits or []) == 1:
+        meta0 = (hits[0] or {}).get("meta", {}) or {}
+        src0 = str(meta0.get("source_path") or "").strip()
+        if src0:
+            return 1, _display_source_name(src0)
+    return None
+
+
+def _annotate_equation_tags_with_sources(md: str, hits: list[dict]) -> str:
+    """
+    Add a small note under display equations with \\tag{n}:
+    '式(n) 来自参考定位 #k: filename'
+    """
+    s = (md or "").replace("\r\n", "\n").replace("\r", "\n")
+    if "$$" not in s or "\\tag{" not in s:
+        return md
+    lines = s.split("\n")
+    blocks = _iter_display_math_blocks(s)
+    if not blocks:
+        return md
+
+    # Mark block boundaries for quick lookup
+    block_by_start: dict[int, tuple[int, str]] = {}
+    for si, sj, inner in blocks:
+        m = _EQ_TAG_RE.search(inner or "")
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except Exception:
+            continue
+        block_by_start[si] = (n, inner)
+
+    if not block_by_start:
+        return md
+
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if i not in block_by_start:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        # Copy the whole $$...$$ block as-is
+        # Find its end
+        j = i + 1
+        out.append(lines[i])
+        while j < len(lines):
+            out.append(lines[j])
+            if lines[j].strip() == "$$":
+                break
+            j += 1
+        # Annotate under it
+        tag_n, inner = block_by_start[i]
+        picked = _best_eq_source_for_tag(inner, tag_n, hits or [])
+        if picked:
+            ref_rank, label = picked
+            out.append(f"*（式({int(tag_n)}) 来自参考定位 #{int(ref_rank)}：`{label}`，可在下方参考定位点 Open/Page）*")
+        out.append("")
+        i = j + 1
+
+    return "\n".join(out)
+
+
+def _extract_inpaper_cite_numbers(text: str, *, min_n: int = 10, max_n: int = 9999) -> list[int]:
+    s = str(text or "")
+    if not s:
+        return []
+    out: set[int] = set()
+    for m in _INPAPER_CITE_RE.finditer(s):
+        try:
+            n = int(m.group(1))
+        except Exception:
+            continue
+        if n < int(min_n) or n > int(max_n):
+            continue
+        out.add(n)
+        if len(out) >= 60:
+            break
+    return sorted(out)
+
+
+def _parse_int_set(spec: str) -> list[int]:
+    """
+    Parse: "45,46-49  52" -> [45,46,47,48,49,52]
+    """
+    s = (spec or "").strip()
+    if not s:
+        return []
+    s = s.replace("，", ",").replace("；", ",").replace(";", ",")
+    parts = re.split(r"[,\s]+", s)
+    out: set[int] = set()
+    for p in parts:
+        t = (p or "").strip()
+        if not t:
+            continue
+        t = t.replace("—", "-").replace("–", "-")
+        if "-" in t:
+            a, b = t.split("-", 1)
+            a = a.strip()
+            b = b.strip()
+            try:
+                x = int(a)
+                y = int(b)
+            except Exception:
+                continue
+            if x <= 0 or y <= 0:
+                continue
+            if x > y:
+                x, y = y, x
+            # keep bounded to avoid accidental huge ranges
+            if (y - x) > 500:
+                continue
+            for k in range(x, y + 1):
+                out.add(k)
+        else:
+            try:
+                out.add(int(t))
+            except Exception:
+                continue
+    return sorted(n for n in out if n > 0)
+
+
+def _read_text_tail(path: Path, *, max_bytes: int = 1_200_000) -> str:
+    """
+    Read the tail of a text file (references usually at the end).
+    Returns UTF-8 decoded text with errors ignored.
+    """
+    p = Path(path)
+    if not p.exists():
+        return ""
+    try:
+        size = int(p.stat().st_size)
+    except Exception:
+        size = 0
+    try:
+        if size <= int(max_bytes) or size <= 0:
+            return p.read_text(encoding="utf-8", errors="ignore")
+        with open(p, "rb") as f:
+            f.seek(max(0, size - int(max_bytes)))
+            raw = f.read(int(max_bytes))
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _extract_references_map_from_md(md_text: str) -> dict[int, str]:
+    """
+    Extract numbered references from a converted Markdown doc:
+    - Find "## References" (or similar)
+    - Parse entries starting with "[n] ..."
+    - Merge wrapped continuation lines
+    """
+    md = (md_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not md.strip():
+        return {}
+    lines = md.split("\n")
+    ref_i = None
+    for i, ln in enumerate(lines):
+        if re.match(r"^#{1,6}\s+(References|Bibliography)\b", (ln or "").strip(), re.IGNORECASE):
+            ref_i = i
+            break
+    if ref_i is None:
+        return {}
+
+    tail = lines[ref_i + 1 :]
+    start_re = re.compile(r"^\[(\d+)\]\s+(.*\S)?\s*$")
+    cur_n: int | None = None
+    cur_buf: list[str] = []
+    out: dict[int, str] = {}
+
+    def _flush():
+        nonlocal cur_n, cur_buf
+        if cur_n is None:
+            cur_buf = []
+            return
+        merged = " ".join(x.strip() for x in cur_buf if str(x or "").strip()).strip()
+        if merged:
+            out[int(cur_n)] = merged
+        cur_n = None
+        cur_buf = []
+
+    for raw in tail:
+        s = (raw or "").strip()
+        if not s:
+            continue
+        # Stop when reaching a new major section (rare but happens in some conversions)
+        if re.match(r"^#{1,6}\s+\S+", s) and ("references" not in s.lower()) and ("bibliography" not in s.lower()):
+            # Only stop if we have already collected some refs
+            if out:
+                break
+        m = start_re.match(s)
+        if m:
+            _flush()
+            try:
+                cur_n = int(m.group(1))
+            except Exception:
+                cur_n = None
+                continue
+            rest = (m.group(2) or "").strip()
+            cur_buf = [f"[{cur_n}] {rest}".strip()] if rest else [f"[{cur_n}]".strip()]
+            continue
+        # Continuation line
+        if cur_n is not None:
+            cur_buf.append(s)
+
+    _flush()
+    return out
+
+
+def _load_references_map_for_source(source_path: str) -> dict[int, str]:
+    p = _resolve_source_doc_path(source_path)
+    if not p:
+        return {}
+    # Prefer tail read (references at end), but still works for small docs.
+    txt = _read_text_tail(p, max_bytes=1_200_000)
+    return _extract_references_map_from_md(txt)
+
+
+def _render_inpaper_citation_resolver(
+    hits: list[dict],
+    *,
+    assistant_text: str,
+    key_ns: str,
+) -> None:
+    """
+    UI helper: resolve in-paper citation numbers like [45] to actual reference entries,
+    by reading the converted Markdown source doc and parsing its References section.
+    """
+    # Candidate sources from retrieved docs
+    srcs: list[str] = []
+    for h in hits or []:
+        meta = h.get("meta", {}) or {}
+        sp = str(meta.get("source_path") or "").strip()
+        if not sp or _is_temp_source_path(sp):
+            continue
+        if sp not in srcs:
+            srcs.append(sp)
+        if len(srcs) >= 20:
+            break
+    if not srcs:
+        return
+
+    cited = _extract_inpaper_cite_numbers(assistant_text or "", min_n=10)
+    if not cited:
+        return
+
+    st.markdown("---")
+    st.markdown("#### 文内引用编号解析（例如 [45]）")
+    open_key = f"{key_ns}_inpaper_open"
+    is_open = st.checkbox(
+        "展开解析（不会影响回答里的 [1][2] 知识库来源编号）",
+        value=bool(st.session_state.get(open_key) or False),
+        key=open_key,
+    )
+    if not is_open:
+        return
+
+    st.caption("提示：这里解析的是原文里的 [10+] 这类引用编号（例如 [45]），用于反查 References 列表。")
+
+    # Select a source doc to resolve against
+    labels = [_display_source_name(s) for s in srcs]
+    opts = list(range(len(srcs)))
+    default_idx = 0
+    sel = st.selectbox(
+        "选择要解析的来源文档",
+        options=opts,
+        format_func=lambda i: labels[int(i)],
+        index=default_idx,
+        key=f"{key_ns}_inpaper_src_sel",
+    )
+    try:
+        source_path = srcs[int(sel)]
+    except Exception:
+        source_path = srcs[0]
+
+    default_spec = ",".join(str(x) for x in cited[:20])
+    spec = st.text_input(
+        "要解析的编号（支持 45,46-49）",
+        value=default_spec,
+        key=f"{key_ns}_inpaper_spec",
+    )
+    want_nums = _parse_int_set(spec)[:80]
+
+    use_crossref = st.checkbox(
+        "尝试用 Crossref 补全（需要联网，可能较慢）",
+        value=False,
+        key=f"{key_ns}_inpaper_crossref",
+    )
+
+    # Cache by (source_path, mtime) in session_state to avoid repeated file reads across reruns
+    cache_key = f"{key_ns}_inpaper_refmap_cache"
+    cache = st.session_state.get(cache_key)
+    if not isinstance(cache, dict):
+        cache = {}
+        st.session_state[cache_key] = cache
+
+    mtime = ""
+    p = _resolve_source_doc_path(source_path)
+    if p:
+        try:
+            mtime = str(int(p.stat().st_mtime))
+        except Exception:
+            mtime = ""
+    map_key = f"{source_path}|{mtime}"
+
+    refmap = cache.get(map_key)
+    if not isinstance(refmap, dict):
+        refmap = _load_references_map_for_source(source_path)
+        cache[map_key] = refmap
+
+    if not refmap:
+        st.warning("未在该文档中检测到 `References/Bibliography` 段落或可解析的 `[n]` 条目。可能该文档还没转换完，或原文未包含参考文献。")
+        return
+
+    missing: list[int] = []
+    shown = 0
+    for n in want_nums:
+        entry = refmap.get(int(n))
+        if not entry:
+            missing.append(int(n))
+            continue
+
+        shown += 1
+        if not use_crossref:
+            st.markdown(f"**[{int(n)}]** {entry}")
+            continue
+
+        doi = extract_first_doi(entry)
+        if doi:
+            meta = fetch_best_crossref_meta(query_title="", doi_hint=doi, allow_title_only=False)
+        else:
+            meta = None
+        if isinstance(meta, dict) and str(meta.get("title") or "").strip():
+            title = str(meta.get("title") or "").strip()
+            year = str(meta.get("year") or "").strip()
+            venue = str(meta.get("venue") or "").strip()
+            doi2 = str(meta.get("doi") or doi or "").strip()
+            extra = " | ".join(x for x in [year, venue, (f"DOI: {doi2}" if doi2 else "")] if x)
+            st.markdown(f"**[{int(n)}]** {title}" + (f"  \n{extra}" if extra else ""))
+            st.caption(entry)
+        else:
+            st.markdown(f"**[{int(n)}]** {entry}")
+
+        if shown >= 40:
+            st.caption("（条目较多，已截断显示）")
+            break
+
+    if missing:
+        miss_s = ", ".join(f"[{x}]" for x in missing[:20])
+        st.caption(f"未找到这些编号：{miss_s}" + (" …" if len(missing) > 20 else ""))
 
 
 def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
@@ -703,35 +1181,20 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
                 #    RUNTIME.CITATION_TASKS.pop(task_id, None)
                 st.experimental_rerun()
             else:
-                # Still running
-                with st.container():
-                     st.markdown(
-                        "<div style='background:rgba(128,128,128,0.06); padding:10px; border-radius:8px; margin-top:5px; margin-bottom:10px; border:1px solid rgba(128,128,128,0.15);'>"
-                        "<div style='margin-bottom:8px; font-weight:600; font-size:0.9em; color:#666;'>Citation Export</div>"
-                        "<div style='font-size:0.9em; color:#666;'>正在联网检索元数据 (Crossref)...</div>"
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
-                     # Poll again shortly
-                     time.sleep(0.5) 
-                     st.experimental_rerun()
+                # Still running - show minimal loading indicator
+                st.markdown(
+                    "<div class='citation-loading'>检索中...</div>",
+                    unsafe_allow_html=True,
+                )
+                time.sleep(0.5) 
+                st.experimental_rerun()
                 return
         else:
              # Should not happen if button clicked, but safety fallback
              pass
 
     if not isinstance(net_data, dict):
-        with st.container():
-            st.markdown(
-                "<div style='background:rgba(128,128,128,0.06); padding:10px; border-radius:8px; margin-top:5px; margin-bottom:10px; border:1px solid rgba(128,128,128,0.15);'>"
-                "<div style='margin-bottom:8px; font-weight:600; font-size:0.9em;'>Citation Export</div>",
-                unsafe_allow_html=True,
-            )
-            if fetch_failed:
-                st.info("未识别出可靠引用信息。为保证准确性，此条不自动生成 Cite。")
-            else:
-                st.info("点击 Cite 后未获得可用元数据。")
-            st.markdown("</div>", unsafe_allow_html=True)
+        # Silently fail - don't show error messages
         return
 
     d_title = str(net_data.get("title") or "").strip()
@@ -746,14 +1209,6 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
     match_score = float(net_data.get("match_score") or 0.0)
 
     if not d_title:
-        with st.container():
-            st.markdown(
-                "<div style='background:rgba(128,128,128,0.06); padding:10px; border-radius:8px; margin-top:5px; margin-bottom:10px; border:1px solid rgba(128,128,128,0.15);'>"
-                "<div style='margin-bottom:8px; font-weight:600; font-size:0.9em;'>Citation Export</div>",
-                unsafe_allow_html=True,
-            )
-            st.info("未识别出可靠标题。为保证准确性，此条不自动生成 Cite。")
-            st.markdown("</div>", unsafe_allow_html=True)
         return
 
     gbt_suffix = f", {d_year}"
@@ -775,19 +1230,9 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
   year={{{d_year}}},
 {bib_extras}}}"""
 
-    with st.container():
-        st.markdown(
-            "<div style='background:rgba(128,128,128,0.06); padding:10px; border-radius:8px; margin-top:5px; margin-bottom:10px; border:1px solid rgba(128,128,128,0.15);'>"
-            "<div style='margin-bottom:8px; font-weight:600; font-size:0.9em;'>Citation Export</div>",
-            unsafe_allow_html=True
-        )
-        st.caption(f"Source: Crossref ({match_method}, confidence {match_score:.2f})")
-
-
-        t1, t2 = st.tabs(["GB/T 7714", "BibTeX"])
-        with t1:
-            st.code(gbt_str, language="text")
-        with t2:
-            st.code(bib_str, language="latex")
-
-        st.markdown("</div>", unsafe_allow_html=True)
+    # Compact citation UI - no extra container, just tabs
+    t1, t2 = st.tabs(["GB/T 7714", "BibTeX"])
+    with t1:
+        st.code(gbt_str, language="text")
+    with t2:
+        st.code(bib_str, language="latex")
