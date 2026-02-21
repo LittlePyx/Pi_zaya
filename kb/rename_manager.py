@@ -4,6 +4,7 @@ import hashlib
 import html
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,9 @@ from kb.pdf_tools import (
     open_in_explorer,
 )
 
+_RENAME_BASE_MAX = 88
+_MD_IGNORED_MAIN_NAMES = {"assets_manifest.md", "quality_report.md"}
+
 
 def _sanitize_filename_component(text: str) -> str:
     normalized = (text or "").strip()
@@ -26,7 +30,218 @@ def _sanitize_filename_component(text: str) -> str:
     normalized = re.sub(r'[<>:"/\\\\|?*]+', "-", normalized)
     normalized = normalized.replace("\u0000", "").strip()
     normalized = normalized.strip(" .-_")
+    if len(normalized) > _RENAME_BASE_MAX:
+        digest = hashlib.sha1(normalized.encode("utf-8", "ignore")).hexdigest()[:8]
+        keep = max(12, _RENAME_BASE_MAX - len(digest) - 1)
+        normalized = normalized[:keep].rstrip(" .-_") + "-" + digest
     return normalized
+
+
+def _to_os_path(path_like: Path | str) -> str:
+    p = Path(path_like).expanduser()
+    try:
+        s = str(p.resolve(strict=False))
+    except Exception:
+        s = str(p)
+    if os.name != "nt":
+        return s
+    if s.startswith("\\\\?\\"):
+        return s
+    if s.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + s.lstrip("\\")
+    return "\\\\?\\" + s
+
+
+def _path_exists(path_like: Path | str) -> bool:
+    try:
+        return bool(os.path.exists(_to_os_path(path_like)))
+    except Exception:
+        try:
+            return Path(path_like).exists()
+        except Exception:
+            return False
+
+
+def _path_is_dir(path_like: Path | str) -> bool:
+    try:
+        return bool(os.path.isdir(_to_os_path(path_like)))
+    except Exception:
+        try:
+            return Path(path_like).is_dir()
+        except Exception:
+            return False
+
+
+def _path_is_file(path_like: Path | str) -> bool:
+    try:
+        return bool(os.path.isfile(_to_os_path(path_like)))
+    except Exception:
+        try:
+            return Path(path_like).is_file()
+        except Exception:
+            return False
+
+
+def _safe_move_path(src: Path, dst: Path) -> bool:
+    src_os = _to_os_path(src)
+    dst_os = _to_os_path(dst)
+    try:
+        os.makedirs(os.path.dirname(dst_os), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        os.replace(src_os, dst_os)
+        return True
+    except Exception:
+        pass
+    try:
+        src.rename(dst)
+        return True
+    except Exception:
+        pass
+    try:
+        shutil.move(src_os, dst_os)
+        return True
+    except Exception:
+        return False
+
+
+def _safe_move_file(src: Path, dst: Path) -> bool:
+    if src == dst:
+        return True
+    src_os = _to_os_path(src)
+    dst_os = _to_os_path(dst)
+    try:
+        os.makedirs(os.path.dirname(dst_os), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(dst_os):
+            os.remove(dst_os)
+    except Exception:
+        pass
+    try:
+        os.replace(src_os, dst_os)
+        return True
+    except Exception:
+        pass
+    try:
+        with open(src_os, "rb") as fr, open(dst_os, "wb") as fw:
+            shutil.copyfileobj(fr, fw, length=1024 * 1024)
+        try:
+            os.remove(src_os)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _copy_file_no_overwrite(src: str, dst: str) -> str:
+    if os.path.exists(dst):
+        return dst
+    return shutil.copy2(src, dst)
+
+
+def _merge_dir_no_overwrite(src_dir: Path, dst_dir: Path) -> bool:
+    src_os = _to_os_path(src_dir)
+    dst_os = _to_os_path(dst_dir)
+    try:
+        shutil.copytree(src_os, dst_os, dirs_exist_ok=True, copy_function=_copy_file_no_overwrite)
+    except Exception:
+        return False
+    try:
+        shutil.rmtree(src_os, ignore_errors=True)
+    except Exception:
+        pass
+    return True
+
+
+def _pick_md_main_candidate(folder: Path, old_stem: str, new_stem: str) -> Path | None:
+    if not _path_is_dir(folder):
+        return None
+    preferred = [
+        folder / f"{old_stem}.en.md",
+        folder / "output.md",
+    ]
+    for p in preferred:
+        if _path_is_file(p):
+            return p
+    en_cands: list[Path] = []
+    any_cands: list[Path] = []
+    try:
+        with os.scandir(_to_os_path(folder)) as it:
+            for e in it:
+                try:
+                    if not e.is_file():
+                        continue
+                except Exception:
+                    continue
+                name = str(e.name or "")
+                low = name.lower()
+                if not low.endswith(".md"):
+                    continue
+                if low in _MD_IGNORED_MAIN_NAMES:
+                    continue
+                if low == f"{new_stem}.en.md".lower():
+                    continue
+                p = Path(folder) / name
+                any_cands.append(p)
+                if low.endswith(".en.md"):
+                    en_cands.append(p)
+    except Exception:
+        return None
+    if en_cands:
+        return sorted(en_cands, key=lambda x: x.name.lower())[0]
+    if any_cands:
+        return sorted(any_cands, key=lambda x: x.name.lower())[0]
+    return None
+
+
+def _sync_md_after_pdf_rename(*, src_pdf: Path, dest_pdf: Path, md_out_root: Path) -> tuple[bool, str]:
+    old_folder = Path(md_out_root) / src_pdf.stem
+    new_folder = Path(md_out_root) / dest_pdf.stem
+    target_folder: Path | None = None
+
+    try:
+        old_exists = _path_is_dir(old_folder)
+        new_exists = _path_is_dir(new_folder)
+
+        if old_exists and (not new_exists):
+            moved = _safe_move_path(old_folder, new_folder)
+            if not moved:
+                copied = _merge_dir_no_overwrite(old_folder, new_folder)
+                if not copied:
+                    return False, f"MD folder move failed: {old_folder.name} -> {new_folder.name}"
+            target_folder = new_folder
+        elif old_exists and new_exists:
+            merged = _merge_dir_no_overwrite(old_folder, new_folder)
+            if not merged:
+                return False, f"MD folder merge failed: {old_folder.name} -> {new_folder.name}"
+            target_folder = new_folder
+        elif new_exists:
+            target_folder = new_folder
+        else:
+            # No generated MD folder yet; not an error for rename flow.
+            return True, "No MD folder found, skipped"
+
+        if (target_folder is None) or (not _path_is_dir(target_folder)):
+            return False, "MD target folder missing after sync"
+
+        new_main = target_folder / f"{dest_pdf.stem}.en.md"
+        if _path_is_file(new_main):
+            return True, f"MD synced: {target_folder.name}"
+
+        cand = _pick_md_main_candidate(target_folder, src_pdf.stem, dest_pdf.stem)
+        if cand is not None:
+            ok = _safe_move_file(cand, new_main)
+            if ok:
+                return True, f"MD main renamed: {cand.name} -> {new_main.name}"
+            return False, f"MD main rename failed: {cand.name} -> {new_main.name}"
+
+        return True, f"MD folder synced: {target_folder.name}"
+    except Exception as e:
+        return False, f"MD sync exception: {e}"
 
 
 def _muted(text: str) -> None:
@@ -50,9 +265,15 @@ def _unique_pdf_path(pdf_dir: Path, base: str) -> Path:
     if not dest.exists():
         return dest
     suffix = 2
-    while (Path(pdf_dir) / f"{base_name}-{suffix}.pdf").exists() and suffix < 999:
+    while True:
+        tail = f"-{suffix}"
+        stem = base_name
+        if len(stem) + len(tail) > _RENAME_BASE_MAX:
+            stem = stem[: max(8, _RENAME_BASE_MAX - len(tail))].rstrip(" .-_")
+        cand = Path(pdf_dir) / f"{stem}{tail}.pdf"
+        if (not cand.exists()) or (suffix >= 999):
+            return cand
         suffix += 1
-    return Path(pdf_dir) / f"{base_name}-{suffix}.pdf"
 
 
 def _select_recent_pdf_paths(pdf_dir: Path, n: int) -> list[Path]:
@@ -211,7 +432,20 @@ def _scan_rows(
                     suggestion = PdfMetaSuggestion()
                 meta_cache[cache_key] = suggestion
 
-            base = build_base_name(venue=suggestion.venue, year=suggestion.year, title=suggestion.title).strip()
+            md_out_root = None
+            try:
+                maybe_root = getattr(settings, "md_out_root", None) if settings is not None else None
+                if maybe_root:
+                    md_out_root = Path(maybe_root)
+            except Exception:
+                md_out_root = None
+            base = build_base_name(
+                venue=suggestion.venue,
+                year=suggestion.year,
+                title=suggestion.title,
+                pdf_dir=pdf_dir,
+                md_out_root=md_out_root,
+            ).strip()
             rows.append(
                 {
                     "path": str(pdf),
@@ -365,7 +599,9 @@ def _apply_renames(
 
         dest = _unique_pdf_path(pdf_dir, new_base)
         try:
-            src.rename(dest)
+            moved_pdf = _safe_move_path(src, dest)
+            if not moved_pdf:
+                raise RuntimeError("filesystem rename failed")
             try:
                 lib_store.update_path(src, dest)
                 # Store Crossref metadata if available and trusted
@@ -380,37 +616,9 @@ def _apply_renames(
             continue
 
         if also_md:
-            try:
-                old_folder = Path(md_out_root) / src.stem
-                new_folder = Path(md_out_root) / dest.stem
-                target_folder: Path | None = None
-
-                if old_folder.exists():
-                    if not new_folder.exists():
-                        old_folder.rename(new_folder)
-                        target_folder = new_folder
-                    else:
-                        target_folder = new_folder
-                elif new_folder.exists():
-                    target_folder = new_folder
-
-                if target_folder and target_folder.exists():
-                    new_main = target_folder / f"{dest.stem}.en.md"
-                    if not new_main.exists():
-                        candidates = [
-                            x
-                            for x in sorted(target_folder.glob("*.md"))
-                            if x.is_file() and x.name.lower() != "assets_manifest.md" and x.name != new_main.name
-                        ]
-                        if candidates:
-                            prefer = [x for x in candidates if x.name.lower().endswith(".en.md")]
-                            src_main = prefer[0] if prefer else candidates[0]
-                            try:
-                                src_main.rename(new_main)
-                            except Exception:
-                                pass
-            except Exception:
-                pass
+            md_ok, md_msg = _sync_md_after_pdf_rename(src_pdf=src, dest_pdf=dest, md_out_root=md_out_root)
+            if not md_ok:
+                operations.append(("fail", f"MD 同步失败（{dest.name}）：{md_msg}"))
 
     try:
         results_cache = st.session_state.setdefault("rename_scan_results_cache", {})
@@ -531,5 +739,3 @@ def render_panel(
                 dismissed_dirs=dismissed_dirs,
                 scan_key=scan_key,
             )
-
-

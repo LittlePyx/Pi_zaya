@@ -694,6 +694,10 @@ _INPAPER_CITE_RE = re.compile(r"\[(\d{1,4})\]")
 _INPAPER_CITE_GROUP_RE = re.compile(r"\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})+)\]")
 _INPAPER_CITE_ANY_RE = re.compile(r"\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\]")
 _STRUCT_CITE_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]", re.IGNORECASE)
+# Fallbacks for malformed model outputs like "[CITE:sid:24]" / "[[CITE:sid]]".
+_STRUCT_CITE_SINGLE_RE = re.compile(r"(?<!\[)\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})(?:\s*:\s*(\d{1,4}))?\s*\](?!\])", re.IGNORECASE)
+_STRUCT_CITE_SID_ONLY_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]", re.IGNORECASE)
+_STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORECASE)
 _CODE_FENCE_LINE_RE = re.compile(r"^\s*```")
 _INLINE_CODE_RE = re.compile(r"(`[^`]*`)")
 _INLINE_MATH_RE = re.compile(r"(\$[^$\n]+\$)")
@@ -900,9 +904,17 @@ def _annotate_inpaper_citations_with_hover_meta(
     if not s or "[" not in s:
         return s, []
 
+    def _strip_unresolved_structured_tokens(text: str) -> str:
+        if not text or "CITE" not in text.upper():
+            return text
+        out = _STRUCT_CITE_RE.sub(lambda m: f"[{int(m.group(2))}]", text)
+        out = _STRUCT_CITE_SINGLE_RE.sub(lambda m: f"[{int(m.group(2))}]" if str(m.group(2) or "").strip() else "", out)
+        out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
+        return _STRUCT_CITE_GARBAGE_RE.sub("", out)
+
     srcs = _collect_source_paths_from_hits(hits or [], max_docs=16)
     if not srcs:
-        return s, []
+        return _strip_unresolved_structured_tokens(s), []
     sid_to_source: dict[str, str] = {}
     for sp in srcs:
         sid = _source_cite_id(sp).lower()
@@ -1004,14 +1016,14 @@ def _annotate_inpaper_citations_with_hover_meta(
             t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
             return f"[{int(n)}](#{anchor} \"{t_attr}\")"
 
-        def _repl_struct(m: re.Match) -> str:
+        def _resolve_struct_token(sid_raw: str, n_raw: str) -> str:
             nonlocal structured_seen
-            structured_seen = True
-            sid = str(m.group(1) or "").strip().lower()
+            sid = str(sid_raw or "").strip().lower()
             try:
-                n = int(m.group(2))
+                n = int(n_raw)
             except Exception:
-                return str(m.group(0) or "")
+                return ""
+            structured_seen = True
             sp = sid_to_source.get(sid) or sid_to_source.get(sid.lower())
             if not sp:
                 # Keep visible reference number even if sid cannot be mapped.
@@ -1026,6 +1038,21 @@ def _annotate_inpaper_citations_with_hover_meta(
             detail = _remember_detail(int(n), src_name, ref)
             title_attr = _citation_hover_title(src_name, int(n), ref)
             return _mk_cite_link_md(int(n), detail, title_attr)
+
+        def _repl_struct(m: re.Match) -> str:
+            return _resolve_struct_token(str(m.group(1) or ""), str(m.group(2) or ""))
+
+        def _repl_struct_single(m: re.Match) -> str:
+            sid = str(m.group(1) or "")
+            n_txt = str(m.group(2) or "").strip()
+            if not n_txt:
+                # Malformed form like [CITE:sid] -> hide raw token.
+                return ""
+            return _resolve_struct_token(sid, n_txt)
+
+        def _repl_struct_sid_only(_: re.Match) -> str:
+            # Malformed form like [[CITE:sid]] -> hide raw token.
+            return ""
 
         def _repl_any(m: re.Match) -> str:
             raw = str(m.group(0) or "")
@@ -1051,6 +1078,10 @@ def _annotate_inpaper_citations_with_hover_meta(
             return "".join(items)
 
         seg2 = _STRUCT_CITE_RE.sub(_repl_struct, seg)
+        seg2 = _STRUCT_CITE_SINGLE_RE.sub(_repl_struct_single, seg2)
+        seg2 = _STRUCT_CITE_SID_ONLY_RE.sub(_repl_struct_sid_only, seg2)
+        # Final safety-net: never leak raw CITE tokens to UI.
+        seg2 = _STRUCT_CITE_GARBAGE_RE.sub("", seg2)
         if structured_seen:
             return seg2
         return _INPAPER_CITE_ANY_RE.sub(_repl_any, seg2)

@@ -12,7 +12,7 @@ class DeepSeekChat:
     def __init__(self, settings: Settings) -> None:
         if not settings.api_key:
             raise RuntimeError(
-                "缺少 DEEPSEEK_API_KEY（或 OPENAI_API_KEY）。请先在环境变量里设置，再启动 UI/脚本。"
+                "缺少 QWEN_API_KEY / DEEPSEEK_API_KEY（或 OPENAI_API_KEY）。请先在环境变量里设置，再启动 UI/脚本。"
             )
         self._settings = settings
         self._client = OpenAI(api_key=settings.api_key, base_url=settings.base_url)

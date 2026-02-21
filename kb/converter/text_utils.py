@@ -46,7 +46,17 @@ _MOJIBAKE_REPL: dict[str, str] = _build_mojibake_repl()
 # PDF font mapping sometimes substitutes Greek/math symbols with random CJK glyphs.
 # These are paper-dependent; keep to the ones we have observed repeatedly.
 _GARBLED_SYMBOL_REPL: dict[str, str] = {
-    # Keep this conservative to avoid over-correction.
+    # Common mojibake patterns from PDFs
+    "ďŹ": "fi",
+    "Ď": "σ",  # Often sigma
+    "Î´": "δ",
+    "Îą": "α",
+    "âĽ": "≤",  # Less than or equal
+    "âĺ¤": "≥",  # Greater than or equal
+    "â": "∈",  # Often element-of, but context-dependent
+    "ˆ": "^",  # Hat/caret in math context
+    "âĺ": "→",  # Arrow
+    "âĺ": "→",  # Arrow variant
 }
 
 
@@ -137,3 +147,10 @@ def _is_letter(ch: str) -> bool:
         return unicodedata.category(ch).startswith("L")
     except Exception:
         return False
+
+
+def _common_prefix_length(s1: str, s2: str) -> int:
+    i = 0
+    while i < min(len(s1), len(s2)) and s1[i] == s2[i]:
+        i += 1
+    return i

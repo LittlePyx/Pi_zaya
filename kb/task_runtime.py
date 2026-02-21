@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import threading
 import time
@@ -36,6 +37,14 @@ from ui.chat_widgets import _normalize_math_markdown
 from ui.strings import S
 
 _LIVE_ASSISTANT_PREFIX = "__KB_LIVE_TASK__:"
+_CITE_SINGLE_BRACKET_RE = re.compile(
+    r"(?<!\[)\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\](?!\])",
+    re.IGNORECASE,
+)
+_CITE_SID_ONLY_RE = re.compile(
+    r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]",
+    re.IGNORECASE,
+)
 
 # Backward-compat for long-lived Streamlit processes that loaded older runtime_state.
 if not hasattr(RUNTIME, "BG_LOCK"):
@@ -339,6 +348,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "- When citing paper references, MUST use [[CITE:<sid>:<ref_num>]].\n"
             "- Example: [[CITE:s1a2b3c4:24]] or [[CITE:s1a2b3c4:24]][[CITE:s1a2b3c4:25]].\n"
             "- Do NOT output free-form numeric citations like [24] / [2][4].\n"
+            "- NEVER output malformed markers like [[CITE:<sid>]] or [CITE:<sid>] (missing ref_num).\n"
         )
         user = f"问题：\n{prompt}\n\n检索片段（含深读补充定位）：\n{ctx if ctx else '(无)'}\n"
         history = chat_store.get_messages(conv_id)
@@ -381,7 +391,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _gen_update_task(session_id, task_id, status="canceled", stage="canceled", answer=answer, partial=answer, char_count=len(answer), finished_at=time.time())
             return
 
-        answer = _normalize_math_markdown(_strip_model_ref_section(partial or "")).strip() or "（未返回文本）"
+        answer = _normalize_math_markdown(_strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))).strip() or "（未返回文本）"
         _gen_store_answer(task, answer)
         _gen_update_task(session_id, task_id, status="done", stage="done", answer=answer, partial=answer, char_count=len(answer), finished_at=time.time())
 
@@ -617,3 +627,15 @@ def _strip_model_ref_section(answer: str) -> str:
         if idx > 0:
             return answer[:idx].rstrip()
     return answer
+
+
+def _sanitize_structured_cite_tokens(answer: str) -> str:
+    s = str(answer or "")
+    if not s:
+        return s
+    # Normalize accidental single-bracket form to canonical form expected by renderer.
+    s = _CITE_SINGLE_BRACKET_RE.sub(lambda m: f"[[CITE:{m.group(1)}:{m.group(2)}]]", s)
+    # Drop malformed sid-only tokens; they have no ref number and cannot be resolved.
+    s = _CITE_SID_ONLY_RE.sub("", s)
+    return s
+

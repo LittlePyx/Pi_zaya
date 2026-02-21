@@ -539,7 +539,7 @@ def _page_chat(
                         else:
                             ans0 = str(t0.get("answer") or "").strip()
                             if ans0:
-                                _render_answer_copy_bar(ans0, key_ns=f"copy_{idx}_done")
+                                copy_done_rendered = False
                                 notice, body = _split_kb_miss_notice(ans0)
                                 if notice:
                                     st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
@@ -557,11 +557,20 @@ def _page_chat(
                                         hits_for_anno,
                                         anchor_ns=f"{conv_id}:{idx}:{msg_id}:done",
                                     )
+                                    copy_md_done = f"{notice}\n\n{body3}" if notice else body3
+                                    _render_answer_copy_bar(
+                                        copy_md_done,
+                                        key_ns=f"copy_{idx}_done",
+                                        cite_details=cite_details,
+                                    )
+                                    copy_done_rendered = True
                                     st.markdown(_normalize_math_markdown(body3))
                                     _render_inpaper_citation_details(
                                         cite_details,
                                         key_ns=f"{conv_id}_{idx}_{msg_id}_done",
                                     )
+                                if not copy_done_rendered:
+                                    _render_answer_copy_bar(ans0, key_ns=f"copy_{idx}_done")
                             else:
                                 st.markdown("<div class='msg-meta'>AI（处理中）</div>", unsafe_allow_html=True)
                                 st.caption("处理中…")
@@ -570,7 +579,7 @@ def _page_chat(
                         st.caption("处理中…")
                 else:
                     msg_key = hashlib.md5((st.session_state.get("conv_id", "") + "|" + str(idx)).encode("utf-8", "ignore")).hexdigest()[:10]
-                    _render_answer_copy_bar(content, key_ns=f"copy_{msg_key}")
+                    copy_hist_rendered = False
                     notice, body = _split_kb_miss_notice(content or "")
                     if notice:
                         st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
@@ -588,11 +597,20 @@ def _page_chat(
                             hits_for_anno,
                             anchor_ns=f"{conv_id}:{idx}:{msg_id}:hist",
                         )
+                        copy_md_hist = f"{notice}\n\n{body3}" if notice else body3
+                        _render_answer_copy_bar(
+                            copy_md_hist,
+                            key_ns=f"copy_{msg_key}",
+                            cite_details=cite_details,
+                        )
+                        copy_hist_rendered = True
                         st.markdown(_normalize_math_markdown(body3))
                         _render_inpaper_citation_details(
                             cite_details,
                             key_ns=f"{conv_id}_{idx}_{msg_id}_hist",
                         )
+                    if not copy_hist_rendered:
+                        _render_answer_copy_bar(content, key_ns=f"copy_{msg_key}")
 
                 if (last_user_msg_id > 0) and (last_user_msg_id not in shown_refs_user_ids):
                     # Use the current assistant text (partial/answer/content) to extract in-paper citations.
@@ -1927,7 +1945,6 @@ def main() -> None:
     if "ui_theme" not in st.session_state:
         st.session_state["ui_theme"] = "light"
     _init_theme_css(st.session_state["ui_theme"])
-    _inject_runtime_ui_fixes(st.session_state["ui_theme"])
     _render_app_title()
 
     settings = load_settings()
@@ -2176,6 +2193,8 @@ def main() -> None:
 
             if "conv_select" in st.session_state:
                 del st.session_state["conv_select"]
+
+    _inject_runtime_ui_fixes(st.session_state["ui_theme"], st.session_state.get("conv_id", ""))
 
     # Retriever (auto-reload when DB changes)
     docs_json = db_dir / "docs.json"

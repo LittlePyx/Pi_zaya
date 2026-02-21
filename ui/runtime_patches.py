@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import streamlit as st
@@ -264,7 +265,8 @@ section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*
 section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="鍏抽棴"] [data-testid="stIcon"]{
   display: none !important;
 }
-section[data-testid="stSidebar"] .kb-close-glyph{
+section[data-testid="stSidebar"] .kb-close-glyph,
+.kb-close-glyph{
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -274,6 +276,63 @@ section[data-testid="stSidebar"] .kb-close-glyph{
   color: var(--text-main) !important;
   transform: translate(-1px, -1px);
   pointer-events: none !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn,
+button.kb-sidebar-close-btn{
+  width: 34px !important;
+  min-width: 34px !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--btn-border) !important;
+  background: color-mix(in srgb, var(--sidebar-bg) 76%, var(--panel)) !important;
+  box-shadow: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: relative !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  text-shadow: none !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn:hover,
+button.kb-sidebar-close-btn:hover{
+  background: var(--btn-hover) !important;
+  border-color: var(--blue-line) !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn:active,
+button.kb-sidebar-close-btn:active{
+  background: var(--btn-active) !important;
+  border-color: var(--blue-line) !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn::before,
+button.kb-sidebar-close-btn::before{
+  content: "\2039" !important;
+  position: absolute !important;
+  inset: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-size: 24px !important;
+  line-height: 1 !important;
+  font-weight: 600 !important;
+  color: var(--text-main) !important;
+  transform: translate(-1px, -1px);
+  pointer-events: none !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn svg,
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn [data-testid="stIcon"],
+button.kb-sidebar-close-btn svg,
+button.kb-sidebar-close-btn [data-testid="stIcon"]{
+  display: none !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn *,
+button.kb-sidebar-close-btn *{
+  color: transparent !important;
+  -webkit-text-fill-color: transparent !important;
+  opacity: 0 !important;
 }
 section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] p,
@@ -1696,7 +1755,7 @@ def _inject_copy_js() -> None:
       t = root.createElement("div");
       t.id = TOAST_ID;
       t.className = "kb-toast";
-      t.textContent = "宸插鍒?;
+      t.textContent = "\u5df2\u590d\u5236";
       root.body.appendChild(t);
     }
     return t;
@@ -1704,7 +1763,7 @@ def _inject_copy_js() -> None:
 
   function toast(msg) {
     const t = ensureToast();
-    t.textContent = msg || "宸插鍒?;
+    t.textContent = msg || "\u5df2\u590d\u5236";
     t.classList.add("show");
     clearTimeout(t._kbTimer);
     t._kbTimer = setTimeout(() => t.classList.remove("show"), 900);
@@ -1752,7 +1811,7 @@ def _inject_copy_js() -> None:
   async function copyText(text) {
     try {
       await navigator.clipboard.writeText(text);
-      toast("宸插鍒?);
+      toast("\u5df2\u590d\u5236");
       return true;
     } catch (e) {
       // Fallback: execCommand
@@ -1766,10 +1825,10 @@ def _inject_copy_js() -> None:
         ta.select();
         root.execCommand("copy");
         root.body.removeChild(ta);
-        toast("宸插鍒?);
+        toast("\u5df2\u590d\u5236");
         return true;
       } catch (e2) {
-        toast("澶嶅埗澶辫触");
+        toast("\u590d\u5236\u5931\u8d25");
         return false;
       }
     }
@@ -1939,7 +1998,7 @@ def _inject_copy_js() -> None:
       const btn = root.createElement("button");
       btn.className = "kb-codecopy";
       btn.type = "button";
-      btn.textContent = "澶嶅埗浠ｇ爜";
+      btn.textContent = "\u590d\u5236\u4ee3\u7801";
       btn.addEventListener("click", async (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1968,7 +2027,7 @@ def _inject_copy_js() -> None:
         const tex = extractTexFromKaTeX(n) || (n.innerText || "").trim();
         if (!tex) return;
         await copyText(tex);
-        toast("宸插鍒?LaTeX");
+        toast("\u5df2\u590d\u5236 LaTeX");
       });
     }
   }
@@ -1987,8 +2046,9 @@ def _inject_copy_js() -> None:
         height=0,
     )
 
-def _inject_runtime_ui_fixes(theme_mode: str) -> None:
+def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     mode = "dark" if str(theme_mode or "").lower() == "dark" else "light"
+    conv_js = json.dumps(str(conv_id or ""))
     components.html(
         f"""
 <script>
@@ -1997,11 +2057,70 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
   const doc = host.document || document;
   const KEY = "__kbUiRuntimeFixV2";
   const mode = "{mode}";
+  const ACTIVE_CONV_INPUT = {conv_js};
   try {{
     if (host[KEY] && typeof host[KEY].destroy === "function") {{
       host[KEY].destroy();
     }}
   }} catch (e) {{}}
+
+  const SHELF_ROOT_KEY = "__kbCiteShelfRootV2";
+  const SHELF_STORAGE_KEY = "__kb_cite_shelf_by_conv_v2";
+
+  function normalizeConvId(v) {{
+    const s = String(v || "").trim();
+    if (!s) return "default";
+    return s.replace(/[^a-zA-Z0-9_.:\\-]/g, "_").slice(0, 160) || "default";
+  }}
+
+  const ACTIVE_CONV_ID = normalizeConvId(ACTIVE_CONV_INPUT);
+
+  function _readShelfStore() {{
+    try {{
+      const ls = host.localStorage;
+      if (!ls) return {{}};
+      const raw = String(ls.getItem(SHELF_STORAGE_KEY) || "");
+      if (!raw) return {{}};
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) {{
+        return obj;
+      }}
+    }} catch (e) {{}}
+    return {{}};
+  }}
+
+  function _ensureShelfRoot() {{
+    let root = null;
+    try {{
+      root = host[SHELF_ROOT_KEY];
+    }} catch (e) {{}}
+    if (!root || typeof root !== "object" || Array.isArray(root)) {{
+      root = {{ byConv: {{}} }};
+    }}
+    const badByConv = (!root.byConv) || (typeof root.byConv !== "object") || Array.isArray(root.byConv);
+    if (badByConv || Object.keys(root.byConv).length === 0) {{
+      const loaded = _readShelfStore();
+      if (loaded && typeof loaded === "object") {{
+        root.byConv = loaded;
+      }}
+    }}
+    if (!root.byConv || typeof root.byConv !== "object" || Array.isArray(root.byConv)) {{
+      root.byConv = {{}};
+    }}
+    try {{
+      host[SHELF_ROOT_KEY] = root;
+    }} catch (e) {{}}
+    return root;
+  }}
+
+  function _persistShelfRoot() {{
+    try {{
+      const root = _ensureShelfRoot();
+      const ls = host.localStorage;
+      if (!ls) return;
+      ls.setItem(SHELF_STORAGE_KEY, JSON.stringify(root.byConv || {{}}));
+    }} catch (e) {{}}
+  }}
 
   function paint(el, color) {{
     if (!el || !el.style) return;
@@ -2033,53 +2152,96 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
   function normalizeSidebarCloseIcon() {{
     try {{
       const mainText = mode === "dark" ? "#e7eaef" : "#1f2329";
-      const collapseGlyph = "\\u2039"; // small left-pointing chevron
-      const sidebars = doc.querySelectorAll('section[data-testid="stSidebar"]');
-      for (const sidebar of sidebars) {{
-        // Only target Streamlit's native sidebar-collapse controls.
-        // Avoid position-based heuristics that can catch custom top-right buttons.
-        const btns = sidebar.querySelectorAll(
-          '[data-testid="stSidebarCollapseButton"] button, ' +
-          '[data-testid="stSidebarNav"] button[aria-label*="close" i], ' +
-          '[data-testid="stSidebarNav"] button[aria-label*="collapse" i], ' +
-          '[data-testid="stSidebarNav"] button[aria-label*="鍏抽棴"]'
-        );
-        for (const b of btns) {{
+      const collapseGlyph = "\\u2039"; // left chevron
+
+      function walkButtonsDeep(rootNode, out) {{
+        try {{
+          if (!rootNode) return;
+          const nt = Number(rootNode.nodeType || 0);
+          if (nt === 1 && String(rootNode.tagName || "").toUpperCase() === "BUTTON") {{
+            out.push(rootNode);
+          }}
+          const sr = rootNode.shadowRoot;
+          if (sr) walkButtonsDeep(sr, out);
+          const children = rootNode.children || [];
+          for (const ch of children) walkButtonsDeep(ch, out);
+        }} catch (e) {{}}
+      }}
+
+      const allBtns = [];
+      walkButtonsDeep(doc.documentElement || doc, allBtns);
+      if (!allBtns.length) return;
+
+      let sidebarRect = null;
+      try {{
+        const sb = doc.querySelector('section[data-testid="stSidebar"]');
+        if (sb) sidebarRect = sb.getBoundingClientRect();
+      }} catch (e) {{}}
+
+      function maybeSidebarCloseBtn(b) {{
+        try {{
+          if (!(b instanceof Element)) return false;
+          const r = b.getBoundingClientRect();
+          const w = Number(r.width || 0);
+          const h = Number(r.height || 0);
+          if (!(w >= 24 && w <= 52 && h >= 24 && h <= 52)) return false;
+          const txt = String((b.textContent || "")).replace(/\s+/g, "");
           const aria = String(b.getAttribute("aria-label") || "").toLowerCase();
-          const maybeClose = aria.includes("close") || aria.includes("collapse");
-          if (!maybeClose) continue;
-          try {{
-            b.style.setProperty("width", "34px", "important");
-            b.style.setProperty("height", "34px", "important");
-            b.style.setProperty("min-width", "34px", "important");
-            b.style.setProperty("min-height", "34px", "important");
-            b.style.setProperty("padding", "0", "important");
-            b.style.setProperty("font-size", "0", "important");
-            b.style.setProperty("line-height", "0", "important");
-            b.style.setProperty("display", "inline-flex", "important");
-            b.style.setProperty("align-items", "center", "important");
-            b.style.setProperty("justify-content", "center", "important");
-          }} catch (e) {{}}
-          const svgs = b.querySelectorAll("svg");
-          for (const s of svgs) {{
-            try {{ s.style.setProperty("display", "none", "important"); }} catch (e) {{}}
+          const title = String(b.getAttribute("title") || "").toLowerCase();
+          const hasCloseSem = /close|collapse|hide|关闭|收起/.test(aria + " " + title);
+          const hasCloseTxt = /^(?:×|x|✕|✖)$/.test(txt);
+          const semHit = hasCloseSem || hasCloseTxt;
+
+          // Geometry guard: top-left band near sidebar/header area.
+          if (sidebarRect) {{
+            const nearBand =
+              Number(r.top || 0) <= (Number(sidebarRect.top || 0) + 140) &&
+              Number(r.left || 0) <= (Number(sidebarRect.right || 0) + 180);
+            if (!nearBand) return false;
+            // Source-level fallback: if semantics unavailable, still patch the very top small square.
+            if (semHit) return true;
+            const veryTop = Number(r.top || 0) <= (Number(sidebarRect.top || 0) + 88);
+            return veryTop;
+          }} else {{
+            const nearBand = (Number(r.top || 0) <= 150 && Number(r.left || 0) <= 560);
+            if (!nearBand) return false;
+            return semHit;
           }}
-          const icons = b.querySelectorAll('[data-testid="stIcon"]');
-          for (const ic of icons) {{
-            try {{ ic.style.setProperty("display", "none", "important"); }} catch (e) {{}}
-          }}
-          let glyph = b.querySelector(".kb-close-glyph");
-          if (!glyph) {{
-            glyph = doc.createElement("span");
-            glyph.className = "kb-close-glyph";
-            glyph.setAttribute("aria-hidden", "true");
-            b.appendChild(glyph);
-          }}
-          if (glyph.textContent !== collapseGlyph) {{
-            glyph.textContent = collapseGlyph;
-          }}
-          paint(glyph, mainText);
+        }} catch (e) {{
+          return false;
         }}
+      }}
+
+      for (const b of allBtns) {{
+        if (!maybeSidebarCloseBtn(b)) continue;
+        try {{ b.classList.add("kb-sidebar-close-btn"); }} catch (e) {{}}
+        try {{
+          // Source-level replacement: replace content text with left chevron directly.
+          while (b.firstChild) {{
+            b.removeChild(b.firstChild);
+          }}
+        }} catch (e) {{}}
+        try {{
+          b.textContent = collapseGlyph;
+          b.style.setProperty("width", "34px", "important");
+          b.style.setProperty("height", "34px", "important");
+          b.style.setProperty("min-width", "34px", "important");
+          b.style.setProperty("min-height", "34px", "important");
+          b.style.setProperty("padding", "0", "important");
+          b.style.setProperty("display", "inline-flex", "important");
+          b.style.setProperty("align-items", "center", "important");
+          b.style.setProperty("justify-content", "center", "important");
+          b.style.setProperty("font-size", "26px", "important");
+          b.style.setProperty("line-height", "1", "important");
+          b.style.setProperty("font-weight", "600", "important");
+          b.style.setProperty("font-family", "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial", "important");
+          b.style.setProperty("color", mainText, "important");
+          b.style.setProperty("-webkit-text-fill-color", mainText, "important");
+          b.style.setProperty("text-shadow", "none", "important");
+          b.style.setProperty("border", "1px solid var(--btn-border)", "important");
+          b.style.setProperty("border-radius", "10px", "important");
+          b.style.setProperty("background", "color-mix(in srgb, var(--sidebar-bg) 76%, var(--panel))", "important");
+        }} catch (e) {{}}
       }}
     }} catch (e) {{}}
   }}
@@ -2133,7 +2295,6 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
   let citeDragUp = null;
   let citeShelfEl = null;
   let citeShelfToggleEl = null;
-  const SHELF_KEY = "__kbCiteShelfStateV1";
 
   function escapeHtml(s) {{
     return String(s || "")
@@ -2153,18 +2314,21 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
   }}
 
   function shelfState() {{
-    try {{
-      const cur = host[SHELF_KEY];
-      if (cur && typeof cur === "object") {{
-        if (!Array.isArray(cur.items)) cur.items = [];
-        if (typeof cur.open !== "boolean") cur.open = false;
-        if (typeof cur.focusKey !== "string") cur.focusKey = "";
-        return cur;
-      }}
-    }} catch (e) {{}}
-    const init = {{ open: false, items: [], focusKey: "" }};
-    try {{ host[SHELF_KEY] = init; }} catch (e) {{}}
-    return init;
+    const root = _ensureShelfRoot();
+    const cid = String(ACTIVE_CONV_ID || "default");
+    let cur = root.byConv[cid];
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) {{
+      cur = {{}};
+    }}
+    if (!Array.isArray(cur.items)) cur.items = [];
+    if (typeof cur.open !== "boolean") cur.open = false;
+    if (typeof cur.focusKey !== "string") cur.focusKey = "";
+    root.byConv[cid] = cur;
+    return cur;
+  }}
+
+  function saveShelfState() {{
+    _persistShelfRoot();
   }}
 
   function shelfItemKey(rec) {{
@@ -2308,6 +2472,7 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
           e.stopPropagation();
           const st0 = shelfState();
           st0.open = false;
+          saveShelfState();
           renderCiteShelf();
         }});
       }}
@@ -2318,6 +2483,8 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
           e.stopPropagation();
           const st0 = shelfState();
           st0.items = [];
+          st0.focusKey = "";
+          saveShelfState();
           renderCiteShelf();
         }});
       }}
@@ -2326,6 +2493,7 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
         e.stopPropagation();
         const st0 = shelfState();
         st0.open = !Boolean(st0.open);
+        saveShelfState();
         renderCiteShelf();
       }});
     }} catch (e) {{}}
@@ -2382,6 +2550,7 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
       const focusKey = String(st0.focusKey || "").trim();
       if (focusKey) {{
         st0.focusKey = "";
+        saveShelfState();
         let target = null;
         try {{
           const nodes = listEl.querySelectorAll(".kb-cite-shelf-item[data-kb-shelf-key]");
@@ -2410,6 +2579,7 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
   function openCiteShelf() {{
     const st0 = shelfState();
     st0.open = true;
+    saveShelfState();
     renderCiteShelf();
   }}
 
@@ -2437,6 +2607,7 @@ def _inject_runtime_ui_fixes(theme_mode: str) -> None:
     st0.items = next.slice(0, 120);
     st0.open = true;
     st0.focusKey = key;
+    saveShelfState();
     renderCiteShelf();
     return {{ added: !exists, key: key }};
   }}

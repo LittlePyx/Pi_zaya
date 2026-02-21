@@ -101,6 +101,7 @@ def _collect_image_rects(page) -> list["fitz.Rect"]:
 def _merge_nearby_visual_rects(rects: list["fitz.Rect"], *, page_w: float, page_h: float) -> list["fitz.Rect"]:
     if fitz is None or (not rects):
         return rects
+    page_area = max(1.0, float(page_w) * float(page_h))
     merged = [fitz.Rect(r) for r in rects]
     changed = True
     while changed:
@@ -125,7 +126,24 @@ def _merge_nearby_visual_rects(rects: list["fitz.Rect"], *, page_w: float, page_
                 close_h = (y_ov / y_min >= 0.45) and (x_gap <= page_w * 0.035)
                 close_v = (x_ov / x_min >= 0.45) and (y_gap <= page_h * 0.028)
                 touching = _rect_intersection_area(cur, b) > 0.0
-                if close_h or close_v or touching:
+                union = fitz.Rect(
+                    min(float(cur.x0), float(b.x0)),
+                    min(float(cur.y0), float(b.y0)),
+                    max(float(cur.x1), float(b.x1)),
+                    max(float(cur.y1), float(b.y1)),
+                )
+                union_area = max(0.0, float(union.width) * float(union.height))
+                area_a = max(0.0, float(cur.width) * float(cur.height))
+                area_b = max(0.0, float(b.width) * float(b.height))
+                # Multi-panel figures are often stacked (a)(b)/(c) with a moderate y-gap.
+                # Keep this merge conservative to avoid collapsing unrelated figures.
+                stacked_panel = (
+                    (x_ov / x_min >= 0.62)
+                    and (y_gap <= page_h * 0.085)
+                    and (min(area_a, area_b) >= page_area * 0.006)
+                    and (union_area <= page_area * 0.62)
+                )
+                if close_h or close_v or touching or stacked_panel:
                     cur = fitz.Rect(
                         min(float(cur.x0), float(b.x0)),
                         min(float(cur.y0), float(b.y0)),

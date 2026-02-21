@@ -100,13 +100,18 @@ _DEFAULT_VENUE_ABBR_MAP: dict[str, str] = {
     "cvpr": "CVPR",
     "conference on computer vision and pattern recognition": "CVPR",
     "proceedings of the ieee cvf conference on computer vision and pattern recognition": "CVPR",
+    "ieee cvf conference on computer vision and pattern recognition": "CVPR",
+    "ieee conference on computer vision and pattern recognition": "CVPR",
     "proceedings of the ieee cvf international conference on computer vision": "ICCV",
+    "ieee cvf international conference on computer vision": "ICCV",
     "european conference on computer vision": "ECCV",
     "iccv": "ICCV",
     "eccv": "ECCV",
     "wacv": "WACV",
     "accv": "ACCV",
     "icip": "ICIP",
+    "ieee international conference on image processing": "ICIP",
+    "proceedings of the ieee international conference on image processing": "ICIP",
     "icassp": "ICASSP",
     "icme": "ICME",
     "neurips": "NeurIPS",
@@ -138,7 +143,7 @@ _VENUE_ABBR_JSON_PATH = Path(__file__).resolve().with_name("venue_abbr_map.json"
 
 # Bump this whenever the PDF meta extraction heuristics change in a way that should
 # invalidate any UI/session caches that store extracted metadata.
-PDF_META_EXTRACT_VERSION = "2026-02-13.5"
+PDF_META_EXTRACT_VERSION = "2026-02-19.1"
 
 
 def ensure_dir(p: Path) -> None:
@@ -194,9 +199,67 @@ def abbreviate_venue(venue: str) -> str:
     raw = _sanitize_component(venue)
     if not raw:
         return ""
-    key = _venue_key(raw)
-    if key in _VENUE_ABBR_MAP:
-        return _VENUE_ABBR_MAP[key]
+
+    def _keys(raw_text: str) -> list[str]:
+        txt = html_lib.unescape((raw_text or "").strip())
+        if not txt:
+            return []
+        cands: list[str] = []
+        seen: set[str] = set()
+
+        def _add(s: str) -> None:
+            k = _venue_key(s)
+            if k and (k not in seen):
+                seen.add(k)
+                cands.append(k)
+
+        txt0 = txt
+        txt1 = re.sub(r"^\s*(?:19\d{2}|20\d{2})\s+", "", txt0, flags=re.IGNORECASE)
+        txt2 = re.sub(r"^\s*(?:proceedings\s+of|in\s+proceedings\s+of)\s+", "", txt1, flags=re.IGNORECASE)
+        txt3 = re.sub(r"\([^)]*\)", " ", txt2)
+        txt4 = re.sub(r"^\s*(?:ieee(?:\s+cvf)?|acm)\s+", "", txt3, flags=re.IGNORECASE)
+
+        for s in (txt0, txt1, txt2, txt3, txt4):
+            _add(s)
+        return cands
+
+    # 1) Direct/normalized phrase matching.
+    for key in _keys(raw):
+        if key in _VENUE_ABBR_MAP:
+            return _VENUE_ABBR_MAP[key]
+
+    # 2) Acronym fallback: prefer explicit acronyms in parentheses, then standalone tokens.
+    ignored = {"IEEE", "ACM", "CVF", "USA", "UK", "EU"}
+    ac_tokens: list[str] = []
+    for seg in re.findall(r"\(([^)]{1,28})\)", raw):
+        for tk in re.split(r"[^A-Za-z0-9]+", seg):
+            t = (tk or "").strip().upper()
+            if re.fullmatch(r"[A-Z][A-Z0-9]{1,11}", t):
+                ac_tokens.append(t)
+    for tk in re.findall(r"\b[A-Z][A-Z0-9]{1,11}\b", raw):
+        ac_tokens.append(str(tk).upper())
+
+    seen_ac: set[str] = set()
+    for ac in ac_tokens:
+        if (not ac) or (ac in seen_ac) or (ac in ignored):
+            continue
+        seen_ac.add(ac)
+        k = _venue_key(ac)
+        if k in _VENUE_ABBR_MAP:
+            return _VENUE_ABBR_MAP[k]
+        # Keep well-formed conference/journal acronyms as-is.
+        if 3 <= len(ac) <= 10:
+            return ac
+
+    # 3) Soft fallback: strip verbose wrappers before truncating title in filenames.
+    compact = re.sub(r"^\s*(?:19\d{2}|20\d{2})\s+", "", raw, flags=re.IGNORECASE)
+    compact = re.sub(r"^\s*(?:proceedings\s+of|in\s+proceedings\s+of)\s+", "", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"^\s*(?:ieee(?:\s+cvf)?|acm)\s+", "", compact, flags=re.IGNORECASE)
+    compact = re.sub(r"\s+", " ", compact).strip(" .-_")
+    compact = _sanitize_component(compact)
+    if compact and (len(compact) + 6 <= len(raw)):
+        return compact
+
     return raw
 
 
@@ -230,7 +293,66 @@ def venue_abbreviation_pairs() -> list[tuple[str, str]]:
     return pairs
 
 
-def build_base_name(venue: str, year: str, title: str, *, shorten_venue: bool = True) -> str:
+def _safe_base_len_for_paths(
+    *,
+    pdf_dir: Path | str | None = None,
+    md_out_root: Path | str | None = None,
+    safe_path_limit: int = 230,
+    default_base_max: int = 88,
+) -> int:
+    """
+    Choose a conservative base-name cap so that both:
+    - <pdf_dir>/<base>.pdf
+    - <md_out_root>/<base>/<base>.en.md
+    stay comfortably below problematic path lengths on Windows/tooling.
+    """
+    cap = int(default_base_max)
+    cap = max(40, min(160, cap))
+    limit = int(max(120, safe_path_limit))
+
+    try:
+        if pdf_dir:
+            pdf_root_len = len(str(Path(pdf_dir).expanduser().resolve()))
+            # "<root>\<base>.pdf"
+            pdf_budget = limit - pdf_root_len - len("\\") - len(".pdf")
+            cap = min(cap, int(pdf_budget))
+    except Exception:
+        pass
+
+    try:
+        if md_out_root:
+            md_root_len = len(str(Path(md_out_root).expanduser().resolve()))
+            # "<root>\<base>\<base>.en.md"
+            md_budget = (limit - md_root_len - len("\\") * 2 - len(".en.md")) // 2
+            cap = min(cap, int(md_budget))
+    except Exception:
+        pass
+
+    return max(40, min(160, int(cap)))
+
+
+def _truncate_with_hash(text: str, max_len: int) -> str:
+    s = (text or "").strip()
+    lim = max(16, int(max_len))
+    if len(s) <= lim:
+        return s
+    digest = hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()[:8]
+    tail = "-" + digest
+    head_len = max(8, lim - len(tail))
+    head = s[:head_len].rstrip(" .-_")
+    return (head + tail)[:lim]
+
+
+def build_base_name(
+    venue: str,
+    year: str,
+    title: str,
+    *,
+    shorten_venue: bool = True,
+    pdf_dir: Path | str | None = None,
+    md_out_root: Path | str | None = None,
+    max_len: int | None = None,
+) -> str:
     venue = abbreviate_venue(venue) if shorten_venue else _sanitize_component(venue)
     year = _sanitize_component(year)
     title = _sanitize_component(title)
@@ -243,8 +365,35 @@ def build_base_name(venue: str, year: str, title: str, *, shorten_venue: bool = 
     if title:
         parts.append(title)
     base = "-".join(parts) if parts else "paper"
-    # clamp
-    return base[:160]
+
+    target_len = int(max_len) if isinstance(max_len, int) and max_len > 0 else _safe_base_len_for_paths(
+        pdf_dir=pdf_dir,
+        md_out_root=md_out_root,
+    )
+    target_len = max(40, min(160, target_len))
+    if len(base) <= target_len:
+        return base
+
+    # Keep venue/year stable, shorten title first, then add hash for uniqueness.
+    prefix_parts: list[str] = []
+    if venue:
+        prefix_parts.append(venue)
+    if year:
+        prefix_parts.append(year)
+    prefix = "-".join(prefix_parts).strip("-")
+
+    if prefix and title:
+        # Reserve room for "<prefix>-<title_part>" plus hash suffix.
+        digest = hashlib.sha1(base.encode("utf-8", "ignore")).hexdigest()[:8]
+        suffix = "-" + digest
+        body_budget = max(16, target_len - len(suffix))
+        title_budget = body_budget - len(prefix) - 1
+        if title_budget >= 10:
+            title_cut = title[:title_budget].rstrip(" .-_")
+            body = f"{prefix}-{title_cut}".strip("-")
+            return (body + suffix)[:target_len]
+
+    return _truncate_with_hash(base, target_len)
 
 
 def copy_upload_to_dir(uploaded_file: Any, dst_dir: Path) -> Path:
@@ -862,6 +1011,7 @@ def run_pdf_to_md(
     heartbeat_s: float = 1.0,
     stall_timeout_s: float | None = None,
     speed_mode: str | None = None,
+    _safe_retry_attempt: int = 0,
 ) -> tuple[bool, str]:
     """
     Convert a PDF into a markdown folder under out_root/pdf_stem.
@@ -882,9 +1032,10 @@ def run_pdf_to_md(
 
     if stall_timeout_s is None:
         try:
-            # Default watchdog for web/background mode:
-            # if converter produces no stdout for too long, abort instead of hanging forever.
-            stall_timeout_s = float(os.environ.get("KB_PDF_PROGRESS_STALL_TIMEOUT_S", "180"))
+            # Output-stall watchdog remains opt-in because some stages can stay quiet for long periods.
+            # Enable via env: KB_PDF_PROGRESS_STALL_TIMEOUT_S=<seconds>.
+            raw_stall = (os.environ.get("KB_PDF_PROGRESS_STALL_TIMEOUT_S") or "").strip()
+            stall_timeout_s = float(raw_stall) if raw_stall else 0.0
         except Exception:
             stall_timeout_s = 0.0
     try:
@@ -1062,6 +1213,25 @@ def run_pdf_to_md(
     ui_llm_retries = _env_int("KB_PDF_LLM_RETRIES", default=0, lo=0, hi=20)
     args.extend(["--llm-retries", str(ui_llm_retries)])
 
+    # Page-progress watchdog (separate from output-stall watchdog):
+    # terminate if no page has finished for too long, to avoid endless "14/15 alive ...".
+    # Default is conservative to avoid killing genuinely heavy pages.
+    if bool(no_llm):
+        page_stall_default = 240.0
+    else:
+        # Example (default): timeout=25,retries=0 -> 300s floor; timeout=120,retries=0 -> 600s.
+        page_stall_default = max(
+            300.0,
+            min(1800.0, float(ui_llm_timeout) * float(max(1, ui_llm_retries + 2)) * 2.5),
+        )
+    try:
+        raw_page_stall = (os.environ.get("KB_PDF_PAGE_STALL_TIMEOUT_S") or "").strip()
+        page_stall_timeout_s = float(raw_page_stall) if raw_page_stall else float(page_stall_default)
+    except Exception:
+        page_stall_timeout_s = float(page_stall_default)
+    if page_stall_timeout_s <= 0:
+        page_stall_timeout_s = 0.0
+
     auto_page_llm_threshold_default = 8
     if page_count >= 15:
         auto_page_llm_threshold_default = 10
@@ -1088,6 +1258,7 @@ def run_pdf_to_md(
                     f"workers={ui_workers if ui_workers > 0 else 'auto'}, "
                     f"llm_workers={ui_llm_workers if ui_llm_workers > 0 else 'auto'}, "
                     f"llm_timeout={ui_llm_timeout}s, llm_retries={ui_llm_retries}, "
+                    f"page_stall_timeout={int(page_stall_timeout_s)}s, "
                     f"auto_page_llm_threshold={auto_page_llm_threshold}, "
                     f"classify_batch={classify_batch_size}, "
                     f"pages={page_count}, cpu={cpu_count}"
@@ -1132,6 +1303,8 @@ def run_pdf_to_md(
         except Exception:
             pass
 
+    p_total = 0
+    p_done = 0
     try:
         # Stream stdout so we can parse per-page progress emitted by the converter.
         # Example lines:
@@ -1176,9 +1349,15 @@ def run_pdf_to_md(
         re_prog = re.compile(r"Processing\s+page\s+(\d+)\s*/\s*(\d+)", flags=re.IGNORECASE)
         re_done = re.compile(r"Finished\s+page\s+(\d+)\s*/\s*(\d+)", flags=re.IGNORECASE)
         re_page_hint = re.compile(r"\bPage\s+(\d+)\s*:", flags=re.IGNORECASE)
+        re_page_bracket = re.compile(r"\[\s*Page\s+(\d+)\s*\]", flags=re.IGNORECASE)
+        re_fail_page_a = re.compile(r"\berror\s+processing\s+page\s+(\d+)\b", flags=re.IGNORECASE)
+        re_fail_page_b = re.compile(r"\berror\s+page\s+(\d+)\b", flags=re.IGNORECASE)
+        re_fail_page_c = re.compile(r"\bpage\s+(\d+)\s+failed\b", flags=re.IGNORECASE)
+        re_running_pages = re.compile(r"still\s+running\s+pages\s*:\s*\[([0-9,\s]+)\]", flags=re.IGNORECASE)
         done_pages: set[int] = set()
         current_page_inflight = 0
         last_line_ts = time.time()
+        last_done_ts = time.time()
         last_heartbeat_ts = 0.0
         rc_override: Optional[int] = None
         while True:
@@ -1214,16 +1393,48 @@ def run_pdf_to_md(
                 m3 = re_done.search(s)
                 if m3:
                     try:
+                        old_done = int(p_done)
                         pg = int(m3.group(1))
                         p_total = max(p_total, int(m3.group(2)))
                         done_pages.add(pg)
                         p_done = max(p_done, len(done_pages))
+                        if p_done > old_done:
+                            last_done_ts = time.time()
                     except Exception:
                         pass
                 m4 = re_page_hint.search(s)
                 if m4:
                     try:
                         current_page_inflight = max(current_page_inflight, int(m4.group(1)))
+                    except Exception:
+                        pass
+                m5 = re_page_bracket.search(s)
+                if m5:
+                    try:
+                        current_page_inflight = max(current_page_inflight, int(m5.group(1)))
+                    except Exception:
+                        pass
+                m6 = re_running_pages.search(s)
+                if m6:
+                    try:
+                        vals = [int(x.strip()) for x in str(m6.group(1) or "").split(",") if x.strip().isdigit()]
+                        if vals:
+                            current_page_inflight = max(current_page_inflight, max(vals))
+                    except Exception:
+                        pass
+                # Treat failed pages as "processed" for progress accounting.
+                # Otherwise UI can appear stuck at N-1/N during long tail post-processing.
+                fm = re_fail_page_a.search(s) or re_fail_page_b.search(s) or re_fail_page_c.search(s)
+                if fm:
+                    try:
+                        old_done = int(p_done)
+                        pgf = int(fm.group(1))
+                        if pgf > 0:
+                            done_pages.add(pgf)
+                            p_done = max(p_done, len(done_pages))
+                            current_page_inflight = max(current_page_inflight, pgf)
+                            if p_done > old_done:
+                                last_done_ts = time.time()
                     except Exception:
                         pass
                 try:
@@ -1245,6 +1456,26 @@ def run_pdf_to_md(
                 try:
                     if (now - last_line_ts) >= float(stall_timeout_s):
                         rc_override = -3
+                        _terminate_proc(proc)
+                        break
+                except Exception:
+                    pass
+
+            # Page-progress stall watchdog (independent from stdout heartbeat activity).
+            # If no page finishes for too long while pages remain, abort to avoid endless hangs.
+            if (page_stall_timeout_s is not None) and (page_stall_timeout_s > 0):
+                try:
+                    if (p_total > 0) and (p_done < p_total) and ((now - last_done_ts) >= float(page_stall_timeout_s)):
+                        rc_override = -4
+                        stalled_page = max(1, int(p_done) + 1, int(current_page_inflight or 0))
+                        try:
+                            progress_cb and progress_cb(
+                                p_done,
+                                p_total,
+                                f"converter page-progress stalled at {stalled_page}/{p_total} for {int(now-last_done_ts)}s; terminating",
+                            )
+                        except Exception:
+                            pass
                         _terminate_proc(proc)
                         break
                 except Exception:
@@ -1289,8 +1520,105 @@ def run_pdf_to_md(
     if rc == -2:
         return False, "cancelled"
     if rc == -3:
+        # Source-level resilience: one automatic safe-profile retry for LLM mode.
+        # This addresses common root causes of stalls (provider throttling / concurrency contention)
+        # without requiring users to manually tune env vars.
+        if (not bool(no_llm)) and int(_safe_retry_attempt) < 1:
+            try:
+                progress_cb and progress_cb(
+                    p_done,
+                    p_total,
+                    "converter stalled on output heartbeat; retrying once with conservative profile (workers=1, llm_workers=1)",
+                )
+            except Exception:
+                pass
+            env_overrides = {
+                "KB_PDF_WORKERS": "1",
+                "KB_PDF_LLM_WORKERS": "1",
+                "KB_LLM_MAX_INFLIGHT": "1",
+                "KB_PDF_LLM_TIMEOUT_S": str(max(120, int(ui_llm_timeout))),
+                "KB_PDF_LLM_RETRIES": str(max(1, int(ui_llm_retries))),
+                "KB_PDF_PAGE_STALL_TIMEOUT_S": str(max(1200, int(page_stall_timeout_s or 0))),
+            }
+            old_env: dict[str, str | None] = {}
+            try:
+                for k, v in env_overrides.items():
+                    old_env[k] = os.environ.get(k)
+                    os.environ[k] = str(v)
+                return run_pdf_to_md(
+                    pdf_path=pdf_path,
+                    out_root=out_root,
+                    no_llm=no_llm,
+                    keep_debug=keep_debug,
+                    eq_image_fallback=eq_image_fallback,
+                    progress_cb=progress_cb,
+                    cancel_cb=cancel_cb,
+                    heartbeat_s=heartbeat_s,
+                    stall_timeout_s=stall_timeout_s,
+                    speed_mode=speed_mode,
+                    _safe_retry_attempt=int(_safe_retry_attempt) + 1,
+                )
+            finally:
+                for k, ov in old_env.items():
+                    if ov is None:
+                        try:
+                            del os.environ[k]
+                        except Exception:
+                            pass
+                    else:
+                        os.environ[k] = ov
         timeout_hint = int(float(stall_timeout_s or 0))
         return False, f"converter stalled (no output for {timeout_hint}s)"
+    if rc == -4:
+        # Source-level resilience: one automatic safe-profile retry for LLM mode.
+        # This addresses common root causes of stalls (provider throttling / concurrency contention)
+        # without requiring users to manually tune env vars.
+        if (not bool(no_llm)) and int(_safe_retry_attempt) < 1:
+            try:
+                progress_cb and progress_cb(
+                    p_done,
+                    p_total,
+                    "converter stalled on page completion; retrying once with conservative profile (workers=1, llm_workers=1)",
+                )
+            except Exception:
+                pass
+            env_overrides = {
+                "KB_PDF_WORKERS": "1",
+                "KB_PDF_LLM_WORKERS": "1",
+                "KB_LLM_MAX_INFLIGHT": "1",
+                "KB_PDF_LLM_TIMEOUT_S": str(max(120, int(ui_llm_timeout))),
+                "KB_PDF_LLM_RETRIES": str(max(1, int(ui_llm_retries))),
+                "KB_PDF_PAGE_STALL_TIMEOUT_S": str(max(1200, int(page_stall_timeout_s or 0))),
+            }
+            old_env: dict[str, str | None] = {}
+            try:
+                for k, v in env_overrides.items():
+                    old_env[k] = os.environ.get(k)
+                    os.environ[k] = str(v)
+                return run_pdf_to_md(
+                    pdf_path=pdf_path,
+                    out_root=out_root,
+                    no_llm=no_llm,
+                    keep_debug=keep_debug,
+                    eq_image_fallback=eq_image_fallback,
+                    progress_cb=progress_cb,
+                    cancel_cb=cancel_cb,
+                    heartbeat_s=heartbeat_s,
+                    stall_timeout_s=stall_timeout_s,
+                    speed_mode=speed_mode,
+                    _safe_retry_attempt=int(_safe_retry_attempt) + 1,
+                )
+            finally:
+                for k, ov in old_env.items():
+                    if ov is None:
+                        try:
+                            del os.environ[k]
+                        except Exception:
+                            pass
+                    else:
+                        os.environ[k] = ov
+        timeout_hint = int(float(page_stall_timeout_s or 0))
+        return False, f"converter stalled (no page finished for {timeout_hint}s)"
 
     if rc != 0:
         tail = "\n".join(cp_out).strip()[-800:]

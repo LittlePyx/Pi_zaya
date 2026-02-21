@@ -134,10 +134,26 @@ def _looks_like_math_block(lines: list[str]) -> bool:
     # Avoid classifying equation numbers as math.
     if re.fullmatch(r"\(\s*\d{1,4}\s*\)", t):
         return False
+    
+    # Check for common math patterns (more lenient for single lines)
+    # Patterns like "δ + log k", "α =", "I 1 = { 1 , 2 , . . . , n }"
+    if len(cleaned) == 1:
+        # Single line - be more lenient
+        # Check for Greek letters, math operators, set notation
+        if re.search(r'[αβγδεζηθικλμνξοπρστυφχψω]', t, re.IGNORECASE):
+            if re.search(r'[=+\-*/^_{}\[\]()]', t) or re.search(r'\b(log|exp|sin|cos|tan|max|min)\b', t, re.IGNORECASE):
+                return True
+        # Check for set notation
+        if re.search(r'\{.*\}', t) and re.search(r'[=∈⊂⊆]', t):
+            return True
+        # Check for variable assignments with math operators
+        if re.match(r'^[A-Za-z]\s*[0-9]*\s*[=+\-*/]', t) or re.match(r'^[A-Za-z]\s*=\s*', t):
+            return True
+    
     # lots of math operators / greek / symbols
     # NOTE: single-line display equations are common (e.g., d?/ds), so don't require 2+ lines.
     math_chars = re.findall(r"[=+\-*/^_{}()\[\]<>?]|[\u2200-\u22ff]|[\u0370-\u03ff]|[\ufe00-\ufe0f]", t)
-    threshold = 4 if len(cleaned) <= 1 else 6
+    threshold = 3 if len(cleaned) <= 1 else 6  # Lower threshold for single lines
     if len(math_chars) < threshold and not _looks_like_equation_text(t):
         return False
     alpha_chars = re.findall(r"[A-Za-z]", t)
@@ -150,7 +166,7 @@ def _looks_like_math_block(lines: list[str]) -> bool:
     if len(wordish) >= 24 and len(math_chars) < 18 and "=" not in t and ("\\sum" not in t) and ("\\int" not in t):
         return False
     if len(cleaned) <= 1:
-        return ratio < 0.55
+        return ratio < 0.60  # More lenient for single lines
     # multi-line equation blocks can contain connector words like "with/and"; allow a bit more letters.
     if len(math_chars) >= 10:
         return True

@@ -12,6 +12,7 @@ class TextBlock(BaseModel):
     is_table: bool = False
     table_markdown: Optional[str] = None
     is_math: bool = False
+    is_caption: bool = False  # Figure/Table captions
     heading_level: Optional[str] = None  # e.g., "[H1]", "[H2]"
     
     # Optional closure for inserting images (not serializable, exclude from dumps if needed)

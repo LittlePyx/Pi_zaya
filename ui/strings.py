@@ -5,6 +5,8 @@ S = {
     "title": "\u03c0-zaya \u00b7 \u4f60\u7684\u77e5\u8bc6\u5e93\u52a9\u7406",
     "settings": "\u8bbe\u7f6e",
     "db_path": "DB \u8def\u5f84",
+    "pdf_path": "PDF \u8def\u5f84",
+    "open_pdf_dir": "\u6253\u5f00 PDF \u76ee\u5f55",
     "top_k": "\u68c0\u7d22 Top-K",
     "temp": "\u6e29\u5ea6",
     "max_tokens": "\u6700\u5927\u8f93\u51fa tokens",

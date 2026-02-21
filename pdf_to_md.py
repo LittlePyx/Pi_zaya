@@ -815,6 +815,36 @@ def _page_looks_like_references_content(page) -> bool:
     return len(years) >= 28
 
 
+def _build_refs_mode_by_page(doc) -> list[bool]:
+    """
+    Build per-page REFERENCES mode without "sticky-to-end" behavior.
+
+    Older logic toggled refs-mode once and kept it for all following pages, which
+    breaks journals where a references block appears early. Here we classify each
+    page independently, with only a one-page bridge for occasional OCR misses.
+    """
+    total = int(len(doc) or 0)
+    if total <= 0:
+        return []
+
+    seed: list[bool] = [False] * total
+    for i in range(total):
+        try:
+            p = doc[i]
+            seed[i] = bool(_page_has_references_heading(p) or _page_looks_like_references_content(p))
+        except Exception:
+            seed[i] = False
+
+    refs_mode = list(seed)
+    if total >= 3:
+        for i in range(1, total - 1):
+            # Bridge one isolated miss between two reference-like pages.
+            if (not refs_mode[i]) and refs_mode[i - 1] and refs_mode[i + 1]:
+                refs_mode[i] = True
+
+    return refs_mode
+
+
 def _is_frontmatter_noise_line(text: str) -> bool:
     t = _normalize_text(text)
     if not t:
@@ -3494,8 +3524,15 @@ def _format_references(md: str) -> str:
     lines = md.splitlines()
     heading_re = re.compile(r"^#{1,3}\s+REFERENCES\s*$", re.IGNORECASE)
     plain_re = re.compile(r"^\s*REFERENCES\s*$", re.IGNORECASE)
-    top_heading_re = re.compile(r"^#\s+")
+    top_heading_re = re.compile(r"^#{1,6}\s+")
     idx_line_re = re.compile(r"^\s*(\d+)\.\s+\S")
+    plain_section_re = re.compile(
+        r"^\s*(?:\d+(?:\.\d+)*\.?\s+)?"
+        r"(?:introduction|background|related work|method(?:s|ology)?|"
+        r"experiment(?:s|al)?|results?|discussion|conclusion|appendix|"
+        r"acknowledg(?:e)?ments?)\b",
+        re.IGNORECASE,
+    )
 
     def _is_ref_index_line(ln: str) -> bool:
         m = idx_line_re.match(ln.strip())
@@ -3508,11 +3545,27 @@ def _format_references(md: str) -> str:
         # Guard: years like "2022. ..." are NOT list indices.
         return 1 <= n <= 600
 
+    def _looks_refish_line(ln: str) -> bool:
+        s = _normalize_text(ln or "").strip()
+        if not s:
+            return False
+        if _is_ref_index_line(s) or re.match(r"^\s*\[\d+\]\s+\S", s):
+            return True
+        years = re.findall(r"(?:19|20)\d{2}", s)
+        if years and (s.count(",") >= 2) and (len(s) >= 20):
+            return True
+        low = s.lower()
+        if ("doi" in low or "http" in low or "arxiv" in low) and len(s) >= 20:
+            return True
+        return False
+
     i = 0
     out: list[str] = []
     found = False
     ref_block: list[str] = []
     tail_after_refs: list[str] = []
+    refish_hits = 0
+    non_ref_run = 0
 
     while i < len(lines):
         line = lines[i]
@@ -3528,13 +3581,22 @@ def _format_references(md: str) -> str:
         # found references: collect until an appendix-like heading starts.
         # Some converters/LLMs may accidentally emit headings in the middle (page headers, etc.) - ignore those.
         if top_heading_re.match(line) and not heading_re.match(line.strip()):
-            title = re.sub(r"^#\s+", "", line.strip()).strip()
+            title = re.sub(r"^#{1,6}\s+", "", line.strip()).strip()
             if _is_appendix_heading_text(title) or _is_numbered_heading_text(title):
+                tail_after_refs = lines[i:]
+                break
+            # Front-references safe exit: when substantial references were already collected,
+            # and a normal body section appears, stop collecting references.
+            if plain_section_re.match(title):
                 tail_after_refs = lines[i:]
                 break
             # ignore spurious headings inside references (do not stop collection)
             i += 1
             continue
+        # Non-markdown section cue (e.g. "1. Introduction") can indicate body starts here.
+        if plain_section_re.match(line.strip()) and len(ref_block) >= 3:
+            tail_after_refs = lines[i:]
+            break
         # Some PDFs (especially two-column) lose heading markers and emit appendix as:
         # "A" newline "DETAILS OF ...". Stop references before that.
         if line.strip() and re.fullmatch(r"[A-Z]", line.strip()):
@@ -3546,7 +3608,22 @@ def _format_references(md: str) -> str:
             # skip repeated "REFERENCES" headings
             i += 1
             continue
+
+        # If we're deep into a references run but hit a long sequence of non-reference lines,
+        # this is likely normal body content after an early references block.
+        st_line = line.strip()
+        is_refish = _looks_refish_line(st_line)
+        if st_line and (not is_refish) and (refish_hits >= 8) and ((non_ref_run + 1) >= 8):
+            tail_after_refs = lines[i:]
+            break
+
         ref_block.append(line)
+        if st_line:
+            if is_refish:
+                refish_hits += 1
+                non_ref_run = 0
+            else:
+                non_ref_run += 1
         i += 1
 
     if not found:
@@ -3939,7 +4016,7 @@ def _inject_references_section(md: str, refs: list[str]) -> str:
     lines = md.splitlines()
     heading_re = re.compile(r"^#{1,3}\s+REFERENCES\s*$", re.IGNORECASE)
     plain_re = re.compile(r"^\s*REFERENCES\s*$", re.IGNORECASE)
-    top_heading_re = re.compile(r"^#\s+")
+    top_heading_re = re.compile(r"^#{1,6}\s+")
 
     start = None
     for i, ln in enumerate(lines):
@@ -3962,7 +4039,7 @@ def _inject_references_section(md: str, refs: list[str]) -> str:
         ln = lines[i]
         st = ln.strip()
         if top_heading_re.match(ln) and not heading_re.match(st):
-            title = re.sub(r"^#\s+", "", st).strip()
+            title = re.sub(r"^#{1,6}\s+", "", st).strip()
             if _is_appendix_heading_text(title) or _is_numbered_heading_text(title):
                 end = i
                 break
@@ -4859,14 +4936,14 @@ TEXT:
         # find references heading
         start = None
         for i, ln in enumerate(lines):
-            if re.match(r"^#\s+REFERENCES\s*$", ln.strip(), flags=re.IGNORECASE):
+            if re.match(r"^#{1,6}\s+REFERENCES\s*$", ln.strip(), flags=re.IGNORECASE):
                 start = i + 1
                 break
         if start is None:
             return md
         end = len(lines)
         for j in range(start, len(lines)):
-            if re.match(r"^#\s+\S", lines[j]) and not re.match(r"^#\s+REFERENCES\s*$", lines[j].strip(), flags=re.IGNORECASE):
+            if re.match(r"^#{1,6}\s+\S", lines[j]) and not re.match(r"^#{1,6}\s+REFERENCES\s*$", lines[j].strip(), flags=re.IGNORECASE):
                 end = j
                 break
         ref_block = "\n".join(lines[start:end]).strip()
@@ -6254,13 +6331,7 @@ INPUT JSON:
         end: int,
         noise_texts: set[str],
     ) -> None:
-        refs_mode_by_page: list[bool] = []
-        in_references = False
-        for i in range(total_pages):
-            page = doc[i]
-            if _page_has_references_heading(page) or _page_looks_like_references_content(page):
-                in_references = True
-            refs_mode_by_page.append(bool(in_references))
+        refs_mode_by_page = _build_refs_mode_by_page(doc)
 
         en_by_index: dict[int, str] = {}
         todo_pages: list[int] = []
@@ -6367,13 +6438,7 @@ INPUT JSON:
                 )
                 print(f"Done. Output: {save_dir_ui}")
                 return
-            refs_mode_by_page: list[bool] = []
-            in_references = False
-            for i in range(total_pages):
-                p = doc[i]
-                if _page_has_references_heading(p) or _page_looks_like_references_content(p):
-                    in_references = True
-                refs_mode_by_page.append(bool(in_references))
+            refs_mode_by_page = _build_refs_mode_by_page(doc)
 
             en_by_index: dict[int, str] = {}
             zh_by_index: dict[int, str] = {}
@@ -6816,22 +6881,40 @@ def main() -> None:
         # Keep conversion success even on long Windows paths.
         # output.md is already sufficient for UI discovery (_resolve_md_output_paths falls back to any *.md).
         output_md = output_dir / "output.md"
-        if output_md.exists():
+        try:
+            output_exists = bool(_as_fs_path(output_md).exists())
+        except Exception:
+            output_exists = output_md.exists()
+        if output_exists:
             final_md = output_dir / f"{paper_name}.en.md"
+            src_p = _as_fs_path(output_md)
+            dst_p = _as_fs_path(final_md)
+            moved = False
             try:
-                if final_md.exists():
-                    final_md.unlink()
-                output_md.replace(final_md)
+                if dst_p.exists():
+                    dst_p.unlink()
+            except Exception:
+                pass
+            try:
+                src_p.replace(dst_p)
+                moved = True
                 print(f"  Renamed to: {final_md}", flush=True)
             except Exception as e:
-                # Fallback: try copy so canonical .en.md still gets refreshed.
-                # This helps when replace() fails due Windows path/locking quirks.
+                # Fallback: copy then keep source as-is.
                 try:
                     import shutil
-                    shutil.copyfile(str(output_md), str(final_md))
+                    shutil.copyfile(str(src_p), str(dst_p))
+                    moved = True
                     print(f"  Rename failed ({e}); copied to: {final_md}", flush=True)
                 except Exception as e2:
                     print(f"  Skip rename/copy to .en.md ({e2}); keep output.md", flush=True)
+            if moved:
+                # Best effort: remove output.md when canonical file is ready.
+                try:
+                    if src_p.exists():
+                        src_p.unlink()
+                except Exception:
+                    pass
         
         if (output_dir / "quality_report.md").exists():
             print(f"  Quality report: {output_dir / 'quality_report.md'}", flush=True)

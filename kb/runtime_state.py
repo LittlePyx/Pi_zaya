@@ -24,6 +24,11 @@ GEN_LOCK = threading.Lock()
 GEN_TASKS: dict[str, dict] = {}
 
 
+# Citation metadata async worker state (used by ui/refs_renderer.py).
+CITATION_LOCK = threading.Lock()
+CITATION_TASKS: dict[str, dict] = {}
+
+
 CACHE_LOCK = threading.Lock()
 CACHE: dict[str, dict] = {
     "file_text": {},

@@ -454,13 +454,29 @@ def _extract_tables_by_layout(
 
     candidates: list[tuple[fitz.Rect, str, float]] = []
     kwargs_seq = primary_kwargs
-    for kwargs in kwargs_seq:
+    
+    import time
+    table_extract_start = time.time()
+    max_table_extract_time = 8.0  # Max 8 seconds for table extraction per page
+    
+    for strategy_idx, kwargs in enumerate(kwargs_seq):
+        if time.time() - table_extract_start > max_table_extract_time:
+            print(f"      [Table extraction] Timeout after {strategy_idx}/{len(kwargs_seq)} strategies, skipping remaining", flush=True)
+            break
+        
         uses_text_strategy = ("text" in str(kwargs.get("vertical_strategy", "")).lower()) or (
             "text" in str(kwargs.get("horizontal_strategy", "")).lower()
         )
+        strategy_start = time.time()
         try:
             table_finder = page.find_tables(**kwargs)
-        except Exception:
+            strategy_time = time.time() - strategy_start
+            if strategy_time > 1.0:
+                print(f"      [Table extraction] Strategy {strategy_idx+1} ({kwargs.get('vertical_strategy', '?')}/{kwargs.get('horizontal_strategy', '?')}): {strategy_time:.2f}s (SLOW!)", flush=True)
+        except Exception as e:
+            strategy_time = time.time() - strategy_start
+            if strategy_time > 0.5:
+                print(f"      [Table extraction] Strategy {strategy_idx+1} FAILED after {strategy_time:.2f}s: {e}", flush=True)
             continue
         tables = getattr(table_finder, "tables", table_finder)
         if not tables:
