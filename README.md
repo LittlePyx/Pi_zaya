@@ -1,15 +1,18 @@
 ﻿# Pi_zaya / kb_chat
 
-这份 README 是我（开发者）写给使用者的。目标是让你在自己的电脑上，稳定地把 PDF 转成 Markdown、更新知识库，并在对话里可追溯引用。
+学术 PDF 知识库助手 —— 基于 RAG 的问答系统，支持可追溯引用。
+
+前端：Vite + React 18 + Ant Design 5 + TailwindCSS v4
+后端：FastAPI（包装 `kb/` 模块）+ Uvicorn
 
 ## 你可以用它做什么
 
 - 在「文献管理」页批量上传 PDF，并转换为 Markdown（含图片、公式、参考文献处理）。
 - 一键「更新知识库」，把 Markdown 分块索引到本地 DB。
-- 在「对话」页基于知识库检索回答，并显示可点击的文内引用 `[n]`。
-- 点击引用可弹出文献信息（来源、题录、DOI 链接）。
-- 可将引用加入右侧「文献篮」，集中查看并跳转 DOI 页面。
+- 在「对话」页基于知识库检索回答，LLM 流式输出（SSE），并显示可点击的文内引用 `[n]`。
+- 点击引用可查看文献信息（来源、题录、DOI 链接）。
 - 参考文献索引支持后台 Crossref 同步，不阻塞页面使用。
+- 支持 Dark / Light 主题切换。
 
 ---
 
@@ -30,41 +33,74 @@
 
 ---
 
-## 快速启动（Windows）
+## 快速启动
 
 ### 1) 克隆项目
 
-```powershell
+```bash
 git clone https://github.com/LittlePyx/Pi_zaya.git
 cd Pi_zaya
 ```
 
-### 2) 设置 Qwen API Key（当前推荐）
+### 2) 设置 API Key
+
+macOS / Linux：
+
+```bash
+export QWEN_API_KEY="你的key"
+```
+
+Windows (PowerShell)：
 
 ```powershell
 $env:QWEN_API_KEY="你的key"
 ```
 
-可选（一般不用改）：
+### 3) 安装后端依赖
 
-```powershell
-$env:QWEN_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
-$env:QWEN_MODEL="qwen3-vl-plus"
+macOS / Linux：
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-### 3) 启动
+Windows (PowerShell)：
 
 ```powershell
-.\run.ps1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
 ```
 
-或双击 `run.cmd`。
+### 4) 安装前端依赖并构建
 
-脚本会自动：
+```bash
+cd web
+npm install
+npm run build
+cd ..
+```
 
-- 创建 `.venv`（若不存在）
-- 安装 `requirements.txt`
-- 启动 Streamlit（默认 `http://127.0.0.1:8501`）
+### 5) 启动
+
+```bash
+python server.py
+# 访问 http://localhost:8000
+```
+
+生产模式下 FastAPI 同时提供 API 和前端静态文件。
+
+**开发模式**（前后端分离热更新）：
+
+```bash
+# 终端 1：后端
+python server.py
+
+# 终端 2：前端（Vite dev server，自动代理 /api → localhost:8000）
+cd web && npm run dev
+# 访问 http://localhost:5173
+```
 
 ---
 
@@ -114,8 +150,6 @@ $env:QWEN_MODEL="qwen3-vl-plus"
 - `KB_DB_DIR`：知识库索引目录
 - `KB_CHAT_DB`：对话数据库路径
 - `KB_LIBRARY_DB`：文献库数据库路径
-- `KB_STREAMLIT_ADDR`：默认 `127.0.0.1`
-- `KB_STREAMLIT_PORT`：默认 `8501`
 
 ### 参考文献索引
 
@@ -125,13 +159,11 @@ $env:QWEN_MODEL="qwen3-vl-plus"
 
 ## 常见问题
 
-### 1) 页面一直 Running
+### 1) 页面打不开或接口报错
 
-通常是前端脚本缓存或后台任务异常。建议：
-
-1. 重启 Streamlit
-2. 浏览器 `Ctrl+F5` 强刷
-3. 再看「文献管理」页中的后台状态
+1. 确认后端已启动：`python server.py`
+2. 生产模式确认已执行 `cd web && npm run build`
+3. 检查终端日志中的错误信息
 
 ### 2) 为什么有的引用没有 DOI
 

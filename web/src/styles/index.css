@@ -1,0 +1,37 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #fcfcfd;
+  --panel: #ffffff;
+  --text-main: #1f2329;
+  --accent: #1677ff;
+  --msg-user-bg: #eef3f9;
+  --msg-ai-bg: #ffffff;
+  --border: #e8e8e8;
+}
+
+.dark {
+  --bg: #141414;
+  --panel: #1f1f1f;
+  --text-main: #e7eaef;
+  --accent: #4daafc;
+  --msg-user-bg: rgba(77, 170, 252, 0.12);
+  --msg-ai-bg: #1a1a2e;
+  --border: #303030;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-main);
+  font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+
+/* markdown code blocks */
+.kb-markdown pre {
+  border-radius: 8px;
+  overflow-x: auto;
+}

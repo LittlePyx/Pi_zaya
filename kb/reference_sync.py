@@ -254,7 +254,7 @@ def start_reference_sync(
             },
             daemon=True,
             name=f"kb-ref-sync-{run_id}",
-        )
+    )
         _THREAD = t
         t.start()
         return {"started": True, "run_id": run_id}

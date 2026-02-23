@@ -17,8 +17,13 @@ user_prefs.json
 db/
 
 # OS
+.env
 .DS_Store
 Thumbs.db
 
 DBnew/
-db/
+chat.*
+CLAUDE.md
+web/dist
+web/node_modules
+.claude

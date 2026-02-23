@@ -1,9 +1,12 @@
-﻿streamlit==1.12.0
-altair==4.2.2
-Jinja2>=3.1
-openai==2.16.0
+﻿openai==2.16.0
 pymupdf==1.26.5
 pdfplumber==0.11.8
 rank-bm25==0.2.2
 tqdm==4.67.1
 requests>=2.31
+Jinja2>=3.1
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sse-starlette>=2.0
+python-multipart>=0.0.9
+python-dotenv>=1.0

@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -18,6 +20,7 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
     # Prefer Qwen (vision-capable) when configured; fall back to DeepSeek/OpenAI.
     api_key = (
         os.environ.get("QWEN_API_KEY")
