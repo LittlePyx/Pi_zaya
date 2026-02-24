@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Typography, Tag } from 'antd'
+import { Typography } from 'antd'
 import { UserOutlined, RobotOutlined } from '@ant-design/icons'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
@@ -62,11 +62,20 @@ export function MessageList({ messages, generationPartial, generationStage }: Pr
             <RobotOutlined className="text-white text-xs" />
           </div>
           <div className="max-w-[75%] rounded-xl px-4 py-3 bg-[var(--msg-ai-bg)]">
-            {generationStage && <Tag color="blue" className="mb-2">{generationStage}</Tag>}
+            {generationStage && (
+              <div className="flex items-center gap-2 mb-2">
+                <span className="inline-block w-2 h-2 rounded-full bg-[var(--accent)] animate-pulse" />
+                <Text type="secondary" className="text-xs">{generationStage}</Text>
+              </div>
+            )}
             {generationPartial ? (
               <MarkdownRenderer content={generationPartial} />
             ) : (
-              <Text type="secondary" className="animate-pulse">思考中...</Text>
+              <div className="flex items-center gap-1 py-1">
+                <span className="typing-dot" />
+                <span className="typing-dot" style={{ animationDelay: '0.15s' }} />
+                <span className="typing-dot" style={{ animationDelay: '0.3s' }} />
+              </div>
             )}
           </div>
         </div>

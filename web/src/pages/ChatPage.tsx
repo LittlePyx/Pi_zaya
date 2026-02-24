@@ -1,4 +1,5 @@
 import { Typography } from 'antd'
+import { MessageOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList } from '../components/chat/MessageList'
@@ -32,8 +33,13 @@ export default function ChatPage() {
   return (
     <div className="flex flex-col h-full">
       {!activeConvId && messages.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center">
-          <Text type="secondary">{S.no_msgs}</Text>
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4">
+          <div className="w-14 h-14 rounded-full bg-[var(--accent)] flex items-center justify-center opacity-20">
+            <MessageOutlined className="text-white text-2xl" />
+          </div>
+          <Text type="secondary" className="text-center max-w-xs">
+            {S.no_msgs}
+          </Text>
         </div>
       ) : (
         <>

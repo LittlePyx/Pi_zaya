@@ -11,7 +11,14 @@ export default function LibraryPage() {
   const store = useLibraryStore()
   const [mode, setMode] = useState('balanced')
 
-  useEffect(() => { store.loadPdfs() }, [])
+  useEffect(() => {
+    store.loadPdfs()
+    // Reconnect SSE if conversion is already running
+    if (store.converting && !store.sseController) {
+      store.startProgressStream()
+    }
+    return () => { store.stopProgressStream() }
+  }, [])
 
   const handleUpload = async (file: File) => {
     const res = await store.upload(file)
@@ -59,7 +66,44 @@ export default function LibraryPage() {
         )}
       </div>
 
-      {store.converting && <Progress percent={50} status="active" />}
+      {store.converting && store.progress && (
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--panel)] p-4 space-y-3">
+          <div className="flex justify-between items-center text-sm">
+            <Text strong>
+              {S.converting_files} {store.progress.completed}/{store.progress.total}
+            </Text>
+            {store.progress.last && (
+              <Text type="secondary" className="text-xs">
+                {S.last_done}: {store.progress.last}
+              </Text>
+            )}
+          </div>
+          <Progress
+            percent={store.progress.total > 0
+              ? Math.round((store.progress.completed / store.progress.total) * 100)
+              : 0}
+            status="active"
+            strokeColor={{ from: '#1677ff', to: '#52c41a' }}
+          />
+          {store.progress.current && (
+            <div className="pl-3 border-l-2 border-[var(--accent)] space-y-1">
+              <Text className="text-sm">{store.progress.current}</Text>
+              {store.progress.curPageTotal > 0 && (
+                <Progress
+                  percent={Math.round(
+                    (store.progress.curPageDone / store.progress.curPageTotal) * 100
+                  )}
+                  size="small"
+                  status="active"
+                />
+              )}
+              {store.progress.curPageMsg && (
+                <Text type="secondary" className="text-xs">{store.progress.curPageMsg}</Text>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <Button icon={<ReloadOutlined />} type="primary" onClick={handleReindex}>
         {S.reindex_now}

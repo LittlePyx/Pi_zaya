@@ -32,4 +32,7 @@ export const S = {
   stop: '停止',
   copy_text: '复制文本',
   copy_md: '复制 Markdown',
+  converting_files: '正在转换',
+  last_done: '上一个完成',
+  newline: '换行',
 } as const

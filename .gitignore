@@ -10,7 +10,7 @@ __pycache__/
 .venv/
 
 # Local DB / prefs (per-user, should not be shared)
-chat.sqlite3
+chat.sqlite3*
 library.sqlite3
 tmp_*.sqlite3
 user_prefs.json
@@ -22,7 +22,6 @@ db/
 Thumbs.db
 
 DBnew/
-chat.*
 CLAUDE.md
 web/dist
 web/node_modules
