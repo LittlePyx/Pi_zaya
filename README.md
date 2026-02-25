@@ -5,6 +5,26 @@
 前端：Vite + React 18 + Ant Design 5 + TailwindCSS v4
 后端：FastAPI（包装 `kb/` 模块）+ Uvicorn
 
+## 入口说明（当前阶段）
+
+- `app.py`（Streamlit）：当前功能更完整，建议作为日常默认入口。
+- `server.py` + `web/`（FastAPI + React）：重构中的新入口，建议作为阶段性保留/迁移目标。
+
+Windows（PowerShell）可直接使用：
+
+```powershell
+# 旧版入口（默认推荐）
+.\run_old.ps1
+
+# 新版入口（开发模式：后端 + Vite）
+.\run_new.ps1 -StopExisting
+```
+
+说明：
+
+- `run.ps1` 仍然可用，它本质上就是旧版 Streamlit 启动脚本。
+- `run_new.ps1` 默认不自动安装依赖，避免无意修改环境；需要时可加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
+
 ## 你可以用它做什么
 
 - 在「文献管理」页批量上传 PDF，并转换为 Markdown（含图片、公式、参考文献处理）。
