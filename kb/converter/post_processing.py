@@ -21,6 +21,10 @@ _ALLOWED_UNNUMBERED_HEADINGS = {
     "METHODS",
     "RESULTS",
     "DISCUSSION",
+    "SUPPLEMENTARY MATERIAL",
+    "SUPPLEMENTAL MATERIAL",
+    "SUPPLEMENTARY",
+    "SUPPLEMENTAL",
 }
 
 def _is_reasonable_heading_text(t: str) -> bool:
@@ -74,6 +78,89 @@ def _is_caption_heading_text(title: str) -> bool:
     if re.match(r"^(?:figure|fig\.?|table|algorithm)\s*(?:\d+|[ivxlc]+)\b", t, re.IGNORECASE):
         return True
     if re.match(r"^(?:figure|fig\.?|table|algorithm)\s+\d+\s+caption\b", t, re.IGNORECASE):
+        return True
+    return False
+
+
+def _is_references_heading_line(text: str) -> bool:
+    st = (text or "").strip()
+    if not st:
+        return False
+    return bool(
+        re.match(r"^#{1,6}\s+(?:References|Bibliography)\b", st, re.IGNORECASE)
+        or re.match(r"^(?:References|Bibliography)\s*$", st, re.IGNORECASE)
+    )
+
+
+def _is_post_references_resume_heading_line(text: str) -> bool:
+    """
+    Detect a likely section boundary after a References/Bibliography block.
+    This is intentionally conservative and primarily targets appendices /
+    supplementary sections, which are commonly placed after references.
+    """
+    st = (text or "").strip()
+    if not st:
+        return False
+    if _is_references_heading_line(st):
+        return False
+    ref_start_match = bool(re.match(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\.\s+[A-Z])", st))
+
+    # Markdown headings: any explicit appendix/supplementary heading should end refs mode.
+    if re.match(r"^#{1,6}\s+", st):
+        title = re.sub(r"^#{1,6}\s+", "", st).strip()
+        if re.match(
+            r"^(?:appendix|appendices|supplementary(?:\s+material)?|supplemental(?:\s+material)?|annex)\b",
+            title,
+            re.IGNORECASE,
+        ):
+            return True
+        if _parse_appendix_heading_level(title) is not None:
+            return True
+        return False
+
+    # Plain-text appendix/supplementary headings (common after OCR/VL).
+    if re.match(
+        r"^(?:appendix|appendices|supplementary(?:\s+material)?|supplemental(?:\s+material)?|annex)\b",
+        st,
+        re.IGNORECASE,
+    ):
+        return True
+    # Some OCR/VL outputs merge the paper title and "Supplementary Material" onto one line.
+    # Example: "SCIGS: ... Snapshot Compressive Image Supplementary Material"
+    if re.search(r"\bsupplementary\s+material\b", st, re.IGNORECASE):
+        # Avoid misclassifying reference prose lines mentioning supplementary material.
+        if ref_start_match:
+            # If this is a merged mega-line containing multiple references plus a supplementary header,
+            # treat it as a true resume boundary.
+            ref_markers = len(re.findall(r"\[\s*\d{1,4}\s*\]", st))
+            if ref_markers >= 2 and len(st) >= 220:
+                return True
+        elif not re.search(r"\b(?:doi|arxiv|proc(?:eedings)?\.?)\b", st, re.IGNORECASE):
+            return True
+    if re.search(r"\bsupplemental\s+material\b", st, re.IGNORECASE):
+        if ref_start_match:
+            ref_markers = len(re.findall(r"\[\s*\d{1,4}\s*\]", st))
+            if ref_markers >= 2 and len(st) >= 220:
+                return True
+        elif not re.search(r"\b(?:doi|arxiv|proc(?:eedings)?\.?)\b", st, re.IGNORECASE):
+            return True
+    # Catch merged headers like "SCIGS ... A. Additional Experiments" on one OCR line.
+    if re.search(r"\b[A-Z]\.\s+Additional\s+Experiments\b", st, re.IGNORECASE):
+        if ref_start_match:
+            ref_markers = len(re.findall(r"\[\s*\d{1,4}\s*\]", st))
+            if ref_markers >= 2 and len(st) >= 180:
+                return True
+        elif not re.search(r"\b(?:doi|arxiv|proc(?:eedings)?\.?)\b", st, re.IGNORECASE):
+            return True
+    # For normal reference entries, keep them in refs mode.
+    if ref_start_match:
+        return False
+    if re.match(
+        r"^[A-Z]\.\s+(?:appendix|additional|supplementary|supplemental|proof(?:s)?|derivation(?:s)?|"
+        r"implementation(?:\s+details?)?|experiment(?:s)?|results?|ablation(?:s)?|details?|extra)\b",
+        st,
+        re.IGNORECASE,
+    ):
         return True
     return False
 
@@ -428,10 +515,12 @@ def _promote_bare_numbered_headings(md: str) -> str:
             in_math = not in_math
             out.append(ln)
             continue
-        if re.match(r"^#{1,6}\s+References\b", st, re.IGNORECASE):
+        if _is_references_heading_line(st):
             in_refs = True
             out.append(ln)
             continue
+        if in_refs and _is_post_references_resume_heading_line(st):
+            in_refs = False
         if in_fence or in_math or in_refs:
             out.append(ln)
             continue
@@ -690,7 +779,7 @@ def _format_references(md: str) -> str:
         r"^\s*(?:\d+(?:\.\d+)*\.?\s+)?"
         r"(?:introduction|background|related work|method(?:s|ology)?|"
         r"experiment(?:s|al)?|results?|discussion|conclusion|appendix|"
-        r"acknowledg(?:e)?ments?)\b",
+        r"acknowledg(?:e)?ments?|supplementary(?:\s+material)?|supplemental(?:\s+material)?)\b",
         re.IGNORECASE,
     )
 
@@ -704,10 +793,7 @@ def _format_references(md: str) -> str:
     ref_i = None
     inferred_heading = False
     for i, ln in enumerate(lines):
-        if re.match(r"^#{1,6}\s+References\b", ln.strip(), re.IGNORECASE):
-            ref_i = i
-            break
-        if re.match(r"^#{1,6}\s+Bibliography\b", ln.strip(), re.IGNORECASE):
+        if _is_references_heading_line(ln):
             ref_i = i
             break
     if ref_i is None:
@@ -803,6 +889,12 @@ def _format_references(md: str) -> str:
             if re.match(r"^#{1,6}\s+(?:References|Bibliography)\b", st, re.IGNORECASE):
                 continue
 
+            # Strong boundary: Appendix/Supplementary section after references.
+            # This must work even when the references section is short (<3 entries).
+            if _is_post_references_resume_heading_line(st):
+                tail_end = j
+                break
+
             # Strong section boundary (markdown heading).
             if heading_any_re.match(st):
                 title = _heading_title(st)
@@ -867,6 +959,28 @@ def _format_references(md: str) -> str:
     # Normalize leading markers like "1] ..." or "1. ..."
     blob = re.sub(r"(?m)^\s*(\d+)\]\s*", r"[\1] ", blob)
     blob = re.sub(r"(?m)^\s*(\d+)\.\s+", r"[\1] ", blob)
+
+    # Inline rescue: some preprocessors/OCR outputs collapse the first lines of
+    # supplementary material into the tail of the last reference line.
+    # When a strong post-references marker appears inside the blob after multiple
+    # reference markers, split it back out into body_tail so it won't be trimmed
+    # as reference noise.
+    try:
+        inline_resume_pat = re.compile(
+            r"\b(?:supplementary\s+material|supplemental\s+material|appendix|appendices|[A-Z]\.\s+Additional\s+Experiments)\b",
+            re.IGNORECASE,
+        )
+        m_inline_resume = inline_resume_pat.search(blob)
+        if m_inline_resume:
+            pre_blob = blob[: int(m_inline_resume.start())]
+            ref_marker_n = len(re.findall(r"\[\s*\d{1,4}\s*\]", pre_blob))
+            if ref_marker_n >= 2:
+                inline_tail = blob[int(m_inline_resume.start()) :].strip()
+                blob = pre_blob.rstrip()
+                if inline_tail:
+                    body_tail = [inline_tail] + list(body_tail or [])
+    except Exception:
+        pass
 
     def _trim_reference_noise(entry: str) -> str:
         s = re.sub(r"\s+", " ", (entry or "")).strip()
@@ -1573,10 +1687,12 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
             in_math = not in_math
             out.append(s)
             continue
-        if re.match(r"^#{1,6}\s+References\b", st, re.IGNORECASE):
+        if _is_references_heading_line(st):
             in_refs = True
             out.append(s)
             continue
+        if in_refs and _is_post_references_resume_heading_line(st):
+            in_refs = False
         if in_refs or in_math:
             out.append(s)
             continue
@@ -1804,10 +1920,12 @@ def _normalize_body_citations_to_superscript(md: str) -> str:
             in_math = not in_math
             out.append(ln)
             continue
-        if re.match(r"^#{1,6}\s+References\b", st, re.IGNORECASE):
+        if _is_references_heading_line(st):
             in_refs = True
             out.append(ln)
             continue
+        if in_refs and _is_post_references_resume_heading_line(st):
+            in_refs = False
 
         if in_refs or in_fence or in_math:
             out.append(ln)
@@ -1857,7 +1975,8 @@ def _normalize_body_citations_to_superscript(md: str) -> str:
 def _normalize_figure_caption_blocks(md: str) -> str:
     """
     Normalize figure/table caption presentation:
-    - Keep captions visually distinct from body text (italicized line).
+    - Use a canonical Markdown caption form for figures/tables:
+      `**Figure 3.** ...` / `**Table A.** ...`
     - If image alt contains a full caption but no visible caption line follows,
       inject one deterministic caption line after the image.
     """
@@ -1866,13 +1985,13 @@ def _normalize_figure_caption_blocks(md: str) -> str:
 
     image_re = re.compile(r"^\s*!\[([^\]]*)\]\([^)]+\)\s*$")
     caption_re = re.compile(
-        r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*(?:\d+[A-Za-z]?|[IVXLC]+)\b",
+        r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*(?:\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
         flags=re.IGNORECASE,
     )
 
     def _caption_id(text: str) -> Optional[str]:
         m = re.match(
-            r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*(\d+[A-Za-z]?|[IVXLC]+)\b",
+            r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table)\s*(\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
             _normalize_text(text or "").strip(),
             flags=re.IGNORECASE,
         )
@@ -1897,14 +2016,28 @@ def _normalize_figure_caption_blocks(md: str) -> str:
         return t
 
     def _format_caption_line(line: str) -> str:
-        t = (line or "").strip()
+        t = _normalize_text(line or "").strip()
         # Remove one layer of markdown emphasis and normalize spacing.
         t = re.sub(r"^\*{1,2}\s*", "", t)
         t = re.sub(r"\s*\*{1,2}$", "", t)
         t = re.sub(r"\s{2,}", " ", t).strip()
         if not t:
             return ""
-        return f"*{t}*"
+        m = re.match(
+            r"^(fig(?:ure)?\.?|table)\s*([A-Za-z0-9]+)\s*(?:[.:]\s*|\-\s*|\s+)?(.*)$",
+            t,
+            flags=re.IGNORECASE,
+        )
+        if not m:
+            return t
+        kind_raw = (m.group(1) or "").strip().lower()
+        ident = (m.group(2) or "").strip()
+        tail = (m.group(3) or "").strip()
+        tail = re.sub(r"^[\s\.\:\-]+", "", tail).strip()
+        kind = "Table" if kind_raw.startswith("table") else "Figure"
+        if tail:
+            return f"**{kind} {ident}.** {tail}"
+        return f"**{kind} {ident}.**"
 
     lines = md.splitlines()
     out: list[str] = []
@@ -1938,7 +2071,7 @@ def _normalize_figure_caption_blocks(md: str) -> str:
             in_math = not in_math
             out.append(ln)
             continue
-        if re.match(r"^#{1,6}\s+References\b", st, re.IGNORECASE):
+        if _is_references_heading_line(st):
             if pending_after_image and pending_alt_caption:
                 out.append(f"*{pending_alt_caption}*")
                 out.append("")
@@ -1948,6 +2081,8 @@ def _normalize_figure_caption_blocks(md: str) -> str:
             in_refs = True
             out.append(ln)
             continue
+        if in_refs and _is_post_references_resume_heading_line(st):
+            in_refs = False
 
         if in_fence or in_math or in_refs:
             out.append(ln)
@@ -1979,7 +2114,7 @@ def _normalize_figure_caption_blocks(md: str) -> str:
                     continue
             # No explicit caption followed image: inject from alt if we have one.
             if pending_after_image and pending_alt_caption:
-                out.append(f"*{pending_alt_caption}*")
+                out.append(_format_caption_line(pending_alt_caption))
                 out.append("")
             pending_alt_caption = None
             pending_alt_id = None
@@ -1993,10 +2128,16 @@ def _normalize_figure_caption_blocks(md: str) -> str:
             pending_after_image = True
             continue
 
+        if caption_re.match(st):
+            cap = _format_caption_line(ln)
+            if cap:
+                out.append(cap)
+                continue
+
         out.append(ln)
 
     if pending_after_image and pending_alt_caption:
-        out.append(f"*{pending_alt_caption}*")
+        out.append(_format_caption_line(pending_alt_caption))
 
     return "\n".join(out)
 

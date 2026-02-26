@@ -1,4 +1,8 @@
 ﻿openai==2.16.0
+# NOTE:
+# - Verified on Python 3.10.11 (the previous Python 3.9.7 environment is backed up).
+# - Streamlit >=1.12.1 excludes Python 3.9.7, so Python 3.10+ is now required.
+streamlit==1.54.0
 pymupdf==1.26.5
 pdfplumber==0.11.8
 rank-bm25==0.2.2

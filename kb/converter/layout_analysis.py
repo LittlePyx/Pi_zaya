@@ -135,13 +135,16 @@ def _merge_nearby_visual_rects(rects: list["fitz.Rect"], *, page_w: float, page_
                 union_area = max(0.0, float(union.width) * float(union.height))
                 area_a = max(0.0, float(cur.width) * float(cur.height))
                 area_b = max(0.0, float(b.width) * float(b.height))
+                inter_area = _rect_intersection_area(cur, b)
+                fill_ratio = (area_a + area_b - max(0.0, inter_area)) / max(1.0, union_area)
                 # Multi-panel figures are often stacked (a)(b)/(c) with a moderate y-gap.
                 # Keep this merge conservative to avoid collapsing unrelated figures.
                 stacked_panel = (
                     (x_ov / x_min >= 0.62)
-                    and (y_gap <= page_h * 0.085)
+                    and (y_gap <= min(page_h * 0.055, 48.0))
                     and (min(area_a, area_b) >= page_area * 0.006)
                     and (union_area <= page_area * 0.62)
+                    and (fill_ratio >= 0.58)
                 )
                 if close_h or close_v or touching or stacked_panel:
                     cur = fitz.Rect(
@@ -211,7 +214,14 @@ def _collect_visual_rects(page, *, image_rects: Optional[list["fitz.Rect"]] = No
             continue
         seen.add(key)
         uniq.append(r)
-    return _merge_nearby_visual_rects(uniq, page_w=page_w, page_h=page_h)
+    merged = _merge_nearby_visual_rects(uniq, page_w=page_w, page_h=page_h)
+    # Stabilize figure numbering/order across runs: top-to-bottom, then left-to-right.
+    # `get_image_info()` ordering can vary by PDF internals and cause fig_1/fig_2 swaps.
+    try:
+        merged.sort(key=lambda r: (int(round(float(r.y0) / 6.0)), float(r.x0), float(r.y0), float(r.x1)))
+    except Exception:
+        pass
+    return merged
 
 
 def _pick_render_scale(page_rect: "fitz.Rect", crop_rect: "fitz.Rect", *, base_scale: float, min_scale: float = 1.35) -> float:

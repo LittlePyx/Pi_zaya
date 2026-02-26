@@ -143,7 +143,7 @@ _VENUE_ABBR_JSON_PATH = Path(__file__).resolve().with_name("venue_abbr_map.json"
 
 # Bump this whenever the PDF meta extraction heuristics change in a way that should
 # invalidate any UI/session caches that store extracted metadata.
-PDF_META_EXTRACT_VERSION = "2026-02-19.1"
+PDF_META_EXTRACT_VERSION = "2026-02-25.2"
 
 
 def ensure_dir(p: Path) -> None:
@@ -579,6 +579,33 @@ def _is_generic_venue(venue: str) -> bool:
     return v in {"science", "nature"}
 
 
+def _is_arxiv_venue(venue: str) -> bool:
+    v = _venue_key(venue)
+    if not v:
+        return False
+    return ("arxiv" == v) or ("arxiv" in v)
+
+
+def _prefer_real_venue_over_arxiv(current: str, candidate: str) -> str:
+    """
+    Prefer non-arXiv venues when they conflict with arXiv labels.
+    Otherwise prefer the non-empty candidate (newer/more trusted source).
+    """
+    cur = _sanitize_component(current)
+    cand = _sanitize_component(candidate)
+    if not cand:
+        return cur
+    if not cur:
+        return cand
+    cur_is_arxiv = _is_arxiv_venue(cur)
+    cand_is_arxiv = _is_arxiv_venue(cand)
+    if cur_is_arxiv and (not cand_is_arxiv):
+        return cand
+    if cand_is_arxiv and (not cur_is_arxiv):
+        return cur
+    return cand
+
+
 def _parse_filename_meta(stem_or_name: str) -> tuple[str, str, str]:
     stem = Path(stem_or_name or "").stem or (stem_or_name or "")
     if stem.lower().endswith(".en"):
@@ -878,8 +905,8 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
                 title = sugg.title
             if not year and sugg.year:
                 year = sugg.year
-            if sugg.venue and (not venue or _is_generic_venue(venue)):
-                venue = sugg.venue
+            if sugg.venue and (not venue or _is_generic_venue(venue) or _is_arxiv_venue(venue)):
+                venue = _prefer_real_venue_over_arxiv(venue, sugg.venue)
 
     # Crossref refinement (DOI first, then strict title search).
     # For rename suggestions we still keep a conservative gate to avoid bad overwrites.
@@ -958,12 +985,17 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
             else:
                 year = ""
             if c_venue:
-                venue = c_venue
+                venue = _prefer_real_venue_over_arxiv(venue, c_venue)
             # Store trusted Crossref metadata for later use
             crossref_meta_stored = dict(cross)
         else:
             # For filename suggestions, prefer empty year over a potentially wrong year.
             year = ""
+            # Even if Crossref year is not trusted enough, venue can still be useful when the
+            # current label is only "arXiv"/generic and Crossref provides a specific venue.
+            if c_venue and (not _is_arxiv_venue(c_venue)):
+                if (not venue) or _is_generic_venue(venue) or _is_arxiv_venue(venue):
+                    venue = c_venue
     else:
         # User preference: if Crossref cannot be confirmed, keep year empty.
         year = ""
@@ -973,12 +1005,21 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
         venue = ""
     if (not venue) and file_venue and (not _is_generic_venue(file_venue)):
         venue = file_venue
+    elif file_venue and (not _is_generic_venue(file_venue)):
+        # If current venue is only arXiv and filename already encodes a specific venue, prefer it.
+        if _is_arxiv_venue(venue) and (not _is_arxiv_venue(file_venue)):
+            venue = file_venue
     if (not title) and file_title:
         title = file_title
 
     # Cleanups
     title = _sanitize_component(title)
     venue = _sanitize_component(venue)
+    if venue:
+        # Normalize verbose official names to a stable concise venue key for naming/display.
+        # Example: "2024 IEEE-CVF Conference on ... (CVPR)" -> "CVPR"
+        venue = abbreviate_venue(venue)
+        venue = _sanitize_component(venue)
     year = _sanitize_component(year)
 
     return PdfMetaSuggestion(venue=venue, year=year, title=title, crossref_meta=crossref_meta_stored)

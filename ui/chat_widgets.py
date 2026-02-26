@@ -312,6 +312,31 @@ def _normalize_math_markdown(text: str) -> str:
     s = re.sub(r"\\\((.+?)\\\)", _inline_math_repl, s, flags=re.DOTALL)
     s = re.sub(r"\\\[(.+?)\\\]", _display_math_repl, s, flags=re.DOTALL)
 
+    # Some model outputs wrap raw LaTeX in inline code spans (e.g. `\mathbf{x}`),
+    # which prevents math rendering. Convert math-looking code spans back to inline math.
+    def _latex_code_repl(m: re.Match) -> str:
+        inner = str(m.group(1) or "").strip()
+        if not inner:
+            return m.group(0)
+        # Avoid common non-math cases (paths, shell snippets, URLs).
+        if re.search(r":\\|https?://|^\w+[\w.-]*\.[A-Za-z]{2,}$", inner):
+            return m.group(0)
+        looks_latex_math = bool(
+            re.search(
+                r"\\(?:frac|sum|int|prod|sqrt|mathbf|mathbb|mathcal|hat|bar|tilde|alpha|beta|gamma|theta|lambda|mu|sigma|cdot|times|left|right|in|to|rightarrow|leq|geq)",
+                inner,
+            )
+            or re.search(r"[\\][A-Za-z]+", inner)
+            or (("_" in inner or "^" in inner) and ("{" in inner or "}" in inner))
+        )
+        if not looks_latex_math:
+            return m.group(0)
+        if inner.startswith("$") and inner.endswith("$"):
+            return inner
+        return f"${inner}$"
+
+    s = re.sub(r"`([^`\n]{1,240})`", _latex_code_repl, s)
+
     # Unwrap math that was mistakenly put in code spans.
     s = re.sub(r"`(\$[^`]+?\$)`", r"\1", s)
     s = re.sub(r"`(\$\$[\s\S]+?\$\$)`", r"\1", s)

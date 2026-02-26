@@ -6,6 +6,7 @@ import re
 import time
 import base64
 import threading
+import queue
 from typing import Optional, List, Callable, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -32,6 +33,7 @@ class LLMWorker:
         # This prevents "N pages in parallel" from flooding the provider and stalling on throttling.
         self._llm_sem: threading.Semaphore | None = None
         self._llm_max_inflight: int = 8
+        self._thread_state = threading.local()
         try:
             raw = str(os.environ.get("KB_LLM_MAX_INFLIGHT", "") or "").strip()
             if raw:
@@ -72,6 +74,102 @@ class LLMWorker:
         except Exception:
             return 8
 
+    def _set_last_vl_error_code(self, code: str) -> None:
+        try:
+            self._thread_state.last_vl_error_code = str(code or "").strip().lower()
+        except Exception:
+            pass
+
+    def get_last_vl_error_code(self) -> str:
+        try:
+            return str(getattr(self._thread_state, "last_vl_error_code", "") or "").strip().lower()
+        except Exception:
+            return ""
+
+    def _resolve_llm_hard_timeout_s(self, *, has_image_payload: bool, request_timeout_s: float) -> float:
+        """
+        Best-effort hard timeout guard around provider SDK calls.
+        This protects the converter from rare hangs where SDK/network timeouts do not
+        return control promptly (observed as "page alive..." forever in parallel mode).
+        """
+        try:
+            if has_image_payload:
+                raw = str(os.environ.get("KB_PDF_VISION_HARD_TIMEOUT_S", "") or "").strip()
+                if raw:
+                    val = float(raw)
+                    return max(0.0, min(1800.0, val))
+            raw = str(os.environ.get("KB_LLM_HARD_TIMEOUT_S", "") or "").strip()
+            if raw:
+                val = float(raw)
+                return max(0.0, min(1800.0, val))
+        except Exception:
+            pass
+        # Default only for vision page OCR. Text-only calls are short and already bounded by SDK timeout.
+        if not has_image_payload:
+            return 0.0
+        try:
+            base = float(request_timeout_s or 0.0)
+        except Exception:
+            base = 0.0
+        if base <= 0:
+            base = 120.0
+        # Give some slack above SDK timeout while keeping a hard upper bound.
+        return max(base + 20.0, base * 1.35, 90.0)
+
+    def _client_create_with_guard_timeout(self, *, timeout_s: float, has_image_payload: bool, **kwargs):
+        if not self._client:
+            raise RuntimeError("LLM client not initialized")
+
+        hard_timeout_s = self._resolve_llm_hard_timeout_s(
+            has_image_payload=bool(has_image_payload),
+            request_timeout_s=float(timeout_s or 0.0),
+        )
+        if hard_timeout_s <= 0:
+            return self._client.chat.completions.create(
+                model=self.cfg.llm.model,
+                timeout=timeout_s,
+                **kwargs,
+            )
+
+        q: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+        def _run_create() -> None:
+            try:
+                resp = self._client.chat.completions.create(
+                    model=self.cfg.llm.model,
+                    timeout=timeout_s,
+                    **kwargs,
+                )
+                try:
+                    q.put_nowait(("ok", resp))
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    q.put_nowait(("err", e))
+                except Exception:
+                    pass
+
+        t = threading.Thread(
+            target=_run_create,
+            name="kb_llm_create_guard",
+            daemon=True,
+        )
+        t.start()
+        try:
+            kind, payload = q.get(timeout=max(1.0, float(hard_timeout_s)))
+        except queue.Empty:
+            raise TimeoutError(
+                f"LLM hard timeout after {float(hard_timeout_s):.1f}s "
+                f"(sdk_timeout={float(timeout_s):.1f}s, vision={int(bool(has_image_payload))})"
+            )
+
+        if kind == "err":
+            if isinstance(payload, Exception):
+                raise payload
+            raise RuntimeError(str(payload))
+        return payload
+
     @staticmethod
     def _messages_contain_image_payload(messages: Any) -> bool:
         try:
@@ -106,7 +204,8 @@ class LLMWorker:
 
         # Vision page OCR is heavier than text-only calls; keep a safer timeout floor.
         try:
-            if self._messages_contain_image_payload(kwargs.get("messages")):
+            has_image_payload = self._messages_contain_image_payload(kwargs.get("messages"))
+            if has_image_payload:
                 raw_v_to = str(os.environ.get("KB_PDF_VISION_TIMEOUT_S", "120") or "120").strip()
                 try:
                     vision_timeout_floor = float(raw_v_to)
@@ -114,15 +213,18 @@ class LLMWorker:
                     vision_timeout_floor = 120.0
                 timeout_s = max(float(timeout_s), max(30.0, min(300.0, vision_timeout_floor)))
         except Exception:
+            has_image_payload = False
             pass
+        else:
+            has_image_payload = bool(has_image_payload)
 
         last_err: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
                 if self._llm_sem is None:
-                    return self._client.chat.completions.create(
-                        model=self.cfg.llm.model,
-                        timeout=timeout_s,
+                    return self._client_create_with_guard_timeout(
+                        timeout_s=timeout_s,
+                        has_image_payload=has_image_payload,
                         **kwargs,
                     )
                 # Increase semaphore acquire timeout for vision-direct mode (full-page screenshots take longer)
@@ -137,9 +239,9 @@ class LLMWorker:
                         f"Waited {sem_timeout:.1f}s for a slot. Consider increasing KB_LLM_MAX_INFLIGHT."
                     )
                 try:
-                    return self._client.chat.completions.create(
-                        model=self.cfg.llm.model,
-                        timeout=timeout_s,
+                    return self._client_create_with_guard_timeout(
+                        timeout_s=timeout_s,
+                        has_image_payload=has_image_payload,
                         **kwargs,
                     )
                 finally:
@@ -576,6 +678,7 @@ class LLMWorker:
             return None
         if not png_bytes:
             return None
+        self._set_last_vl_error_code("")
 
         b64 = base64.b64encode(png_bytes).decode("ascii")
         data_url = f"data:image/png;base64,{b64}"
@@ -658,6 +761,10 @@ class LLMWorker:
                 ),
             )
         except Exception as e:
+            if isinstance(e, TimeoutError):
+                self._set_last_vl_error_code("timeout")
+            else:
+                self._set_last_vl_error_code("error")
             error_str = str(e)
             error_msg = f"[VISION_PAGE] error page={page_number + 1} err={e!a}"
             
@@ -696,6 +803,7 @@ class LLMWorker:
             return None
 
         out = (resp.choices[0].message.content or "").strip()
+        self._set_last_vl_error_code("")
         # Strip markdown fences if model wrapped the whole output
         if out.startswith("```markdown") or out.startswith("```md"):
             try:

@@ -1395,7 +1395,19 @@ class PDFConverter:
         if md and formula_placeholders:
             md = self._restore_formula_placeholders(md, formula_placeholders)
         if not md:
-            retry_n = self._vision_empty_retry_attempts()
+            last_vl_err = ""
+            try:
+                last_vl_err = str(self.llm_worker.get_last_vl_error_code() or "").strip().lower()
+            except Exception:
+                last_vl_err = ""
+            if last_vl_err == "timeout":
+                print(
+                    f"[VISION_DIRECT] VL hard-timeout on page {page_index+1}, skip empty retries and fallback",
+                    flush=True,
+                )
+                retry_n = 0
+            else:
+                retry_n = self._vision_empty_retry_attempts()
             retry_sleep = self._vision_empty_retry_backoff_s()
             for k in range(1, retry_n + 1):
                 try:
@@ -1763,6 +1775,367 @@ class PDFConverter:
                 pass
         return "\n".join(lines)
 
+    @staticmethod
+    def _normalize_page_local_image_link_order(
+        md: str,
+        *,
+        page_index: int,
+        image_names: list[str],
+    ) -> str:
+        """
+        Normalize current-page figure link ordering to match extracted asset order.
+
+        Vision models may reference valid assets but swap `fig_1` / `fig_2`.
+        When the page contains the exact same set of current-page assets, remap
+        links in document order to the sorted extracted order.
+        """
+        if not md:
+            return md
+        if len(image_names or []) < 2:
+            return md
+
+        page_no = int(page_index) + 1
+
+        def _img_key(nm: str) -> tuple[int, str]:
+            m = re.search(r"_fig_(\d+)", str(nm), flags=re.IGNORECASE)
+            if m:
+                try:
+                    return (int(m.group(1)), str(nm).lower())
+                except Exception:
+                    pass
+            return (10**9, str(nm).lower())
+
+        ordered_assets = sorted({str(n).strip() for n in image_names if str(n).strip()}, key=_img_key)
+        if len(ordered_assets) < 2:
+            return md
+
+        img_re = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        page_fig_re = re.compile(rf"^page_{page_no}_fig_(\d+)\.[A-Za-z0-9]+$", flags=re.IGNORECASE)
+        refs: list[dict] = []
+        for m in img_re.finditer(md):
+            raw_path = (m.group(2) or "").strip().strip('"').strip("'")
+            base = Path(raw_path).name
+            if not page_fig_re.match(base):
+                continue
+            refs.append({"start": m.start(), "end": m.end(), "alt": m.group(1) or "", "path": raw_path, "base": base})
+
+        if len(refs) < 2:
+            return md
+        if len(refs) != len(ordered_assets):
+            return md
+
+        current_order = [str(r["base"]) for r in refs]
+        if set(current_order) != set(ordered_assets):
+            return md
+        if current_order == ordered_assets:
+            return md
+
+        out = md
+        shift = 0
+        changed = 0
+        for r, target_name in zip(refs, ordered_assets):
+            new_ref = f"![{r['alt']}](./assets/{target_name})"
+            s0 = int(r["start"]) + shift
+            e0 = int(r["end"]) + shift
+            old_ref = out[s0:e0]
+            if old_ref == new_ref:
+                continue
+            out = out[:s0] + new_ref + out[e0:]
+            shift += len(new_ref) - (e0 - s0)
+            changed += 1
+        if changed:
+            try:
+                print(f"[IMAGE_ORDER] page {page_no}: normalized {changed} figure link(s)", flush=True)
+            except Exception:
+                pass
+        return out
+
+    def _detect_table_rects_for_fallback(
+        self,
+        page,
+        *,
+        page_index: int,
+        pdf_path: Path,
+        visual_rects: Optional[list["fitz.Rect"]] = None,
+    ) -> list["fitz.Rect"]:
+        """
+        Find table rectangles for screenshot fallback, without requiring markdown
+        table extraction success.
+        """
+        if fitz is None or page is None or (not hasattr(page, "find_tables")):
+            return []
+
+        W = float(page.rect.width or 0.0)
+        H = float(page.rect.height or 0.0)
+        page_area = max(1.0, W * H)
+        vis_rects = list(visual_rects or [])
+
+        d0 = None
+        has_table_hint = False
+        try:
+            d0 = page.get_text("dict")
+            if isinstance(d0, dict):
+                has_table_hint = bool(_page_maybe_has_table_from_dict(d0))
+        except Exception:
+            d0 = None
+            has_table_hint = False
+
+        caption_rects: list["fitz.Rect"] = []
+        if isinstance(d0, dict):
+            try:
+                for b in d0.get("blocks", []):
+                    if "lines" not in b:
+                        continue
+                    bbox = b.get("bbox")
+                    if not bbox:
+                        continue
+                    txt_parts: list[str] = []
+                    for l in b.get("lines", []):
+                        spans = l.get("spans", [])
+                        if not spans:
+                            continue
+                        line = "".join(str(s.get("text", "")) for s in spans)
+                        line = _normalize_text(line)
+                        if line:
+                            txt_parts.append(line)
+                    txt = _normalize_text(" ".join(txt_parts)).strip()
+                    if re.match(r"^Table\s+(?:\d+|[A-Za-z]|[IVXLC]+)\b", txt, flags=re.IGNORECASE):
+                        caption_rects.append(fitz.Rect(tuple(float(x) for x in bbox)))
+            except Exception:
+                caption_rects = []
+
+        def _near_caption(rect: "fitz.Rect") -> bool:
+            for cr in caption_rects:
+                hov = _overlap_1d(float(rect.x0), float(rect.x1), float(cr.x0) - 18.0, float(cr.x1) + 18.0)
+                if hov < max(10.0, min(float(rect.width), float(cr.width) + 36.0) * 0.15):
+                    continue
+                # Usually table is right below caption, but allow moderate gap.
+                if float(rect.y0) >= float(cr.y0) - 24.0 and (float(rect.y0) - float(cr.y1)) <= max(140.0, H * 0.25):
+                    return True
+            return False
+
+        kwargs_seq = [{"vertical_strategy": "lines", "horizontal_strategy": "lines"}]
+        if has_table_hint:
+            kwargs_seq.extend(
+                [
+                    {"vertical_strategy": "lines", "horizontal_strategy": "text", "min_words_horizontal": 1, "text_tolerance": 2.0},
+                    {"vertical_strategy": "text", "horizontal_strategy": "lines", "min_words_vertical": 2, "text_tolerance": 2.0},
+                ]
+            )
+
+        candidates: list[tuple["fitz.Rect", float]] = []
+        for kwargs in kwargs_seq:
+            try:
+                table_finder = page.find_tables(**kwargs)
+            except Exception:
+                continue
+            tables = getattr(table_finder, "tables", table_finder)
+            if not tables:
+                continue
+            for tb in tables:
+                try:
+                    rect = fitz.Rect(getattr(tb, "bbox", None))
+                except Exception:
+                    continue
+                if rect.width <= 0 or rect.height <= 0:
+                    continue
+                area = _rect_area(rect)
+                if area < page_area * 0.0035:
+                    continue
+                if area > page_area * 0.70:
+                    continue
+                if float(rect.width) < W * 0.15 or float(rect.height) < H * 0.04:
+                    continue
+                near_cap = _near_caption(rect)
+                if vis_rects and (not near_cap):
+                    vis_overlap = max(
+                        (
+                            _rect_intersection_area(rect, vr) / max(1.0, min(_rect_area(rect), _rect_area(vr)))
+                            for vr in vis_rects
+                        ),
+                        default=0.0,
+                    )
+                    if vis_overlap >= 0.55:
+                        continue
+                score = float(area / page_area)
+                if near_cap:
+                    score += 10.0
+                candidates.append((rect, score))
+
+        if not candidates:
+            return []
+
+        uniq: list[tuple["fitz.Rect", float]] = []
+        for rect, score in sorted(candidates, key=lambda x: (x[0].y0, x[0].x0, -x[1])):
+            replaced = False
+            for j, (r0, s0) in enumerate(uniq):
+                inter = _rect_intersection_area(rect, r0)
+                denom = max(1.0, min(_rect_area(rect), _rect_area(r0)))
+                if (inter / denom) >= 0.72:
+                    if score > s0:
+                        uniq[j] = (rect, score)
+                    replaced = True
+                    break
+            if not replaced:
+                uniq.append((rect, score))
+        uniq.sort(key=lambda x: (x[0].y0, x[0].x0))
+        return [r for r, _ in uniq]
+
+    def _inject_table_image_fallbacks(
+        self,
+        md: str,
+        *,
+        page,
+        page_index: int,
+        pdf_path: Path,
+        assets_dir: Path,
+        visual_rects: Optional[list["fitz.Rect"]] = None,
+        is_references_page: bool = False,
+    ) -> str:
+        """
+        For difficult tables that VL fails to render into markdown, insert a table
+        screenshot fallback (saved as `page_X_table_Y.png`) before the table caption.
+        """
+        if not md or is_references_page:
+            return md
+        if not re.search(r"(?mi)^\s*(?:\*{1,2}\s*)?Table\s+(?:\d+|[A-Za-z]|[IVXLC]+)\b", md):
+            return md
+
+        lines = md.splitlines()
+        if not lines:
+            return md
+
+        cap_re = re.compile(
+            r"^\s*(?:\*{1,2}\s*)?Table\s+([A-Za-z0-9]+)\s*(?:[.:]\s*|\-\s*|\s+)?(.*)$",
+            flags=re.IGNORECASE,
+        )
+        md_table_re = re.compile(r"^\s*\|.*\|\s*$")
+        table_img_re = re.compile(rf"!\[[^\]]*\]\(\./assets/page_{page_index+1}_table_\d+\.[^)]+\)", flags=re.IGNORECASE)
+
+        caption_rows: list[dict] = []
+        for idx, ln in enumerate(lines):
+            m = cap_re.match(ln.strip())
+            if not m:
+                continue
+            ident = (m.group(1) or "").strip()
+            label = f"Table {ident}" if ident else "Table"
+            caption_rows.append({"idx": idx, "label": label})
+        if not caption_rows:
+            return md
+
+        def _needs_table_image_at(idx: int) -> bool:
+            lo = max(0, idx - 4)
+            hi = min(len(lines), idx + 9)
+            for j in range(lo, hi):
+                s = lines[j].strip()
+                if not s:
+                    continue
+                if table_img_re.search(s):
+                    return False
+                if md_table_re.match(s):
+                    return False
+            return True
+
+        missing_caps = [c for c in caption_rows if _needs_table_image_at(int(c["idx"]))]
+        if not missing_caps:
+            return md
+
+        table_rects = self._detect_table_rects_for_fallback(
+            page,
+            page_index=page_index,
+            pdf_path=pdf_path,
+            visual_rects=visual_rects,
+        )
+        if not table_rects:
+            try:
+                print(f"[TABLE_FALLBACK] page {page_index+1}: no table rects detected for {len(missing_caps)} caption(s)", flush=True)
+            except Exception:
+                pass
+            return md
+
+        page_no = int(page_index) + 1
+        out_lines = list(lines)
+        offset = 0
+        inserted = 0
+        dpi = max(144, int(getattr(self, "dpi", 200) or 200))
+
+        for table_idx, (cap, rect) in enumerate(zip(missing_caps, table_rects), start=1):
+            pad_x = max(4.0, float(rect.width) * 0.015)
+            pad_y = max(4.0, float(rect.height) * 0.015)
+            clip = fitz.Rect(
+                max(0.0, float(rect.x0) - pad_x),
+                max(0.0, float(rect.y0) - pad_y),
+                min(float(page.rect.width), float(rect.x1) + pad_x),
+                min(float(page.rect.height), float(rect.y1) + pad_y),
+            )
+            img_name = f"page_{page_no}_table_{table_idx}.png"
+            img_path = assets_dir / img_name
+            try:
+                pix = page.get_pixmap(clip=clip, dpi=dpi, alpha=False)
+                pix.save(img_path)
+                if (not img_path.exists()) or img_path.stat().st_size < 256:
+                    continue
+            except Exception as e:
+                try:
+                    print(f"[TABLE_FALLBACK] page {page_no}: failed to save {img_name}: {e}", flush=True)
+                except Exception:
+                    pass
+                continue
+
+            label = str(cap.get("label") or "Table").strip()
+            ins_at = int(cap["idx"]) + offset
+            block = [
+                f"![{label}](./assets/{img_name})",
+                f"<!-- kb:asset kind=table_image_fallback page={page_no} index={table_idx} label={label} -->",
+                "",
+            ]
+            out_lines[ins_at:ins_at] = block
+            offset += len(block)
+            inserted += 1
+
+        if inserted:
+            try:
+                print(f"[TABLE_FALLBACK] page {page_no}: inserted {inserted} table screenshot fallback(s)", flush=True)
+            except Exception:
+                pass
+        return "\n".join(out_lines)
+
+    def _postprocess_vision_page_markdown(
+        self,
+        md: str,
+        *,
+        page,
+        page_index: int,
+        pdf_path: Path,
+        assets_dir: Path,
+        image_names: list[str],
+        visual_rects: Optional[list["fitz.Rect"]] = None,
+        is_references_page: bool = False,
+    ) -> str:
+        if not md:
+            return md
+        md = self._inject_missing_page_image_links(
+            md,
+            page_index=page_index,
+            image_names=image_names,
+            is_references_page=is_references_page,
+        )
+        md = self._normalize_page_local_image_link_order(
+            md,
+            page_index=page_index,
+            image_names=image_names,
+        )
+        md = self._inject_table_image_fallbacks(
+            md,
+            page=page,
+            page_index=page_index,
+            pdf_path=pdf_path,
+            assets_dir=assets_dir,
+            visual_rects=visual_rects,
+            is_references_page=is_references_page,
+        )
+        return md
+
     # Removed: _process_batch_fast and _process_batch_llm (old text extraction methods)
     # Now only using vision-direct mode (_process_batch_vision_direct) and no-LLM mode (_process_batch_no_llm)
 
@@ -1922,6 +2295,7 @@ class PDFConverter:
                     
                     # Extract images BEFORE sending to LLM, so they're available when LLM references them
                     image_names: list[str] = []
+                    visual_rects: list[fitz.Rect] = []
                     try:
                         visual_rects = _collect_visual_rects(page)
                         W = page_w
@@ -2095,10 +2469,14 @@ class PDFConverter:
                     )
                     elapsed = time.time() - t0
                     if md:
-                        md = self._inject_missing_page_image_links(
+                        md = self._postprocess_vision_page_markdown(
                             md,
+                            page=page,
                             page_index=i,
+                            pdf_path=pdf_path,
+                            assets_dir=assets_dir,
                             image_names=image_names,
+                            visual_rects=visual_rects,
                             is_references_page=is_references_page,
                         )
                         results[i] = md
@@ -2153,6 +2531,7 @@ class PDFConverter:
                     
                     # Extract images BEFORE sending to LLM, so they're available when LLM references them
                     image_names: list[str] = []
+                    visual_rects: list[fitz.Rect] = []
                     try:
                         visual_rects = _collect_visual_rects(page)
                         W = page_w
@@ -2328,10 +2707,14 @@ class PDFConverter:
                     )
                     elapsed = time.time() - t0
                     if md:
-                        md = self._inject_missing_page_image_links(
+                        md = self._postprocess_vision_page_markdown(
                             md,
+                            page=page,
                             page_index=i,
+                            pdf_path=pdf_path,
+                            assets_dir=assets_dir,
                             image_names=image_names,
+                            visual_rects=visual_rects,
                             is_references_page=is_references_page,
                         )
                         print(f"Finished page {i+1}/{total_pages} ({elapsed:.1f}s, {len(md)} chars)", flush=True)
