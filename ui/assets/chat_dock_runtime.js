@@ -12,6 +12,9 @@
   const DOCK_SIDE_GAP = 35;
   const DOCK_RIGHT_GAP = 35;
   const MIN_WIDTH = 320;
+  // Sidebar-edge drag support conflicts with Streamlit's native sidebar collapse button
+  // on newer builds. Prefer native behavior reliability over this optional enhancement.
+  const DISABLE_SIDEBAR_EDGE_DRAG = true;
   const state = {
     raf: 0,
     timer: 0,
@@ -32,14 +35,22 @@
     onKeyDown: null,
     onBlur: null,
     onResize: null,
+    disableDockCompat: false,
   };
 
   function isInsideStaleNode(el) {
-    try { return !!(el && el.closest && el.closest('[data-stale="true"]')); } catch (e) { return false; }
+    try {
+      return !!(
+        el &&
+        el.closest &&
+        el.closest('[data-stale="true"], .stale-element, [data-testid="staleElementOverlay"], [data-testid="stale-overlay"]')
+      );
+    } catch (e) { return false; }
   }
   function pickFresh(nodes) {
     for (const n of (nodes || [])) {
       if (!n) continue;
+      try { if (n.isConnected === false) continue; } catch (e) {}
       if (!isInsideStaleNode(n)) return n;
     }
     return (nodes && nodes.length) ? nodes[0] : null;
@@ -58,15 +69,30 @@
     return pickFresh(root.querySelectorAll('section[data-testid="stSidebar"]'));
   }
   function _btnText(btn) {
-    return String((btn && (btn.innerText || btn.textContent)) || "").trim().toLowerCase();
+    return String((btn && (btn.innerText || btn.textContent)) || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
   }
   function isStopBtnText(t) {
-    const s = String(t || "").trim().toLowerCase();
-    return s === "■" || s === "停止" || s === "stop";
+    const s = String(t || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return s === "■" || s === "停止" || s === "stop" || s.includes("■") || s.includes("停止") || s.includes("stop");
   }
   function isSendBtnText(t) {
-    const s = String(t || "").trim().toLowerCase();
-    return s === "发送" || s === "↑" || s === "send" || s === "submit";
+    const s = String(t || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    return (
+      s === "发送" || s === "↑" || s === "send" || s === "submit" ||
+      s.includes("↑") || s.includes("发送") || s.includes("send") || s.includes("submit")
+    );
   }
   function hasSendButton(form) {
     if (!form) return false;
@@ -104,22 +130,198 @@
     }
     return false;
   }
+  function findSubmitButtonWrap(btn) {
+    if (!btn || !btn.closest) return null;
+    const sels = [
+      'div[data-testid="stFormSubmitButton"]',
+      'div[data-testid*="FormSubmit"]',
+      'div[data-testid="stButton"]',
+      '.stButton'
+    ];
+    for (const sel of sels) {
+      try {
+        const hit = btn.closest(sel);
+        if (hit) return hit;
+      } catch (e) {}
+    }
+    try { return btn.parentElement || null; } catch (e) {}
+    return null;
+  }
+  function decoratePromptButtons(form) {
+    if (!form) return;
+    const btns = Array.from(form.querySelectorAll("button"));
+    const submitCandidates = [];
+    let hasSendClass = false;
+    for (const b of btns) {
+      if (!b || isInsideStaleNode(b)) continue;
+      try {
+        b.classList.remove("kb-dock-send-btn", "kb-dock-stop-btn");
+      } catch (e) {}
+      let wrap = null;
+      try { wrap = findSubmitButtonWrap(b); } catch (e) {}
+      if (wrap) {
+        try {
+          wrap.classList.remove("kb-dock-send-wrap", "kb-dock-stop-wrap");
+        } catch (e) {}
+      }
+      const txt = _btnText(b);
+      const typ = String(b.getAttribute("type") || "").toLowerCase();
+      if ((typ === "submit") || wrap) submitCandidates.push({ b, wrap, txt });
+      if (isStopBtnText(txt)) {
+        try { b.classList.add("kb-dock-stop-btn"); } catch (e) {}
+        if (wrap) {
+          try { wrap.classList.add("kb-dock-stop-wrap"); } catch (e) {}
+        }
+        continue;
+      }
+      if (isSendBtnText(txt)) {
+        try { b.classList.add("kb-dock-send-btn"); } catch (e) {}
+        if (wrap) {
+          try { wrap.classList.add("kb-dock-send-wrap"); } catch (e) {}
+        }
+        hasSendClass = true;
+      }
+    }
+    if (!hasSendClass && submitCandidates.length) {
+      let picked = null;
+      for (const item of submitCandidates) {
+        if (!isStopBtnText(item.txt)) { picked = item; break; }
+      }
+      if (!picked) picked = submitCandidates[0];
+      if (picked && picked.b) {
+        try { picked.b.classList.add("kb-dock-send-btn"); } catch (e) {}
+        if (picked.wrap) {
+          try { picked.wrap.classList.add("kb-dock-send-wrap"); } catch (e) {}
+        }
+      }
+    }
+  }
+  function mountPromptActionWrappers(form) {
+    if (!form || !form.querySelector) return;
+    let layer = null;
+    try { layer = form.querySelector(':scope > .kb-dock-action-layer'); } catch (e) {}
+    if (!layer) {
+      try {
+        layer = root.createElement("div");
+        layer.className = "kb-dock-action-layer";
+        form.appendChild(layer);
+      } catch (e) {
+        layer = null;
+      }
+    }
+    if (!layer) return;
+
+    let sendAnchor = null;
+    let stopAnchor = null;
+    try { sendAnchor = layer.querySelector('.kb-dock-send-anchor'); } catch (e) {}
+    try { stopAnchor = layer.querySelector('.kb-dock-stop-anchor'); } catch (e) {}
+    if (!sendAnchor) {
+      try {
+        sendAnchor = root.createElement("div");
+        sendAnchor.className = "kb-dock-send-anchor";
+        layer.appendChild(sendAnchor);
+      } catch (e) { sendAnchor = null; }
+    }
+    if (!stopAnchor) {
+      try {
+        stopAnchor = root.createElement("div");
+        stopAnchor.className = "kb-dock-stop-anchor";
+        layer.appendChild(stopAnchor);
+      } catch (e) { stopAnchor = null; }
+    }
+
+    let sendWrap = null;
+    let stopWrap = null;
+    try {
+      const sendWraps = Array.from(form.querySelectorAll(".kb-dock-send-wrap"));
+      for (const el of sendWraps) {
+        if (!el || isInsideStaleNode(el)) continue;
+        sendWrap = el;
+        break;
+      }
+    } catch (e) {}
+    try {
+      const stopWraps = Array.from(form.querySelectorAll(".kb-dock-stop-wrap"));
+      for (const el of stopWraps) {
+        if (!el || isInsideStaleNode(el)) continue;
+        stopWrap = el;
+        break;
+      }
+    } catch (e) {}
+
+    if (sendAnchor && sendWrap && sendWrap.parentElement !== sendAnchor) {
+      try { sendAnchor.appendChild(sendWrap); } catch (e) {}
+    }
+    if (stopAnchor && stopWrap && stopWrap.parentElement !== stopAnchor) {
+      try { stopAnchor.appendChild(stopWrap); } catch (e) {}
+    }
+  }
   function findPromptFormAndTextarea() {
-    const forms = root.querySelectorAll('div[data-testid="stForm"], form');
+    const forms = [
+      ...root.querySelectorAll('form'),
+      ...root.querySelectorAll('div[data-testid="stForm"]')
+    ];
+    const mainRegion = findMainRegion();
     for (const form of forms) {
-      if (isInsideStaleNode(form)) continue;
+      if (!form) continue;
+      let targetForm = form;
+      try {
+        if (String(form.tagName || "").toUpperCase() !== "FORM") {
+          const innerForm = form.querySelector ? form.querySelector("form") : null;
+          if (innerForm) targetForm = innerForm;
+        }
+      } catch (e) {}
+      if (!targetForm) continue;
+      if (isInsideStaleNode(targetForm)) continue;
+      if (mainRegion && targetForm.closest && !targetForm.closest('section.main')) continue;
       const ta =
-        form.querySelector('div[data-testid="stTextArea"] textarea') ||
-        form.querySelector('.stTextArea textarea') ||
-        form.querySelector('textarea');
+        targetForm.querySelector('div[data-testid="stTextArea"] textarea') ||
+        targetForm.querySelector('.stTextArea textarea') ||
+        targetForm.querySelector('textarea');
       if (!ta || isInsideStaleNode(ta)) continue;
-      if (hasSendButton(form)) return { form, ta };
+      if (hasSendButton(targetForm)) return { form: targetForm, ta };
     }
     return { form: null, ta: null };
+  }
+  function resetDockStyles(form) {
+    if (!form) return;
+    try {
+      form.classList.remove('kb-input-dock', 'kb-dock-positioned');
+      form.style.left = '';
+      form.style.right = '';
+      form.style.width = '';
+      form.style.transform = '';
+      form.style.position = '';
+      form.style.bottom = '';
+      form.style.height = '';
+      form.style.maxHeight = '';
+      form.style.minHeight = '';
+      form.style.flex = '';
+      form.style.display = '';
+    } catch (e) {}
   }
   function setResizing(on) {
     if (on) root.body.classList.add(RESIZE_CLASS);
     else root.body.classList.remove(RESIZE_CLASS);
+  }
+  function isInteractiveTarget(target) {
+    try {
+      if (!target || !target.closest) return false;
+      return !!target.closest([
+        'button',
+        'a[href]',
+        'input',
+        'textarea',
+        'select',
+        'label',
+        '[role="button"]',
+        '[contenteditable="true"]',
+        '[data-testid="stSidebarCollapseButton"]',
+        '[data-testid="stSidebarNav"]'
+      ].join(', '));
+    } catch (e) {
+      return false;
+    }
   }
   function placeDock(form) {
     if (!form) return;
@@ -156,6 +358,13 @@
     const dockWidth = Math.max(MIN_WIDTH, Math.floor(rightBound - dockLeft));
 
     form.classList.add('kb-input-dock', 'kb-dock-positioned');
+    try {
+      form.style.setProperty('height', 'auto', 'important');
+      form.style.setProperty('min-height', '0', 'important');
+      form.style.setProperty('max-height', 'none', 'important');
+      form.style.setProperty('flex', 'none', 'important');
+      form.style.setProperty('display', 'block', 'important');
+    } catch (e) {}
     form.style.left = dockLeft + 'px';
     form.style.right = 'auto';
     form.style.width = dockWidth + 'px';
@@ -179,8 +388,25 @@
     if (!hit.form || !hit.ta) return;
     state.form = hit.form;
     state.ta = hit.ta;
-    state.form.classList.add("kb-input-dock");
-    placeDock(state.form);
+    // Decorate/mount action wrappers first so the height sanity check measures the compact dock layout,
+    // not Streamlit's temporary stacked form rows (textarea + uploader + submit).
+    decoratePromptButtons(state.form);
+    mountPromptActionWrappers(state.form);
+    if (!state.disableDockCompat) {
+      state.form.classList.add("kb-input-dock");
+      placeDock(state.form);
+      try {
+        const rect = state.form.getBoundingClientRect();
+        const viewportH = Math.max(0, host.innerHeight || root.documentElement.clientHeight || 0);
+        const maxDockH = Math.max(360, Math.floor(viewportH * 0.62));
+        if (rect && isFinite(rect.height) && rect.height > maxDockH) {
+          // Streamlit DOM shape changed: docking the chosen wrapper can explode to full-height.
+          // Fail safe to native layout instead of breaking the whole chat page.
+          state.disableDockCompat = true;
+          resetDockStyles(state.form);
+        }
+      } catch (e) {}
+    }
     bindCtrlEnter(state.ta, state.form);
   }
   function scheduleHook() {
@@ -191,8 +417,12 @@
     });
   }
   function startDragIfNearSidebarEdge(e) {
+    if (DISABLE_SIDEBAR_EDGE_DRAG) return;
     const sidebar = findSidebar();
     if (!sidebar || !e) return;
+    try {
+      if (isInteractiveTarget(e.target || null)) return;
+    } catch (err) {}
     const clientX = Number(e.clientX);
     if (!isFinite(clientX)) return;
     const rect = sidebar.getBoundingClientRect();
@@ -214,18 +444,18 @@
     scheduleHook();
   }
   function installListeners() {
-    state.onMouseDown = startDragIfNearSidebarEdge;
-    state.onPointerDown = startDragIfNearSidebarEdge;
-    state.onTouchStart = function (e) {
+    state.onMouseDown = DISABLE_SIDEBAR_EDGE_DRAG ? null : startDragIfNearSidebarEdge;
+    state.onPointerDown = DISABLE_SIDEBAR_EDGE_DRAG ? null : startDragIfNearSidebarEdge;
+    state.onTouchStart = DISABLE_SIDEBAR_EDGE_DRAG ? null : function (e) {
       const t = (e.touches && e.touches[0]) ? e.touches[0] : null;
       if (t) startDragIfNearSidebarEdge(t);
     };
-    state.onMouseMove = onDragMove;
-    state.onPointerMove = onDragMove;
-    state.onMouseUp = stopDrag;
-    state.onPointerUp = stopDrag;
-    state.onPointerCancel = stopDrag;
-    state.onTouchEnd = stopDrag;
+    state.onMouseMove = DISABLE_SIDEBAR_EDGE_DRAG ? null : onDragMove;
+    state.onPointerMove = DISABLE_SIDEBAR_EDGE_DRAG ? null : onDragMove;
+    state.onMouseUp = DISABLE_SIDEBAR_EDGE_DRAG ? null : stopDrag;
+    state.onPointerUp = DISABLE_SIDEBAR_EDGE_DRAG ? null : stopDrag;
+    state.onPointerCancel = DISABLE_SIDEBAR_EDGE_DRAG ? null : stopDrag;
+    state.onTouchEnd = DISABLE_SIDEBAR_EDGE_DRAG ? null : stopDrag;
     state.onKeyDown = function (e) {
       try {
         const isCtrlEnter = (e.ctrlKey || e.metaKey) && e.key === "Enter";
@@ -246,15 +476,15 @@
     state.onBlur = stopDrag;
     state.onResize = scheduleHook;
 
-    root.addEventListener("mousedown", state.onMouseDown, true);
-    root.addEventListener("pointerdown", state.onPointerDown, true);
-    root.addEventListener("touchstart", state.onTouchStart, true);
-    root.addEventListener("mousemove", state.onMouseMove, true);
-    root.addEventListener("pointermove", state.onPointerMove, true);
-    root.addEventListener("mouseup", state.onMouseUp, true);
-    root.addEventListener("pointerup", state.onPointerUp, true);
-    root.addEventListener("pointercancel", state.onPointerCancel, true);
-    root.addEventListener("touchend", state.onTouchEnd, true);
+    if (state.onMouseDown) root.addEventListener("mousedown", state.onMouseDown, true);
+    if (state.onPointerDown) root.addEventListener("pointerdown", state.onPointerDown, true);
+    if (state.onTouchStart) root.addEventListener("touchstart", state.onTouchStart, true);
+    if (state.onMouseMove) root.addEventListener("mousemove", state.onMouseMove, true);
+    if (state.onPointerMove) root.addEventListener("pointermove", state.onPointerMove, true);
+    if (state.onMouseUp) root.addEventListener("mouseup", state.onMouseUp, true);
+    if (state.onPointerUp) root.addEventListener("pointerup", state.onPointerUp, true);
+    if (state.onPointerCancel) root.addEventListener("pointercancel", state.onPointerCancel, true);
+    if (state.onTouchEnd) root.addEventListener("touchend", state.onTouchEnd, true);
     root.addEventListener("keydown", state.onKeyDown, true);
     host.addEventListener("blur", state.onBlur, true);
     host.addEventListener("resize", state.onResize, { passive: true });
@@ -294,6 +524,7 @@
     try { host.removeEventListener("blur", state.onBlur, true); } catch (e) {}
     try { host.removeEventListener("resize", state.onResize, false); } catch (e) {}
     setResizing(false);
+    resetDockStyles(state.form);
   }
 
   host[NS] = { destroy, schedule: scheduleHook };

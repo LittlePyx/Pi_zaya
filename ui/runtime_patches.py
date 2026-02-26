@@ -120,7 +120,7 @@ def _init_theme_css(theme_mode: str = "dark") -> None:
   --notice-bg: rgba(245, 158, 11, 0.10);
   --notice-border: rgba(245, 158, 11, 0.20);
   --ref-accent: rgba(15, 108, 189, 0.24);
-  --dock-bg: linear-gradient(180deg, rgba(252, 252, 253, 0.76) 0%, rgba(252, 252, 253, 0.96) 18%, rgba(252, 252, 253, 0.99) 100%);
+  --dock-bg: linear-gradient(180deg, #f7f8fa 0%, #f4f6f8 100%);
   --dock-border: rgba(49, 51, 63, 0.12);
   --dock-shadow: 0 -8px 26px rgba(16, 24, 40, 0.08);
   --copy-btn-bg: rgba(255, 255, 255, 0.88);
@@ -160,6 +160,57 @@ html, body{
   color: var(--text-main) !important;
   color-scheme: __SCHEME__;
   font-family: var(--font-body);
+}
+/* Streamlit marks previous DOM as "stale" during reruns.
+   For background conversion auto-refresh, keep old nodes from cluttering the UI. */
+.stale-element,
+.stale-element *,
+[data-stale="true"],
+[data-stale="true"] *{
+  transition: none !important;
+  animation: none !important;
+}
+/* Chat streaming on Streamlit 1.12 relies on full-script reruns.
+   Keep stale nodes visually stable (instead of fading/hiding) to reduce flashing. */
+body.kb-live-streaming .stale-element,
+body.kb-live-streaming [data-stale="true"]{
+  opacity: 1 !important;
+  filter: none !important;
+  visibility: visible !important;
+  pointer-events: none !important;
+}
+/* Fragment local reruns can temporarily mark non-fragment regions (including sidebar) stale.
+   Never disable/hide sidebar controls because it makes radio/slider/buttons feel broken. */
+body.kb-live-streaming section[data-testid="stSidebar"] .stale-element,
+body.kb-live-streaming section[data-testid="stSidebar"] [data-stale="true"]{
+  opacity: 1 !important;
+  filter: none !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+/* Only while background library auto-refresh is active: hide stale copies so controls/messages
+   do not appear duplicated. Avoid this in chat streaming because it causes visible flicker. */
+body.kb-hide-stale-rerun .stale-element,
+body.kb-hide-stale-rerun [data-stale="true"]{
+  opacity: 0 !important;
+  filter: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+/* Keep sidebar interactive even while library background fragments are updating. */
+body.kb-hide-stale-rerun section[data-testid="stSidebar"] .stale-element,
+body.kb-hide-stale-rerun section[data-testid="stSidebar"] [data-stale="true"]{
+  opacity: 1 !important;
+  filter: none !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+[data-testid="staleElementOverlay"],
+[data-testid="stale-overlay"],
+.stale-element-overlay{
+  opacity: 0 !important;
+  background: transparent !important;
+  display: none !important;
 }
 [data-testid="stAppViewContainer"],
 [data-testid="stMain"],
@@ -201,6 +252,7 @@ body.kb-resizing section[data-testid="stSidebar"] > div > div{
 body.kb-resizing section[data-testid="stSidebar"] div[style*="z-index"]{
   background: transparent !important;
   opacity: 0 !important;
+  pointer-events: none !important;
 }
 .block-container{
   width: 100%;
@@ -219,6 +271,8 @@ section[data-testid="stSidebar"]{
   --text-color: var(--sidebar-strong-text) !important;
   --secondary-text-color: var(--sidebar-soft-text) !important;
   --body-text-color: var(--sidebar-strong-text) !important;
+  container-type: inline-size;
+  container-name: kb-sidebar;
 }
 section[data-testid="stSidebar"] > div,
 section[data-testid="stSidebar"] > div > div{
@@ -227,12 +281,12 @@ section[data-testid="stSidebar"] > div > div{
 section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button,
 section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="Close"],
 section[data-testid="stSidebar"] [data-testid="stSidebarNav"] button[aria-label*="鍏抽棴"]{
-  width: 34px !important;
-  min-width: 34px !important;
-  height: 34px !important;
-  min-height: 34px !important;
+  width: 30px !important;
+  min-width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
   padding: 0 !important;
-  border-radius: 10px !important;
+  border-radius: 9px !important;
   border: 1px solid var(--btn-border) !important;
   background: color-mix(in srgb, var(--sidebar-bg) 76%, var(--panel)) !important;
   box-shadow: none !important;
@@ -279,12 +333,12 @@ section[data-testid="stSidebar"] .kb-close-glyph,
 }
 section[data-testid="stSidebar"] button.kb-sidebar-close-btn,
 button.kb-sidebar-close-btn{
-  width: 34px !important;
-  min-width: 34px !important;
-  height: 34px !important;
-  min-height: 34px !important;
+  width: 30px !important;
+  min-width: 30px !important;
+  height: 30px !important;
+  min-height: 30px !important;
   padding: 0 !important;
-  border-radius: 10px !important;
+  border-radius: 9px !important;
   border: 1px solid var(--btn-border) !important;
   background: color-mix(in srgb, var(--sidebar-bg) 76%, var(--panel)) !important;
   box-shadow: none !important;
@@ -333,6 +387,39 @@ button.kb-sidebar-close-btn *{
   color: transparent !important;
   -webkit-text-fill-color: transparent !important;
   opacity: 0 !important;
+}
+/* Streamlit >=1.5x: keep sidebar collapse button native to avoid breaking click behavior. */
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button{
+  font-size: inherit !important;
+  line-height: normal !important;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"],
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] *{
+  visibility: visible !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button svg,
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button [data-testid="stIcon"],
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button [data-testid="stIconMaterial"]{
+  display: inline-flex !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] button *{
+  opacity: 1 !important;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn::before,
+button.kb-sidebar-close-btn::before{
+  content: none !important;
+}
+section[data-testid="stSidebar"] button.kb-sidebar-close-btn *,
+button.kb-sidebar-close-btn *{
+  opacity: 1 !important;
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
 }
 section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] p,
@@ -457,17 +544,24 @@ section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stThu
   display: flex;
   justify-content: center;
   align-items: center;
-  margin: -4.2rem 0 0.28rem 0;
+  width: 100%;
+  box-sizing: border-box;
+  /* Reserve space for the native collapse button on the top-right corner. */
+  padding: 0 2.7rem 0 0.35rem;
+  margin: -3.55rem 0 0.38rem 0;
+  /* Logo is pulled into the sidebar header area; do not block the native collapse button. */
+  pointer-events: none;
 }
 .kb-sidebar-logo-img{
-  width: 220px;
-  max-width: 86%;
+  width: 186px;
+  max-width: 82%;
   height: auto;
   display: block;
   object-fit: contain;
   image-rendering: -webkit-optimize-contrast;
   image-rendering: crisp-edges;
   transform: translateZ(0);
+  pointer-events: none;
 }
 h1, h2, h3, h4, h5{
   color: var(--text-main) !important;
@@ -975,6 +1069,377 @@ div[data-testid="stCode"] *::after,
   line-height: 1.5;
 }
 .hr{ height: 1px; background: var(--line); margin: 1rem 0; }
+/* Sidebar visual polish: improve spacing, control hierarchy, and tactile feel
+   without changing widget behavior. */
+section[data-testid="stSidebar"] > div:first-child{
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--sidebar-bg) 88%, var(--panel)) 0%,
+      var(--sidebar-bg) 22%,
+      var(--sidebar-bg) 100%) !important;
+  box-shadow:
+    inset -1px 0 0 color-mix(in srgb, var(--line) 90%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--panel) 22%, transparent) !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"],
+section[data-testid="stSidebar"] > div > div{
+  padding-bottom: 0.45rem !important;
+}
+section[data-testid="stSidebar"] > div{
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--sidebar-soft-text) 28%, transparent) transparent;
+}
+section[data-testid="stSidebar"] *::-webkit-scrollbar{
+  width: 10px;
+  height: 10px;
+}
+section[data-testid="stSidebar"] *::-webkit-scrollbar-thumb{
+  background: color-mix(in srgb, var(--sidebar-soft-text) 24%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+section[data-testid="stSidebar"] *::-webkit-scrollbar-thumb:hover{
+  background: color-mix(in srgb, var(--sidebar-soft-text) 40%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+section[data-testid="stSidebar"] h1,
+section[data-testid="stSidebar"] h2,
+section[data-testid="stSidebar"] h3,
+section[data-testid="stSidebar"] h4{
+  font-family: var(--font-display) !important;
+  color: var(--sidebar-strong-text) !important;
+  letter-spacing: -0.02em !important;
+}
+section[data-testid="stSidebar"] h3{
+  font-size: 1.26rem !important;
+  font-weight: 820 !important;
+  line-height: 1.12 !important;
+  margin: 0.28rem 0 0.18rem 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{
+  margin-top: -0.06rem !important;
+}
+section[data-testid="stSidebar"] .stCaption,
+section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] *{
+  font-size: 0.78rem !important;
+  line-height: 1.35 !important;
+  letter-spacing: 0.01em;
+  opacity: 0.92 !important;
+}
+section[data-testid="stSidebar"] .hr{
+  height: 1px !important;
+  margin: 0.9rem 0 0.95rem 0 !important;
+  border: 0 !important;
+  background:
+    linear-gradient(90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--line) 85%, transparent) 12%,
+      color-mix(in srgb, var(--line) 100%, transparent) 50%,
+      color-mix(in srgb, var(--line) 85%, transparent) 88%,
+      transparent 100%) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"]{
+  margin-bottom: 0.14rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] p,
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] label,
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] span{
+  font-weight: 650 !important;
+  letter-spacing: 0.01em;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"]{
+  margin: 0.22rem 0 !important;
+}
+section[data-testid="stSidebar"] div.stButton > button{
+  min-height: 42px !important;
+  border-radius: 14px !important;
+  border-color: color-mix(in srgb, var(--btn-border) 82%, var(--line)) !important;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--btn-bg) 88%, var(--panel)) 0%,
+      color-mix(in srgb, var(--btn-bg) 96%, transparent) 100%) !important;
+  box-shadow:
+    0 6px 18px rgba(9, 16, 29, 0.08),
+    inset 0 1px 0 color-mix(in srgb, var(--panel) 24%, white) !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.01em !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:hover{
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--blue-line) 82%, var(--btn-border)) !important;
+  box-shadow:
+    0 10px 22px rgba(9, 16, 29, 0.12),
+    inset 0 1px 0 color-mix(in srgb, var(--panel) 28%, white) !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:active{
+  transform: translateY(0);
+  box-shadow:
+    0 4px 10px rgba(9, 16, 29, 0.10),
+    inset 0 1px 0 color-mix(in srgb, var(--panel) 16%, white) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] div[data-testid="stTextInput"],
+section[data-testid="stSidebar"] div[data-testid="stTextArea"],
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"]{
+  margin: 0.22rem 0 0.34rem 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input{
+  border-radius: 16px !important;
+  border-color: color-mix(in srgb, var(--input-border) 84%, var(--line)) !important;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--input-bg) 88%, var(--panel)) 0%,
+      color-mix(in srgb, var(--input-bg) 100%, transparent) 100%) !important;
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--panel) 18%, white),
+    0 2px 8px rgba(11, 18, 32, 0.05) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div:hover,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:hover,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea:hover,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input:hover{
+  border-color: color-mix(in srgb, var(--blue-line) 52%, var(--input-border)) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:focus,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea:focus,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input:focus{
+  border-color: color-mix(in srgb, var(--blue-line) 78%, var(--input-border)) !important;
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--blue-weak) 82%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--panel) 18%, white) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] [data-testid="stMarkdownContainer"] *{
+  font-weight: 620 !important;
+}
+ul[data-testid="stSelectboxVirtualDropdown"],
+div[role="listbox"]{
+  border-radius: 14px !important;
+  box-shadow: 0 14px 28px rgba(8, 14, 26, 0.22) !important;
+  overflow: hidden;
+}
+li[data-testid="stSelectboxVirtualDropdownOption"],
+div[role="option"]{
+  border-radius: 8px !important;
+}
+li[data-testid="stSelectboxVirtualDropdownOption"]:hover,
+div[role="option"]:hover{
+  background: color-mix(in srgb, var(--blue-weak) 68%, transparent) !important;
+}
+div[role="option"][aria-selected="true"]{
+  background: color-mix(in srgb, var(--blue-weak) 90%, transparent) !important;
+  color: var(--text-main) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stRadio"],
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{
+  margin: 0.22rem 0 0.32rem 0 !important;
+}
+section[data-testid="stSidebar"] [role="radiogroup"] > label,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] > label{
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+  background: color-mix(in srgb, var(--panel) 28%, transparent);
+  border-radius: 14px;
+  padding: 0.35rem 0.55rem !important;
+  margin: 0.16rem 0 !important;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+section[data-testid="stSidebar"] [role="radiogroup"] > label:hover,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] > label:hover{
+  border-color: color-mix(in srgb, var(--blue-line) 48%, var(--line));
+  background: color-mix(in srgb, var(--blue-weak) 44%, transparent);
+}
+section[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked),
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] > label:has(input:checked){
+  border-color: color-mix(in srgb, var(--blue-line) 88%, var(--line));
+  background: color-mix(in srgb, var(--blue-weak) 78%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 20%, white);
+}
+section[data-testid="stSidebar"] input[type="radio"],
+section[data-testid="stSidebar"] input[type="checkbox"]{
+  accent-color: var(--accent) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"]{
+  margin: 0.24rem 0 0.48rem 0 !important;
+  padding: 0.42rem 0.58rem 0.38rem 0.58rem !important;
+  border: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  border-radius: 16px !important;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--panel) 34%, transparent) 0%,
+      color-mix(in srgb, var(--sidebar-bg) 88%, transparent) 100%) !important;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 20%, white) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-baseweb="slider"]{
+  margin-top: 0.12rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-baseweb="slider"] [role="slider"]{
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-weak) 36%, transparent) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-baseweb="slider"] > div > div{
+  border-radius: 999px !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"]{
+  border: 1px solid color-mix(in srgb, var(--line) 72%, transparent) !important;
+  border-radius: 16px !important;
+  background: color-mix(in srgb, var(--panel) 20%, transparent) !important;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--panel) 18%, white) !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"] summary{
+  padding: 0.5rem 0.7rem !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > div{
+  padding: 0.1rem 0.25rem 0.3rem 0.25rem !important;
+}
+/* Minimal sidebar override: flatten the previous decorative treatment. */
+section[data-testid="stSidebar"] > div:first-child{
+  background: var(--sidebar-bg) !important;
+  box-shadow: inset -1px 0 0 color-mix(in srgb, var(--line) 92%, transparent) !important;
+}
+section[data-testid="stSidebar"] h3{
+  font-size: 1.04rem !important;
+  font-weight: 760 !important;
+  line-height: 1.18 !important;
+  letter-spacing: -0.012em !important;
+  margin: 0.18rem 0 0.10rem 0 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"]{
+  margin-top: 0 !important;
+}
+section[data-testid="stSidebar"] .stCaption,
+section[data-testid="stSidebar"] div[data-testid="stCaptionContainer"] *{
+  font-size: 0.76rem !important;
+  line-height: 1.32 !important;
+  opacity: 0.84 !important;
+  letter-spacing: 0 !important;
+}
+section[data-testid="stSidebar"] .hr{
+  margin: 0.82rem 0 0.88rem 0 !important;
+  background: color-mix(in srgb, var(--line) 95%, transparent) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"]{
+  margin-bottom: 0.08rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] p,
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] label,
+section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"] span{
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"]{
+  margin: 0.16rem 0 !important;
+}
+section[data-testid="stSidebar"] div.stButton > button{
+  min-height: 38px !important;
+  border-radius: 12px !important;
+  padding: 0.34rem 0.68rem !important;
+  font-size: 0.82rem !important;
+  font-weight: 650 !important;
+  letter-spacing: 0 !important;
+  background: color-mix(in srgb, var(--btn-bg) 94%, transparent) !important;
+  border: 1px solid color-mix(in srgb, var(--btn-border) 88%, var(--line)) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:hover{
+  background: color-mix(in srgb, var(--btn-hover) 90%, var(--btn-bg)) !important;
+  border-color: color-mix(in srgb, var(--blue-line) 58%, var(--btn-border)) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:active{
+  background: color-mix(in srgb, var(--btn-active) 92%, var(--btn-bg)) !important;
+  border-color: color-mix(in srgb, var(--blue-line) 68%, var(--btn-border)) !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] div[data-testid="stTextInput"],
+section[data-testid="stSidebar"] div[data-testid="stTextArea"],
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"]{
+  margin: 0.16rem 0 0.24rem 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input{
+  border-radius: 12px !important;
+  background: var(--input-bg) !important;
+  border: 1px solid color-mix(in srgb, var(--input-border) 90%, var(--line)) !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div:hover,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:hover,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea:hover,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input:hover{
+  border-color: color-mix(in srgb, var(--blue-line) 45%, var(--input-border)) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:focus,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea:focus,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input:focus{
+  border-color: color-mix(in srgb, var(--blue-line) 65%, var(--input-border)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue-weak) 65%, transparent) !important;
+}
+section[data-testid="stSidebar"] [role="radiogroup"] > label,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] > label{
+  border: 0 !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+  padding: 0.14rem 0 !important;
+  margin: 0.06rem 0 !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [role="radiogroup"] > label:hover,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] > label:hover{
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] [role="radiogroup"] > label:has(input:checked),
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] > label:has(input:checked){
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stRadio"],
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"]{
+  margin: 0.14rem 0 0.18rem 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSlider"]{
+  margin: 0.14rem 0 0.36rem 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"]{
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent) !important;
+  border-radius: 12px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"] summary{
+  padding: 0.42rem 0.58rem !important;
+}
+section[data-testid="stSidebar"] details[data-testid="stExpander"] > div{
+  padding: 0.06rem 0.15rem 0.18rem 0.15rem !important;
+}
+section[data-testid="stSidebar"] a{
+  color: color-mix(in srgb, var(--sidebar-soft-text) 92%, var(--sidebar-strong-text)) !important;
+  text-decoration-color: color-mix(in srgb, var(--sidebar-soft-text) 45%, transparent) !important;
+  text-underline-offset: 2px;
+}
+section[data-testid="stSidebar"] a:hover{
+  color: var(--sidebar-strong-text) !important;
+  text-decoration-color: color-mix(in srgb, var(--blue-line) 65%, transparent) !important;
+}
 .pill{
   display: inline-flex;
   align-items: center;
@@ -1458,23 +1923,72 @@ div[data-testid="stTextArea"]::after{
   background: var(--dock-bg) !important;
   border: 1px solid var(--dock-border) !important;
   border-radius: 20px;
-  padding: 0.48rem 0.56rem 0.18rem 0.56rem;
+  padding: 0.34rem 0.46rem 0.34rem 0.46rem;
   box-shadow: var(--dock-shadow);
-  backdrop-filter: blur(5px);
+  backdrop-filter: saturate(118%) blur(8px) !important;
+  -webkit-backdrop-filter: saturate(118%) blur(8px) !important;
   margin: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  flex: none !important;
+  display: block !important;
+  overflow: hidden !important;
+  isolation: isolate !important;
 }
-.kb-input-dock,
 .kb-input-dock > div,
+.kb-input-dock form,
 .kb-input-dock div[data-testid="stForm"]{
-  background: var(--dock-bg) !important;
-  border-color: var(--dock-border) !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  border-color: transparent !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  flex: none !important;
+}
+.kb-input-dock form,
+.kb-input-dock div[data-testid="stForm"]{
+  position: relative !important;
 }
 .kb-input-dock textarea,
 .kb-input-dock div[data-testid="stTextArea"] textarea{
   border-color: var(--input-border) !important;
 }
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="textarea"],
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="textarea"] > div,
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="base-input"],
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="base-input"] > div{
+  outline: none !important;
+  box-shadow: none !important;
+}
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="textarea"]:focus-within,
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="textarea"][aria-invalid="true"],
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="textarea"][data-invalid="true"],
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="base-input"]:focus-within,
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="base-input"][aria-invalid="true"],
+.kb-input-dock div[data-testid="stTextArea"] [data-baseweb="base-input"][data-invalid="true"]{
+  border-color: transparent !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
 .kb-input-dock textarea:focus,
 .kb-input-dock div[data-testid="stTextArea"] textarea:focus{
+  border-color: var(--blue-line) !important;
+  box-shadow: 0 0 0 1px var(--blue-weak) !important;
+}
+.kb-input-dock textarea:invalid,
+.kb-input-dock textarea:user-invalid,
+.kb-input-dock div[data-testid="stTextArea"] textarea:invalid,
+.kb-input-dock div[data-testid="stTextArea"] textarea:user-invalid{
+  border-color: color-mix(in srgb, var(--input-border) 92%, var(--line)) !important;
+  box-shadow: none !important;
+}
+.kb-input-dock textarea:focus:invalid,
+.kb-input-dock textarea:focus:user-invalid,
+.kb-input-dock div[data-testid="stTextArea"] textarea:focus:invalid,
+.kb-input-dock div[data-testid="stTextArea"] textarea:focus:user-invalid{
   border-color: var(--blue-line) !important;
   box-shadow: 0 0 0 1px var(--blue-weak) !important;
 }
@@ -1489,16 +2003,211 @@ body.kb-resizing .kb-input-dock *{
 }
 .kb-input-dock.kb-dock-positioned{ max-width: none !important; }
 .kb-input-dock div[data-testid="stForm"]{ margin-bottom: 0 !important; }
+.kb-input-dock .kb-dock-action-layer{
+  position: absolute !important;
+  inset: 0 !important;
+  z-index: 9 !important;
+  pointer-events: none !important;
+}
+.kb-input-dock .kb-dock-send-anchor{
+  position: absolute !important;
+  right: 0.98rem !important;
+  bottom: 1.20rem !important;
+  width: 36px !important;
+  height: 36px !important;
+  pointer-events: none !important;
+}
+.kb-input-dock .kb-dock-send-anchor::before{
+  content: none;
+}
+.kb-input-dock .kb-dock-stop-anchor{
+  position: absolute !important;
+  right: 3.55rem !important;
+  bottom: 1.23rem !important;
+  width: 28px !important;
+  height: 28px !important;
+  pointer-events: none !important;
+}
+.kb-input-dock .kb-dock-action-layer .kb-dock-send-wrap,
+.kb-input-dock .kb-dock-action-layer .kb-dock-stop-wrap{
+  position: static !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  margin: 0 !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  display: block !important;
+  pointer-events: auto !important;
+}
 .kb-input-dock::before{
   content: "Ask anything... (searches Markdown first)";
   display: block;
   font-size: 0.75rem;
-  color: var(--muted);
-  margin: 0 0 0.32rem 0.16rem;
+  color: color-mix(in srgb, var(--text-soft) 86%, var(--text-main) 14%);
+  opacity: 0.96;
+  margin: 0 0 0.20rem 0.18rem;
+}
+.kb-input-dock::after{
+  content: "π-zaya can make mistakes. check important info";
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 0.60rem;
+  font-size: 11px;
+  color: var(--hint-text);
+  opacity: 0.82;
+  line-height: 1;
+  white-space: nowrap;
+  text-align: center;
+  pointer-events: none;
+  z-index: 4;
+}
+html[data-theme="light"] .kb-input-dock,
+body[data-theme="light"] .kb-input-dock{
+  background:
+    linear-gradient(180deg,
+      rgba(255,255,255,0.70) 0%,
+      rgba(247,249,252,0.76) 22%,
+      rgba(239,243,248,0.82) 100%) !important;
+  border-color: rgba(174, 184, 196, 0.32) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.72),
+    inset 0 -1px 0 rgba(255,255,255,0.22),
+    0 1px 2px rgba(15,23,42,0.05),
+    0 10px 26px rgba(15,23,42,0.07) !important;
+}
+html[data-theme="light"] .kb-input-dock::before,
+body[data-theme="light"] .kb-input-dock::before{
+  text-shadow: 0 1px 0 rgba(255,255,255,0.45);
+}
+html[data-theme="light"] .kb-input-dock::after,
+body[data-theme="light"] .kb-input-dock::after{
+  color: color-mix(in srgb, var(--hint-text) 74%, #5f6d7c 26%);
+  opacity: 0.88;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.38);
 }
 .kb-input-dock div[data-testid="stTextArea"] label{ display: none !important; }
-.kb-input-dock textarea{ min-height: 92px !important; border-radius: 14px !important; }
-.kb-input-dock div[data-testid="stFormSubmitButton"]{ display: flex !important; justify-content: flex-end !important; margin-top: 0.38rem !important; }
+.kb-input-dock div[data-testid="stTextArea"]{ position: relative !important; margin-bottom: 0 !important; }
+.kb-input-dock div[data-testid="stTextArea"]::before{
+  content: "Ctrl+Enter";
+  position: absolute;
+  right: 4.15rem;
+  bottom: 0.80rem;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--hint-text);
+  opacity: 0.82;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 6;
+}
+.kb-input-dock div[data-testid="stTextArea"],
+.kb-input-dock div[data-testid="stTextArea"] *{
+  filter: none !important;
+  opacity: 1 !important;
+}
+.kb-input-dock div[data-testid="stTextArea"] [data-testid="InputInstructions"]{ display: none !important; }
+.kb-input-dock .stTextArea::after,
+.kb-input-dock div[data-testid="stTextArea"]::after{ content: none !important; display: none !important; }
+.kb-input-dock textarea{
+  min-height: 110px !important;
+  border-radius: 14px !important;
+  padding-right: 4.85rem !important;
+  padding-bottom: 3.05rem !important;
+  background: color-mix(in srgb, var(--panel) 97%, white 3%) !important;
+  color: var(--text-main) !important;
+  border-color: color-mix(in srgb, var(--input-border) 92%, var(--line)) !important;
+  opacity: 1 !important;
+}
+.kb-input-dock textarea::placeholder{
+  color: color-mix(in srgb, var(--text-soft) 82%, var(--muted) 18%) !important;
+  opacity: 0.88 !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"]{
+  position: absolute !important;
+  left: 0.98rem !important;
+  bottom: 1.20rem !important;
+  z-index: 6 !important;
+  width: 104px !important;
+  min-width: 104px !important;
+  max-width: 104px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] > label{
+  display: none !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] > div{
+  margin: 0 !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"]{
+  min-height: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  border: none !important;
+  background: color-mix(in srgb, var(--panel) 94%, transparent) !important;
+  box-shadow: none !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: hidden !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"]:hover{
+  background: color-mix(in srgb, var(--btn-hover) 62%, var(--panel) 38%) !important;
+  border-color: transparent !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] svg,
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] small,
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] p,
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzoneInstructions"]{
+  display: none !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] button{
+  all: unset !important;
+  box-sizing: border-box !important;
+  width: 100% !important;
+  height: 100% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  color: transparent !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  position: relative !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] button::before{
+  content: "+ Add files" !important;
+  color: color-mix(in srgb, var(--text-main) 94%, var(--text-soft) 6%) !important;
+  font-size: 0.70rem !important;
+  line-height: 1 !important;
+  font-weight: 560 !important;
+  letter-spacing: 0.01em !important;
+}
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] > div{
+  width: 100% !important;
+  height: 100% !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+/* Hide uploaded file list rows in the dock to keep composer compact; upload feedback is shown as caption. */
+.kb-input-dock div[data-testid="stFileUploader"] ul,
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid*="stFileUploaderFile"],
+.kb-input-dock div[data-testid="stFileUploader"] [data-testid*="FileUploaderFile"]{
+  display: none !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"]{
+  display: flex !important;
+  justify-content: flex-end !important;
+  margin: 0 !important;
+  min-height: 0 !important;
+}
 .kb-input-dock div[data-testid="stFormSubmitButton"] > button{
   width: 40px !important;
   min-width: 40px !important;
@@ -1506,6 +2215,151 @@ body.kb-resizing .kb-input-dock *{
   min-height: 40px !important;
   border-radius: 999px !important;
   padding: 0 !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap,
+.kb-input-dock .kb-dock-send-wrap{
+  position: absolute !important;
+  right: 0.98rem !important;
+  bottom: 1.20rem !important;
+  top: auto !important;
+  left: auto !important;
+  z-index: 8 !important;
+  width: 36px !important;
+  min-width: 36px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  display: block !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn,
+.kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn{
+  all: unset;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 36px !important;
+  min-width: 36px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border-radius: 999px !important;
+  border: none !important;
+  background: linear-gradient(180deg, #2d333d 0%, #262b33 100%) !important;
+  color: #ffffff !important;
+  font-size: 1.02rem !important;
+  line-height: 1 !important;
+  font-weight: 800 !important;
+  cursor: pointer !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 6px 14px rgba(0, 0, 0, 0.10) !important;
+  transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease !important;
+}
+.kb-input-dock button.kb-dock-send-btn{
+  position: absolute !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: auto !important;
+  top: auto !important;
+  margin: 0 !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn:hover,
+.kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn:hover{
+  background: linear-gradient(180deg, #353c47 0%, #2d333d 100%) !important;
+  transform: translateY(-1px) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 2px 4px rgba(0, 0, 0, 0.20),
+    0 8px 18px rgba(0, 0, 0, 0.12) !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn:active,
+.kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn:active{
+  background: #242a32 !important;
+  transform: translateY(0) !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn,
+.kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn{
+  color: #ffffff !important;
+}
+html[data-theme="light"] .kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn,
+html[data-theme="light"] .kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn,
+body[data-theme="light"] .kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn,
+body[data-theme="light"] .kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn{
+  border: none !important;
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2f6 100%) !important;
+  color: #28313d !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    0 1px 2px rgba(16, 24, 40, 0.06),
+    0 5px 12px rgba(16, 24, 40, 0.08) !important;
+}
+html[data-theme="light"] .kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn:hover,
+html[data-theme="light"] .kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn:hover,
+body[data-theme="light"] .kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn:hover,
+body[data-theme="light"] .kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn:hover{
+  background: linear-gradient(180deg, #ffffff 0%, #f1f4f8 100%) !important;
+  color: #1f2733 !important;
+}
+html[data-theme="light"] .kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn:active,
+html[data-theme="light"] .kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn:active,
+body[data-theme="light"] .kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn:active,
+body[data-theme="light"] .kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn:active{
+  background: #e9edf2 !important;
+  color: #1f2733 !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-send-wrap > button.kb-dock-send-btn:disabled,
+.kb-input-dock .kb-dock-send-wrap button.kb-dock-send-btn:disabled{
+  opacity: 0.56 !important;
+  box-shadow: none !important;
+  cursor: default !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-stop-wrap,
+.kb-input-dock .kb-dock-stop-wrap{
+  position: absolute !important;
+  right: 3.55rem !important;
+  bottom: 1.23rem !important;
+  top: auto !important;
+  left: auto !important;
+  z-index: 7 !important;
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  margin: 0 !important;
+  display: block !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-stop-wrap > button.kb-dock-stop-btn,
+.kb-input-dock .kb-dock-stop-wrap button.kb-dock-stop-btn{
+  all: unset;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 28px !important;
+  min-width: 28px !important;
+  height: 28px !important;
+  min-height: 28px !important;
+  border-radius: 999px !important;
+  border: none !important;
+  background: rgba(255, 255, 255, 0.035) !important;
+  color: var(--text-main) !important;
+  font-size: 0.78rem !important;
+  line-height: 1 !important;
+  cursor: pointer !important;
+}
+.kb-input-dock button.kb-dock-stop-btn{
+  position: absolute !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: auto !important;
+  top: auto !important;
+  margin: 0 !important;
+}
+.kb-input-dock div[data-testid="stFormSubmitButton"].kb-dock-stop-wrap > button.kb-dock-stop-btn:hover,
+.kb-input-dock .kb-dock-stop-wrap button.kb-dock-stop-btn:hover{
+  background: rgba(255, 255, 255, 0.07) !important;
+  border-color: transparent !important;
 }
 
 .kb-copybar{
@@ -1714,6 +2568,1407 @@ body[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stSlid
   color: var(--text-soft) !important;
   opacity: 1 !important;
 }
+/* IDE-like / OpenAI-like sidebar controls: low-contrast surfaces, crisp borders, restrained motion. */
+section[data-testid="stSidebar"]{
+  --kb-side-btn-bg: color-mix(in srgb, var(--sidebar-bg) 80%, var(--panel));
+  --kb-side-btn-hover: color-mix(in srgb, var(--sidebar-bg) 62%, var(--panel));
+  --kb-side-btn-active: color-mix(in srgb, var(--sidebar-bg) 54%, var(--panel));
+  --kb-side-btn-border: color-mix(in srgb, var(--line) 88%, transparent);
+  --kb-side-btn-border-hover: color-mix(in srgb, var(--blue-line) 28%, var(--line));
+  --kb-side-ctrl-bg: color-mix(in srgb, var(--sidebar-bg) 76%, var(--panel));
+  --kb-side-ctrl-border: color-mix(in srgb, var(--line) 90%, transparent);
+  --kb-side-focus-ring: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"]{
+  margin: 0.12rem 0 !important;
+}
+section[data-testid="stSidebar"] div.stButton > button{
+  min-height: 36px !important;
+  height: auto !important;
+  padding: 0.36rem 0.72rem !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--kb-side-btn-border) !important;
+  background: var(--kb-side-btn-bg) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.025) !important;
+  color: var(--sidebar-strong-text) !important;
+  font-size: 0.84rem !important;
+  font-weight: 620 !important;
+  line-height: 1.2 !important;
+  letter-spacing: 0 !important;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    color 120ms ease !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] div.stButton > button *{
+  color: inherit !important;
+  -webkit-text-fill-color: inherit !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:hover{
+  background: var(--kb-side-btn-hover) !important;
+  border-color: var(--kb-side-btn-border-hover) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.03) !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:active{
+  background: var(--kb-side-btn-active) !important;
+  border-color: color-mix(in srgb, var(--blue-line) 42%, var(--line)) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.02) !important;
+  transform: none !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:focus,
+section[data-testid="stSidebar"] div.stButton > button:focus-visible{
+  outline: none !important;
+  box-shadow:
+    0 0 0 2px var(--kb-side-focus-ring) !important;
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line)) !important;
+}
+section[data-testid="stSidebar"] div.stButton > button[disabled],
+section[data-testid="stSidebar"] div.stButton > button:disabled{
+  opacity: 0.55 !important;
+  cursor: not-allowed !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"],
+section[data-testid="stSidebar"] div[data-testid="stTextInput"],
+section[data-testid="stSidebar"] div[data-testid="stTextArea"],
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"]{
+  margin: 0.14rem 0 0.22rem 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input{
+  min-height: 38px !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--kb-side-ctrl-border) !important;
+  background: var(--kb-side-ctrl-bg) !important;
+  box-shadow: none !important;
+  color: var(--sidebar-strong-text) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div:hover,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:hover,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea:hover,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input:hover{
+  border-color: color-mix(in srgb, var(--blue-line) 24%, var(--line)) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] > div:focus-within,
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input:focus,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea:focus,
+section[data-testid="stSidebar"] div[data-testid="stNumberInput"] input:focus{
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line)) !important;
+  box-shadow: 0 0 0 2px var(--kb-side-focus-ring) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] [data-baseweb="select"] [data-testid="stMarkdownContainer"] *{
+  font-weight: 560 !important;
+}
+ul[data-testid="stSelectboxVirtualDropdown"],
+div[role="listbox"]{
+  border-radius: 10px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 92%, transparent) !important;
+  background: color-mix(in srgb, var(--panel) 92%, var(--sidebar-bg)) !important;
+  box-shadow: 0 10px 24px rgba(5, 10, 19, 0.18) !important;
+}
+li[data-testid="stSelectboxVirtualDropdownOption"],
+div[role="option"]{
+  border-radius: 8px !important;
+  font-weight: 520 !important;
+}
+li[data-testid="stSelectboxVirtualDropdownOption"]:hover,
+div[role="option"]:hover{
+  background: color-mix(in srgb, var(--panel) 62%, var(--blue-weak)) !important;
+}
+div[role="option"][aria-selected="true"]{
+  background: color-mix(in srgb, var(--panel) 48%, var(--blue-weak)) !important;
+}
+
+/* Remove bulky row pills around checkbox/radio controls (Streamlit/BaseWeb variants). */
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label,
+section[data-testid="stSidebar"] [data-baseweb="checkbox"],
+section[data-testid="stSidebar"] [data-baseweb="radio"]{
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:hover,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label:hover,
+section[data-testid="stSidebar"] [data-baseweb="checkbox"]:hover,
+section[data-testid="stSidebar"] [data-baseweb="radio"]:hover{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] label:has(input:checked),
+section[data-testid="stSidebar"] div[data-testid="stRadio"] label:has(input:checked),
+section[data-testid="stSidebar"] [data-baseweb="checkbox"]:has(input:checked),
+section[data-testid="stSidebar"] [data-baseweb="radio"]:has(input:checked){
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"],
+section[data-testid="stSidebar"] div[data-testid="stRadio"]{
+  margin: 0.10rem 0 0.16rem 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] p,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] p,
+section[data-testid="stSidebar"] div[data-testid="stCheckbox"] span,
+section[data-testid="stSidebar"] div[data-testid="stRadio"] span{
+  font-weight: 560 !important;
+}
+
+/* Sidebar section titles: compact, IDE-like. */
+section[data-testid="stSidebar"] h3{
+  font-size: 1.00rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.01em !important;
+  margin: 0.16rem 0 0.08rem 0 !important;
+}
+section[data-testid="stSidebar"] .hr{
+  margin: 0.72rem 0 0.82rem 0 !important;
+  background: color-mix(in srgb, var(--line) 84%, transparent) !important;
+}
+/* Ultra-minimal sidebar action chips (less "button", more IDE action affordance). */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button{
+  width: fit-content !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  min-height: 32px !important;
+  padding: 0.28rem 0.62rem !important;
+  border-radius: 9px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0.35rem !important;
+  background: transparent !important;
+  border: 1px solid color-mix(in srgb, var(--line) 78%, transparent) !important;
+  box-shadow: none !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 92%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 92%, var(--sidebar-soft-text)) !important;
+  font-size: 0.82rem !important;
+  font-weight: 560 !important;
+  letter-spacing: 0 !important;
+  line-height: 1.2 !important;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:hover{
+  background: color-mix(in srgb, var(--panel) 26%, transparent) !important;
+  border-color: color-mix(in srgb, var(--line) 96%, var(--blue-line)) !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.018) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:active{
+  background: color-mix(in srgb, var(--panel) 34%, transparent) !important;
+  border-color: color-mix(in srgb, var(--blue-line) 32%, var(--line)) !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:focus,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:focus-visible{
+  outline: none !important;
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button[disabled],
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button:disabled{
+  opacity: 0.48 !important;
+  border-color: color-mix(in srgb, var(--line) 62%, transparent) !important;
+  background: transparent !important;
+}
+
+/* Conversation history (row styles shared by popover/expander variants) */
+button.kb-conv-picker-trigger,
+section[data-testid="stSidebar"] button.kb-conv-picker-trigger{
+  width: 100% !important;
+  min-height: 36px !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+  border-radius: 10px !important;
+  background: color-mix(in srgb, var(--panel) 24%, var(--sidebar-bg)) !important;
+  border: 1px solid color-mix(in srgb, var(--line) 84%, transparent) !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+  font-weight: 560 !important;
+}
+button.kb-conv-picker-trigger:hover,
+section[data-testid="stSidebar"] button.kb-conv-picker-trigger:hover{
+  background: color-mix(in srgb, var(--panel) 36%, var(--sidebar-bg)) !important;
+  border-color: color-mix(in srgb, var(--line) 98%, var(--blue-line)) !important;
+}
+.kb-conv-popover-panel{
+  width: min(100%, var(--kb-conv-panel-width, 320px)) !important;
+  max-width: var(--kb-conv-panel-width, 320px) !important;
+  min-width: min(100%, 240px) !important;
+  border-radius: 10px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 86%, transparent) !important;
+  background: color-mix(in srgb, var(--panel) 90%, var(--sidebar-bg)) !important;
+  box-shadow: 0 14px 32px rgba(3, 8, 16, 0.24) !important;
+  padding: 6px !important;
+  overflow: hidden !important;
+}
+.kb-conv-popover-panel div[data-testid="stButton"]{
+  margin: 0 !important;
+}
+.kb-conv-popover-scroll{
+  max-height: min(56vh, 420px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  padding-right: 2px !important;
+}
+.kb-conv-row-wrap{
+  position: relative !important;
+  border-radius: 8px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0.14rem !important;
+  align-items: center !important;
+  overflow: clip !important;
+}
+.kb-conv-row-wrap::after{
+  content: none !important;
+}
+.kb-conv-row-wrap > div[data-testid="column"]{
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+.kb-conv-row-wrap div[data-testid="stButton"]{
+  margin: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(button.kb-conv-row-btn),
+section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(button.kb-conv-row-btn){
+  margin: 0 !important;
+  padding: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(button.kb-conv-row-btn) > div,
+section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(button.kb-conv-row-btn) > div{
+  margin: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 1px !important; /* leave a hairline gap between rows */
+}
+/* Flat list mode: style rows by structure (row = horizontal block containing a conversation row button) */
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn){
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0.02rem !important;
+  align-items: center !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn) > div[data-testid="column"]{
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn) div[data-testid="stButton"]{
+  margin: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn) > div[data-testid="column"]:first-child div[data-testid="stButton"] > button{
+  min-height: 18px !important;
+  padding: 0.01rem 0.10rem 0.01rem 0.06rem !important;
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  border-radius: 5px !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn) > div[data-testid="column"]:first-child div[data-testid="stButton"] > button p,
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn) > div[data-testid="column"]:first-child div[data-testid="stButton"] > button span{
+  margin: 0 !important;
+  font-size: 0.64rem !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn):hover > div[data-testid="column"]:first-child div[data-testid="stButton"] > button,
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn):focus-within > div[data-testid="column"]:first-child div[data-testid="stButton"] > button{
+  background: color-mix(in srgb, var(--panel) 10%, transparent) !important;
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-current) > div[data-testid="column"]:first-child div[data-testid="stButton"] > button{
+  background: color-mix(in srgb, var(--panel) 14%, transparent) !important;
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn) > div[data-testid="column"]:last-child{
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-conv-row-btn) > div[data-testid="column"]:last-child div[data-testid="stButton"] > button{
+  width: 12px !important;
+  min-width: 12px !important;
+  max-width: 12px !important;
+  height: 12px !important;
+  min-height: 12px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+button.kb-conv-row-btn,
+section[data-testid="stSidebar"] button.kb-conv-row-btn{
+  width: 100% !important;
+  min-height: 20px !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  padding: 0.02rem 0.12rem 0.02rem 0.07rem !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 84%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 84%, var(--sidebar-soft-text)) !important;
+  font-size: 0.72rem !important;
+  font-weight: 500 !important;
+  line-height: 1.0 !important;
+  transition: background-color 100ms ease, color 100ms ease !important;
+}
+button.kb-conv-row-btn p,
+section[data-testid="stSidebar"] button.kb-conv-row-btn p,
+button.kb-conv-row-btn span,
+section[data-testid="stSidebar"] button.kb-conv-row-btn span{
+  margin: 0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  line-height: 1 !important;
+  font-size: 0.72rem !important;
+}
+button.kb-conv-row-btn:hover,
+section[data-testid="stSidebar"] button.kb-conv-row-btn:hover{
+  background: color-mix(in srgb, var(--panel) 13%, transparent) !important;
+  border: 0 !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+button.kb-conv-row-btn.kb-current,
+section[data-testid="stSidebar"] button.kb-conv-row-btn.kb-current{
+  background: color-mix(in srgb, var(--panel) 16%, transparent) !important;
+  border: 0 !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+  font-weight: 540 !important;
+}
+button.kb-conv-trash-btn,
+section[data-testid="stSidebar"] button.kb-conv-trash-btn{
+  width: 12px !important;
+  min-width: 12px !important;
+  max-width: 12px !important;
+  height: 12px !important;
+  min-height: 12px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 3px !important;
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  color: color-mix(in srgb, var(--sidebar-soft-text) 76%, transparent) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-soft-text) 76%, transparent) !important;
+  opacity: 0.16 !important;
+  pointer-events: auto !important;
+  transition: none !important;
+}
+button.kb-conv-trash-btn:hover,
+section[data-testid="stSidebar"] button.kb-conv-trash-btn:hover{
+  background: color-mix(in srgb, #ef4444 10%, transparent) !important;
+  border: 0 !important;
+  color: #fca5a5 !important;
+  -webkit-text-fill-color: #fca5a5 !important;
+  opacity: 1 !important;
+}
+.kb-conv-row-wrap:hover button.kb-conv-trash-btn,
+.kb-conv-row-wrap:focus-within button.kb-conv-trash-btn{
+  opacity: 0.55 !important;
+  pointer-events: auto !important;
+}
+.kb-conv-row-wrap:hover button.kb-conv-row-btn,
+.kb-conv-row-wrap:focus-within button.kb-conv-row-btn{
+  background: color-mix(in srgb, var(--panel) 13%, transparent) !important;
+}
+.kb-conv-row-wrap button.kb-conv-row-btn.kb-current + *,
+.kb-conv-row-wrap:has(button.kb-current) button.kb-conv-trash-btn{
+  opacity: 0.26 !important;
+}
+.kb-conv-row-wrap:has(button.kb-current) button.kb-conv-trash-btn{
+  opacity: 0.34 !important;
+}
+button.kb-conv-trash-btn:focus,
+button.kb-conv-trash-btn:focus-visible,
+section[data-testid="stSidebar"] button.kb-conv-trash-btn:focus,
+section[data-testid="stSidebar"] button.kb-conv-trash-btn:focus-visible{
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.10) !important;
+  border: 0 !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* Conversation history expander (ChatGPT-like, low-button-feel) */
+section[data-testid="stSidebar"] details.kb-conv-history-expander,
+section[data-testid="stSidebar"] div[data-testid="stExpander"].kb-conv-history-expander{
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary{
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 9px !important;
+  min-height: 34px !important;
+  padding: 0.28rem 0.5rem !important;
+  margin: 0 !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 96%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 96%, var(--sidebar-soft-text)) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary:hover{
+  background: color-mix(in srgb, var(--panel) 28%, transparent) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander[open] > summary{
+  background: color-mix(in srgb, var(--panel) 22%, transparent) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary:focus,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary:focus-visible{
+  outline: none !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--line) 88%, transparent) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary p{
+  margin: 0 !important;
+  font-size: 0.86rem !important;
+  font-weight: 560 !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary svg{
+  opacity: 0.7 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div{
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding-top: 0.18rem !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap{
+  margin: 0 !important;
+  border-radius: 8px !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-row-btn{
+  min-height: 31px !important;
+  border-radius: 8px !important;
+  padding: 0.16rem 0.42rem !important;
+  font-size: 0.84rem !important;
+  font-weight: 500 !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:hover button.kb-conv-row-btn,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:focus-within button.kb-conv-row-btn{
+  background: color-mix(in srgb, var(--panel) 30%, transparent) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-row-btn.kb-current{
+  background: color-mix(in srgb, var(--panel) 38%, transparent) !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-trash-btn{
+  min-width: 28px !important;
+  min-height: 28px !important;
+  border-radius: 7px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  color: color-mix(in srgb, var(--sidebar-soft-text) 50%, transparent) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-soft-text) 50%, transparent) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:hover button.kb-conv-trash-btn,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:focus-within button.kb-conv-trash-btn{
+  opacity: 0.8 !important;
+  pointer-events: auto !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:has(button.kb-current) button.kb-conv-trash-btn{
+  opacity: 0.35 !important;
+  pointer-events: auto !important;
+}
+
+/* Conversation history compact override (text-list, GPT-like) */
+button.kb-history-action-btn,
+section[data-testid="stSidebar"] button.kb-history-action-btn{
+  min-height: 24px !important;
+  padding: 0.05rem 0.16rem !important;
+  border: 0 !important;
+  border-radius: 7px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 80%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 80%, var(--sidebar-soft-text)) !important;
+  font-size: 0.68rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0 !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+button.kb-history-action-btn:hover,
+section[data-testid="stSidebar"] button.kb-history-action-btn:hover{
+  background: color-mix(in srgb, var(--panel) 12%, transparent) !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+button.kb-history-action-btn:active,
+section[data-testid="stSidebar"] button.kb-history-action-btn:active,
+button.kb-history-action-btn:focus,
+button.kb-history-action-btn:focus-visible,
+section[data-testid="stSidebar"] button.kb-history-action-btn:focus,
+section[data-testid="stSidebar"] button.kb-history-action-btn:focus-visible{
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(button.kb-history-toggle-btn),
+section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(button.kb-history-toggle-btn){
+  margin: 0 !important;
+  padding: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(button.kb-history-toggle-btn) > div,
+section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(button.kb-history-toggle-btn) > div{
+  margin: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 1px !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button.kb-history-toggle-btn){
+  margin: 0 !important;
+  padding: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"]:has(> button.kb-history-toggle-btn) > button{
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Older-history toggle should look like plain text until hover */
+button.kb-history-toggle-btn,
+section[data-testid="stSidebar"] button.kb-history-toggle-btn{
+  width: 100% !important;
+  min-height: 18px !important;
+  padding: 0.01rem 0.08rem 0.01rem 0.06rem !important;
+  border: 0 !important;
+  border-width: 0 !important;
+  border-style: none !important;
+  border-color: transparent !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 76%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 76%, var(--sidebar-soft-text)) !important;
+  font-size: 0.63rem !important;
+  font-weight: 500 !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+button.kb-history-toggle-btn p,
+section[data-testid="stSidebar"] button.kb-history-toggle-btn p,
+button.kb-history-toggle-btn span,
+section[data-testid="stSidebar"] button.kb-history-toggle-btn span{
+  margin: 0 !important;
+  font-size: 0.63rem !important;
+  line-height: 1.0 !important;
+}
+button.kb-history-toggle-btn:hover,
+section[data-testid="stSidebar"] button.kb-history-toggle-btn:hover,
+button.kb-history-toggle-btn:focus,
+button.kb-history-toggle-btn:focus-visible,
+section[data-testid="stSidebar"] button.kb-history-toggle-btn:focus,
+section[data-testid="stSidebar"] button.kb-history-toggle-btn:focus-visible{
+  background: color-mix(in srgb, var(--panel) 7%, transparent) !important;
+  border: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+
+/* Final hard override: defeat generic sidebar chip style for history rows/toggles */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn{
+  all: unset !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  width: 100% !important;
+  min-height: 17px !important;
+  padding: 0.00rem 0.08rem 0.00rem 0.05rem !important;
+  border: 0 !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 84%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 84%, var(--sidebar-soft-text)) !important;
+  font-size: 0.72rem !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  text-align: left !important;
+  cursor: pointer !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn::before,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn::after,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn::before,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn::after{
+  content: none !important;
+  display: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn p,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn span,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn p,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn span{
+  margin: 0 !important;
+  font-size: 0.72rem !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn:hover,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn:focus,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn:focus-visible,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn:hover,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn:focus,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn:focus-visible{
+  background: color-mix(in srgb, var(--panel) 4%, transparent) !important;
+  background-color: color-mix(in srgb, var(--panel) 4%, transparent) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn.kb-current,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn.kb-current{
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--blue-weak) 22%, var(--panel) 16%),
+    color-mix(in srgb, var(--panel) 14%, transparent) 28%,
+    color-mix(in srgb, var(--panel) 10%, transparent)
+  ) !important;
+  background-color: color-mix(in srgb, var(--panel) 14%, var(--blue-weak) 12%) !important;
+  border: 0 !important;
+  box-shadow:
+    inset 3px 0 0 color-mix(in srgb, var(--blue-line) 88%, var(--accent)),
+    inset 0 0 0 1px color-mix(in srgb, var(--blue-line) 20%, transparent) !important;
+  outline: none !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+  font-weight: 700 !important;
+  padding-left: 0.28rem !important;
+  gap: 0.22rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn.kb-current p,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn.kb-current span,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn.kb-current p,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn.kb-current span{
+  font-weight: 700 !important;
+  letter-spacing: 0.005em !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-conv-row-btn.kb-current::before,
+section[data-testid="stSidebar"] div.stButton > button.kb-conv-row-btn.kb-current::before{
+  content: "" !important;
+  display: inline-block !important;
+  width: 5px !important;
+  min-width: 5px !important;
+  height: 5px !important;
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--blue-line) 92%, var(--accent)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue-weak) 30%, transparent) !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  flex: 0 0 auto !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(button.kb-current) > div[data-testid="column"]:last-child button.kb-conv-trash-btn{
+  opacity: 0.52 !important;
+  color: color-mix(in srgb, var(--sidebar-soft-text) 88%, var(--sidebar-strong-text) 12%) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-soft-text) 88%, var(--sidebar-strong-text) 12%) !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn{
+  all: unset !important;
+  box-sizing: border-box !important;
+  display: flex !important;
+  width: 100% !important;
+  min-height: 18px !important;
+  padding: 0.02rem 0.08rem !important;
+  border: 0 !important;
+  border-radius: 5px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 68%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 68%, var(--sidebar-soft-text)) !important;
+  font-size: 0.61rem !important;
+  font-weight: 560 !important;
+  letter-spacing: 0.02em !important;
+  line-height: 1 !important;
+  justify-content: center !important;
+  align-items: center !important;
+  text-align: center !important;
+  cursor: pointer !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn::before,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn::after,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn::before,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn::after{
+  content: none !important;
+  display: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn p,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn span,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn p,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn span{
+  margin: 0 !important;
+  font-size: 0.61rem !important;
+  font-weight: 560 !important;
+  letter-spacing: 0.02em !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn:hover,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn:focus,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-toggle-btn:focus-visible,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn:hover,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn:focus,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-toggle-btn:focus-visible{
+  background: color-mix(in srgb, var(--panel) 5%, transparent) !important;
+  background-color: color-mix(in srgb, var(--panel) 5%, transparent) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+
+/* Final hard override: top history action buttons ("New chat" / "Delete current") */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn),
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn){
+  all: unset !important;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  min-height: 34px !important;
+  padding: 0.28rem 0.70rem !important;
+  border-radius: 12px !important;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent) !important;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel) 22%, transparent),
+      color-mix(in srgb, var(--panel) 12%, transparent)
+    ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.030),
+    0 1px 0 rgba(0,0,0,0.18) !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 92%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 92%, var(--sidebar-soft-text)) !important;
+  font-size: 0.80rem !important;
+  font-weight: 600 !important;
+  line-height: 1.05 !important;
+  justify-content: center !important;
+  align-items: center !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  overflow: hidden !important;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease,
+    box-shadow 120ms ease,
+    transform 90ms ease !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn) p,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn) span,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn) p,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn) span{
+  margin: 0 !important;
+  font-size: 0.80rem !important;
+  line-height: 1.05 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn):hover,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn):focus,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn):focus-visible,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn):hover,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn):focus,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn):focus-visible{
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel) 28%, transparent),
+      color-mix(in srgb, var(--panel) 16%, transparent)
+    ) !important;
+  border-color: color-mix(in srgb, var(--line) 92%, var(--blue-line)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.036),
+    0 0 0 1px color-mix(in srgb, var(--line) 22%, transparent) !important;
+  outline: none !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn):active,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn):active{
+  transform: translateY(0.5px) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.020),
+    0 0 0 1px color-mix(in srgb, var(--line) 18%, transparent) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn)[disabled],
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn):disabled,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn)[disabled],
+section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn):disabled{
+  opacity: 0.42 !important;
+  cursor: not-allowed !important;
+  border-color: color-mix(in srgb, var(--line) 50%, transparent) !important;
+  box-shadow: none !important;
+}
+
+/* New chat: slightly brighter, accent-tinted */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-new-btn,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-new-btn{
+  border-color: color-mix(in srgb, var(--blue-line) 34%, var(--line)) !important;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--blue-weak) 18%, var(--panel) 18%),
+      color-mix(in srgb, var(--blue-weak) 10%, transparent)
+    ) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-new-btn:hover,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-new-btn:focus,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-new-btn:focus-visible,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-new-btn:hover,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-new-btn:focus,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-new-btn:focus-visible{
+  border-color: color-mix(in srgb, var(--blue-line) 56%, var(--line)) !important;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--blue-weak) 24%, var(--panel) 22%),
+      color-mix(in srgb, var(--blue-weak) 13%, transparent)
+    ) !important;
+}
+
+/* Delete current: subtle danger tone, not aggressive */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-danger-btn,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-danger-btn{
+  border-color: color-mix(in srgb, #ef4444 20%, var(--line)) !important;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, #ef4444 8%, var(--panel) 18%),
+      color-mix(in srgb, #ef4444 4%, transparent)
+    ) !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 88%, #fecaca 12%) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 88%, #fecaca 12%) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-danger-btn:hover,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-danger-btn:focus,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-danger-btn:focus-visible,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-danger-btn:hover,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-danger-btn:focus,
+section[data-testid="stSidebar"] div.stButton > button.kb-history-danger-btn:focus-visible{
+  border-color: color-mix(in srgb, #ef4444 36%, var(--line)) !important;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, #ef4444 12%, var(--panel) 22%),
+      color-mix(in srgb, #ef4444 6%, transparent)
+    ) !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 80%, #fecaca 20%) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 80%, #fecaca 20%) !important;
+}
+
+/* Responsive squeeze for top history action buttons when sidebar is dragged narrow.
+   Gradually shrink font/padding to keep Chinese labels inside the pill. */
+@supports (width: 1cqw){
+  section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn),
+  section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn){
+    font-size: clamp(0.66rem, 4.2cqw, 0.80rem) !important;
+    padding-left: clamp(0.34rem, 2.0cqw, 0.70rem) !important;
+    padding-right: clamp(0.34rem, 2.0cqw, 0.70rem) !important;
+    min-height: clamp(31px, 10cqw, 34px) !important;
+  }
+  section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn) p,
+  section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-history-action-btn:not(.kb-history-toggle-btn) span,
+  section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn) p,
+  section[data-testid="stSidebar"] div.stButton > button.kb-history-action-btn:not(.kb-history-toggle-btn) span{
+    font-size: clamp(0.66rem, 4.2cqw, 0.80rem) !important;
+  }
+}
+
+/* Model connectivity test button: more premium technical pill */
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn{
+  all: unset !important;
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  width: fit-content !important;
+  max-width: 100% !important;
+  min-height: 35px !important;
+  padding: 0.30rem 0.78rem !important;
+  border-radius: 12px !important;
+  border: 1px solid color-mix(in srgb, var(--blue-line) 30%, var(--line)) !important;
+  background:
+    radial-gradient(120% 160% at 12% 0%, color-mix(in srgb, var(--blue-weak) 22%, transparent) 0%, transparent 55%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel) 22%, transparent),
+      color-mix(in srgb, var(--panel) 10%, transparent)
+    ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.040),
+    inset 0 0 0 1px color-mix(in srgb, var(--blue-line) 10%, transparent),
+    0 1px 0 rgba(0,0,0,0.18) !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 94%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 94%, var(--sidebar-soft-text)) !important;
+  font-size: 0.81rem !important;
+  font-weight: 620 !important;
+  line-height: 1.06 !important;
+  letter-spacing: 0.01em !important;
+  justify-content: center !important;
+  align-items: center !important;
+  text-align: center !important;
+  cursor: pointer !important;
+  transition:
+    transform 100ms ease,
+    border-color 130ms ease,
+    box-shadow 130ms ease,
+    background-color 130ms ease,
+    color 130ms ease !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn::before,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn::before{
+  content: "" !important;
+  width: 7px !important;
+  min-width: 7px !important;
+  height: 7px !important;
+  border-radius: 999px !important;
+  margin-right: 0.45rem !important;
+  background:
+    radial-gradient(circle at 35% 35%, #ffffff 0 14%, color-mix(in srgb, var(--accent) 88%, var(--blue-line)) 18% 100%) !important;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--blue-weak) 20%, transparent),
+    0 0 10px color-mix(in srgb, var(--blue-line) 18%, transparent) !important;
+  flex: 0 0 auto !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn p,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn span,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn p,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn span{
+  margin: 0 !important;
+  font-size: 0.81rem !important;
+  font-weight: 620 !important;
+  line-height: 1.06 !important;
+  letter-spacing: 0.01em !important;
+  white-space: nowrap !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn:hover,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn:focus,
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn:focus-visible,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn:hover,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn:focus,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn:focus-visible{
+  transform: translateY(-0.5px) !important;
+  border-color: color-mix(in srgb, var(--blue-line) 54%, var(--line)) !important;
+  background:
+    radial-gradient(120% 160% at 12% 0%, color-mix(in srgb, var(--blue-weak) 28%, transparent) 0%, transparent 58%),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--panel) 28%, transparent),
+      color-mix(in srgb, var(--panel) 14%, transparent)
+    ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.055),
+    inset 0 0 0 1px color-mix(in srgb, var(--blue-line) 18%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--line) 20%, transparent),
+    0 4px 16px color-mix(in srgb, var(--blue-line) 10%, transparent) !important;
+  outline: none !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stButton"] > button.kb-model-test-btn:active,
+section[data-testid="stSidebar"] div.stButton > button.kb-model-test-btn:active{
+  transform: translateY(0) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.025),
+    inset 0 0 0 1px color-mix(in srgb, var(--blue-line) 12%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--line) 18%, transparent) !important;
+}
+
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary{
+  min-height: 30px !important;
+  padding: 0.08rem 0.18rem !important;
+  border-radius: 6px !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary:hover{
+  background: color-mix(in srgb, var(--panel) 11%, transparent) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > summary p{
+  font-size: 0.75rem !important;
+  font-weight: 540 !important;
+  line-height: 1.08 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div{
+  padding-top: 0.06rem !important;
+  padding-bottom: 0.02rem !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap{
+  margin: 0 !important;
+  border-radius: 0 !important;
+  padding: 0.01rem 0 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap::after{
+  content: "";
+  position: absolute;
+  left: 0.45rem;
+  right: 0.10rem;
+  bottom: -1px;
+  height: 1px;
+  background: color-mix(in srgb, var(--line) 34%, transparent);
+  opacity: 0.78;
+  pointer-events: none;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:last-child::after{
+  opacity: 0;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap::before{
+  content: none !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-row-btn{
+  width: 100% !important;
+  min-height: 18px !important;
+  padding: 0.02rem 0.20rem 0.02rem 0.12rem !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: color-mix(in srgb, var(--sidebar-strong-text) 85%, var(--sidebar-soft-text)) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 85%, var(--sidebar-soft-text)) !important;
+  font-size: 0.70rem !important;
+  font-weight: 500 !important;
+  line-height: 1.0 !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-row-btn p,
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-row-btn span{
+  font-size: 0.70rem !important;
+  line-height: 1.0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:hover button.kb-conv-row-btn,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:focus-within button.kb-conv-row-btn{
+  background: transparent !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-row-btn.kb-current{
+  background: transparent !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+  font-weight: 550 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap div[data-testid="stButton"] > button,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap [data-testid="stPopover"] > button{
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap div[data-testid="stButton"] > button:hover,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap [data-testid="stPopover"] > button:hover,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap div[data-testid="stButton"] > button:focus,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap [data-testid="stPopover"] > button:focus,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap div[data-testid="stButton"] > button:focus-visible,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap [data-testid="stPopover"] > button:focus-visible{
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+button.kb-conv-menu-trigger,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger{
+  width: 16px !important;
+  min-width: 16px !important;
+  max-width: 16px !important;
+  height: 16px !important;
+  min-height: 16px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: color-mix(in srgb, var(--sidebar-soft-text) 70%, transparent) !important;
+  -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-soft-text) 70%, transparent) !important;
+  font-size: 0.60rem !important;
+  font-weight: 600 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 90ms ease, color 90ms ease, background-color 90ms ease !important;
+}
+button.kb-conv-menu-trigger svg,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger svg,
+button.kb-conv-menu-trigger [data-testid="stIconMaterial"],
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger [data-testid="stIconMaterial"]{
+  display: none !important;
+}
+button.kb-conv-menu-trigger p,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger p,
+button.kb-conv-menu-trigger span,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger span{
+  font-size: 0.60rem !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+  letter-spacing: 0 !important;
+  white-space: nowrap !important;
+}
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger [data-testid="stPopoverChevron"],
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger svg,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger [data-testid="stIcon"],
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger [data-testid="stIconMaterial"]{
+  display: none !important;
+}
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger > div,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger > span{
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:hover button.kb-conv-menu-trigger,
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:focus-within button.kb-conv-menu-trigger{
+  opacity: 0.55 !important;
+  pointer-events: auto !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander .kb-conv-row-wrap:has(button.kb-current) button.kb-conv-menu-trigger{
+  opacity: 0.26 !important;
+  pointer-events: auto !important;
+}
+button.kb-conv-menu-trigger:hover,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger:hover{
+  background: transparent !important;
+  color: var(--sidebar-strong-text) !important;
+  -webkit-text-fill-color: var(--sidebar-strong-text) !important;
+  opacity: 1 !important;
+}
+button.kb-conv-menu-trigger:focus,
+button.kb-conv-menu-trigger:focus-visible,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger:focus,
+section[data-testid="stSidebar"] button.kb-conv-menu-trigger:focus-visible{
+  border: 0 !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+/* Flatten the internal expander trigger button if Streamlit renders one. */
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-picker-trigger{
+  min-height: 22px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander button.kb-conv-picker-trigger:hover{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+/* Hard override: remove button chrome inside conversation dropdown rows (text list only) */
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="stHorizontalBlock"]{
+  position: relative !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0 !important;
+  align-items: center !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="stHorizontalBlock"]::after{
+  content: "" !important;
+  position: absolute !important;
+  left: 0.25rem !important;
+  right: 0.05rem !important;
+  bottom: -1px !important;
+  height: 1px !important;
+  background: color-mix(in srgb, var(--line) 40%, transparent) !important;
+  opacity: 0.9 !important;
+  pointer-events: none !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="stHorizontalBlock"]:last-child::after{
+  opacity: 0 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]{
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] div[data-testid="stButton"],
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] [data-testid="stPopover"]{
+  margin: 0 !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] div[data-testid="stButton"] > button,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] [data-testid="stPopover"] > button{
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  min-height: 18px !important;
+  padding-top: 0.04rem !important;
+  padding-bottom: 0.04rem !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] div[data-testid="stButton"] > button:hover,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] [data-testid="stPopover"] > button:hover,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] div[data-testid="stButton"] > button:focus,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] [data-testid="stPopover"] > button:focus,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] div[data-testid="stButton"] > button:focus-visible,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"] [data-testid="stPopover"] > button:focus-visible{
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:first-child div[data-testid="stButton"] > button{
+  justify-content: flex-start !important;
+  text-align: left !important;
+  padding-left: 0.12rem !important;
+  padding-right: 0.18rem !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:first-child div[data-testid="stButton"] > button p,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:first-child div[data-testid="stButton"] > button span{
+  font-size: 0.70rem !important;
+  line-height: 1.0 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child{
+  display: flex !important;
+  justify-content: flex-end !important;
+  align-items: center !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child div[data-testid="stButton"] > button{
+  width: 16px !important;
+  min-width: 16px !important;
+  max-width: 16px !important;
+  height: 16px !important;
+  min-height: 16px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  justify-content: center !important;
+  text-align: center !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button p,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button span,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child div[data-testid="stButton"] > button p,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child div[data-testid="stButton"] > button span{
+  font-size: 0.60rem !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+  white-space: nowrap !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button svg,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button [data-testid="stPopoverChevron"],
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button [data-testid="stIcon"],
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button [data-testid="stIconMaterial"]{
+  display: none !important;
+}
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button > div,
+section[data-testid="stSidebar"] details.kb-conv-history-expander > div div[data-testid="column"]:last-child [data-testid="stPopover"] > button > span{
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+}
 </style>
 <script>
 (function () {
@@ -1730,6 +3985,202 @@ body[data-theme="dark"] section[data-testid="stSidebar"] div[data-testid="stSlid
     st.markdown(
         css.replace("__TOKENS__", tokens).replace("__SCHEME__", color_scheme).replace("__MODE__", mode),
         unsafe_allow_html=True,
+    )
+
+
+def _sync_theme_with_browser_preference() -> None:
+    """
+    Follow browser/system color scheme without adding an in-app theme toggle.
+    We keep `_init_theme_css()` as the base stylesheet (light mode baseline),
+    then override CSS variables + data-theme in the browser when dark mode is active.
+    """
+    dark_tokens = """
+  --bg: #1f1f1f;
+  --panel: #252526;
+  --sidebar-bg: #181818;
+  --line: rgba(168, 176, 189, 0.42);
+  --muted: #d2d9e4;
+  --text-main: #e7eaef;
+  --text-soft: #e0e7f0;
+  --sidebar-strong-text: #e9eff8;
+  --sidebar-soft-text: #d5deea;
+  --slider-tick-text: #d9e1ec;
+  --accent: #4daafc;
+  --blue-weak: rgba(77, 170, 252, 0.18);
+  --blue-line: rgba(77, 170, 252, 0.58);
+  --font-display: "LittleP", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --font-body: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --btn-bg: #2d2d30;
+  --btn-border: #45494f;
+  --btn-text: #e7eaef;
+  --btn-hover: #37373d;
+  --btn-active: #3f444c;
+  --btn-shadow: 0 1px 0 rgba(0, 0, 0, 0.32), 0 12px 30px rgba(0, 0, 0, 0.42);
+  --input-bg: #1f2632;
+  --input-border: #505a6d;
+  --msg-user-bg: rgba(77, 170, 252, 0.14);
+  --msg-user-border: rgba(126, 179, 228, 0.40);
+  --msg-user-text: #eaf3ff;
+  --msg-ai-bg: #222934;
+  --msg-ai-border: #3f4b5f;
+  --snip-bg: rgba(148, 163, 184, 0.14);
+  --snip-border: rgba(148, 163, 184, 0.34);
+  --snip-text: #d7deea;
+  --snip-quote-bg: rgba(77, 170, 252, 0.16);
+  --snip-quote-border: rgba(77, 170, 252, 0.50);
+  --snip-mark-bg: rgba(250, 204, 21, 0.28);
+  --snip-mark-text: #f8fafc;
+  --notice-text: #fde68a;
+  --notice-bg: rgba(245, 158, 11, 0.20);
+  --notice-border: rgba(245, 158, 11, 0.38);
+  --ref-accent: rgba(77, 170, 252, 0.52);
+  --dock-bg: linear-gradient(180deg, rgba(31, 31, 31, 0.72) 0%, rgba(31, 31, 31, 0.94) 20%, rgba(31, 31, 31, 0.98) 100%);
+  --dock-border: rgba(148, 163, 184, 0.30);
+  --dock-shadow: 0 -10px 28px rgba(0, 0, 0, 0.45);
+  --copy-btn-bg: rgba(45, 45, 48, 0.94);
+  --copy-btn-border: rgba(148, 163, 184, 0.34);
+  --copy-btn-text: #dbe4f0;
+  --toast-bg: rgba(36, 39, 45, 0.96);
+  --toast-border: rgba(148, 163, 184, 0.30);
+  --toast-text: #ebf1f8;
+  --hint-text: #d2d9e4;
+  --refs-title-text: #e7eaef;
+  --refs-body-text: #dbe4f0;
+  --code-bg: #171d28;
+  --code-border: #3d4658;
+  --code-text: #e6edf3;
+  --code-inline-bg: rgba(77, 170, 252, 0.14);
+  --code-syn-keyword: #c678dd;
+  --code-syn-string: #98c379;
+  --code-syn-comment: #7f848e;
+  --code-syn-number: #d19a66;
+  --code-syn-func: #61afef;
+  --code-syn-type: #e5c07b;
+  --code-syn-literal: #56b6c2;
+  --code-syn-operator: #abb2bf;
+"""
+    # 1) Inject CSS overrides (safe in markdown HTML)
+    st.markdown(
+        """
+<style>
+html[data-theme="light"], body[data-theme="light"]{
+  color-scheme: light !important;
+}
+html[data-theme="dark"], body[data-theme="dark"]{
+  """
+        + dark_tokens
+        + """
+  color-scheme: dark !important;
+}
+</style>
+<script>
+(function () {
+  try {
+    const candidates = [];
+    try { if (window.parent) candidates.push(window.parent); } catch (e) {}
+    try { if (window.top && window.top !== window.parent) candidates.push(window.top); } catch (e) {}
+    candidates.push(window);
+
+    let host = window;
+    let doc = document;
+    for (const c of candidates) {
+      try {
+        const d = c.document;
+        if (!d) continue;
+        if (d.querySelector('[data-testid="stAppViewContainer"], [data-testid="stMain"]')) {
+          host = c;
+          doc = d;
+          break;
+        }
+      } catch (e) {}
+    }
+    if (!doc || !doc.documentElement) return;
+    const mq = (host.matchMedia && host.matchMedia("(prefers-color-scheme: dark)")) || null;
+    function apply() {
+      try {
+        const dark = !!(mq && mq.matches);
+        const mode = dark ? "dark" : "light";
+        doc.documentElement.setAttribute("data-theme", mode);
+        if (doc.body) doc.body.setAttribute("data-theme", mode);
+      } catch (e) {}
+    }
+    apply();
+    if (mq) {
+      try { mq.addEventListener("change", apply); }
+      catch (e) { try { mq.addListener(apply); } catch (e2) {} }
+    }
+  } catch (e) {}
+})();
+</script>
+        """,
+        unsafe_allow_html=True,
+    )
+    # 2) Inject executable JS via components iframe (Streamlit markdown may strip/ignore <script>)
+    components.html(
+        """
+<script>
+(function () {
+  try {
+    const candidates = [];
+    try { if (window.parent) candidates.push(window.parent); } catch (e) {}
+    try { if (window.top && window.top !== window.parent) candidates.push(window.top); } catch (e) {}
+    candidates.push(window);
+
+    let host = window;
+    let doc = document;
+    for (const c of candidates) {
+      try {
+        const d = c.document;
+        if (!d) continue;
+        if (d.querySelector('[data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stApp"]')) {
+          host = c;
+          doc = d;
+          break;
+        }
+      } catch (e) {}
+    }
+    if (!doc || !doc.documentElement) return;
+
+    const KEY = "__kbBrowserThemeSyncV1";
+    try {
+      if (host[KEY] && typeof host[KEY].teardown === "function") host[KEY].teardown();
+    } catch (e) {}
+
+    const mq = (host.matchMedia && host.matchMedia("(prefers-color-scheme: dark)")) || null;
+    let listener = null;
+
+    function apply() {
+      try {
+        const dark = !!(mq && mq.matches);
+        const mode = dark ? "dark" : "light";
+        doc.documentElement.setAttribute("data-theme", mode);
+        if (doc.body) doc.body.setAttribute("data-theme", mode);
+      } catch (e) {}
+    }
+
+    apply();
+
+    if (mq) {
+      listener = function () { apply(); };
+      try { mq.addEventListener("change", listener); }
+      catch (e) { try { mq.addListener(listener); } catch (e2) {} }
+    }
+
+    host[KEY] = {
+      teardown: function () {
+        try {
+          if (mq && listener) {
+            try { mq.removeEventListener("change", listener); }
+            catch (e) { try { mq.removeListener(listener); } catch (e2) {} }
+          }
+        } catch (e) {}
+      }
+    };
+  } catch (e) {}
+})();
+</script>
+        """,
+        height=0,
     )
 
 def _inject_copy_js() -> None:
@@ -2033,13 +4484,14 @@ def _inject_copy_js() -> None:
   }
 
   function tick() {
+    try { if (doc && doc.hidden) return; } catch (e) {}
     hookCopyButtons();
     hookCodeBlocks();
     hookMathClickToCopy();
   }
 
   tick();
-  setInterval(tick, 900);
+  setInterval(tick, 2200);
 })();
 </script>
         """,
@@ -2047,7 +4499,8 @@ def _inject_copy_js() -> None:
     )
 
 def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
-    mode = "dark" if str(theme_mode or "").lower() == "dark" else "light"
+    raw_mode = str(theme_mode or "").lower().strip()
+    mode = "auto" if raw_mode in {"", "auto", "system", "browser"} else ("dark" if raw_mode == "dark" else "light")
     conv_js = json.dumps(str(conv_id or ""))
     components.html(
         f"""
@@ -2056,7 +4509,7 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
   const host = window.parent || window;
   const doc = host.document || document;
   const KEY = "__kbUiRuntimeFixV2";
-  const mode = "{mode}";
+  const modeHint = "{mode}";
   const ACTIVE_CONV_INPUT = {conv_js};
   try {{
     if (host[KEY] && typeof host[KEY].destroy === "function") {{
@@ -2149,98 +4602,40 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     }} catch (e) {{}}
   }}
 
+  function resolveThemeMode() {{
+    try {{
+      if (modeHint === "dark" || modeHint === "light") return modeHint;
+      const attrMode = String((doc.documentElement && doc.documentElement.getAttribute("data-theme")) || "").toLowerCase();
+      if (attrMode === "dark" || attrMode === "light") return attrMode;
+      if (host.matchMedia && host.matchMedia("(prefers-color-scheme: dark)").matches) return "dark";
+    }} catch (e) {{}}
+    return "light";
+  }}
+
   function normalizeSidebarCloseIcon() {{
     try {{
-      const mainText = mode === "dark" ? "#e7eaef" : "#1f2329";
-      const collapseGlyph = "\\u2039"; // left chevron
-
-      function walkButtonsDeep(rootNode, out) {{
+      const isStale = function (el) {{
         try {{
-          if (!rootNode) return;
-          const nt = Number(rootNode.nodeType || 0);
-          if (nt === 1 && String(rootNode.tagName || "").toUpperCase() === "BUTTON") {{
-            out.push(rootNode);
-          }}
-          const sr = rootNode.shadowRoot;
-          if (sr) walkButtonsDeep(sr, out);
-          const children = rootNode.children || [];
-          for (const ch of children) walkButtonsDeep(ch, out);
-        }} catch (e) {{}}
-      }}
-
-      const allBtns = [];
-      walkButtonsDeep(doc.documentElement || doc, allBtns);
-      if (!allBtns.length) return;
-
-      let sidebarRect = null;
-      try {{
-        const sb = doc.querySelector('section[data-testid="stSidebar"]');
-        if (sb) sidebarRect = sb.getBoundingClientRect();
-      }} catch (e) {{}}
-
-      function maybeSidebarCloseBtn(b) {{
-        try {{
-          if (!(b instanceof Element)) return false;
-          const r = b.getBoundingClientRect();
-          const w = Number(r.width || 0);
-          const h = Number(r.height || 0);
-          if (!(w >= 24 && w <= 52 && h >= 24 && h <= 52)) return false;
-          const txt = String((b.textContent || "")).replace(/\s+/g, "");
-          const aria = String(b.getAttribute("aria-label") || "").toLowerCase();
-          const title = String(b.getAttribute("title") || "").toLowerCase();
-          const hasCloseSem = /close|collapse|hide|关闭|收起/.test(aria + " " + title);
-          const hasCloseTxt = /^(?:×|x|✕|✖)$/.test(txt);
-          const semHit = hasCloseSem || hasCloseTxt;
-
-          // Geometry guard: top-left band near sidebar/header area.
-          if (sidebarRect) {{
-            const nearBand =
-              Number(r.top || 0) <= (Number(sidebarRect.top || 0) + 140) &&
-              Number(r.left || 0) <= (Number(sidebarRect.right || 0) + 180);
-            if (!nearBand) return false;
-            // Source-level fallback: if semantics unavailable, still patch the very top small square.
-            if (semHit) return true;
-            const veryTop = Number(r.top || 0) <= (Number(sidebarRect.top || 0) + 88);
-            return veryTop;
-          }} else {{
-            const nearBand = (Number(r.top || 0) <= 150 && Number(r.left || 0) <= 560);
-            if (!nearBand) return false;
-            return semHit;
-          }}
+          return !!(el && el.closest && el.closest('[data-stale="true"], .stale-element, [data-testid="staleElementOverlay"], [data-testid="stale-overlay"]'));
         }} catch (e) {{
           return false;
         }}
-      }}
+      }};
 
-      for (const b of allBtns) {{
-        if (!maybeSidebarCloseBtn(b)) continue;
-        try {{ b.classList.add("kb-sidebar-close-btn"); }} catch (e) {{}}
+      // Compatibility mode on newer Streamlit: do not rewrite sidebar collapse button DOM.
+      // Only clean up old injected class/inline styles from previous runs.
+      const patchedBtns = Array.from(doc.querySelectorAll('button.kb-sidebar-close-btn'));
+      for (const b of patchedBtns) {{
+        if (!b || isStale(b)) continue;
+        try {{ b.classList.remove("kb-sidebar-close-btn"); }} catch (e) {{}}
         try {{
-          // Source-level replacement: replace content text with left chevron directly.
-          while (b.firstChild) {{
-            b.removeChild(b.firstChild);
-          }}
-        }} catch (e) {{}}
-        try {{
-          b.textContent = collapseGlyph;
-          b.style.setProperty("width", "34px", "important");
-          b.style.setProperty("height", "34px", "important");
-          b.style.setProperty("min-width", "34px", "important");
-          b.style.setProperty("min-height", "34px", "important");
-          b.style.setProperty("padding", "0", "important");
-          b.style.setProperty("display", "inline-flex", "important");
-          b.style.setProperty("align-items", "center", "important");
-          b.style.setProperty("justify-content", "center", "important");
-          b.style.setProperty("font-size", "26px", "important");
-          b.style.setProperty("line-height", "1", "important");
-          b.style.setProperty("font-weight", "600", "important");
-          b.style.setProperty("font-family", "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial", "important");
-          b.style.setProperty("color", mainText, "important");
-          b.style.setProperty("-webkit-text-fill-color", mainText, "important");
-          b.style.setProperty("text-shadow", "none", "important");
-          b.style.setProperty("border", "1px solid var(--btn-border)", "important");
-          b.style.setProperty("border-radius", "10px", "important");
-          b.style.setProperty("background", "color-mix(in srgb, var(--sidebar-bg) 76%, var(--panel))", "important");
+          const props = [
+            "width","height","min-width","min-height","padding","display",
+            "align-items","justify-content","font-size","line-height","font-weight",
+            "font-family","color","-webkit-text-fill-color","text-shadow",
+            "border","border-radius","background"
+          ];
+          for (const p of props) b.style.removeProperty(p);
         }} catch (e) {{}}
       }}
     }} catch (e) {{}}
@@ -2280,10 +4675,241 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     }} catch (e) {{}}
   }}
 
+  function decorateConversationHistoryButtons() {{
+    try {{
+      const normText = (v) => String(v || "").replace(/\s+/g, " ").trim();
+      try {{
+        const oldWraps = doc.querySelectorAll(".kb-conv-row-wrap");
+        for (const n of oldWraps) n.classList.remove("kb-conv-row-wrap");
+      }} catch (e) {{}}
+      try {{
+        const oldPanels = doc.querySelectorAll(".kb-conv-popover-panel, .kb-conv-popover-scroll");
+        for (const n of oldPanels) {{
+          n.classList.remove("kb-conv-popover-panel", "kb-conv-popover-scroll");
+          try {{
+            n.style.removeProperty("--kb-conv-panel-width");
+            n.style.removeProperty("width");
+            n.style.removeProperty("max-width");
+            n.style.removeProperty("min-width");
+          }} catch (e) {{}}
+        }}
+      }} catch (e) {{}}
+
+      const taggedBtns = doc.querySelectorAll(
+        "button.kb-conv-picker-trigger, button.kb-conv-row-btn, button.kb-conv-trash-btn, button.kb-conv-menu-trigger, button.kb-history-action-btn, button.kb-history-toggle-btn, button.kb-history-new-btn, button.kb-history-danger-btn, button.kb-model-test-btn, button.kb-current"
+      );
+      for (const b of taggedBtns) {{
+        if (!b) continue;
+        try {{
+          b.classList.remove("kb-conv-picker-trigger", "kb-conv-row-btn", "kb-conv-trash-btn", "kb-conv-menu-trigger", "kb-history-action-btn", "kb-history-toggle-btn", "kb-history-new-btn", "kb-history-danger-btn", "kb-model-test-btn", "kb-current");
+        }} catch (e) {{}}
+      }}
+
+      const buttons = doc.querySelectorAll("button");
+      for (const b of buttons) {{
+        if (!b || !b.closest) continue;
+        const txt = normText(b.innerText || b.textContent || "");
+        if (!txt) continue;
+        const inSidebar = !!b.closest('section[data-testid="stSidebar"]');
+        const inSummary = !!b.closest("summary");
+
+        const isHistoryAction = (
+          txt === "新建对话" || txt === "删除本会话" || txt === "New chat" ||
+          txt.includes("更早会话") || txt.includes("older chat")
+        );
+        const isHistoryToggle = (txt.includes("更早会话") || txt.includes("older chat"));
+        const isHistoryNew = (txt === "新建对话" || txt === "New chat");
+        const isHistoryDelete = (txt === "删除本会话");
+        const isModelTestBtn = (txt === "测试模型连接" || txt === "Test model connection");
+        if (inSidebar && isHistoryAction) {{
+          try {{ b.classList.add("kb-history-action-btn"); }} catch (e) {{}}
+          if (isHistoryToggle) {{
+            try {{ b.classList.add("kb-history-toggle-btn"); }} catch (e) {{}}
+          }}
+          if (isHistoryNew) {{
+            try {{ b.classList.add("kb-history-new-btn"); }} catch (e) {{}}
+          }}
+          if (isHistoryDelete) {{
+            try {{ b.classList.add("kb-history-danger-btn"); }} catch (e) {{}}
+          }}
+        }}
+        if (inSidebar && isModelTestBtn) {{
+          try {{ b.classList.add("kb-model-test-btn"); }} catch (e) {{}}
+        }}
+
+        const looksConvLabel = /\\d{{2}}-\\d{{2}}\\s+\\d{{2}}:\\d{{2}}\\s+\\|/.test(txt);
+        const isTrash = (
+          txt === "🗑" || txt === "🗑️" ||
+          txt === "Del" || txt === "Delete" || txt === "删除"
+        );
+        const isMenuTrigger = (!looksConvLabel) && (
+          txt.includes("...") || txt.includes("…") || txt.includes("⋯") || txt.includes("⋮")
+        );
+        if (!(inSidebar || isTrash || isMenuTrigger || looksConvLabel)) continue;
+        if (isTrash) {{
+          try {{ b.classList.add("kb-conv-trash-btn"); }} catch (e) {{}}
+          continue;
+        }}
+        if (isMenuTrigger) {{
+          try {{ b.classList.add("kb-conv-menu-trigger"); }} catch (e) {{}}
+          continue;
+        }}
+
+        if (!looksConvLabel) continue;
+
+        if (inSummary) {{
+          try {{ b.classList.add("kb-conv-picker-trigger"); }} catch (e) {{}}
+          try {{
+            const d = b.closest("details");
+            const x = b.closest('div[data-testid="stExpander"]');
+            if (d) d.classList.add("kb-conv-history-expander");
+            if (x) x.classList.add("kb-conv-history-expander");
+          }} catch (e) {{}}
+          continue;
+        }}
+
+        // Timestamp-like buttons in sidebar are conversation rows (flat list or expander rows).
+        try {{
+          if (inSidebar) {{
+            b.classList.add("kb-conv-row-btn");
+          }}
+        }} catch (e) {{}}
+
+        // Distinguish row item by checking whether a nearby row also has a delete/menu action button.
+        let hasNearbyAction = false;
+        let cur = b;
+        for (let k = 0; k < 4 && cur; k += 1) {{
+          cur = cur.parentElement;
+          if (!cur) break;
+          try {{
+            const rowBtns = cur.querySelectorAll ? cur.querySelectorAll("button") : [];
+            for (const rb of rowBtns) {{
+              const t2 = normText(rb.innerText || rb.textContent || "");
+              const t2LooksConv = /\\d{{2}}-\\d{{2}}\\s+\\d{{2}}:\\d{{2}}\\s+\\|/.test(t2);
+              const t2IsMenu = (!t2LooksConv) && (
+                t2.includes("...") || t2.includes("…") || t2.includes("⋯") || t2.includes("⋮")
+              );
+              const t2IsTrash = (t2 === "🗑" || t2 === "🗑️" || t2 === "Del" || t2 === "Delete" || t2 === "删除");
+              if (t2IsTrash || t2IsMenu) {{
+                hasNearbyAction = true;
+                break;
+              }}
+            }}
+          }} catch (e) {{}}
+          if (hasNearbyAction) break;
+        }}
+
+        try {{
+          if (hasNearbyAction) {{
+            b.classList.add("kb-conv-row-btn");
+          }}
+        }} catch (e) {{}}
+      }}
+
+      // Mark expander containers by summary text (works even if summary has no <button>).
+      try {{
+        const summaries = doc.querySelectorAll('section[data-testid="stSidebar"] details summary');
+        for (const sm of summaries) {{
+          const txt = normText(sm.innerText || sm.textContent || "");
+          if (!/\\d{{2}}-\\d{{2}}\\s+\\d{{2}}:\\d{{2}}\\s+\\|/.test(txt)) continue;
+          try {{
+            const d = sm.closest("details");
+            const x = sm.closest('div[data-testid="stExpander"]');
+            if (d) d.classList.add("kb-conv-history-expander");
+            if (x) x.classList.add("kb-conv-history-expander");
+          }} catch (e) {{}}
+        }}
+      }} catch (e) {{}}
+
+      // Mark row wrappers (common ancestor of one conversation row button + one trash button).
+      try {{
+        const rowBtns = doc.querySelectorAll("button.kb-conv-row-btn");
+        for (const rb of rowBtns) {{
+          let cur = rb;
+          for (let k = 0; k < 6 && cur; k += 1) {{
+            cur = cur.parentElement;
+            if (!cur) break;
+            let hasTrash = false;
+            let hasMenu = false;
+            let hasRow = false;
+            try {{
+              hasTrash = !!cur.querySelector("button.kb-conv-trash-btn");
+              hasMenu = !!cur.querySelector("button.kb-conv-menu-trigger");
+              hasRow = !!cur.querySelector("button.kb-conv-row-btn");
+            }} catch (e) {{}}
+            if ((hasTrash || hasMenu) && hasRow) {{
+              try {{ cur.classList.add("kb-conv-row-wrap"); }} catch (e) {{}}
+              break;
+            }}
+          }}
+        }}
+      }} catch (e) {{}}
+
+      // Flat-list fallback: mark the horizontal row container even if trash/menu detection misses.
+      try {{
+        const rowBtns2 = doc.querySelectorAll('section[data-testid="stSidebar"] button.kb-conv-row-btn');
+        for (const rb of rowBtns2) {{
+          let cur = rb;
+          for (let k = 0; k < 8 && cur; k += 1) {{
+            cur = cur.parentElement;
+            if (!cur) break;
+            try {{
+              const isHBlock = cur.matches && cur.matches('div[data-testid="stHorizontalBlock"]');
+              if (isHBlock) {{
+                cur.classList.add("kb-conv-row-wrap");
+                break;
+              }}
+            }} catch (e) {{}}
+          }}
+        }}
+      }} catch (e) {{}}
+
+      // Mark the current conversation row by matching expander summary label text.
+      try {{
+        const expanders = doc.querySelectorAll('section[data-testid="stSidebar"] details.kb-conv-history-expander');
+        for (const d of expanders) {{
+          const summary = d.querySelector("summary");
+          const curLabel = normText(summary ? (summary.innerText || summary.textContent || "") : "");
+          if (!curLabel) continue;
+          const rows = d.querySelectorAll("button.kb-conv-row-btn");
+          for (const rb of rows) {{
+            const rowTxt = normText(rb.innerText || rb.textContent || "");
+            if (rowTxt && rowTxt === curLabel) {{
+              try {{ rb.classList.add("kb-current"); }} catch (e) {{}}
+              break;
+            }}
+          }}
+        }}
+      }} catch (e) {{}}
+
+      // Fallback for flat list mode (no expander): active conversation is rendered first.
+      try {{
+        const curRows = doc.querySelectorAll('section[data-testid="stSidebar"] button.kb-conv-row-btn.kb-current');
+        if ((!curRows) || (curRows.length === 0)) {{
+          const flatRows = doc.querySelectorAll('section[data-testid="stSidebar"] button.kb-conv-row-btn');
+          if (flatRows && flatRows.length > 0) {{
+            try {{ flatRows[0].classList.add("kb-current"); }} catch (e) {{}}
+          }}
+        }}
+      }} catch (e) {{}}
+
+      // Disabled risky popover/panel width mutations: they can affect unrelated layout containers
+      // on some Streamlit builds. Keep only row-level styling hooks.
+    }} catch (e) {{}}
+  }}
+
+  let _kbLastHistoryDecorTs = 0;
   function applyNow() {{
-    clearInlineThemeForRefs();
-    normalizeSidebarCloseIcon();
-    clearCodeLineArtifacts();
+    try {{
+      clearInlineThemeForRefs();
+      normalizeSidebarCloseIcon();
+      clearCodeLineArtifacts();
+      const nowTs = Date.now ? Date.now() : (+new Date());
+      if ((!_kbLastHistoryDecorTs) || ((nowTs - _kbLastHistoryDecorTs) > 220)) {{
+        decorateConversationHistoryButtons();
+        _kbLastHistoryDecorTs = nowTs;
+      }}
+    }} catch (e) {{}}
   }}
 
   let citePopup = null;
@@ -2882,7 +5508,7 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     if (raf) return;
     raf = host.requestAnimationFrame(function () {{
       raf = 0;
-      applyNow();
+      try {{ applyNow(); }} catch (e) {{}}
     }});
   }}
 
@@ -2891,7 +5517,7 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     if (typeof MutationObserver === "undefined") return;
     try {{
       mo = new MutationObserver(function () {{ schedule(); }});
-      mo.observe(doc.body, {{ childList: true, subtree: true, attributes: true }});
+      mo.observe(doc.body, {{ childList: true, subtree: true }});
     }} catch (e) {{}}
   }}
 
@@ -2912,10 +5538,10 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
 
   host[KEY] = {{ destroy }};
 
-  schedule();
-  observe();
-  bindCitationPopover();
-  renderCiteShelf();
+  try {{ schedule(); }} catch (e) {{}}
+  try {{ observe(); }} catch (e) {{}}
+  try {{ bindCitationPopover(); }} catch (e) {{}}
+  try {{ renderCiteShelf(); }} catch (e) {{}}
 }})();
 </script>
         """,
@@ -2941,6 +5567,7 @@ def _teardown_chat_dock_runtime() -> None:
     try {
       root.body.classList.remove("kb-resizing");
       root.body.classList.remove("kb-live-streaming");
+      root.body.classList.remove("kb-hide-stale-rerun");
     } catch (e) {}
 
     const docks = root.querySelectorAll(".kb-input-dock, .kb-dock-positioned");
@@ -2960,8 +5587,9 @@ def _teardown_chat_dock_runtime() -> None:
         height=0,
     )
 
-def _set_live_streaming_mode(active: bool) -> None:
+def _set_live_streaming_mode(active: bool, hide_stale: bool = False) -> None:
     on_flag = "true" if bool(active) else "false"
+    hide_stale_flag = "true" if bool(hide_stale) else "false"
     components.html(
         f"""
 <script>
@@ -2971,14 +5599,176 @@ def _set_live_streaming_mode(active: bool) -> None:
     const root = host.document;
     if (!root || !root.body) return;
     const on = {on_flag};
+    const hideStale = {hide_stale_flag};
     if (on) root.body.classList.add("kb-live-streaming");
     else root.body.classList.remove("kb-live-streaming");
+    if (on && hideStale) root.body.classList.add("kb-hide-stale-rerun");
+    else root.body.classList.remove("kb-hide-stale-rerun");
   }} catch (e) {{}}
 }})();
 </script>
         """,
         height=0,
     )
+
+
+def _remember_scroll_for_next_rerun(*, nonce: str = "", anchor_id: str = "") -> None:
+    nonce_js = json.dumps(str(nonce or ""))
+    anchor_js = json.dumps(str(anchor_id or ""))
+    html_js = """
+<script>
+(function () {
+  try {
+    const host = window.parent || window;
+    const doc = host.document || document;
+    const store = host.sessionStorage || window.sessionStorage;
+    if (!store) return;
+
+    const NONCE = __NONCE__;
+    const ANCHOR_ID = __ANCHOR_ID__;
+    const sels = [
+      '[data-testid="stAppViewContainer"]',
+      'section.main',
+      '[data-testid="stMain"]',
+      '[data-testid="stMainBlockContainer"]',
+      'main',
+      'body',
+      'html'
+    ];
+    let bestSel = "";
+    let bestY = 0;
+    for (const sel of sels) {
+      let el = null;
+      try { el = doc.querySelector(sel); } catch (e) {}
+      if (!el) continue;
+      let y0 = 0;
+      try { y0 = Number(el.scrollTop || 0); } catch (e) { y0 = 0; }
+      if (isFinite(y0) && y0 >= bestY) {
+        bestY = y0;
+        bestSel = sel;
+      }
+    }
+    let winY = 0;
+    try {
+      winY = Number(
+        host.scrollY ||
+        host.pageYOffset ||
+        (doc && doc.documentElement && doc.documentElement.scrollTop) ||
+        (doc && doc.body && doc.body.scrollTop) ||
+        0
+      );
+    } catch (e) {}
+    if (!isFinite(winY)) winY = 0;
+    if (!isFinite(bestY)) bestY = 0;
+
+    store.setItem("__kb_scroll_restore_v1", JSON.stringify({
+      nonce: String(NONCE || ""),
+      anchorId: String(ANCHOR_ID || ""),
+      winY: Math.max(0, Math.floor(winY)),
+      sel: String(bestSel || ""),
+      y: Math.max(0, Math.floor(bestY)),
+      ts: Date.now(),
+      src: "chat-finish-rerun"
+    }));
+  } catch (e) {}
+})();
+</script>
+    """.replace("__NONCE__", nonce_js).replace("__ANCHOR_ID__", anchor_js)
+    components.html(html_js, height=0)
+
+
+def _restore_scroll_after_rerun_if_needed(*, max_age_ms: int = 10000) -> None:
+    max_age = max(1000, int(max_age_ms))
+    html_js = """
+<script>
+(function () {
+  try {
+    const host = window.parent || window;
+    const doc = host.document || document;
+    const store = host.sessionStorage || window.sessionStorage;
+    if (!store) return;
+    const raw = store.getItem("__kb_scroll_restore_v1");
+    if (!raw) return;
+
+    let rec = null;
+    try { rec = JSON.parse(raw); } catch (e) { rec = null; }
+    if (!rec || typeof rec !== "object") {
+      try { store.removeItem("__kb_scroll_restore_v1"); } catch (e) {}
+      return;
+    }
+
+    const y = Number(rec.y);
+    const winY = Number(rec.winY);
+    const sel = String(rec.sel || "");
+    const anchorId = String(rec.anchorId || "");
+    const ts = Number(rec.ts || 0);
+    if (!isFinite(y)) {
+      try { store.removeItem("__kb_scroll_restore_v1"); } catch (e) {}
+      return;
+    }
+    if (ts > 0 && (Date.now() - ts) > __MAX_AGE__) {
+      try { store.removeItem("__kb_scroll_restore_v1"); } catch (e) {}
+      return;
+    }
+
+    function allTargets() {
+      const targets = [];
+      const sels = [
+        sel,
+        '[data-testid="stAppViewContainer"]',
+        'section.main',
+        '[data-testid="stMain"]',
+        '[data-testid="stMainBlockContainer"]',
+        'main',
+        'body',
+        'html'
+      ];
+      for (const s of sels) {
+        if (!s) continue;
+        let el = null;
+        try { el = doc.querySelector(s); } catch (e) {}
+        if (el && targets.indexOf(el) < 0) targets.push(el);
+      }
+      return targets;
+    }
+
+    let tries = 0;
+    function apply() {
+      try {
+        const targetWinY = isFinite(winY) ? winY : y;
+        if (typeof host.scrollTo === "function") host.scrollTo(0, targetWinY);
+        if (doc && doc.documentElement) doc.documentElement.scrollTop = targetWinY;
+        if (doc && doc.body) doc.body.scrollTop = targetWinY;
+        const targets = allTargets();
+        for (const el of targets) {
+          try {
+            if ("scrollTop" in el) el.scrollTop = y;
+          } catch (e) {}
+        }
+        if (anchorId) {
+          let anchor = null;
+          try { anchor = doc.getElementById(anchorId); } catch (e) {}
+          if (anchor && typeof anchor.scrollIntoView === "function") {
+            try { anchor.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) {}
+          }
+        }
+      } catch (e) {}
+      tries += 1;
+      if (tries < 42) {
+        try { host.requestAnimationFrame(apply); }
+        catch (e) { setTimeout(apply, 40); }
+      } else {
+        try { store.removeItem("__kb_scroll_restore_v1"); } catch (e) {}
+      }
+    }
+
+    try { host.requestAnimationFrame(apply); }
+    catch (e) { setTimeout(apply, 0); }
+  } catch (e) {}
+})();
+</script>
+    """.replace("__MAX_AGE__", str(max_age))
+    components.html(html_js, height=0)
 
 
 def _inject_chat_dock_runtime() -> None:
@@ -2994,44 +5784,129 @@ def _inject_chat_dock_runtime() -> None:
     components.html("<script>\n" + js + "\n</script>", height=0)
 
 
-def _inject_auto_rerun_once(*, delay_ms: int = 3500) -> None:
+def _inject_auto_rerun_once(*, delay_ms: int = 3500, pulse_button_label: str = "", nonce: str = "") -> None:
     delay = max(300, int(delay_ms))
+    pulse_label_js = json.dumps(str(pulse_button_label or ""))
+    nonce_js = json.dumps(str(nonce or ""))
     components.html(
         f"""
 <script>
 (function () {{
   try {{
-    const root = window.top || window.parent || window;
-    if (!root) return;
-    
-    // Keep exactly one one-shot timer per delay.
-    // Streamlit rerun recreates component iframes; recursive timers can break.
-    // IMPORTANT: do not use location.reload() here (it refreshes the whole page).
-    const timerKey = "_kbAutoRefreshTimer_" + {delay};
-    
-    // Clear existing timer before creating a new one.
-    if (root[timerKey]) {{
+    const delay = {delay};
+    const pulseLabel = {pulse_label_js};
+    const nonce = {nonce_js}; // force srcdoc changes across reruns
+    const hostCandidates = [];
+    try {{ if (window.parent) hostCandidates.push(window.parent); }} catch (e) {{}}
+    try {{ if (window.top && window.top !== window.parent) hostCandidates.push(window.top); }} catch (e) {{}}
+    hostCandidates.push(window);
+
+    const hostDocs = [];
+    for (const h of hostCandidates) {{
       try {{
-        clearTimeout(root[timerKey]);
-        root[timerKey] = null;
+        if (h && h.document && hostDocs.indexOf(h.document) < 0) hostDocs.push(h.document);
       }} catch (e) {{}}
     }}
-    
-    root[timerKey] = setTimeout(function () {{
+
+    function findPulseButton(doc) {{
       try {{
-        root[timerKey] = null;
-        const msgs = [
-          {{ isStreamlitMessage: true, type: "streamlit:rerunScript" }},
-          {{ type: "streamlit:rerun" }},
-        ];
-        const targets = [window, window.parent, root];
-        for (const m of msgs) {{
-          for (const t of targets) {{
-            try {{ t.postMessage(m, "*"); }} catch (e) {{}}
-          }}
+        if (!doc || !pulseLabel) return null;
+        const buttons = doc.querySelectorAll("button");
+        for (const btn of buttons) {{
+          try {{
+            const txt = String(btn.textContent || "").replace(/\\s+/g, " ").trim();
+            if (txt === pulseLabel) return btn;
+          }} catch (e) {{}}
         }}
       }} catch (e) {{}}
-    }}, {delay});
+      return null;
+    }}
+
+    function hidePulseButton(btn) {{
+      try {{
+        if (!btn) return;
+        btn.setAttribute("data-kb-auto-rerun-pulse", "1");
+        btn.tabIndex = -1;
+        btn.style.pointerEvents = "none";
+        btn.style.opacity = "0";
+        btn.style.width = "1px";
+        btn.style.minWidth = "1px";
+        btn.style.height = "1px";
+        btn.style.minHeight = "1px";
+        btn.style.padding = "0";
+        btn.style.margin = "0";
+        const wrap = btn.closest('[data-testid="stButton"]') || btn.parentElement;
+        if (wrap) {{
+          wrap.style.height = "0";
+          wrap.style.minHeight = "0";
+          wrap.style.overflow = "hidden";
+          wrap.style.margin = "0";
+          wrap.style.padding = "0";
+        }}
+      }} catch (e) {{}}
+    }}
+
+    function hidePulseButtons() {{
+      for (const d of hostDocs) {{
+        const btn = findPulseButton(d);
+        if (btn) hidePulseButton(btn);
+      }}
+    }}
+
+    function clickPulseButton() {{
+      for (const d of hostDocs) {{
+        const btn = findPulseButton(d);
+        if (!btn) continue;
+        hidePulseButton(btn);
+        try {{
+          if (!btn.disabled) {{
+            btn.click();
+            return true;
+          }}
+        }} catch (e) {{}}
+      }}
+      return false;
+    }}
+
+    // Hide the pulse button immediately to avoid visual pollution near page bottom.
+    try {{ hidePulseButtons(); }} catch (e) {{}}
+
+    // Keep exactly one one-shot timer per delay (best-effort).
+    // Do NOT store timers only on window.top; some environments expose a WindowProxy
+    // that rejects property writes, which silently kills auto-refresh.
+    const timerKey = "_kbAutoRefreshTimer_" + delay;
+    try {{
+      if (window[timerKey]) {{
+        clearTimeout(window[timerKey]);
+        window[timerKey] = null;
+      }}
+    }} catch (e) {{}}
+
+    window[timerKey] = window.setTimeout(function () {{
+      try {{
+        try {{ window[timerKey] = null; }} catch (e) {{}}
+        // Preferred path for Streamlit<=1.12 in this app: click a hidden Streamlit button.
+        if (clickPulseButton()) return;
+
+        // Fallback path: try internal Streamlit postMessage rerun hooks (works only on some versions/builds).
+        const msgs = [
+          {{ isStreamlitMessage: true, type: "streamlit:rerunScript" }},
+          {{ type: "streamlit:rerunScript" }},
+          {{ type: "streamlit:rerun" }},
+          {{ isStreamlitMessage: true, type: "streamlit:rerun" }},
+          {{ type: "streamlit:scriptRequestRerun" }},
+        ];
+        for (const m of msgs) {{
+          for (const t of hostCandidates) {{
+            try {{
+              if (t && typeof t.postMessage === "function") t.postMessage(m, "*");
+            }} catch (e) {{}}
+          }}
+        }}
+        // Some Streamlit builds only react when the iframe is focused.
+        try {{ window.focus(); }} catch (e) {{}}
+      }} catch (e) {{}}
+    }}, delay);
   }} catch (e) {{
     // Frontend JS errors should never break the Streamlit app.
   }}

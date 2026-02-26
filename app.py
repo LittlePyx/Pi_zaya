@@ -15,9 +15,13 @@ from pathlib import Path
 import streamlit as st
 from ui.runtime_patches import (
     _init_theme_css,
+    _inject_auto_rerun_once,
     _inject_chat_dock_runtime,
     _inject_copy_js,
     _inject_runtime_ui_fixes,
+    _remember_scroll_for_next_rerun,
+    _restore_scroll_after_rerun_if_needed,
+    _sync_theme_with_browser_preference,
     _set_live_streaming_mode,
     _teardown_chat_dock_runtime,
 )
@@ -34,10 +38,17 @@ from ui.refs_renderer import (
 from kb.chat_store import ChatStore
 from kb.bg_queue_state import is_running_snapshot as bg_is_running_snapshot
 from kb.config import load_settings
+from kb.file_naming import (
+    build_display_pdf_filename,
+    build_storage_base_name,
+    citation_meta_display_pdf_name,
+    merge_citation_meta_file_labels,
+    merge_citation_meta_name_fields,
+)
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
 from kb import runtime_state as RUNTIME
-from kb.pdf_tools import PdfMetaSuggestion, build_base_name, ensure_dir, extract_pdf_meta_suggestion, open_in_explorer
+from kb.pdf_tools import PdfMetaSuggestion, ensure_dir, extract_pdf_meta_suggestion, open_in_explorer
 from kb.prefs import load_prefs, save_prefs
 from kb.file_ops import (
     _cleanup_tmp_md_artifacts,
@@ -46,11 +57,14 @@ from kb.file_ops import (
     _list_orphan_md_dirs,
     _list_pdf_paths_fast,
     _next_pdf_dest_path,
+    _path_exists,
+    _path_is_dir,
     _persist_upload_pdf,
     _pick_directory_dialog,
     _resolve_md_output_paths,
     _stash_orphan_md_dirs,
     _sync_md_main_filenames,
+    _to_os_path,
     _write_tmp_upload,
 )
 from kb.rename_manager import ensure_state_defaults as ensure_rename_manager_state
@@ -121,6 +135,72 @@ def _patch_streamlit_label_visibility_compat() -> None:
 
 _patch_streamlit_label_visibility_compat()
 
+
+def _patch_streamlit_rerun_compat() -> None:
+    """
+    Streamlit >=1.50 removed `st.experimental_rerun` in favor of `st.rerun`.
+    This project still calls the experimental name in multiple modules.
+    """
+    try:
+        if (not hasattr(st, "experimental_rerun")) and hasattr(st, "rerun"):
+            st.experimental_rerun = st.rerun  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
+_patch_streamlit_rerun_compat()
+
+
+def _safe_delete_file(path_obj: Path) -> tuple[bool, str]:
+    p = Path(path_obj)
+    try:
+        if not _path_exists(p):
+            return True, "not found"
+    except Exception:
+        pass
+    err = ""
+    try:
+        os.remove(_to_os_path(p))
+    except Exception as e:
+        err = str(e)
+        try:
+            p.unlink()
+            err = ""
+        except Exception as e2:
+            err = str(e2) or err
+    try:
+        if _path_exists(p):
+            return False, err or "still exists after delete"
+    except Exception:
+        pass
+    return True, ""
+
+
+def _safe_delete_tree(path_obj: Path) -> tuple[bool, str]:
+    p = Path(path_obj)
+    try:
+        if not _path_exists(p):
+            return True, "not found"
+        if not _path_is_dir(p):
+            return False, "target is not a directory"
+    except Exception:
+        pass
+    err = ""
+    try:
+        shutil.rmtree(_to_os_path(p), ignore_errors=False)
+    except Exception as e:
+        err = str(e)
+        try:
+            shutil.rmtree(p, ignore_errors=True)
+        except Exception:
+            pass
+    try:
+        if _path_exists(p):
+            return False, err or "directory still exists after delete"
+    except Exception:
+        pass
+    return True, ""
+
 # Force converter script to this workspace copy, avoiding accidental fallback
 # to an older sibling-repo script when multiple app processes are running.
 _LOCAL_CONVERTER = Path(__file__).resolve().parent / "pdf_to_md.py"
@@ -167,6 +247,20 @@ def _cache_set(bucket: str, key: str, val, *, max_items: int = 600) -> None:
             except Exception:
                 d.clear()
 
+
+
+def _library_pdf_display_name(lib_store: LibraryStore, pdf_path: Path) -> str:
+    try:
+        meta = lib_store.get_citation_meta(pdf_path)
+        full_name = citation_meta_display_pdf_name(meta)
+        if full_name:
+            return full_name
+    except Exception:
+        pass
+    try:
+        return Path(pdf_path).name
+    except Exception:
+        return str(pdf_path)
 
 
 configure_retrieval_cache(_cache_get, _cache_set)
@@ -363,8 +457,11 @@ def _split_kb_miss_notice(text: str) -> tuple[str, str]:
 def _page_chat(
     settings,
     chat_store: ChatStore,
+    lib_store: LibraryStore,
     retriever: BM25Retriever,
     db_dir: Path,
+    pdf_dir: Path,
+    md_out_root: Path,
     top_k: int,
     temperature: float,
     max_tokens: int,
@@ -384,7 +481,8 @@ def _page_chat(
     session_id = str(st.session_state.get("session_id") or "").strip()
 
     conv_id = str(st.session_state.get("conv_id") or "").strip()
-    st.session_state["show_context"] = bool(show_context)
+    # "Show full snippet" feature removed; force disabled for all sessions.
+    st.session_state["show_context"] = False
     st.session_state["deep_read"] = bool(deep_read)
 
     if bool(getattr(retriever, "is_empty", False)):
@@ -396,7 +494,8 @@ def _page_chat(
         and str(cur_task.get("status") or "") == "running"
         and str(cur_task.get("conv_id") or "") == conv_id
     )
-    _set_live_streaming_mode(running_for_conv)
+    _set_live_streaming_mode(running_for_conv, hide_stale=False)
+    _restore_scroll_after_rerun_if_needed()
 
     st.session_state["pending_prompt"] = ""
 
@@ -431,8 +530,34 @@ def _page_chat(
     if not isinstance(refs_by_user, dict):
         refs_by_user = {}
 
+    def _get_refs_pack_for_user(user_msg_id: int) -> dict | None:
+        nonlocal refs_by_user
+        try:
+            uid = int(user_msg_id or 0)
+        except Exception:
+            uid = 0
+        if uid <= 0:
+            return None
+        pack0 = refs_by_user.get(uid) if isinstance(refs_by_user, dict) else None
+        if isinstance(pack0, dict):
+            return pack0
+        try:
+            latest = chat_store.list_message_refs(conv_id) or {}
+        except Exception:
+            latest = {}
+        if not isinstance(latest, dict):
+            latest = {}
+        refs_by_user = latest
+        try:
+            st.session_state["_chat_refs_cache"] = latest
+            st.session_state["_chat_refs_cache_conv"] = conv_id
+        except Exception:
+            pass
+        pack1 = latest.get(uid)
+        return pack1 if isinstance(pack1, dict) else None
+
     def _render_refs_for_user(user_msg_id: int, prompt_text: str, assistant_text: str, *, pending: bool = False) -> None:
-        ref_pack = refs_by_user.get(user_msg_id) if isinstance(refs_by_user, dict) else None
+        ref_pack = _get_refs_pack_for_user(user_msg_id)
         hits_hist: list[dict] = []
         prompt_hist = str(prompt_text or "").strip()
         if isinstance(ref_pack, dict):
@@ -467,86 +592,142 @@ def _page_chat(
                     st.caption("（未命中知识库片段：这条回答没有可定位的参考位置。）")
             st.markdown("</div>", unsafe_allow_html=True)
 
-    if (not msgs) and (not running_for_conv):
-        st.markdown(f"<div class='chat-empty-state'>{html.escape(S['no_msgs'])}</div>", unsafe_allow_html=True)
-    else:
-        render_msgs = list(msgs)
-        hidden_msgs = 0
-        if running_for_conv:
-            live_window = 20
-            if len(render_msgs) > live_window:
-                hidden_msgs = len(render_msgs) - live_window
-                render_msgs = render_msgs[-live_window:]
-            if hidden_msgs > 0:
-                st.caption(f"（为保证流式输出流畅，已折叠更早的 {hidden_msgs} 条消息）")
+    chat_fragment_refresh_ok = bool(callable(getattr(st, "fragment", None)))
 
-        last_user_for_refs = None
-        last_user_msg_id = 0
-        shown_refs_user_ids: set[int] = set()
-        idx_offset = max(0, len(msgs) - len(render_msgs))
-        for idx, m in enumerate(render_msgs, start=idx_offset):
-            role = m.get("role", "user")
-            content = m.get("content", "") or ""
-            try:
-                msg_id = int(m.get("id") or 0)
-            except Exception:
-                msg_id = 0
-
-            if role == "user":
-                safe = html.escape(content).replace("\n", "<br/>")
-                st.markdown(
-                    f"<div class='msg-user-wrap'><div class='msg-user'>{safe}</div><div class='msg-meta msg-meta-user'>你</div></div>",
-                    unsafe_allow_html=True,
-                )
-                last_user_for_refs = content
-                if msg_id > 0:
-                    last_user_msg_id = msg_id
+    def _render_chat_messages_area(*, live_running: bool, compact_live: bool = False) -> None:
+            if (not msgs) and (not live_running):
+                st.markdown(f"<div class='chat-empty-state'>{html.escape(S['no_msgs'])}</div>", unsafe_allow_html=True)
             else:
-                pending = False
-                if _is_live_assistant_text(content):
-                    pending_tid = _live_assistant_task_id(content)
-                    t0 = _gen_get_task(session_id)
-                    if isinstance(t0, dict) and str(t0.get("id") or "") == pending_tid:
-                        pending = str(t0.get("status") or "") == "running"
-                        stage = str(t0.get("stage") or "-")
-                        if pending:
-                            _render_ai_live_header(stage=stage)
-                            partial = str(t0.get("partial") or "").strip()
-                            notice, body = _split_kb_miss_notice(partial)
+                render_msgs = list(msgs)
+                hidden_msgs = 0
+                lite_live = bool(compact_live and live_running)
+                if live_running:
+                    live_window = 8 if lite_live else 20
+                    if len(render_msgs) > live_window:
+                        hidden_msgs = len(render_msgs) - live_window
+                        render_msgs = render_msgs[-live_window:]
+                    if hidden_msgs > 0:
+                        st.caption(f"（为保证流式输出流畅，已折叠更早的 {hidden_msgs} 条消息）")
+
+                last_user_for_refs = None
+                last_user_msg_id = 0
+                shown_refs_user_ids: set[int] = set()
+                idx_offset = max(0, len(msgs) - len(render_msgs))
+                for idx, m in enumerate(render_msgs, start=idx_offset):
+                    role = m.get("role", "user")
+                    content = m.get("content", "") or ""
+                    try:
+                        msg_id = int(m.get("id") or 0)
+                    except Exception:
+                        msg_id = 0
+
+                    if role == "user":
+                        safe = html.escape(content).replace("\n", "<br/>")
+                        st.markdown(
+                            f"<div class='msg-user-wrap'><div class='msg-user'>{safe}</div><div class='msg-meta msg-meta-user'>你</div></div>",
+                            unsafe_allow_html=True,
+                        )
+                        last_user_for_refs = content
+                        if msg_id > 0:
+                            last_user_msg_id = msg_id
+                    else:
+                        pending = False
+                        if _is_live_assistant_text(content):
+                            pending_tid = _live_assistant_task_id(content)
+                            t0 = _gen_get_task(session_id)
+                            if isinstance(t0, dict) and str(t0.get("id") or "") == pending_tid:
+                                pending = str(t0.get("status") or "") == "running"
+                                stage = str(t0.get("stage") or "-")
+                                if pending:
+                                    _render_ai_live_header(stage=stage)
+                                    partial = str(t0.get("partial") or "").strip()
+                                    notice, body = _split_kb_miss_notice(partial)
+                                    if notice:
+                                        st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
+                                    if (body or "").strip():
+                                        hits_for_anno = []
+                                        try:
+                                            pack = _get_refs_pack_for_user(last_user_msg_id)
+                                            if isinstance(pack, dict):
+                                                hits_for_anno = list(pack.get("hits") or [])
+                                        except Exception:
+                                            hits_for_anno = []
+                                        body2 = _annotate_equation_tags_with_sources(body, hits_for_anno)
+                                        body3, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                                            body2,
+                                            hits_for_anno,
+                                            anchor_ns=f"{conv_id}:{idx}:{msg_id}:live",
+                                        )
+                                        st.markdown(_normalize_math_markdown(body3))
+                                        if cite_details:
+                                            _render_inpaper_citation_details(
+                                                cite_details,
+                                                key_ns=f"{conv_id}_{idx}_{msg_id}_live",
+                                            )
+                                    else:
+                                        st.markdown("<div class='kb-ai-live-dots'>...</div>", unsafe_allow_html=True)
+                                else:
+                                    ans0 = str(t0.get("answer") or "").strip()
+                                    if ans0:
+                                        copy_done_rendered = False
+                                        notice, body = _split_kb_miss_notice(ans0)
+                                        if notice:
+                                            st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
+                                        if (body or "").strip():
+                                            if lite_live:
+                                                st.markdown(_normalize_math_markdown(body))
+                                                copy_done_rendered = True
+                                            else:
+                                                hits_for_anno = []
+                                                try:
+                                                    pack = _get_refs_pack_for_user(last_user_msg_id)
+                                                    if isinstance(pack, dict):
+                                                        hits_for_anno = list(pack.get("hits") or [])
+                                                except Exception:
+                                                    hits_for_anno = []
+                                                body2 = _annotate_equation_tags_with_sources(body, hits_for_anno)
+                                                body3, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                                                    body2,
+                                                    hits_for_anno,
+                                                    anchor_ns=f"{conv_id}:{idx}:{msg_id}:done",
+                                                )
+                                                copy_md_done = f"{notice}\n\n{body3}" if notice else body3
+                                                _render_answer_copy_bar(
+                                                    copy_md_done,
+                                                    key_ns=f"copy_{idx}_done",
+                                                    cite_details=cite_details,
+                                                )
+                                                copy_done_rendered = True
+                                                st.markdown(_normalize_math_markdown(body3))
+                                                _render_inpaper_citation_details(
+                                                    cite_details,
+                                                    key_ns=f"{conv_id}_{idx}_{msg_id}_done",
+                                                )
+                                        if not copy_done_rendered:
+                                            if lite_live:
+                                                st.markdown(_normalize_math_markdown(ans0))
+                                            else:
+                                                _render_answer_copy_bar(ans0, key_ns=f"copy_{idx}_done")
+                                    else:
+                                        st.markdown("<div class='msg-meta'>AI (processing)</div>", unsafe_allow_html=True)
+                                        st.caption("Processing...")
+                            else:
+                                st.markdown("<div class='msg-meta'>AI（处理中）</div>", unsafe_allow_html=True)
+                                st.caption("处理中…")
+                        else:
+                            msg_key = hashlib.md5((st.session_state.get("conv_id", "") + "|" + str(idx)).encode("utf-8", "ignore")).hexdigest()[:10]
+                            copy_hist_rendered = False
+                            notice, body = _split_kb_miss_notice(content or "")
                             if notice:
                                 st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
                             if (body or "").strip():
-                                hits_for_anno = []
-                                try:
-                                    pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
-                                    if isinstance(pack, dict):
-                                        hits_for_anno = list(pack.get("hits") or [])
-                                except Exception:
-                                    hits_for_anno = []
-                                body2 = _annotate_equation_tags_with_sources(body, hits_for_anno)
-                                body3, cite_details = _annotate_inpaper_citations_with_hover_meta(
-                                    body2,
-                                    hits_for_anno,
-                                    anchor_ns=f"{conv_id}:{idx}:{msg_id}:live",
-                                )
-                                st.markdown(_normalize_math_markdown(body3))
-                                _render_inpaper_citation_details(
-                                    cite_details,
-                                    key_ns=f"{conv_id}_{idx}_{msg_id}_live",
-                                )
-                            else:
-                                st.markdown("<div class='kb-ai-live-dots'>...</div>", unsafe_allow_html=True)
-                        else:
-                            ans0 = str(t0.get("answer") or "").strip()
-                            if ans0:
-                                copy_done_rendered = False
-                                notice, body = _split_kb_miss_notice(ans0)
-                                if notice:
-                                    st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
-                                if (body or "").strip():
+                                if lite_live:
+                                    st.markdown(_normalize_math_markdown(body))
+                                    copy_hist_rendered = True
+                                else:
                                     hits_for_anno = []
                                     try:
-                                        pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
+                                        pack = _get_refs_pack_for_user(last_user_msg_id)
                                         if isinstance(pack, dict):
                                             hits_for_anno = list(pack.get("hits") or [])
                                     except Exception:
@@ -555,162 +736,305 @@ def _page_chat(
                                     body3, cite_details = _annotate_inpaper_citations_with_hover_meta(
                                         body2,
                                         hits_for_anno,
-                                        anchor_ns=f"{conv_id}:{idx}:{msg_id}:done",
+                                        anchor_ns=f"{conv_id}:{idx}:{msg_id}:hist",
                                     )
-                                    copy_md_done = f"{notice}\n\n{body3}" if notice else body3
+                                    copy_md_hist = f"{notice}\n\n{body3}" if notice else body3
                                     _render_answer_copy_bar(
-                                        copy_md_done,
-                                        key_ns=f"copy_{idx}_done",
+                                        copy_md_hist,
+                                        key_ns=f"copy_{msg_key}",
                                         cite_details=cite_details,
                                     )
-                                    copy_done_rendered = True
+                                    copy_hist_rendered = True
                                     st.markdown(_normalize_math_markdown(body3))
                                     _render_inpaper_citation_details(
                                         cite_details,
-                                        key_ns=f"{conv_id}_{idx}_{msg_id}_done",
+                                        key_ns=f"{conv_id}_{idx}_{msg_id}_hist",
                                     )
-                                if not copy_done_rendered:
-                                    _render_answer_copy_bar(ans0, key_ns=f"copy_{idx}_done")
-                            else:
-                                st.markdown("<div class='msg-meta'>AI（处理中）</div>", unsafe_allow_html=True)
-                                st.caption("处理中…")
-                    else:
-                        st.markdown("<div class='msg-meta'>AI（处理中）</div>", unsafe_allow_html=True)
-                        st.caption("处理中…")
-                else:
-                    msg_key = hashlib.md5((st.session_state.get("conv_id", "") + "|" + str(idx)).encode("utf-8", "ignore")).hexdigest()[:10]
-                    copy_hist_rendered = False
-                    notice, body = _split_kb_miss_notice(content or "")
-                    if notice:
-                        st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
-                    if (body or "").strip():
-                        hits_for_anno = []
-                        try:
-                            pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
-                            if isinstance(pack, dict):
-                                hits_for_anno = list(pack.get("hits") or [])
-                        except Exception:
-                            hits_for_anno = []
-                        body2 = _annotate_equation_tags_with_sources(body, hits_for_anno)
-                        body3, cite_details = _annotate_inpaper_citations_with_hover_meta(
-                            body2,
-                            hits_for_anno,
-                            anchor_ns=f"{conv_id}:{idx}:{msg_id}:hist",
-                        )
-                        copy_md_hist = f"{notice}\n\n{body3}" if notice else body3
-                        _render_answer_copy_bar(
-                            copy_md_hist,
-                            key_ns=f"copy_{msg_key}",
-                            cite_details=cite_details,
-                        )
-                        copy_hist_rendered = True
-                        st.markdown(_normalize_math_markdown(body3))
-                        _render_inpaper_citation_details(
-                            cite_details,
-                            key_ns=f"{conv_id}_{idx}_{msg_id}_hist",
-                        )
-                    if not copy_hist_rendered:
-                        _render_answer_copy_bar(content, key_ns=f"copy_{msg_key}")
+                            if not copy_hist_rendered:
+                                if lite_live:
+                                    st.markdown(_normalize_math_markdown(content))
+                                else:
+                                    _render_answer_copy_bar(content, key_ns=f"copy_{msg_key}")
 
-                if (last_user_msg_id > 0) and (last_user_msg_id not in shown_refs_user_ids):
-                    # Use the current assistant text (partial/answer/content) to extract in-paper citations.
-                    assistant_text_for_refs = ""
-                    try:
-                        if _is_live_assistant_text(content) and isinstance(t0, dict):
-                            assistant_text_for_refs = str(t0.get("partial") or t0.get("answer") or "")
-                        else:
-                            assistant_text_for_refs = str(content or "")
-                    except Exception:
-                        assistant_text_for_refs = str(content or "")
-                    _render_refs_for_user(
-                        last_user_msg_id,
-                        str(last_user_for_refs or "").strip(),
-                        assistant_text_for_refs,
-                        pending=pending,
-                    )
-                    shown_refs_user_ids.add(last_user_msg_id)
-            st.markdown("")
+                        if (not lite_live) and (last_user_msg_id > 0) and (last_user_msg_id not in shown_refs_user_ids):
+                            # Use the current assistant text (partial/answer/content) to extract in-paper citations.
+                            assistant_text_for_refs = ""
+                            try:
+                                if _is_live_assistant_text(content) and isinstance(t0, dict):
+                                    assistant_text_for_refs = str(t0.get("partial") or t0.get("answer") or "")
+                                else:
+                                    assistant_text_for_refs = str(content or "")
+                            except Exception:
+                                assistant_text_for_refs = str(content or "")
+                            _render_refs_for_user(
+                                last_user_msg_id,
+                                str(last_user_for_refs or "").strip(),
+                                assistant_text_for_refs,
+                                pending=pending,
+                            )
+                            shown_refs_user_ids.add(last_user_msg_id)
+                    st.markdown("")
 
-    st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
+            st.markdown("<div id='kb-chat-tail-anchor' style='height:0.35rem;'></div>", unsafe_allow_html=True)
 
-    with st.form(key="prompt_form", clear_on_submit=True):
-        prompt_val = st.text_area(" ", height=96, key="prompt_text")
-        action_cols = st.columns([8.4, 1.2, 1.2])
-        with action_cols[1]:
-            if running_for_conv:
-                stop_clicked = st.form_submit_button("■", help="停止输出")
+    if chat_fragment_refresh_ok and running_for_conv:
+        @st.fragment(run_every=0.12)
+        def _kb_chat_live_messages_fragment() -> None:
+            t_now = _gen_get_task(session_id) or {}
+            running_now = bool(
+                isinstance(t_now, dict)
+                and str(t_now.get("status") or "") == "running"
+                and str(t_now.get("conv_id") or "") == conv_id
+            )
+            # Keep body runtime classes in sync even without an app-wide rerun.
+            _set_live_streaming_mode(running_now, hide_stale=False)
+            _render_chat_messages_area(live_running=running_now, compact_live=True)
+            prev_running = bool(st.session_state.get("_kb_chat_fragment_prev_running", False))
+            st.session_state["_kb_chat_fragment_prev_running"] = running_now
+            if prev_running and (not running_now):
+                # Completion is handled by the input fragment (no app-wide rerun -> no scroll jump).
+                st.session_state.pop("_kb_chat_finish_app_rerun_pending", None)
+                st.session_state.pop("_kb_chat_finish_app_rerun_after_ts", None)
+
+        _kb_chat_live_messages_fragment()
+    else:
+        st.session_state.pop("_kb_chat_fragment_prev_running", None)
+        st.session_state.pop("_kb_chat_finish_app_rerun_pending", None)
+        st.session_state.pop("_kb_chat_finish_app_rerun_after_ts", None)
+        _render_chat_messages_area(live_running=running_for_conv, compact_live=False)
+
+    def _quick_chat_upload_to_library(selected_files) -> None:
+        if not selected_files:
+            return
+        handled = st.session_state.setdefault("_chat_quick_upload_handled", {})
+        if not isinstance(handled, dict):
+            handled = {}
+
+        uploaded_cnt = 0
+        dup_cnt = 0
+        err_cnt = 0
+
+        for up in list(selected_files or []):
+            try:
+                data = bytes(up.getbuffer())
+            except Exception:
+                data = b""
+            if not data:
+                continue
+
+            file_sha1 = hashlib.sha1(data).hexdigest()
+            if file_sha1 in handled:
+                continue
+
+            try:
+                exist = lib_store.get_by_sha1(file_sha1)
+            except Exception:
+                exist = None
+            if exist:
+                handled[file_sha1] = {"action": "dup", "ts": time.time()}
+                dup_cnt += 1
+                continue
+
+            try:
+                raw_name = str(getattr(up, "name", "") or "upload.pdf")
+                tmp_path = _write_tmp_upload(pdf_dir, raw_name, data)
+                try:
+                    sug = extract_pdf_meta_suggestion(tmp_path, settings=settings)
+                except Exception:
+                    sug = PdfMetaSuggestion()
+
+                venue = str(getattr(sug, "venue", "") or "").strip()
+                year = str(getattr(sug, "year", "") or "").strip()
+                title = str(getattr(sug, "title", "") or "").strip() or (Path(raw_name).stem or "Untitled")
+
+                base = build_storage_base_name(
+                    venue=venue,
+                    year=year,
+                    title=title,
+                    pdf_dir=pdf_dir,
+                    md_out_root=md_out_root,
+                )
+                display_full_name = build_display_pdf_filename(
+                    venue=venue,
+                    year=year,
+                    title=title,
+                    fallback_name=raw_name,
+                )
+                dest_pdf = _next_pdf_dest_path(pdf_dir, base)
+                upload_citation_meta = merge_citation_meta_file_labels(
+                    sug.crossref_meta if isinstance(getattr(sug, "crossref_meta", None), dict) else None,
+                    display_full_name=display_full_name,
+                    storage_filename=dest_pdf.name,
+                )
+                upload_citation_meta = merge_citation_meta_name_fields(
+                    upload_citation_meta,
+                    venue=venue,
+                    year=year,
+                    title=title,
+                )
+
+                _persist_upload_pdf(tmp_path, dest_pdf, data)
+                lib_store.upsert(file_sha1, dest_pdf, citation_meta=upload_citation_meta)
+                handled[file_sha1] = {"action": "saved", "ts": time.time(), "path": str(dest_pdf)}
+                uploaded_cnt += 1
+            except Exception:
+                handled[file_sha1] = {"action": "error", "ts": time.time()}
+                err_cnt += 1
+
+        st.session_state["_chat_quick_upload_handled"] = handled
+        if uploaded_cnt or dup_cnt or err_cnt:
+            msg_parts: list[str] = []
+            if uploaded_cnt:
+                msg_parts.append(f"已添加 {uploaded_cnt} 个文件到文献库")
+            if dup_cnt:
+                msg_parts.append(f"跳过重复 {dup_cnt} 个")
+            if err_cnt:
+                msg_parts.append(f"失败 {err_cnt} 个")
+            st.session_state["_chat_quick_upload_flash"] = " | ".join(msg_parts)
+
+    def _render_chat_prompt_form_ui(*, live_running: bool, form_key: str) -> tuple[str, bool, bool]:
+        with st.form(key=form_key, clear_on_submit=True):
+            prompt_val_local = st.text_area(" ", height=96, key="prompt_text")
+            uploader_nonce = int(st.session_state.get("chat_input_uploader_nonce", 0) or 0)
+            uploader_key = f"chat_input_pdf_uploader_{uploader_nonce}"
+            try:
+                chat_uploads_local = st.file_uploader(
+                    "Add files",
+                    type=["pdf"],
+                    accept_multiple_files=True,
+                    key=uploader_key,
+                    label_visibility="collapsed",
+                )
+            except TypeError:
+                chat_uploads_local = st.file_uploader(
+                    "Add files",
+                    type=["pdf"],
+                    accept_multiple_files=True,
+                    key=uploader_key,
+                )
+            _quick_chat_upload_to_library(chat_uploads_local)
+            submitted_local = st.form_submit_button("↑", help="Send (Ctrl+Enter)")
+            if live_running:
+                stop_clicked_local = st.form_submit_button("■", help="Stop generation")
             else:
-                stop_clicked = False
-                st.markdown("<div style='height:2.25rem;'></div>", unsafe_allow_html=True)
-        with action_cols[2]:
-            submitted = st.form_submit_button("↑")
+                stop_clicked_local = False
+        return str(prompt_val_local or ""), bool(stop_clicked_local), bool(submitted_local)
+
+    def _handle_chat_form_actions(*, prompt_val_in: str, stop_clicked_in: bool, submitted_in: bool, rerun_on_stop: bool, rerun_on_submit: bool) -> None:
+        if stop_clicked_in:
+            t0 = _gen_get_task(session_id)
+            if isinstance(t0, dict):
+                _gen_mark_cancel(session_id, str(t0.get("id") or ""))
+            if rerun_on_stop:
+                try:
+                    st.rerun(scope="app")
+                except Exception:
+                    st.experimental_rerun()
+            return
+
+        if submitted_in:
+            txt = (prompt_val_in or "").strip()
+            if txt:
+                t0 = _gen_get_task(session_id)
+                if isinstance(t0, dict) and str(t0.get("status") or "") == "running":
+                    st.warning("Previous answer is still generating. Please stop or wait.")
+                    return
+
+                task_id = uuid.uuid4().hex[:12]
+                try:
+                    user_msg_id = int(chat_store.append_message(conv_id, "user", txt) or 0)
+                except Exception:
+                    user_msg_id = 0
+                try:
+                    assistant_msg_id = int(chat_store.append_message(conv_id, "assistant", _live_assistant_text(task_id)) or 0)
+                except Exception:
+                    assistant_msg_id = 0
+                chat_store.set_title_if_default(conv_id, txt)
+                st.session_state["messages"] = chat_store.get_messages(conv_id)
+
+                ok = _gen_start_task(
+                    {
+                        "id": task_id,
+                        "session_id": session_id,
+                        "conv_id": conv_id,
+                        "prompt": txt,
+                        "prompt_sig": hashlib.sha1(txt.encode("utf-8", "ignore")).hexdigest()[:12],
+                        "created_at": time.time(),
+                        "chat_db": str(getattr(settings, "chat_db_path", "") or ""),
+                        "db_dir": str(db_dir),
+                        "top_k": int(top_k),
+                        "temperature": float(temperature),
+                        "max_tokens": int(max_tokens),
+                        "deep_read": bool(deep_read),
+                        "settings_obj": settings,
+                        "user_msg_id": int(user_msg_id),
+                        "assistant_msg_id": int(assistant_msg_id),
+                    }
+                )
+                if not ok:
+                    chat_store.update_message_content(assistant_msg_id, "(failed to start generation)")
+                if rerun_on_submit:
+                    try:
+                        st.rerun(scope="app")
+                    except Exception:
+                        st.experimental_rerun()
+
+    prompt_val = ""
+    stop_clicked = False
+    submitted = False
+
+    if chat_fragment_refresh_ok and running_for_conv:
+        @st.fragment(run_every=0.28)
+        def _kb_chat_input_fragment() -> None:
+            running_now = False
+            try:
+                t_now = _gen_get_task(session_id) or {}
+                running_now = bool(
+                    isinstance(t_now, dict)
+                    and str(t_now.get("status") or "") == "running"
+                    and str(t_now.get("conv_id") or "") == conv_id
+                )
+            except Exception:
+                running_now = False
+            # Sync body classes here as well in case this fragment is the first one to observe completion.
+            _set_live_streaming_mode(running_now, hide_stale=False)
+            pv, sc, sb = _render_chat_prompt_form_ui(live_running=running_now, form_key="prompt_form_frag")
+            _handle_chat_form_actions(
+                prompt_val_in=pv,
+                stop_clicked_in=sc,
+                submitted_in=sb,
+                rerun_on_stop=False,
+                rerun_on_submit=True,
+            )
+
+        _kb_chat_input_fragment()
+    else:
+        prompt_val, stop_clicked, submitted = _render_chat_prompt_form_ui(
+            live_running=running_for_conv,
+            form_key="prompt_form",
+        )
 
     if not disable_hooks:
         _inject_chat_dock_runtime()
 
-    if stop_clicked:
-        t0 = _gen_get_task(session_id)
-        if isinstance(t0, dict):
-            _gen_mark_cancel(session_id, str(t0.get("id") or ""))
-        st.experimental_rerun()
+    if (not chat_fragment_refresh_ok) or (not running_for_conv):
+        _handle_chat_form_actions(
+            prompt_val_in=prompt_val,
+            stop_clicked_in=stop_clicked,
+            submitted_in=submitted,
+            rerun_on_stop=True,
+            rerun_on_submit=True,
+        )
 
-    if submitted:
-        txt = (prompt_val or "").strip()
-        if txt:
-            t0 = _gen_get_task(session_id)
-            if isinstance(t0, dict) and str(t0.get("status") or "") == "running":
-                st.warning("上一条回答还在生成中，请先停止或等待完成。")
-                return
+    upload_flash = str(st.session_state.pop("_chat_quick_upload_flash", "") or "").strip()
+    if upload_flash:
+        st.caption(upload_flash)
 
-            task_id = uuid.uuid4().hex[:12]
-            try:
-                user_msg_id = int(chat_store.append_message(conv_id, "user", txt) or 0)
-            except Exception:
-                user_msg_id = 0
-            try:
-                assistant_msg_id = int(chat_store.append_message(conv_id, "assistant", _live_assistant_text(task_id)) or 0)
-            except Exception:
-                assistant_msg_id = 0
-            chat_store.set_title_if_default(conv_id, txt)
-            st.session_state["messages"] = chat_store.get_messages(conv_id)
-
-            ok = _gen_start_task(
-                {
-                    "id": task_id,
-                    "session_id": session_id,
-                    "conv_id": conv_id,
-                    "prompt": txt,
-                    "prompt_sig": hashlib.sha1(txt.encode("utf-8", "ignore")).hexdigest()[:12],
-                    "created_at": time.time(),
-                    "chat_db": str(getattr(settings, "chat_db_path", "") or ""),
-                    "db_dir": str(db_dir),
-                    "top_k": int(top_k),
-                    "temperature": float(temperature),
-                    "max_tokens": int(max_tokens),
-                    "deep_read": bool(deep_read),
-                    "settings_obj": settings,
-                    "user_msg_id": int(user_msg_id),
-                    "assistant_msg_id": int(assistant_msg_id),
-                }
-            )
-            if not ok:
-                chat_store.update_message_content(assistant_msg_id, "（启动生成失败）")
-            st.experimental_rerun()
-
-    # --- Streaming poll loop (Python-only, avoid frontend JS hooks) ---
-    # When a background generation task is running, Streamlit won't refresh `partial`
-    # unless the script reruns. Use a gentle polling rerun to keep the UI updating.
-    if running_for_conv and (not stop_clicked) and (not submitted):
-        try:
-            time.sleep(0.6)
-        except Exception:
-            pass
-        st.experimental_rerun()
-
-    # Adaptive server-side polling:
-    # - fast when new tokens arrive
-    # - slower when model is still retrieving/deep-reading (to reduce UI jank)
-    if running_for_conv and (not submitted) and (not stop_clicked):
+    # Adaptive polling for chat streaming:
+    # - Prefer browser-side one-shot rerun pulses (lighter visual feel than server sleep+rerun)
+    # - Fall back to server-side rerun if frontend hooks are disabled/broken
+    # - Poll faster when new tokens arrive, slower while retrieving/deep-reading
+    if (not chat_fragment_refresh_ok) and running_for_conv and (not submitted) and (not stop_clicked):
         t_live = _gen_get_task(session_id) or {}
         poll_key = "_gen_poll_state"
         prev = st.session_state.get(poll_key) or {}
@@ -735,10 +1059,49 @@ def _page_chat(
             delay_s = 0.42
 
         st.session_state[poll_key] = {"tid": cur_tid, "chars": cur_chars, "stage": cur_stage}
-        time.sleep(delay_s)
-        st.experimental_rerun()
+
+        client_poll_ok = False
+        if not disable_hooks:
+            pulse_label = "__KB_CHAT_POLL_PULSE__"
+            try:
+                if st.button(pulse_label, key="_kb_chat_poll_pulse_btn"):
+                    st.session_state["_kb_chat_client_poll_ts"] = time.time()
+            except Exception:
+                pass
+            try:
+                if not bool(st.session_state.get("_kb_chat_poll_started_ts")):
+                    st.session_state["_kb_chat_poll_started_ts"] = time.time()
+                _inject_auto_rerun_once(
+                    delay_ms=int(max(120, delay_s * 1000)),
+                    pulse_button_label=pulse_label,
+                    nonce=f"chat:{session_id}:{cur_tid}:{cur_chars}:{time.time():.6f}",
+                )
+                client_poll_ok = True
+            except Exception:
+                client_poll_ok = False
+
+        if client_poll_ok:
+            now_ts = time.time()
+            started_ts = float(st.session_state.get("_kb_chat_poll_started_ts", 0.0) or 0.0)
+            client_ts = float(st.session_state.get("_kb_chat_client_poll_ts", 0.0) or 0.0)
+            grace_s = max(1.1, delay_s * 3.2)
+            stale_limit_s = max(2.2, delay_s * 4.5)
+            client_poll_ok = not (
+                (started_ts > 0.0)
+                and ((now_ts - started_ts) > grace_s)
+                and ((client_ts <= 0.0) or ((now_ts - client_ts) > stale_limit_s))
+            )
+
+        if not client_poll_ok:
+            try:
+                time.sleep(delay_s)
+            except Exception:
+                pass
+            st.experimental_rerun()
     else:
         st.session_state.pop("_gen_poll_state", None)
+        st.session_state.pop("_kb_chat_poll_started_ts", None)
+        st.session_state.pop("_kb_chat_client_poll_ts", None)
 
 
 def _dir_signature(path_obj: Path) -> str:
@@ -858,6 +1221,19 @@ def _kb_reindex_hint(md_out_root: Path, db_dir: Path, pdf_dir: Path) -> tuple[bo
 
 def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: Path, prefs: dict, retriever_reload_flag: dict) -> None:
     _bg_ensure_started()
+    lib_fragment_refresh_ok = bool(callable(getattr(st, "fragment", None)))
+    try:
+        st.session_state["_kb_library_progress_fragments_active"] = bool(lib_fragment_refresh_ok)
+    except Exception:
+        pass
+    try:
+        _set_live_streaming_mode(
+            bool(bg_is_running_snapshot(_bg_snapshot()))
+            or bool(refsync_is_running_snapshot(refsync_snapshot())),
+            hide_stale=True,
+        )
+    except Exception:
+        pass
 
     retriever_err = str(st.session_state.get("retriever_load_error") or "").strip()
     if retriever_err:
@@ -1089,7 +1465,28 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             st.warning(f"参考文献索引后台同步失败：{err_msg}")
             st.session_state["_refsync_seen_run_id"] = ref_run_id
 
-    if refsync_is_running_snapshot(ref_snap):
+    if lib_fragment_refresh_ok:
+        @st.fragment(run_every=1.0)
+        def _kb_library_run_monitor_fragment() -> None:
+            try:
+                bg_now = _bg_snapshot()
+                ref_now = refsync_snapshot()
+                running_now = bool(bg_is_running_snapshot(bg_now) or refsync_is_running_snapshot(ref_now))
+                _set_live_streaming_mode(running_now, hide_stale=True)
+                prev_running = bool(st.session_state.get("_kb_lib_monitor_prev_running", False))
+                st.session_state["_kb_lib_monitor_prev_running"] = running_now
+                if prev_running and (not running_now):
+                    try:
+                        st.rerun(scope="app")
+                    except Exception:
+                        st.rerun()
+                st.markdown("<div style='display:none' aria-hidden='true'></div>", unsafe_allow_html=True)
+            except Exception:
+                pass
+
+        _kb_library_run_monitor_fragment()
+
+    if (not lib_fragment_refresh_ok) and refsync_is_running_snapshot(ref_snap):
         docs_done = int(ref_snap.get("docs_done", 0) or 0)
         docs_total = int(ref_snap.get("docs_total", 0) or 0)
         current_doc = str(ref_snap.get("current") or "").strip()
@@ -1108,6 +1505,35 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             st.caption(f"{status_line} | 当前: {current_doc} | 已运行 {elapsed_s}s")
         else:
             st.caption(f"{status_line} | 已运行 {elapsed_s}s")
+
+    if lib_fragment_refresh_ok:
+        @st.fragment(run_every=1.0)
+        def _kb_refsync_progress_fragment() -> None:
+            snap = refsync_snapshot()
+            if not refsync_is_running_snapshot(snap):
+                _set_live_streaming_mode(bool(bg_is_running_snapshot(_bg_snapshot())), hide_stale=True)
+                return
+            _set_live_streaming_mode(True, hide_stale=True)
+            docs_done = int(snap.get("docs_done", 0) or 0)
+            docs_total = int(snap.get("docs_total", 0) or 0)
+            current_doc = str(snap.get("current") or "").strip()
+            stage = str(snap.get("stage") or "").strip()
+            started_at = float(snap.get("started_at", 0.0) or 0.0)
+            elapsed_s = max(0, int(time.time() - started_at)) if started_at > 0 else 0
+            if docs_total > 0:
+                progress = min(0.99, max(0.01, docs_done / max(1, docs_total)))
+                status_line = f"{docs_done}/{docs_total} documents | stage {stage or 'running'}"
+            else:
+                progress = 0.03
+                status_line = f"stage: {stage or 'starting'}"
+            st.markdown("<div class='refbox'><strong>Reference Index Sync (Background)</strong></div>", unsafe_allow_html=True)
+            st.progress(progress)
+            if current_doc:
+                st.caption(f"{status_line} | current: {current_doc} | elapsed {elapsed_s}s")
+            else:
+                st.caption(f"{status_line} | elapsed {elapsed_s}s")
+
+        _kb_refsync_progress_fragment()
 
     ensure_rename_manager_state()
     render_rename_manager_panel(
@@ -1341,6 +1767,7 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             done = int(bg2.get("done", 0) or 0)
             total = int(bg2.get("total", 0) or 0)
             cur = str(bg2.get("current") or "")
+            cur_tid = str(bg2.get("cur_task_id") or "")
             last = str(bg2.get("last") or "").strip()
             p_done = int(bg2.get("cur_page_done", 0) or 0)
             p_total = int(bg2.get("cur_page_total", 0) or 0)
@@ -1362,9 +1789,18 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             prev_overall_display = float(prev_meta.get("overall_display", 0.0) or 0.0)
             prev_file_display = float(prev_meta.get("file_display", 0.0) or 0.0)
             prev_file_key = str(prev_meta.get("file_key") or "")
+            prev_tid = str(prev_meta.get("cur_tid") or "")
+            prev_p_done = int(prev_meta.get("p_done", 0) or 0)
+            prev_p_total = int(prev_meta.get("p_total", 0) or 0)
 
             # New run: clear cached display values to avoid carrying old bars.
-            if (done < prev_done) or ((done == 0) and (prev_done > 0)) or (total < prev_total):
+            if (
+                (done < prev_done)
+                or ((done == 0) and (prev_done > 0))
+                or (total < prev_total)
+                or (cur_tid and prev_tid and (cur_tid != prev_tid))
+                or ((cur == prev_cur) and (p_done < prev_p_done) and (p_total <= max(prev_p_total, p_total)))
+            ):
                 prev_overall_display = 0.0
                 prev_file_display = 0.0
                 prev_file_key = ""
@@ -1388,7 +1824,8 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                 speed=0.002,
             )
 
-            file_key = f"{done}|{cur}" if cur else ""
+            # Include task_id so reconverting the same file starts from 0 visually.
+            file_key = f"{done}|{cur}|{cur_tid}" if cur else ""
             file_display = 0.0
             if cur:
                 if p_total > 0:
@@ -1536,6 +1973,9 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                 "done": done,
                 "total": total,
                 "cur": cur,
+                "cur_tid": cur_tid,
+                "p_done": p_done,
+                "p_total": p_total,
                 "overall_display": overall_display,
                 "file_display": file_display,
                 "file_key": file_key,
@@ -1545,6 +1985,14 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             # Do not call server-side rerun here (inside tab blocks), it may interrupt
             # rendering of sibling tabs. Global server-side fallback rerun is handled
             # once at the end of main().
+
+        if lib_fragment_refresh_ok:
+            @st.fragment(run_every=0.9)
+            def render_bg_progress_under_tasks_live(*, key_ns: str) -> None:
+                render_bg_progress_under_tasks(key_ns=key_ns)
+        else:
+            def render_bg_progress_under_tasks_live(*, key_ns: str) -> None:
+                render_bg_progress_under_tasks(key_ns=key_ns)
 
         def render_items(items: list[dict], *, show_missing_badge: bool, key_ns: str) -> None:
             from typing import Optional
@@ -1604,8 +2052,9 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                     badge = "\u3010\u672a\u8f6c\u6362\u3011"
                 else:
                     badge = "\u3010\u5df2\u8f6c\u6362\u3011"
-                
-                title = f"{badge} {pdf.name}"
+
+                pdf_display_name = _library_pdf_display_name(lib_store, pdf)
+                title = f"{badge} {pdf_display_name}"
 
                 with st.expander(title, expanded=False):
                     del_key = f"{key_ns}_del_state_{uid}"
@@ -1697,7 +2146,7 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                         md_name = md_main.name if md_exists else "\u2014"
                         st.markdown(
                             f"""<div class='meta-kv'>
-<b>PDF</b>\uff1a{pdf.name}<br/>
+<b>PDF</b>\uff1a{html.escape(pdf_display_name)}<br/>
 <b>MD</b>\uff1a{md_name}
 </div>""",
                             unsafe_allow_html=True,
@@ -1714,42 +2163,49 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                         c_del2 = st.columns([1.1, 1.1, 8.0])
                         with c_del2[0]:
                             if st.button("\u786e\u8ba4\u5220\u9664", key=f"{key_ns}_del_confirm_{uid}"):
-                                # Remove queued tasks first (if any)
-                                if queued_pos is not None:
+                                # Remove queued tasks first (best-effort, even if queued_pos UI missed it).
+                                try:
                                     _bg_remove_queued_tasks_for_pdf(pdf)
+                                except Exception:
+                                    pass
 
                                 # Delete PDF on disk
-                                ok_pdf = False
-                                try:
-                                    pdf.unlink()
-                                    ok_pdf = True
-                                except Exception:
-                                    ok_pdf = False
+                                ok_pdf, pdf_del_msg = _safe_delete_file(pdf)
 
                                 # Delete MD folder if requested
                                 ok_md = True
+                                md_del_msg = ""
                                 if also_md:
                                     try:
                                         md_root = Path(md_out_root).resolve()
                                         target = (Path(md_out_root) / pdf.stem).resolve()
-                                        if str(target).lower().startswith(str(md_root).lower()) and target.exists():
-                                            shutil.rmtree(target, ignore_errors=True)
-                                    except Exception:
+                                        if str(target).lower().startswith(str(md_root).lower()) and _path_exists(target):
+                                            ok_md, md_del_msg = _safe_delete_tree(target)
+                                    except Exception as e:
                                         ok_md = False
+                                        md_del_msg = str(e)
 
                                 # Best-effort remove from library index
                                 try:
                                     lib_store.delete_by_path(pdf)
                                 except Exception:
                                     pass
+                                if ok_pdf:
+                                    try:
+                                        st.session_state["kb_reindex_pending"] = True
+                                        st.session_state.pop("_kb_reindex_hint_cache", None)
+                                    except Exception:
+                                        pass
 
                                 st.session_state[del_key] = False
                                 if ok_pdf:
                                     st.success("\u5df2\u5220\u9664 PDF\u3002")
                                 else:
-                                    st.warning("\u5220\u9664 PDF \u5931\u8d25\uff08\u53ef\u80fd\u88ab\u5360\u7528\uff09\u3002")
+                                    detail = f"（{pdf_del_msg}）" if str(pdf_del_msg or "").strip() else ""
+                                    st.warning(f"\u5220\u9664 PDF \u5931\u8d25{detail}\uff08\u53ef\u80fd\u88ab\u5360\u7528/\u8def\u5f84\u8fc7\u957f\uff09\u3002")
                                 if also_md and (not ok_md):
-                                    st.warning("\u5220\u9664 MD \u6587\u4ef6\u5939\u5931\u8d25\u3002")
+                                    detail = f"（{md_del_msg}）" if str(md_del_msg or "").strip() else ""
+                                    st.warning(f"\u5220\u9664 MD \u6587\u4ef6\u5939\u5931\u8d25{detail}\u3002")
                                 st.info("\u5982\u679c\u4f60\u5df2\u7ecf\u5efa\u5e93\uff0c\u5220\u9664\u540e\u5efa\u8bae\u70b9\u4e00\u6b21\u300c\u66f4\u65b0\u77e5\u8bc6\u5e93\u300d\u4ee5\u6e05\u7406\u65e7\u7d22\u5f15\u3002")
                                 st.experimental_rerun()
                         with c_del2[1]:
@@ -1772,7 +2228,7 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
             )
 
         if not show_full_list:
-            render_bg_progress_under_tasks(key_ns="lib_compact_progress")
+            render_bg_progress_under_tasks_live(key_ns="lib_compact_progress")
             q = list(bg_view.get("queue") or [])
             if q:
                 names: list[str] = []
@@ -1820,14 +2276,14 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                 else:
                     st.caption("\u5168\u90e8\u90fd\u5df2\u8f6c\u6362\u3002")
                 # Always render progress *under* the list (user expects it here).
-                render_bg_progress_under_tasks(key_ns="tab_pending_bottom")
+                render_bg_progress_under_tasks_live(key_ns="tab_pending_bottom")
 
             with tabs[1]:
-                render_bg_progress_under_tasks(key_ns="tab_done")
+                render_bg_progress_under_tasks_live(key_ns="tab_done")
                 render_items(converted, show_missing_badge=False, key_ns="tab_done")
 
             with tabs[2]:
-                render_bg_progress_under_tasks(key_ns="tab_all")
+                render_bg_progress_under_tasks_live(key_ns="tab_all")
                 render_items(pending + converted, show_missing_badge=True, key_ns="tab_all")
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
@@ -1895,29 +2351,52 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                     with c3:
                         title = st.text_input(S["title_field"], value=sug.title, key=f"title_{n}")
 
-                    base = build_base_name(
+                    base = build_storage_base_name(
                         venue=venue,
                         year=year,
                         title=title,
                         pdf_dir=pdf_dir,
                         md_out_root=md_out_root,
                     )
+                    display_full_name = build_display_pdf_filename(
+                        venue=venue,
+                        year=year,
+                        title=title,
+                        fallback_name=up.name,
+                    )
                     st.text_input(S["base_name"], value=base, disabled=True, key=f"base_{n}")
+                    st.text_input(
+                        "完整显示名（用于引用/文献篮/参考定位）",
+                        value=display_full_name,
+                        disabled=True,
+                        key=f"display_name_{n}",
+                    )
 
                     dest_pdf = _next_pdf_dest_path(pdf_dir, base)
+                    upload_citation_meta = merge_citation_meta_file_labels(
+                        sug.crossref_meta if isinstance(sug.crossref_meta, dict) else None,
+                        display_full_name=display_full_name,
+                        storage_filename=dest_pdf.name,
+                    )
+                    upload_citation_meta = merge_citation_meta_name_fields(
+                        upload_citation_meta,
+                        venue=venue,
+                        year=year,
+                        title=title,
+                    )
 
                     action_cols = st.columns(2)
                     with action_cols[0]:
                         if st.button(S["save_pdf"], key=f"save_pdf_{n}"):
                             _persist_upload_pdf(tmp_path, dest_pdf, data)
-                            lib_store.upsert(file_sha1, dest_pdf, citation_meta=(sug.crossref_meta or None))
+                            lib_store.upsert(file_sha1, dest_pdf, citation_meta=upload_citation_meta)
                             handled[file_sha1] = {"action": "saved", "msg": S["handled_saved"], "ts": time.time()}
                             st.info(f"{S['saved_as']}: {dest_pdf}")
 
                     with action_cols[1]:
                         if st.button(S["convert_now"], key=f"convert_now_{n}"):
                             _persist_upload_pdf(tmp_path, dest_pdf, data)
-                            lib_store.upsert(file_sha1, dest_pdf, citation_meta=(sug.crossref_meta or None))
+                            lib_store.upsert(file_sha1, dest_pdf, citation_meta=upload_citation_meta)
                             handled[file_sha1] = {"action": "converted", "msg": S["handled_converted"], "ts": time.time()}
                             _bg_enqueue(
                                 _build_bg_task(
@@ -1942,9 +2421,9 @@ def main() -> None:
     # Diagnostic heartbeat: increments on every Streamlit script run.
     st.session_state["_run_tick"] = int(st.session_state.get("_run_tick", 0) or 0) + 1
     st.session_state["_run_tick_ts"] = time.strftime("%H:%M:%S")
-    if "ui_theme" not in st.session_state:
-        st.session_state["ui_theme"] = "light"
-    _init_theme_css(st.session_state["ui_theme"])
+    # Base theme CSS is light; browser preference overrides are applied in frontend JS.
+    _init_theme_css("light")
+    _sync_theme_with_browser_preference()
     _render_app_title()
 
     settings = load_settings()
@@ -2004,17 +2483,8 @@ def main() -> None:
             else:
                 st.image(str(sidebar_logo), width=220)
 
-        c_mode = st.columns([3, 1])
-        with c_mode[0]:
-            st.subheader(S["settings"])
-        with c_mode[1]:
-            btn_icon = "🌞" if st.session_state["ui_theme"] == "dark" else "🌙"
-            if st.button(btn_icon, key="theme_toggle_btn"):
-                cur_page = st.session_state.get("page_radio") or st.session_state.get("active_page") or S["page_chat"]
-                st.session_state["active_page"] = cur_page
-                st.session_state["page_radio"] = cur_page
-                st.session_state["ui_theme"] = "light" if st.session_state["ui_theme"] == "dark" else "dark"
-                st.experimental_rerun()
+        st.subheader(S["settings"])
+        st.caption("主题跟随浏览器/系统设置")
 
         # Background conversion status (shown on every page)
         _bg_ensure_started()
@@ -2068,19 +2538,20 @@ def main() -> None:
         max_tokens_pref = 256 + int(round((max_tokens_pref - 256) / 64.0)) * 64
         max_tokens_pref = max(256, min(4096, max_tokens_pref))
         max_tokens = st.slider(S["max_tokens"], min_value=256, max_value=4096, value=int(max_tokens_pref), step=64)
-        show_context = st.checkbox(S["show_ctx"], value=bool(prefs.get("show_context") or False))
+        # "Show full snippet" feature removed; keep snippets collapsed-only behavior.
+        show_context = False
         deep_read = st.checkbox(S["deep_read"], value=bool(prefs.get("deep_read") if ("deep_read" in prefs) else True))
         llm_rerank = True
         st.session_state["llm_rerank"] = True
 
         # Persist simple knobs
         prefs_knobs = dict(prefs)
+        prefs_knobs.pop("show_context", None)
         prefs_knobs.update(
             {
                 "top_k": int(top_k),
                 "temperature": float(temperature),
                 "max_tokens": int(max_tokens),
-                "show_context": bool(show_context),
                 "deep_read": bool(deep_read),
                 "llm_rerank": bool(llm_rerank),
             }
@@ -2088,6 +2559,8 @@ def main() -> None:
         if prefs_knobs != prefs:
             save_prefs(prefs_path, prefs_knobs)
             prefs.update(prefs_knobs)
+
+        history_slot = st.container()
 
         st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
         st.subheader("模型/Key")
@@ -2120,81 +2593,231 @@ def main() -> None:
             except Exception as e:
                 st.error(f"测试失败：{e}")
 
-        if st.button("测试VL图片输入", key="test_llm_vl_btn", help="向当前模型发送一张 32x32 PNG（image_url），看服务端是否接受多模态输入。"):
+        # Sidebar actions trimmed: keep this area quieter and rely on auto reload / conversation controls.
+        reload_btn = False
+        clear_btn = False
+
+        history_slot.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+        history_slot.subheader(S["history"])
+        def _history_new_chat_click() -> None:
             try:
-                import base64
-                from openai import OpenAI
+                new_id = str(chat_store.create_conversation() or "").strip()
+            except Exception:
+                new_id = ""
+            if new_id:
+                st.session_state["conv_id"] = new_id
 
-                # 32x32 white PNG (some VL endpoints reject tiny images)
-                png_b64 = (
-                    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAKUlEQVR42u3OIQEAAAACIP+f1hkWWEB6FgEBAQEBAQEBAQEBAQEBgXdgl/rw4tnPBf0AAAAASUVORK5CYII="
-                )
-                data_url = "data:image/png;base64," + png_b64
-                client = OpenAI(api_key=getattr(settings, "api_key", None), base_url=str(getattr(settings, "base_url", "") or ""))
-                with st.spinner("测试VL中…"):
-                    resp = client.chat.completions.create(
-                        model=str(getattr(settings, "model", "") or ""),
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": "If you received the image input, reply exactly: IMAGE_OK"},
-                                    {"type": "image_url", "image_url": {"url": data_url}},
-                                ],
-                            }
-                        ],
-                        temperature=0.0,
-                        max_tokens=16,
-                        timeout=float(getattr(settings, "timeout_s", 60.0) or 60.0),
-                    )
-                txt = str(resp.choices[0].message.content or "").strip()
-                if "IMAGE_OK" in txt:
-                    st.success(f"VL OK：{txt}")
-                else:
-                    st.warning(f"请求成功，但未按预期返回 IMAGE_OK：{txt or '(空)'}（模型可能忽略指令，但至少说明服务端接受 image_url）")
-            except Exception as e:
-                st.error(f"VL 测试失败：{e}")
+        def _history_pick_chat_click(target_id: str) -> None:
+            cid = str(target_id or "").strip()
+            if not cid:
+                return
+            st.session_state["conv_id"] = cid
 
-        col_a, col_b = st.columns(2)
-        with col_a:
-            reload_btn = st.button(S["reload_db"], key="reload_db")
-        with col_b:
-            clear_btn = st.button(S["clear_chat"], key="clear_chat")
+        def _history_delete_chat_by_id(target_id: str) -> None:
+            target = str(target_id or "").strip()
+            if not target:
+                return
+            cur_before = str(st.session_state.get("conv_id") or "").strip()
+            try:
+                chat_store.delete_conversation(target)
+            except Exception:
+                pass
+            try:
+                remaining = chat_store.list_conversations(limit=50) or []
+            except Exception:
+                remaining = []
+            remaining_ids = [str(x.get("id") or "").strip() for x in remaining if str(x.get("id") or "").strip()]
 
-        st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
-        st.subheader(S["history"])
-        if st.button(S["new_chat"], key="new_chat"):
-            st.session_state["conv_id"] = chat_store.create_conversation()
-
-        convs = chat_store.list_conversations(limit=50)
-        conv_ids = [c["id"] for c in convs] if convs else [st.session_state["conv_id"]]
-        conv_labels = {}
-        for c in convs:
-            ts = time.strftime("%m-%d %H:%M", time.localtime(float(c.get("updated_at", 0) or 0)))
-            conv_labels[c["id"]] = f"{ts} | {c.get('title','')}"
-
-        selected_conv_id = st.selectbox(
-            S["pick_chat"],
-            options=conv_ids,
-            format_func=lambda x: conv_labels.get(x, x),
-            index=0,
-            key="conv_select",
-        )
-        if selected_conv_id and selected_conv_id != st.session_state["conv_id"]:
-            st.session_state["conv_id"] = selected_conv_id
-
-        if st.button(S["del_chat"], key="delete_chat") and st.session_state.get("conv_id"):
-            chat_store.delete_conversation(st.session_state["conv_id"])
-            remaining = chat_store.list_conversations(limit=1)
-            if remaining:
-                st.session_state["conv_id"] = remaining[0]["id"]
+            next_id = ""
+            if cur_before and (cur_before != target) and (cur_before in remaining_ids):
+                next_id = cur_before
+            elif remaining_ids:
+                next_id = remaining_ids[0]
             else:
-                st.session_state["conv_id"] = chat_store.create_conversation()
+                try:
+                    next_id = str(chat_store.create_conversation() or "").strip()
+                except Exception:
+                    next_id = ""
 
-            if "conv_select" in st.session_state:
-                del st.session_state["conv_select"]
+            if next_id:
+                st.session_state["conv_id"] = next_id
+            st.session_state.pop("conv_select", None)
 
-    _inject_runtime_ui_fixes(st.session_state["ui_theme"], st.session_state.get("conv_id", ""))
+        def _history_delete_chat_click() -> None:
+            cur_id = str(st.session_state.get("conv_id") or "").strip()
+            if not cur_id:
+                return
+            _history_delete_chat_by_id(cur_id)
+
+        hist_action_cols = history_slot.columns([1, 1], gap="small")
+        with hist_action_cols[0]:
+            st.button(S["new_chat"], key="new_chat", on_click=_history_new_chat_click, use_container_width=True)
+        with hist_action_cols[1]:
+            st.button(
+                "\u5220\u9664\u672c\u4f1a\u8bdd",
+                key="delete_chat_inline",
+                on_click=_history_delete_chat_click,
+                disabled=not bool(str(st.session_state.get("conv_id") or "").strip()),
+                use_container_width=True,
+            )
+
+        cur_conv_id_hint = str(st.session_state.get("conv_id") or "").strip()
+        try:
+            convs = chat_store.list_conversations(limit=200) or []
+        except Exception:
+            convs = []
+
+        # Hard cap conversation history to 30 records in storage.
+        if len(convs) > 30:
+            ordered_ids = [str(c.get("id") or "").strip() for c in convs if str(c.get("id") or "").strip()]
+            keep_ids = ordered_ids[:30]
+            if cur_conv_id_hint and (cur_conv_id_hint in ordered_ids) and (cur_conv_id_hint not in keep_ids):
+                # Preserve current conversation if it falls outside the top 30.
+                replaced = False
+                for i in range(len(keep_ids) - 1, -1, -1):
+                    if keep_ids[i] != cur_conv_id_hint:
+                        keep_ids[i] = cur_conv_id_hint
+                        replaced = True
+                        break
+                if not replaced:
+                    keep_ids = [cur_conv_id_hint]
+            keep_set = set(keep_ids)
+            for cid in ordered_ids:
+                if cid in keep_set:
+                    continue
+                try:
+                    chat_store.delete_conversation(cid)
+                except Exception:
+                    pass
+            try:
+                convs = chat_store.list_conversations(limit=50) or []
+            except Exception:
+                convs = [c for c in convs if str(c.get("id") or "").strip() in keep_set][:30]
+        conv_labels: dict[str, str] = {}
+        conv_updated_ts: dict[str, float] = {}
+        conv_ids: list[str] = []
+        for c in convs:
+            cid = str(c.get("id") or "").strip()
+            if not cid:
+                continue
+            conv_ids.append(cid)
+            ts_raw = float(c.get("updated_at", 0) or 0)
+            conv_updated_ts[cid] = ts_raw
+            ts = time.strftime("%m-%d %H:%M", time.localtime(ts_raw))
+            conv_labels[cid] = f"{ts} | {c.get('title','')}"
+
+        cur_conv_id = str(st.session_state.get("conv_id") or "").strip()
+        if not cur_conv_id:
+            if conv_ids:
+                cur_conv_id = conv_ids[0]
+                st.session_state["conv_id"] = cur_conv_id
+            else:
+                cur_conv_id = str(chat_store.create_conversation() or "").strip()
+                st.session_state["conv_id"] = cur_conv_id
+                if cur_conv_id:
+                    conv_ids = [cur_conv_id]
+
+        if cur_conv_id:
+            # Keep the active conversation at the top so the sidebar behaves like a chat app list.
+            conv_ids = [cur_conv_id] + [x for x in conv_ids if x != cur_conv_id]
+
+        recent_cutoff_ts = time.time() - (7 * 24 * 60 * 60)
+        recent_conv_ids: list[str] = []
+        older_conv_ids: list[str] = []
+        for cid in conv_ids:
+            ts0 = float(conv_updated_ts.get(cid, 0.0) or 0.0)
+            # Always keep the active conversation visible, even if it is older than 7 days.
+            if (cid == cur_conv_id) or (ts0 >= recent_cutoff_ts):
+                recent_conv_ids.append(cid)
+            else:
+                older_conv_ids.append(cid)
+
+        if "history_show_older_convs" not in st.session_state:
+            st.session_state["history_show_older_convs"] = False
+
+        def _toggle_history_older_click() -> None:
+            st.session_state["history_show_older_convs"] = not bool(st.session_state.get("history_show_older_convs"))
+
+        def _render_history_rows(row_ids: list[str], *, slot=None) -> None:
+            host = slot or history_slot
+            for cid in row_ids:
+                row_label = conv_labels.get(cid, cid)
+                row_cols = host.columns([9.45, 0.55], gap="small")
+                with row_cols[0]:
+                    st.button(
+                        row_label,
+                        key=f"conv_pick_{cid}",
+                        on_click=_history_pick_chat_click,
+                        args=(cid,),
+                        use_container_width=True,
+                    )
+                with row_cols[1]:
+                    st.button(
+                        "\U0001F5D1",
+                        key=f"conv_del_{cid}",
+                        on_click=_history_delete_chat_by_id,
+                        args=(cid,),
+                        help="Delete this conversation",
+                    )
+
+        history_slot.caption(S["pick_chat"])
+        if not conv_ids:
+            history_slot.caption("(no conversations)")
+        else:
+            _render_history_rows(recent_conv_ids)
+            if older_conv_ids:
+                show_older = bool(st.session_state.get("history_show_older_convs"))
+                toggle_label = (
+                    "\u25b8 \u5c55\u5f00\u66f4\u65e9\u4f1a\u8bdd"
+                    if not show_older
+                    else "\u25be \u6536\u8d77\u66f4\u65e9\u4f1a\u8bdd"
+                )
+                history_slot.button(
+                    toggle_label,
+                    key="history_toggle_older_convs",
+                    on_click=_toggle_history_older_click,
+                    use_container_width=True,
+                )
+                if show_older:
+                    history_slot.caption("\u66f4\u65e9\u4f1a\u8bdd")
+                    try:
+                        older_scroll_slot = history_slot.container(height=280)
+                    except TypeError:
+                        older_scroll_slot = history_slot.container()
+                    _render_history_rows(older_conv_ids, slot=older_scroll_slot)
+
+    _inject_runtime_ui_fixes("auto", st.session_state.get("conv_id", ""))
+
+    # Resolve chat-page upload directories even if the user never opened the Library page.
+    # (Library page normally initializes pdf_dir_input/md_dir_input.)
+    pdf_dir_raw = str(
+        st.session_state.get("pdf_dir_input")
+        or st.session_state.get("pdf_dir")
+        or prefs.get("pdf_dir")
+        or ""
+    ).strip()
+    if not pdf_dir_raw:
+        pdf_dir_raw = str(st.session_state.get("pdf_dir") or "").strip()
+    try:
+        pdf_dir = Path(pdf_dir_raw).expanduser().resolve() if pdf_dir_raw else Path.home().resolve()
+    except Exception:
+        pdf_dir = Path(pdf_dir_raw).expanduser() if pdf_dir_raw else Path.home()
+
+    md_dir_default_raw = str(
+        st.session_state.get("md_dir")
+        or prefs.get("md_dir")
+        or os.environ.get("KB_MD_DIR")
+        or str(db_dir)
+    ).strip()
+    md_dir_raw = str(
+        st.session_state.get("md_dir_input")
+        or md_dir_default_raw
+        or str(db_dir)
+    ).strip()
+    try:
+        md_out_root = Path(md_dir_raw).expanduser().resolve()
+    except Exception:
+        md_out_root = Path(md_dir_raw).expanduser()
 
     # Retriever (auto-reload when DB changes)
     docs_json = db_dir / "docs.json"
@@ -2222,9 +2845,6 @@ def main() -> None:
             st.session_state["db_mtime"] = cur_mtime or time.time()
             retriever_reload_flag["reload"] = False
 
-    if clear_btn:
-        st.session_state["conv_id"] = chat_store.create_conversation()
-
     st.session_state["messages"] = chat_store.get_messages(st.session_state["conv_id"])
 
     if page != S["page_chat"]:
@@ -2235,8 +2855,11 @@ def main() -> None:
         _page_chat(
             settings,
             chat_store,
+            lib_store,
             st.session_state["retriever"],
             db_dir,
+            pdf_dir,
+            md_out_root,
             top_k=top_k,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -2249,29 +2872,73 @@ def main() -> None:
 
     # No separate PDF->Markdown page: conversion lives in the library page.
 
-    # Global server-side auto-refresh loop (JS-independent, Streamlit 1.12 compatible).
-    # In old Streamlit versions, there is no native periodic callback. We emulate
-    # a heartbeat by waiting briefly at the end of a run, then forcing rerun.
-    # This avoids relying on browser-side postMessage scripts.
+    # Global auto-refresh heartbeat while background work is running.
+    # Prefer browser-side one-shot rerun (lighter feel than server-side sleep+rerun).
+    # Keep server-side heartbeat only as an opt-in fallback for very old/broken frontends.
     bg_end = _bg_snapshot()
     ref_end = refsync_snapshot()
     ref_running_end = (page == S["page_library"]) and refsync_is_running_snapshot(ref_end)
     is_running_end = bg_is_running_snapshot(bg_end) or bool(ref_running_end)
     was_running = bool(st.session_state.get("_bg_was_running", False))
+    lib_local_fragment_refresh = bool(
+        (page == S["page_library"])
+        and callable(getattr(st, "fragment", None))
+        and st.session_state.get("_kb_library_progress_fragments_active", False)
+    )
     if is_running_end:
         st.session_state["_bg_was_running"] = True
-        now_ts = time.time()
-        last_ts = float(st.session_state.get("_global_auto_rerun_ts", 0.0) or 0.0)
-        interval_s = 1.0
-        wait_s = max(0.0, interval_s - (now_ts - last_ts))
-        # Sleep only while tasks are running; keeps refresh cadence stable.
-        if wait_s > 0:
-            time.sleep(min(wait_s, 1.0))
-        st.session_state["_global_auto_rerun_ts"] = time.time()
-        # Use experimental_rerun for broad compatibility.
-        st.experimental_rerun()
+        if lib_local_fragment_refresh:
+            # Library page progress runs via st.fragment local reruns; avoid app-wide heartbeat flicker.
+            st.session_state["_global_auto_rerun_ts"] = 0.0
+            st.session_state["_global_server_rerun_ts"] = 0.0
+            st.session_state["_kb_auto_hb_started_ts"] = 0.0
+            st.session_state["_kb_client_auto_rerun_ts"] = 0.0
+        else:
+            if not bool(st.session_state.get("_kb_auto_hb_started_ts")):
+                st.session_state["_kb_auto_hb_started_ts"] = time.time()
+            # Slightly slower heartbeat reduces visible flicker on the library page
+            # while keeping progress responsive enough for long conversions.
+            interval_s = 1.4 if page == S["page_library"] else 1.0
+            st.session_state["_global_auto_rerun_ts"] = time.time()
+            pulse_label = "__KB_AUTO_RERUN_PULSE__"
+            try:
+                if st.button(pulse_label, key="_kb_auto_rerun_pulse_btn"):
+                    st.session_state["_kb_client_auto_rerun_ts"] = time.time()
+            except Exception:
+                pass
+            try:
+                _inject_auto_rerun_once(
+                    delay_ms=int(max(300, interval_s * 1000)),
+                    pulse_button_label=pulse_label,
+                    nonce=f"{time.time():.6f}",
+                )
+            except Exception:
+                pass
+
+            # Server-side fallback watchdog:
+            # - opt-in env var forces old behavior
+            # - otherwise only trigger if client heartbeat appears unhealthy for a while
+            force_server_hb = str(os.environ.get("KB_FORCE_SERVER_HEARTBEAT", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+            now_ts = time.time()
+            hb_started_ts = float(st.session_state.get("_kb_auto_hb_started_ts", 0.0) or 0.0)
+            client_hb_ts = float(st.session_state.get("_kb_client_auto_rerun_ts", 0.0) or 0.0)
+            grace_s = max(2.5, interval_s * 2.2)
+            client_hb_stale = (hb_started_ts > 0) and ((now_ts - hb_started_ts) > grace_s) and (
+                (client_hb_ts <= 0.0) or ((now_ts - client_hb_ts) > max(3.5, interval_s * 2.8))
+            )
+            if force_server_hb or client_hb_stale:
+                now_ts = time.time()
+                last_ts = float(st.session_state.get("_global_server_rerun_ts", 0.0) or 0.0)
+                wait_s = max(0.0, interval_s - (now_ts - last_ts))
+                if wait_s > 0:
+                    time.sleep(min(wait_s, 1.0))
+                st.session_state["_global_server_rerun_ts"] = time.time()
+                st.experimental_rerun()
     else:
         st.session_state["_global_auto_rerun_ts"] = 0.0
+        st.session_state["_global_server_rerun_ts"] = 0.0
+        st.session_state["_kb_auto_hb_started_ts"] = 0.0
+        st.session_state["_kb_client_auto_rerun_ts"] = 0.0
         # One extra rerun on running->stopped transition to flush stale disabled widgets.
         if was_running:
             st.session_state["_bg_was_running"] = False

@@ -13,6 +13,7 @@ from urllib.parse import quote
 import streamlit as st
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
+from kb.file_naming import citation_meta_display_pdf_name
 from kb.reference_index import (
     extract_references_map_from_md as _extract_references_map_from_md_index,
     load_reference_index as _load_reference_index_file,
@@ -43,12 +44,28 @@ def _top_heading(heading_path: str) -> str:
 
 
 def _display_source_name(source_path: str) -> str:
-    name = Path(source_path).name or source_path or "unknown"
-    for suf in (".en.md", ".md"):
-        if name.lower().endswith(suf):
-            name = name[: -len(suf)]
-            break
-    return _trim_middle(name, max_len=78)
+    src = str(source_path or "").strip()
+    if not src:
+        return "unknown"
+    try:
+        pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
+        pdf_root = Path(pdf_root_str) if pdf_root_str else None
+        pdf_path = _resolve_pdf_for_source(pdf_root, src) if pdf_root else None
+        lib_store = st.session_state.get("lib_store")
+        if (pdf_path is not None) and hasattr(lib_store, "get_citation_meta"):
+            meta = lib_store.get_citation_meta(pdf_path)  # type: ignore[attr-defined]
+            full_name = citation_meta_display_pdf_name(meta)
+            if full_name:
+                return full_name
+    except Exception:
+        pass
+    name = Path(src).name or src
+    low = name.lower()
+    if low.endswith(".en.md"):
+        name = name[:-6] + ".pdf"
+    elif low.endswith(".md"):
+        name = name[:-3] + ".pdf"
+    return name or "unknown.pdf"
 
 
 def _is_temp_source_path(source_path: str) -> bool:
@@ -584,7 +601,8 @@ def _render_refs(
 
     pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
     pdf_root = Path(pdf_root_str) if pdf_root_str else None
-    show_context = bool(st.session_state.get("show_context") or False)
+    # "Show full snippet" feature removed.
+    show_context = False
 
     for i, h in enumerate(filtered_hits, start=1):
         meta = h.get("meta", {}) or {}
@@ -750,6 +768,11 @@ def _citation_hover_title(source_name: str, ref_num: int, ref_rec: dict) -> str:
     src = str(source_name or "").strip()
     title = str(ref_rec.get("title") or "").strip()
     doi = str(ref_rec.get("doi") or "").strip()
+    if not title:
+        try:
+            title = str((_fallback_fill_reference_meta_from_raw(ref_rec) or {}).get("title") or "").strip()
+        except Exception:
+            title = ""
     parts = [f"source: {src}", f"ref [{int(ref_num)}]"]
     if title:
         parts.append(title)
@@ -790,6 +813,92 @@ def _strip_reference_lead_label(text: str) -> str:
             break
         t = t2
     return t
+
+
+def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
+    """Best-effort local parse of authors/title from raw numbered references.
+
+    This is a render-time fallback only, used when the reference index stores
+    sparse metadata (e.g. venue/year/doi present but title empty).
+    """
+    if not isinstance(ref_rec, dict):
+        return {}
+    raw0 = _strip_reference_lead_label(str(ref_rec.get("raw") or "").strip())
+    if not raw0:
+        return {}
+
+    # Normalize spacing but keep punctuation shape; parser relies on ". " splits.
+    raw = re.sub(r"\s+", " ", raw0).strip()
+    venue_hint = _strip_reference_lead_label(str(ref_rec.get("venue") or "").strip())
+    if not venue_hint:
+        return {}
+
+    # Prefer the last venue occurrence (safer when title contains venue-like tokens).
+    try:
+        venue_matches = list(re.finditer(re.escape(venue_hint), raw, flags=re.IGNORECASE))
+    except Exception:
+        venue_matches = []
+    if not venue_matches:
+        return {}
+    m_venue = venue_matches[-1]
+    prefix = raw[: m_venue.start()].rstrip()
+    if not prefix:
+        return {}
+
+    # Strip the sentence delimiter immediately before venue, if present.
+    prefix_core = re.sub(r"[.;,:]\s*$", "", prefix).strip()
+    if not prefix_core:
+        return {}
+
+    def _authors_like(s: str) -> bool:
+        t = str(s or "").strip()
+        if len(t) < 3:
+            return False
+        if not (("," in t) or (" et al" in t.lower()) or (" & " in t) or re.search(r"\band\b", t, flags=re.I)):
+            return False
+        if not re.search(r"\b[A-Z]\.", t):
+            return False
+        # If prose stopwords appear in the "authors" block, boundary is probably too late.
+        if len(t) >= 32 and re.search(r"\b(using|via|with|through|for|from|into|onto|under|over|between|within)\b", t, flags=re.I):
+            return False
+        return True
+
+    def _title_ok(s: str) -> bool:
+        t = str(s or "").strip().strip(" .;,:")
+        if len(t) < 4:
+            return False
+        if t.startswith(("&", ",")):
+            return False
+        if re.match(r"^(?:et al\.?|and)\b", t, flags=re.I):
+            return False
+        # Author-list continuation like "L. Video ..." or "A. B. Title ..."
+        if re.match(r"^[A-Z]\.\s", t):
+            return False
+        if re.match(r"^(?:[A-Z]\.\s+){2,}", t):
+            return False
+        if t.lower() == venue_hint.lower():
+            return False
+        if _looks_noisy_reference_title(t):
+            return False
+        return True
+
+    best: dict[str, str] = {}
+    for m in re.finditer(r"\.\s+", prefix_core):
+        a = prefix_core[: m.start()].strip().strip(" .;,:")
+        t = prefix_core[m.end():].strip().strip(" .;,:")
+        if _authors_like(a) and _title_ok(t):
+            best = {"authors": a, "title": t}
+            break
+
+    if not best:
+        # Last-chance fallback: recover at least title as tail before venue.
+        m2 = re.search(r"\.\s+(.+)$", prefix_core)
+        if m2:
+            t2 = str(m2.group(1) or "").strip().strip(" .;,:")
+            if _title_ok(t2):
+                best = {"title": t2}
+
+    return best
 
 
 def _format_reference_cite_line(ref_rec: dict) -> str:
@@ -848,6 +957,27 @@ def _normalize_reference_for_popup(ref_rec: dict) -> dict:
     # DOI enrichment is handled during reference-index build/update.
     if (not doi) and raw:
         doi = str(extract_first_doi(raw) or "").strip()
+
+    if raw and ((not title) or (not authors)):
+        try:
+            parsed = _fallback_fill_reference_meta_from_raw(
+                {
+                    "raw": raw,
+                    "venue": venue,
+                    "title": title,
+                    "authors": authors,
+                }
+            )
+        except Exception:
+            parsed = {}
+        if not title:
+            title_p = _strip_reference_lead_label(str((parsed or {}).get("title") or "").strip())
+            if title_p and (not _looks_noisy_reference_title(title_p)):
+                title = title_p
+        if not authors:
+            authors_p = _strip_reference_lead_label(str((parsed or {}).get("authors") or "").strip())
+            if authors_p:
+                authors = authors_p
 
     out["title"] = title
     out["authors"] = authors
@@ -941,7 +1071,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             if isinstance(got, dict):
                 ref = got.get("ref")
                 if isinstance(ref, dict):
-                    src_name = str(got.get("source_name") or _display_source_name(sp)).strip()
+                    src_name = _display_source_name(sp)
                     matches.append((src_name, ref))
 
         picked: tuple[str, dict] | None = None
@@ -990,7 +1120,7 @@ def _annotate_inpaper_citations_with_hover_meta(
         detail_by_key[skey] = rec
         return rec
 
-    def _replace_text_segment(seg: str) -> str:
+    def _replace_text_segment(seg: str, *, table_mode: bool = False) -> str:
         structured_seen = False
 
         def _preferred_source_by_context(pos: int) -> str:
@@ -1013,6 +1143,9 @@ def _annotate_inpaper_citations_with_hover_meta(
 
         def _mk_cite_link_md(n: int, detail: dict, title_attr: str) -> str:
             anchor = str(detail.get("anchor") or "").strip()
+            if table_mode:
+                # Avoid markdown-table column splits caused by "|" inside title text.
+                return f"[{int(n)}](#{anchor})"
             t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
             return f"[{int(n)}](#{anchor} \"{t_attr}\")"
 
@@ -1034,7 +1167,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             ref = got.get("ref")
             if not isinstance(ref, dict):
                 return f"[{int(n)}]"
-            src_name = str(got.get("source_name") or _display_source_name(sp)).strip()
+            src_name = _display_source_name(sp)
             detail = _remember_detail(int(n), src_name, ref)
             title_attr = _citation_hover_title(src_name, int(n), ref)
             return _mk_cite_link_md(int(n), detail, title_attr)
@@ -1108,7 +1241,7 @@ def _annotate_inpaper_citations_with_hover_meta(
         st_ln = (ln or "").strip()
         is_table_row = (st_ln.startswith("|") and st_ln.count("|") >= 2)
         is_table_sep = bool(re.match(r"^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$", st_ln))
-        if is_table_row or is_table_sep:
+        if is_table_sep:
             out_lines.append(ln)
             continue
 
@@ -1124,7 +1257,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                 if j % 2 == 1:
                     rebuilt_math.append(mp)
                 else:
-                    rebuilt_math.append(_replace_text_segment(mp))
+                    rebuilt_math.append(_replace_text_segment(mp, table_mode=is_table_row))
             rebuilt_code.append("".join(rebuilt_math))
         out_lines.append("".join(rebuilt_code))
 
