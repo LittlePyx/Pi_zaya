@@ -8,7 +8,7 @@ Paragraph above.
 Paragraph below.
 """
     out = postprocess_markdown(src)
-    assert "*Fig. 8. Experimental results from real-world objects under broadband illumination.*" in out
+    assert "**Figure 8.** Experimental results from real-world objects under broadband illumination." in out
     assert "Paragraph below." in out
 
 
@@ -18,4 +18,4 @@ def test_caption_line_after_image_is_italicized():
 Fig. 3. Reconstructing images with a spatially variant effective exposure time.
 """
     out = postprocess_markdown(src)
-    assert "*Fig. 3. Reconstructing images with a spatially variant effective exposure time.*" in out
+    assert "**Figure 3.** Reconstructing images with a spatially variant effective exposure time." in out

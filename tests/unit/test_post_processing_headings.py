@@ -43,7 +43,7 @@ def test_promote_bare_numbered_headings_and_demote_caption_headings():
     assert "### 2.1. Structures of Single-Pixel Imaging" in out
     assert "#### 3.1.2. Training and Testing of Deep Neural Network" in out
     assert "## Figure 6" not in out
-    assert "\nFigure 6\n" in f"\n{out}\n"
+    assert "\n**Figure 6.**\n" in f"\n{out}\n"
 
 
 def test_drop_rogue_unnumbered_headings_inside_numbered_doc():
