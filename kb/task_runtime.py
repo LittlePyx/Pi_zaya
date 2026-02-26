@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import re
@@ -45,6 +46,14 @@ _CITE_SID_ONLY_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]",
     re.IGNORECASE,
 )
+_VISION_IMAGE_MIME_BY_SUFFIX = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
 
 # Backward-compat for long-lived Streamlit processes that loaded older runtime_state.
 if not hasattr(RUNTIME, "BG_LOCK"):
@@ -184,6 +193,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     try:
         conv_id = str(task.get("conv_id") or "")
         prompt = str(task.get("prompt") or "").strip()
+        raw_image_atts = task.get("image_attachments") or []
         chat_db = Path(str(task.get("chat_db") or "")).expanduser()
         db_dir = Path(str(task.get("db_dir") or "")).expanduser()
         top_k = int(task.get("top_k") or 6)
@@ -193,12 +203,36 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         settings_obj = task.get("settings_obj")
         chat_store = ChatStore(chat_db)
 
-        if (not conv_id) or (not prompt):
+        image_attachments: list[dict] = []
+        if isinstance(raw_image_atts, list):
+            for it in raw_image_atts:
+                if not isinstance(it, dict):
+                    continue
+                p0 = Path(str(it.get("path") or "")).expanduser()
+                if (not str(p0)) or (not p0.exists()) or (not p0.is_file()):
+                    continue
+                mime0 = str(it.get("mime") or "").strip().lower()
+                if not mime0.startswith("image/"):
+                    mime0 = _VISION_IMAGE_MIME_BY_SUFFIX.get(p0.suffix.lower(), "")
+                if not mime0.startswith("image/"):
+                    continue
+                image_attachments.append(
+                    {
+                        "path": str(p0),
+                        "name": str(it.get("name") or p0.name),
+                        "mime": mime0,
+                        "sha1": str(it.get("sha1") or "").strip().lower(),
+                    }
+                )
+        if len(image_attachments) > 4:
+            image_attachments = image_attachments[:4]
+
+        if (not conv_id) or ((not prompt) and (not image_attachments)):
             raise RuntimeError("invalid task")
         if _gen_should_cancel(session_id, task_id):
             raise RuntimeError("canceled")
 
-        quick_answer = _quick_answer_for_prompt(prompt)
+        quick_answer = _quick_answer_for_prompt(prompt) if prompt else None
         if quick_answer is not None:
             try:
                 umid0 = int(task.get("user_msg_id") or 0)
@@ -225,22 +259,30 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         chunks = load_all_chunks(db_dir)
         retriever = BM25Retriever(chunks)
 
-        _gen_update_task(session_id, task_id, stage="retrieve")
-        hits_raw, scores_raw, used_query, used_translation = _search_hits_with_fallback(
-            prompt,
-            retriever,
-            top_k=top_k,
-            settings=settings_obj,
-        )
-        hits = _group_hits_by_top_heading(hits_raw, top_k=top_k)
-
+        hits_raw: list[dict] = []
+        scores_raw: list[float] = []
+        used_query = ""
+        used_translation = False
+        hits: list[dict] = []
         grouped_docs: list[dict] = []
-        _gen_update_task(session_id, task_id, stage="refs")
-        if (not getattr(retriever, "is_empty", False)) and prompt:
-            try:
-                grouped_docs = _group_hits_by_doc_for_refs_fast(hits_raw, top_k_docs=top_k)
-            except Exception:
-                grouped_docs = []
+        if prompt:
+            _gen_update_task(session_id, task_id, stage="retrieve")
+            hits_raw, scores_raw, used_query, used_translation = _search_hits_with_fallback(
+                prompt,
+                retriever,
+                top_k=top_k,
+                settings=settings_obj,
+            )
+            hits = _group_hits_by_top_heading(hits_raw, top_k=top_k)
+
+            _gen_update_task(session_id, task_id, stage="refs")
+            if not getattr(retriever, "is_empty", False):
+                try:
+                    grouped_docs = _group_hits_by_doc_for_refs_fast(hits_raw, top_k_docs=top_k)
+                except Exception:
+                    grouped_docs = []
+        else:
+            _gen_update_task(session_id, task_id, stage="retrieve (image-only)")
 
         try:
             umid = int(task.get("user_msg_id") or 0)
@@ -350,11 +392,34 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "- Do NOT output free-form numeric citations like [24] / [2][4].\n"
             "- NEVER output malformed markers like [[CITE:<sid>]] or [CITE:<sid>] (missing ref_num).\n"
         )
-        user = f"问题：\n{prompt}\n\n检索片段（含深读补充定位）：\n{ctx if ctx else '(无)'}\n"
+        prompt_for_user = prompt or "[Image attachment only request]"
+        user = (
+            f"Question:\\n{prompt_for_user}\\n\\n"
+            f"Retrieved context (with deep-read supplements):\\n{ctx if ctx else '(none)'}\\n"
+        )
+        if image_attachments:
+            user += f"\\nAttached images: {len(image_attachments)} (analyze them directly if relevant).\\n"
         history = chat_store.get_messages(conv_id)
         hist = [m for m in history if m.get("role") in ("user", "assistant")][-10:]
-        messages = [{"role": "system", "content": system}, *hist, {"role": "user", "content": user}]
-
+        user_content: str | list[dict] = user
+        if image_attachments:
+            mm_parts: list[dict] = [{"type": "text", "text": user}]
+            for it in image_attachments:
+                try:
+                    p_img = Path(str(it.get("path") or "")).expanduser()
+                    if (not p_img.exists()) or (not p_img.is_file()):
+                        continue
+                    data_img = p_img.read_bytes()
+                    if (not data_img) or (len(data_img) > 8 * 1024 * 1024):
+                        continue
+                    mime_img = str(it.get("mime") or "").strip().lower() or _VISION_IMAGE_MIME_BY_SUFFIX.get(p_img.suffix.lower(), "image/png")
+                    b64 = base64.b64encode(data_img).decode("ascii")
+                    mm_parts.append({"type": "image_url", "image_url": {"url": f"data:{mime_img};base64,{b64}"}})
+                except Exception:
+                    continue
+            if len(mm_parts) > 1:
+                user_content = mm_parts
+        messages = [{"role": "system", "content": system}, *hist, {"role": "user", "content": user_content}]
         ds = DeepSeekChat(settings_obj)
         partial = ""
         streamed = False
@@ -638,4 +703,3 @@ def _sanitize_structured_cite_tokens(answer: str) -> str:
     # Drop malformed sid-only tokens; they have no ref number and cannot be resolved.
     s = _CITE_SID_ONLY_RE.sub("", s)
     return s
-

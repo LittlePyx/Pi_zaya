@@ -5,6 +5,7 @@ import hashlib
 import html
 import inspect
 import os
+import re
 import subprocess
 import shutil
 import time
@@ -31,7 +32,6 @@ from ui.refs_renderer import (
     _annotate_equation_tags_with_sources,
     _annotate_inpaper_citations_with_hover_meta,
     _render_inpaper_citation_details,
-    _render_inpaper_citation_resolver,
     _render_refs,
 )
 
@@ -228,6 +228,30 @@ _CACHE_LOCK = RUNTIME.CACHE_LOCK
 _CACHE = RUNTIME.CACHE
 
 
+_APP_STRUCT_CITE_CANON_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]", re.IGNORECASE)
+_APP_STRUCT_CITE_SINGLE_RE = re.compile(r"(?<!\[)\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})(?:\s*:\s*(\d{1,4}))?\s*\](?!\])", re.IGNORECASE)
+_APP_STRUCT_CITE_SID_ONLY_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]", re.IGNORECASE)
+_APP_STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORECASE)
+
+
+def _strip_structured_cite_tokens_for_display(md: str) -> str:
+    s = str(md or "")
+    if (not s) or ("CITE" not in s.upper()):
+        return s
+    out = _APP_STRUCT_CITE_CANON_RE.sub(lambda m: f"[{int(m.group(2))}]", s)
+    out = _APP_STRUCT_CITE_SINGLE_RE.sub(
+        lambda m: f"[{int(m.group(2))}]" if str(m.group(2) or "").strip() else "",
+        out,
+    )
+    out = _APP_STRUCT_CITE_SID_ONLY_RE.sub("", out)
+    out = _APP_STRUCT_CITE_GARBAGE_RE.sub("", out)
+    return out
+
+
+def _normalize_chat_markdown_for_display(md: str) -> str:
+    return _normalize_math_markdown(_strip_structured_cite_tokens_for_display(md))
+
+
 def _cache_get(bucket: str, key: str):
     with _CACHE_LOCK:
         d = _CACHE.get(bucket) or {}
@@ -265,62 +289,6 @@ def _library_pdf_display_name(lib_store: LibraryStore, pdf_path: Path) -> str:
 
 configure_retrieval_cache(_cache_get, _cache_set)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _load_retriever(db_dir: Path) -> BM25Retriever:
     chunks = load_all_chunks(db_dir)
     return BM25Retriever(chunks)
@@ -338,78 +306,6 @@ def _render_kb_empty_hint(*, compact: bool = False) -> None:
                 st.experimental_rerun()
         with c[1]:
             st.info(msg)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _split_kb_miss_notice(text: str) -> tuple[str, str]:
@@ -556,7 +452,7 @@ def _page_chat(
         pack1 = latest.get(uid)
         return pack1 if isinstance(pack1, dict) else None
 
-    def _render_refs_for_user(user_msg_id: int, prompt_text: str, assistant_text: str, *, pending: bool = False) -> None:
+    def _render_refs_for_user(user_msg_id: int, prompt_text: str, *, pending: bool = False) -> None:
         ref_pack = _get_refs_pack_for_user(user_msg_id)
         hits_hist: list[dict] = []
         prompt_hist = str(prompt_text or "").strip()
@@ -579,12 +475,6 @@ def _page_chat(
                         key_ns=f"hist_{conv_id}_{user_msg_id}",
                         refs_open_key=open_key_hist,
                         settings=settings,
-                    )
-                    # Resolve in-paper numeric citations like [45] shown in the assistant answer.
-                    _render_inpaper_citation_resolver(
-                        hits_hist,
-                        assistant_text=str(assistant_text or ""),
-                        key_ns=f"hist_{conv_id}_{user_msg_id}",
                     )
                 elif pending:
                     st.caption("（参考定位生成中…）")
@@ -658,7 +548,7 @@ def _page_chat(
                                             hits_for_anno,
                                             anchor_ns=f"{conv_id}:{idx}:{msg_id}:live",
                                         )
-                                        st.markdown(_normalize_math_markdown(body3))
+                                        st.markdown(_normalize_chat_markdown_for_display(body3))
                                         if cite_details:
                                             _render_inpaper_citation_details(
                                                 cite_details,
@@ -675,7 +565,7 @@ def _page_chat(
                                             st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
                                         if (body or "").strip():
                                             if lite_live:
-                                                st.markdown(_normalize_math_markdown(body))
+                                                st.markdown(_normalize_chat_markdown_for_display(body))
                                                 copy_done_rendered = True
                                             else:
                                                 hits_for_anno = []
@@ -698,14 +588,14 @@ def _page_chat(
                                                     cite_details=cite_details,
                                                 )
                                                 copy_done_rendered = True
-                                                st.markdown(_normalize_math_markdown(body3))
+                                                st.markdown(_normalize_chat_markdown_for_display(body3))
                                                 _render_inpaper_citation_details(
                                                     cite_details,
                                                     key_ns=f"{conv_id}_{idx}_{msg_id}_done",
                                                 )
                                         if not copy_done_rendered:
                                             if lite_live:
-                                                st.markdown(_normalize_math_markdown(ans0))
+                                                st.markdown(_normalize_chat_markdown_for_display(ans0))
                                             else:
                                                 _render_answer_copy_bar(ans0, key_ns=f"copy_{idx}_done")
                                     else:
@@ -722,7 +612,7 @@ def _page_chat(
                                 st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
                             if (body or "").strip():
                                 if lite_live:
-                                    st.markdown(_normalize_math_markdown(body))
+                                    st.markdown(_normalize_chat_markdown_for_display(body))
                                     copy_hist_rendered = True
                                 else:
                                     hits_for_anno = []
@@ -745,31 +635,21 @@ def _page_chat(
                                         cite_details=cite_details,
                                     )
                                     copy_hist_rendered = True
-                                    st.markdown(_normalize_math_markdown(body3))
+                                    st.markdown(_normalize_chat_markdown_for_display(body3))
                                     _render_inpaper_citation_details(
                                         cite_details,
                                         key_ns=f"{conv_id}_{idx}_{msg_id}_hist",
                                     )
                             if not copy_hist_rendered:
                                 if lite_live:
-                                    st.markdown(_normalize_math_markdown(content))
+                                    st.markdown(_normalize_chat_markdown_for_display(content))
                                 else:
                                     _render_answer_copy_bar(content, key_ns=f"copy_{msg_key}")
 
                         if (not lite_live) and (last_user_msg_id > 0) and (last_user_msg_id not in shown_refs_user_ids):
-                            # Use the current assistant text (partial/answer/content) to extract in-paper citations.
-                            assistant_text_for_refs = ""
-                            try:
-                                if _is_live_assistant_text(content) and isinstance(t0, dict):
-                                    assistant_text_for_refs = str(t0.get("partial") or t0.get("answer") or "")
-                                else:
-                                    assistant_text_for_refs = str(content or "")
-                            except Exception:
-                                assistant_text_for_refs = str(content or "")
                             _render_refs_for_user(
                                 last_user_msg_id,
                                 str(last_user_for_refs or "").strip(),
-                                assistant_text_for_refs,
                                 pending=pending,
                             )
                             shown_refs_user_ids.add(last_user_msg_id)
@@ -789,12 +669,36 @@ def _page_chat(
             # Keep body runtime classes in sync even without an app-wide rerun.
             _set_live_streaming_mode(running_now, hide_stale=False)
             _render_chat_messages_area(live_running=running_now, compact_live=True)
-            prev_running = bool(st.session_state.get("_kb_chat_fragment_prev_running", False))
             st.session_state["_kb_chat_fragment_prev_running"] = running_now
-            if prev_running and (not running_now):
-                # Completion is handled by the input fragment (no app-wide rerun -> no scroll jump).
+            pending_finish_rerun = bool(st.session_state.get("_kb_chat_finish_app_rerun_pending", False))
+            if running_now and pending_finish_rerun:
                 st.session_state.pop("_kb_chat_finish_app_rerun_pending", None)
                 st.session_state.pop("_kb_chat_finish_app_rerun_after_ts", None)
+                pending_finish_rerun = False
+            if (not running_now) and (not pending_finish_rerun):
+                # Trigger one app rerun on completion so chat fragments stop polling.
+                # Preserve scroll to avoid a visible jump when switching back to non-fragment mode.
+                st.session_state["_kb_chat_finish_app_rerun_pending"] = True
+                st.session_state["_kb_chat_finish_app_rerun_after_ts"] = time.time() + 0.18
+            if (not running_now) and bool(st.session_state.get("_kb_chat_finish_app_rerun_pending", False)):
+                after_ts = float(st.session_state.get("_kb_chat_finish_app_rerun_after_ts", 0.0) or 0.0)
+                if (after_ts <= 0.0) or (time.time() >= after_ts):
+                    try:
+                        _remember_scroll_for_next_rerun(
+                            nonce=f"{session_id}:{conv_id}:{int(time.time() * 1000)}",
+                            anchor_id="kb-chat-tail-anchor",
+                        )
+                    except Exception:
+                        pass
+                    st.session_state.pop("_kb_chat_finish_app_rerun_pending", None)
+                    st.session_state.pop("_kb_chat_finish_app_rerun_after_ts", None)
+                    try:
+                        st.rerun(scope="app")
+                    except Exception:
+                        try:
+                            st.rerun()
+                        except Exception:
+                            st.experimental_rerun()
 
         _kb_chat_live_messages_fragment()
     else:
@@ -805,14 +709,45 @@ def _page_chat(
 
     def _quick_chat_upload_to_library(selected_files) -> None:
         if not selected_files:
+            st.session_state["_chat_pending_image_attachments"] = []
             return
         handled = st.session_state.setdefault("_chat_quick_upload_handled", {})
         if not isinstance(handled, dict):
             handled = {}
 
-        uploaded_cnt = 0
+        pdf_uploaded_cnt = 0
+        image_uploaded_cnt = 0
         dup_cnt = 0
+        unsupported_cnt = 0
         err_cnt = 0
+        current_image_attachments: list[dict] = []
+        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+        image_mime_to_ext = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/bmp": ".bmp",
+        }
+
+        def _safe_upload_stem(name: str) -> str:
+            s0 = str(name or "").strip()
+            out_chars: list[str] = []
+            for ch in s0:
+                try:
+                    if ch.isalnum():
+                        out_chars.append(ch)
+                    elif ch in ("-", "_", "."):
+                        out_chars.append(ch)
+                    elif ch.isspace():
+                        out_chars.append("-")
+                    else:
+                        out_chars.append("_")
+                except Exception:
+                    out_chars.append("_")
+            out = "".join(out_chars).strip(" ._-")
+            return (out or "upload")[:72]
 
         for up in list(selected_files or []):
             try:
@@ -823,7 +758,71 @@ def _page_chat(
                 continue
 
             file_sha1 = hashlib.sha1(data).hexdigest()
+            raw_name = str(getattr(up, "name", "") or "").strip()
+            raw_mime = str(getattr(up, "type", "") or "").strip().lower()
             if file_sha1 in handled:
+                prev_info = handled.get(file_sha1)
+                if (
+                    isinstance(prev_info, dict)
+                    and str(prev_info.get("action") or "") in {"saved_image", "dup"}
+                    and str(prev_info.get("path") or "").strip()
+                ):
+                    current_image_attachments.append(
+                        {
+                            "sha1": file_sha1,
+                            "path": str(prev_info.get("path") or "").strip(),
+                            "name": raw_name or (Path(str(prev_info.get("path") or "")).name or "image"),
+                            "mime": raw_mime or "image/*",
+                        }
+                    )
+                continue
+
+            suffix = Path(raw_name).suffix.lower()
+            is_pdf = bool((suffix == ".pdf") or (raw_mime == "application/pdf") or data.startswith(b"%PDF"))
+            is_image = bool(raw_mime.startswith("image/") or (suffix in image_exts))
+
+            if (not is_pdf) and (not is_image):
+                handled[file_sha1] = {"action": "unsupported", "ts": time.time(), "name": raw_name, "mime": raw_mime}
+                unsupported_cnt += 1
+                continue
+
+            if is_image and (not is_pdf):
+                try:
+                    chat_img_dir = Path(db_dir) / "_chat_uploads" / "images"
+                    ensure_dir(chat_img_dir)
+                    ext = suffix if suffix in image_exts else image_mime_to_ext.get(raw_mime, "")
+                    if not ext:
+                        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+                            ext = ".png"
+                        elif data[:3] == b"\xff\xd8\xff":
+                            ext = ".jpg"
+                        elif data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+                            ext = ".gif"
+                        elif (len(data) >= 12) and (data[:4] == b"RIFF") and (data[8:12] == b"WEBP"):
+                            ext = ".webp"
+                        elif data.startswith(b"BM"):
+                            ext = ".bmp"
+                    if not ext:
+                        ext = ".png"
+                    stem_seed = Path(raw_name).stem or f"pasted-{int(time.time())}"
+                    safe_stem = _safe_upload_stem(stem_seed)
+                    dest_img = chat_img_dir / f"{safe_stem}-{file_sha1[:10]}{ext}"
+                    if dest_img.exists():
+                        handled[file_sha1] = {"action": "dup", "ts": time.time(), "path": str(dest_img)}
+                        current_image_attachments.append(
+                            {"sha1": file_sha1, "path": str(dest_img), "name": raw_name or dest_img.name, "mime": raw_mime or "image/*"}
+                        )
+                        dup_cnt += 1
+                        continue
+                    dest_img.write_bytes(data)
+                    handled[file_sha1] = {"action": "saved_image", "ts": time.time(), "path": str(dest_img)}
+                    current_image_attachments.append(
+                        {"sha1": file_sha1, "path": str(dest_img), "name": raw_name or dest_img.name, "mime": raw_mime or "image/*"}
+                    )
+                    image_uploaded_cnt += 1
+                except Exception:
+                    handled[file_sha1] = {"action": "error", "ts": time.time(), "kind": "image"}
+                    err_cnt += 1
                 continue
 
             try:
@@ -836,8 +835,8 @@ def _page_chat(
                 continue
 
             try:
-                raw_name = str(getattr(up, "name", "") or "upload.pdf")
-                tmp_path = _write_tmp_upload(pdf_dir, raw_name, data)
+                raw_name_pdf = str(raw_name or "upload.pdf")
+                tmp_path = _write_tmp_upload(pdf_dir, raw_name_pdf, data)
                 try:
                     sug = extract_pdf_meta_suggestion(tmp_path, settings=settings)
                 except Exception:
@@ -845,7 +844,7 @@ def _page_chat(
 
                 venue = str(getattr(sug, "venue", "") or "").strip()
                 year = str(getattr(sug, "year", "") or "").strip()
-                title = str(getattr(sug, "title", "") or "").strip() or (Path(raw_name).stem or "Untitled")
+                title = str(getattr(sug, "title", "") or "").strip() or (Path(raw_name_pdf).stem or "Untitled")
 
                 base = build_storage_base_name(
                     venue=venue,
@@ -858,7 +857,7 @@ def _page_chat(
                     venue=venue,
                     year=year,
                     title=title,
-                    fallback_name=raw_name,
+                    fallback_name=raw_name_pdf,
                 )
                 dest_pdf = _next_pdf_dest_path(pdf_dir, base)
                 upload_citation_meta = merge_citation_meta_file_labels(
@@ -876,20 +875,48 @@ def _page_chat(
                 _persist_upload_pdf(tmp_path, dest_pdf, data)
                 lib_store.upsert(file_sha1, dest_pdf, citation_meta=upload_citation_meta)
                 handled[file_sha1] = {"action": "saved", "ts": time.time(), "path": str(dest_pdf)}
-                uploaded_cnt += 1
+                pdf_uploaded_cnt += 1
             except Exception:
-                handled[file_sha1] = {"action": "error", "ts": time.time()}
+                handled[file_sha1] = {"action": "error", "ts": time.time(), "kind": "pdf"}
                 err_cnt += 1
 
+        # Keep only currently selected image attachments for the next submit.
+        uniq_imgs: list[dict] = []
+        seen_img = set()
+        for it in current_image_attachments:
+            if not isinstance(it, dict):
+                continue
+            p0 = str(it.get("path") or "").strip()
+            h0 = str(it.get("sha1") or "").strip().lower()
+            if (not p0) or (not _path_exists(Path(p0))):
+                continue
+            key0 = h0 or p0.lower()
+            if key0 in seen_img:
+                continue
+            seen_img.add(key0)
+            uniq_imgs.append(
+                {
+                    "sha1": h0,
+                    "path": p0,
+                    "name": str(it.get("name") or Path(p0).name),
+                    "mime": str(it.get("mime") or "image/*"),
+                }
+            )
+
         st.session_state["_chat_quick_upload_handled"] = handled
-        if uploaded_cnt or dup_cnt or err_cnt:
+        st.session_state["_chat_pending_image_attachments"] = uniq_imgs
+        if pdf_uploaded_cnt or image_uploaded_cnt or dup_cnt or unsupported_cnt or err_cnt:
             msg_parts: list[str] = []
-            if uploaded_cnt:
-                msg_parts.append(f"已添加 {uploaded_cnt} 个文件到文献库")
+            if pdf_uploaded_cnt:
+                msg_parts.append(f"Added {pdf_uploaded_cnt} PDF(s)")
+            if image_uploaded_cnt:
+                msg_parts.append(f"Added {image_uploaded_cnt} image(s)")
             if dup_cnt:
-                msg_parts.append(f"跳过重复 {dup_cnt} 个")
+                msg_parts.append(f"Skipped duplicate {dup_cnt}")
+            if unsupported_cnt:
+                msg_parts.append(f"Unsupported {unsupported_cnt}")
             if err_cnt:
-                msg_parts.append(f"失败 {err_cnt} 个")
+                msg_parts.append(f"Failed {err_cnt}")
             st.session_state["_chat_quick_upload_flash"] = " | ".join(msg_parts)
 
     def _render_chat_prompt_form_ui(*, live_running: bool, form_key: str) -> tuple[str, bool, bool]:
@@ -900,7 +927,7 @@ def _page_chat(
             try:
                 chat_uploads_local = st.file_uploader(
                     "Add files",
-                    type=["pdf"],
+                    type=["pdf", "png", "jpg", "jpeg", "webp", "gif", "bmp"],
                     accept_multiple_files=True,
                     key=uploader_key,
                     label_visibility="collapsed",
@@ -908,15 +935,19 @@ def _page_chat(
             except TypeError:
                 chat_uploads_local = st.file_uploader(
                     "Add files",
-                    type=["pdf"],
+                    type=["pdf", "png", "jpg", "jpeg", "webp", "gif", "bmp"],
                     accept_multiple_files=True,
                     key=uploader_key,
                 )
             _quick_chat_upload_to_library(chat_uploads_local)
-            submitted_local = st.form_submit_button("↑", help="Send (Ctrl+Enter)")
             if live_running:
+                # Keep the form DOM shape stable while streaming: render one action button (stop only),
+                # instead of switching to two submit buttons (send + stop), which causes the dock runtime
+                # to reclassify/misplace wrappers after the first submit on some Streamlit builds.
                 stop_clicked_local = st.form_submit_button("■", help="Stop generation")
+                submitted_local = False
             else:
+                submitted_local = st.form_submit_button("↑", help="Send (Ctrl+Enter)")
                 stop_clicked_local = False
         return str(prompt_val_local or ""), bool(stop_clicked_local), bool(submitted_local)
 
@@ -934,22 +965,41 @@ def _page_chat(
 
         if submitted_in:
             txt = (prompt_val_in or "").strip()
-            if txt:
+            raw_img_atts = st.session_state.get("_chat_pending_image_attachments") or []
+            img_atts: list[dict] = []
+            if isinstance(raw_img_atts, list):
+                for it in raw_img_atts:
+                    if not isinstance(it, dict):
+                        continue
+                    p0 = str(it.get("path") or "").strip()
+                    if (not p0) or (not _path_exists(Path(p0))):
+                        continue
+                    img_atts.append(
+                        {
+                            "sha1": str(it.get("sha1") or "").strip().lower(),
+                            "path": p0,
+                            "name": str(it.get("name") or Path(p0).name),
+                            "mime": str(it.get("mime") or "image/*"),
+                        }
+                    )
+
+            if txt or img_atts:
                 t0 = _gen_get_task(session_id)
                 if isinstance(t0, dict) and str(t0.get("status") or "") == "running":
                     st.warning("Previous answer is still generating. Please stop or wait.")
                     return
 
                 task_id = uuid.uuid4().hex[:12]
+                user_store_text = txt if txt else f"[Image attachment x{len(img_atts)}]"
                 try:
-                    user_msg_id = int(chat_store.append_message(conv_id, "user", txt) or 0)
+                    user_msg_id = int(chat_store.append_message(conv_id, "user", user_store_text) or 0)
                 except Exception:
                     user_msg_id = 0
                 try:
                     assistant_msg_id = int(chat_store.append_message(conv_id, "assistant", _live_assistant_text(task_id)) or 0)
                 except Exception:
                     assistant_msg_id = 0
-                chat_store.set_title_if_default(conv_id, txt)
+                chat_store.set_title_if_default(conv_id, txt or user_store_text)
                 st.session_state["messages"] = chat_store.get_messages(conv_id)
 
                 ok = _gen_start_task(
@@ -958,6 +1008,7 @@ def _page_chat(
                         "session_id": session_id,
                         "conv_id": conv_id,
                         "prompt": txt,
+                        "image_attachments": list(img_atts),
                         "prompt_sig": hashlib.sha1(txt.encode("utf-8", "ignore")).hexdigest()[:12],
                         "created_at": time.time(),
                         "chat_db": str(getattr(settings, "chat_db_path", "") or ""),
@@ -973,6 +1024,12 @@ def _page_chat(
                 )
                 if not ok:
                     chat_store.update_message_content(assistant_msg_id, "(failed to start generation)")
+                else:
+                    st.session_state["_chat_pending_image_attachments"] = []
+                    try:
+                        st.session_state["chat_input_uploader_nonce"] = int(st.session_state.get("chat_input_uploader_nonce", 0) or 0) + 1
+                    except Exception:
+                        st.session_state["chat_input_uploader_nonce"] = 1
                 if rerun_on_submit:
                     try:
                         st.rerun(scope="app")
