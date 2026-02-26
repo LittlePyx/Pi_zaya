@@ -1189,6 +1189,19 @@ def _annotate_inpaper_citations_with_hover_meta(
     srcs = _collect_source_paths_from_hits(hits or [], max_docs=16)
     if not srcs:
         return _strip_unresolved_structured_tokens(s), []
+    source_hint_by_path: dict[str, dict] = {}
+    for h in hits or []:
+        meta_h = (h or {}).get("meta", {}) or {}
+        sp_h = str(meta_h.get("source_path") or "").strip()
+        if not sp_h or _is_temp_source_path(sp_h):
+            continue
+        rec = source_hint_by_path.get(sp_h)
+        if not isinstance(rec, dict):
+            rec = {}
+            source_hint_by_path[sp_h] = rec
+        sha1_h = str(meta_h.get("source_sha1") or "").strip().lower()
+        if sha1_h and (not str(rec.get("source_sha1") or "").strip()):
+            rec["source_sha1"] = sha1_h
     sid_to_source: dict[str, str] = {}
     for sp in srcs:
         sid = _source_cite_id(sp).lower()
@@ -1211,7 +1224,13 @@ def _annotate_inpaper_citations_with_hover_meta(
         if pref and pref in ordered_srcs:
             ordered_srcs = [pref] + [x for x in ordered_srcs if x != pref]
         for sp in ordered_srcs:
-            got = _resolve_reference_entry_from_index(index_data, sp, n)
+            hint = source_hint_by_path.get(sp) or {}
+            got = _resolve_reference_entry_from_index(
+                index_data,
+                sp,
+                n,
+                source_sha1=str(hint.get("source_sha1") or "").strip().lower(),
+            )
             if isinstance(got, dict):
                 ref = got.get("ref")
                 if isinstance(ref, dict):
@@ -1305,7 +1324,13 @@ def _annotate_inpaper_citations_with_hover_meta(
             if not sp:
                 # Keep visible reference number even if sid cannot be mapped.
                 return f"[{int(n)}]"
-            got = _resolve_reference_entry_from_index(index_data, sp, int(n))
+            hint = source_hint_by_path.get(sp) or {}
+            got = _resolve_reference_entry_from_index(
+                index_data,
+                sp,
+                int(n),
+                source_sha1=str(hint.get("source_sha1") or "").strip().lower(),
+            )
             if not isinstance(got, dict):
                 return f"[{int(n)}]"
             ref = got.get("ref")

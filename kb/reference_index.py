@@ -1079,7 +1079,32 @@ def _lookup_crossref_meta_for_entry(
     return meta, doi_hint
 
 
-def resolve_reference_entry(index_data: dict, source_path: str, ref_num: int) -> dict | None:
+def _path_suffix_match_score(want_path: str, cand_path: str, *, max_parts: int = 8) -> int:
+    want = str(want_path or "").strip()
+    cand = str(cand_path or "").strip()
+    if not want or not cand:
+        return 0
+    wp = [str(x).strip().lower() for x in Path(want).parts if str(x).strip()]
+    cp = [str(x).strip().lower() for x in Path(cand).parts if str(x).strip()]
+    if not wp or not cp:
+        return 0
+    lim = min(len(wp), len(cp), int(max_parts))
+    score = 0
+    for k in range(1, lim + 1):
+        if wp[-k:] == cp[-k:]:
+            score = k
+        else:
+            break
+    return int(score)
+
+
+def resolve_reference_entry(
+    index_data: dict,
+    source_path: str,
+    ref_num: int,
+    *,
+    source_sha1: str = "",
+) -> dict | None:
     if not isinstance(index_data, dict):
         return None
     docs = index_data.get("docs")
@@ -1107,6 +1132,65 @@ def resolve_reference_entry(index_data: dict, source_path: str, ref_num: int) ->
                         "ref_num": n,
                         "ref": item,
                     }
+
+    source_sha1 = str(source_sha1 or "").strip().lower()
+    if source_sha1:
+        for d in docs.values():
+            if not isinstance(d, dict):
+                continue
+            d_sha1 = str(d.get("sha1") or "").strip().lower()
+            if not d_sha1 or d_sha1 != source_sha1:
+                continue
+            refs = d.get("refs")
+            if not isinstance(refs, dict):
+                continue
+            item = refs.get(ref_key)
+            if isinstance(item, dict):
+                return {
+                    "source_path": str(d.get("path") or source_path),
+                    "source_name": str(d.get("name") or Path(source_path).name),
+                    "ref_num": n,
+                    "ref": item,
+                }
+
+    # Fallback: match by shared path suffix when source root changed across machines.
+    if str(source_path or "").strip():
+        best_score = 0
+        best_matches: list[dict] = []
+        for d in docs.values():
+            if not isinstance(d, dict):
+                continue
+            refs = d.get("refs")
+            if not isinstance(refs, dict):
+                continue
+            item = refs.get(ref_key)
+            if not isinstance(item, dict):
+                continue
+            score = _path_suffix_match_score(str(source_path), str(d.get("path") or ""))
+            if score <= 1:
+                continue
+            rec = {
+                "source_path": str(d.get("path") or source_path),
+                "source_name": str(d.get("name") or Path(source_path).name),
+                "ref_num": n,
+                "ref": item,
+                "_score": int(score),
+            }
+            if score > best_score:
+                best_score = int(score)
+                best_matches = [rec]
+            elif score == best_score:
+                best_matches.append(rec)
+        if best_matches and best_score >= 2:
+            if len(best_matches) == 1:
+                out = dict(best_matches[0])
+                out.pop("_score", None)
+                return out
+            # If multiple docs tie, require a stronger shared suffix.
+            if best_score >= 4:
+                out = dict(best_matches[0])
+                out.pop("_score", None)
+                return out
 
     # Fallback: match by basename/stem when source path changed.
     want_name = Path(str(source_path or "")).name.lower()

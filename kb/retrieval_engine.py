@@ -26,6 +26,7 @@ from .retrieval_heuristics import (
     _score_tokens,
 )
 from .retriever import BM25Retriever
+from .store import compute_file_sha1
 from .tokenize import tokenize
 
 # These callbacks are injected by app.py so this module can reuse the shared runtime cache.
@@ -528,6 +529,9 @@ def _group_hits_by_doc_for_refs(
         combined = (0.75 * best_score) + (0.25 * deep_scaled) + term_bonus
 
         meta_out = {"source_path": src}
+        src_sha1 = _file_sha1_cached(Path(src))
+        if src_sha1:
+            meta_out["source_sha1"] = src_sha1
         if best_heading:
             meta_out["top_heading"] = best_heading
         meta_out["ref_aspects"] = aspects
@@ -676,21 +680,25 @@ def _group_hits_by_doc_for_refs_fast(hits_raw: list[dict], top_k_docs: int) -> l
         sc = float(h.get("score", 0.0) or 0.0)
         top = (meta.get("top_heading") or _top_heading(meta.get("heading_path", "")) or "").strip()
         txt = (h.get("text") or "").strip()
+        src_sha1_fast = _file_sha1_cached(Path(src))
         if (cur is None) or (sc > float(cur.get("score", 0.0) or 0.0)):
+            meta_fast = {
+                "source_path": src,
+                "top_heading": ("" if _is_probably_bad_heading(top) else top),
+                "ref_snippets": [txt] if txt else [],
+                "ref_show_snippets": [_clean_snippet_for_display(txt, max_chars=900)] if txt else [],
+                "ref_locs": ([{"heading": top, "score": sc}] if top and (not _is_probably_bad_heading(top)) else []),
+                "ref_headings": ([top] if top and (not _is_probably_bad_heading(top)) else []),
+                "ref_aspects": [],
+                "ref_rank": {"bm25": sc, "deep": 0.0, "term_bonus": 0.0, "llm": 0.0, "why": "", "score": sc},
+            }
+            if src_sha1_fast:
+                meta_fast["source_sha1"] = src_sha1_fast
             by_doc[src] = {
                 "score": sc,
                 "id": f"doc:{hashlib.sha1(src.encode('utf-8','ignore')).hexdigest()[:12]}",
                 "text": txt,
-                "meta": {
-                    "source_path": src,
-                    "top_heading": ("" if _is_probably_bad_heading(top) else top),
-                    "ref_snippets": [txt] if txt else [],
-                    "ref_show_snippets": [_clean_snippet_for_display(txt, max_chars=900)] if txt else [],
-                    "ref_locs": ([{"heading": top, "score": sc}] if top and (not _is_probably_bad_heading(top)) else []),
-                    "ref_headings": ([top] if top and (not _is_probably_bad_heading(top)) else []),
-                    "ref_aspects": [],
-                    "ref_rank": {"bm25": sc, "deep": 0.0, "term_bonus": 0.0, "llm": 0.0, "why": "", "score": sc},
-                },
+                "meta": meta_fast,
             }
         elif txt:
             m = by_doc[src].get("meta") or {}
@@ -720,6 +728,27 @@ def _read_text_cached(path: Path) -> str:
         text = ""
     _cache_set("file_text", key, text, max_items=220)
     return text
+
+
+def _file_sha1_cached(path: Path) -> str:
+    p = Path(path)
+    try:
+        st = p.stat()
+        key = f"{str(p)}|{int(st.st_mtime)}|{int(st.st_size)}"
+    except Exception:
+        key = str(p)
+    v0 = _cache_get("file_sha1", key)
+    if isinstance(v0, str):
+        return v0
+    try:
+        if p.exists() and p.is_file():
+            out = str(compute_file_sha1(p) or "").strip().lower()
+        else:
+            out = ""
+    except Exception:
+        out = ""
+    _cache_set("file_sha1", key, out, max_items=300)
+    return out
 
 def _extract_md_headings(md_path: Path, *, max_n: int = 80) -> list[str]:
     """
