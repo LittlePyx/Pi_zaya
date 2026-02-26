@@ -73,6 +73,52 @@ def _top_heading(heading_path: str) -> str:
         return ""
     return hp.split(" / ", 1)[0].strip()
 
+
+def _normalize_heading_path_for_display(heading_path: str) -> str:
+    hp = (heading_path or "").strip()
+    if not hp:
+        return ""
+    parts: list[str] = []
+    for raw in hp.split(" / "):
+        t = _normalize_heading(str(raw).strip())
+        if not t:
+            continue
+        parts.append(t)
+    return " / ".join(parts)
+
+
+def _split_heading_path_levels(heading_path: str) -> tuple[str, str]:
+    hp = _normalize_heading_path_for_display(heading_path)
+    if not hp:
+        return "", ""
+    parts = [p.strip() for p in hp.split(" / ") if p.strip()]
+    if not parts:
+        return "", ""
+    return parts[0], " / ".join(parts[1:]).strip()
+
+
+def _page_range_from_meta(meta: dict) -> tuple[int | None, int | None]:
+    def _to_pos_int(x) -> int | None:
+        try:
+            v = int(x)
+        except Exception:
+            return None
+        return v if v > 0 else None
+
+    p0 = _to_pos_int(meta.get("page_start"))
+    p1 = _to_pos_int(meta.get("page_end"))
+    if p0 is None:
+        p0 = _to_pos_int(meta.get("page"))
+    if p0 is None:
+        p0 = _to_pos_int(meta.get("page_num"))
+    if p0 is None:
+        p0 = _to_pos_int(meta.get("page_idx"))
+    if p1 is None:
+        p1 = p0
+    if (p0 is not None) and (p1 is not None) and p1 < p0:
+        p0, p1 = p1, p0
+    return p0, p1
+
 def _translate_query_for_search(settings, prompt_text: str) -> str | None:
     """
     Translate a CJK-only query to a compact English search query (keywords),
@@ -300,7 +346,7 @@ def _group_hits_by_doc_for_refs(
             continue
         by_doc.setdefault(src, []).append(h)
 
-    # Pre-sort docs by best hit score so we only deep-read a few.
+    # Pre-sort docs by best lexical hit; later stages can override with deep-read/LLM semantics.
     doc_order: list[tuple[float, str]] = []
     for src, hs in by_doc.items():
         try:
@@ -312,11 +358,10 @@ def _group_hits_by_doc_for_refs(
 
     docs: list[dict] = []
     profile = _query_term_profile(prompt_text, deep_query or "")
-    # Keep it fast: do NOT do full-doc deep scoring for every hit.
-    # Deep-read expansion (reading full md) is only applied to a couple of top docs.
-    deep_expand_docs = 2 if deep_read else 0
     # Bound work: only consider a limited number of candidate docs.
     max_docs_consider = max(int(top_k_docs) * 2, 12)
+    # Quality-first refs: if deep_read is enabled, expand more candidate docs than before.
+    deep_expand_docs = min(max_docs_consider, max(int(top_k_docs) * 2, 6)) if deep_read else 0
     for _best, src in doc_order[:max_docs_consider]:
         hs = by_doc.get(src) or []
         hs2 = sorted(hs, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
@@ -324,33 +369,62 @@ def _group_hits_by_doc_for_refs(
         # Candidate headings: (score, top_heading)
         cand: list[tuple[float, str]] = []
         snippets: list[str] = []
-        locs: list[tuple[float, str]] = []
+        locs_full: list[dict] = []
         for h in hs2[:6]:
             meta = h.get("meta", {}) or {}
+            sc_h = float(h.get("score", 0.0) or 0.0)
             top = (meta.get("top_heading") or _top_heading(meta.get("heading_path", "")) or "").strip()
             if top:
-                cand.append((float(h.get("score", 0.0) or 0.0), top))
+                cand.append((sc_h, top))
                 if not _is_probably_bad_heading(top):
-                    locs.append((float(h.get("score", 0.0) or 0.0), top))
+                    hp = _normalize_heading_path_for_display(str(meta.get("heading_path") or ""))
+                    p0, p1 = _page_range_from_meta(meta)
+                    locs_full.append(
+                        {
+                            "heading_path": hp or top,
+                            "heading": _normalize_heading(top) or top,
+                            "score": sc_h,
+                            "page_start": p0,
+                            "page_end": p1,
+                            "source": "hit",
+                        }
+                    )
             t = (h.get("text") or "").strip()
             if t:
-                snippets.append(t)
+                if t not in snippets:
+                    snippets.append(t)
 
         # Optional deep-read for better section targeting + aspects + ranking.
         deep_best = 0.0
         if deep_read and deep_query and (len(docs) < deep_expand_docs):
             try:
-                extra = _deep_read_md_for_context(Path(src), deep_query, max_snippets=2, snippet_chars=1400)
+                extra = _deep_read_md_for_context(Path(src), deep_query, max_snippets=3, snippet_chars=1600)
             except Exception:
                 extra = []
             for ex in extra or []:
                 meta_ex = ex.get("meta", {}) or {}
-                top2 = _top_heading(meta_ex.get("heading_path", "") or "")
+                sc_ex = float(ex.get("score", 0.0) or 0.0)
+                hp2_raw = str(meta_ex.get("heading_path", "") or "").strip()
+                hp2 = _normalize_heading_path_for_display(hp2_raw)
+                top2 = _top_heading(hp2 or hp2_raw)
                 if top2:
-                    cand.append((float(ex.get("score", 0.0) or 0.0) + 0.2, top2))
+                    cand.append((sc_ex + 0.2, top2))
+                    if not _is_probably_bad_heading(top2):
+                        p0, p1 = _page_range_from_meta(meta_ex)
+                        locs_full.append(
+                            {
+                                "heading_path": hp2 or top2,
+                                "heading": _normalize_heading(top2) or top2,
+                                "score": sc_ex + 0.2,
+                                "page_start": p0,
+                                "page_end": p1,
+                                "source": "deep",
+                            }
+                        )
                 tx = (ex.get("text") or "").strip()
                 if tx:
-                    snippets.append(tx)
+                    if tx not in snippets:
+                        snippets.append(tx)
                 try:
                     deep_best = max(deep_best, float(ex.get("score", 0.0) or 0.0))
                 except Exception:
@@ -408,16 +482,42 @@ def _group_hits_by_doc_for_refs(
         scored_snips.sort(key=lambda x: x[0], reverse=True)
         show_snips = [_clean_snippet_for_display(s, max_chars=900) for _, s in scored_snips[:2]]
 
-        # Best location candidates (real headings)
-        locs.sort(key=lambda x: x[0], reverse=True)
+        # Best location candidates (prefer deep-read heading_path with subsection detail)
+        locs_full.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
         locs2 = []
         seen_h = set()
-        for sc, hh in locs:
-            hh2 = _normalize_heading(hh)
-            if not hh2 or _is_probably_bad_heading(hh2) or hh2 in seen_h:
+        for loc in locs_full:
+            hh_path = _normalize_heading_path_for_display(str(loc.get("heading_path") or ""))
+            if not hh_path:
+                hh_path = _normalize_heading(str(loc.get("heading") or ""))
+            if not hh_path:
                 continue
-            seen_h.add(hh2)
-            locs2.append({"heading": hh2, "score": float(sc)})
+            top_h, sub_h = _split_heading_path_levels(hh_path)
+            hh_key = hh_path.lower()
+            if not top_h or _is_probably_bad_heading(top_h) or hh_key in seen_h:
+                continue
+            seen_h.add(hh_key)
+            ent = {
+                "heading": top_h,
+                "heading_path": hh_path,
+                "score": float(loc.get("score", 0.0) or 0.0),
+                "source": str(loc.get("source") or ""),
+            }
+            if sub_h:
+                ent["subsection"] = sub_h
+            try:
+                p0 = int(loc.get("page_start")) if loc.get("page_start") is not None else None
+            except Exception:
+                p0 = None
+            try:
+                p1 = int(loc.get("page_end")) if loc.get("page_end") is not None else None
+            except Exception:
+                p1 = None
+            if p0 is not None and p0 > 0:
+                ent["page_start"] = p0
+            if p1 is not None and p1 > 0:
+                ent["page_end"] = p1
+            locs2.append(ent)
             if len(locs2) >= 3:
                 break
 
@@ -431,10 +531,24 @@ def _group_hits_by_doc_for_refs(
         if best_heading:
             meta_out["top_heading"] = best_heading
         meta_out["ref_aspects"] = aspects
-        meta_out["ref_snippets"] = snippets[:2]
-        meta_out["ref_show_snippets"] = show_snips
+        meta_out["ref_snippets"] = snippets[:3]
+        meta_out["ref_show_snippets"] = show_snips[:3]
         meta_out["ref_locs"] = locs2
         meta_out["ref_headings"] = headings_for_pack
+        if locs2:
+            loc0 = locs2[0]
+            hp0 = str(loc0.get("heading_path") or "").strip()
+            sec0, sub0 = _split_heading_path_levels(hp0 or str(loc0.get("heading") or ""))
+            if hp0:
+                meta_out["ref_best_heading_path"] = hp0
+            if sec0:
+                meta_out["ref_section"] = sec0
+            if sub0:
+                meta_out["ref_subsection"] = sub0
+            if loc0.get("page_start") is not None:
+                meta_out["page_start"] = int(loc0.get("page_start"))
+            if loc0.get("page_end") is not None:
+                meta_out["page_end"] = int(loc0.get("page_end"))
         meta_out["ref_rank"] = {"bm25": best_score, "deep": deep_best, "term_bonus": term_bonus, "llm": 0.0, "why": "", "score": combined}
 
         docs.append(
@@ -466,6 +580,8 @@ def _group_hits_by_doc_for_refs(
                     "score": llm_score,
                     "why": llm_why,
                     "what": str(pr.get("what") or "").strip(),
+                    "start": str(pr.get("start") or "").strip(),
+                    "gain": str(pr.get("gain") or "").strip(),
                     "find": [str(x).strip() for x in (pr.get("find") or []) if str(x).strip()][:4] if isinstance(pr.get("find"), list) else [],
                     "section": str(pr.get("section") or "").strip(),
                 }
@@ -474,6 +590,21 @@ def _group_hits_by_doc_for_refs(
                 sec = str(pr.get("section") or "").strip()
                 if sec and (not _is_probably_bad_heading(sec)):
                     meta["top_heading"] = sec
+                    meta["ref_section"] = sec
+                    # If we already have a detailed path under this section, keep it; else fall back to section only.
+                    locs_meta = meta.get("ref_locs") or []
+                    if isinstance(locs_meta, list):
+                        for loc in locs_meta:
+                            if not isinstance(loc, dict):
+                                continue
+                            hp = str(loc.get("heading_path") or "").strip()
+                            top_h, sub_h = _split_heading_path_levels(hp or str(loc.get("heading") or ""))
+                            if top_h and (top_h.lower() == sec.lower()):
+                                if hp:
+                                    meta["ref_best_heading_path"] = hp
+                                if sub_h:
+                                    meta["ref_subsection"] = sub_h
+                                break
 
                 # Recompute combined score with semantic signal.
                 r = meta.get("ref_rank") or {}
@@ -496,6 +627,36 @@ def _group_hits_by_doc_for_refs(
                 d["meta"] = meta
 
     docs.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
+
+    # Precision-first filtering: when semantic rerank is available, drop weakly related docs
+    # instead of filling the list with lexical look-alikes.
+    if llm_rerank and docs:
+        llm_scores: list[float] = []
+        for d in docs:
+            meta = d.get("meta", {}) or {}
+            rank = meta.get("ref_rank") or {}
+            try:
+                llm_sc = float(rank.get("llm", 0.0) or 0.0)
+            except Exception:
+                llm_sc = 0.0
+            if llm_sc > 0:
+                llm_scores.append(llm_sc)
+        if llm_scores:
+            best_llm = max(llm_scores)
+            sem_keep_min = max(28.0, best_llm - 35.0)
+            filtered: list[dict] = []
+            for d in docs:
+                meta = d.get("meta", {}) or {}
+                rank = meta.get("ref_rank") or {}
+                try:
+                    llm_sc = float(rank.get("llm", 0.0) or 0.0)
+                except Exception:
+                    llm_sc = 0.0
+                if llm_sc >= sem_keep_min:
+                    filtered.append(d)
+            if filtered:
+                docs = filtered
+
     return docs[: max(1, int(top_k_docs))]
 
 def _group_hits_by_doc_for_refs_fast(hits_raw: list[dict], top_k_docs: int) -> list[dict]:
@@ -688,9 +849,9 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
     """
     One-shot LLM pack for refs:
     - semantic relevance score (0..100) for reranking
-    - a strong directional one-liner pieces (what/find/section) grounded on snippets
+    - concise summary + relevance + reading-start + expected gain (grounded on snippets/headings)
 
-    Returns: {idx -> {"score":float, "why":str, "what":str, "find":[str], "section":str}}
+    Returns: {idx -> {"score":float, "why":str, "what":str, "start":str, "gain":str, "find":[str], "section":str}}
     """
     if not settings or (not getattr(settings, "api_key", None)):
         return {}
@@ -703,6 +864,29 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
         meta = d.get("meta", {}) or {}
         headings = [h for h in (meta.get("ref_headings") or []) if isinstance(h, str)]
         headings = [h for h in headings if h and (not _is_probably_bad_heading(h))][:20]
+        locs_payload: list[dict] = []
+        raw_locs = meta.get("ref_locs")
+        if isinstance(raw_locs, list):
+            for loc in raw_locs[:3]:
+                if not isinstance(loc, dict):
+                    continue
+                hp = str(loc.get("heading_path") or loc.get("heading") or "").strip()
+                if not hp:
+                    continue
+                rec = {"heading_path": hp}
+                try:
+                    p0 = int(loc.get("page_start")) if loc.get("page_start") is not None else None
+                except Exception:
+                    p0 = None
+                try:
+                    p1 = int(loc.get("page_end")) if loc.get("page_end") is not None else None
+                except Exception:
+                    p1 = None
+                if p0 is not None and p0 > 0:
+                    rec["page_start"] = p0
+                if p1 is not None and p1 > 0:
+                    rec["page_end"] = p1
+                locs_payload.append(rec)
         snippets = []
         for s in (meta.get("ref_show_snippets") or [])[:2]:
             s2 = " ".join(str(s).strip().split())
@@ -717,11 +901,11 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
                 s = s[:360].rstrip() + "..."
             if s:
                 snippets.append(s)
-        items.append({"i": i, "headings": headings, "snippets": snippets})
+        items.append({"i": i, "headings": headings, "locs": locs_payload, "snippets": snippets})
 
     try:
         # Include mtimes so updates invalidate cache.
-        sig_parts = [q]
+        sig_parts = ["refs_pack_v2", q]
         for d in docs:
             src = str((d.get("meta", {}) or {}).get("source_path") or "")
             try:
@@ -740,34 +924,34 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
 
     ds = DeepSeekChat(settings)
     en = _has_latin(q) and (not _has_cjk(q))
-    if en:
-        sys = (
-            "You are a strict academic retriever reranker and paper navigator.\n"
-            "Output JSON ONLY: {\"items\":[{\"i\":int,\"score\":number,\"why\":string,\"what\":string,\"find\":[string],\"section\":string}]}.\n"
-            "Rules:\n"
-            "- score: 0..100, how directly snippets answer the question.\n"
-            "- Penalize false friends (single-shot vs single-pixel) when mismatched.\n"
-            "- Use ONLY snippets/headings; DO NOT use filenames.\n"
-            "- section MUST be chosen from provided headings; otherwise empty string.\n"
-            "- what: <= 18 words. why: <= 14 words. find: 2-4 short phrases.\n"
-        )
-    else:
-        sys = (
-            "浣犳槸涓ユ牸鐨勫鏈绱㈤噸鎺掑櫒 + 鏂囩尞瀵艰埅鍣ㄣ€俓n"
-            "鍙兘杈撳嚭 JSON锛歿\"items\":[{\"i\":int,\"score\":number,\"why\":string,\"what\":string,\"find\":[string],\"section\":string}]}銆俓n"
-            "瑙勫垯锛歕n"
-            "- score: 0..100锛岃〃绀鸿繖浜涚墖娈典笌闂鐨勭洿鎺ョ浉鍏崇▼搴︺€俓n"
-            "- 閬囧埌鏈鍋囨湅鍙嬭鎵ｅ垎锛堝 single-shot vs single-pixel锛夈€俓n"
-            "- 鍙兘鏍规嵁 snippets/headings 鍒ゆ柇锛屼笉鑳芥牴鎹枃浠跺悕鍒ゆ柇銆俓n"
-            "- section 蹇呴』浠庣粰瀹?headings 涓€変竴涓紱閫変笉鍑烘潵灏辩┖瀛楃涓层€俓n"
-            "- what锛?= 22瀛楋紱why锛?= 16瀛楋紱find锛?-4 涓煭璇紙鍏蜂綋鑳芥壘鍒颁粈涔堬級銆俓n"
-        )
+    # Use an English instruction body to avoid encoding issues in long-lived terminals,
+    # but require the model to match the user's language.
+    _ = en  # language heuristic kept for potential future tuning
+    sys = (
+        "You are a strict academic retriever reranker and reading guide generator.\n"
+        "Output JSON ONLY: "
+        "{\"items\":[{\"i\":int,\"score\":number,\"why\":string,\"what\":string,\"start\":string,\"gain\":string,\"find\":[string],\"section\":string}]}.\n"
+        "Rules:\n"
+        "- score: 0..100, based on how directly snippets answer the question.\n"
+        "- Penalize false-friend term mismatch (e.g., single-shot vs single-pixel).\n"
+        "- Use ONLY snippets/headings; DO NOT use filenames.\n"
+        "- section MUST be chosen from provided headings; otherwise empty string.\n"
+        "- Prefer using candidate locs.heading_path when writing the start field.\n"
+        "- Match the user's language (Chinese question -> Chinese output).\n"
+        "- what: one-sentence summary of what this paper contributes for this question (specific, not generic).\n"
+        "- why: why this paper is strongly relevant to the current question (point to evidence in snippets).\n"
+        "- start: where to start reading (section/subsection + what to look for first).\n"
+        "- gain: what the user can extract from this paper that helps answer the question.\n"
+        "- find: 2-4 concrete items to look for (methods, settings, formulas, results, ablations, etc.).\n"
+        "- Keep each field concise but informative. Avoid boilerplate and avoid repeating the same words across fields.\n"
+        "- If evidence is weak or only partial, reduce score and state the limitation in why/gain.\n"
+    )
 
     # Keep payload small
     payload = {"question": q, "docs": items}
     user = json.dumps(payload, ensure_ascii=False)
     try:
-        out = (ds.chat(messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}], temperature=0.0, max_tokens=520) or "").strip()
+        out = (ds.chat(messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}], temperature=0.0, max_tokens=900) or "").strip()
     except Exception:
         out = ""
     if out.startswith("```"):
@@ -801,6 +985,8 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
             "score": sc,
             "why": str(it.get("why") or "").strip(),
             "what": str(it.get("what") or "").strip(),
+            "start": str(it.get("start") or "").strip(),
+            "gain": str(it.get("gain") or "").strip(),
             "find": [str(x).strip() for x in (it.get("find") or []) if str(x).strip()][:4] if isinstance(it.get("find"), list) else [],
             "section": str(it.get("section") or "").strip(),
         }

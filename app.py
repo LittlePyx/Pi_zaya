@@ -1017,6 +1017,7 @@ def _page_chat(
                         "temperature": float(temperature),
                         "max_tokens": int(max_tokens),
                         "deep_read": bool(deep_read),
+                        "llm_rerank": bool(st.session_state.get("llm_rerank", True)),
                         "settings_obj": settings,
                         "user_msg_id": int(user_msg_id),
                         "assistant_msg_id": int(assistant_msg_id),

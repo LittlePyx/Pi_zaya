@@ -214,7 +214,7 @@ def _open_pdf_at(pdf_path: Path, *, page: int | None = None) -> tuple[bool, str]
 
 
 def _safe_page(meta: dict) -> int | None:
-    for x in [meta.get("page"), meta.get("page_num"), meta.get("page_idx")]:
+    for x in [meta.get("page"), meta.get("page_num"), meta.get("page_idx"), meta.get("page_start"), meta.get("page_end")]:
         try:
             p = int(x)
         except Exception:
@@ -224,12 +224,118 @@ def _safe_page(meta: dict) -> int | None:
     return None
 
 
+def _safe_page_range(meta: dict) -> tuple[int | None, int | None]:
+    def _to_pos_int(x) -> int | None:
+        try:
+            v = int(x)
+        except Exception:
+            return None
+        return v if v > 0 else None
+
+    p0 = _to_pos_int(meta.get("page_start")) or _safe_page(meta)
+    p1 = _to_pos_int(meta.get("page_end")) or p0
+    if (p0 is not None) and (p1 is not None) and p1 < p0:
+        p0, p1 = p1, p0
+    return p0, p1
+
+
 def _score_tier(score: float) -> str:
     if score >= 8.0:
         return "hi"
     if score >= 4.0:
         return "mid"
     return "low"
+
+
+def _split_section_subsection(heading_path: str) -> tuple[str, str]:
+    hp = (heading_path or "").strip()
+    if not hp:
+        return "", ""
+    parts = [p.strip() for p in hp.split(" / ") if p.strip()]
+    if not parts:
+        return "", ""
+    return parts[0], " / ".join(parts[1:]).strip()
+
+
+def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = "") -> dict:
+    pack = meta.get("ref_pack") if isinstance(meta.get("ref_pack"), dict) else {}
+    pack = pack if isinstance(pack, dict) else {}
+
+    heading_path = str(meta.get("ref_best_heading_path") or "").strip()
+    sec = str(meta.get("ref_section") or "").strip()
+    sub = str(meta.get("ref_subsection") or "").strip()
+    if (not sec) and heading_path:
+        sec, sub = _split_section_subsection(heading_path)
+    if not sec:
+        sec = str(pack.get("section") or "").strip() or str(meta.get("top_heading") or "").strip() or heading_fallback
+    if (not heading_path) and sec:
+        heading_path = sec + (f" / {sub}" if sub else "")
+
+    what = str(pack.get("what") or "").strip()
+    why = str(pack.get("why") or "").strip()
+    start_s = str(pack.get("start") or "").strip()
+    gain_s = str(pack.get("gain") or "").strip()
+    find_list: list[str] = []
+    raw_find = pack.get("find")
+    if isinstance(raw_find, list):
+        for x in raw_find:
+            s = str(x or "").strip()
+            if s:
+                find_list.append(s)
+    if not find_list:
+        raw_aspects = meta.get("ref_aspects")
+        if isinstance(raw_aspects, list):
+            for x in raw_aspects[:4]:
+                s = str(x or "").strip()
+                if s:
+                    find_list.append(s)
+
+    try:
+        sem_score = float(pack.get("score", 0.0) or 0.0)
+    except Exception:
+        sem_score = 0.0
+
+    start_from = start_s
+    if not start_from:
+        start_from = heading_path or sec or ""
+        if start_from:
+            if sub:
+                start_from = f"先从 `{heading_path}` 开始，优先看与当前问题直接相关的小节定义/实验设置。"
+            else:
+                start_from = f"先从 `{start_from}` 开始，先定位与问题关键词直接相关的段落与图表。"
+    if not start_from and prompt:
+        start_from = "先从方法/实验设置相关小节读起，优先找与问题关键词直接匹配的定义、设置和结果描述。"
+
+    gain = gain_s
+    if not gain:
+        gain = "；".join(find_list[:4]).strip()
+    if not gain and what:
+        gain = what
+
+    if not why:
+        if find_list:
+            why = f"命中与问题直接相关的信息点：{'、'.join(find_list[:3])}。"
+        elif sec or sub:
+            why = f"定位到了与问题较相关的章节位置：{heading_path or sec}。"
+
+    summary_line = what
+    if not summary_line:
+        if find_list:
+            summary_line = f"这篇文献可提供与该问题相关的信息：{'、'.join(find_list[:3])}。"
+        elif sec:
+            summary_line = f"这篇文献在 `{sec}` 相关章节中包含与当前问题相关内容。"
+
+    return {
+        "what": what,
+        "summary_line": summary_line,
+        "why": why,
+        "start_from": start_from,
+        "gain": gain,
+        "sem_score": sem_score,
+        "section": sec,
+        "subsection": sub,
+        "find": find_list[:4],
+    }
 
 
 def _normalize_name_key(text: str) -> str:
@@ -583,7 +689,7 @@ def _render_refs(
         refs_open_key: str = "",
         settings=None,
 ) -> None:
-    del prompt, settings  # backward compatibility
+    del settings  # backward compatibility
 
     filtered_hits: list[dict] = []
     for h in hits or []:
@@ -607,21 +713,31 @@ def _render_refs(
     for i, h in enumerate(filtered_hits, start=1):
         meta = h.get("meta", {}) or {}
         source_path = str(meta.get("source_path") or "").strip()
-        heading = str(meta.get("top_heading") or _top_heading(str(meta.get("heading_path") or "")) or "").strip()
-        page = _safe_page(meta)
+        heading_path = str(meta.get("ref_best_heading_path") or meta.get("heading_path") or "").strip()
+        heading = str(meta.get("top_heading") or _top_heading(heading_path) or _top_heading(str(meta.get("heading_path") or "")) or "").strip()
+        section_label = str(meta.get("ref_section") or "").strip()
+        subsection_label = str(meta.get("ref_subsection") or "").strip()
+        if (not section_label) and heading_path:
+            section_label, subsection_label = _split_section_subsection(heading_path)
+        p0, p1 = _safe_page_range(meta)
         score = float(h.get("score", 0.0) or 0.0)
 
         # Basic Info
         source_label = _display_source_name(source_path)
-        heading_label = heading if heading else ""  # Use full heading, not truncated
+        heading_label = (heading_path or heading or "").strip()  # Use full heading path when available
         score_s = f"{score:.2f}" if score > 0 else "-"
         score_tier = _score_tier(score)
 
         source_attr = html.escape(source_label, quote=True)
-        heading_attr = html.escape(heading, quote=True) if heading else ""
+        heading_attr = html.escape((heading_path or heading), quote=True) if (heading_path or heading) else ""
         source_html = html.escape(source_label)
-        heading_html = html.escape(heading) if heading else ""
-        page_chip = f"<span class='ref-chip'>p.{int(page)}</span>" if page else ""
+        heading_html = html.escape(heading_path or heading) if (heading_path or heading) else ""
+        if p0 and p1 and p1 > p0:
+            page_chip = f"<span class='ref-chip'>p.{int(p0)}-{int(p1)}</span>"
+        elif p0:
+            page_chip = f"<span class='ref-chip'>p.{int(p0)}</span>"
+        else:
+            page_chip = ""
 
         pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
         has_pdf = bool(pdf_path)
@@ -630,9 +746,8 @@ def _render_refs(
         net_key = f"{key_ns}_net_meta_v5_{uid}"
         is_cite_open = st.session_state.get(cite_key, False)
 
-        # Compact layout: rank, filename, buttons, score on one line
-        # Tighter spacing: buttons moved right and closer together
-        header_cols = st.columns([0.28, 3.2, 0.55, 0.55, 0.55, 0.4, 0.5])
+        # Compact layout: rank, filename, buttons, page chip, score
+        header_cols = st.columns([0.28, 3.5, 0.55, 0.55, 0.52, 0.6])
         
         with header_cols[0]:
             st.markdown(
@@ -655,16 +770,6 @@ def _render_refs(
                     st.warning(msg)
         
         with header_cols[3]:
-            disabled_page = (page is None) or (not has_pdf)
-            if st.button("Page", key=f"{key_ns}_open_page_{uid}", disabled=disabled_page,
-                         help=f"Go to page {page}" if page else "Page unknown"):
-                if refs_open_key:
-                    st.session_state[refs_open_key] = True
-                ok, msg = _open_pdf_at(pdf_path, page=page)
-                if not ok:
-                    st.warning(msg)
-        
-        with header_cols[4]:
             btn_label = "Close" if is_cite_open else "Cite"
             st.button(
                 btn_label,
@@ -674,30 +779,69 @@ def _render_refs(
                 args=(cite_key, net_key, source_path, refs_open_key)
             )
         
-        with header_cols[5]:
+        with header_cols[4]:
             if page_chip:
                 st.markdown(f"<div style='display:flex; align-items:center; height:100%;'>{page_chip}</div>", unsafe_allow_html=True)
         
-        with header_cols[6]:
+        with header_cols[5]:
             st.markdown(
                 f"<div style='display:flex; align-items:center; height:100%;'><span class='ref-score ref-score-{score_tier}'>score {score_s}</span></div>",
                 unsafe_allow_html=True
             )
         
-        # Subtitle (heading) if available
+        # Subtitle (full heading path) if available
         if heading_label:
             st.markdown(
                 f"<div class='ref-item-sub-compact' title='{heading_attr}'>{heading_html}</div>",
                 unsafe_allow_html=True
             )
 
-        # Render Snippet (only if enabled and has text)
-        text = _snippet(str(h.get("text") or ""), heading=heading)
-        if show_context and text:
+        # Section / subsection guidance (explicitly shown for navigation)
+        loc_bits: list[str] = []
+        if section_label:
+            loc_bits.append(f"章节：{section_label}")
+        if subsection_label:
+            loc_bits.append(f"小节：{subsection_label}")
+        if loc_bits:
+            st.caption(" | ".join(loc_bits))
+
+        # Paper summary + relevance + reading navigation (collapsed by default)
+        nav = _build_ref_navigation(meta, prompt=prompt, heading_fallback=heading)
+        summary_line = str(nav.get("summary_line") or nav.get("what") or "").strip()
+        why_line = str(nav.get("why") or "").strip()
+        if summary_line:
             st.markdown(
-                f"<div class='snipbox-compact'><pre>{html.escape(text)}</pre></div>",
+                f"<div class='ref-item-sub-compact'><strong>一句话总结：</strong>{html.escape(summary_line)}</div>",
                 unsafe_allow_html=True,
             )
+        if why_line:
+            st.markdown(
+                f"<div class='ref-item-sub-compact'><strong>相关性：</strong>{html.escape(why_line)}</div>",
+                unsafe_allow_html=True,
+            )
+
+        nav_has_details = bool(nav.get("start_from") or nav.get("gain") or nav.get("find") or summary_line or why_line)
+        if nav_has_details:
+            with st.expander("阅读指导（从哪里读起 / 看什么 / 能得到什么）", expanded=False):
+                sem_score = float(nav.get("sem_score") or 0.0)
+                if sem_score > 0:
+                    st.caption(f"语义相关度（深读重排）: {sem_score:.0f}/100")
+                if summary_line:
+                    st.markdown(f"**这篇文献讲了什么**：{html.escape(summary_line)}", unsafe_allow_html=True)
+                if why_line:
+                    st.markdown(f"**它为什么和你的问题强相关**：{html.escape(why_line)}", unsafe_allow_html=True)
+                if nav.get("start_from"):
+                    st.markdown(f"**建议从哪里开始读**：{html.escape(str(nav.get('start_from')))}", unsafe_allow_html=True)
+                if nav.get("gain"):
+                    st.markdown(f"**读完这部分你能获得什么（与当前提问相关）**：{html.escape(str(nav.get('gain')))}", unsafe_allow_html=True)
+                find_items = nav.get("find") or []
+                if isinstance(find_items, list):
+                    find_items = [str(x).strip() for x in find_items if str(x).strip()]
+                if find_items:
+                    st.markdown("**阅读时优先关注**：")
+                    for item in find_items[:4]:
+                        st.markdown(f"- {html.escape(str(item))}", unsafe_allow_html=True)
+
 
         # Render Citation UI (if open)
         if st.session_state.get(cite_key, False):

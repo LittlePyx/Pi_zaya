@@ -27,7 +27,7 @@ from kb.llm import DeepSeekChat
 from kb.pdf_tools import run_pdf_to_md
 from kb.retrieval_engine import (
     _deep_read_md_for_context,
-    _group_hits_by_doc_for_refs_fast,
+    _group_hits_by_doc_for_refs,
     _search_hits_with_fallback,
     _top_heading,
 )
@@ -200,6 +200,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         temperature = float(task.get("temperature") or 0.15)
         max_tokens = int(task.get("max_tokens") or 1200)
         deep_read = bool(task.get("deep_read"))
+        llm_rerank = bool(task.get("llm_rerank", True))
         settings_obj = task.get("settings_obj")
         chat_store = ChatStore(chat_db)
 
@@ -278,7 +279,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _gen_update_task(session_id, task_id, stage="refs")
             if not getattr(retriever, "is_empty", False):
                 try:
-                    grouped_docs = _group_hits_by_doc_for_refs_fast(hits_raw, top_k_docs=top_k)
+                    grouped_docs = _group_hits_by_doc_for_refs(
+                        hits_raw,
+                        prompt_text=prompt,
+                        top_k_docs=top_k,
+                        deep_query=(used_query or prompt or ""),
+                        deep_read=True,  # refs quality: always deep-read candidate docs
+                        llm_rerank=bool(llm_rerank),
+                        settings=settings_obj,
+                    )
                 except Exception:
                     grouped_docs = []
         else:
@@ -308,27 +317,48 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         ctx_parts: list[str] = []
         doc_first_idx: dict[str, int] = {}
         # Keep prompt compact for fast first-token latency.
-        answer_hits = list(hits[: max(1, min(int(top_k), 4))])
+        answer_hits = list((grouped_docs or hits)[: max(1, min(int(top_k), 4))])
         for i, h in enumerate(answer_hits, start=1):
             meta = h.get("meta", {}) or {}
             src = (meta.get("source_path", "") or "").strip()
             if src and src not in doc_first_idx:
                 doc_first_idx[src] = i
             src_name = Path(src).name if src else ""
-            top = meta.get("top_heading") or _top_heading(meta.get("heading_path", ""))
-            top = "" if _is_probably_bad_heading(top) else top
+            focus_heading = (
+                str(meta.get("ref_best_heading_path") or "").strip()
+                or str(meta.get("top_heading") or "").strip()
+                or str(_top_heading(meta.get("heading_path", "")) or "").strip()
+            )
+            top = "" if _is_probably_bad_heading(focus_heading) else focus_heading
             sid = _cite_source_id(src)
             header = f"[{i}] [SID:{sid}] {src_name or 'unknown'}" + (f" | {top}" if top else "")
-            body = h.get("text", "") or ""
+            body = ""
+            rs = meta.get("ref_show_snippets")
+            if isinstance(rs, list):
+                parts: list[str] = []
+                seen_parts: set[str] = set()
+                for s0 in rs[:2]:
+                    s = str(s0 or "").strip()
+                    if not s:
+                        continue
+                    k = hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()[:12]
+                    if k in seen_parts:
+                        continue
+                    seen_parts.add(k)
+                    parts.append(s)
+                if parts:
+                    body = "\n\n".join(parts)
+            if not body:
+                body = h.get("text", "") or ""
             ctx_parts.append(header + "\n" + body)
 
         deep_added = 0
         deep_docs = 0
         if deep_read and answer_hits:
-            deep_budget_s = 4.0
+            deep_budget_s = 9.0
             deep_begin = time.monotonic()
             q_fine = (used_query or prompt or "").strip()
-            items = list(doc_first_idx.items())[:1]
+            items = list(doc_first_idx.items())[: min(3, max(1, len(doc_first_idx)))]
             total = len(items)
             for n, (src, idx0) in enumerate(items, start=1):
                 if _gen_should_cancel(session_id, task_id):
@@ -340,7 +370,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 p = Path(src)
                 extras: list[dict] = []
                 if q_fine:
-                    extras.extend(_deep_read_md_for_context(p, q_fine, max_snippets=1, snippet_chars=900))
+                    extras.extend(_deep_read_md_for_context(p, q_fine, max_snippets=2, snippet_chars=1000))
                 if not extras:
                     continue
                 deep_docs += 1
@@ -355,7 +385,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         continue
                     seen_snip.add(k)
                     extras2.append(t)
-                    if len(extras2) >= 1:
+                    if len(extras2) >= 2:
                         break
                 if not extras2:
                     continue
