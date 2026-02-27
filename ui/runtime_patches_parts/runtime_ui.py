@@ -181,6 +181,180 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     }} catch (e) {{}}
   }}
 
+  function decorateReferenceActionButtons() {{
+    try {{
+      const normText = (v) => String(v || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const bindRefGlassHover = (btn) => {{
+        if (!btn || !btn.addEventListener || !btn.dataset) return;
+        if (String(btn.dataset.kbRefGlassBound || "") === "1") return;
+        btn.dataset.kbRefGlassBound = "1";
+
+        const baseBg = "linear-gradient(180deg, color-mix(in srgb, var(--panel) 95%, var(--blue-weak) 5%), color-mix(in srgb, var(--panel) 92%, var(--blue-weak) 8%))";
+        const hoverBg = "linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, var(--blue-weak) 8%), color-mix(in srgb, var(--panel) 88%, var(--blue-weak) 12%))";
+
+        const ensureHostLayer = () => {{
+          try {{
+            btn.style.setProperty("position", "relative", "important");
+            btn.style.setProperty("overflow", "hidden", "important");
+            btn.style.setProperty("isolation", "isolate", "important");
+            const kids = btn.querySelectorAll(":scope > *");
+            for (const k of kids) {{
+              if (!k || !k.style) continue;
+              k.style.setProperty("position", "relative", "important");
+              k.style.setProperty("z-index", "1", "important");
+            }}
+          }} catch (e) {{}}
+        }};
+
+        const runSheen = () => {{
+          try {{
+            ensureHostLayer();
+            let old = null;
+            try {{
+              old = btn.querySelector(":scope > .kb-ref-glass-sheen-inline");
+            }} catch (e) {{}}
+            if (old && old.parentNode) {{
+              try {{ old.parentNode.removeChild(old); }} catch (e) {{}}
+            }}
+
+            const sheen = doc.createElement("span");
+            sheen.className = "kb-ref-glass-sheen-inline";
+            sheen.setAttribute("aria-hidden", "true");
+            sheen.style.position = "absolute";
+            sheen.style.left = "-44%";
+            sheen.style.top = "-138%";
+            sheen.style.width = "42%";
+            sheen.style.height = "376%";
+            sheen.style.zIndex = "0";
+            sheen.style.pointerEvents = "none";
+            sheen.style.opacity = "0.0";
+            sheen.style.background = "linear-gradient(90deg, rgba(120,176,255,0.00) 0%, rgba(120,176,255,0.26) 48%, rgba(120,176,255,0.00) 100%)";
+            sheen.style.transform = "translate3d(-180%,0,0) rotate(24deg)";
+            sheen.style.transition = "transform 760ms cubic-bezier(0.22,0.61,0.36,1.0), opacity 180ms ease";
+            btn.appendChild(sheen);
+
+            const raf = host.requestAnimationFrame || window.requestAnimationFrame || function (f) {{ return setTimeout(f, 16); }};
+            raf(function () {{
+              raf(function () {{
+                try {{
+                  sheen.style.opacity = "0.34";
+                  sheen.style.transform = "translate3d(295%,0,0) rotate(24deg)";
+                }} catch (e) {{}}
+              }});
+            }});
+
+            (host.setTimeout || window.setTimeout)(function () {{
+              try {{
+                if (sheen && sheen.parentNode) sheen.parentNode.removeChild(sheen);
+              }} catch (e) {{}}
+            }}, 860);
+          }} catch (e) {{}}
+        }};
+
+        try {{
+          btn.addEventListener("mouseenter", function () {{
+            try {{
+              btn.style.setProperty("background", hoverBg, "important");
+            }} catch (e) {{}}
+            runSheen();
+          }}, {{ passive: true }});
+          btn.addEventListener("mouseleave", function () {{
+            try {{
+              btn.style.setProperty("background", baseBg, "important");
+            }} catch (e) {{}}
+          }}, {{ passive: true }});
+          btn.addEventListener("focus", function () {{
+            runSheen();
+          }}, {{ passive: true }});
+        }} catch (e) {{}}
+      }};
+      const applyRefBtnStyle = (btn) => {{
+        if (!btn || !btn.style) return;
+        try {{
+          btn.style.setProperty("border", "none", "important");
+          btn.style.setProperty("border-color", "transparent", "important");
+          btn.style.setProperty("border-width", "0", "important");
+          btn.style.setProperty("border-style", "none", "important");
+          btn.style.setProperty("border-radius", "6px", "important");
+          btn.style.setProperty("box-shadow", "none", "important");
+          btn.style.setProperty(
+            "background",
+            "linear-gradient(180deg, color-mix(in srgb, var(--panel) 82%, transparent), color-mix(in srgb, var(--panel) 68%, transparent))",
+            "important",
+          );
+          btn.style.setProperty("backdrop-filter", "saturate(120%) blur(8px)", "important");
+          btn.style.setProperty("-webkit-backdrop-filter", "saturate(120%) blur(8px)", "important");
+          btn.style.setProperty("color", "var(--text-main)", "important");
+          btn.style.setProperty("-webkit-text-fill-color", "var(--text-main)", "important");
+          btn.style.setProperty("min-height", "2.02rem", "important");
+          btn.style.setProperty("height", "2.02rem", "important");
+          btn.style.setProperty("font-weight", "665", "important");
+          btn.style.setProperty("letter-spacing", "0.008em", "important");
+          btn.style.setProperty("outline", "none", "important");
+        }} catch (e) {{}}
+      }};
+      const applyRefBtnWrapStyle = (btn) => {{
+        if (!btn || !btn.closest) return;
+        try {{
+          const wrap = btn.closest('div[data-testid="stButton"], div.stButton');
+          if (!wrap || !wrap.style) return;
+          wrap.style.setProperty("border", "none", "important");
+          wrap.style.setProperty("border-color", "transparent", "important");
+          wrap.style.setProperty("box-shadow", "none", "important");
+          wrap.style.setProperty("background", "transparent", "important");
+          wrap.style.setProperty("outline", "none", "important");
+        }} catch (e) {{}}
+      }};
+      try {{
+        const oldTagged = doc.querySelectorAll("button.kb-ref-action-btn, button.kb-ref-open-btn, button.kb-ref-cite-btn");
+        for (const b of oldTagged) {{
+          if (!b || !b.classList) continue;
+          b.classList.remove("kb-ref-action-btn", "kb-ref-open-btn", "kb-ref-cite-btn");
+        }}
+      }} catch (e) {{}}
+
+      const headers = doc.querySelectorAll(".kb-ref-header-block");
+      for (const h of headers) {{
+        if (!h || !h.closest) continue;
+        const row = h.closest('div[data-testid="stHorizontalBlock"]');
+        if (!row) continue;
+        const btns = row.querySelectorAll('div[data-testid="stButton"] > button, div.stButton > button');
+        for (const b of btns) {{
+          if (!b || !b.classList) continue;
+          const txt = normText(b.innerText || b.textContent || "");
+          if (!txt) continue;
+          b.classList.add("kb-ref-action-btn");
+          applyRefBtnStyle(b);
+          applyRefBtnWrapStyle(b);
+          bindRefGlassHover(b);
+          if (txt === "open" || txt === "打开") {{
+            b.classList.add("kb-ref-open-btn");
+          }} else if (txt === "cite" || txt === "close" || txt === "引用" || txt === "关闭") {{
+            b.classList.add("kb-ref-cite-btn");
+          }}
+        }}
+      }}
+
+      // Fallback: match by visible label in main area even if header marker is not found.
+      const allBtns = doc.querySelectorAll("button");
+      for (const b of allBtns) {{
+        if (!b || !b.classList || !b.closest) continue;
+        if (b.closest('section[data-testid="stSidebar"]')) continue;
+        const txt = normText(b.innerText || b.textContent || "");
+        if (!(txt === "open" || txt === "cite" || txt === "close" || txt === "打开" || txt === "引用" || txt === "关闭")) continue;
+        b.classList.add("kb-ref-action-btn");
+        if (txt === "open" || txt === "打开") {{
+          b.classList.add("kb-ref-open-btn");
+        }} else {{
+          b.classList.add("kb-ref-cite-btn");
+        }}
+        applyRefBtnStyle(b);
+        applyRefBtnWrapStyle(b);
+        bindRefGlassHover(b);
+      }}
+    }} catch (e) {{}}
+  }}
+
   function decorateConversationHistoryButtons() {{
     try {{
       const normText = (v) => String(v || "").replace(/\s+/g, " ").trim();
@@ -410,6 +584,7 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
       clearInlineThemeForRefs();
       normalizeSidebarCloseIcon();
       clearCodeLineArtifacts();
+      decorateReferenceActionButtons();
       const nowTs = Date.now ? Date.now() : (+new Date());
       if ((!_kbLastHistoryDecorTs) || ((nowTs - _kbLastHistoryDecorTs) > 220)) {{
         decorateConversationHistoryButtons();
