@@ -600,8 +600,8 @@ section[data-testid="stSidebar"] div[data-testid="stSlider"] [data-testid="stThu
   box-sizing: border-box;
   /* Reserve space for the native collapse button on the top-right corner. */
   padding: 0 2.7rem 0 0.35rem;
-  margin: -3.55rem 0 0.38rem 0;
-  /* Logo is pulled into the sidebar header area; do not block the native collapse button. */
+  margin: 0.38rem 0 0.38rem 0;
+  /* No negative top margin so logo stays visible and is not clipped by sidebar scroll. */
   pointer-events: none;
 }
 .kb-sidebar-logo-img{
@@ -1807,6 +1807,24 @@ section[data-testid="stSidebar"] details[data-testid="stExpander"] summary{
 section[data-testid="stSidebar"] details[data-testid="stExpander"] > div{
   padding: 0.1rem 0.25rem 0.3rem 0.25rem !important;
 }
+/* 项目行三点菜单 expander：无边框、无内阴影，与通用 sidebar expander 区分 */
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div details[data-testid="stExpander"],
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-project-expander) + div details[data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"]{
+  border: none !important;
+  border-width: 0 !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  overflow: visible !important;
+}
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div details[data-testid="stExpander"] > div,
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-project-expander) + div details[data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"] > div{
+  border: none !important;
+  box-shadow: none !important;
+}
 /* Minimal sidebar override: flatten the previous decorative treatment. */
 section[data-testid="stSidebar"] > div:first-child{
   background: var(--sidebar-bg) !important;
@@ -1956,6 +1974,60 @@ section[data-testid="stSidebar"] details[data-testid="stExpander"] summary{
 }
 section[data-testid="stSidebar"] details[data-testid="stExpander"] > div{
   padding: 0.06rem 0.15rem 0.18rem 0.15rem !important;
+}
+/* 项目行三点 + 会话行 ⋮：无边框、无下拉框感（覆盖上面 sidebar expander 的 border；含包装 div 与 summary） */
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div details[data-testid="stExpander"],
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div [data-testid="stExpander"],
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"],
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stExpander"],
+section[data-testid="stSidebar"] div:has(.kb-history-list) details[data-testid="stExpander"],
+section[data-testid="stSidebar"] div:has(.kb-history-list) [data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-project-expander) + div details[data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-project-expander) + div [data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-list) details[data-testid="stExpander"],
+section.stSidebar div:has(.kb-history-list) [data-testid="stExpander"]{
+  border: none !important;
+  border-width: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div details[data-testid="stExpander"] > div,
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div [data-testid="stExpander"] > div,
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"] > div,
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stExpander"] > div,
+section[data-testid="stSidebar"] div:has(.kb-history-list) details[data-testid="stExpander"] > div,
+section[data-testid="stSidebar"] div:has(.kb-history-list) [data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-project-expander) + div details[data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-project-expander) + div [data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-list) details[data-testid="stExpander"] > div,
+section.stSidebar div:has(.kb-history-list) [data-testid="stExpander"] > div{
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div details[data-testid="stExpander"] summary,
+section[data-testid="stSidebar"] div:has(.kb-history-project-expander) + div [data-testid="stExpander"] summary,
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"] summary,
+section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stExpander"] summary,
+section[data-testid="stSidebar"] div:has(.kb-history-list) details[data-testid="stExpander"] summary,
+section[data-testid="stSidebar"] div:has(.kb-history-list) [data-testid="stExpander"] summary,
+section.stSidebar div:has(.kb-history-project-expander) + div details[data-testid="stExpander"] summary,
+section.stSidebar div:has(.kb-history-project-expander) + div [data-testid="stExpander"] summary,
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) details[data-testid="stExpander"] summary,
+section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizontalBlock"] > div:nth-child(2) [data-testid="stExpander"] summary,
+section.stSidebar div:has(.kb-history-list) details[data-testid="stExpander"] summary,
+section.stSidebar div:has(.kb-history-list) [data-testid="stExpander"] summary{
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+  background: transparent !important;
+  border-radius: 0 !important;
 }
 section[data-testid="stSidebar"] a{
   color: color-mix(in srgb, var(--sidebar-soft-text) 92%, var(--sidebar-strong-text)) !important;

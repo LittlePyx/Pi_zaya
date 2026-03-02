@@ -70,24 +70,118 @@ class ChatStore:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_message_refs_conv_id ON message_refs(conv_id);")
+            # Projects (ChatGPT-style): optional grouping for conversations
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS projects (
+                  id TEXT PRIMARY KEY,
+                  name TEXT NOT NULL,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL
+                );
+                """
+            )
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN project_id TEXT;")
+            except sqlite3.OperationalError:
+                pass
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);")
 
-    def create_conversation(self, title: str = "新对话") -> str:
+    def create_project(self, name: str) -> str:
+        pid = uuid.uuid4().hex
+        now = time.time()
+        name = (name or "").strip() or "未命名项目"
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (pid, name, now, now),
+            )
+        return pid
+
+    def list_projects(self) -> list[dict]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, name, created_at, updated_at FROM projects ORDER BY updated_at DESC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_project(self, project_id: str) -> dict | None:
+        if not (project_id or "").strip():
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, name, created_at, updated_at FROM projects WHERE id = ?",
+                (project_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def rename_project(self, project_id: str, name: str) -> bool:
+        if not (project_id or "").strip():
+            return False
+        name = (name or "").strip()
+        if not name:
+            return False
+        now = time.time()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE projects SET name = ?, updated_at = ? WHERE id = ?",
+                (name, now, project_id),
+            )
+        return cur.rowcount > 0
+
+    def delete_project(self, project_id: str) -> None:
+        if not (project_id or "").strip():
+            return
+        with self._connect() as conn:
+            conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+    def create_conversation(self, title: str = "新对话", project_id: str | None = None) -> str:
         conv_id = uuid.uuid4().hex
         now = time.time()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (conv_id, title.strip() or "新对话", now, now),
+                "INSERT INTO conversations (id, title, created_at, updated_at, project_id) VALUES (?, ?, ?, ?, ?)",
+                (conv_id, title.strip() or "新对话", now, now, project_id),
             )
         return conv_id
 
-    def list_conversations(self, limit: int = 50) -> list[dict]:
+    def list_conversations(self, project_id: str | None = None, limit: int = 50) -> list[dict]:
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT id, title, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT ?",
-                (int(limit),),
-            ).fetchall()
+            if project_id is None:
+                rows = conn.execute(
+                    "SELECT id, title, created_at, updated_at, project_id FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC LIMIT ?",
+                    (int(limit),),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, title, created_at, updated_at, project_id FROM conversations WHERE project_id = ? ORDER BY updated_at DESC LIMIT ?",
+                    (project_id, int(limit)),
+                ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_conversation(self, conv_id: str) -> dict | None:
+        conv_id = (conv_id or "").strip()
+        if not conv_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, title, created_at, updated_at, project_id FROM conversations WHERE id = ?",
+                (conv_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def set_conversation_project(self, conv_id: str, project_id: str | None) -> bool:
+        conv_id = (conv_id or "").strip()
+        if not conv_id:
+            return False
+        now = time.time()
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE conversations SET project_id = ?, updated_at = ? WHERE id = ?",
+                (project_id, now, conv_id),
+            )
+        return cur.rowcount > 0
 
     def delete_conversation(self, conv_id: str) -> None:
         with self._connect() as conn:

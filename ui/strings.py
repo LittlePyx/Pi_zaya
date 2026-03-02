@@ -58,4 +58,18 @@ S = {
     "handled_saved": "\u5df2\u4fdd\u5b58",
     "handled_converted": "\u5df2\u8f6c\u6362",
     "kb_miss": "\u672c\u6b21\u672a\u547d\u4e2d\u77e5\u8bc6\u5e93\u7247\u6bb5\uff0c\u56de\u7b54\u5c06\u4e3b\u8981\u57fa\u4e8e\u6a21\u578b\u901a\u7528\u77e5\u8bc6\u3002",
+    # Project (ChatGPT-style)
+    "project_current": "\u5f53\u524d\u9879\u76ee",
+    "project_global": "\u5168\u5c40\u4f1a\u8bdd",
+    "project_new": "\u65b0\u5efa\u9879\u76ee",
+    "project_rename": "\u91cd\u547d\u540d\u9879\u76ee",
+    "project_delete": "\u5220\u9664\u9879\u76ee",
+    "project_delete_confirm": "\u786e\u5b9a\u5220\u9664\u8be5\u9879\u76ee\uff1f\u5176\u4e0b\u4f1a\u8bdd\u5c06\u53d8\u4e3a\u300c\u5168\u5c40\u4f1a\u8bdd\u300d\u3002",
+    "conv_move_to_project": "\u79fb\u52a8\u5230\u9879\u76ee",
+    "conv_remove_from_project": "\u79fb\u51fa\u9879\u76ee",
+    "no_conversations_in_project": "\u5f53\u524d\u9879\u76ee\u6682\u65e0\u4f1a\u8bdd",
+    "scattered_conversations": "\u96f6\u6563\u4f1a\u8bdd",
+    "your_chats": "Your chats",
+    "no_scattered_conversations": "\u6682\u65e0\u96f6\u6563\u4f1a\u8bdd\uff0c\u65b0\u5efa\u7684\u4f1a\u8bdd\u5c06\u51fa\u73b0\u5728\u6b64\u5904\u3002",
+    "chats_in_project": "\u9879\u76ee\u5185\u4f1a\u8bdd",
 }

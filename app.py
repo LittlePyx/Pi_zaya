@@ -782,7 +782,7 @@ def _page_chat(
                         st.rerun(scope="app")
                     except Exception:
                         try:
-                            st.rerun()
+                            st.experimental_rerun()
                         except Exception:
                             st.experimental_rerun()
 
@@ -1557,7 +1557,7 @@ def _page_library(settings, lib_store: LibraryStore, db_dir: Path, prefs_path: P
                     try:
                         st.rerun(scope="app")
                     except Exception:
-                        st.rerun()
+                        st.experimental_rerun()
                 st.markdown("<div style='display:none' aria-hidden='true'></div>", unsafe_allow_html=True)
             except Exception:
                 pass
@@ -2534,12 +2534,15 @@ def main() -> None:
         except Exception:
             st.session_state["pdf_dir"] = str(default_pdf_dir)
 
+    if "project_id" not in st.session_state:
+        st.session_state["project_id"] = None
     if "conv_id" not in st.session_state:
-        recent = chat_store.list_conversations(limit=1)
+        _pid = st.session_state.get("project_id")
+        recent = chat_store.list_conversations(project_id=_pid, limit=1)
         if recent:
             st.session_state["conv_id"] = recent[0]["id"]
         else:
-            st.session_state["conv_id"] = chat_store.create_conversation()
+            st.session_state["conv_id"] = chat_store.create_conversation(project_id=_pid)
 
     if "llm_rerank" not in st.session_state:
         st.session_state["llm_rerank"] = True
@@ -2662,6 +2665,7 @@ def main() -> None:
             st.caption("API Key：已设置")
         else:
             st.warning("API Key：未设置（需要 QWEN_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY）。设置后需重启 Streamlit。")
+        st.markdown("<div class='kb-sidebar-test-llm-marker' aria-hidden='true'></div>", unsafe_allow_html=True)
         if st.button("测试模型连接", key="test_llm_btn"):
             try:
                 with st.spinner("测试中…"):
@@ -2682,7 +2686,8 @@ def main() -> None:
         history_slot.markdown("<div class='kb-history-root' aria-hidden='true'></div>", unsafe_allow_html=True)
         def _history_new_chat_click() -> None:
             try:
-                new_id = str(chat_store.create_conversation() or "").strip()
+                _pid = st.session_state.get("project_id")
+                new_id = str(chat_store.create_conversation(project_id=_pid) or "").strip()
             except Exception:
                 new_id = ""
             if new_id:
@@ -2693,6 +2698,18 @@ def main() -> None:
             if not cid:
                 return
             st.session_state["conv_id"] = cid
+            try:
+                c = chat_store.get_conversation(cid)
+                if c is not None:
+                    pid = (c.get("project_id") or "").strip() or None
+                    if pid is None:
+                        st.session_state["project_id"] = None
+                        st.session_state["project_radio"] = "__global__"
+                    else:
+                        st.session_state["project_id"] = pid
+                        st.session_state["project_radio"] = pid
+            except Exception:
+                pass
 
         def _history_delete_chat_by_id(target_id: str) -> None:
             target = str(target_id or "").strip()
@@ -2704,7 +2721,8 @@ def main() -> None:
             except Exception:
                 pass
             try:
-                remaining = chat_store.list_conversations(limit=50) or []
+                _pid = st.session_state.get("project_id")
+                remaining = chat_store.list_conversations(project_id=_pid, limit=50) or []
             except Exception:
                 remaining = []
             remaining_ids = [str(x.get("id") or "").strip() for x in remaining if str(x.get("id") or "").strip()]
@@ -2716,7 +2734,8 @@ def main() -> None:
                 next_id = remaining_ids[0]
             else:
                 try:
-                    next_id = str(chat_store.create_conversation() or "").strip()
+                    _pid = st.session_state.get("project_id")
+                    next_id = str(chat_store.create_conversation(project_id=_pid) or "").strip()
                 except Exception:
                     next_id = ""
 
@@ -2729,82 +2748,154 @@ def main() -> None:
         # 不用 columns，按钮直接放在 container 里，便于 CSS/JS 做成满宽
         actions_slot.button(S["new_chat"], key="new_chat", on_click=_history_new_chat_click)
 
+        # Project list (global + projects + new): radio + menu + new-project expander
+        _current_pid = st.session_state.get("project_id")
+        try:
+            _projects = chat_store.list_projects()
+        except Exception:
+            _projects = []
+        _option_ids: list[str] = ["__global__"] + [p["id"] for p in _projects] + ["__new__"]
+
+        def _project_label(oid: str) -> str:
+            if oid == "__global__":
+                return S["project_global"]
+            if oid == "__new__":
+                return "+ " + S["project_new"]
+            for p in _projects:
+                if p.get("id") == oid:
+                    return str(p.get("name") or oid)
+            return oid
+
+        def _select_project(oid: str) -> None:
+            st.session_state["project_radio"] = oid
+            if oid == "__global__":
+                st.session_state["project_id"] = None
+            elif oid != "__new__":
+                st.session_state["project_id"] = oid
+
+        # Delete project confirmation (when delete_project_id is set)
+        _delete_pid = st.session_state.get("delete_project_id")
+        if _delete_pid and _delete_pid in (p.get("id") for p in _projects):
+            history_slot.caption(S["project_delete_confirm"])
+            _dc1, _dc2 = history_slot.columns(2)
+            with _dc1:
+                if st.button("\u786e\u5b9a\u5220\u9664", key="proj_confirm_del"):
+                    chat_store.delete_project(_delete_pid)
+                    if st.session_state.get("project_id") == _delete_pid:
+                        st.session_state["project_id"] = None
+                        st.session_state["project_radio"] = "__global__"
+                    st.session_state.pop("delete_project_id", None)
+                    st.experimental_rerun()
+            with _dc2:
+                if st.button("\u53d6\u6d88", key="proj_cancel_del"):
+                    st.session_state.pop("delete_project_id", None)
+                    st.experimental_rerun()
+
+        _proj_container = history_slot.container()
+        _proj_container.markdown("<div class='kb-history-project-wrap' aria-hidden='true'></div>", unsafe_allow_html=True)
+        _proj_container.caption(S["project_current"])
+        if _proj_container.button("+ " + S["project_new"], key="proj_new_top"):
+            st.session_state["project_radio"] = "__new__"
+            st.experimental_rerun()
+        _cur_radio = st.session_state.get("project_radio")
+        if _cur_radio not in _option_ids and _current_pid in _option_ids:
+            st.session_state["project_radio"] = _current_pid or "__global__"
+            _cur_radio = st.session_state["project_radio"]
+        elif _cur_radio not in _option_ids:
+            st.session_state["project_radio"] = "__global__"
+            _cur_radio = "__global__"
         cur_conv_id_hint = str(st.session_state.get("conv_id") or "").strip()
         try:
-            convs = chat_store.list_conversations(limit=200) or []
+            _pid = st.session_state.get("project_id")
+            project_convs = (chat_store.list_conversations(project_id=_pid, limit=15) or []) if _pid else []
+            global_convs = chat_store.list_conversations(project_id=None, limit=200) or []
         except Exception:
-            convs = []
+            project_convs = []
+            global_convs = []
 
-        # Hard cap conversation history to 30 records in storage.
-        if len(convs) > 30:
-            ordered_ids = [str(c.get("id") or "").strip() for c in convs if str(c.get("id") or "").strip()]
-            keep_ids = ordered_ids[:30]
-            if cur_conv_id_hint and (cur_conv_id_hint in ordered_ids) and (cur_conv_id_hint not in keep_ids):
-                # Preserve current conversation if it falls outside the top 30.
-                replaced = False
-                for i in range(len(keep_ids) - 1, -1, -1):
-                    if keep_ids[i] != cur_conv_id_hint:
-                        keep_ids[i] = cur_conv_id_hint
-                        replaced = True
+        def _cap_convs(convs: list, limit: int = 30) -> list:
+            if len(convs) <= limit:
+                return convs
+            ordered = [str(c.get("id") or "").strip() for c in convs if str(c.get("id") or "").strip()]
+            keep = ordered[:limit]
+            if cur_conv_id_hint and cur_conv_id_hint in ordered and cur_conv_id_hint not in keep:
+                for i in range(len(keep) - 1, -1, -1):
+                    if keep[i] != cur_conv_id_hint:
+                        keep[i] = cur_conv_id_hint
                         break
-                if not replaced:
-                    keep_ids = [cur_conv_id_hint]
-            keep_set = set(keep_ids)
-            for cid in ordered_ids:
-                if cid in keep_set:
+            for cid in ordered:
+                if cid in keep:
                     continue
                 try:
                     chat_store.delete_conversation(cid)
                 except Exception:
                     pass
-            try:
-                convs = chat_store.list_conversations(limit=50) or []
-            except Exception:
-                convs = [c for c in convs if str(c.get("id") or "").strip() in keep_set][:30]
-        conv_labels: dict[str, str] = {}
-        conv_updated_ts: dict[str, float] = {}
-        conv_ids: list[str] = []
-        for c in convs:
+            return [c for c in convs if str(c.get("id") or "").strip() in keep]
+        project_convs = _cap_convs(project_convs, limit=15)
+        global_convs = _cap_convs(global_convs)
+
+        conv_labels = {}
+        conv_updated_ts = {}
+        conv_project_ids = {}
+        for c in project_convs + global_convs:
             cid = str(c.get("id") or "").strip()
-            if not cid:
+            if not cid or cid in conv_labels:
                 continue
-            conv_ids.append(cid)
             ts_raw = float(c.get("updated_at", 0) or 0)
             conv_updated_ts[cid] = ts_raw
-            ts = time.strftime("%m-%d %H:%M", time.localtime(ts_raw))
-            conv_labels[cid] = f"{ts} | {c.get('title','')}"
+            conv_project_ids[cid] = (c.get("project_id") or "").strip() or None
+            conv_labels[cid] = f"{time.strftime('%m-%d %H:%M', time.localtime(ts_raw))} | {c.get('title','')}"
 
         cur_conv_id = str(st.session_state.get("conv_id") or "").strip()
+        project_conv_ids = [str(c.get("id") or "").strip() for c in project_convs if str(c.get("id") or "").strip()]
+        global_conv_ids = [str(c.get("id") or "").strip() for c in global_convs if str(c.get("id") or "").strip()]
         if not cur_conv_id:
-            if conv_ids:
-                cur_conv_id = conv_ids[0]
-                st.session_state["conv_id"] = cur_conv_id
+            if _pid and project_conv_ids:
+                cur_conv_id = project_conv_ids[0]
+            elif global_conv_ids:
+                cur_conv_id = global_conv_ids[0]
             else:
-                cur_conv_id = str(chat_store.create_conversation() or "").strip()
-                st.session_state["conv_id"] = cur_conv_id
+                cur_conv_id = str(chat_store.create_conversation(project_id=_pid) or "").strip()
                 if cur_conv_id:
-                    conv_ids = [cur_conv_id]
+                    if _pid:
+                        project_conv_ids = [cur_conv_id]
+                    else:
+                        global_conv_ids = [cur_conv_id]
+            if cur_conv_id:
+                st.session_state["conv_id"] = cur_conv_id
 
-        if cur_conv_id:
-            # Keep the active conversation at the top so the sidebar behaves like a chat app list.
-            conv_ids = [cur_conv_id] + [x for x in conv_ids if x != cur_conv_id]
+        if cur_conv_id and cur_conv_id not in conv_labels:
+            _c = chat_store.get_conversation(cur_conv_id)
+            if _c:
+                _ts_raw = float(_c.get("updated_at", 0) or 0)
+                conv_updated_ts[cur_conv_id] = _ts_raw
+                conv_project_ids[cur_conv_id] = (_c.get("project_id") or "").strip() or None
+                conv_labels[cur_conv_id] = f"{time.strftime('%m-%d %H:%M', time.localtime(_ts_raw))} | {_c.get('title', '')}"
+            else:
+                conv_labels[cur_conv_id] = "\u4f1a\u8bdd"
+                conv_updated_ts[cur_conv_id] = 0.0
+                conv_project_ids[cur_conv_id] = None
 
         recent_cutoff_ts = time.time() - (7 * 24 * 60 * 60)
-        recent_conv_ids: list[str] = []
-        older_conv_ids: list[str] = []
-        for cid in conv_ids:
-            ts0 = float(conv_updated_ts.get(cid, 0.0) or 0.0)
-            # Always keep the active conversation visible, even if it is older than 7 days.
-            if (cid == cur_conv_id) or (ts0 >= recent_cutoff_ts):
-                recent_conv_ids.append(cid)
-            else:
-                older_conv_ids.append(cid)
 
-        if "history_show_older_convs" not in st.session_state:
-            st.session_state["history_show_older_convs"] = False
+        def _split_recent_older(cids: list) -> tuple:
+            cur_at_top = [cur_conv_id] + [x for x in cids if x != cur_conv_id] if cur_conv_id in cids else cids
+            rec, old = [], []
+            for cid in cur_at_top:
+                ts0 = float(conv_updated_ts.get(cid, 0.0) or 0.0)
+                if (cid == cur_conv_id) or (ts0 >= recent_cutoff_ts):
+                    rec.append(cid)
+                else:
+                    old.append(cid)
+            return rec, old
 
-        def _toggle_history_older_click() -> None:
-            st.session_state["history_show_older_convs"] = not bool(st.session_state.get("history_show_older_convs"))
+        project_recent, project_older = _split_recent_older(project_conv_ids)
+        global_recent, global_older = _split_recent_older(global_conv_ids)
+
+        if "history_show_older_project_convs" not in st.session_state:
+            st.session_state["history_show_older_project_convs"] = False
+        if "history_show_older_scattered_convs" not in st.session_state:
+            st.session_state["history_show_older_scattered_convs"] = False
 
         def _render_history_rows(row_ids: list[str], *, slot=None, older_section: bool = False) -> None:
             host = slot or history_slot
@@ -2814,7 +2905,7 @@ def main() -> None:
                 if older_section:
                     marker_cls += " kb-history-older-row"
                 host.markdown(f"<div class='{marker_cls}' aria-hidden='true'></div>", unsafe_allow_html=True)
-                row_cols = host.columns([9.45, 0.55], gap="small")
+                row_cols = host.columns([8.4, 0.5, 0.5], gap="small")
                 with row_cols[0]:
                     st.markdown(
                         "<div class='kb-history-row-btn-slot' aria-hidden='true' style='display:none;height:0;margin:0;padding:0;overflow:hidden'></div>",
@@ -2827,6 +2918,10 @@ def main() -> None:
                         args=(cid,),
                     )
                 with row_cols[1]:
+                    if st.button("\u22ee", key=f"conv_menu_btn_{cid}", help=S["conv_move_to_project"]):
+                        st.session_state["conv_menu_cid"] = cid
+                        st.experimental_rerun()
+                with row_cols[2]:
                     st.button(
                         "\U0001F5D1",
                         key=f"conv_del_{cid}",
@@ -2835,43 +2930,141 @@ def main() -> None:
                         help="Delete this conversation",
                     )
 
-        list_slot = history_slot.container()
-        list_slot.markdown("<div class='kb-history-list' aria-hidden='true'></div>", unsafe_allow_html=True)
-        if not conv_ids:
-            list_slot.caption("(no conversations)")
-        else:
-            _render_history_rows(recent_conv_ids, slot=list_slot)
-            if older_conv_ids:
-                show_older = bool(st.session_state.get("history_show_older_convs"))
-                toggle_label = (
-                    "\u25b8 \u5c55\u5f00\u66f4\u65e9\u4f1a\u8bdd"
-                    if not show_older
-                    else "\u25be \u6536\u8d77\u66f4\u65e9\u4f1a\u8bdd"
-                )
-                list_slot.markdown("<div class='kb-history-toggle-marker' aria-hidden='true'></div>", unsafe_allow_html=True)
-                list_slot.button(
-                    toggle_label,
-                    key="history_toggle_older_convs",
-                    on_click=_toggle_history_older_click,
-                )
-                if show_older:
-                    older_section_slot = list_slot.container()
-                    older_section_slot.markdown("<div class='kb-history-older' aria-hidden='true'></div>", unsafe_allow_html=True)
+        def _make_toggle_older(toggle_key: str):
+            def _fn():
+                st.session_state[toggle_key] = not st.session_state.get(toggle_key)
+            return _fn
+
+        def _render_section(slot, recent_ids: list, older_ids: list, toggle_key: str, toggle_click_key: str) -> None:
+            _render_history_rows(recent_ids, slot=slot)
+            if older_ids:
+                _show = bool(st.session_state.get(toggle_key))
+                _label = "\u25b8 \u5c55\u5f00\u66f4\u65e9\u4f1a\u8bdd" if not _show else "\u25be \u6536\u8d77\u66f4\u65e9\u4f1a\u8bdd"
+                slot.markdown("<div class='kb-history-toggle-marker' aria-hidden='true'></div>", unsafe_allow_html=True)
+                slot.button(_label, key=toggle_click_key, on_click=_make_toggle_older(toggle_key))
+                if _show:
+                    _old_slot = slot.container()
+                    _old_slot.markdown("<div class='kb-history-older' aria-hidden='true'></div>", unsafe_allow_html=True)
                     try:
-                        older_scroll_slot = older_section_slot.container(height=280)
+                        _scroll = _old_slot.container(height=280)
                     except TypeError:
-                        older_scroll_slot = older_section_slot.container()
-                    older_scroll_slot.markdown("<div class='kb-history-older-list' aria-hidden='true'></div>", unsafe_allow_html=True)
-                    older_scroll_slot.markdown(
+                        _scroll = _old_slot.container()
+                    _scroll.markdown("<div class='kb-history-older-list' aria-hidden='true'></div>", unsafe_allow_html=True)
+                    _scroll.markdown(
                         "<div class='kb-history-row kb-history-older-row kb-history-dummy-row' aria-hidden='true'></div>",
                         unsafe_allow_html=True,
                     )
-                    _dummy_cols = older_scroll_slot.columns([9.45, 0.55], gap="small")
-                    with _dummy_cols[0]:
-                        st.empty()
-                    with _dummy_cols[1]:
-                        st.empty()
-                    _render_history_rows(older_conv_ids, slot=older_scroll_slot, older_section=True)
+                    _dc = _scroll.columns([8.4, 0.5, 0.5], gap="small")
+                    with _dc[0]: st.empty()
+                    with _dc[1]: st.empty()
+                    with _dc[2]: st.empty()
+                    _render_history_rows(older_ids, slot=_scroll, older_section=True)
+
+        for oid in _option_ids:
+            _is_selected = _cur_radio == oid
+            if oid == "__global__":
+                _lab = _project_label(oid)
+                if st.button(_lab, key=f"proj_sel_{oid}"):
+                    _select_project(oid)
+                    st.experimental_rerun()
+            elif oid == "__new__":
+                _lab = _project_label(oid)
+                if st.button(_lab, key=f"proj_sel_{oid}"):
+                    _select_project(oid)
+                    st.experimental_rerun()
+            else:
+                _proj_name = _project_label(oid)
+                _row_cls = "kb-history-project-row" + (" kb-history-project-row-selected" if _is_selected else "")
+                _proj_container.markdown(f"<div class='{_row_cls}' aria-hidden='true'></div>", unsafe_allow_html=True)
+                _pcols = _proj_container.columns([7.0, 0.4, 0.4])
+                _folder_icon = "\U0001F4C2" if _is_selected else "\U0001F4C1"  # open / closed folder
+                _proj_display = f"{_folder_icon} {_proj_name}"
+                with _pcols[0]:
+                    if st.button(_proj_display, key=f"proj_sel_{oid}"):
+                        _select_project(oid)
+                        st.experimental_rerun()
+                with _pcols[1]:
+                    _pcols[1].markdown("<div class='kb-history-project-expander' aria-hidden='true'></div>", unsafe_allow_html=True)
+                    with st.expander("\u22ee", expanded=False):
+                        if st.button(S["project_rename"], key=f"proj_pop_rename_{oid}"):
+                            st.session_state["rename_project_id"] = oid
+                            st.experimental_rerun()
+                with _pcols[2]:
+                    if st.button("\U0001F5D1", key=f"proj_trash_{oid}", help=S["project_delete"]):
+                        st.session_state["delete_project_id"] = oid
+                        st.experimental_rerun()
+                if _is_selected and _pid and oid == _pid:
+                    _proj_container.markdown("<div class='kb-history-project-convs' aria-hidden='true'></div>", unsafe_allow_html=True)
+                    if not project_recent and not project_older:
+                        _proj_container.caption(S["no_conversations_in_project"])
+                    else:
+                        _render_section(
+                            _proj_container, project_recent, project_older,
+                            "history_show_older_project_convs", "history_toggle_older_project_convs",
+                        )
+
+        if st.session_state.get("project_radio") == "__new__":
+            with _proj_container.expander(S["project_new"], expanded=True):
+                st.text_input("项目名称", key="new_project_name", placeholder="输入名称后点击创建")
+                if st.button("创建", key="new_project_btn"):
+                    name = (st.session_state.get("new_project_name") or "").strip()
+                    if name:
+                        try:
+                            pid = chat_store.create_project(name)
+                            st.session_state["project_id"] = pid
+                            st.session_state["project_radio"] = pid
+                            st.session_state["new_project_name"] = ""
+                        except Exception:
+                            pass
+                    st.experimental_rerun()
+
+        if st.session_state.get("rename_project_id"):
+            _rid = st.session_state["rename_project_id"]
+            _proj = chat_store.get_project(_rid) if _rid else None
+            _cur_name = (_proj or {}).get("name", "")
+            with _proj_container.expander(S["project_rename"], expanded=True):
+                _new_name = st.text_input("项目名称", value=_cur_name, key="proj_rename_input")
+                if st.button("\u4fdd\u5b58", key="proj_rename_save"):
+                    if (_new_name or "").strip():
+                        chat_store.rename_project(_rid, (_new_name or "").strip())
+                    st.session_state.pop("rename_project_id", None)
+                    st.experimental_rerun()
+                if st.button("\u53d6\u6d88", key="proj_rename_cancel"):
+                    st.session_state.pop("rename_project_id", None)
+                    st.experimental_rerun()
+
+        _scattered_slot = history_slot.container()
+        _scattered_slot.markdown("<div class='kb-history-list kb-history-scattered-section' aria-hidden='true'></div>", unsafe_allow_html=True)
+        _scattered_slot.caption(S["no_scattered_conversations"] if not global_recent and not global_older else S["your_chats"])
+        _render_section(
+            _scattered_slot, global_recent, global_older,
+            "history_show_older_scattered_convs", "history_toggle_older_scattered_convs",
+        )
+
+        if st.session_state.get("conv_menu_cid"):
+            _menu_cid = st.session_state["conv_menu_cid"]
+            with history_slot.expander("\u4f1a\u8bdd\u64cd\u4f5c", expanded=True):
+                _mpid = conv_project_ids.get(_menu_cid)
+                if _mpid:
+                    if st.button(S["conv_remove_from_project"], key="conv_menu_remove"):
+                        chat_store.set_conversation_project(_menu_cid, None)
+                        st.session_state.pop("conv_menu_cid", None)
+                        st.experimental_rerun()
+                if _projects or not _mpid:
+                    if st.button(S["project_global"], key="conv_menu_global"):
+                        chat_store.set_conversation_project(_menu_cid, None)
+                        st.session_state.pop("conv_menu_cid", None)
+                        st.experimental_rerun()
+                    for _p in _projects:
+                        if _p.get("id") == _mpid:
+                            continue
+                        if st.button(_p.get("name") or _p.get("id", ""), key=f"conv_menu_to_{_p.get('id', '')}"):
+                            chat_store.set_conversation_project(_menu_cid, _p["id"])
+                            st.session_state.pop("conv_menu_cid", None)
+                            st.experimental_rerun()
+                if st.button("\u5173\u95ed", key="conv_menu_close"):
+                    st.session_state.pop("conv_menu_cid", None)
+                    st.experimental_rerun()
 
     _inject_runtime_ui_fixes("auto", st.session_state.get("conv_id", ""))
 
