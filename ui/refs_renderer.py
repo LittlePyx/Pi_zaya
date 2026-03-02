@@ -7,10 +7,12 @@ import re
 import subprocess
 import time
 import difflib
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
 import streamlit as st
+import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.file_naming import citation_meta_display_pdf_name
@@ -20,6 +22,7 @@ from kb.reference_index import (
     resolve_reference_entry as _resolve_reference_entry_from_index,
 )
 from kb.pdf_tools import open_in_explorer
+from kb.tokenize import tokenize
 from ui.strings import S
 import json
 
@@ -248,7 +251,7 @@ def _score_tier(score: float) -> str:
 
 
 def _split_section_subsection(heading_path: str) -> tuple[str, str]:
-    hp = (heading_path or "").strip()
+    hp = " / ".join([p.strip() for p in str(heading_path or "").split(" / ") if p.strip()])
     if not hp:
         return "", ""
     parts = [p.strip() for p in hp.split(" / ") if p.strip()]
@@ -257,38 +260,1097 @@ def _split_section_subsection(heading_path: str) -> tuple[str, str]:
     return parts[0], " / ".join(parts[1:]).strip()
 
 
+_REF_HEADING_RE_UI = re.compile(
+    r"\b(references?|bibliography|works?\s+cited|citation|acknowledg(e)?ments?|appendi(?:x|ces)|supplementary)\b",
+    flags=re.I,
+)
+_VENUE_HEAD_TOKENS_UI = {
+    "nature",
+    "science",
+    "ieee",
+    "acm",
+    "cvpr",
+    "iccv",
+    "eccv",
+    "neurips",
+    "icml",
+    "ijcai",
+    "aaai",
+    "conference",
+    "proceedings",
+    "journal",
+    "transactions",
+    "letters",
+    "communication",
+    "communications",
+    "photonics",
+    "optics",
+    "review",
+    "advances",
+    "arxiv",
+}
+_VENUE_JOIN_TOKENS_UI = {"of", "on", "for", "and", "the", "in", "&"}
+_SECTION_WORDS_UI = {
+    "abstract",
+    "introduction",
+    "background",
+    "related",
+    "work",
+    "method",
+    "methods",
+    "approach",
+    "model",
+    "setup",
+    "experiment",
+    "experiments",
+    "results",
+    "discussion",
+    "conclusion",
+    "implementation",
+    "evaluation",
+    "analysis",
+}
+_METHOD_QUERY_RE_UI = re.compile(
+    r"(怎么|如何|方法|实现|步骤|流程|原理|机制|算法|模型|公式|推导|"
+    r"\bhow\b|\bmethod\b|\bapproach\b|\bimplement(?:ation)?\b|\balgorithm\b|\bmodel\b|\bequation\b)",
+    flags=re.I,
+)
+_LIMIT_QUERY_RE_UI = re.compile(
+    r"(局限|限制|不足|未来工作|讨论|结论|"
+    r"\blimitation\b|\bfuture\s+work\b|\bdiscussion\b|\bconclusion\b)",
+    flags=re.I,
+)
+_DISCUSS_HEAD_RE_UI = re.compile(
+    r"\b(discussion|conclusion|limitations?|future\s+work)\b|(讨论|结论|局限|未来工作)",
+    flags=re.I,
+)
+
+
+def _wants_reference_nav_ui(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    return bool(re.search(r"(参考文献|引用|cite|citation|reference|bibliography)", q, flags=re.I))
+
+
+def _is_reference_heading_ui(h: str) -> bool:
+    s = str(h or "").strip()
+    return bool(_REF_HEADING_RE_UI.search(s))
+
+
+def _is_venue_heading_ui(h: str) -> bool:
+    s = " ".join(str(h or "").strip().split())
+    if not s:
+        return False
+    low = s.lower()
+    toks = re.findall(r"[a-z][a-z0-9.+-]*", low)
+    if not toks:
+        return False
+    if any(t in _SECTION_WORDS_UI for t in toks):
+        return False
+    venue_hit = any(t in _VENUE_HEAD_TOKENS_UI for t in toks)
+    if (len(toks) <= 6) and venue_hit and all((t in _VENUE_HEAD_TOKENS_UI or t in _VENUE_JOIN_TOKENS_UI) for t in toks):
+        return True
+    letters = re.sub(r"[^A-Za-z]", "", s)
+    if letters and (letters == letters.upper()) and (len(toks) <= 5) and venue_hit:
+        return True
+    return False
+
+
+def _looks_like_doc_title_heading_ui(h: str, source_path: str) -> bool:
+    hh = " ".join(str(h or "").strip().split())
+    src = str(source_path or "").strip()
+    if (not hh) or (not src):
+        return False
+    low_h = re.sub(r"[^a-z0-9]+", " ", hh.lower()).strip()
+    if len(low_h) < 24:
+        return False
+    stem = Path(src).stem
+    stem = re.sub(r"(19|20)\d{2}", " ", stem)
+    stem = re.sub(r"[_\-]+", " ", stem)
+    low_s = re.sub(r"[^a-z0-9]+", " ", stem.lower()).strip()
+    if not low_s:
+        return False
+    if low_h in low_s:
+        return True
+    h_toks = [t for t in low_h.split() if len(t) >= 3]
+    s_toks = [t for t in low_s.split() if len(t) >= 3]
+    if len(h_toks) < 3 or len(s_toks) < 3:
+        return False
+    hs = set(h_toks)
+    ss = set(s_toks)
+    inter = hs & ss
+    if len(inter) < 3:
+        return False
+    return (len(inter) / max(1, len(hs))) >= 0.66
+
+
+def _is_non_navigational_heading_ui(h: str, *, prompt: str, source_path: str) -> bool:
+    s = " ".join(str(h or "").strip().split())
+    if not s:
+        return True
+    if _is_venue_heading_ui(s):
+        return True
+    if (not _wants_reference_nav_ui(prompt)) and _is_reference_heading_ui(s):
+        return True
+    return False
+
+
+def _should_avoid_discussion_ui(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return True
+    if _wants_reference_nav_ui(q):
+        return False
+    if _LIMIT_QUERY_RE_UI.search(q):
+        return False
+    return True
+
+
+def _is_discussion_heading_ui(h: str) -> bool:
+    s = " ".join(str(h or "").strip().split())
+    if not s:
+        return False
+    return bool(_DISCUSS_HEAD_RE_UI.search(s))
+
+
+def _looks_like_structured_section_heading_ui(h: str) -> bool:
+    s = " ".join(str(h or "").strip().split())
+    if not s:
+        return False
+    low = s.lower()
+    if re.match(r"^\d+(\.\d+){0,3}\b", low):
+        return True
+    if re.match(r"^(section|sec\.?|chapter|part|appendix)\b", low):
+        return True
+    return bool(re.match(r"^[ivxlcdm]+\.\s+", low))
+
+
+def _sanitize_heading_path_ui(hp: str, *, prompt: str, source_path: str) -> str:
+    parts = [p.strip() for p in str(hp or "").split(" / ") if p.strip()]
+    if not parts:
+        return ""
+    keep: list[str] = []
+    for p in parts:
+        p2 = " ".join(p.split())
+        if _is_non_navigational_heading_ui(p2, prompt=prompt, source_path=source_path):
+            continue
+        if keep and keep[-1].lower() == p2.lower():
+            continue
+        keep.append(p2)
+    if len(keep) >= 2:
+        first = keep[0]
+        second = keep[1]
+        if (
+            len(first) >= 36
+            and _looks_like_structured_section_heading_ui(second)
+            and (not _looks_like_structured_section_heading_ui(first))
+        ):
+            keep = keep[1:]
+    if keep and _looks_like_doc_title_heading_ui(keep[0], source_path):
+        keep = keep[1:] if len(keep) >= 2 else []
+    return " / ".join(keep[:3]) if keep else ""
+
+
+_GENERIC_HINT_PATTERNS_UI = (
+    "这篇文献可提供与该问题相关的信息",
+    "命中与问题直接相关的信息点",
+    "与当前问题相关内容",
+    "可用于回答问题的证据",
+    "information related to the question",
+    "directly relevant information points",
+    "evidence for the current question",
+)
+_ANCHOR_STOPWORDS_UI = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "at",
+    "by",
+    "as",
+    "is",
+    "are",
+    "be",
+    "this",
+    "that",
+    "these",
+    "those",
+    "method",
+    "methods",
+    "approach",
+    "approaches",
+    "model",
+    "models",
+    "algorithm",
+    "algorithms",
+    "experiment",
+    "experiments",
+    "evaluation",
+    "analysis",
+    "result",
+    "results",
+    "problem",
+    "problems",
+    "challenge",
+    "challenges",
+    "constraint",
+    "constraints",
+    "bottleneck",
+    "bottlenecks",
+    "metric",
+    "metrics",
+    "performance",
+    "paper",
+    "study",
+    "work",
+    "section",
+    "sections",
+    "introduction",
+    "background",
+    "discussion",
+    "conclusion",
+    "conclusions",
+    "data",
+    "dataset",
+    "datasets",
+    "figure",
+    "table",
+    "supplementary",
+    "appendix",
+    "文献",
+    "论文",
+    "研究",
+    "问题",
+    "挑战",
+    "瓶颈",
+    "约束",
+    "相关",
+    "信息",
+    "内容",
+    "章节",
+    "小节",
+    "方法",
+    "结果",
+    "实验",
+    "模型",
+    "算法",
+    "数据",
+    "with",
+    "using",
+    "use",
+    "used",
+    "based",
+    "via",
+    "from",
+    "into",
+    "over",
+    "under",
+    "through",
+    "between",
+    "across",
+    "improve",
+    "improves",
+    "improved",
+    "enable",
+    "enables",
+    "provide",
+    "provides",
+    "proposed",
+    "propose",
+}
+
+
+def _looks_generic_guidance_ui(text: str) -> bool:
+    s = " ".join(str(text or "").strip().split())
+    if not s:
+        return True
+    low = s.lower()
+    if any(k in low for k in _GENERIC_HINT_PATTERNS_UI):
+        return True
+    toks = [t for t in re.findall(r"[A-Za-z][A-Za-z0-9\-]{2,}", low) if t not in _ANCHOR_STOPWORDS_UI]
+    return len(set(toks)) <= 2 and len(s) <= 80
+
+
+def _looks_keyword_list_ui(text: str) -> bool:
+    s = " ".join(str(text or "").strip().split())
+    if not s:
+        return True
+    if len(s) <= 90 and (s.count(",") + s.count("，") + s.count(";") + s.count("；")) >= 2:
+        return True
+    low = s.lower()
+    verb_markers = (
+        "提出",
+        "采用",
+        "通过",
+        "实现",
+        "提升",
+        "验证",
+        "propose",
+        "use",
+        "introduce",
+        "achieve",
+        "improve",
+        "show",
+    )
+    return not any(v in low for v in verb_markers)
+
+
+def _contains_question_echo_ui(text: str, prompt: str) -> bool:
+    t = " ".join(str(text or "").strip().split()).lower()
+    q = " ".join(str(prompt or "").strip().split()).lower()
+    if not t or not q:
+        return False
+    q_compact = re.sub(r"[\s`'\"“”‘’，。！？,.?!:;；：()（）\-_/\\]+", "", q)
+    t_compact = re.sub(r"[\s`'\"“”‘’，。！？,.?!:;；：()（）\-_/\\]+", "", t)
+    if len(q_compact) < 10:
+        return False
+    for n in (24, 18, 14):
+        if len(q_compact) < n:
+            continue
+        max_start = min(len(q_compact) - n, 28)
+        for s in range(max_start + 1):
+            chunk = q_compact[s : s + n]
+            if chunk and (chunk in t_compact):
+                return True
+    return False
+
+
+def _too_similar_text_ui(a: str, b: str) -> bool:
+    aa = " ".join(str(a or "").strip().split()).lower()
+    bb = " ".join(str(b or "").strip().split()).lower()
+    if not aa or not bb:
+        return False
+    if aa == bb:
+        return True
+    if (aa in bb or bb in aa) and min(len(aa), len(bb)) >= 18:
+        return True
+    try:
+        return difflib.SequenceMatcher(None, aa, bb).ratio() >= 0.88
+    except Exception:
+        return False
+
+
+def _looks_template_artifact_ui(text: str) -> bool:
+    s = " ".join(str(text or "").strip().split())
+    if not s:
+        return False
+    low = s.lower()
+    if s.startswith("该文") and ("方法上" in s) and ("并在实验中" in s):
+        return True
+    if s.startswith("可直接支撑提问的证据主要位于"):
+        return True
+    if ("目标任务" in s) or ("相关结果上有可核查提升" in s):
+        return True
+    if ("evidence is concentrated in" in low) and ("key points on" in low):
+        return True
+    return False
+
+
+def _extract_anchor_terms_ui(meta: dict, *, prompt: str = "", max_n: int = 4) -> list[str]:
+    if not isinstance(meta, dict):
+        return []
+    texts: list[str] = []
+    for s in (meta.get("ref_show_snippets") or [])[:3]:
+        s2 = " ".join(str(s or "").strip().split())
+        if s2:
+            texts.append(s2)
+    for loc in (meta.get("ref_locs") or [])[:3]:
+        if not isinstance(loc, dict):
+            continue
+        hp = str(loc.get("heading_path") or loc.get("heading") or "").strip()
+        if hp:
+            texts.append(hp)
+    if not texts:
+        s0 = " ".join(str(meta.get("text") or "").strip().split())
+        if s0:
+            texts.append(s0)
+    all_text = "\n".join(texts)
+    if not all_text:
+        return []
+
+    q_toks = set(tokenize(str(prompt or "").lower()))
+    scores: dict[str, float] = {}
+
+    def _bump(term: str, w: float) -> None:
+        t = str(term or "").strip()
+        if not t:
+            return
+        k = t.lower()
+        if k in _ANCHOR_STOPWORDS_UI:
+            return
+        if len(k) <= 2:
+            return
+        if k in q_toks and len(k) <= 5:
+            return
+        ww = float(w)
+        # Generic down-weighting for very short/common-looking terms.
+        if len(k) <= 4 and re.fullmatch(r"[a-z]+", k):
+            ww *= 0.65
+        # Acronyms are useful but short all-caps tokens are often weak anchors.
+        if re.fullmatch(r"[A-Z]{2,5}", t):
+            ww *= 0.62
+        if ww <= 0.0:
+            return
+        scores[t] = float(scores.get(t, 0.0) + ww)
+
+    for ab in re.findall(r"\b[A-Z]{2,10}\b", all_text):
+        _bump(ab, 3.0)
+
+    for hy in re.findall(r"\b[A-Za-z]{3,}(?:-[A-Za-z0-9]{2,})+\b", all_text):
+        _bump(hy, 2.0)
+
+    for phr in re.findall(r"\b[A-Za-z][A-Za-z0-9\-]{2,}(?:\s+[A-Za-z][A-Za-z0-9\-]{2,}){1,4}\b", all_text):
+        low = phr.lower()
+        if len(phr) > 56:
+            continue
+        if any(
+            bad in low
+            for bad in (
+                "quantitative",
+                "comparison",
+                "comparisons",
+                "table",
+                "fig",
+                "result and analysis",
+                "introduction",
+                "conclusion",
+                "datasets",
+            )
+        ):
+            continue
+        # Keep phrase candidates using generic shape cues instead of domain keywords.
+        if re.search(r"[A-Z]{2,}", phr) or re.search(r"\d", phr) or ("-" in phr):
+            _bump(phr, 2.6)
+        elif len(phr) >= 18:
+            _bump(phr, 1.4)
+
+    for w in re.findall(r"\b[A-Za-z][A-Za-z0-9]{3,}\b", all_text):
+        wl = w.lower()
+        if wl in _ANCHOR_STOPWORDS_UI:
+            continue
+        if wl.endswith("tion") or wl.endswith("ing") or wl.endswith("ment"):
+            _bump(w, 0.8)
+        else:
+            _bump(w, 1.0)
+
+    for zh in re.findall(r"[\u4e00-\u9fff]{2,8}", all_text):
+        if zh in {"这篇文献", "当前问题", "相关信息"}:
+            continue
+        _bump(zh, 1.4)
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    out: list[str] = []
+    seen_low: set[str] = set()
+    for t, _s in ranked:
+        k = t.lower()
+        if k in seen_low:
+            continue
+        if any((k in ex) or (ex in k) for ex in seen_low if len(ex) >= 4):
+            continue
+        seen_low.add(k)
+        out.append(t)
+        if len(out) >= int(max_n):
+            break
+    return out
+
+
+def _has_cjk_text_ui(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _looks_latin_heavy_ui(text: str) -> bool:
+    s = str(text or "")
+    if not s.strip():
+        return False
+    n_cjk = len(re.findall(r"[\u4e00-\u9fff]", s))
+    n_lat = len(re.findall(r"[A-Za-z]", s))
+    return (n_lat >= 18) and (n_lat >= (2 * n_cjk + 8))
+
+
+def _clean_sentence_candidate_ui(text: str) -> str:
+    s = " ".join(str(text or "").replace("\r", " ").replace("\n", " ").split())
+    if not s:
+        return ""
+    s = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", s)
+    s = re.sub(r"`{1,3}", "", s)
+    s = re.sub(r"^#{1,6}\s*", "", s)
+    s = s.replace("|", " ")
+    s = re.sub(r"\$?\^\{\s*\[\s*\d[^]]{0,60}\]\s*\}\$?", " ", s)
+    s = re.sub(r"\[\s*\d{1,4}(?:\s*[,;\-–—]\s*\d{1,4})*\s*\]", " ", s)
+    s = s.replace("**", " ").replace("*", " ")
+    s = re.sub(r"\s{2,}", " ", s).strip(" \t\r\n-–—:：;；,.。")
+    return s
+
+
+def _looks_noisy_sentence_ui(text: str) -> bool:
+    s = " ".join(str(text or "").strip().split())
+    if not s:
+        return True
+    low = s.lower()
+    if len(s) < 10:
+        return True
+    if ("http://" in low) or ("https://" in low):
+        return True
+    if re.search(r"(equal contribution|corresponding author|all rights reserved)", low):
+        return True
+    if s.count("|") >= 2:
+        return True
+    if re.fullmatch(r"[^\w\u4e00-\u9fff]{3,}", s):
+        return True
+    # Chunk-boundary fragments are common in OCR/MD conversion.
+    if s.endswith("...") or s.endswith("…"):
+        return True
+    if re.match(r"^[a-z]{1,4}\b", s) and len(s) < 28:
+        return True
+    sym_n = len(re.findall(r"[^0-9A-Za-z\u4e00-\u9fff\s]", s))
+    if sym_n > max(14, int(len(s) * 0.28)):
+        return True
+    return False
+
+
+def _explode_find_terms_ui(text: str, *, max_n: int = 6) -> list[str]:
+    raw = _clean_sentence_candidate_ui(text)
+    if not raw:
+        return []
+    seeds = [raw]
+    if raw.count("|") >= 2:
+        cells = [c.strip() for c in raw.split("|") if c.strip()]
+        if cells:
+            seeds = cells
+    out: list[str] = []
+    seen: set[str] = set()
+    for seg in seeds:
+        seg2 = re.sub(r"\s+", " ", seg).strip(" ,，;；:：")
+        if not seg2:
+            continue
+        parts = re.split(r"[，,;；/、]", seg2)
+        for p in parts:
+            t = _clean_sentence_candidate_ui(p)
+            if not t:
+                continue
+            if len(t) <= 1:
+                continue
+            if len(t) > 56:
+                continue
+            k = t.lower()
+            if k in seen:
+                continue
+            if k in _ANCHOR_STOPWORDS_UI:
+                continue
+            if re.fullmatch(r"\d+(?:\.\d+)?", k):
+                continue
+            if re.search(r"\b(table|figure|fig|supplementary|appendix)\b", k):
+                continue
+            if re.search(r"\b(quantitative|comparison|comparisons|result and analysis|introduction|conclusion|dataset|datasets)\b", k):
+                continue
+            seen.add(k)
+            out.append(t)
+            if len(out) >= int(max_n):
+                return out
+    return out
+
+
+def _anchor_specificity_score_ui(term: str) -> float:
+    t = " ".join(str(term or "").strip().split())
+    if not t:
+        return -1e9
+    low = t.lower()
+    score = 0.0
+    if ("-" in t) or (" " in t):
+        score += 2.3
+    if re.search(r"\d", t):
+        score += 1.7
+    if re.search(r"[A-Z]{2,}", t):
+        score += 1.4
+    if len(t) >= 10:
+        score += 1.0
+    if re.fullmatch(r"[A-Z]{2,5}", t):
+        score -= 1.4
+    if len(t) > 40:
+        score -= 1.2
+    if re.search(r"\b(quantitative|comparison|comparisons|result and analysis|introduction|conclusion|dataset|datasets)\b", low):
+        score -= 2.4
+    if low in _ANCHOR_STOPWORDS_UI:
+        score -= 2.6
+    if re.fullmatch(r"[a-z]+", low) and len(low) <= 6:
+        score -= 0.8
+    return score
+
+
+def _loc_phrase_ui(*, sec: str, meta: dict, cjk: bool) -> str:
+    sec_s = str(sec or "").strip()
+    p0, p1 = _safe_page_range(meta if isinstance(meta, dict) else {})
+    if cjk:
+        if p0 and p1 and p1 > p0:
+            page_s = f"第{int(p0)}-{int(p1)}页"
+        elif p0:
+            page_s = f"第{int(p0)}页"
+        else:
+            page_s = ""
+        if sec_s and page_s:
+            return f"`{sec_s}`（{page_s}）"
+        if sec_s:
+            return f"`{sec_s}`"
+        if page_s:
+            return page_s
+        return "正文命中段落"
+    else:
+        if p0 and p1 and p1 > p0:
+            page_s = f"pp.{int(p0)}-{int(p1)}"
+        elif p0:
+            page_s = f"p.{int(p0)}"
+        else:
+            page_s = ""
+        if sec_s and page_s:
+            return f"`{sec_s}` ({page_s})"
+        if sec_s:
+            return f"`{sec_s}`"
+        if page_s:
+            return page_s
+        return "the matched body paragraphs"
+
+
+def _pick_term_from_sentence_ui(sentence: str, terms: list[str]) -> str:
+    low = str(sentence or "").lower()
+    for pat in (
+        r"\b([A-Za-z]{3,}(?:-[A-Za-z0-9]{2,})+)\b",
+        r"\b([A-Z]{2,}[A-Za-z0-9\-]{1,})\b",
+        r"\b([A-Za-z][A-Za-z0-9]{3,}\s+[A-Za-z][A-Za-z0-9]{3,}(?:\s+[A-Za-z][A-Za-z0-9]{3,})?)\b",
+    ):
+        m0 = re.search(pat, low)
+        if m0:
+            return " ".join(m0.group(1).split())
+    for t in terms or []:
+        tt = str(t or "").strip()
+        if not tt:
+            continue
+        if tt.lower() in low:
+            return tt
+    for t in terms or []:
+        tt = str(t or "").strip()
+        if not tt:
+            continue
+        if len(tt) <= 2:
+            continue
+        if re.fullmatch(r"[A-Z]{2,5}", tt):
+            continue
+        return tt
+    return ""
+
+
+def _pick_model_name_ui(sentence: str, terms: list[str]) -> str:
+    stop = {
+        "however",
+        "therefore",
+        "additionally",
+        "results",
+        "result",
+        "method",
+        "methods",
+        "quantitative",
+        "table",
+        "figure",
+        "analysis",
+        "introduction",
+        "conclusion",
+        "discussion",
+    }
+    for t in terms or []:
+        tt = str(t or "").strip()
+        if not tt:
+            continue
+        if not re.search(r"[A-Z]{2,}", tt):
+            continue
+        if tt.lower() in stop:
+            continue
+        if re.fullmatch(r"[A-Z]{2,5}", tt):
+            continue
+        if " " in tt:
+            toks = re.findall(r"\b[A-Z]{2,}[A-Za-z0-9\-]{1,}\b", tt)
+            for tok in toks:
+                if re.fullmatch(r"[A-Z]{2,5}", tok):
+                    continue
+                if tok.lower() not in stop:
+                    return tok
+            continue
+        return tt
+    for m in re.findall(r"\b[A-Z]{2,}[A-Za-z0-9\-]{1,}\b", str(sentence or "")):
+        low = m.lower()
+        if low in stop:
+            continue
+        if re.fullmatch(r"[A-Z]{2,5}", m):
+            continue
+        return m
+    return ""
+
+
+def _display_focus_term_ui(term: str) -> str:
+    t = " ".join(str(term or "").strip().split())
+    if not t:
+        return ""
+    low = t.lower()
+    if low.startswith("the "):
+        t = t[4:].strip()
+        low = t.lower()
+    if re.search(r"\b(table|figure|fig|section|chapter|appendix|supplementary)\b", low):
+        return ""
+    if len(t) > 36:
+        t = t[:36].rstrip() + "..."
+    return t
+
+
+def _compress_evidence_clause_ui(
+    sentence: str,
+    *,
+    cjk: bool,
+    role: str,
+    terms: list[str],
+    max_chars: int,
+) -> str:
+    s_raw = _clean_sentence_candidate_ui(sentence)
+    if not s_raw:
+        return ""
+    if (not cjk) or _has_cjk_text_ui(s_raw):
+        return _trim_clause_ui(s_raw, max_chars=max_chars)
+    if not _looks_latin_heavy_ui(s_raw):
+        return _trim_clause_ui(s_raw, max_chars=max_chars)
+
+    low = s_raw.lower()
+    term = _pick_term_from_sentence_ui(s_raw, terms)
+    term_disp = _display_focus_term_ui(term)
+    model = _pick_model_name_ui(s_raw, terms)
+
+    if role == "problem":
+        if re.search(r"(struggle|limitation|limited|bottleneck|difficult|lack|challenge|suboptimal|incompetent|poor|not\s+outperform|did\s+not\s+outperform)", low):
+            return _trim_clause_ui(f"指出现有方法在 {term_disp or '目标任务'} 上仍有明显局限", max_chars=max_chars)
+        return _trim_clause_ui(f"围绕 {term_disp or '目标任务'} 提炼了待解决的关键问题", max_chars=max_chars)
+
+    if role == "method":
+        if re.search(r"(propos|introduc|develop|design|adopt|utiliz|construct|build)", low):
+            if model and term and (model.lower() != term.lower()):
+                return _trim_clause_ui(f"提出 {model}，并围绕 {term_disp or term} 给出实现路径", max_chars=max_chars)
+            if model:
+                return _trim_clause_ui(f"提出 {model} 并给出可复现的实现流程", max_chars=max_chars)
+            if term:
+                return _trim_clause_ui(f"提出并采用围绕 {term_disp or term} 的方法设计", max_chars=max_chars)
+            return _trim_clause_ui("提出了具体的方法设计与实现流程", max_chars=max_chars)
+        if term:
+            return _trim_clause_ui(f"围绕 {term_disp or term} 给出实现细节", max_chars=max_chars)
+        return _trim_clause_ui("给出具体方法与实现细节", max_chars=max_chars)
+
+    if role == "result":
+        if re.search(r"(outperform|improv|superior|better|achieve|show|demonstrate|experiment|results?)", low):
+            if term:
+                return _trim_clause_ui(f"实验显示在 {term_disp or term} 相关结果上有可核查提升", max_chars=max_chars)
+            return _trim_clause_ui("实验结果显示相对现有方法有可核查提升", max_chars=max_chars)
+        if term:
+            return _trim_clause_ui(f"报告了围绕 {term_disp or term} 的可核查结果", max_chars=max_chars)
+        return _trim_clause_ui("报告了可核查的实验结果", max_chars=max_chars)
+
+    # relevance/evidence fallback
+    if re.search(r"(did\s+not\s+outperform|not\s+outperform)", low):
+        if model:
+            return _trim_clause_ui(f"原文指出 {model} 在部分场景仍存在性能短板", max_chars=max_chars)
+        return _trim_clause_ui("原文指出该方法在部分场景仍存在性能短板", max_chars=max_chars)
+    if re.search(r"(outperform|superior|better)", low):
+        if model:
+            return _trim_clause_ui(f"原文报告 {model} 在对比实验中取得更优结果", max_chars=max_chars)
+        return _trim_clause_ui("原文报告该方法在对比实验中取得更优结果", max_chars=max_chars)
+    if re.search(r"(show|demonstrate|evidence|support|indicate|experiment|results?)", low):
+        if term:
+            return _trim_clause_ui(f"原文在 {term_disp or term} 相关内容上给出直接证据", max_chars=max_chars)
+        return _trim_clause_ui("原文给出可直接用于回答提问的证据", max_chars=max_chars)
+    if term:
+        return _trim_clause_ui(f"围绕 {term_disp or term} 给出可核查描述", max_chars=max_chars)
+    return _trim_clause_ui("给出可核查的实现与结果描述", max_chars=max_chars)
+
+
+def _collect_ref_snippets_ui(meta: dict, *, max_n: int = 5) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(s: str) -> None:
+        s2 = _clean_sentence_candidate_ui(str(s or ""))
+        if not s2:
+            return
+        k = s2.lower()
+        if k in seen:
+            return
+        seen.add(k)
+        out.append(s2)
+
+    if isinstance(meta, dict):
+        for s in (meta.get("ref_snippets") or [])[:3]:
+            _add(str(s or ""))
+        for s in (meta.get("ref_show_snippets") or [])[:4]:
+            _add(str(s or ""))
+        for loc in (meta.get("ref_locs") or [])[:3]:
+            if not isinstance(loc, dict):
+                continue
+            _add(str(loc.get("snippet") or ""))
+    if isinstance(meta, dict) and (not out):
+        _add(str(meta.get("text") or ""))
+    return out[: max(1, int(max_n))]
+
+
+def _split_sentences_ui(text: str, *, max_n: int = 24) -> list[str]:
+    s = _clean_sentence_candidate_ui(text)
+    if not s:
+        return []
+    parts = re.split(r"(?<=[。！？.!?;；])\s+|[。！？；]", s)
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        p2 = _clean_sentence_candidate_ui(p)
+        if len(p2) < 10:
+            continue
+        if _looks_noisy_sentence_ui(p2):
+            continue
+        k2 = p2.lower()
+        if k2 in seen:
+            continue
+        seen.add(k2)
+        out.append(p2)
+        if len(out) >= int(max_n):
+            break
+    return out
+
+
+def _trim_clause_ui(text: str, *, max_chars: int = 110) -> str:
+    s = " ".join(str(text or "").strip().split())
+    if not s:
+        return ""
+    s = re.sub(r"^[,;:，；：\-]+", "", s).strip()
+    s = re.sub(r"[。！？.!?;；]+$", "", s).strip()
+    if len(s) <= max_chars:
+        return s
+    return s[: max_chars - 3].rstrip() + "..."
+
+
+def _find_sentence_by_pat_ui(sents: list[str], pat: re.Pattern, *, max_chars: int, anchors: list[str] | None = None) -> str:
+    if not sents:
+        return ""
+    anchors_l = [str(x or "").strip().lower() for x in (anchors or []) if str(x or "").strip()]
+    best = ""
+    best_score = -1.0
+    for s in sents:
+        ss = str(s or "")
+        if not pat.search(ss):
+            continue
+        if _looks_noisy_sentence_ui(ss):
+            continue
+        low = ss.lower()
+        score = 1.0
+        if anchors_l:
+            score += 1.8 * sum(1 for a in anchors_l if a and (a in low))
+        if re.search(r"\b(table|fig|figure)\b", low):
+            score -= 1.3
+        if re.search(r"\b(result and analysis|supplementary|appendix)\b", low):
+            score -= 0.8
+        if len(ss) >= 36:
+            score += 0.3
+        if score > best_score:
+            best_score = score
+            best = ss
+    if best:
+        return _trim_clause_ui(best, max_chars=max_chars)
+    for s in sents:
+        ss = str(s or "")
+        if pat.search(ss):
+            return _trim_clause_ui(ss, max_chars=max_chars)
+    return ""
+
+
+def _pick_role_sentence_ui(sents: list[str], *, role: str, anchors: list[str]) -> str:
+    role_key = str(role or "").strip().lower()
+    if role_key == "problem":
+        pat = re.compile(
+            r"(问题|挑战|瓶颈|受限|难以|困难|problem|challenge|bottleneck|limitation|difficult|lack|struggle)",
+            flags=re.I,
+        )
+    elif role_key == "method":
+        pat = re.compile(
+            r"(提出|采用|设计|构建|引入|实现|propose|introduce|design|develop|variant)",
+            flags=re.I,
+        )
+    else:
+        pat = re.compile(
+            r"(结果|显示|表明|提升|提高|优于|验证|性能|指标|result|results|show|demonstrate|improv|outperform|achieve|experiment)",
+            flags=re.I,
+        )
+
+    best = ""
+    best_sc = -1e9
+    anchors_l = [str(a or "").strip().lower() for a in (anchors or []) if str(a or "").strip()]
+    for s in sents or []:
+        ss = str(s or "")
+        if not ss or (not pat.search(ss)):
+            continue
+        if _looks_noisy_sentence_ui(ss):
+            continue
+        low = ss.lower()
+        sc = 1.0
+        if anchors_l:
+            hit_n = sum(1 for a in anchors_l if a and (a in low))
+            if role_key == "problem":
+                sc += 0.6 * hit_n
+            elif role_key == "method":
+                sc += 0.9 * hit_n
+            else:
+                sc += 1.2 * hit_n
+        if re.search(r"\b(table|fig|figure)\b", low):
+            sc -= 1.2
+        if role_key == "problem":
+            if re.search(r"(challenge|limitations?|struggle|bottleneck|受限|挑战|瓶颈|困难)", low):
+                sc += 3.0
+            if re.search(r"(did\s+not\s+outperform|not\s+outperform)", low):
+                sc -= 2.2
+            if re.search(r"(airplants|hotdog|noteworthy|second-best|underlined|bold)", low):
+                sc -= 1.0
+        elif role_key == "method":
+            if re.search(r"(we\s+propose|propose|introduce|develop|design|variant)", low):
+                sc += 2.3
+            if re.search(r"(compared?|comparison|baseline)", low):
+                sc -= 1.1
+        else:
+            if re.search(r"(results?|show|demonstrate|outperform|improv|achieve|实验|结果)", low):
+                sc += 2.0
+            if re.search(r"(second-best|underlined|bold)", low):
+                sc -= 0.8
+        if len(ss) >= 36:
+            sc += 0.2
+        if sc > best_sc:
+            best_sc = sc
+            best = ss
+    return " ".join(best.split())
+
+
+def _pick_specific_terms_ui(cands: list[str], *, max_n: int = 3) -> list[str]:
+    ranked = sorted(
+        [t for x in (cands or []) for t in _explode_find_terms_ui(str(x or ""), max_n=6)],
+        key=_anchor_specificity_score_ui,
+        reverse=True,
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in ranked:
+        k = t.lower()
+        if k in seen:
+            continue
+        if any((k in s) or (s in k) for s in seen if len(s) >= 5):
+            continue
+        seen.add(k)
+        out.append(t)
+        if len(out) >= int(max_n):
+            break
+    return out
+
+
 def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = "") -> dict:
     pack = meta.get("ref_pack") if isinstance(meta.get("ref_pack"), dict) else {}
     pack = pack if isinstance(pack, dict) else {}
+    pack_state = str(meta.get("ref_pack_state") or "").strip().lower()
+    pack_pending = pack_state == "pending"
+    pack_ready = pack_state == "ready"
+    prompt_is_cjk = _has_cjk_text_ui(prompt)
 
-    heading_path = str(meta.get("ref_best_heading_path") or "").strip()
+    source_path = str(meta.get("source_path") or "").strip()
+    heading_path = _sanitize_heading_path_ui(str(meta.get("ref_best_heading_path") or "").strip(), prompt=prompt, source_path=source_path)
     sec = str(meta.get("ref_section") or "").strip()
     sub = str(meta.get("ref_subsection") or "").strip()
+    if sec and _is_non_navigational_heading_ui(sec, prompt=prompt, source_path=source_path):
+        sec = ""
+    if sec and _looks_like_doc_title_heading_ui(sec, source_path):
+        sec = ""
+    if sub and _is_non_navigational_heading_ui(sub, prompt=prompt, source_path=source_path):
+        sub = ""
     if (not sec) and heading_path:
         sec, sub = _split_section_subsection(heading_path)
     if not sec:
-        sec = str(pack.get("section") or "").strip() or str(meta.get("top_heading") or "").strip() or heading_fallback
+        sec_pack = str(pack.get("section") or "").strip()
+        if sec_pack and (not _is_non_navigational_heading_ui(sec_pack, prompt=prompt, source_path=source_path)):
+            if not _looks_like_doc_title_heading_ui(sec_pack, source_path):
+                sec = sec_pack
+    if not sec:
+        sec_meta = str(meta.get("top_heading") or "").strip() or str(heading_fallback or "").strip()
+        if sec_meta and (not _is_non_navigational_heading_ui(sec_meta, prompt=prompt, source_path=source_path)):
+            if not _looks_like_doc_title_heading_ui(sec_meta, source_path):
+                sec = sec_meta
     if (not heading_path) and sec:
         heading_path = sec + (f" / {sub}" if sub else "")
+    if _should_avoid_discussion_ui(prompt):
+        if sec and _is_discussion_heading_ui(sec):
+            sec = ""
+            sub = ""
+            heading_path = ""
+        elif heading_path and _is_discussion_heading_ui(heading_path):
+            heading_path = ""
 
-    what = str(pack.get("what") or "").strip()
-    why = str(pack.get("why") or "").strip()
+    what = _clean_sentence_candidate_ui(str(pack.get("what") or "").strip())
+    why = _clean_sentence_candidate_ui(str(pack.get("why") or "").strip())
+    if pack_ready:
+        if _looks_template_artifact_ui(what):
+            what = ""
+        if _looks_template_artifact_ui(why):
+            why = ""
     start_s = str(pack.get("start") or "").strip()
-    gain_s = str(pack.get("gain") or "").strip()
+    gain_s = _clean_sentence_candidate_ui(str(pack.get("gain") or "").strip())
     find_list: list[str] = []
     raw_find = pack.get("find")
     if isinstance(raw_find, list):
         for x in raw_find:
-            s = str(x or "").strip()
-            if s:
-                find_list.append(s)
-    if not find_list:
+            for item in _explode_find_terms_ui(str(x or ""), max_n=6):
+                find_list.append(item)
+    anchors = _extract_anchor_terms_ui(meta, prompt=prompt, max_n=5)
+    if find_list:
+        dedup_find: list[str] = []
+        seen_find: set[str] = set()
+        for f in find_list:
+            f2 = " ".join(str(f or "").strip().split())
+            if not f2:
+                continue
+            k2 = f2.lower()
+            if k2 in seen_find:
+                continue
+            seen_find.add(k2)
+            if _looks_generic_guidance_ui(f2):
+                continue
+            if _should_avoid_discussion_ui(prompt) and _is_discussion_heading_ui(f2):
+                continue
+            dedup_find.append(f2)
+        find_list = dedup_find[:4]
+    if (not find_list) and (not pack_pending) and (not pack_ready):
         raw_aspects = meta.get("ref_aspects")
         if isinstance(raw_aspects, list):
             for x in raw_aspects[:4]:
-                s = str(x or "").strip()
-                if s:
-                    find_list.append(s)
+                for item in _explode_find_terms_ui(str(x or ""), max_n=4):
+                    find_list.append(item)
+    if find_list:
+        dedup2: list[str] = []
+        seen2: set[str] = set()
+        for f in find_list:
+            f2 = " ".join(str(f or "").strip().split())
+            if not f2:
+                continue
+            k2 = f2.lower()
+            if k2 in seen2:
+                continue
+            seen2.add(k2)
+            if _looks_generic_guidance_ui(f2):
+                continue
+            if _should_avoid_discussion_ui(prompt) and _is_discussion_heading_ui(f2):
+                continue
+            dedup2.append(f2)
+        find_list = dedup2[:4]
+    if (not find_list) and anchors and (not pack_pending) and (not pack_ready):
+        find_list = anchors[:4]
 
     try:
         sem_score = float(pack.get("score", 0.0) or 0.0)
@@ -296,34 +1358,70 @@ def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = ""
         sem_score = 0.0
 
     start_from = start_s
-    if not start_from:
-        start_from = heading_path or sec or ""
-        if start_from:
-            if sub:
-                start_from = f"先从 `{heading_path}` 开始，优先看与当前问题直接相关的小节定义/实验设置。"
+    if start_from and (not _wants_reference_nav_ui(prompt)) and _REF_HEADING_RE_UI.search(start_from):
+        start_from = ""
+    if start_from:
+        m = re.search(r"`([^`]{2,180})`", start_from)
+        if m:
+            hp_m = _sanitize_heading_path_ui(m.group(1), prompt=prompt, source_path=source_path)
+            if hp_m:
+                start_from = start_from[: m.start()] + f"`{hp_m}`" + start_from[m.end() :]
             else:
-                start_from = f"先从 `{start_from}` 开始，先定位与问题关键词直接相关的段落与图表。"
-    if not start_from and prompt:
+                start_from = (start_from[: m.start()] + start_from[m.end() :]).strip(" ，,;；。")
+    if start_from:
+        compact_start = re.sub(r"[\s`|,;:，；。：·\-_/\\(){}\[\]]+", "", start_from)
+        if len(compact_start) < 6:
+            start_from = ""
+        elif re.search(r"(先从\s*开始|start\s+with\s*$)", start_from, flags=re.I):
+            start_from = ""
+    if start_from and _is_venue_heading_ui(start_from):
+        start_from = ""
+    if _should_avoid_discussion_ui(prompt) and _is_discussion_heading_ui(start_from):
+        start_from = ""
+    if start_from and _looks_generic_guidance_ui(start_from):
+        start_from = ""
+    if (not start_from) and (not pack_pending) and (not pack_ready):
+        if heading_path:
+            if anchors:
+                start_from = f"先从 `{heading_path}` 开始，优先定位 {anchors[0]}，再核对相关定义/设置与结果。"
+            else:
+                start_from = f"先从 `{heading_path}` 开始，优先看与当前问题直接相关的定义、设置和关键结果。"
+        elif sec:
+            if anchors:
+                start_from = f"先从 `{sec}` 开始，先定位 {anchors[0]} 和相关图表，再看支撑结论的段落。"
+            else:
+                start_from = f"先从 `{sec}` 开始，先定位与问题关键词直接匹配的段落和图表。"
+        elif find_list:
+            start_from = f"先在方法/实验相关段落中定位：{'、'.join(find_list[:2])}。"
+        elif anchors:
+            start_from = f"先在正文中搜索 {anchors[0]}，再顺着相关段落追踪其方法与结果证据。"
+    if (not start_from) and prompt and (not pack_pending) and (not pack_ready):
         start_from = "先从方法/实验设置相关小节读起，优先找与问题关键词直接匹配的定义、设置和结果描述。"
 
     gain = gain_s
-    if not gain:
+    if (not gain) and (not pack_pending) and (not pack_ready):
         gain = "；".join(find_list[:4]).strip()
-    if not gain and what:
+    if (not gain) and what and (not pack_pending):
         gain = what
-
-    if not why:
-        if find_list:
-            why = f"命中与问题直接相关的信息点：{'、'.join(find_list[:3])}。"
-        elif sec or sub:
-            why = f"定位到了与问题较相关的章节位置：{heading_path or sec}。"
+    if gain and _looks_generic_guidance_ui(gain) and anchors and (not pack_pending) and (not pack_ready):
+        gain = f"可直接提取 { '、'.join(anchors[:3]) } 等与提问强相关的证据。"
 
     summary_line = what
-    if not summary_line:
-        if find_list:
-            summary_line = f"这篇文献可提供与该问题相关的信息：{'、'.join(find_list[:3])}。"
-        elif sec:
-            summary_line = f"这篇文献在 `{sec}` 相关章节中包含与当前问题相关内容。"
+    if pack_ready:
+        summary_line = summary_line.replace("...", " ").strip()
+        why = why.replace("...", " ").strip()
+        if prompt_is_cjk:
+            if (not _has_cjk_text_ui(summary_line)) or _looks_latin_heavy_ui(summary_line):
+                summary_line = ""
+            if (not _has_cjk_text_ui(why)) or _looks_latin_heavy_ui(why):
+                why = ""
+        if _looks_generic_guidance_ui(summary_line) or _contains_question_echo_ui(summary_line, prompt):
+            summary_line = ""
+        if _looks_generic_guidance_ui(why):
+            why = ""
+    else:
+        summary_line = ""
+        why = ""
 
     return {
         "what": what,
@@ -335,7 +1433,40 @@ def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = ""
         "section": sec,
         "subsection": sub,
         "find": find_list[:4],
+        "pack_pending": pack_pending,
     }
+
+
+def _fallback_why_line_ui(
+    *,
+    prompt: str,
+    heading_label: str = "",
+    section_label: str = "",
+    subsection_label: str = "",
+    find_terms: list[str] | None = None,
+) -> str:
+    q = " ".join(str(prompt or "").strip().split())
+    if not q:
+        return ""
+    if len(q) > 30:
+        q = q[:30].rstrip() + "..."
+
+    loc = str(subsection_label or "").strip() or str(section_label or "").strip() or str(heading_label or "").strip()
+    terms: list[str] = []
+    for t in (find_terms or []):
+        tt = " ".join(str(t or "").strip().split())
+        if tt and (tt not in terms):
+            terms.append(tt)
+        if len(terms) >= 2:
+            break
+
+    if loc and terms:
+        return f"该文在“{loc}”处直接讨论了“{'、'.join(terms)}”，与“{q}”的关注点直接对应。"
+    if loc:
+        return f"该文在“{loc}”给出了与“{q}”直接相关的定义、方法或结果信息。"
+    if terms:
+        return f"该文对“{'、'.join(terms)}”有直接论述，可作为回答“{q}”的关键证据来源。"
+    return f"该文内容与“{q}”主题一致，可作为当前问题的直接参考依据。"
 
 
 def _normalize_name_key(text: str) -> str:
@@ -430,7 +1561,7 @@ def _expand_venue_abbr(abbr: str) -> str:
     return abbr
 
 
-def _resolve_source_doc_path(source_path: str) -> Path | None:
+def _resolve_source_doc_path(source_path: str, *, md_root_hint: str = "") -> Path | None:
     raw = (source_path or "").strip()
     if not raw:
         return None
@@ -440,7 +1571,12 @@ def _resolve_source_doc_path(source_path: str) -> Path | None:
     if p.is_absolute():
         return None
 
-    md_root_str = str(st.session_state.get("md_dir") or "").strip()
+    md_root_str = str(md_root_hint or "").strip()
+    if not md_root_str:
+        try:
+            md_root_str = str(st.session_state.get("md_dir") or "").strip()
+        except Exception:
+            md_root_str = ""
     if not md_root_str:
         return None
     md_root = Path(md_root_str)
@@ -460,8 +1596,8 @@ def _resolve_source_doc_path(source_path: str) -> Path | None:
     return None
 
 
-def _load_source_preview_text(source_path: str, *, max_chars: int = 12000) -> str:
-    p = _resolve_source_doc_path(source_path)
+def _load_source_preview_text(source_path: str, *, max_chars: int = 12000, md_root_hint: str = "") -> str:
+    p = _resolve_source_doc_path(source_path, md_root_hint=md_root_hint)
     if not p:
         return ""
     try:
@@ -473,8 +1609,8 @@ def _load_source_preview_text(source_path: str, *, max_chars: int = 12000) -> st
         return ""
 
 
-def _infer_title_from_source_text(source_path: str, fallback_title: str) -> str:
-    txt = _load_source_preview_text(source_path, max_chars=9000)
+def _infer_title_from_source_text(source_path: str, fallback_title: str, *, md_root_hint: str = "") -> str:
+    txt = _load_source_preview_text(source_path, max_chars=9000, md_root_hint=md_root_hint)
     if not txt:
         return fallback_title
 
@@ -494,18 +1630,26 @@ def _infer_title_from_source_text(source_path: str, fallback_title: str) -> str:
     return fallback_title
 
 
-def fetch_crossref_meta(title: str, *, source_path: str = "", expected_venue: str = "", expected_year: str = "") -> dict | None:
+def fetch_crossref_meta(
+    title: str,
+    *,
+    source_path: str = "",
+    expected_venue: str = "",
+    expected_year: str = "",
+    md_root_hint: str = "",
+) -> dict | None:
     """
     Synchronous fetch with strict confidence gate.
     Return None when not reliable enough.
     """
     q = (title or "").strip()
-    if not q or len(q) < 5:
-        return None
-
     doi_hint = extract_first_doi(source_path)
     if not doi_hint:
-        doi_hint = extract_first_doi(_load_source_preview_text(source_path))
+        doi_hint = extract_first_doi(_load_source_preview_text(source_path, md_root_hint=md_root_hint))
+    if (not q or len(q) < 5) and (not doi_hint):
+        return None
+    if not q or len(q) < 5:
+        q = ""
     venue = (expected_venue or "").strip()
     # Try to expand venue abbreviation to full name for better matching
     if venue:
@@ -525,6 +1669,20 @@ def fetch_crossref_meta(title: str, *, source_path: str = "", expected_venue: st
             min_score=min_score,
             allow_title_only=allow_title_only,
         )
+
+    # If DOI is available from source text/path, trust DOI-first resolution.
+    # This avoids title-noise failures (e.g., OCR author lines as "title").
+    if doi_hint:
+        out = fetch_best_crossref_meta(
+            query_title="",
+            expected_year=year,
+            expected_venue=venue,
+            doi_hint=doi_hint,
+            min_score=0.90,
+            allow_title_only=False,
+        )
+        if isinstance(out, dict):
+            return out
 
     # Try with each venue variant (original and expanded)
     for v_try in venues_to_try:
@@ -566,6 +1724,468 @@ def fetch_crossref_meta(title: str, *, source_path: str = "", expected_venue: st
     return None
 
 
+def _norm_name_for_match(text: str) -> str:
+    s = " ".join(str(text or "").strip().split()).lower()
+    s = s.replace("&", " and ")
+    s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _text_sim(a: str, b: str) -> float:
+    aa = _norm_name_for_match(a)
+    bb = _norm_name_for_match(b)
+    if not aa or not bb:
+        return 0.0
+    if aa == bb:
+        return 1.0
+    try:
+        seq = difflib.SequenceMatcher(None, aa, bb).ratio()
+    except Exception:
+        seq = 0.0
+    ta = set(aa.split())
+    tb = set(bb.split())
+    jac = (len(ta & tb) / max(1, len(ta | tb))) if ta and tb else 0.0
+    return float(min(1.0, 0.68 * seq + 0.32 * jac))
+
+
+def _normalize_issn(issn: str) -> str:
+    s = re.sub(r"[^0-9Xx]", "", str(issn or "").strip())
+    if len(s) != 8:
+        return ""
+    return f"{s[:4]}-{s[4:]}"
+
+
+def _normalize_issn_list(items) -> set[str]:
+    out: set[str] = set()
+    if isinstance(items, (list, tuple, set)):
+        for x in items:
+            n = _normalize_issn(str(x or ""))
+            if n:
+                out.add(n)
+    else:
+        n = _normalize_issn(str(items or ""))
+        if n:
+            out.add(n)
+    return out
+
+
+def _infer_venue_kind(meta: dict) -> str:
+    t = str((meta or {}).get("type") or "").strip().lower()
+    venue = str((meta or {}).get("venue") or "").strip().lower()
+    if "proceedings" in t or "conference" in t:
+        return "conference"
+    if "journal" in t or t in {"article", "journal-article"}:
+        return "journal"
+    if any(k in venue for k in ["conference", "symposium", "workshop", "proceedings", "congress"]):
+        return "conference"
+    return "journal"
+
+
+def _openalex_work_by_doi(doi: str) -> dict | None:
+    d = str(doi or "").strip().lower()
+    if not d:
+        return None
+    url = "https://api.openalex.org/works/https://doi.org/" + quote(d, safe="")
+    try:
+        r = requests.get(url, timeout=6.0, headers={"User-Agent": "Pi-zaya-KB/1.0"})
+        if r.status_code != 200:
+            return None
+        out = r.json()
+        return out if isinstance(out, dict) else None
+    except Exception:
+        return None
+
+
+def _lookup_journal_if(meta: dict) -> dict | None:
+    venue = str((meta or {}).get("venue") or "").strip()
+    issn = _normalize_issn(str((meta or {}).get("issn") or ""))
+    eissn = _normalize_issn(str((meta or {}).get("eissn") or ""))
+    if not venue and not issn and not eissn:
+        return None
+    try:
+        from impact_factor.core import Factor  # type: ignore
+    except Exception:
+        return None
+    try:
+        fa = Factor()
+    except Exception:
+        return None
+
+    recs = []
+    if issn:
+        try:
+            recs = fa.search(issn, key="issn") or []
+        except Exception:
+            recs = []
+    if (not recs) and eissn:
+        try:
+            recs = fa.search(eissn, key="eissn") or []
+        except Exception:
+            recs = []
+    if (not recs) and venue:
+        try:
+            recs = fa.search(venue, key="journal") or []
+        except Exception:
+            recs = []
+    if not recs:
+        return None
+
+    best = None
+    best_sc = -1.0
+    for r in recs:
+        if not isinstance(r, dict):
+            continue
+        jname = str(r.get("journal") or "").strip()
+        sc = _text_sim(venue, jname) if venue else 0.0
+        if issn and (_normalize_issn(str(r.get("issn") or "")) == issn):
+            sc += 1.6
+        if eissn and (_normalize_issn(str(r.get("eissn") or "")) == eissn):
+            sc += 1.3
+        if sc > best_sc:
+            best_sc = sc
+            best = r
+    if not isinstance(best, dict):
+        return None
+    if best_sc < 0.80:
+        return None
+
+    try:
+        factor = float(best.get("factor"))
+    except Exception:
+        return None
+    if factor <= 0:
+        return None
+    return {
+        "journal_if": round(factor, 3),
+        "journal_quartile": str(best.get("jcr") or "").strip(),
+        "journal_if_source": "JCR dataset (impact_factor)",
+        "journal_if_matched_journal": str(best.get("journal") or "").strip(),
+    }
+
+
+_CONF_ACR_STOP = {
+    "IEEE",
+    "ACM",
+    "CVF",
+    "IAPR",
+    "IET",
+    "SPIE",
+    "OSA",
+    "IFIP",
+}
+
+
+def _clean_conf_query_text(venue: str) -> str:
+    v = " ".join(str(venue or "").strip().split())
+    if not v:
+        return ""
+    v = re.sub(r"\b(19|20)\d{2}\b", " ", v)
+    v = re.sub(r"[()/,:;]+", " ", v)
+    v = re.sub(
+        r"\b(proceedings|proc|conference|international|annual|ieee|acm|cvf|symposium|workshop)\b",
+        " ",
+        v,
+        flags=re.I,
+    )
+    v = re.sub(r"\s+", " ", v).strip()
+    return v
+
+
+def _guess_conf_acronym(venue: str) -> str:
+    v = " ".join(str(venue or "").strip().split())
+    if not v:
+        return ""
+    # Prefer acronym inside parentheses: "... (CVPR)".
+    m_paren = re.search(r"\(([A-Z][A-Z0-9]{2,12})\)", v)
+    if m_paren:
+        cand = str(m_paren.group(1) or "").strip().upper()
+        if cand and cand not in _CONF_ACR_STOP:
+            return cand
+    # Next, choose uppercase token but skip publisher/organization tokens.
+    cands = [str(x or "").strip().upper() for x in re.findall(r"\b([A-Z][A-Z0-9]{2,12})\b", v)]
+    for cand in cands:
+        if cand and cand not in _CONF_ACR_STOP:
+            return cand
+    # e.g., "International Conference on ..."
+    toks = [w for w in re.findall(r"[A-Za-z]+", v) if w]
+    initials = "".join(w[0].upper() for w in toks if w and w[0].isalpha())
+    if 3 <= len(initials) <= 10:
+        return initials
+    return ""
+
+
+def _core_parse_rows(html_text: str) -> list[dict]:
+    s = str(html_text or "")
+    rows: list[dict] = []
+    for m in re.finditer(
+        r"<tr[^>]*onclick=\"navigate\('[^']+'\)\"[^>]*>\s*"
+        r"<td>\s*(.*?)\s*</td>\s*"
+        r"<td[^>]*>\s*(.*?)\s*</td>\s*"
+        r"<td[^>]*>\s*(.*?)\s*</td>\s*"
+        r"<td[^>]*>\s*([A*BC]+)\s*</td>",
+        s,
+        flags=re.I | re.S,
+    ):
+        title = re.sub(r"<[^>]+>", " ", str(m.group(1) or ""))
+        acr = re.sub(r"<[^>]+>", " ", str(m.group(2) or ""))
+        source = re.sub(r"<[^>]+>", " ", str(m.group(3) or ""))
+        rank = re.sub(r"<[^>]+>", " ", str(m.group(4) or ""))
+        rows.append(
+            {
+                "title": " ".join(title.split()).strip(),
+                "acronym": " ".join(acr.split()).strip(),
+                "source": " ".join(source.split()).strip(),
+                "rank": " ".join(rank.split()).strip(),
+            }
+        )
+        if len(rows) >= 24:
+            break
+    return rows
+
+
+@lru_cache(maxsize=256)
+def _lookup_core_tier(venue: str) -> dict | None:
+    v = " ".join(str(venue or "").strip().split())
+    if not v:
+        return None
+    acr = _guess_conf_acronym(v)
+    v_clean = _clean_conf_query_text(v)
+    queries: list[str] = []
+    for q in [acr, v_clean, v]:
+        qn = " ".join(str(q or "").split()).strip()
+        if qn and qn not in queries:
+            queries.append(qn)
+    # Keep query budget bounded to avoid long pending states in UI workers.
+    sources = ["ICORE2026", "CORE2023", "CORE2021", "CORE2020"]
+    start_ts = time.monotonic()
+    budget_s = 9.0
+    best = None
+    best_sc = -1.0
+    best_name_sim = 0.0
+    for q in queries:
+        if (time.monotonic() - start_ts) > budget_s:
+            break
+        if not q:
+            continue
+        for src in sources:
+            if (time.monotonic() - start_ts) > budget_s:
+                break
+            url = "https://portal.core.edu.au/conf-ranks/"
+            params = {"search": q, "by": "all", "source": src, "sort": "atitle", "page": "1"}
+            try:
+                r = requests.get(url, params=params, timeout=3.2, headers={"User-Agent": "Pi-zaya-KB/1.0"})
+                if r.status_code != 200:
+                    continue
+                rows = _core_parse_rows(r.text)
+            except Exception:
+                continue
+            for row in rows:
+                title = str(row.get("title") or "")
+                acronym = str(row.get("acronym") or "")
+                rank = str(row.get("rank") or "").strip()
+                if not rank:
+                    continue
+                sc_main = _text_sim(v, title)
+                sc_clean = _text_sim(v_clean, title) if v_clean else 0.0
+                sc = max(sc_main, sc_clean)
+                if acr and acronym and (acronym.upper() == acr.upper()):
+                    sc += 1.2
+                if q and title and (_text_sim(q, title) >= 0.92):
+                    sc += 0.3
+                if sc > best_sc:
+                    best_sc = sc
+                    best_name_sim = max(sc_main, sc_clean)
+                    best = {
+                        "conference_tier": rank,
+                        "conference_rank_source": src,
+                        "conference_name": title,
+                        "conference_acronym": acronym,
+                        "conference_match_confidence": round(float(best_name_sim), 3),
+                    }
+            if best_sc >= 1.3:
+                break
+        if best_sc >= 1.3:
+            break
+    if not isinstance(best, dict):
+        return None
+    if best_sc < 0.88:
+        return None
+    return best
+
+
+def _core_tier_to_ccf(tier: str) -> str:
+    t = str(tier or "").strip().upper()
+    if not t:
+        return ""
+    if t.startswith("A"):
+        return "A"
+    if t.startswith("B"):
+        return "B"
+    if t.startswith("C"):
+        return "C"
+    return ""
+
+
+def _enrich_bibliometrics(meta: dict | None) -> dict | None:
+    if not isinstance(meta, dict):
+        return None
+    out = dict(meta)
+    doi = str(out.get("doi") or "").strip()
+    venue = str(out.get("venue") or "").strip()
+    issn = _normalize_issn(str(out.get("issn") or ""))
+    eissn = _normalize_issn(str(out.get("eissn") or ""))
+    venue_kind = _infer_venue_kind(out)
+    out["venue_kind"] = venue_kind
+    venue_verified = False
+
+    if doi:
+        ox = _openalex_work_by_doi(doi)
+        if isinstance(ox, dict):
+            try:
+                out["citation_count"] = int(ox.get("cited_by_count") or 0)
+            except Exception:
+                pass
+            out["citation_source"] = "OpenAlex"
+            src0 = ((ox.get("primary_location") or {}).get("source") or {})
+            ox_venue = str(src0.get("display_name") or "").strip()
+            ox_issn_l = _normalize_issn(str(src0.get("issn_l") or ""))
+            ox_issn_all = _normalize_issn_list(src0.get("issn"))
+            if ox_venue:
+                out["openalex_venue"] = ox_venue
+                out["venue_match_confidence"] = round(_text_sim(venue, ox_venue), 3)
+            if ox_issn_l:
+                out["openalex_issn_l"] = ox_issn_l
+            if ox_issn_all:
+                out["openalex_issn_set"] = sorted(ox_issn_all)
+
+            crossref_issn_set = {x for x in {issn, eissn} if x}
+            issn_hit = bool(crossref_issn_set & ({ox_issn_l} if ox_issn_l else set())) or bool(
+                crossref_issn_set & ox_issn_all
+            )
+            name_hit = bool(ox_venue and (_text_sim(venue, ox_venue) >= 0.78))
+            if issn_hit or name_hit:
+                venue_verified = True
+                out["venue_verified_by"] = "OpenAlex DOI source"
+                if ox_venue and (not venue or _text_sim(ox_venue, venue) > 0.90):
+                    out["venue"] = ox_venue
+    if ("citation_count" not in out) and isinstance(out.get("crossref_cited_by_count"), int):
+        out["citation_count"] = int(out.get("crossref_cited_by_count") or 0)
+        out["citation_source"] = "Crossref"
+
+    # DOI-resolved Crossref metadata is already high confidence for venue mapping.
+    if doi and (not venue_verified):
+        venue_verified = True
+        out["venue_verified_by"] = str(out.get("venue_verified_by") or "Crossref DOI")
+    out["venue_verified"] = venue_verified
+
+    if venue_kind == "journal":
+        # Only expose IF when journal mapping is verified (DOI/OpenAlex) to avoid wrong-journal IF.
+        if venue_verified:
+            jif_meta = _lookup_journal_if(out)
+            if isinstance(jif_meta, dict):
+                out.update(jif_meta)
+    else:
+        tier_meta = _lookup_core_tier(venue)
+        if isinstance(tier_meta, dict):
+            out.update(tier_meta)
+            ccf_tier = _core_tier_to_ccf(str(tier_meta.get("conference_tier") or ""))
+            if ccf_tier:
+                out["conference_ccf"] = ccf_tier
+                out["conference_ccf_source"] = "CORE tier proxy"
+
+    out["bibliometrics_checked"] = True
+    return out
+
+
+def _metrics_html(meta: dict) -> str:
+    if not isinstance(meta, dict):
+        return ""
+
+    parts: list[str] = []
+
+    cnum = meta.get("citation_count")
+    if isinstance(cnum, int) and cnum >= 0:
+        csrc = str(meta.get("citation_source") or "").strip()
+        if csrc:
+            parts.append(
+                f"\u88ab\u5f15<strong>{int(cnum)}</strong> "
+                f"<span class='kb-ref-metric-src'>({html.escape(csrc)})</span>"
+            )
+        else:
+            parts.append(f"\u88ab\u5f15<strong>{int(cnum)}</strong>")
+    else:
+        parts.append("\u88ab\u5f15<span class='kb-ref-metric-na'>N/A</span>")
+
+    year = str(meta.get("year") or "").strip()
+    if re.fullmatch(r"(19|20)\d{2}", year):
+        parts.append(f"\u5e74\u4efd<strong>{html.escape(year)}</strong>")
+
+    doi = str(meta.get("doi") or "").strip()
+    if doi:
+        doi_url = doi
+        if not re.match(r"^https?://", doi_url, flags=re.I):
+            doi_url = "https://doi.org/" + quote(doi_url, safe="/:;._-()")
+        parts.append(
+            "DOI"
+            f"<a class='kb-ref-doi-link' href='{html.escape(doi_url, quote=True)}' "
+            "target='_blank' rel='noopener noreferrer'>"
+            f"{html.escape(doi)}</a>"
+        )
+
+    kind = str(meta.get("venue_kind") or "").strip().lower()
+    if kind == "conference":
+        conf_acr = str(meta.get("conference_acronym") or "").strip()
+        conf_name = str(meta.get("conference_name") or meta.get("venue") or "").strip()
+        conf_label = conf_acr if conf_acr else conf_name
+        if conf_label:
+            parts.append(f"\u4f1a\u8bae<strong>{html.escape(conf_label)}</strong>")
+
+        tier = str(meta.get("conference_tier") or "").strip()
+        src = str(meta.get("conference_rank_source") or "").strip()
+        if tier:
+            txt = f"CORE<strong>{html.escape(tier)}</strong>"
+            if src:
+                txt += f" <span class='kb-ref-metric-src'>({html.escape(src)})</span>"
+            parts.append(txt)
+        else:
+            parts.append("CORE<span class='kb-ref-metric-na'>N/A</span>")
+
+        ccf = str(meta.get("conference_ccf") or "").strip().upper()
+        ccf_src = str(meta.get("conference_ccf_source") or "").strip()
+        if ccf:
+            txt = f"CCF<strong>{html.escape(ccf)}</strong>"
+            if ccf_src:
+                txt += f" <span class='kb-ref-metric-src'>({html.escape(ccf_src)})</span>"
+            parts.append(txt)
+        else:
+            parts.append("CCF<span class='kb-ref-metric-na'>N/A</span>")
+
+        parts.append("IF<span class='kb-ref-metric-na'>N/A (\u4f1a\u8bae)</span>")
+
+    else:
+        venue = str(meta.get("venue") or "").strip()
+        if venue:
+            parts.append(f"\u671f\u520a<strong>{html.escape(venue)}</strong>")
+
+        jif = meta.get("journal_if")
+        jq = str(meta.get("journal_quartile") or "").strip()
+        jsrc = str(meta.get("journal_if_source") or "").strip()
+        if isinstance(jif, (int, float)) and float(jif) > 0:
+            jif_s = f"{float(jif):.3f}".rstrip("0").rstrip(".")
+            txt = f"IF<strong>{html.escape(jif_s)}</strong>"
+            if jq:
+                txt += f" <span class='kb-ref-metric-tag'>{html.escape(jq)}</span>"
+            if jsrc:
+                txt += f" <span class='kb-ref-metric-src'>({html.escape(jsrc)})</span>"
+            parts.append(txt)
+        else:
+            parts.append("IF<span class='kb-ref-metric-na'>N/A</span>")
+
+    if not parts:
+        return ""
+    return "<div class='kb-ref-metrics-row'>" + " | ".join(parts) + "</div>"
+
+
 def _parse_filename_meta(path_str: str) -> tuple[str, str, str]:
     name = Path(path_str).stem
     if name.lower().endswith(".en"):
@@ -576,108 +2196,257 @@ def _parse_filename_meta(path_str: str) -> tuple[str, str, str]:
     return "", "", name
 
 
-# --- Callback Function (THE FIX) ---
 # --- Async Citation Worker ---
 
-def _bg_citation_worker(task_id: str, net_key: str, source_path: str, venue_hint: str, year_hint: str):
+def _has_metrics_payload(meta: dict | None) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    if bool(meta.get("bibliometrics_checked")):
+        return True
+    if isinstance(meta.get("citation_count"), int):
+        return True
+    if isinstance(meta.get("journal_if"), (int, float)):
+        return True
+    if str(meta.get("conference_tier") or "").strip():
+        return True
+    return False
+
+
+_CITATION_TASK_TIMEOUT_S = 90.0
+_CITATION_RETRY_COOLDOWN_S = 8.0
+_CITATION_MAX_RETRIES = 2
+_CITATION_FAIL_BACKOFF_S = 120.0
+
+
+def _sync_citation_task_state(net_key: str) -> tuple[dict | None, bool, bool, bool]:
+    """
+    Returns: (net_data, failed, pending, changed)
+    """
+    net_data = st.session_state.get(net_key)
+    failed = bool(st.session_state.get(f"{net_key}_failed", False))
+    pending = False
+    changed = False
+
+    if isinstance(net_data, dict) and _has_metrics_payload(net_data):
+        return net_data, failed, pending, changed
+    if failed:
+        return (net_data if isinstance(net_data, dict) else None), failed, pending, changed
+
     from kb import runtime_state as RUNTIME
-    
-    # 0. Try to load stored citation metadata from library_store first
-    found = None
-    try:
-        # Get library_store from session_state (set by app.py)
-        lib_store = st.session_state.get("lib_store")
-        if lib_store:
-            # Try to resolve PDF path from source_path
-            pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
-            if pdf_root_str:
-                pdf_root = Path(pdf_root_str)
-                pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
-                if pdf_path and pdf_path.exists():
-                    stored_meta = lib_store.get_citation_meta(pdf_path)
-                    if stored_meta and isinstance(stored_meta, dict):
-                        found = stored_meta
-    except Exception:
-        pass  # Fallback to fetching if stored metadata not available
-    
-    # 1. If no stored metadata, fetch from Crossref
-    if not found:
-        l_title_hint = os.path.basename(source_path)
-        try:
-            if l_title_hint.lower().endswith(".pdf"):
-                l_title_hint = l_title_hint[:-4]
-            search_title = _infer_title_from_source_text(source_path, l_title_hint)
-        except Exception:
-            search_title = l_title_hint
 
-        # 2. Fetch (Blocking I/O)
-        found = fetch_crossref_meta(
-            search_title,
-            source_path=source_path,
-            expected_venue=venue_hint,
-            expected_year=year_hint,
-        )
-
-    # 3. Update State
+    task_id = f"cite_task_{net_key}"
     with RUNTIME.CITATION_LOCK:
-        tasks = RUNTIME.CITATION_TASKS
-        if task_id in tasks:
-            t = tasks[task_id]
-            t["done"] = True
-            t["result"] = found
-            # Also update session_state copy if possible? 
-            # No, stream lit session state is thread-local usually. 
-            # We rely on the UI poll to pick it up from RUNTIME.CITATION_TASKS.
+        task = RUNTIME.CITATION_TASKS.get(task_id)
+
+    if not task:
+        return (net_data if isinstance(net_data, dict) else None), failed, pending, changed
+
+    if task.get("done"):
+        res = task.get("result")
+        err_msg = str(task.get("error") or "").strip()
+        changed = True
+        if isinstance(res, dict):
+            st.session_state[net_key] = res
+            net_data = res
+            st.session_state.pop(f"{net_key}_failed", None)
+            st.session_state.pop(f"{net_key}_failed_ts", None)
+            st.session_state.pop(f"{net_key}_failed_reason", None)
+            st.session_state[f"{net_key}_retry_n"] = 0
+        else:
+            st.session_state[f"{net_key}_failed"] = True
+            st.session_state[f"{net_key}_failed_ts"] = float(time.time())
+            st.session_state[f"{net_key}_failed_reason"] = (err_msg or "no_result")[:180]
+            failed = True
+        with RUNTIME.CITATION_LOCK:
+            RUNTIME.CITATION_TASKS.pop(task_id, None)
+    else:
+        try:
+            created_at = float(task.get("created_at") or 0.0)
+        except Exception:
+            created_at = 0.0
+        # Guard against a stuck background thread: never keep "pending" forever.
+        if created_at > 0 and (time.time() - created_at) > _CITATION_TASK_TIMEOUT_S:
+            with RUNTIME.CITATION_LOCK:
+                t2 = RUNTIME.CITATION_TASKS.get(task_id)
+                if isinstance(t2, dict):
+                    t2["done"] = True
+                    t2["result"] = None
+                    t2["error"] = str(t2.get("error") or "timeout")
+            st.session_state[f"{net_key}_failed"] = True
+            st.session_state[f"{net_key}_failed_ts"] = float(time.time())
+            st.session_state[f"{net_key}_failed_reason"] = "timeout"
+            failed = True
+            changed = True
+        else:
+            pending = True
+
+    return (net_data if isinstance(net_data, dict) else None), failed, pending, changed
 
 
-# --- Callback Function (Async) ---
+def _ensure_citation_task(net_key: str, source_path: str) -> None:
+    existing = st.session_state.get(net_key)
+    if isinstance(existing, dict) and _has_metrics_payload(existing):
+        return
+    if st.session_state.get(f"{net_key}_failed"):
+        now_ts = float(time.time())
+        try:
+            failed_ts = float(st.session_state.get(f"{net_key}_failed_ts") or 0.0)
+        except Exception:
+            failed_ts = 0.0
+        try:
+            retry_n = int(st.session_state.get(f"{net_key}_retry_n") or 0)
+        except Exception:
+            retry_n = 0
+        if (now_ts - failed_ts) < _CITATION_RETRY_COOLDOWN_S:
+            return
+        if (retry_n >= _CITATION_MAX_RETRIES) and ((now_ts - failed_ts) < _CITATION_FAIL_BACKOFF_S):
+            return
+        st.session_state.pop(f"{net_key}_failed", None)
+        st.session_state.pop(f"{net_key}_failed_reason", None)
+
+    from kb import runtime_state as RUNTIME
+    import threading
+
+    task_id = f"cite_task_{net_key}"
+    with RUNTIME.CITATION_LOCK:
+        if task_id in RUNTIME.CITATION_TASKS:
+            return
+        RUNTIME.CITATION_TASKS[task_id] = {
+            "created_at": time.time(),
+            "done": False,
+            "result": None,
+            "net_key": net_key,
+        }
+    try:
+        st.session_state[f"{net_key}_retry_n"] = int(st.session_state.get(f"{net_key}_retry_n") or 0) + 1
+    except Exception:
+        st.session_state[f"{net_key}_retry_n"] = 1
+
+    l_venue, l_year, _ = _parse_filename_meta(source_path)
+    try:
+        pdf_root_hint = str(st.session_state.get("pdf_dir") or "").strip()
+    except Exception:
+        pdf_root_hint = ""
+    try:
+        md_root_hint = str(st.session_state.get("md_dir") or "").strip()
+    except Exception:
+        md_root_hint = ""
+    try:
+        lib_store_obj = st.session_state.get("lib_store")
+    except Exception:
+        lib_store_obj = None
+    t = threading.Thread(
+        target=_bg_citation_worker,
+        args=(task_id, net_key, source_path, l_venue, l_year, pdf_root_hint, md_root_hint, lib_store_obj),
+        daemon=True,
+    )
+    t.start()
+
+
+def _bg_citation_worker(
+    task_id: str,
+    net_key: str,
+    source_path: str,
+    venue_hint: str,
+    year_hint: str,
+    pdf_root_hint: str = "",
+    md_root_hint: str = "",
+    lib_store_obj=None,
+):
+    from kb import runtime_state as RUNTIME
+
+    found = None
+    pdf_path = None
+    lib_store = lib_store_obj
+    worker_error = ""
+    try:
+        if lib_store and pdf_root_hint:
+            pdf_root = Path(pdf_root_hint)
+            pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
+            if pdf_path and pdf_path.exists():
+                stored_meta = lib_store.get_citation_meta(pdf_path)
+                if stored_meta and isinstance(stored_meta, dict):
+                    found = dict(stored_meta)
+
+        need_fetch = not isinstance(found, dict)
+        if isinstance(found, dict):
+            has_title = bool(str(found.get("title") or "").strip())
+            has_doi = bool(str(found.get("doi") or "").strip())
+            has_venue = bool(str(found.get("venue") or "").strip())
+            need_fetch = not (has_title and has_venue and has_doi)
+
+        if need_fetch:
+            l_title_hint = os.path.basename(source_path)
+            try:
+                if l_title_hint.lower().endswith(".pdf"):
+                    l_title_hint = l_title_hint[:-4]
+                search_title = _infer_title_from_source_text(
+                    source_path,
+                    l_title_hint,
+                    md_root_hint=md_root_hint,
+                )
+            except Exception:
+                search_title = l_title_hint
+
+            fetched = fetch_crossref_meta(
+                search_title,
+                source_path=source_path,
+                expected_venue=venue_hint,
+                expected_year=year_hint,
+                md_root_hint=md_root_hint,
+            )
+            if isinstance(fetched, dict):
+                if isinstance(found, dict):
+                    merged = dict(found)
+                    merged.update({k: v for k, v in fetched.items() if v not in (None, "", [], {})})
+                    found = merged
+                else:
+                    found = fetched
+
+        if isinstance(found, dict) and (not bool(found.get("bibliometrics_checked"))):
+            try:
+                enriched = _enrich_bibliometrics(found)
+                if isinstance(enriched, dict):
+                    found = enriched
+                else:
+                    found["bibliometrics_checked"] = True
+            except Exception:
+                found["bibliometrics_checked"] = True
+
+        try:
+            if isinstance(found, dict) and lib_store and pdf_path and pdf_path.exists() and hasattr(lib_store, "set_citation_meta"):
+                lib_store.set_citation_meta(pdf_path, found)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    except Exception as exc:
+        worker_error = str(exc or "").strip()[:260]
+        found = None
+    finally:
+        with RUNTIME.CITATION_LOCK:
+            tasks = RUNTIME.CITATION_TASKS
+            if task_id in tasks:
+                t = tasks[task_id]
+                t["done"] = True
+                t["result"] = found
+                if worker_error:
+                    t["error"] = worker_error
+
+
 def _on_cite_click(cite_key: str, net_key: str, source_path: str, refs_open_key: str = ""):
     """
-    Triggers background fetch if data missing, returns immediately.
+    Toggle cite detail panel and trigger async fetch if needed.
     """
     if refs_open_key:
         st.session_state[refs_open_key] = True
 
-    # 1. Toggle visibility
     new_state = not st.session_state.get(cite_key, False)
     st.session_state[cite_key] = new_state
-
-    # 2. If opening, start background task if needed
     if new_state:
-        # Check if we already have data
-        if st.session_state.get(net_key):
-            return
-        if st.session_state.get(f"{net_key}_failed"):
-            return
-
-        from kb import runtime_state as RUNTIME
-        import threading
-        import uuid
-
-        # Check if task already running
-        task_id = f"cite_task_{net_key}"
-        with RUNTIME.CITATION_LOCK:
-            if task_id in RUNTIME.CITATION_TASKS:
-                return # Already running
-            
-            # Start new task
-            RUNTIME.CITATION_TASKS[task_id] = {
-                "created_at": time.time(),
-                "done": False,
-                "result": None,
-                "net_key": net_key,
-            }
-
-        # Prepare hints
-        l_venue, l_year, _ = _parse_filename_meta(source_path)
-        
-        # Fire thread
-        t = threading.Thread(
-            target=_bg_citation_worker,
-            args=(task_id, net_key, source_path, l_venue, l_year),
-            daemon=True
-        )
-        t.start()
+        st.session_state.pop(f"{net_key}_failed", None)
+        st.session_state.pop(f"{net_key}_failed_ts", None)
+        st.session_state.pop(f"{net_key}_failed_reason", None)
+        st.session_state[f"{net_key}_retry_n"] = 0
+        _ensure_citation_task(net_key, source_path)
 
 
 def _render_refs(
@@ -689,7 +2458,12 @@ def _render_refs(
         refs_open_key: str = "",
         settings=None,
 ) -> None:
-    del settings  # backward compatibility
+    settings_obj = settings
+    refs_panel_open = True
+    if refs_open_key:
+        # Expander state is not reliably mirrored into session_state when user manually toggles.
+        # Default to visible once rendering starts, so metric tasks are not starved.
+        refs_panel_open = bool(st.session_state.get(refs_open_key, True))
 
     filtered_hits: list[dict] = []
     for h in hits or []:
@@ -707,147 +2481,243 @@ def _render_refs(
 
     pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
     pdf_root = Path(pdf_root_str) if pdf_root_str else None
-    # "Show full snippet" feature removed.
-    show_context = False
+
+    def _norm_text(s: str) -> str:
+        return re.sub(r"\s+", " ", str(s or "").strip()).strip()
+
+    def _loc_chip_html(label: str, value: str) -> str:
+        v = str(value or "").strip()
+        if not v:
+            return ""
+        return (
+            "<span class='kb-ref-loc-chip'>"
+            f"<span class='kb-ref-loc-chip-label'>{html.escape(label)}</span>"
+            f"<span class='kb-ref-loc-chip-value'>{html.escape(v)}</span>"
+            "</span>"
+        )
+
+    def _insight_card_html(tag: str, title: str, text: str) -> str:
+        body = _norm_text(text)
+        if not body:
+            return ""
+        return (
+            "<div class='kb-ref-insight-card'>"
+            "<div class='kb-ref-insight-head'>"
+            f"<span class='kb-ref-insight-tag'>{html.escape(tag)}</span>"
+            f"<span class='kb-ref-guide-label kb-ref-inline-label'>{html.escape(title)}</span>"
+            "</div>"
+            f"<div class='kb-ref-insight-text'>{html.escape(body)}</div>"
+            "</div>"
+        )
+
+    any_metric_changed = False
+    any_metric_pending = False
+    any_pack_pending = False
 
     for i, h in enumerate(filtered_hits, start=1):
         meta = h.get("meta", {}) or {}
         source_path = str(meta.get("source_path") or "").strip()
-        heading_path = str(meta.get("ref_best_heading_path") or meta.get("heading_path") or "").strip()
+        heading_path = _sanitize_heading_path_ui(
+            str(meta.get("ref_best_heading_path") or meta.get("heading_path") or "").strip(),
+            prompt=prompt,
+            source_path=source_path,
+        )
         heading = str(meta.get("top_heading") or _top_heading(heading_path) or _top_heading(str(meta.get("heading_path") or "")) or "").strip()
+        if heading and _is_non_navigational_heading_ui(heading, prompt=prompt, source_path=source_path):
+            heading = ""
+        if heading and _looks_like_doc_title_heading_ui(heading, source_path):
+            heading = ""
         section_label = str(meta.get("ref_section") or "").strip()
         subsection_label = str(meta.get("ref_subsection") or "").strip()
+        if section_label and _is_non_navigational_heading_ui(section_label, prompt=prompt, source_path=source_path):
+            section_label = ""
+        if subsection_label and _is_non_navigational_heading_ui(subsection_label, prompt=prompt, source_path=source_path):
+            subsection_label = ""
         if (not section_label) and heading_path:
             section_label, subsection_label = _split_section_subsection(heading_path)
+        if section_label and _looks_like_doc_title_heading_ui(section_label, source_path):
+            # Hide title-line pseudo sections; show page and semantic guidance instead.
+            section_label = ""
+            subsection_label = ""
         p0, p1 = _safe_page_range(meta)
         score = float(h.get("score", 0.0) or 0.0)
 
-        # Basic Info
         source_label = _display_source_name(source_path)
-        heading_label = (heading_path or heading or "").strip()  # Use full heading path when available
+        heading_label = (heading_path or heading or "").strip()
+        # Avoid duplicated location text: when heading path is shown, hide section chips.
+        section_chip_label = section_label
+        subsection_chip_label = subsection_label
+        if heading_label:
+            section_chip_label = ""
+            subsection_chip_label = ""
         score_s = f"{score:.2f}" if score > 0 else "-"
         score_tier = _score_tier(score)
 
         source_attr = html.escape(source_label, quote=True)
-        heading_attr = html.escape((heading_path or heading), quote=True) if (heading_path or heading) else ""
+        heading_attr = html.escape(heading_label, quote=True) if heading_label else ""
         source_html = html.escape(source_label)
-        heading_html = html.escape(heading_path or heading) if (heading_path or heading) else ""
-        if p0 and p1 and p1 > p0:
-            page_chip = f"<span class='ref-chip'>p.{int(p0)}-{int(p1)}</span>"
-        elif p0:
-            page_chip = f"<span class='ref-chip'>p.{int(p0)}</span>"
-        else:
-            page_chip = ""
 
         pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
         has_pdf = bool(pdf_path)
         uid = hashlib.sha1(str(source_path).encode("utf-8", "ignore")).hexdigest()[:10]
         cite_key = f"{key_ns}_cite_visible_{uid}"
-        net_key = f"{key_ns}_net_meta_v5_{uid}"
+        net_key = f"{key_ns}_net_meta_v6_{uid}"
         is_cite_open = st.session_state.get(cite_key, False)
 
-        # Compact layout: rank, filename, buttons, page chip, score
-        header_cols = st.columns([0.28, 3.5, 0.55, 0.55, 0.52, 0.6])
-        
-        with header_cols[0]:
-            st.markdown(
-                f"<div style='display:flex; align-items:center; height:100%;'><span class='ref-rank'>#{i}</span></div>",
-                unsafe_allow_html=True
-            )
-        
-        with header_cols[1]:
-            st.markdown(
-                f"<div style='display:flex; align-items:center; height:100%;'><span class='ref-source-compact' title='{source_attr}'>{source_html}</span></div>",
-                unsafe_allow_html=True
-            )
-        
-        with header_cols[2]:
-            if st.button("Open", key=f"{key_ns}_open_pdf_{uid}", help="Open PDF", disabled=(not has_pdf)):
-                if refs_open_key:
-                    st.session_state[refs_open_key] = True
-                ok, msg = _open_pdf(pdf_path)
-                if not ok:
-                    st.warning(msg)
-        
-        with header_cols[3]:
-            btn_label = "Close" if is_cite_open else "Cite"
-            st.button(
-                btn_label,
-                key=f"{key_ns}_cite_btn_{uid}",
-                help="Fetch citation",
-                on_click=_on_cite_click,
-                args=(cite_key, net_key, source_path, refs_open_key)
-            )
-        
-        with header_cols[4]:
-            if page_chip:
-                st.markdown(f"<div style='display:flex; align-items:center; height:100%;'>{page_chip}</div>", unsafe_allow_html=True)
-        
-        with header_cols[5]:
-            st.markdown(
-                f"<div style='display:flex; align-items:center; height:100%;'><span class='ref-score ref-score-{score_tier}'>score {score_s}</span></div>",
-                unsafe_allow_html=True
-            )
-        
-        # Subtitle (full heading path) if available
-        if heading_label:
-            st.markdown(
-                f"<div class='ref-item-sub-compact' title='{heading_attr}'>{heading_html}</div>",
-                unsafe_allow_html=True
-            )
+        net_meta = st.session_state.get(net_key)
+        metric_failed = bool(st.session_state.get(f"{net_key}_failed", False))
+        metric_pending = False
+        metric_changed = False
+        _ensure_citation_task(net_key, source_path)
+        net_meta, metric_failed, metric_pending, metric_changed = _sync_citation_task_state(net_key)
+        if metric_changed:
+            any_metric_changed = True
+        if metric_pending:
+            any_metric_pending = True
 
-        # Section / subsection guidance (explicitly shown for navigation)
-        loc_bits: list[str] = []
-        if section_label:
-            loc_bits.append(f"章节：{section_label}")
-        if subsection_label:
-            loc_bits.append(f"小节：{subsection_label}")
-        if loc_bits:
-            st.caption(" | ".join(loc_bits))
-
-        # Paper summary + relevance + reading navigation (collapsed by default)
         nav = _build_ref_navigation(meta, prompt=prompt, heading_fallback=heading)
         summary_line = str(nav.get("summary_line") or nav.get("what") or "").strip()
         why_line = str(nav.get("why") or "").strip()
+        if summary_line and (not why_line):
+            why_line = _fallback_why_line_ui(
+                prompt=prompt,
+                heading_label=heading_label,
+                section_label=section_label,
+                subsection_label=subsection_label,
+                find_terms=list(nav.get("find") or []),
+            )
+        pack_pending = bool(nav.get("pack_pending"))
+        pack_state_local = str(meta.get("ref_pack_state") or "").strip().lower()
+        pack_ready_local = pack_state_local == "ready"
+        if pack_pending:
+            any_pack_pending = True
+
+        loc_chip_parts: list[str] = []
+        if section_chip_label:
+            loc_chip_parts.append(_loc_chip_html("\u7ae0\u8282", section_chip_label))
+        if subsection_chip_label:
+            loc_chip_parts.append(_loc_chip_html("\u5c0f\u8282", subsection_chip_label))
+        if p0 and p1 and p1 > p0:
+            loc_chip_parts.append(_loc_chip_html("\u9875\u7801", f"{int(p0)}-{int(p1)}"))
+        elif p0:
+            loc_chip_parts.append(_loc_chip_html("\u9875\u7801", f"{int(p0)}"))
+
+        status_html = f"<span class='ref-score ref-score-{score_tier}'>\u5339\u914d\u5206 {score_s}</span>"
+
+        insight_cards: list[str] = []
         if summary_line:
-            st.markdown(
-                f"<div class='ref-item-sub-compact'><strong>一句话总结：</strong>{html.escape(summary_line)}</div>",
-                unsafe_allow_html=True,
-            )
+            insight_cards.append(_insight_card_html("\u6458\u8981", "\u8fd9\u7bc7\u6587\u732e\u8bb2\u4ec0\u4e48 / \u63d0\u4f9b\u4ec0\u4e48", summary_line))
         if why_line:
-            st.markdown(
-                f"<div class='ref-item-sub-compact'><strong>相关性：</strong>{html.escape(why_line)}</div>",
-                unsafe_allow_html=True,
-            )
+            insight_cards.append(_insight_card_html("\u76f8\u5173", "\u4e3a\u4ec0\u4e48\u4e0e\u5f53\u524d\u95ee\u9898\u5f3a\u76f8\u5173", why_line))
+        insights_html = (
+            f"<div class='kb-ref-insight-grid'>{''.join(insight_cards)}</div>"
+            if insight_cards
+            else ""
+        )
+        metrics_html = _metrics_html(net_meta) if isinstance(net_meta, dict) else ""
 
-        nav_has_details = bool(nav.get("start_from") or nav.get("gain") or nav.get("find") or summary_line or why_line)
-        if nav_has_details:
-            with st.expander("阅读指导（从哪里读起 / 看什么 / 能得到什么）", expanded=False):
-                sem_score = float(nav.get("sem_score") or 0.0)
-                if sem_score > 0:
-                    st.caption(f"语义相关度（深读重排）: {sem_score:.0f}/100")
-                if summary_line:
-                    st.markdown(f"**这篇文献讲了什么**：{html.escape(summary_line)}", unsafe_allow_html=True)
-                if why_line:
-                    st.markdown(f"**它为什么和你的问题强相关**：{html.escape(why_line)}", unsafe_allow_html=True)
-                if nav.get("start_from"):
-                    st.markdown(f"**建议从哪里开始读**：{html.escape(str(nav.get('start_from')))}", unsafe_allow_html=True)
-                if nav.get("gain"):
-                    st.markdown(f"**读完这部分你能获得什么（与当前提问相关）**：{html.escape(str(nav.get('gain')))}", unsafe_allow_html=True)
-                find_items = nav.get("find") or []
-                if isinstance(find_items, list):
-                    find_items = [str(x).strip() for x in find_items if str(x).strip()]
-                if find_items:
-                    st.markdown("**阅读时优先关注**：")
-                    for item in find_items[:4]:
-                        st.markdown(f"- {html.escape(str(item))}", unsafe_allow_html=True)
+        with st.container():
+            header_cols = st.columns([0.50, 6.2, 1.0, 1.0], gap="small")
 
+            with header_cols[0]:
+                st.markdown(
+                    "<div class='kb-ref-rank-wrap'><span class='ref-rank'>"
+                    f"#{i}"
+                    "</span></div>",
+                    unsafe_allow_html=True,
+                )
 
-        # Render Citation UI (if open)
-        if st.session_state.get(cite_key, False):
-            _render_citation_ui(uid, source_path, key_ns)
+            with header_cols[1]:
+                title_block = (
+                    "<div class='kb-ref-header-block'>"
+                    "<div class='kb-ref-title-row'>"
+                    "<div class='kb-ref-title-stack'>"
+                    f"<div class='kb-ref-title' title='{source_attr}'>{source_html}</div>"
+                )
+                title_block += "<div class='kb-ref-heading-meta-row'>"
+                if heading_label:
+                    title_block += (
+                        f"<div class='kb-ref-heading-path' title='{heading_attr}'>{html.escape(heading_label)}</div>"
+                    )
+                title_block += f"<div class='kb-ref-heading-score-wrap'>{status_html}</div>"
+                title_block += "</div>"
+                title_block += "</div></div></div>"
+                st.markdown(title_block, unsafe_allow_html=True)
 
-        st.markdown("<div class='ref-item-gap-compact'></div>", unsafe_allow_html=True)
+            with header_cols[2]:
+                if st.button(
+                    "Open",
+                    key=f"{key_ns}_open_pdf_{uid}",
+                    help="Open PDF",
+                    disabled=(not has_pdf),
+                ):
+                    if refs_open_key:
+                        st.session_state[refs_open_key] = True
+                    ok, msg = _open_pdf(pdf_path)
+                    if not ok:
+                        st.warning(msg)
+
+            with header_cols[3]:
+                btn_label = "Close" if is_cite_open else "Cite"
+                st.button(
+                    btn_label,
+                    key=f"{key_ns}_cite_btn_{uid}",
+                    help="Fetch citation",
+                    on_click=_on_cite_click,
+                    args=(cite_key, net_key, source_path, refs_open_key),
+                )
+
+            if loc_chip_parts:
+                st.markdown(
+                    f"<div class='kb-ref-loc-row'>{''.join(loc_chip_parts)}</div>",
+                    unsafe_allow_html=True,
+                )
+
+            if insights_html:
+                st.markdown(insights_html, unsafe_allow_html=True)
+            elif pack_pending:
+                st.caption("摘要与相关性正在生成中…")
+            elif pack_ready_local:
+                st.caption("LLM 摘要暂不可用")
+            elif pack_state_local == "none":
+                st.caption("摘要与相关性生成失败或超时（本次未产出）")
+            elif settings_obj and getattr(settings_obj, "api_key", None):
+                st.caption("摘要与相关性待 LLM 生成")
+            else:
+                st.caption("未配置 LLM，摘要与相关性不可用")
+
+            if metrics_html:
+                st.markdown(metrics_html, unsafe_allow_html=True)
+            elif metric_pending and (refs_panel_open or is_cite_open):
+                st.caption("文献指标检索中…")
+            elif metric_failed:
+                fail_reason = str(st.session_state.get(f"{net_key}_failed_reason") or "").strip()
+                if fail_reason:
+                    st.caption(f"文献指标检索失败（{fail_reason}），可点击 Cite 重试")
+                else:
+                    st.caption("文献指标检索失败，可点击 Cite 重试")
+
+            if st.session_state.get(cite_key, False):
+                _render_citation_ui(uid, source_path, key_ns)
+
+        if i < len(filtered_hits):
+            st.markdown("<div class='kb-ref-item-gap'></div>", unsafe_allow_html=True)
+
+    if any_metric_changed:
+        st.experimental_rerun()
+    elif (any_metric_pending or any_pack_pending) and refs_panel_open:
+        # Light polling so async metrics resolve without requiring extra user actions.
+        poll_key = f"{key_ns}_refs_poll_ts"
+        now_ts = float(time.time())
+        try:
+            last_ts = float(st.session_state.get(poll_key) or 0.0)
+        except Exception:
+            last_ts = 0.0
+        interval_s = 0.55 if any_pack_pending else 0.9
+        if (now_ts - last_ts) >= interval_s:
+            st.session_state[poll_key] = now_ts
+            time.sleep(0.10 if any_pack_pending else 0.12)
+            st.experimental_rerun()
 
 
 # --- In-paper citation number resolver (e.g., "[45]" in body text) ---
@@ -1701,44 +3571,25 @@ def _parse_int_set(spec: str) -> list[int]:
 
 
 def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
-    net_key = f"{key_ns}_net_meta_v5_{uid}"
-    net_data = st.session_state.get(net_key)
-    fetch_failed = bool(st.session_state.get(f"{net_key}_failed", False))
-
-    # Async Check
+    net_key = f"{key_ns}_net_meta_v6_{uid}"
+    net_data, fetch_failed, pending, changed = _sync_citation_task_state(net_key)
     if (not net_data) and (not fetch_failed):
-        from kb import runtime_state as RUNTIME
-        task_id = f"cite_task_{net_key}"
-        with RUNTIME.CITATION_LOCK:
-            task = RUNTIME.CITATION_TASKS.get(task_id)
-        
-        if task:
-            if task.get("done"):
-                # Task finished, sync to session
-                res = task.get("result")
-                if res:
-                    st.session_state[net_key] = res
-                    net_data = res
-                else:
-                    st.session_state[f"{net_key}_failed"] = True
-                    fetch_failed = True
-                
-                # Cleanup task (optional, or keep generic cleaner)
-                # with RUNTIME.CITATION_LOCK:
-                #    RUNTIME.CITATION_TASKS.pop(task_id, None)
-                st.experimental_rerun()
-            else:
-                # Still running - show minimal loading indicator
-                st.markdown(
-                    "<div class='citation-loading'>检索中...</div>",
-                    unsafe_allow_html=True,
-                )
-                time.sleep(0.5) 
-                st.experimental_rerun()
-                return
-        else:
-             # Should not happen if button clicked, but safety fallback
-             pass
+        _ensure_citation_task(net_key, source_path)
+        net_data, fetch_failed, pending, changed2 = _sync_citation_task_state(net_key)
+        changed = changed or changed2
+
+    if changed:
+        st.experimental_rerun()
+        return
+
+    if (not net_data) and pending:
+        st.markdown(
+            "<div class='citation-loading'>检索中...</div>",
+            unsafe_allow_html=True,
+        )
+        time.sleep(0.5)
+        st.experimental_rerun()
+        return
 
     if not isinstance(net_data, dict):
         # Silently fail - don't show error messages

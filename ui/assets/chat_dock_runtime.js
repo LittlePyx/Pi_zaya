@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
   const host = window.parent || window;
   const root = host.document;
   if (!root || !root.body) return;
@@ -176,7 +176,7 @@
         if (!node) continue;
         n += 1;
         const rec = { n, node: _dbgElBrief(node) };
-        try { rec.inMain = !!(node.closest && node.closest("section.main")); } catch (e) {}
+        try { rec.inMain = !!isInMainRegion(node); } catch (e) {}
         try {
           rec.hasTextarea = !!node.querySelector("textarea");
           rec.hasUploader = !!node.querySelector('div[data-testid="stFileUploader"]');
@@ -335,7 +335,7 @@
     try { score += isInsideStaleNode(ta) ? -700 : 260; } catch (e) {}
     try { score += _isVisibleForDock(dockRoot) ? 280 : -360; } catch (e) {}
     try { score += _isVisibleForDock(ta) ? 180 : -220; } catch (e) {}
-    try { if (mainRegion && dockRoot.closest && dockRoot.closest('section.main')) score += 160; } catch (e) {}
+    try { if (mainRegion && isInMainRegion(dockRoot)) score += 160; } catch (e) {}
     try { if (submitWrap) score += 120; } catch (e) {}
     try { if (uploader) score += 80; } catch (e) {}
     try { score += hasSendButton(dockRoot) ? 220 : -180; } catch (e) {}
@@ -351,7 +351,17 @@
     return score;
   }
   function findMainRegion() {
-    return pickFresh(root.querySelectorAll('section.main'));
+    const byMain = pickFresh(root.querySelectorAll('section.main'));
+    if (byMain) return byMain;
+    return pickFresh(root.querySelectorAll('[data-testid="stAppViewContainer"]'));
+  }
+  function isInMainRegion(el) {
+    if (!el || !el.closest) return false;
+    try {
+      if (el.closest('section.main')) return true;
+      if (el.closest('[data-testid="stAppViewContainer"]')) return true;
+    } catch (e) {}
+    return false;
   }
   function findMainContainer() {
     return pickFresh([
@@ -632,13 +642,38 @@
       movedStop: !!movedStop,
     };
   }
-  function findPromptFormAndTextarea() {
+  var CHAT_DOCK_SELECTORS = [
+    '[data-testid="stAppViewContainer"] div[data-testid="stForm"]:has(> form:has(div[data-testid="stTextArea"]):has(div[data-testid="stFileUploader"]))',
+    '[data-testid="stAppViewContainer"] form:has(div[data-testid="stTextArea"]):has(div[data-testid="stFileUploader"])',
+    'section.main div[data-testid="stForm"]:has(> form:has(div[data-testid="stTextArea"]):has(div[data-testid="stFileUploader"]))',
+    'section.main form:has(div[data-testid="stTextArea"]):has(div[data-testid="stFileUploader"])',
+    '.kb-chat-dock-root'
+  ];
+  function findChatDockByStructure(doc) {
+    if (!doc || !doc.querySelector) return { form: null, ta: null };
+    for (var i = 0; i < CHAT_DOCK_SELECTORS.length; i++) {
+      try {
+        var el = doc.querySelector(CHAT_DOCK_SELECTORS[i]);
+        if (!el || isInsideStaleNode(el)) continue;
+        var ta = _pickPromptTextareaIn(el);
+        if (ta) return { form: el, ta: ta };
+      } catch (e) {}
+    }
+    return { form: null, ta: null };
+  }
+  function findPromptFormAndTextareaInDoc(doc) {
+    var hit = findChatDockByStructure(doc);
+    if (hit.form && hit.ta) return hit;
+    if (!doc || !doc.querySelectorAll) return { form: null, ta: null };
     const seenRoots = (typeof Set !== "undefined") ? new Set() : null;
     const forms = [
-      ...root.querySelectorAll('form'),
-      ...root.querySelectorAll('div[data-testid="stForm"]')
+      ...doc.querySelectorAll('form'),
+      ...doc.querySelectorAll('div[data-testid="stForm"]')
     ];
-    const mainRegion = findMainRegion();
+    let mainRegion = null;
+    try {
+      mainRegion = pickFresh(doc.querySelectorAll('section.main')) || pickFresh(doc.querySelectorAll('[data-testid="stAppViewContainer"]'));
+    } catch (e) {}
     let best = null;
     let bestScore = -999999;
     for (const form of forms) {
@@ -660,7 +695,7 @@
         } catch (e) {}
       }
       if (isInsideStaleNode(dockRoot)) continue;
-      if (mainRegion && dockRoot.closest && !dockRoot.closest('section.main')) continue;
+      if (mainRegion && dockRoot.closest && !isInMainRegion(dockRoot)) continue;
       const ta = _pickPromptTextareaIn(dockRoot);
       if (!ta) continue;
       const submitWrap = _pickPromptSubmitWrapIn(dockRoot);
@@ -672,6 +707,22 @@
       }
     }
     return best || { form: null, ta: null };
+  }
+  function findPromptFormAndTextarea() {
+    let hit = findPromptFormAndTextareaInDoc(root);
+    if (hit.form && hit.ta) return hit;
+    try {
+      const iframes = root.querySelectorAll ? root.querySelectorAll('iframe') : [];
+      for (const frame of Array.from(iframes)) {
+        try {
+          const doc = frame.contentDocument || frame.contentWindow && frame.contentWindow.document;
+          if (!doc) continue;
+          hit = findPromptFormAndTextareaInDoc(doc);
+          if (hit.form && hit.ta) return hit;
+        } catch (e) {}
+      }
+    } catch (e) {}
+    return { form: null, ta: null };
   }
   function resetDockStyles(form) {
     if (!form) return;
@@ -789,11 +840,16 @@
     form.classList.add('kb-input-dock', 'kb-dock-positioned');
     try {
       if (!form.dataset || form.dataset.kbDockBaseApplied !== '1') {
+        form.style.setProperty('position', 'fixed', 'important');
+        form.style.setProperty('bottom', 'max(10px, env(safe-area-inset-bottom, 0px))', 'important');
+        form.style.setProperty('z-index', '40', 'important');
         form.style.setProperty('height', 'auto', 'important');
         form.style.setProperty('min-height', '0', 'important');
         form.style.setProperty('max-height', 'none', 'important');
         form.style.setProperty('flex', 'none', 'important');
         form.style.setProperty('display', 'block', 'important');
+        form.style.setProperty('backdrop-filter', 'saturate(118%) blur(8px)', 'important');
+        form.style.setProperty('-webkit-backdrop-filter', 'saturate(118%) blur(8px)', 'important');
         if (form.dataset) form.dataset.kbDockBaseApplied = '1';
       }
     } catch (e) {}
@@ -1516,6 +1572,41 @@
     try { form.addEventListener("drop", clearDragState, true); } catch (e) {}
     try { form.addEventListener("dragend", clearDragState, true); } catch (e) {}
   }
+  function injectDockStylesIntoDoc(targetDoc) {
+    try {
+      if (!targetDoc || !targetDoc.head || targetDoc.__kbDockStyleInjected) return;
+      targetDoc.__kbDockStyleInjected = true;
+      var script = targetDoc.createElement("script");
+      script.textContent = [
+        "(function(){",
+        "function styleDockRoot(r){",
+        "if(!r||!r.classList||r.classList.contains('kb-input-dock'))return;",
+        "r.classList.add('kb-input-dock','kb-dock-positioned');",
+        "r.style.setProperty('position','fixed','important');",
+        "r.style.setProperty('bottom','max(10px,env(safe-area-inset-bottom,0px))','important');",
+        "r.style.setProperty('z-index','40','important');",
+        "r.style.setProperty('left','50%','important');",
+        "r.style.setProperty('transform','translateX(-50%)','important');",
+        "r.style.setProperty('width','min(1220px,calc(100vw - 1.6rem))','important');",
+        "r.style.setProperty('backdrop-filter','saturate(118%) blur(8px)','important');",
+        "r.style.setProperty('-webkit-backdrop-filter','saturate(118%) blur(8px)','important');",
+        "}",
+        "var roots=document.querySelectorAll('form,div[data-testid=\"stForm\"]');",
+        "for(var i=0;i<roots.length;i++){",
+        "var el=roots[i];",
+        "if(el.querySelector('[data-testid=\"stTextArea\"]')&&el.querySelector('[data-testid=\"stFileUploader\"]')){",
+        "var root=el.tagName==='FORM'&&el.closest?el.closest('[data-testid=\"stForm\"]'):null;",
+        "if(!root)root=el;",
+        "styleDockRoot(root);",
+        "break;",
+        "}",
+        "}",
+        "})();"
+      ].join("");
+      targetDoc.head.appendChild(script);
+    } catch (e) {}
+  }
+
   function hook() {
     const hit = findPromptFormAndTextarea();
     if (!hit.form || !hit.ta) {
@@ -1526,6 +1617,8 @@
     const prevForm = (state.form && state.form !== hit.form) ? state.form : null;
     state.form = hit.form;
     state.ta = hit.ta;
+    var formDoc = state.form.ownerDocument || state.form.document;
+    if (formDoc) injectDockStylesIntoDoc(formDoc);
     ensurePromptRootMarkers(state.form);
     // Decorate/mount action wrappers first so the height sanity check measures the compact dock layout,
     // not Streamlit's temporary stacked form rows (textarea + uploader + submit).

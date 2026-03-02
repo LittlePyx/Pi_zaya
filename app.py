@@ -14,6 +14,7 @@ import uuid
 from pathlib import Path
 
 import streamlit as st
+from ui.runtime_patches_parts.theme_history_overrides import _history_sidebar_compact_css
 from ui.runtime_patches import (
     _init_theme_css,
     _inject_auto_rerun_once,
@@ -340,14 +341,103 @@ def _split_kb_miss_notice(text: str) -> tuple[str, str]:
     return (prefix, rest)
 
 
+def _task_is_actively_generating(task_obj: dict | None, *, conv_match: str | None = None) -> bool:
+    """
+    Treat refs post-processing (answer_ready=True) as non-blocking for composer/send.
+    """
+    if not isinstance(task_obj, dict):
+        return False
+    if str(task_obj.get("status") or "") != "running":
+        return False
+    if conv_match is not None and str(task_obj.get("conv_id") or "") != str(conv_match):
+        return False
+    if bool(task_obj.get("answer_ready") or False):
+        return False
+    return True
 
 
+def _page_chat_adaptive_polling(
+    session_id: str,
+    *,
+    chat_fragment_refresh_ok: bool,
+    running_for_conv: bool,
+    submitted: bool,
+    stop_clicked: bool,
+    disable_hooks: bool,
+) -> None:
+    """
+    Adaptive polling for chat streaming: prefer browser-side rerun pulses,
+    fall back to server sleep+rerun when frontend hooks are disabled.
+    """
+    if chat_fragment_refresh_ok or (not running_for_conv) or submitted or stop_clicked:
+        st.session_state.pop("_gen_poll_state", None)
+        st.session_state.pop("_kb_chat_poll_started_ts", None)
+        st.session_state.pop("_kb_chat_client_poll_ts", None)
+        return
 
+    t_live = _gen_get_task(session_id) or {}
+    poll_key = "_gen_poll_state"
+    prev = st.session_state.get(poll_key) or {}
+    prev_tid = str(prev.get("tid") or "")
+    prev_chars = int(prev.get("chars") or 0)
+    prev_stage = str(prev.get("stage") or "")
 
+    cur_tid = str(t_live.get("id") or "")
+    try:
+        cur_chars = int(t_live.get("char_count") or 0)
+    except Exception:
+        cur_chars = 0
+    cur_stage = str(t_live.get("stage") or "")
 
+    if cur_tid != prev_tid:
+        delay_s = 0.14
+    elif cur_chars > prev_chars:
+        delay_s = 0.16
+    elif cur_stage != prev_stage:
+        delay_s = 0.22
+    else:
+        delay_s = 0.42
 
+    st.session_state[poll_key] = {"tid": cur_tid, "chars": cur_chars, "stage": cur_stage}
 
+    client_poll_ok = False
+    if not disable_hooks:
+        pulse_label = "__KB_CHAT_POLL_PULSE__"
+        try:
+            if st.button(pulse_label, key="_kb_chat_poll_pulse_btn"):
+                st.session_state["_kb_chat_client_poll_ts"] = time.time()
+        except Exception:
+            pass
+        try:
+            if not bool(st.session_state.get("_kb_chat_poll_started_ts")):
+                st.session_state["_kb_chat_poll_started_ts"] = time.time()
+            _inject_auto_rerun_once(
+                delay_ms=int(max(120, delay_s * 1000)),
+                pulse_button_label=pulse_label,
+                nonce=f"chat:{session_id}:{cur_tid}:{cur_chars}:{time.time():.6f}",
+            )
+            client_poll_ok = True
+        except Exception:
+            client_poll_ok = False
 
+        if client_poll_ok:
+            now_ts = time.time()
+            started_ts = float(st.session_state.get("_kb_chat_poll_started_ts", 0.0) or 0.0)
+            client_ts = float(st.session_state.get("_kb_chat_client_poll_ts", 0.0) or 0.0)
+            grace_s = max(1.1, delay_s * 3.2)
+            stale_limit_s = max(2.2, delay_s * 4.5)
+            client_poll_ok = not (
+                (started_ts > 0.0)
+                and ((now_ts - started_ts) > grace_s)
+                and ((client_ts <= 0.0) or ((now_ts - client_ts) > stale_limit_s))
+            )
+
+    if not client_poll_ok:
+        try:
+            time.sleep(delay_s)
+        except Exception:
+            pass
+        st.experimental_rerun()
 
 
 def _page_chat(
@@ -364,7 +454,7 @@ def _page_chat(
     show_context: bool,
     deep_read: bool,
 ) -> None:
-    disable_hooks = str(os.environ.get("KB_DISABLE_FRONTEND_HOOKS") or "").strip() in {"1", "true", "TRUE", "yes", "YES"}
+    disable_hooks = str(os.environ.get("KB_DISABLE_FRONTEND_HOOKS") or "1").strip() in {"1", "true", "TRUE", "yes", "YES"}
     if not disable_hooks:
         _inject_copy_js()
 
@@ -385,11 +475,7 @@ def _page_chat(
         _render_kb_empty_hint()
 
     cur_task = _gen_get_task(session_id)
-    running_for_conv = bool(
-        isinstance(cur_task, dict)
-        and str(cur_task.get("status") or "") == "running"
-        and str(cur_task.get("conv_id") or "") == conv_id
-    )
+    running_for_conv = _task_is_actively_generating(cur_task, conv_match=conv_id)
     _set_live_streaming_mode(running_for_conv, hide_stale=False)
     _restore_scroll_after_rerun_if_needed()
 
@@ -985,7 +1071,7 @@ def _page_chat(
 
             if txt or img_atts:
                 t0 = _gen_get_task(session_id)
-                if isinstance(t0, dict) and str(t0.get("status") or "") == "running":
+                if _task_is_actively_generating(t0, conv_match=conv_id):
                     st.warning("Previous answer is still generating. Please stop or wait.")
                     return
 
@@ -1047,11 +1133,7 @@ def _page_chat(
             running_now = False
             try:
                 t_now = _gen_get_task(session_id) or {}
-                running_now = bool(
-                    isinstance(t_now, dict)
-                    and str(t_now.get("status") or "") == "running"
-                    and str(t_now.get("conv_id") or "") == conv_id
-                )
+                running_now = _task_is_actively_generating(t_now, conv_match=conv_id)
             except Exception:
                 running_now = False
             # Sync body classes here as well in case this fragment is the first one to observe completion.
@@ -1074,6 +1156,8 @@ def _page_chat(
 
     if not disable_hooks:
         _inject_chat_dock_runtime()
+        # Same-document script removed: st.html(..., unsafe_allow_javascript=True) can trigger a brief visible error
+        # in some setups. Dock styling is applied via iframe→parent CSS injection in _inject_chat_dock_runtime instead.
 
     if (not chat_fragment_refresh_ok) or (not running_for_conv):
         _handle_chat_form_actions(
@@ -1088,78 +1172,14 @@ def _page_chat(
     if upload_flash:
         st.caption(upload_flash)
 
-    # Adaptive polling for chat streaming:
-    # - Prefer browser-side one-shot rerun pulses (lighter visual feel than server sleep+rerun)
-    # - Fall back to server-side rerun if frontend hooks are disabled/broken
-    # - Poll faster when new tokens arrive, slower while retrieving/deep-reading
-    if (not chat_fragment_refresh_ok) and running_for_conv and (not submitted) and (not stop_clicked):
-        t_live = _gen_get_task(session_id) or {}
-        poll_key = "_gen_poll_state"
-        prev = st.session_state.get(poll_key) or {}
-        prev_tid = str(prev.get("tid") or "")
-        prev_chars = int(prev.get("chars") or 0)
-        prev_stage = str(prev.get("stage") or "")
-
-        cur_tid = str(t_live.get("id") or "")
-        try:
-            cur_chars = int(t_live.get("char_count") or 0)
-        except Exception:
-            cur_chars = 0
-        cur_stage = str(t_live.get("stage") or "")
-
-        if cur_tid != prev_tid:
-            delay_s = 0.14
-        elif cur_chars > prev_chars:
-            delay_s = 0.16
-        elif cur_stage != prev_stage:
-            delay_s = 0.22
-        else:
-            delay_s = 0.42
-
-        st.session_state[poll_key] = {"tid": cur_tid, "chars": cur_chars, "stage": cur_stage}
-
-        client_poll_ok = False
-        if not disable_hooks:
-            pulse_label = "__KB_CHAT_POLL_PULSE__"
-            try:
-                if st.button(pulse_label, key="_kb_chat_poll_pulse_btn"):
-                    st.session_state["_kb_chat_client_poll_ts"] = time.time()
-            except Exception:
-                pass
-            try:
-                if not bool(st.session_state.get("_kb_chat_poll_started_ts")):
-                    st.session_state["_kb_chat_poll_started_ts"] = time.time()
-                _inject_auto_rerun_once(
-                    delay_ms=int(max(120, delay_s * 1000)),
-                    pulse_button_label=pulse_label,
-                    nonce=f"chat:{session_id}:{cur_tid}:{cur_chars}:{time.time():.6f}",
-                )
-                client_poll_ok = True
-            except Exception:
-                client_poll_ok = False
-
-        if client_poll_ok:
-            now_ts = time.time()
-            started_ts = float(st.session_state.get("_kb_chat_poll_started_ts", 0.0) or 0.0)
-            client_ts = float(st.session_state.get("_kb_chat_client_poll_ts", 0.0) or 0.0)
-            grace_s = max(1.1, delay_s * 3.2)
-            stale_limit_s = max(2.2, delay_s * 4.5)
-            client_poll_ok = not (
-                (started_ts > 0.0)
-                and ((now_ts - started_ts) > grace_s)
-                and ((client_ts <= 0.0) or ((now_ts - client_ts) > stale_limit_s))
-            )
-
-        if not client_poll_ok:
-            try:
-                time.sleep(delay_s)
-            except Exception:
-                pass
-            st.experimental_rerun()
-    else:
-        st.session_state.pop("_gen_poll_state", None)
-        st.session_state.pop("_kb_chat_poll_started_ts", None)
-        st.session_state.pop("_kb_chat_client_poll_ts", None)
+    _page_chat_adaptive_polling(
+        session_id,
+        chat_fragment_refresh_ok=chat_fragment_refresh_ok,
+        running_for_conv=running_for_conv,
+        submitted=submitted,
+        stop_clicked=stop_clicked,
+        disable_hooks=disable_hooks,
+    )
 
 
 def _dir_signature(path_obj: Path) -> str:
@@ -2657,6 +2677,9 @@ def main() -> None:
 
         history_slot.markdown("<div class='hr'></div>", unsafe_allow_html=True)
         history_slot.subheader(S["history"])
+        # Inject history sidebar CSS via st.markdown (st.html has CSS regression in Streamlit 1.42+)
+        history_slot.markdown(_history_sidebar_compact_css(), unsafe_allow_html=True)
+        history_slot.markdown("<div class='kb-history-root' aria-hidden='true'></div>", unsafe_allow_html=True)
         def _history_new_chat_click() -> None:
             try:
                 new_id = str(chat_store.create_conversation() or "").strip()
@@ -2701,23 +2724,10 @@ def main() -> None:
                 st.session_state["conv_id"] = next_id
             st.session_state.pop("conv_select", None)
 
-        def _history_delete_chat_click() -> None:
-            cur_id = str(st.session_state.get("conv_id") or "").strip()
-            if not cur_id:
-                return
-            _history_delete_chat_by_id(cur_id)
-
-        hist_action_cols = history_slot.columns([1, 1], gap="small")
-        with hist_action_cols[0]:
-            st.button(S["new_chat"], key="new_chat", on_click=_history_new_chat_click, use_container_width=True)
-        with hist_action_cols[1]:
-            st.button(
-                "\u5220\u9664\u672c\u4f1a\u8bdd",
-                key="delete_chat_inline",
-                on_click=_history_delete_chat_click,
-                disabled=not bool(str(st.session_state.get("conv_id") or "").strip()),
-                use_container_width=True,
-            )
+        actions_slot = history_slot.container()
+        actions_slot.markdown("<div class='kb-history-actions' aria-hidden='true'></div>", unsafe_allow_html=True)
+        # 不用 columns，按钮直接放在 container 里，便于 CSS/JS 做成满宽
+        actions_slot.button(S["new_chat"], key="new_chat", on_click=_history_new_chat_click)
 
         cur_conv_id_hint = str(st.session_state.get("conv_id") or "").strip()
         try:
@@ -2796,18 +2806,25 @@ def main() -> None:
         def _toggle_history_older_click() -> None:
             st.session_state["history_show_older_convs"] = not bool(st.session_state.get("history_show_older_convs"))
 
-        def _render_history_rows(row_ids: list[str], *, slot=None) -> None:
+        def _render_history_rows(row_ids: list[str], *, slot=None, older_section: bool = False) -> None:
             host = slot or history_slot
             for cid in row_ids:
                 row_label = conv_labels.get(cid, cid)
+                marker_cls = "kb-history-row kb-history-row-current" if cid == cur_conv_id else "kb-history-row"
+                if older_section:
+                    marker_cls += " kb-history-older-row"
+                host.markdown(f"<div class='{marker_cls}' aria-hidden='true'></div>", unsafe_allow_html=True)
                 row_cols = host.columns([9.45, 0.55], gap="small")
                 with row_cols[0]:
+                    st.markdown(
+                        "<div class='kb-history-row-btn-slot' aria-hidden='true' style='display:none;height:0;margin:0;padding:0;overflow:hidden'></div>",
+                        unsafe_allow_html=True,
+                    )
                     st.button(
                         row_label,
                         key=f"conv_pick_{cid}",
                         on_click=_history_pick_chat_click,
                         args=(cid,),
-                        use_container_width=True,
                     )
                 with row_cols[1]:
                     st.button(
@@ -2818,11 +2835,12 @@ def main() -> None:
                         help="Delete this conversation",
                     )
 
-        history_slot.caption(S["pick_chat"])
+        list_slot = history_slot.container()
+        list_slot.markdown("<div class='kb-history-list' aria-hidden='true'></div>", unsafe_allow_html=True)
         if not conv_ids:
-            history_slot.caption("(no conversations)")
+            list_slot.caption("(no conversations)")
         else:
-            _render_history_rows(recent_conv_ids)
+            _render_history_rows(recent_conv_ids, slot=list_slot)
             if older_conv_ids:
                 show_older = bool(st.session_state.get("history_show_older_convs"))
                 toggle_label = (
@@ -2830,19 +2848,30 @@ def main() -> None:
                     if not show_older
                     else "\u25be \u6536\u8d77\u66f4\u65e9\u4f1a\u8bdd"
                 )
-                history_slot.button(
+                list_slot.markdown("<div class='kb-history-toggle-marker' aria-hidden='true'></div>", unsafe_allow_html=True)
+                list_slot.button(
                     toggle_label,
                     key="history_toggle_older_convs",
                     on_click=_toggle_history_older_click,
-                    use_container_width=True,
                 )
                 if show_older:
-                    history_slot.caption("\u66f4\u65e9\u4f1a\u8bdd")
+                    older_section_slot = list_slot.container()
+                    older_section_slot.markdown("<div class='kb-history-older' aria-hidden='true'></div>", unsafe_allow_html=True)
                     try:
-                        older_scroll_slot = history_slot.container(height=280)
+                        older_scroll_slot = older_section_slot.container(height=280)
                     except TypeError:
-                        older_scroll_slot = history_slot.container()
-                    _render_history_rows(older_conv_ids, slot=older_scroll_slot)
+                        older_scroll_slot = older_section_slot.container()
+                    older_scroll_slot.markdown("<div class='kb-history-older-list' aria-hidden='true'></div>", unsafe_allow_html=True)
+                    older_scroll_slot.markdown(
+                        "<div class='kb-history-row kb-history-older-row kb-history-dummy-row' aria-hidden='true'></div>",
+                        unsafe_allow_html=True,
+                    )
+                    _dummy_cols = older_scroll_slot.columns([9.45, 0.55], gap="small")
+                    with _dummy_cols[0]:
+                        st.empty()
+                    with _dummy_cols[1]:
+                        st.empty()
+                    _render_history_rows(older_conv_ids, slot=older_scroll_slot, older_section=True)
 
     _inject_runtime_ui_fixes("auto", st.session_state.get("conv_id", ""))
 

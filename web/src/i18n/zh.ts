@@ -10,7 +10,6 @@ export const S = {
   no_msgs: '还没有消息，下面输入问题开始吧。',
   kb_empty: 'DB 里还没有 chunks。请到「文献管理」页上传 PDF 并更新知识库。',
   new_chat: '新建对话',
-  del_chat: '删除当前对话',
   pick_chat: '选择对话',
   history: '对话记录',
   top_k: '检索 Top-K',

@@ -9,10 +9,14 @@ _CHAT_DOCK_JS_PATH = Path(__file__).resolve().parent.parent / "assets" / "chat_d
 _CHAT_DOCK_JS_CACHE: str | None = None
 _CHAT_DOCK_JS_MTIME_NS_CACHE: int | None = None
 
+
+def _inject_script(js_body: str, *, height: int = 0) -> None:
+    """Inject JS into an iframe via components.html. js_body is the content inside <script> (no tags)."""
+    components.html("<script>\n" + js_body.strip() + "\n</script>", height=height)
+
+
 def _teardown_chat_dock_runtime() -> None:
-    components.html(
-        """
-<script>
+    _inject_script("""
 (function () {
   try {
     const host = window.parent || window;
@@ -45,17 +49,12 @@ def _teardown_chat_dock_runtime() -> None:
     });
   } catch (e) {}
 })();
-</script>
-        """,
-        height=0,
-    )
+""")
 
 def _set_live_streaming_mode(active: bool, hide_stale: bool = False) -> None:
     on_flag = "true" if bool(active) else "false"
     hide_stale_flag = "true" if bool(hide_stale) else "false"
-    components.html(
-        f"""
-<script>
+    _inject_script(f"""
 (function () {{
   try {{
     const host = window.parent || window;
@@ -69,16 +68,12 @@ def _set_live_streaming_mode(active: bool, hide_stale: bool = False) -> None:
     else root.body.classList.remove("kb-hide-stale-rerun");
   }} catch (e) {{}}
 }})();
-</script>
-        """,
-        height=0,
-    )
+""")
 
 def _remember_scroll_for_next_rerun(*, nonce: str = "", anchor_id: str = "") -> None:
     nonce_js = json.dumps(str(nonce or ""))
     anchor_js = json.dumps(str(anchor_id or ""))
-    html_js = """
-<script>
+    body = """
 (function () {
   try {
     const host = window.parent || window;
@@ -134,14 +129,12 @@ def _remember_scroll_for_next_rerun(*, nonce: str = "", anchor_id: str = "") -> 
     }));
   } catch (e) {}
 })();
-</script>
-    """.replace("__NONCE__", nonce_js).replace("__ANCHOR_ID__", anchor_js)
-    components.html(html_js, height=0)
+""".replace("__NONCE__", nonce_js).replace("__ANCHOR_ID__", anchor_js)
+    _inject_script(body)
 
 def _restore_scroll_after_rerun_if_needed(*, max_age_ms: int = 10000) -> None:
     max_age = max(1000, int(max_age_ms))
-    html_js = """
-<script>
+    body = """
 (function () {
   try {
     const host = window.parent || window;
@@ -227,12 +220,13 @@ def _restore_scroll_after_rerun_if_needed(*, max_age_ms: int = 10000) -> None:
     catch (e) { setTimeout(apply, 0); }
   } catch (e) {}
 })();
-</script>
-    """.replace("__MAX_AGE__", str(max_age))
-    components.html(html_js, height=0)
+""".replace("__MAX_AGE__", str(max_age))
+    _inject_script(body)
 
 def _inject_chat_dock_runtime() -> None:
     global _CHAT_DOCK_JS_CACHE, _CHAT_DOCK_JS_MTIME_NS_CACHE
+    # Single source: chat_dock_runtime.js adds .kb-input-dock class + inline position/size.
+    # theme_legacy.css provides .kb-input-dock styles (var(--dock-bg), etc). No duplicate CSS/script injection.
     cur_mtime_ns: int | None = None
     try:
         cur_mtime_ns = int(_CHAT_DOCK_JS_PATH.stat().st_mtime_ns)
@@ -247,7 +241,7 @@ def _inject_chat_dock_runtime() -> None:
     js = str(_CHAT_DOCK_JS_CACHE or "").strip()
     if not js:
         return
-    components.html("<script>\n" + js + "\n</script>", height=0)
+    _inject_script(js)
 
 def _inject_auto_rerun_once(*, delay_ms: int = 3500, pulse_button_label: str = "", nonce: str = "") -> None:
     delay = max(300, int(delay_ms))

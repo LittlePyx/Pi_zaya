@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import os
 import re
@@ -27,6 +28,7 @@ from kb.llm import DeepSeekChat
 from kb.pdf_tools import run_pdf_to_md
 from kb.retrieval_engine import (
     _deep_read_md_for_context,
+    _enrich_grouped_refs_with_llm_pack,
     _group_hits_by_doc_for_refs,
     _search_hits_with_fallback,
     _top_heading,
@@ -143,6 +145,9 @@ def _gen_mark_cancel(session_id: str, task_id: str) -> bool:
         if str(cur.get("id") or "") != tid:
             return False
         if str(cur.get("status") or "") != "running":
+            return False
+        if bool(cur.get("answer_ready") or False):
+            # During post-answer refs refinement, keep answer stable and do not flip to canceled.
             return False
         cur2 = dict(cur)
         cur2["cancel"] = True
@@ -266,6 +271,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         used_translation = False
         hits: list[dict] = []
         grouped_docs: list[dict] = []
+        refs_async_will_run = False
+        refs_async_seed_docs: list[dict] = []
         if prompt:
             _gen_update_task(session_id, task_id, stage="retrieve")
             hits_raw, scores_raw, used_query, used_translation = _search_hits_with_fallback(
@@ -285,11 +292,35 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         top_k_docs=top_k,
                         deep_query=(used_query or prompt or ""),
                         deep_read=True,  # refs quality: always deep-read candidate docs
-                        llm_rerank=bool(llm_rerank),
+                        llm_rerank=False,  # quick refs first; LLM guidance is refined asynchronously
                         settings=settings_obj,
                     )
                 except Exception:
                     grouped_docs = []
+
+            refs_async_will_run = bool(
+                llm_rerank
+                and prompt
+                and grouped_docs
+                and settings_obj
+                and getattr(settings_obj, "api_key", None)
+            )
+            if refs_async_will_run and grouped_docs:
+                try:
+                    for d in grouped_docs:
+                        if not isinstance(d, dict):
+                            continue
+                        meta_d = d.get("meta", {}) or {}
+                        if not isinstance(meta_d, dict):
+                            meta_d = {}
+                        meta_d["ref_pack_state"] = "pending"
+                        d["meta"] = meta_d
+                except Exception:
+                    pass
+                try:
+                    refs_async_seed_docs = copy.deepcopy(grouped_docs)
+                except Exception:
+                    refs_async_seed_docs = list(grouped_docs)
         else:
             _gen_update_task(session_id, task_id, stage="retrieve (image-only)")
 
@@ -311,6 +342,70 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 )
             except Exception:
                 pass
+
+        def _finalize_task_after_refs_async() -> None:
+            snap = _gen_get_task(session_id) or {}
+            if str(snap.get("id") or "") != str(task_id or ""):
+                return
+            if (str(snap.get("status") or "") == "running") and bool(snap.get("answer_ready") or False):
+                ans = str(snap.get("answer") or snap.get("partial") or "").strip()
+                _gen_update_task(
+                    session_id,
+                    task_id,
+                    status="done",
+                    stage="done",
+                    answer=ans,
+                    partial=ans,
+                    char_count=len(ans),
+                    finished_at=time.time(),
+                )
+
+        if refs_async_will_run and (umid > 0) and refs_async_seed_docs:
+            _gen_update_task(session_id, task_id, refs_async_pending=True, refs_async_state="running")
+
+            def _bg_enrich_refs() -> None:
+                try:
+                    enriched = _enrich_grouped_refs_with_llm_pack(
+                        list(refs_async_seed_docs),
+                        question=(prompt or used_query or ""),
+                        settings=settings_obj,
+                        top_k_docs=top_k,
+                    )
+                except Exception:
+                    enriched = []
+                snap0 = _gen_get_task(session_id) or {}
+                same_task = str(snap0.get("id") or "") == str(task_id or "")
+                answer_ready0 = bool(snap0.get("answer_ready") or False)
+                # If another task has already replaced this session slot, still allow refs
+                # enrichment to be persisted for the original answered message.
+                if same_task and _gen_should_cancel(session_id, task_id) and (not answer_ready0):
+                    _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="canceled")
+                    return
+                if enriched:
+                    try:
+                        cs = ChatStore(chat_db)
+                        cs.upsert_message_refs(
+                            user_msg_id=umid,
+                            conv_id=conv_id,
+                            prompt=prompt,
+                            prompt_sig=str(task.get("prompt_sig") or ""),
+                            hits=list(enriched),
+                            scores=list(scores_raw or []),
+                            used_query=str(used_query or ""),
+                            used_translation=bool(used_translation),
+                        )
+                    except Exception:
+                        pass
+                    _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="done", refs_async_docs=int(len(enriched)))
+                else:
+                    _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="empty")
+                _finalize_task_after_refs_async()
+
+            try:
+                threading.Thread(target=_bg_enrich_refs, daemon=True).start()
+            except Exception:
+                _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="error")
+                _finalize_task_after_refs_async()
 
         _gen_update_task(session_id, task_id, stage="context", used_query=str(used_query or ""), used_translation=bool(used_translation), refs_done=True)
 
@@ -516,7 +611,11 @@ def _gen_start_task(task: dict) -> bool:
         return False
     with RUNTIME.GEN_LOCK:
         cur = RUNTIME.GEN_TASKS.get(sid)
-        if isinstance(cur, dict) and str(cur.get("status") or "") == "running":
+        if (
+            isinstance(cur, dict)
+            and str(cur.get("status") or "") == "running"
+            and (not bool(cur.get("answer_ready") or False))
+        ):
             return False
         item = dict(task)
         item.setdefault("status", "running")

@@ -4,6 +4,7 @@ import json
 
 import streamlit.components.v1 as components
 
+
 def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     raw_mode = str(theme_mode or "").lower().strip()
     mode = "auto" if raw_mode in {"", "auto", "system", "browser"} else ("dark" if raw_mode == "dark" else "light")
@@ -355,241 +356,388 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
     }} catch (e) {{}}
   }}
 
-  function decorateConversationHistoryButtons() {{
+  function injectTrashNoBorderCSS() {{
     try {{
-      const normText = (v) => String(v || "").replace(/\s+/g, " ").trim();
-      try {{
-        const oldWraps = doc.querySelectorAll(".kb-conv-row-wrap");
-        for (const n of oldWraps) n.classList.remove("kb-conv-row-wrap");
-      }} catch (e) {{}}
-      try {{
-        const oldPanels = doc.querySelectorAll(".kb-conv-popover-panel, .kb-conv-popover-scroll");
-        for (const n of oldPanels) {{
-          n.classList.remove("kb-conv-popover-panel", "kb-conv-popover-scroll");
-          try {{
-            n.style.removeProperty("--kb-conv-panel-width");
-            n.style.removeProperty("width");
-            n.style.removeProperty("max-width");
-            n.style.removeProperty("min-width");
-          }} catch (e) {{}}
-        }}
-      }} catch (e) {{}}
-
-      const taggedBtns = doc.querySelectorAll(
-        "button.kb-conv-picker-trigger, button.kb-conv-row-btn, button.kb-conv-trash-btn, button.kb-conv-menu-trigger, button.kb-history-action-btn, button.kb-history-toggle-btn, button.kb-history-new-btn, button.kb-history-danger-btn, button.kb-model-test-btn, button.kb-current"
+      const targetDoc = doc;
+      const id = "kb-trash-noborder-css";
+      if (targetDoc.getElementById(id)) return;
+      const style = targetDoc.createElement("style");
+      style.id = id;
+      style.textContent = (
+        "section[data-testid=\\"stSidebar\\"] .kb-trash-cell, section[data-testid=\\"stSidebar\\"] .kb-trash-cell *, section[data-testid=\\"stSidebar\\"] .kb-trash-wrap, section[data-testid=\\"stSidebar\\"] .kb-trash-wrap *, section[data-testid=\\"stSidebar\\"] button.kb-history-trash-btn {{ border: none !important; border-width: 0 !important; box-shadow: none !important; outline: none !important; background: transparent !important; background-color: transparent !important; }} "
+        + "section[data-testid=\\"stSidebar\\"] button.kb-history-trash-btn:hover, section[data-testid=\\"stSidebar\\"] .kb-trash-wrap:hover button, "
+        + "section.stSidebar button.kb-history-trash-btn:hover, section.stSidebar .kb-trash-wrap:hover button {{ "
+        + "color: #6baf6b !important; -webkit-text-fill-color: #6baf6b !important; background: transparent !important; background-color: transparent !important; border: none !important; "
+        + "filter: brightness(0) saturate(100%) invert(58%) sepia(35%) saturate(1200%) hue-rotate(95deg) !important; }}"
       );
-      for (const b of taggedBtns) {{
-        if (!b) continue;
-        try {{
-          b.classList.remove("kb-conv-picker-trigger", "kb-conv-row-btn", "kb-conv-trash-btn", "kb-conv-menu-trigger", "kb-history-action-btn", "kb-history-toggle-btn", "kb-history-new-btn", "kb-history-danger-btn", "kb-model-test-btn", "kb-current");
-        }} catch (e) {{}}
-      }}
-
-      const buttons = doc.querySelectorAll("button");
-      for (const b of buttons) {{
-        if (!b || !b.closest) continue;
-        const txt = normText(b.innerText || b.textContent || "");
-        if (!txt) continue;
-        const inSidebar = !!b.closest('section[data-testid="stSidebar"]');
-        const inSummary = !!b.closest("summary");
-
-        const isHistoryAction = (
-          txt === "新建对话" || txt === "删除本会话" || txt === "New chat" ||
-          txt.includes("更早会话") || txt.includes("older chat")
-        );
-        const isHistoryToggle = (txt.includes("更早会话") || txt.includes("older chat"));
-        const isHistoryNew = (txt === "新建对话" || txt === "New chat");
-        const isHistoryDelete = (txt === "删除本会话");
-        const isModelTestBtn = (txt === "测试模型连接" || txt === "Test model connection");
-        if (inSidebar && isHistoryAction) {{
-          try {{ b.classList.add("kb-history-action-btn"); }} catch (e) {{}}
-          if (isHistoryToggle) {{
-            try {{ b.classList.add("kb-history-toggle-btn"); }} catch (e) {{}}
-          }}
-          if (isHistoryNew) {{
-            try {{ b.classList.add("kb-history-new-btn"); }} catch (e) {{}}
-          }}
-          if (isHistoryDelete) {{
-            try {{ b.classList.add("kb-history-danger-btn"); }} catch (e) {{}}
-          }}
-        }}
-        if (inSidebar && isModelTestBtn) {{
-          try {{ b.classList.add("kb-model-test-btn"); }} catch (e) {{}}
-        }}
-
-        const looksConvLabel = /\\d{{2}}-\\d{{2}}\\s+\\d{{2}}:\\d{{2}}\\s+\\|/.test(txt);
-        const isTrash = (
-          txt === "🗑" || txt === "🗑️" ||
-          txt === "Del" || txt === "Delete" || txt === "删除"
-        );
-        const isMenuTrigger = (!looksConvLabel) && (
-          txt.includes("...") || txt.includes("…") || txt.includes("⋯") || txt.includes("⋮")
-        );
-        if (!(inSidebar || isTrash || isMenuTrigger || looksConvLabel)) continue;
-        if (isTrash) {{
-          try {{ b.classList.add("kb-conv-trash-btn"); }} catch (e) {{}}
-          continue;
-        }}
-        if (isMenuTrigger) {{
-          try {{ b.classList.add("kb-conv-menu-trigger"); }} catch (e) {{}}
-          continue;
-        }}
-
-        if (!looksConvLabel) continue;
-
-        if (inSummary) {{
-          try {{ b.classList.add("kb-conv-picker-trigger"); }} catch (e) {{}}
-          try {{
-            const d = b.closest("details");
-            const x = b.closest('div[data-testid="stExpander"]');
-            if (d) d.classList.add("kb-conv-history-expander");
-            if (x) x.classList.add("kb-conv-history-expander");
-          }} catch (e) {{}}
-          continue;
-        }}
-
-        // Timestamp-like buttons in sidebar are conversation rows (flat list or expander rows).
-        try {{
-          if (inSidebar) {{
-            b.classList.add("kb-conv-row-btn");
-          }}
-        }} catch (e) {{}}
-
-        // Distinguish row item by checking whether a nearby row also has a delete/menu action button.
-        let hasNearbyAction = false;
-        let cur = b;
-        for (let k = 0; k < 4 && cur; k += 1) {{
-          cur = cur.parentElement;
-          if (!cur) break;
-          try {{
-            const rowBtns = cur.querySelectorAll ? cur.querySelectorAll("button") : [];
-            for (const rb of rowBtns) {{
-              const t2 = normText(rb.innerText || rb.textContent || "");
-              const t2LooksConv = /\\d{{2}}-\\d{{2}}\\s+\\d{{2}}:\\d{{2}}\\s+\\|/.test(t2);
-              const t2IsMenu = (!t2LooksConv) && (
-                t2.includes("...") || t2.includes("…") || t2.includes("⋯") || t2.includes("⋮")
-              );
-              const t2IsTrash = (t2 === "🗑" || t2 === "🗑️" || t2 === "Del" || t2 === "Delete" || t2 === "删除");
-              if (t2IsTrash || t2IsMenu) {{
-                hasNearbyAction = true;
-                break;
-              }}
-            }}
-          }} catch (e) {{}}
-          if (hasNearbyAction) break;
-        }}
-
-        try {{
-          if (hasNearbyAction) {{
-            b.classList.add("kb-conv-row-btn");
-          }}
-        }} catch (e) {{}}
-      }}
-
-      // Mark expander containers by summary text (works even if summary has no <button>).
-      try {{
-        const summaries = doc.querySelectorAll('section[data-testid="stSidebar"] details summary');
-        for (const sm of summaries) {{
-          const txt = normText(sm.innerText || sm.textContent || "");
-          if (!/\\d{{2}}-\\d{{2}}\\s+\\d{{2}}:\\d{{2}}\\s+\\|/.test(txt)) continue;
-          try {{
-            const d = sm.closest("details");
-            const x = sm.closest('div[data-testid="stExpander"]');
-            if (d) d.classList.add("kb-conv-history-expander");
-            if (x) x.classList.add("kb-conv-history-expander");
-          }} catch (e) {{}}
-        }}
-      }} catch (e) {{}}
-
-      // Mark row wrappers (common ancestor of one conversation row button + one trash button).
-      try {{
-        const rowBtns = doc.querySelectorAll("button.kb-conv-row-btn");
-        for (const rb of rowBtns) {{
-          let cur = rb;
-          for (let k = 0; k < 6 && cur; k += 1) {{
-            cur = cur.parentElement;
-            if (!cur) break;
-            let hasTrash = false;
-            let hasMenu = false;
-            let hasRow = false;
-            try {{
-              hasTrash = !!cur.querySelector("button.kb-conv-trash-btn");
-              hasMenu = !!cur.querySelector("button.kb-conv-menu-trigger");
-              hasRow = !!cur.querySelector("button.kb-conv-row-btn");
-            }} catch (e) {{}}
-            if ((hasTrash || hasMenu) && hasRow) {{
-              try {{ cur.classList.add("kb-conv-row-wrap"); }} catch (e) {{}}
-              break;
-            }}
-          }}
-        }}
-      }} catch (e) {{}}
-
-      // Flat-list fallback: mark the horizontal row container even if trash/menu detection misses.
-      try {{
-        const rowBtns2 = doc.querySelectorAll('section[data-testid="stSidebar"] button.kb-conv-row-btn');
-        for (const rb of rowBtns2) {{
-          let cur = rb;
-          for (let k = 0; k < 8 && cur; k += 1) {{
-            cur = cur.parentElement;
-            if (!cur) break;
-            try {{
-              const isHBlock = cur.matches && cur.matches('div[data-testid="stHorizontalBlock"]');
-              if (isHBlock) {{
-                cur.classList.add("kb-conv-row-wrap");
-                break;
-              }}
-            }} catch (e) {{}}
-          }}
-        }}
-      }} catch (e) {{}}
-
-      // Mark the current conversation row by matching expander summary label text.
-      try {{
-        const expanders = doc.querySelectorAll('section[data-testid="stSidebar"] details.kb-conv-history-expander');
-        for (const d of expanders) {{
-          const summary = d.querySelector("summary");
-          const curLabel = normText(summary ? (summary.innerText || summary.textContent || "") : "");
-          if (!curLabel) continue;
-          const rows = d.querySelectorAll("button.kb-conv-row-btn");
-          for (const rb of rows) {{
-            const rowTxt = normText(rb.innerText || rb.textContent || "");
-            if (rowTxt && rowTxt === curLabel) {{
-              try {{ rb.classList.add("kb-current"); }} catch (e) {{}}
-              break;
-            }}
-          }}
-        }}
-      }} catch (e) {{}}
-
-      // Fallback for flat list mode (no expander): active conversation is rendered first.
-      try {{
-        const curRows = doc.querySelectorAll('section[data-testid="stSidebar"] button.kb-conv-row-btn.kb-current');
-        if ((!curRows) || (curRows.length === 0)) {{
-          const flatRows = doc.querySelectorAll('section[data-testid="stSidebar"] button.kb-conv-row-btn');
-          if (flatRows && flatRows.length > 0) {{
-            try {{ flatRows[0].classList.add("kb-current"); }} catch (e) {{}}
-          }}
-        }}
-      }} catch (e) {{}}
-
-      // Disabled risky popover/panel width mutations: they can affect unrelated layout containers
-      // on some Streamlit builds. Keep only row-level styling hooks.
+      (targetDoc.head || targetDoc.documentElement).appendChild(style);
     }} catch (e) {{}}
   }}
 
-  let _kbLastHistoryDecorTs = 0;
+  function injectActionButtonsCSS() {{
+    try {{
+      const targetDoc = doc;
+      const id = "kb-action-buttons-css";
+      const old = targetDoc.getElementById(id);
+      if (old) old.remove();
+      const style = targetDoc.createElement("style");
+      style.id = id;
+      style.textContent = (
+        "/* 新建会话样式由 theme_history_overrides 统一（仿 open/cite），此处仅保留兜底 */ "
+        + "section[data-testid=\\"stSidebar\\"] div:has(.kb-history-actions) + div div[data-testid=\\"stHorizontalBlock\\"] div[data-testid=\\"stButton\\"] > button {{ "
+        + "border: none !important; box-shadow: none !important; outline: none !important; }} "
+        + "section[data-testid=\\"stSidebar\\"] div:has(.kb-history-actions) + div div[data-testid=\\"stHorizontalBlock\\"] div[data-testid=\\"stButton\\"] > button:hover {{ "
+        + "border: none !important; color: var(--blue-line) !important; -webkit-text-fill-color: var(--blue-line) !important; }}"
+      );
+      (targetDoc.head || targetDoc.documentElement).appendChild(style);
+    }} catch (e) {{}}
+  }}
+
+  function decorateConversationHistoryButtons() {{
+    try {{
+      injectTrashNoBorderCSS();
+      injectActionButtonsCSS();
+      const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+      if (!sidebar) return;
+
+      try {{
+        const staleTags = sidebar.querySelectorAll(
+          ".kb-history-actions-block, .kb-history-row-block, .kb-history-row-block-current, .kb-history-toggle-block, .kb-history-older-block, .kb-history-action-btn-inline, .kb-history-row-btn, .kb-history-trash-btn, .kb-history-toggle-btn"
+        );
+        for (const n of staleTags) {{
+          if (!n || !n.classList) continue;
+          n.classList.remove(
+            "kb-history-actions-block",
+            "kb-history-row-block",
+            "kb-history-row-block-current",
+            "kb-history-toggle-block",
+            "kb-history-older-block",
+            "kb-history-action-btn-inline",
+            "kb-history-row-btn",
+            "kb-history-trash-btn",
+            "kb-history-toggle-btn"
+          );
+        }}
+      }} catch (e) {{}}
+
+      const findElementContainer = (marker) => {{
+        let cur = marker;
+        for (let i = 0; i < 10 && cur; i += 1) {{
+          try {{
+            const isElemContainer =
+              !!(cur.matches && (
+                cur.matches('div[data-testid="stElementContainer"]') ||
+                cur.matches('div[data-testid="element-container"]') ||
+                (cur.classList && cur.classList.contains("stElementContainer"))
+              ));
+            if (isElemContainer) return cur;
+          }} catch (e) {{}}
+          cur = cur.parentElement;
+        }}
+        return (marker && marker.parentElement) ? marker.parentElement : null;
+      }};
+
+      const findNextHorizontalBlock = (container) => {{
+        let sib = container ? container.nextElementSibling : null;
+        for (let i = 0; i < 8 && sib; i += 1) {{
+          try {{
+            if (sib.matches && sib.matches('div[data-testid="stHorizontalBlock"]')) return sib;
+            const nested = sib.querySelector ? sib.querySelector('div[data-testid="stHorizontalBlock"]') : null;
+            if (nested) return nested;
+          }} catch (e) {{}}
+          sib = sib.nextElementSibling;
+        }}
+        const isAfterNode = (base, candidate) => {{
+          try {{
+            if (!base || !candidate || base === candidate) return false;
+            const rel = base.compareDocumentPosition(candidate);
+            return !!(rel & Node.DOCUMENT_POSITION_FOLLOWING);
+          }} catch (e) {{}}
+          return false;
+        }};
+        const scopes = [];
+        try {{
+          if (container && container.parentElement) scopes.push(container.parentElement);
+        }} catch (e) {{}}
+        try {{
+          const vb = container && container.closest ? container.closest('div[data-testid="stVerticalBlock"]') : null;
+          if (vb) scopes.push(vb);
+        }} catch (e) {{}}
+        scopes.push(sidebar);
+        for (const scope of scopes) {{
+          if (!scope || !scope.querySelectorAll) continue;
+          try {{
+            const blocks = scope.querySelectorAll('div[data-testid="stHorizontalBlock"]');
+            for (const cand of blocks) {{
+              if (isAfterNode(container, cand)) return cand;
+            }}
+          }} catch (e) {{}}
+        }}
+        return null;
+      }};
+
+      const findNextBlockForToggle = (container) => {{
+        let block = findNextHorizontalBlock(container);
+        if (block) return block;
+        let sib = container ? container.nextElementSibling : null;
+        for (let i = 0; i < 8 && sib; i += 1) {{
+          try {{
+            const hasBtn = sib.querySelector && sib.querySelector('div[data-testid="stButton"] > button, div.stButton > button');
+            if (hasBtn) return sib;
+          }} catch (e) {{}}
+          sib = sib ? sib.nextElementSibling : null;
+        }}
+        return null;
+      }};
+
+      const bindMarkerToBlock = (markerSelector, blockClass, onBound) => {{
+        const markers = sidebar.querySelectorAll(markerSelector);
+        for (const marker of markers) {{
+          const container = findElementContainer(marker);
+          const block = findNextHorizontalBlock(container);
+          if (!block || !block.classList) continue;
+          try {{ block.classList.add(blockClass); }} catch (e) {{}}
+          if (typeof onBound === "function") {{
+            try {{ onBound(marker, block); }} catch (e) {{}}
+          }}
+        }}
+      }};
+
+      const bindToggleMarkerToBlock = (markerSelector, blockClass, onBound) => {{
+        const markers = sidebar.querySelectorAll(markerSelector);
+        for (const marker of markers) {{
+          const container = findElementContainer(marker);
+          const block = findNextBlockForToggle(container) || findNextHorizontalBlock(container);
+          if (block && block.classList) {{
+            try {{ block.classList.add(blockClass); }} catch (e) {{}}
+            if (typeof onBound === "function") {{
+              try {{ onBound(marker, block); }} catch (e) {{}}
+            }}
+          }}
+        }}
+      }};
+
+      bindToggleMarkerToBlock(".kb-history-actions", "kb-history-actions-block", function (_marker, block) {{
+        if (!block) return;
+        const btns = block.querySelectorAll('div[data-testid="stButton"] > button, button');
+        for (const b of btns) {{
+          try {{ b.classList.add("kb-history-action-btn-inline"); }} catch (e) {{}}
+        }}
+        /* 强制新建会话行及按钮容器占满侧边栏宽度（覆盖 Streamlit 内联样式） */
+        try {{
+          if (block.style) {{
+            block.style.setProperty("width", "100%", "important");
+            block.style.setProperty("maxWidth", "100%", "important");
+            block.style.setProperty("boxSizing", "border-box", "important");
+          }}
+          const stBtn = block.querySelector('div[data-testid="stButton"], div.stButton');
+          if (stBtn && stBtn.style) {{
+            stBtn.style.setProperty("width", "100%", "important");
+            stBtn.style.setProperty("maxWidth", "100%", "important");
+          }}
+          let parent = block.parentElement;
+          for (let i = 0; i < 8 && parent && parent !== sidebar; i++) {{
+            if (parent.style) {{
+              parent.style.setProperty("width", "100%", "important");
+              parent.style.setProperty("maxWidth", "100%", "important");
+            }}
+            parent = parent.parentElement;
+          }}
+        }} catch (e) {{}}
+      }});
+
+      bindMarkerToBlock(".kb-history-row", "kb-history-row-block", function (marker, block) {{
+        try {{
+          if (marker && marker.classList && marker.classList.contains("kb-history-row-current")) {{
+            block.classList.add("kb-history-row-block-current");
+          }}
+        }} catch (e) {{}}
+        let rowBtn = null;
+        let trashBtn = null;
+        try {{
+          rowBtn = block.querySelector(
+            'div[data-testid="column"]:first-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button'
+          );
+        }} catch (e) {{}}
+        try {{
+          trashBtn = block.querySelector(
+            'div[data-testid="column"]:last-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:last-child div[data-testid="stButton"] > button'
+          );
+        }} catch (e) {{}}
+        if (!rowBtn || !trashBtn) {{
+          try {{
+            const btnNodes = block.querySelectorAll('div[data-testid="stButton"] > button, button');
+            const btns = [];
+            for (const b of btnNodes) {{
+              if (!b || !b.classList) continue;
+              if (btns.indexOf(b) >= 0) continue;
+              btns.push(b);
+            }}
+            if (!rowBtn && btns.length) rowBtn = btns[0];
+            if (!trashBtn && btns.length > 1) trashBtn = btns[btns.length - 1];
+          }} catch (e) {{}}
+        }}
+        try {{
+          if (rowBtn && rowBtn.classList) rowBtn.classList.add("kb-history-row-btn");
+        }} catch (e) {{}}
+        try {{
+          if (trashBtn && trashBtn.classList) {{
+            trashBtn.classList.add("kb-history-trash-btn");
+          }}
+          const stBtnWrap = trashBtn ? (trashBtn.closest('div[data-testid="stButton"]') || trashBtn.closest('div.stButton') || trashBtn.parentElement) : null;
+          if (stBtnWrap && stBtnWrap.classList) stBtnWrap.classList.add("kb-trash-wrap");
+          const lastCol = block ? block.querySelector('div[data-testid="column"]:last-child, div[data-testid="stColumn"]:last-child') : null;
+          if (lastCol && lastCol.classList) lastCol.classList.add("kb-trash-cell");
+          const clearBorder = (el) => {{
+            if (!el || !el.style) return;
+            el.style.setProperty("border", "none", "important");
+            el.style.setProperty("border-width", "0", "important");
+            el.style.setProperty("border-style", "none", "important");
+            el.style.setProperty("box-shadow", "none", "important");
+            el.style.setProperty("outline", "none", "important");
+            el.style.setProperty("background", "transparent", "important");
+            el.style.setProperty("background-color", "transparent", "important");
+          }};
+          if (trashBtn) clearBorder(trashBtn);
+          let p = trashBtn ? trashBtn.parentElement : null;
+          while (p && p !== block) {{
+            clearBorder(p);
+            if (p.querySelectorAll) {{
+              try {{ p.querySelectorAll("*").forEach(clearBorder); }} catch (e) {{}}
+            }}
+            p = p.parentElement;
+          }}
+          if (lastCol) {{ clearBorder(lastCol); try {{ lastCol.querySelectorAll("*").forEach(clearBorder); }} catch (e) {{}} }}
+        }} catch (e) {{}}
+      }});
+      try {{
+        sidebar.querySelectorAll("button").forEach(function (btn) {{
+          if (btn.textContent && btn.textContent.indexOf(String.fromCodePoint(0x1F5D1)) >= 0) {{
+            btn.classList.add("kb-history-trash-btn");
+            const wrap = btn.closest('div[data-testid="stButton"], div.stButton');
+            if (wrap) wrap.classList.add("kb-trash-wrap");
+            const cell = btn.closest('div[data-testid="column"]:last-child, div[data-testid="stColumn"]:last-child');
+            if (cell) cell.classList.add("kb-trash-cell");
+          }}
+        }});
+      }} catch (e) {{}}
+
+      bindToggleMarkerToBlock(".kb-history-toggle-marker", "kb-history-toggle-block", function (_marker, block) {{
+        const btn = block ? block.querySelector('div[data-testid="stButton"] > button, div.stButton > button, button') : null;
+        if (btn && btn.classList) try {{ btn.classList.add("kb-history-toggle-btn"); }} catch (e) {{}}
+      }});
+      /* Decorate ALL "更早会话" rows by structure only: no marker binding, so no row is missed. */
+      try {{
+        const olderListEl = sidebar.querySelector(".kb-history-older-list");
+        if (!olderListEl) {{}} else {{
+          let root = olderListEl;
+          for (let i = 0; i < 25 && root; i += 1) {{
+            root = root.parentElement;
+            if (!root || !root.querySelectorAll) continue;
+            const allBlocks = root.querySelectorAll('div[data-testid="stHorizontalBlock"]');
+            const candidates = [];
+            for (const block of allBlocks) {{
+              if (!(olderListEl.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+              const cols = block.querySelectorAll('div[data-testid="column"], div[data-testid="stColumn"]');
+              if (!cols || cols.length < 2) continue;
+              candidates.push(block);
+            }}
+            if (candidates.length) {{
+              const applyRowBlockStyles = (block) => {{
+                if (!block || !block.classList) return;
+                const cols = block.querySelectorAll('div[data-testid="column"], div[data-testid="stColumn"]');
+                if (!cols || cols.length < 2) return;
+                block.classList.add("kb-history-row-block");
+                if (block.style) {{
+                  block.style.setProperty("display", "flex", "important");
+                  block.style.setProperty("width", "100%", "important");
+                  block.style.setProperty("box-sizing", "border-box", "important");
+                }}
+                const firstCol = block.querySelector('div[data-testid="column"]:first-child, div[data-testid="stColumn"]:first-child');
+                if (firstCol && firstCol.style) {{
+                  firstCol.style.setProperty("flex", "1 1 0%", "important");
+                  firstCol.style.setProperty("min-width", "0", "important");
+                }}
+                const rowBtn = block.querySelector('div[data-testid="column"]:first-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button');
+                const trashBtn = block.querySelector('div[data-testid="column"]:last-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:last-child div[data-testid="stButton"] > button');
+                const btns = block.querySelectorAll ? block.querySelectorAll('div[data-testid="stButton"] > button, div.stButton > button, button') : [];
+                const r = rowBtn || (btns[0] || null);
+                const t = trashBtn || (btns.length >= 2 ? btns[btns.length - 1] : null);
+                if (r && r.classList) r.classList.add("kb-history-row-btn");
+                if (t && t.classList) {{
+                  t.classList.add("kb-history-trash-btn");
+                  const wrap = t.closest('div[data-testid="stButton"]') || t.closest('div.stButton');
+                  if (wrap && wrap.classList) wrap.classList.add("kb-trash-wrap");
+                  const lastCol = block.querySelector('div[data-testid="column"]:last-child, div[data-testid="stColumn"]:last-child');
+                  if (lastCol && lastCol.classList) {{
+                    lastCol.classList.add("kb-trash-cell");
+                    if (lastCol.style) {{
+                      lastCol.style.setProperty("display", "flex", "important");
+                      lastCol.style.setProperty("justify-content", "flex-end", "important");
+                      lastCol.style.setProperty("align-items", "center", "important");
+                      lastCol.style.setProperty("flex", "0 0 auto", "important");
+                      lastCol.style.setProperty("margin-left", "auto", "important");
+                    }}
+                  }}
+                }}
+              }};
+              for (const block of candidates) applyRowBlockStyles(block);
+              break;
+            }}
+            if (root === sidebar) break;
+          }}
+        }}
+      }} catch (e) {{}}
+      /* Fallback: by trash-emoji button, add classes only (no inline styles). */
+      try {{
+        const trashChar = String.fromCodePoint(0x1F5D1);
+        const allTrashBtns = sidebar.querySelectorAll("button");
+        const seenBlocks = new Set();
+        for (const btn of allTrashBtns) {{
+          if ((btn.textContent || "").trim().indexOf(trashChar) < 0) continue;
+          let block = btn.closest('div[data-testid="stHorizontalBlock"]') || btn.closest('div[data-testid="horizontalBlock"]');
+          if (!block) {{
+            let p = btn.parentElement;
+            for (let i = 0; i < 10 && p && p !== sidebar; i += 1) {{
+              const cols = p.querySelectorAll('div[data-testid="column"], div[data-testid="stColumn"], [data-testid="column"]');
+              if (cols && cols.length >= 2) {{ block = p; break; }}
+              p = p.parentElement;
+            }}
+          }}
+          if (!block || seenBlocks.has(block)) continue;
+          seenBlocks.add(block);
+          if (block.classList) block.classList.add("kb-history-row-block");
+          const rowBtn = block.querySelector('div[data-testid="column"]:first-child button, div[data-testid="stColumn"]:first-child button');
+          if (rowBtn && rowBtn !== btn && rowBtn.classList) rowBtn.classList.add("kb-history-row-btn");
+          if (btn.classList) btn.classList.add("kb-history-trash-btn");
+          const wrap = btn.closest('div[data-testid="stButton"]') || btn.closest('div.stButton');
+          if (wrap && wrap.classList) wrap.classList.add("kb-trash-wrap");
+          const lastCol = block.querySelector('div[data-testid="column"]:last-child, div[data-testid="stColumn"]:last-child') || btn.closest('div[data-testid="column"], div[data-testid="stColumn"]');
+          if (lastCol && lastCol.classList) lastCol.classList.add("kb-trash-cell");
+        }}
+      }} catch (e) {{}}
+      /* Fallback: match toggle by text so both states (展开/收起) get consistent styling */
+      try {{
+        const toggleTexts = ["\u25b8 \u5c55\u5f00\u66f4\u65e9\u4f1a\u8bdd", "\u25be \u6536\u8d77\u66f4\u65e9\u4f1a\u8bdd"];
+        sidebar.querySelectorAll("button").forEach(function (btn) {{
+          if (!btn || !btn.classList) return;
+          const txt = (btn.textContent || "").trim();
+          if (toggleTexts.indexOf(txt) < 0) return;
+          btn.classList.add("kb-history-toggle-btn");
+          const block = btn.closest('div[data-testid="stHorizontalBlock"]');
+          if (block && block.classList) block.classList.add("kb-history-toggle-block");
+        }});
+      }} catch (e) {{}}
+    }} catch (e) {{}}
+  }}
+
   function applyNow() {{
     try {{
       clearInlineThemeForRefs();
       normalizeSidebarCloseIcon();
       clearCodeLineArtifacts();
       decorateReferenceActionButtons();
-      const nowTs = Date.now ? Date.now() : (+new Date());
-      if ((!_kbLastHistoryDecorTs) || ((nowTs - _kbLastHistoryDecorTs) > 220)) {{
-        decorateConversationHistoryButtons();
-        _kbLastHistoryDecorTs = nowTs;
-      }}
+      decorateConversationHistoryButtons();
     }} catch (e) {{}}
   }}
 
@@ -1221,6 +1369,9 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
 
   try {{ schedule(); }} catch (e) {{}}
   try {{ observe(); }} catch (e) {{}}
+  try {{ host.setTimeout(function () {{ schedule(); }}, 80); }} catch (e) {{}}
+  try {{ host.setTimeout(function () {{ schedule(); }}, 250); }} catch (e) {{}}
+  try {{ host.setTimeout(function () {{ schedule(); }}, 500); }} catch (e) {{}}
   try {{ bindCitationPopover(); }} catch (e) {{}}
   try {{ renderCiteShelf(); }} catch (e) {{}}
 }})();
