@@ -54,6 +54,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
+  const skipShelfPersistOnceRef = useRef(false)
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -65,6 +66,9 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   }, [activeConvId, generationPartial])
 
   useEffect(() => {
+    // Switching conversation changes storage key; skip one persist cycle to avoid
+    // writing previous conversation shelf state into the new key before hydration.
+    skipShelfPersistOnceRef.current = true
     const storageKey = shelfStorageKey(activeConvId)
     try {
       const raw = window.localStorage.getItem(storageKey)
@@ -87,6 +91,10 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   }, [activeConvId])
 
   useEffect(() => {
+    if (skipShelfPersistOnceRef.current) {
+      skipShelfPersistOnceRef.current = false
+      return
+    }
     const storageKey = shelfStorageKey(activeConvId)
     window.localStorage.setItem(storageKey, JSON.stringify({ open: shelfOpen, items: shelfItems }))
   }, [activeConvId, shelfItems, shelfOpen])
