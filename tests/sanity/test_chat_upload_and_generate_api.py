@@ -35,7 +35,7 @@ def test_chat_uploads_route_handles_pdf_and_image(monkeypatch, tmp_path: Path):
         conv_id: str = "",
     ) -> str:
         assert pdf_path == saved_pdf
-        assert speed_mode == "ultra_fast"
+        assert speed_mode == "balanced"
         assert display_name == "paper.pdf"
         assert sha1
         assert conv_id == ""
@@ -62,7 +62,7 @@ def test_chat_uploads_route_handles_pdf_and_image(monkeypatch, tmp_path: Path):
         ("files", ("paper.pdf", b"%PDF-1.4 test", "application/pdf")),
         ("files", ("figure.png", b"\x89PNG\r\n\x1a\nfake", "image/png")),
       ],
-      data={"quick_ingest": "true", "speed_mode": "ultra_fast"},
+      data={"quick_ingest": "true"},
     )
 
     assert response.status_code == 200
@@ -341,7 +341,7 @@ def test_chat_upload_duplicate_binds_conversation_source(monkeypatch, tmp_path: 
     response = client.post(
       "/api/chat/uploads",
       files=[("files", ("dup.pdf", b"%PDF-1.4 test", "application/pdf"))],
-      data={"quick_ingest": "true", "speed_mode": "ultra_fast", "conv_id": "conv-1"},
+      data={"quick_ingest": "true", "conv_id": "conv-1"},
     )
 
     assert response.status_code == 200

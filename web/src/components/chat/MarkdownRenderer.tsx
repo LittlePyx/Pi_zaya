@@ -23,7 +23,25 @@ function extractCode(node: ReactNode): { text: string; language: string } {
   const child = Children.toArray(node)[0]
   if (isValidElement(child)) {
     const props = child.props as { className?: string; children?: ReactNode }
-    const language = String(props.className || '').replace('language-', '').trim()
+    const classes = String(props.className || '')
+      .split(/\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    let language = ''
+    for (const cls of classes) {
+      if (cls === 'hljs') continue
+      if (cls.startsWith('language-')) {
+        language = cls.slice('language-'.length)
+        break
+      }
+      if (cls.startsWith('lang-')) {
+        language = cls.slice('lang-'.length)
+        break
+      }
+    }
+    if (!language) {
+      language = classes.find((cls) => cls !== 'hljs') || ''
+    }
     const text = String(Array.isArray(props.children) ? props.children.join('') : props.children || '').replace(/\n$/, '')
     return { text, language }
   }

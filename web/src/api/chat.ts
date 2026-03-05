@@ -85,7 +85,7 @@ export const chatApi = {
     const fd = new FormData()
     files.forEach((file) => fd.append('files', file))
     fd.append('quick_ingest', String(opts?.quickIngest ?? true))
-    fd.append('speed_mode', opts?.speedMode ?? 'ultra_fast')
+    fd.append('speed_mode', opts?.speedMode ?? 'balanced')
     if (opts?.convId) fd.append('conv_id', String(opts.convId))
     const res = await fetch('/api/chat/uploads', { method: 'POST', body: fd })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)

@@ -1,158 +1,142 @@
 ﻿# Pi_zaya / kb_chat
 
-学术 PDF 知识库助手 —— 基于 RAG 的问答系统，支持可追溯引用。
+学术 PDF 知识库助手（RAG）：上传文献 -> 转换与建库 -> 对话检索回答（含可追溯引用）。
 
-前端：Vite + React 18 + Ant Design 5 + TailwindCSS v4
-后端：FastAPI（包装 `kb/` 模块）+ Uvicorn
+## 1. 项目入口
 
-## 入口说明（当前阶段）
+当前推荐入口：
 
-- `server.py` + `web/`（FastAPI + React）：当前默认入口（推荐）。
-- `app.py`（Streamlit）：兼容保留入口，仅用于历史功能回查。
+- `server.py` + `web/`（FastAPI + React）
 
-Windows（PowerShell）可直接使用：
+兼容保留入口（旧版）：
+
+- `app.py`（Streamlit）
+
+Windows 下可直接用脚本：
 
 ```powershell
-# 新版入口（开发模式：后端 + Vite）
+# 新版前后端（推荐）
 .\run_new.ps1 -StopExisting
 
-# 旧版入口（兼容保留）
+# 旧版兼容入口
 .\run_old.ps1
 ```
 
 说明：
 
-- `run.ps1` 仍然可用（等价于旧版 Streamlit 启动脚本）。
-- `run_new.ps1` 默认不自动安装依赖，避免无意修改环境；需要时可加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
+- `run_new.ps1` 默认不会自动安装依赖，需要时加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
+- `run_new.ps1` 默认端口：后端 `8000`，前端 `5173`。
 
-## 你可以用它做什么
+## 2. 你能做什么
 
-- 在「文献管理」页批量上传 PDF，并转换为 Markdown（含图片、公式、参考文献处理）。
-- 一键「更新知识库」，把 Markdown 分块索引到本地 DB。
-- 在「对话」页基于知识库检索回答，LLM 流式输出（SSE），并显示可点击的文内引用 `[n]`。
-- 点击引用可查看文献信息（来源、题录、DOI 链接）。
-- 参考文献索引支持后台 Crossref 同步，不阻塞页面使用。
-- 支持 Dark / Light 主题切换。
+- 批量上传 PDF，并生成 Markdown。
+- 在文献管理页执行转换、重命名建议、引用同步、更新知识库。
+- 在对话页进行基于知识库的问答（流式输出）。
+- 点击回答中的引用 `[n]` 查看来源信息、DOI、文献篮条目。
 
----
+## 3. 快速开始
 
-## 当前默认模型（我现在使用）
-
-本项目当前优先使用 **Qwen**（OpenAI 兼容接口）：
-
-- 默认 `QWEN_BASE_URL`: `https://dashscope.aliyuncs.com/compatible-mode/v1`
-- 默认 `QWEN_MODEL`: `qwen3-vl-plus`
-
-代码逻辑是：
-
-1. 优先读 `QWEN_API_KEY`
-2. 否则回退 `DEEPSEEK_API_KEY`
-3. 再回退 `OPENAI_API_KEY`
-
-所以你只要设置 `QWEN_API_KEY`，就会走 Qwen。
-
----
-
-## 快速启动
-
-### 1) 克隆项目
+### 3.1 克隆项目
 
 ```bash
 git clone https://github.com/LittlePyx/Pi_zaya.git
 cd Pi_zaya
 ```
 
-### 2) 设置 API Key
+### 3.2 配置 API Key（以 Qwen 为例）
 
-macOS / Linux：
+macOS / Linux:
 
 ```bash
 export QWEN_API_KEY="你的key"
 ```
 
-Windows (PowerShell)：
+Windows PowerShell:
 
 ```powershell
 $env:QWEN_API_KEY="你的key"
 ```
 
-### 3) 安装后端依赖
+### 3.3 安装依赖
 
-macOS / Linux：
+后端：
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Windows (PowerShell)：
-
-```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+# Linux/macOS: source .venv/bin/activate
+# Windows: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### 4) 安装前端依赖并构建
+前端：
 
 ```bash
 cd web
 npm install
-npm run build
 cd ..
 ```
 
-### 5) 启动
+### 3.4 启动（两种模式）
 
-```bash
-python server.py
-# 访问 http://localhost:8000
+开发模式（推荐用于调试）：
+
+```powershell
+.\run_new.ps1 -StopExisting
 ```
 
-生产模式下 FastAPI 同时提供 API 和前端静态文件。
+然后访问：`http://localhost:5173`
 
-**开发模式**（前后端分离热更新）：
+生产本地模式（单服务）：
 
 ```bash
-# 终端 1：后端
+cd web && npm run build && cd ..
 python server.py
-
-# 终端 2：前端（Vite dev server，自动代理 /api → localhost:8000）
-cd web && npm run dev
-# 访问 http://localhost:5173
 ```
 
----
+然后访问：`http://localhost:8000`
 
-## 标准使用流程
+## 4. 标准使用流程（给终端用户）
 
-1. 打开「文献管理」页。
-2. 设置：
-   - `文献目录（PDF）`
-   - `输出目录（Markdown）`
+1. 打开「文献管理」。
+2. 在目录设置中配置：
+   - `PDF 目录`
+   - `MD 目录`
 3. 上传 PDF（支持批量）。
-4. 触发转换（当前默认固定为非极速策略，前端不提供“极速扫描”模式）。
+4. 在上传工作台检查失败项，必要时重试。
 5. 点击「更新知识库」。
-6. 回到「对话」页提问。
+6. 回到「对话」开始提问。
 
----
+建议：首次导入大量文献时，先完成一轮转换 + 更新知识库，再进入对话页。
 
-## 引用与文献篮
+## 5. 重要使用说明
 
-在回答里看到 `[n]` 后：
+- 聊天侧设置中仅保留核心参数：`Top-K`、`温度`、`最大输出 tokens`。
+- `深读 MD` 已固定为默认开启（不再在设置中提供开关）。
+- `显示片段全文` 功能已移除（无设置按钮）。
+- 前端默认使用非“极速扫描”模式（更稳定）。
 
-- 点击 `[n]` 会弹出引用详情（支持拖动）。
-- 可直接打开 DOI。
-- 可「加入文献篮」。
-- 文献篮会在右侧汇总，支持定位与高亮条目。
+## 6. 常见问题
 
-说明：不是每条参考文献都一定有 DOI（历史文献、会议条目、源数据缺失时常见）。
+### 6.1 页面打不开
 
----
+- 开发模式请确认 `run_new.ps1` 两个端口都启动成功。
+- 生产模式请确认已先执行 `web` 的 `npm run build`。
 
-## 常用环境变量
+### 6.2 上传后无法检索到内容
 
-### 模型相关
+- 确认已执行「更新知识库」。
+- 确认 PDF 对应 Markdown 已生成在当前 `MD 目录`。
+
+### 6.3 引用里没有 DOI
+
+不一定是错误，常见原因：
+
+- 原始文献条目无 DOI。
+- 条目不完整，Crossref 未命中。
+
+## 7. 常用环境变量
+
+模型：
 
 - `QWEN_API_KEY`
 - `QWEN_BASE_URL`
@@ -160,43 +144,21 @@ cd web && npm run dev
 - `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL`（回退）
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL`（回退）
 
-### 路径与服务
+路径与数据库：
 
-- `KB_PDF_DIR`：默认 PDF 根目录
-- `KB_MD_DIR`：默认 Markdown 目录
-- `KB_DB_DIR`：知识库索引目录
-- `KB_CHAT_DB`：对话数据库路径
-- `KB_LIBRARY_DB`：文献库数据库路径
+- `KB_PDF_DIR`
+- `KB_MD_DIR`
+- `KB_DB_DIR`
+- `KB_CHAT_DB`
+- `KB_LIBRARY_DB`
 
-### 参考文献索引
+引用同步：
 
-- `KB_CROSSREF_BUDGET_S`：Crossref 后台同步预算秒数（默认 45）
+- `KB_CROSSREF_BUDGET_S`（Crossref 后台同步预算秒数）
 
----
+## 8. 开发者补充
 
-## 常见问题
-
-### 1) 页面打不开或接口报错
-
-1. 确认后端已启动：`python server.py`
-2. 生产模式确认已执行 `cd web && npm run build`
-3. 检查终端日志中的错误信息
-
-### 2) 为什么有的引用没有 DOI
-
-可能原因：
-
-- 文献本身未注册 DOI
-- 参考文献条目不完整或噪声大
-- Crossref 未命中
-
-### 3) 更新知识库后对话没变化
-
-请确认你更新的是当前使用的 `DB` 目录，并且 Markdown 文件确实已生成到对应目录。
-
----
-
-## 给使用者的说明
-
-- 这个项目目前是我持续迭代中的版本，界面和细节会更新。
-- 你遇到“可复现”的问题时，附上：PDF 名称、页面截图、生成的 `.md` 片段，我可以更快定位并修复。
+- 前端目录：`web/`
+- API 入口：`api/main.py`
+- 生产启动文件：`server.py`
+- React 迁移计划：`docs/REACT_MIGRATION_PLAN.md`

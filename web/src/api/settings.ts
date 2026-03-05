@@ -19,6 +19,11 @@ export interface SettingsPatch {
   mdDir?: string
 }
 
+export interface PickDirResponse {
+  ok: boolean
+  path: string | null
+}
+
 function toServerPatch(patch: SettingsPatch) {
   const out: Record<string, unknown> = {}
   if (patch.topK !== undefined) out.top_k = patch.topK
@@ -36,6 +41,11 @@ export const settingsApi = {
   get: () => api.get<SettingsPayload>('/api/settings'),
   update: (patch: SettingsPatch) =>
     api.patch('/api/settings', toServerPatch(patch)),
+  pickDir: (target: 'pdf' | 'md', initialDir?: string) =>
+    api.post<PickDirResponse>('/api/settings/pick-dir', {
+      target,
+      initial_dir: initialDir || '',
+    }),
   testLlm: () => api.post<{ ok: boolean; reply?: string; error?: string }>('/api/settings/test-llm'),
   health: () => api.get<{ status: string }>('/api/health'),
 }

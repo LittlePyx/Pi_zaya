@@ -14,6 +14,7 @@
     "antd": "^6.3.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.16.28",
+    "rc-virtual-list": "^3.19.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

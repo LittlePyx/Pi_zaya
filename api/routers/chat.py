@@ -318,7 +318,7 @@ def _start_chat_pdf_ingest_job(
             "conv_id": str(conv_id or "").strip(),
             "ready": False,
             "ingest_status": "renaming",
-            "speed_mode": str(speed_mode or "ultra_fast"),
+            "speed_mode": str(speed_mode or "balanced"),
             "cancel_requested": False,
             "error": "",
             "md_path": "",
@@ -445,7 +445,7 @@ def _retry_chat_pdf_ingest_job(job_id: str) -> dict | None:
         raise FileNotFoundError("pdf file not found")
     new_job_id = _start_chat_pdf_ingest_job(
         pdf_path=pdf_path,
-        speed_mode=str(rec.get("speed_mode") or "ultra_fast"),
+        speed_mode=str(rec.get("speed_mode") or "balanced"),
         display_name=str(rec.get("name") or pdf_path.name),
         sha1=str(rec.get("sha1") or ""),
         conv_id=str(rec.get("conv_id") or ""),
@@ -614,7 +614,7 @@ def retry_chat_upload_quality_job(body: UploadJobBody):
 async def upload_chat_files(
     files: list[UploadFile] = File(...),
     quick_ingest: bool = Form(True),
-    speed_mode: str = Form("ultra_fast"),
+    speed_mode: str = Form("balanced"),
     conv_id: str = Form(""),
 ):
     results: list[dict] = []

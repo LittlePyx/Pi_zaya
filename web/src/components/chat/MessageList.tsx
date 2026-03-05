@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Typography } from 'antd'
-import { UserOutlined, RobotOutlined } from '@ant-design/icons'
+import { UserOutlined } from '@ant-design/icons'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
@@ -36,6 +36,14 @@ function imageAttachmentsOf(message: Message): ChatImageAttachment[] {
   return Array.isArray(message.attachments)
     ? message.attachments.filter((item): item is ChatImageAttachment => Boolean(item && item.path))
     : []
+}
+
+function AssistantAvatar() {
+  return (
+    <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--border)] bg-white/90 dark:bg-white/5">
+      <img src="/pi_logo.png" alt="Pi assistant" className="h-5 w-5 object-contain" loading="lazy" />
+    </div>
+  )
 }
 
 export function MessageList({ activeConvId, messages, refs, generationPartial, generationStage }: Props) {
@@ -201,11 +209,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
                 key={message.id}
                 className={`flex gap-3 ${isUser ? 'justify-end' : ''}`}
               >
-                {!isUser ? (
-                  <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]">
-                    <RobotOutlined className="text-xs text-white" />
-                  </div>
-                ) : null}
+                {!isUser ? <AssistantAvatar /> : null}
                 <div
                   className={`${bubbleClass} ${bubblePadClass} rounded-[28px] ${
                     isUser ? 'bg-[var(--msg-user-bg)]' : 'border border-[var(--border)] bg-[var(--msg-ai-bg)] shadow-[0_8px_24px_rgba(15,23,42,0.03)]'
@@ -287,9 +291,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
 
           {generationPartial !== undefined && generationPartial !== null ? (
             <div className="flex gap-3">
-              <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]">
-                <RobotOutlined className="text-xs text-white" />
-              </div>
+              <AssistantAvatar />
               <div className="w-full max-w-[88%] rounded-[28px] border border-[var(--border)] bg-[var(--msg-ai-bg)] px-6 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.03)]">
                 {generationStage ? (
                   <div className="mb-2 flex items-center gap-2">

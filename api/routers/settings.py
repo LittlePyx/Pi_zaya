@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from api.deps import get_settings, load_prefs, save_prefs
+from kb.file_ops import _pick_directory_dialog
 from kb.llm import DeepSeekChat
 
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -40,6 +43,22 @@ def update_settings(body: PrefsPatch):
         prefs[k] = v
     save_prefs(prefs)
     return {"ok": True}
+
+
+class PickDirRequest(BaseModel):
+    target: Literal["pdf", "md"]
+    initial_dir: str | None = None
+
+
+@router.post("/settings/pick-dir")
+def pick_dir(body: PickDirRequest):
+    prefs = load_prefs()
+    key = "pdf_dir" if body.target == "pdf" else "md_dir"
+    initial = (body.initial_dir or "").strip() or str(prefs.get(key) or "").strip()
+    picked = _pick_directory_dialog(initial)
+    if not picked:
+        return {"ok": False, "path": None}
+    return {"ok": True, "path": picked}
 
 
 @router.post("/settings/test-llm")

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, message, Typography } from 'antd'
-import { MessageOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList } from '../components/chat/MessageList'
@@ -110,13 +109,13 @@ export default function ChatPage() {
       topK: settings.topK,
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
-      deepRead: settings.deepRead,
+      deepRead: true,
     })
   }
 
   const onUpload = async (files: File[]) => {
     try {
-      await uploadFiles(files, { quickIngest: true, speedMode: 'ultra_fast' })
+      await uploadFiles(files, { quickIngest: true, speedMode: 'balanced' })
     } catch {
       message.error('上传失败')
     }
@@ -149,8 +148,8 @@ export default function ChatPage() {
     <div className="flex h-full min-h-0 flex-col">
       {!activeConvId && messages.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-[var(--accent)] opacity-20">
-            <MessageOutlined className="text-2xl text-white" />
+          <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-[var(--border)] bg-white/90 shadow-sm dark:bg-white/5">
+            <img src="/pi_logo.png" alt="Pi assistant" className="h-9 w-9 object-contain" loading="lazy" />
           </div>
           <Text type="secondary" className="max-w-xs text-center">
             {S.no_msgs}

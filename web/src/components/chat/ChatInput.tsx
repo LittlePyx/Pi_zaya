@@ -241,8 +241,8 @@ export function ChatInput({
   const statusItems = uploadItems.filter((item) => item.kind !== 'image')
 
   return (
-    <div className="border-t border-[var(--border)] bg-[var(--panel)] p-4">
-      <div className="mx-auto flex max-w-4xl flex-col gap-3">
+    <div className="px-4 pb-4 pt-3">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2.5">
         {statusItems.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {statusItems.map((item) => {
@@ -342,10 +342,10 @@ export function ChatInput({
         ) : null}
 
         <div
-          className={`relative flex items-end gap-2 rounded-[28px] border border-dashed p-3 transition ${
+          className={`kb-chat-input-shell relative flex items-end gap-2 rounded-[24px] border p-3 transition ${
             dragActive
               ? 'border-[var(--accent)] bg-[var(--msg-user-bg)] shadow-[0_0_0_4px_color-mix(in_srgb,var(--accent)_10%,transparent)]'
-              : 'border-transparent'
+              : 'border-transparent bg-transparent shadow-none'
           }`}
           onDragEnter={onDragEnter}
           onDragOver={onDragOver}
@@ -358,7 +358,7 @@ export function ChatInput({
             </div>
           ) : null}
 
-          <div className="flex flex-1 flex-col gap-2">
+          <div className="kb-chat-composer-main flex flex-1 flex-col gap-2">
             <TextArea
               ref={ref as never}
               value={text}
@@ -368,12 +368,12 @@ export function ChatInput({
               onCompositionStart={() => { composingRef.current = true }}
               onCompositionEnd={() => { composingRef.current = false }}
               placeholder={S.prompt_label}
-              autoSize={{ minRows: 1, maxRows: 6 }}
-              className="flex-1"
+              autoSize={{ minRows: 1, maxRows: 5 }}
+              className="kb-chat-textarea flex-1"
               autoFocus
             />
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+            <div className="kb-chat-toolbar">
+              <div className="kb-chat-toolbar-left">
                 <input
                   ref={fileRef}
                   type="file"
@@ -383,6 +383,7 @@ export function ChatInput({
                   onChange={onPickFiles}
                 />
                 <Button
+                  className="kb-attach-btn"
                   icon={<PaperClipOutlined />}
                   onClick={() => fileRef.current?.click()}
                   loading={uploading}
@@ -390,29 +391,32 @@ export function ChatInput({
                 >
                   添加文件
                 </Button>
-                <Text type="secondary" className="text-xs">
+                <Text type="secondary" className="kb-chat-help-text">
                   PDF 会先快速入库，再后台精修；图片会随本轮提问发送。支持拖拽和粘贴图片。
                 </Text>
               </div>
-              <Text type="secondary" className="text-xs">
-                Enter {S.send} / Shift+Enter {S.newline}
-              </Text>
+              <div className="kb-chat-toolbar-right">
+                <Text type="secondary" className="kb-chat-shortcut-text">
+                  Enter {S.send} / Shift+Enter {S.newline}
+                </Text>
+                {generating ? (
+                  <Button className="kb-stop-btn" icon={<PauseOutlined />} onClick={onStop} danger>
+                    {S.stop}
+                  </Button>
+                ) : (
+                  <Button
+                    className="kb-send-btn"
+                    type="primary"
+                    icon={<SendOutlined />}
+                    onClick={submit}
+                    disabled={(!text.trim() && pendingImages.length === 0) || uploading}
+                  >
+                    {S.send}
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
-          {generating ? (
-            <Button icon={<PauseOutlined />} onClick={onStop} danger>
-              {S.stop}
-            </Button>
-          ) : (
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              onClick={submit}
-              disabled={(!text.trim() && pendingImages.length === 0) || uploading}
-            >
-              {S.send}
-            </Button>
-          )}
         </div>
       </div>
     </div>

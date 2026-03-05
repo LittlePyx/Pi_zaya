@@ -1,4 +1,4 @@
-import { Drawer, Slider, Switch, Button, message, Typography } from 'antd'
+import { Drawer, Slider, Button, message, Typography } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { settingsApi } from '../../api/settings'
 import { S } from '../../i18n/zh'
@@ -33,16 +33,6 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         <div>
           <Text>{S.max_tokens}: {s.maxTokens}</Text>
           <Slider min={256} max={4096} step={64} value={s.maxTokens} onChange={v => s.update({ maxTokens: v })} />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <Text>{S.deep_read}</Text>
-          <Switch checked={s.deepRead} onChange={v => s.update({ deepRead: v })} />
-        </div>
-
-        <div className="flex items-center justify-between">
-          <Text>{S.show_ctx}</Text>
-          <Switch checked={s.showContext} onChange={v => s.update({ showContext: v })} />
         </div>
 
         <Button onClick={testLlm}>测试 LLM 连接</Button>
