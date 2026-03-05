@@ -114,6 +114,8 @@ from .block_classifier import _looks_like_math_block, _looks_like_code_block
 from .llm_worker import LLMWorker
 from .post_processing import postprocess_markdown
 from .md_analyzer import MarkdownAnalyzer
+from .pipeline_vision_direct import process_batch_vision_direct
+from .pipeline_render_markdown import render_blocks_to_markdown
 
 
 class PDFConverter:
@@ -183,7 +185,7 @@ class PDFConverter:
         else:
             print("LLM not configured, using fast mode", flush=True)
         
-        # Only use vision-direct mode: screenshot → VL → Markdown
+        # Only use vision-direct mode: screenshot 鈫?VL 鈫?Markdown
         speed_mode = getattr(self.cfg, 'speed_mode', 'normal')
         
         if speed_mode == 'no_llm':
@@ -197,7 +199,7 @@ class PDFConverter:
                 md_pages = self._process_batch_no_llm(doc, pdf_path, assets_dir)
             else:
                 mode_name = "ultra_fast" if speed_mode == "ultra_fast" else "normal"
-                print(f"[MODE] Vision-direct ({mode_name}): each page screenshot → VL model → Markdown", flush=True)
+                print(f"[MODE] Vision-direct ({mode_name}): each page screenshot 鈫?VL model 鈫?Markdown", flush=True)
                 md_pages = self._process_batch_vision_direct(doc, pdf_path, assets_dir, speed_mode=speed_mode)
             
         final_md = "\n\n".join(filter(None, md_pages))
@@ -264,10 +266,18 @@ class PDFConverter:
             r"^page_(\d+)_(?:fig|eq)_\d+\.(?:png|jpg|jpeg|webp|gif)$",
             re.IGNORECASE,
         )
+        pat_meta = re.compile(
+            r"^page_(\d+)_fig_\d+\.meta\.json$",
+            re.IGNORECASE,
+        )
+        pat_page_index = re.compile(
+            r"^page_(\d+)_fig_index\.json$",
+            re.IGNORECASE,
+        )
         removed = 0
-        for p in assets_dir.glob("page_*_*.*"):
+        for p in assets_dir.glob("page_*"):
             try:
-                m = pat.match(p.name)
+                m = pat.match(p.name) or pat_meta.match(p.name) or pat_page_index.match(p.name)
                 if not m:
                     continue
                 page_no = int(m.group(1))
@@ -1850,6 +1860,494 @@ class PDFConverter:
                 pass
         return out
 
+    @staticmethod
+    def _extract_figure_number_from_text(text: str) -> Optional[int]:
+        t = _normalize_text(text or "").strip()
+        if not t:
+            return None
+        m = re.search(r"\b(?:fig(?:ure)?\.?)\s*(\d{1,4})\b", t, flags=re.IGNORECASE)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _reorder_page_figure_pairs_by_number(
+        md: str,
+        *,
+        page_index: int,
+    ) -> str:
+        """
+        Reorder adjacent figure image+caption pairs for the same page by figure number.
+        This keeps visual order stable when VL outputs Fig.3 before Fig.2 on one page.
+        """
+        if not md:
+            return md
+
+        page_no = int(page_index) + 1
+        img_re = re.compile(
+            rf"^\s*!\[[^\]]*\]\(\./assets/(page_{page_no}_fig_\d+\.[^)]+)\)\s*$",
+            flags=re.IGNORECASE,
+        )
+        cap_re = re.compile(
+            r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?)\s*(\d{1,4})\b",
+            flags=re.IGNORECASE,
+        )
+        heading_re = re.compile(r"^\s*#{1,6}\s+")
+
+        lines = md.splitlines()
+        n = len(lines)
+        blocks: list[dict] = []
+        i = 0
+        while i < n:
+            m_img = img_re.match(lines[i] or "")
+            if not m_img:
+                i += 1
+                continue
+
+            # Find nearby caption line after the image.
+            caption_idx = None
+            fig_no = None
+            j = i + 1
+            scanned = 0
+            while j < n and scanned < 8:
+                s = (lines[j] or "").strip()
+                if not s:
+                    j += 1
+                    scanned += 1
+                    continue
+                if img_re.match(lines[j] or "") or heading_re.match(lines[j] or ""):
+                    break
+                m_cap = cap_re.match(_normalize_text(s))
+                if m_cap:
+                    caption_idx = j
+                    try:
+                        fig_no = int(m_cap.group(1))
+                    except Exception:
+                        fig_no = None
+                    break
+                # Non-caption content appears before caption -> skip this image block.
+                break
+
+            if caption_idx is None or fig_no is None:
+                i += 1
+                continue
+
+            # Include caption continuation lines conservatively.
+            end = caption_idx + 1
+            cont = 0
+            while end < n:
+                s = (lines[end] or "").strip()
+                if not s:
+                    end += 1
+                    break
+                if img_re.match(lines[end] or "") or heading_re.match(lines[end] or ""):
+                    break
+                if cont >= 2:
+                    break
+                end += 1
+                cont += 1
+
+            blocks.append(
+                {
+                    "start": int(i),
+                    "end": int(end),
+                    "fig_no": int(fig_no),
+                    "img_name": str(m_img.group(1)),
+                }
+            )
+            i = end
+
+        if len(blocks) < 2:
+            return md
+
+        # Group adjacent blocks where separators are only blank lines.
+        runs: list[list[dict]] = []
+        cur: list[dict] = [blocks[0]]
+        for b in blocks[1:]:
+            prev = cur[-1]
+            gap_lines = lines[int(prev["end"]):int(b["start"])]
+            only_blank_gap = all((not (gl or "").strip()) for gl in gap_lines)
+            if only_blank_gap:
+                cur.append(b)
+            else:
+                if len(cur) >= 2:
+                    runs.append(cur)
+                cur = [b]
+        if len(cur) >= 2:
+            runs.append(cur)
+        if not runs:
+            return md
+
+        changed = 0
+        out_lines: list[str] = []
+        cursor = 0
+        for run in runs:
+            seg_start = int(run[0]["start"])
+            seg_end = int(run[-1]["end"])
+            out_lines.extend(lines[cursor:seg_start])
+            nums = [int(x["fig_no"]) for x in run]
+            if nums == sorted(nums):
+                out_lines.extend(lines[seg_start:seg_end])
+                cursor = seg_end
+                continue
+
+            run_sorted = sorted(run, key=lambda x: (int(x["fig_no"]), int(x["start"])))
+            chunk: list[str] = []
+            for idx, rb in enumerate(run_sorted):
+                chunk.extend(lines[int(rb["start"]):int(rb["end"])])
+                if idx != len(run_sorted) - 1 and (not chunk or chunk[-1].strip()):
+                    chunk.append("")
+            out_lines.extend(chunk)
+            cursor = seg_end
+            changed += 1
+
+        out_lines.extend(lines[cursor:])
+        if changed:
+            try:
+                print(f"[FIG_ORDER] page {page_no}: reordered {changed} figure block run(s) by figure number", flush=True)
+            except Exception:
+                pass
+        return "\n".join(out_lines)
+
+    @staticmethod
+    def _remap_page_image_links_by_caption(
+        md: str,
+        *,
+        page_index: int,
+        figure_meta_by_asset: Optional[dict[str, dict]] = None,
+    ) -> str:
+        """
+        Use per-page figure metadata (asset -> figure number) to remap image links
+        according to nearby caption numbers in markdown.
+        """
+        if not md:
+            return md
+        if not figure_meta_by_asset:
+            return md
+
+        fig_to_asset: dict[int, str] = {}
+        ambiguous: set[int] = set()
+        for asset_name, meta in (figure_meta_by_asset or {}).items():
+            if not isinstance(meta, dict):
+                continue
+            try:
+                fig_no = int(meta.get("fig_no"))
+            except Exception:
+                continue
+            if fig_no in fig_to_asset and fig_to_asset.get(fig_no) != asset_name:
+                ambiguous.add(fig_no)
+                continue
+            fig_to_asset[fig_no] = str(asset_name)
+        for n in ambiguous:
+            fig_to_asset.pop(n, None)
+        if not fig_to_asset:
+            return md
+
+        page_no = int(page_index) + 1
+        page_fig_re = re.compile(rf"^page_{page_no}_fig_(\d+)\.[A-Za-z0-9]+$", flags=re.IGNORECASE)
+        img_re = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        cap_re = re.compile(
+            r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?)\s*(\d{1,4})\b",
+            flags=re.IGNORECASE,
+        )
+
+        lines = md.splitlines()
+        changed = 0
+
+        def _find_nearby_caption_fig(line_idx: int) -> Optional[int]:
+            # Prefer caption below image, then above.
+            for step in range(1, 4):
+                j = line_idx + step
+                if 0 <= j < len(lines):
+                    s = (lines[j] or "").strip()
+                    if s:
+                        m = cap_re.match(_normalize_text(s))
+                        if m:
+                            try:
+                                return int(m.group(1))
+                            except Exception:
+                                pass
+            for step in range(1, 3):
+                j = line_idx - step
+                if 0 <= j < len(lines):
+                    s = (lines[j] or "").strip()
+                    if s:
+                        m = cap_re.match(_normalize_text(s))
+                        if m:
+                            try:
+                                return int(m.group(1))
+                            except Exception:
+                                pass
+            return None
+
+        out_lines: list[str] = []
+        for idx, line in enumerate(lines):
+            matches = list(img_re.finditer(line))
+            if not matches:
+                out_lines.append(line)
+                continue
+            out = line
+            shift = 0
+            for m in matches:
+                alt = m.group(1) or ""
+                raw_path = (m.group(2) or "").strip().strip('"').strip("'")
+                base = Path(raw_path).name
+                if not page_fig_re.match(base):
+                    continue
+
+                fig_no = PDFConverter._extract_figure_number_from_text(alt)
+                if fig_no is None:
+                    fig_no = _find_nearby_caption_fig(idx)
+                if fig_no is None:
+                    continue
+
+                target = fig_to_asset.get(int(fig_no))
+                if not target or target == base:
+                    continue
+
+                new_ref = f"![{alt}](./assets/{target})"
+                s0 = int(m.start()) + shift
+                e0 = int(m.end()) + shift
+                old_ref = out[s0:e0]
+                if old_ref == new_ref:
+                    continue
+                out = out[:s0] + new_ref + out[e0:]
+                shift += len(new_ref) - (e0 - s0)
+                changed += 1
+            out_lines.append(out)
+
+        if changed:
+            try:
+                print(f"[IMAGE_REMAP] page {page_no}: remapped {changed} figure link(s) by caption metadata", flush=True)
+            except Exception:
+                pass
+        return "\n".join(out_lines)
+
+    def _extract_page_figure_caption_candidates(self, page) -> list[dict]:
+        if fitz is None or page is None:
+            return []
+        out: list[dict] = []
+        try:
+            d = page.get_text("dict") or {}
+        except Exception:
+            return out
+
+        cap_start_re = re.compile(
+            r"^\s*(?:fig(?:ure)?\.?)\s*(\d{1,4}[A-Za-z]?)\b",
+            flags=re.IGNORECASE,
+        )
+        for b in d.get("blocks", []) or []:
+            if "lines" not in b:
+                continue
+            bbox = b.get("bbox")
+            if not bbox:
+                continue
+            txt_parts: list[str] = []
+            for l in b.get("lines", []) or []:
+                spans = l.get("spans", []) or []
+                if not spans:
+                    continue
+                line = "".join(str(s.get("text", "")) for s in spans)
+                line = _normalize_text(line).strip()
+                if line:
+                    txt_parts.append(line)
+            if not txt_parts:
+                continue
+            txt = _normalize_text(" ".join(txt_parts)).strip()
+            if not txt:
+                continue
+            m = cap_start_re.match(txt)
+            if not m:
+                continue
+            fig_ident = (m.group(1) or "").strip()
+            fig_no = None
+            try:
+                fig_no = int(re.match(r"^(\d+)", fig_ident).group(1))  # type: ignore[union-attr]
+            except Exception:
+                fig_no = None
+            out.append(
+                {
+                    "fig_no": fig_no,
+                    "fig_ident": fig_ident,
+                    "caption": txt,
+                    "bbox": [float(x) for x in bbox],
+                }
+            )
+        out.sort(key=lambda x: (float(x["bbox"][1]), float(x["bbox"][0])))
+        return out
+
+    def _match_figure_entries_with_captions(
+        self,
+        *,
+        page,
+        figure_entries: list[dict],
+        caption_candidates: list[dict],
+    ) -> list[dict]:
+        if fitz is None or page is None:
+            return figure_entries
+        if not figure_entries or not caption_candidates:
+            return figure_entries
+
+        page_h = float(page.rect.height or 0.0)
+        max_below_gap = max(120.0, page_h * 0.34)
+        max_above_gap = max(96.0, page_h * 0.22)
+
+        def _score(entry: dict, cap: dict) -> float:
+            rb = entry.get("crop_bbox") or entry.get("bbox")
+            cb = cap.get("bbox")
+            if not rb or not cb:
+                return -10_000.0
+            try:
+                rx0, ry0, rx1, ry1 = [float(v) for v in rb]
+                cx0, cy0, cx1, cy1 = [float(v) for v in cb]
+            except Exception:
+                return -10_000.0
+
+            hov = _overlap_1d(rx0, rx1, cx0 - 18.0, cx1 + 18.0)
+            min_w = max(1.0, min(rx1 - rx0, (cx1 - cx0) + 36.0))
+            hov_ratio = hov / min_w
+
+            below_gap = cy0 - ry1
+            above_gap = ry0 - cy1
+            gap_penalty = 500.0
+            if below_gap >= -20.0 and below_gap <= max_below_gap:
+                gap_penalty = max(0.0, below_gap) * 0.9
+            elif above_gap >= -20.0 and above_gap <= max_above_gap:
+                # Caption above figure is less common; allow but penalize more.
+                gap_penalty = 60.0 + max(0.0, above_gap) * 1.2
+
+            rcx = (rx0 + rx1) / 2.0
+            ccx = (cx0 + cx1) / 2.0
+            x_penalty = abs(rcx - ccx) * 0.06
+
+            score = (hov_ratio * 140.0) - gap_penalty - x_penalty
+            if hov_ratio < 0.08:
+                score -= 140.0
+            return score
+
+        used_entries: set[int] = set()
+        assigned: dict[int, dict] = {}
+        for cap in caption_candidates:
+            best_idx = None
+            best_score = -10_000.0
+            for i, ent in enumerate(figure_entries):
+                if i in used_entries:
+                    continue
+                s = _score(ent, cap)
+                if s > best_score:
+                    best_score = s
+                    best_idx = i
+            if best_idx is None:
+                continue
+            # Conservative threshold to avoid spurious matches.
+            if best_score < -18.0:
+                continue
+            used_entries.add(best_idx)
+            assigned[best_idx] = cap
+
+        out: list[dict] = []
+        for i, ent in enumerate(figure_entries):
+            row = dict(ent)
+            cap = assigned.get(i)
+            if cap:
+                row["fig_no"] = cap.get("fig_no")
+                row["fig_ident"] = cap.get("fig_ident")
+                row["caption"] = cap.get("caption")
+                row["caption_bbox"] = cap.get("bbox")
+            out.append(row)
+        return out
+
+    def _persist_page_figure_metadata(
+        self,
+        *,
+        assets_dir: Path,
+        page_index: int,
+        figure_entries: list[dict],
+    ) -> dict[str, dict]:
+        """
+        Persist per-page figure metadata (asset/crop/caption binding) and return
+        a fast lookup map by asset filename.
+        """
+        page_no = int(page_index) + 1
+        if not figure_entries:
+            # Keep output deterministic: remove stale page metadata if present.
+            meta_path = assets_dir / f"page_{page_no}_fig_index.json"
+            try:
+                meta_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return {}
+
+        rows: list[dict] = []
+        by_asset: dict[str, dict] = {}
+        for idx, item in enumerate(figure_entries, start=1):
+            asset_name = str(item.get("asset_name") or "").strip()
+            if not asset_name:
+                continue
+            row = {
+                "page": page_no,
+                "index": int(idx),
+                "asset_name": asset_name,
+                "fig_no": item.get("fig_no"),
+                "fig_ident": item.get("fig_ident"),
+                "caption": item.get("caption"),
+                "bbox": item.get("bbox"),
+                "crop_bbox": item.get("crop_bbox"),
+                "caption_bbox": item.get("caption_bbox"),
+            }
+            rows.append(row)
+            by_asset[asset_name] = row
+
+            sidecar = assets_dir / f"{Path(asset_name).stem}.meta.json"
+            try:
+                sidecar.write_text(
+                    json.dumps(row, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+
+        meta_path = assets_dir / f"page_{page_no}_fig_index.json"
+        try:
+            payload = {
+                "page": page_no,
+                "figures": rows,
+            }
+            meta_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        return by_asset
+
+    @staticmethod
+    def _build_page_figure_mapping_hint(figure_meta_by_asset: Optional[dict[str, dict]]) -> str:
+        if not figure_meta_by_asset:
+            return ""
+        rows: list[tuple[int, str]] = []
+        for asset, meta in figure_meta_by_asset.items():
+            if not isinstance(meta, dict):
+                continue
+            try:
+                n = int(meta.get("fig_no"))
+            except Exception:
+                continue
+            rows.append((n, str(asset)))
+        if not rows:
+            return ""
+        rows.sort(key=lambda x: (x[0], x[1].lower()))
+        seen: set[int] = set()
+        pairs: list[str] = []
+        for n, asset in rows:
+            if n in seen:
+                continue
+            seen.add(n)
+            pairs.append(f"Figure {n} -> ./assets/{asset}")
+        if not pairs:
+            return ""
+        return "Figure-to-asset mapping for this page: " + "; ".join(pairs) + "."
+
     def _detect_table_rects_for_fallback(
         self,
         page,
@@ -2109,6 +2607,7 @@ class PDFConverter:
         pdf_path: Path,
         assets_dir: Path,
         image_names: list[str],
+        figure_meta_by_asset: Optional[dict[str, dict]] = None,
         visual_rects: Optional[list["fitz.Rect"]] = None,
         is_references_page: bool = False,
     ) -> str:
@@ -2120,11 +2619,25 @@ class PDFConverter:
             image_names=image_names,
             is_references_page=is_references_page,
         )
-        md = self._normalize_page_local_image_link_order(
+        md = self._remap_page_image_links_by_caption(
             md,
             page_index=page_index,
-            image_names=image_names,
+            figure_meta_by_asset=figure_meta_by_asset,
         )
+        md = self._reorder_page_figure_pairs_by_number(
+            md,
+            page_index=page_index,
+        )
+        has_caption_meta = bool(
+            figure_meta_by_asset
+            and any((isinstance(v, dict) and v.get("fig_no") is not None) for v in figure_meta_by_asset.values())
+        )
+        if not has_caption_meta:
+            md = self._normalize_page_local_image_link_order(
+                md,
+                page_index=page_index,
+                image_names=image_names,
+            )
         md = self._inject_table_image_fallbacks(
             md,
             page=page,
@@ -2140,655 +2653,16 @@ class PDFConverter:
     # Now only using vision-direct mode (_process_batch_vision_direct) and no-LLM mode (_process_batch_no_llm)
 
     # ------------------------------------------------------------------
-    # Vision-direct mode: screenshot each page → VL model → Markdown
+    # Vision-direct mode: screenshot each page 鈫?VL model 鈫?Markdown
     # ------------------------------------------------------------------
     def _process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, speed_mode: str = 'normal') -> List[Optional[str]]:
-        """
-        Bypass all text-extraction / block-classification logic.
-        For every page: render a high-DPI screenshot, send it to the vision LLM,
-        and collect the Markdown it returns.
-        Supports parallel processing with ThreadPoolExecutor.
-        """
-        total_pages = len(doc)
-        results: List[Optional[str]] = [None] * total_pages
-
-        start = max(0, int(getattr(self.cfg, "start_page", 0) or 0))
-        end = int(getattr(self.cfg, "end_page", -1) or -1)
-        if end < 0:
-            end = total_pages
-        end = min(total_pages, end)
-        if start >= end:
-            return results
-
-        # Get speed mode config
-        import multiprocessing
-        speed_config = self._get_speed_mode_config(speed_mode, total_pages)
-        cpu_count = multiprocessing.cpu_count()
-        
-        # DPI from config or environment variable
-        # Higher DPI for better formula recognition quality
-        base_dpi = int(getattr(self, "dpi", 200) or 200)
-        try:
-            vision_dpi = int(os.environ.get("KB_PDF_VISION_DPI", "") or "")
-            if vision_dpi > 0:
-                dpi = max(200, min(600, vision_dpi))  # Minimum 200 for better quality
-            else:
-                dpi = speed_config.get('dpi', 220)  # Increased from 160 to 220 for better formula recognition
-        except Exception:
-            dpi = speed_config.get('dpi', 220)  # Increased from 160 to 220
-        zoom = dpi / 72.0
-        mat = fitz.Matrix(zoom, zoom)
-
-        # Determine number of workers for parallel processing
-        max_parallel = speed_config.get('max_parallel_pages', min(8, max(1, cpu_count)))
-        try:
-            max_parallel = int(max_parallel)
-        except Exception:
-            max_parallel = min(8, max(1, cpu_count))
-        max_parallel = max(1, min(64, max_parallel, total_pages))
-
-        raw_llm_pw = (os.environ.get("KB_PDF_LLM_PAGE_WORKERS") or "").strip()
-        num_workers = int(raw_llm_pw) if raw_llm_pw else int(os.environ.get("KB_PDF_WORKERS", "0") or "0")
-        if num_workers <= 0:
-            if total_pages <= 2:
-                num_workers = 1
-            else:
-                num_workers = min(max_parallel, cpu_count, total_pages)
-
-        # Effective LLM inflight limit (semaphore slots).
-        # Prefer env override; otherwise align with LLMWorker's runtime semaphore limit.
-        inflight_source = "speed_config"
-        try:
-            raw_inflight = (os.environ.get("KB_LLM_MAX_INFLIGHT") or "").strip()
-            if raw_inflight:
-                max_inflight = int(raw_inflight)
-                inflight_source = "env:KB_LLM_MAX_INFLIGHT"
-            else:
-                worker_inflight = 0
-                try:
-                    worker_inflight = int(self.llm_worker.get_llm_max_inflight())
-                except Exception:
-                    try:
-                        worker_inflight = int(getattr(self.llm_worker, "_llm_max_inflight", 0) or 0)
-                    except Exception:
-                        worker_inflight = 0
-                if worker_inflight > 0:
-                    max_inflight = worker_inflight
-                    inflight_source = "llm_worker"
-                else:
-                    max_inflight = int(speed_config.get('max_inflight', 8) or 8)
-            max_inflight = max(1, min(32, int(max_inflight)))
-        except Exception:
-            max_inflight = max(1, min(32, int(speed_config.get('max_inflight', 8) or 8)))
-            inflight_source = "fallback"
-        
-        num_workers_before_cap = num_workers
-        cap = None
-        
-        # If user explicitly set KB_PDF_LLM_PAGE_WORKERS, don't cap at all (trust the user)
-        if raw_llm_pw:
-            cap = None
-            num_workers = min(int(num_workers), int(total_pages))
-        else:
-            # Only cap if user didn't explicitly set KB_PDF_LLM_PAGE_WORKERS
-            try:
-                raw_cap = (os.environ.get("KB_PDF_LLM_PAGE_WORKERS_CAP") or "").strip()
-                if raw_cap:
-                    cap = int(raw_cap)
-                    cap = max(1, min(64, int(cap)))
-                else:
-                    # Keep page-workers <= effective inflight to avoid semaphore saturation timeouts.
-                    cap = max(1, min(int(max_parallel), int(max_inflight)))
-                
-                if cap is not None:
-                    num_workers = min(int(num_workers), int(cap), int(total_pages))
-                else:
-                    num_workers = min(int(num_workers), int(total_pages))
-            except Exception as e:
-                # On error, still keep a conservative cap.
-                cap = max(1, min(int(max_parallel), int(max_inflight)))
-                num_workers = min(int(num_workers), int(cap), int(total_pages))
-
-        # Debug: print worker count calculation
-        try:
-            print(
-                f"[VISION_DIRECT] worker calculation: raw_llm_pw={raw_llm_pw!r}, "
-                f"num_workers_before={num_workers_before_cap}, final_num_workers={num_workers}, "
-                f"max_inflight={max_inflight} ({inflight_source}), cap={cap}, total_pages={total_pages}",
-                flush=True,
-            )
-            # Warn if max_inflight is less than num_workers (may cause timeouts)
-            if max_inflight < num_workers:
-                print(f"[VISION_DIRECT] WARNING: KB_LLM_MAX_INFLIGHT={max_inflight} < num_workers={num_workers}. "
-                      f"This may cause timeout errors. Consider setting KB_LLM_MAX_INFLIGHT >= {num_workers}", flush=True)
-        except Exception:
-            pass
-
-        if num_workers <= 1 or total_pages <= 1:
-            # Sequential processing
-            print(f"[VISION_DIRECT] Converting pages {start+1}–{end} via VL screenshots (dpi={dpi}, sequential)", flush=True)
-            for i in range(start, end):
-                t0 = time.time()
-                print(f"Processing page {i+1}/{total_pages} (vision-direct) ...", flush=True)
-                try:
-                    page = doc.load_page(i)
-                    page_w = float(page.rect.width)
-                    page_h = float(page.rect.height)
-
-                    is_references_page = False
-                    try:
-                        is_references_page = bool(
-                            _page_has_references_heading(page) or _page_looks_like_references_content(page)
-                        )
-                    except Exception:
-                        is_references_page = False
-                    metadata_rects: list[fitz.Rect] = []
-                    if not is_references_page:
-                        try:
-                            metadata_rects = self._collect_non_body_metadata_rects(
-                                page,
-                                page_index=i,
-                                is_references_page=False,
-                            )
-                        except Exception:
-                            metadata_rects = []
-                    
-                    # Extract images BEFORE sending to LLM, so they're available when LLM references them
-                    image_names: list[str] = []
-                    visual_rects: list[fitz.Rect] = []
-                    try:
-                        visual_rects = _collect_visual_rects(page)
-                        W = page_w
-                        H = page_h
-                        header_threshold = H * 0.12
-                        footer_threshold = H * 0.88
-                        side_margin = W * 0.05
-                        spanning_threshold = W * 0.55
-                        line_boxes = self._collect_page_text_line_boxes(page)
-                        
-                        img_count = 0
-                        for rect_idx, rect in enumerate(visual_rects):
-                            # Check if this is a full-width image
-                            is_full_width = _rect_area(rect) >= (W * H * 0.40) or _bbox_width(tuple(rect)) >= spanning_threshold
-                            
-                            # Skip if in header/footer region (unless it's a large figure)
-                            if rect.y1 < header_threshold or rect.y0 > footer_threshold:
-                                if not is_full_width and _rect_area(rect) < (W * H * 0.15):
-                                    continue
-                            
-                            # Skip small edge artifacts
-                            if not is_full_width:
-                                if rect.x0 < side_margin and rect.width < W * 0.1:
-                                    continue
-                                if rect.x1 > W - side_margin and rect.width < W * 0.1:
-                                    continue
-                            
-                            cropped_rect = self._expanded_visual_crop_rect(
-                                rect=rect,
-                                page_w=W,
-                                page_h=H,
-                                is_full_width=bool(is_full_width),
-                                line_boxes=line_boxes,
-                            )
-                            
-                            if cropped_rect.width <= 0 or cropped_rect.height <= 0:
-                                continue
-                            
-                            # Save image
-                            img_name = f"page_{i+1}_fig_{rect_idx+1}.png"
-                            img_path = assets_dir / img_name
-                            
-                            try:
-                                pix_img = page.get_pixmap(clip=cropped_rect, dpi=dpi)
-                                pix_img.save(img_path)
-                                # Verify file was saved
-                                if img_path.exists() and img_path.stat().st_size >= 256:
-                                    img_count += 1
-                                    if img_name not in image_names:
-                                        image_names.append(img_name)
-                            except Exception:
-                                # Fallback to original rect if crop fails
-                                try:
-                                    pix_img = page.get_pixmap(clip=rect, dpi=dpi)
-                                    pix_img.save(img_path)
-                                    if img_path.exists() and img_path.stat().st_size >= 256:
-                                        img_count += 1
-                                        if img_name not in image_names:
-                                            image_names.append(img_name)
-                                except Exception:
-                                    continue
-                        
-                        if img_count > 0:
-                            print(f"  [Page {i+1}] Extracted {img_count} images", flush=True)
-                    except Exception as e:
-                        print(f"  [Page {i+1}] Image extraction failed: {e}", flush=True)
-                        # Continue even if image extraction fails
-                    
-                    pix = page.get_pixmap(matrix=mat, alpha=False)
-                    png_bytes = pix.tobytes("png")
-                    
-                    # Compress PNG based on speed mode config
-                    try:
-                        compress_level_raw = os.environ.get("KB_PDF_VISION_COMPRESS", "").strip()
-                        if compress_level_raw:
-                            compress_level = int(compress_level_raw)
-                        else:
-                            compress_level = speed_config.get('compress', 3)
-                        if compress_level > 0:
-                            try:
-                                from PIL import Image
-                                import io
-                                img = Image.open(io.BytesIO(png_bytes))
-                                output = io.BytesIO()
-                                img.save(output, format="PNG", optimize=True, compress_level=min(9, max(1, compress_level)))
-                                png_bytes = output.getvalue()
-                            except ImportError:
-                                pass  # PIL not available, skip compression
-                    except Exception:
-                        pass
-
-                    if metadata_rects:
-                        png_bytes = self._mask_rects_on_png(
-                            png_bytes,
-                            rects=metadata_rects,
-                            page_width=page_w,
-                            page_height=page_h,
-                        )
-                        try:
-                            print(f"  [Page {i+1}] Masked {len(metadata_rects)} metadata region(s) before VL OCR", flush=True)
-                        except Exception:
-                            pass
-
-                    # Save screenshot for debugging if requested
-                    try:
-                        if bool(int(os.environ.get("KB_PDF_SAVE_PAGE_SCREENSHOTS", "0") or "0")):
-                            dbg_dir = assets_dir / "page_screenshots"
-                            dbg_dir.mkdir(exist_ok=True)
-                            (dbg_dir / f"page_{i+1}.png").write_bytes(png_bytes)
-                    except Exception:
-                        pass
-
-                    page_hint = ""
-                    if is_references_page:
-                        page_hint = (
-                            "This page is likely in the REFERENCES/BIBLIOGRAPHY section. "
-                            "Output plain-text references only, one complete reference per line. "
-                            "Do not use $...$ or $$...$$ on this page."
-                        )
-                    elif image_names:
-                        show_n = 6
-                        paths = ", ".join(f"./assets/{nm}" for nm in image_names[:show_n])
-                        hint_img = (
-                            "This page has extracted figure images available in assets. "
-                            f"If figures appear on this page, embed them with exact Markdown links using these paths: {paths}."
-                        )
-                        page_hint = (page_hint + " " + hint_img).strip() if page_hint else hint_img
-                    formula_placeholders: dict[str, str] = {}
-                    if (not is_references_page) and self._vision_formula_overlay_enabled():
-                        try:
-                            eq_candidates = self._collect_display_math_candidates(
-                                page,
-                                page_index=i,
-                                is_references_page=False,
-                            )
-                            if eq_candidates:
-                                eq_labeled_rects, formula_placeholders = self._extract_formula_placeholders_for_page(
-                                    page,
-                                    page_index=i,
-                                    candidates=eq_candidates,
-                                    base_dpi=int(dpi),
-                                )
-                                if eq_labeled_rects and formula_placeholders:
-                                    png_bytes = self._mask_rects_with_labels_on_png(
-                                        png_bytes,
-                                        labeled_rects=eq_labeled_rects,
-                                        page_width=page_w,
-                                        page_height=page_h,
-                                    )
-                                    hint_eq = self._formula_placeholder_hint(formula_placeholders)
-                                    if hint_eq:
-                                        page_hint = (page_hint + " " + hint_eq).strip() if page_hint else hint_eq
-                                    print(
-                                        f"  [Page {i+1}] Formula overlay enabled: {len(formula_placeholders)} display equation(s)",
-                                        flush=True,
-                                    )
-                        except Exception as e:
-                            print(f"  [Page {i+1}] Formula overlay skipped: {e}", flush=True)
-
-                    md = self._convert_page_with_vision_guardrails(
-                        png_bytes=png_bytes,
-                        page=page,
-                        page_index=i,
-                        total_pages=total_pages,
-                        page_hint=page_hint,
-                        speed_mode=speed_mode,
-                        is_references_page=is_references_page,
-                        pdf_path=pdf_path,
-                        assets_dir=assets_dir,
-                        formula_placeholders=formula_placeholders,
-                    )
-                    elapsed = time.time() - t0
-                    if md:
-                        md = self._postprocess_vision_page_markdown(
-                            md,
-                            page=page,
-                            page_index=i,
-                            pdf_path=pdf_path,
-                            assets_dir=assets_dir,
-                            image_names=image_names,
-                            visual_rects=visual_rects,
-                            is_references_page=is_references_page,
-                        )
-                        results[i] = md
-                        print(f"Finished page {i+1}/{total_pages} ({elapsed:.1f}s, {len(md)} chars)", flush=True)
-                    else:
-                        print(f"[VISION_DIRECT] page {i+1} failed in both VL and fallback paths", flush=True)
-                except Exception as e:
-                    error_str = str(e)
-                    print(f"[VISION_DIRECT] error page {i+1}: {e}", flush=True)
-                    
-                    # Check for critical API errors that should stop processing
-                    if "Access denied" in error_str or "account is in good standing" in error_str:
-                        print(f"[VISION_DIRECT] ⚠️  检测到API账户访问被拒绝，建议停止转换并检查账户状态", flush=True)
-                        # Continue processing other pages, but mark this one as failed
-                    
-                    import traceback
-                    traceback.print_exc()
-                    results[i] = None
-            return results
-
-        # Parallel processing
-        print(f"[VISION_DIRECT] Converting pages {start+1}–{end} via VL screenshots (dpi={dpi}, {num_workers} workers)", flush=True)
-        from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
-
-        def process_single_page(i: int):
-            try:
-                print(f"Processing page {i+1}/{total_pages} (vision-direct) ...", flush=True)
-                t0 = time.time()
-                # Avoid sharing fitz.Document / Page across threads
-                with fitz.open(str(pdf_path)) as local_doc:
-                    page = local_doc.load_page(i)
-                    page_w = float(page.rect.width)
-                    page_h = float(page.rect.height)
-
-                    is_references_page = False
-                    try:
-                        is_references_page = bool(
-                            _page_has_references_heading(page) or _page_looks_like_references_content(page)
-                        )
-                    except Exception:
-                        is_references_page = False
-                    metadata_rects: list[fitz.Rect] = []
-                    if not is_references_page:
-                        try:
-                            metadata_rects = self._collect_non_body_metadata_rects(
-                                page,
-                                page_index=i,
-                                is_references_page=False,
-                            )
-                        except Exception:
-                            metadata_rects = []
-                    
-                    # Extract images BEFORE sending to LLM, so they're available when LLM references them
-                    image_names: list[str] = []
-                    visual_rects: list[fitz.Rect] = []
-                    try:
-                        visual_rects = _collect_visual_rects(page)
-                        W = page_w
-                        H = page_h
-                        header_threshold = H * 0.12
-                        footer_threshold = H * 0.88
-                        side_margin = W * 0.05
-                        spanning_threshold = W * 0.55
-                        line_boxes = self._collect_page_text_line_boxes(page)
-                        
-                        img_count = 0
-                        for rect_idx, rect in enumerate(visual_rects):
-                            # Check if this is a full-width image
-                            is_full_width = _rect_area(rect) >= (W * H * 0.40) or _bbox_width(tuple(rect)) >= spanning_threshold
-                            
-                            # Skip if in header/footer region (unless it's a large figure)
-                            if rect.y1 < header_threshold or rect.y0 > footer_threshold:
-                                if not is_full_width and _rect_area(rect) < (W * H * 0.15):
-                                    continue
-                            
-                            # Skip small edge artifacts
-                            if not is_full_width:
-                                if rect.x0 < side_margin and rect.width < W * 0.1:
-                                    continue
-                                if rect.x1 > W - side_margin and rect.width < W * 0.1:
-                                    continue
-                            
-                            cropped_rect = self._expanded_visual_crop_rect(
-                                rect=rect,
-                                page_w=W,
-                                page_h=H,
-                                is_full_width=bool(is_full_width),
-                                line_boxes=line_boxes,
-                            )
-                            
-                            if cropped_rect.width <= 0 or cropped_rect.height <= 0:
-                                continue
-                            
-                            # Save image
-                            img_name = f"page_{i+1}_fig_{rect_idx+1}.png"
-                            img_path = assets_dir / img_name
-                            
-                            try:
-                                pix_img = page.get_pixmap(clip=cropped_rect, dpi=dpi)
-                                pix_img.save(img_path)
-                                # Verify file was saved
-                                if img_path.exists() and img_path.stat().st_size >= 256:
-                                    img_count += 1
-                                    if img_name not in image_names:
-                                        image_names.append(img_name)
-                            except Exception:
-                                # Fallback to original rect if crop fails
-                                try:
-                                    pix_img = page.get_pixmap(clip=rect, dpi=dpi)
-                                    pix_img.save(img_path)
-                                    if img_path.exists() and img_path.stat().st_size >= 256:
-                                        img_count += 1
-                                        if img_name not in image_names:
-                                            image_names.append(img_name)
-                                except Exception:
-                                    continue
-                        
-                        if img_count > 0:
-                            print(f"  [Page {i+1}] Extracted {img_count} images", flush=True)
-                    except Exception as e:
-                        print(f"  [Page {i+1}] Image extraction failed: {e}", flush=True)
-                        # Continue even if image extraction fails
-                    
-                    pix = page.get_pixmap(matrix=mat, alpha=False)
-                    png_bytes = pix.tobytes("png")
-                    
-                    # Compress PNG based on speed mode config
-                    try:
-                        compress_level_raw = os.environ.get("KB_PDF_VISION_COMPRESS", "").strip()
-                        if compress_level_raw:
-                            compress_level = int(compress_level_raw)
-                        else:
-                            compress_level = speed_config.get('compress', 3)
-                        if compress_level > 0:
-                            # Use PIL/Pillow to compress if available
-                            try:
-                                from PIL import Image
-                                import io
-                                img = Image.open(io.BytesIO(png_bytes))
-                                output = io.BytesIO()
-                                # compress_level: 1-9, higher = more compression (slower)
-                                img.save(output, format="PNG", optimize=True, compress_level=min(9, max(1, compress_level)))
-                                png_bytes = output.getvalue()
-                            except ImportError:
-                                pass  # PIL not available, skip compression
-                    except Exception:
-                        pass
-
-                    if metadata_rects:
-                        png_bytes = self._mask_rects_on_png(
-                            png_bytes,
-                            rects=metadata_rects,
-                            page_width=page_w,
-                            page_height=page_h,
-                        )
-                        try:
-                            print(f"  [Page {i+1}] Masked {len(metadata_rects)} metadata region(s) before VL OCR", flush=True)
-                        except Exception:
-                            pass
-
-                    # Save screenshot for debugging if requested
-                    try:
-                        if bool(int(os.environ.get("KB_PDF_SAVE_PAGE_SCREENSHOTS", "0") or "0")):
-                            dbg_dir = assets_dir / "page_screenshots"
-                            dbg_dir.mkdir(exist_ok=True)
-                            (dbg_dir / f"page_{i+1}.png").write_bytes(png_bytes)
-                    except Exception:
-                        pass
-
-                    page_hint = ""
-                    if is_references_page:
-                        page_hint = (
-                            "This page is likely in the REFERENCES/BIBLIOGRAPHY section. "
-                            "Output plain-text references only, one complete reference per line. "
-                            "Do not use $...$ or $$...$$ on this page."
-                        )
-                    elif image_names:
-                        show_n = 6
-                        paths = ", ".join(f"./assets/{nm}" for nm in image_names[:show_n])
-                        hint_img = (
-                            "This page has extracted figure images available in assets. "
-                            f"If figures appear on this page, embed them with exact Markdown links using these paths: {paths}."
-                        )
-                        page_hint = (page_hint + " " + hint_img).strip() if page_hint else hint_img
-                    formula_placeholders: dict[str, str] = {}
-                    if (not is_references_page) and self._vision_formula_overlay_enabled():
-                        try:
-                            eq_candidates = self._collect_display_math_candidates(
-                                page,
-                                page_index=i,
-                                is_references_page=False,
-                            )
-                            if eq_candidates:
-                                eq_labeled_rects, formula_placeholders = self._extract_formula_placeholders_for_page(
-                                    page,
-                                    page_index=i,
-                                    candidates=eq_candidates,
-                                    base_dpi=int(dpi),
-                                )
-                                if eq_labeled_rects and formula_placeholders:
-                                    png_bytes = self._mask_rects_with_labels_on_png(
-                                        png_bytes,
-                                        labeled_rects=eq_labeled_rects,
-                                        page_width=page_w,
-                                        page_height=page_h,
-                                    )
-                                    hint_eq = self._formula_placeholder_hint(formula_placeholders)
-                                    if hint_eq:
-                                        page_hint = (page_hint + " " + hint_eq).strip() if page_hint else hint_eq
-                                    print(
-                                        f"  [Page {i+1}] Formula overlay enabled: {len(formula_placeholders)} display equation(s)",
-                                        flush=True,
-                                    )
-                        except Exception as e:
-                            print(f"  [Page {i+1}] Formula overlay skipped: {e}", flush=True)
-
-                    md = self._convert_page_with_vision_guardrails(
-                        png_bytes=png_bytes,
-                        page=page,
-                        page_index=i,
-                        total_pages=total_pages,
-                        page_hint=page_hint,
-                        speed_mode=speed_mode,
-                        is_references_page=is_references_page,
-                        pdf_path=pdf_path,
-                        assets_dir=assets_dir,
-                        formula_placeholders=formula_placeholders,
-                    )
-                    elapsed = time.time() - t0
-                    if md:
-                        md = self._postprocess_vision_page_markdown(
-                            md,
-                            page=page,
-                            page_index=i,
-                            pdf_path=pdf_path,
-                            assets_dir=assets_dir,
-                            image_names=image_names,
-                            visual_rects=visual_rects,
-                            is_references_page=is_references_page,
-                        )
-                        print(f"Finished page {i+1}/{total_pages} ({elapsed:.1f}s, {len(md)} chars)", flush=True)
-                        return i, md
-                    else:
-                        print(f"[VISION_DIRECT] page {i+1} failed in both VL and fallback paths", flush=True)
-                        return i, None
-            except Exception as e:
-                error_str = str(e)
-                print(f"[VISION_DIRECT] error page {i+1}: {e}", flush=True)
-                
-                # Check for critical API errors
-                if "Access denied" in error_str or "account is in good standing" in error_str:
-                    print(f"[VISION_DIRECT] ⚠️  检测到API账户访问被拒绝，建议停止转换并检查账户状态", flush=True)
-                
-                import traceback
-                traceback.print_exc()
-                return i, None
-
-        executor = ThreadPoolExecutor(max_workers=num_workers)
-        futures = {executor.submit(process_single_page, i): i for i in range(start, end)}
-        pending = set(futures.keys())
-        done_pages = set()
-
-        # Heartbeat logging to avoid UI appearing frozen
-        hb_every_s = 8.0
-        try:
-            hb_every_s = float(os.environ.get("KB_PDF_BATCH_HEARTBEAT_S", str(hb_every_s)) or hb_every_s)
-            hb_every_s = max(2.0, min(60.0, hb_every_s))
-        except Exception:
-            hb_every_s = 8.0
-        last_hb = time.time()
-
-        try:
-            while pending:
-                now_ts = time.time()
-                done, not_done = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
-                pending = set(not_done)
-                try:
-                    if (now_ts - last_hb) >= hb_every_s:
-                        inflight_pages = sorted({int(futures[fut]) + 1 for fut in pending})
-                        if inflight_pages:
-                            head = inflight_pages[:12]
-                            more = len(inflight_pages) - len(head)
-                            extra = f" (+{more} more)" if more > 0 else ""
-                            print(
-                                f"[VISION_DIRECT] still running pages: {head}{extra} | workers={num_workers} llm_inflight={max_inflight}",
-                                flush=True,
-                            )
-                        last_hb = now_ts
-                except Exception:
-                    pass
-                for future in done:
-                    i = futures[future]
-                    try:
-                        i2, result = future.result()
-                        results[i2] = result
-                        done_pages.add(i2 + 1)
-                    except Exception as e:
-                        print(f"[VISION_DIRECT] error processing page {i+1}: {e}", flush=True)
-                        results[i] = None
-        finally:
-            if pending:
-                for future in pending:
-                    i = futures.get(future)
-                    if i is not None and results[i] is None:
-                        results[i] = f"<!-- kb_page: {i+1} -->\n\n[Page {i+1} conversion incomplete]"
-                    try:
-                        future.cancel()
-                    except Exception:
-                        pass
-            executor.shutdown(wait=False, cancel_futures=True)
-
-        return results
+        return process_batch_vision_direct(
+            self,
+            doc,
+            pdf_path,
+            assets_dir,
+            speed_mode=speed_mode,
+        )
 
     def _process_batch_no_llm(self, doc, pdf_path: Path, assets_dir: Path) -> List[Optional[str]]:
         """
@@ -2897,7 +2771,7 @@ class PDFConverter:
         print(f"  [Page {page_index+1}] Step 5 (text blocks): {time.time()-step_start:.2f}s, found {len(blocks)} blocks", flush=True)
 
         # 5.5 Merge split math fragments BEFORE any LLM work / rendering.
-        # PDF extraction frequently splits a single equation into many tiny blocks ("N X", ", (5)", "r ∈ R").
+        # PDF extraction frequently splits a single equation into many tiny blocks ("N X", ", (5)", "r 鈭?R").
         # If we try to repair each fragment in isolation, LaTeX quality collapses.
         step_start = time.time()
         try:
@@ -2962,7 +2836,7 @@ class PDFConverter:
         Merge adjacent math fragments split by PDF extraction.
 
         Typical failure mode (your screenshot):
-        - one display equation becomes multiple blocks: "N X", ", (5)", "r ∈ R", ...
+        - one display equation becomes multiple blocks: "N X", ", (5)", "r 鈭?R", ...
         If we repair each in isolation, LaTeX becomes nonsense.
         """
         if not blocks:
@@ -2991,7 +2865,24 @@ class PDFConverter:
             if not ss:
                 return False
             # very short math-y tokens
-            if any(ch in ss for ch in ["=", "∈", "≤", "≥", "≈", "→", "←", "×", "·", "Σ", "∑", "∫"]):
+            if any(
+                ch in ss
+                for ch in [
+                    "=",
+                    "-",
+                    "\u2212",
+                    "<",
+                    ">",
+                    "\u2264",
+                    "\u2265",
+                    "\u2192",
+                    "\u00d7",
+                    "\u00b7",
+                    "\u2211",
+                    "\u2208",
+                    "\u2209",
+                ]
+            ):
                 return True
             # LaTeX-ish / OCR math
             if "\\" in ss or "^" in ss or "_" in ss:
@@ -2999,10 +2890,10 @@ class PDFConverter:
             # bracket-heavy + sparse words
             if len(ss) <= 28 and re.search(r"[(){}\[\]]", ss) and not re.search(r"[A-Za-z]{3,}", ss):
                 return True
-            # "N X" / "r ∈ R"
+            # "N X" / "r 鈭?R"
             if re.fullmatch(r"[A-Za-z]\s+[A-Za-z]", ss):
                 return True
-            if "∈" in ss and len(ss) <= 24:
+            if ("\u2212" in ss or "-" in ss) and len(ss) <= 24:
                 return True
             return False
 
@@ -3016,7 +2907,7 @@ class PDFConverter:
                 return False
             try:
                 word_n = len(re.findall(r"\b[A-Za-z]{2,}\b", ss))
-                math_sym_n = len(re.findall(r"[=+\-*/^_{}\\\\\\[\\]]|[∈≤≥≈×·Σ∑∫]", ss))
+                math_sym_n = len(re.findall(r"[=+\-*/^_{}\\\\\\[\\]]|[鈭堚墹鈮モ増脳路危鈭戔埆]", ss))
                 has_sentence = (". " in ss) or ("? " in ss) or ("! " in ss)
                 if word_n >= 14 and (math_sym_n <= 10 or has_sentence):
                     return True
@@ -3077,7 +2968,7 @@ class PDFConverter:
                     break
 
                 # Avoid swallowing normal paragraphs into an equation merge.
-                # (The paragraph often contains symbols like "r∈R" which are math-ish, but it's prose.)
+                # (The paragraph often contains symbols like "r鈭圧" which are math-ish, but it's prose.)
                 if (not nb.is_math) and _looks_proseish_text(nt):
                     break
 
@@ -3238,7 +3129,7 @@ class PDFConverter:
                 if _looks_like_equation_text(tt):
                     return True
                 # Extra: short symbol-heavy lines are usually equation lines
-                sym_n = len(re.findall(r"[=+\-*/^_{}\\\\\\[\\]]|[∈≤≥≈×·Σ∑∫]", tt))
+                sym_n = len(re.findall(r"[=+\-*/^_{}\\\\\\[\\]]|[鈭堚墹鈮モ増脳路危鈭戔埆]", tt))
                 word_n = len(re.findall(r"\b[A-Za-z]{2,}\b", tt))
                 if len(tt) <= 80 and sym_n >= 3 and word_n <= 10:
                     return True
@@ -3405,6 +3296,7 @@ class PDFConverter:
         line_boxes = self._collect_page_text_line_boxes(page)
         
         img_count = 0
+        figure_entries: list[dict] = []
         for rect_idx, rect in enumerate(visual_rects):
             img_step_start = time.time()
             # Check if this is a full-width image (spans both columns or most of page)
@@ -3446,6 +3338,7 @@ class PDFConverter:
             # Use a stable per-page index to avoid filename collisions/overwrites on Windows.
             img_name = f"page_{page_index+1}_fig_{rect_idx+1}.png"
             img_path = assets_dir / img_name
+            used_clip = cropped_rect
             
             # Use configured DPI
             dpi = self.dpi
@@ -3462,6 +3355,7 @@ class PDFConverter:
                 print(f"      [Page {page_index+1}] Image {rect_idx+1} get_pixmap failed: {e}", flush=True)
                 # Fallback to original rect if crop fails
                 try:
+                    used_clip = rect
                     pix = page.get_pixmap(clip=rect, dpi=dpi)
                     pix.save(img_path)
                 except Exception:
@@ -3480,11 +3374,33 @@ class PDFConverter:
                 max_font_size=body_size
             )
             text_blocks.append(tb)
+            figure_entries.append(
+                {
+                    "asset_name": img_name,
+                    "bbox": [float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)],
+                    "crop_bbox": [float(used_clip.x0), float(used_clip.y0), float(used_clip.x1), float(used_clip.y1)],
+                }
+            )
             img_count += 1
             if time.time() - img_step_start > 0.5:
                 print(f"      [Page {page_index+1}] Image {rect_idx+1} processing took {time.time()-img_step_start:.2f}s", flush=True)
         
         print(f"    [Page {page_index+1}] Image processing: {time.time()-step_start:.2f}s, processed {img_count}/{len(visual_rects)} images", flush=True)
+        try:
+            if figure_entries:
+                cap_candidates = self._extract_page_figure_caption_candidates(page)
+                figure_entries = self._match_figure_entries_with_captions(
+                    page=page,
+                    figure_entries=figure_entries,
+                    caption_candidates=cap_candidates,
+                )
+            self._persist_page_figure_metadata(
+                assets_dir=assets_dir,
+                page_index=page_index,
+                figure_entries=figure_entries,
+            )
+        except Exception as e:
+            print(f"    [Page {page_index+1}] Figure metadata persist skipped: {e}", flush=True)
 
         # Sort reading order
         sort_start = time.time()
@@ -3609,7 +3525,7 @@ class PDFConverter:
         except Exception:
             pass
 
-        # Fix "hat" when OCR emits a caret with whitespace: "^ C" or "ˆ C" (normalized to "^ C")
+        # Fix "hat" when OCR emits a caret with whitespace: "^ C" or "藛 C" (normalized to "^ C")
         # This avoids confusing "^" exponent usage because we REQUIRE whitespace after caret.
         try:
             t = re.sub(r"\^\s+([A-Za-z])\b", r"\\hat{\1}", t)
@@ -3689,1009 +3605,13 @@ class PDFConverter:
         return t
 
     def _render_blocks_to_markdown(self, blocks: List[TextBlock], page_index: int, *, page=None, assets_dir: Path | None = None) -> str:
-        import time
-        render_start = time.time()
-        llm_call_count = 0
-        llm_total_time = 0.0
-
-        eq_img_idx = 0
-
-        def _ctx_from_neighbor_blocks(idx: int, *, direction: int) -> str:
-            """
-            Build a small, useful context snippet for LLM math repair from nearby raw blocks.
-            direction: -1 for before, +1 for after
-            """
-            try:
-                acc: list[str] = []
-                j = idx + direction
-                # Take up to 2 blocks of context
-                while 0 <= j < len(blocks) and len(acc) < 2:
-                    nb = blocks[j]
-                    t = (nb.text or "").strip()
-                    if not t:
-                        j += direction
-                        continue
-                    # Skip structural noise
-                    if nb.is_table or nb.is_code:
-                        j += direction
-                        continue
-                    # Avoid dumping huge paragraphs
-                    if len(t) > 240:
-                        t = t[:240] + "..."
-                    acc.append(t)
-                    j += direction
-                return "\n".join(acc) if direction > 0 else "\n".join(reversed(acc))
-            except Exception:
-                return ""
-
-        def _extract_math_raw_from_page(page, bbox: tuple[float, float, float, float]) -> str:
-            """
-            Extract math-like text from `page` inside `bbox` using span-level geometry (rawdict),
-            attempting to preserve superscript/subscript structure.
-
-            This is critical for full_llm quality: `get_text('dict')` often loses layout cues,
-            producing garbled math that even an LLM can't reliably reconstruct.
-            """
-            try:
-                clip = fitz.Rect(bbox)
-                if clip.width <= 2 or clip.height <= 2:
-                    return ""
-            except Exception:
-                return ""
-
-            try:
-                d = page.get_text("rawdict")
-            except Exception:
-                try:
-                    d = page.get_text("dict")
-                except Exception:
-                    return ""
-
-            spans: list[tuple[float, float, float, float, float, str]] = []
-            try:
-                for b0 in (d.get("blocks") or []):
-                    for ln in (b0.get("lines") or []):
-                        for sp in (ln.get("spans") or []):
-                            txt = str(sp.get("text") or "")
-                            if not txt.strip():
-                                # Some PDFs store glyphs only in `chars` with empty `text`.
-                                chars = sp.get("chars") or []
-                                if chars:
-                                    try:
-                                        txt = "".join(str(ch.get("c") or "") for ch in chars)
-                                    except Exception:
-                                        txt = ""
-                            if not txt.strip():
-                                continue
-                            sb = sp.get("bbox")
-                            if not sb:
-                                continue
-                            try:
-                                r = fitz.Rect(tuple(float(x) for x in sb))
-                            except Exception:
-                                continue
-                            if not r.intersects(clip):
-                                continue
-                            size = float(sp.get("size") or 0.0)
-                            spans.append((float(r.x0), float(r.y0), float(r.x1), float(r.y1), size, txt))
-            except Exception:
-                spans = []
-
-            if not spans:
-                return ""
-
-            # Sort top-to-bottom, left-to-right
-            spans.sort(key=lambda x: (x[1], x[0]))
-
-            # Group spans into lines by y proximity
-            lines: list[list[tuple[float, float, float, float, float, str]]] = []
-            cur: list[tuple[float, float, float, float, float, str]] = []
-            cur_y = None
-            for sp in spans:
-                y0, y1, size = sp[1], sp[3], sp[4]
-                cy = (y0 + y1) / 2.0
-                if cur_y is None:
-                    cur_y = cy
-                    cur = [sp]
-                    continue
-                tol = max(2.0, (size or 10.0) * 0.65)
-                if abs(cy - cur_y) <= tol:
-                    cur.append(sp)
-                    # update running center y
-                    cur_y = (cur_y * 0.7) + (cy * 0.3)
-                else:
-                    lines.append(cur)
-                    cur = [sp]
-                    cur_y = cy
-            if cur:
-                lines.append(cur)
-
-            def _median(xs: list[float]) -> float:
-                if not xs:
-                    return 0.0
-                xs2 = sorted(xs)
-                mid = len(xs2) // 2
-                return xs2[mid] if (len(xs2) % 2 == 1) else (xs2[mid - 1] + xs2[mid]) / 2.0
-
-            out_lines: list[str] = []
-            for ln in lines:
-                ln.sort(key=lambda x: x[0])
-                centers = [((x[1] + x[3]) / 2.0) for x in ln]
-                sizes = [float(x[4] or 0.0) for x in ln]
-                base_c = _median(centers)
-                base_s = _median([s for s in sizes if s > 0.0]) or 0.0
-                # Estimate line height
-                heights = [max(1.0, float(x[3] - x[1])) for x in ln]
-                lh = _median(heights) or 10.0
-
-                parts: list[str] = []
-                prev_x1 = None
-                for x0, y0, x1, y1, size, txt in ln:
-                    t = str(txt)
-                    # Normalize some common math glyphs early
-                    t = t.replace("⊙", r"\odot").replace("∈", r"\in").replace("×", r"\times").replace("·", r"\cdot")
-                    t = re.sub(r"\s+", " ", t).strip()
-                    if not t:
-                        continue
-                    c = (y0 + y1) / 2.0
-                    is_small = (base_s > 0.0) and (size > 0.0) and (size <= base_s * 0.88)
-                    # Sup/sub classification by relative center y
-                    super_th = base_c - (lh * 0.22)
-                    sub_th = base_c + (lh * 0.22)
-                    if is_small and c < super_th:
-                        t = "^{" + t + "}"
-                    elif is_small and c > sub_th:
-                        t = "_{" + t + "}"
-
-                    # Insert a space if there is a large horizontal gap between spans
-                    if prev_x1 is not None:
-                        gap = float(x0) - float(prev_x1)
-                        if gap > max(2.0, (base_s or 10.0) * 0.4):
-                            parts.append(" ")
-                    parts.append(t)
-                    prev_x1 = x1
-
-                line_s = "".join(parts).strip()
-                if line_s:
-                    out_lines.append(line_s)
-
-            return "\n".join(out_lines).strip()
-
-        def _save_eq_image(bbox: tuple[float, float, float, float]) -> str | None:
-            nonlocal eq_img_idx
-            if (not self.cfg.eq_image_fallback) or (page is None) or (assets_dir is None):
-                return None
-            try:
-                assets_dir.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                return None
-            try:
-                r = fitz.Rect(bbox)
-            except Exception:
-                return None
-            # Pad a bit to include equation number / surrounding symbols
-            try:
-                pad_x = max(2.0, float(r.width) * 0.04)
-                pad_y = max(2.0, float(r.height) * 0.10)
-                clip = fitz.Rect(
-                    max(0.0, float(r.x0) - pad_x),
-                    max(0.0, float(r.y0) - pad_y),
-                    min(float(page.rect.width), float(r.x1) + pad_x),
-                    min(float(page.rect.height), float(r.y1) + pad_y),
-                )
-                if clip.width <= 2 or clip.height <= 2:
-                    return None
-            except Exception:
-                clip = r
-            eq_img_idx += 1
-            img_name = f"page_{page_index+1}_eq_{eq_img_idx}.png"
-            img_path = assets_dir / img_name
-            try:
-                pix = page.get_pixmap(clip=clip, dpi=int(getattr(self, "dpi", 200) or 200))
-                pix.save(img_path)
-                if (not img_path.exists()) or (img_path.stat().st_size < 256):
-                    return None
-            except Exception:
-                return None
-            return f"![Equation](./assets/{img_name})"
-
-        def _vision_math_enabled() -> bool:
-            """
-            Whether to use vision-capable math recovery from equation screenshots.
-            Priority:
-            - explicit env KB_PDF_LLM_VISION_MATH
-            - otherwise auto-enable for VL/vision models (e.g. qwen3-vl-plus)
-            """
-            try:
-                if (not self.cfg.llm) or (not self.llm_worker) or (not getattr(self.llm_worker, "_client", None)):
-                    return False
-                if page is None:
-                    return False
-                raw = str(os.environ.get("KB_PDF_LLM_VISION_MATH", "") or "").strip().lower()
-                if raw:
-                    return raw in {"1", "true", "yes", "y", "on"}
-                m = str(getattr(self.cfg.llm, "model", "") or "").strip().lower()
-                return ("vl" in m) or ("vision" in m)
-            except Exception:
-                return False
-
-        def _looks_like_broken_display_math(math_src: str, latex_text: str) -> bool:
-            """
-            Decide if a non-empty latex_text is still likely wrong enough to justify a vision retry.
-            Keep conservative to control cost; only for display-ish math.
-            """
-            ms = (math_src or "").strip()
-            lt = (latex_text or "").strip()
-            if not ms or not lt:
-                return False
-            if ("=" in ms) and ("=" not in lt):
-                return True
-            if len(ms) >= 55 and len(lt) <= max(24, int(len(ms) * 0.45)):
-                return True
-            if any(x in ms for x in ["∑", "Σ", "\\sum", "∫", "\\int", "||", "‖"]) and not any(
-                y in lt for y in ["\\sum", "\\int", "\\left\\|", "\\|", "\\lVert", "\\rVert"]
-            ):
-                return True
-            if len(lt) >= 120 and len(re.findall(r"\b[A-Za-z]{3,}\b", lt)) >= 10:
-                return True
-            return False
-
-        def _debug_vision_math() -> bool:
-            try:
-                return bool(int(os.environ.get("KB_PDF_DEBUG_VISION_MATH", "0") or "0")) or bool(
-                    getattr(self.cfg, "keep_debug", False)
-                )
-            except Exception:
-                return False
-
-        def _vision_math_policy() -> str:
-            """
-            Control when to use vision math recovery.
-            - env KB_PDF_VISION_MATH_POLICY: off|fallback|prefer|force
-            - additionally, KB_PDF_LLM_VISION_MATH can be set to "prefer"/"force" (backward compatible with boolean).
-            """
-            try:
-                raw2 = str(os.environ.get("KB_PDF_VISION_MATH_POLICY", "") or "").strip().lower()
-                if raw2 in {"off", "0", "false", "none"}:
-                    return "off"
-                if raw2 in {"fallback", "prefer", "force"}:
-                    return raw2
-                raw = str(os.environ.get("KB_PDF_LLM_VISION_MATH", "") or "").strip().lower()
-                if raw in {"prefer", "force"}:
-                    return raw
-                return "fallback"
-            except Exception:
-                return "fallback"
-
-        def _expand_math_group_bbox(idx: int, bb: tuple[float, float, float, float]) -> "fitz.Rect":
-            """
-            Expand a bbox to include neighboring math-ish fragments that belong to the same display equation.
-            This dramatically improves VL quality on PDFs where a single equation is split into many tiny blocks.
-            """
-            try:
-                if fitz is None:
-                    return fitz.Rect(bb)  # type: ignore[union-attr]
-            except Exception:
-                return fitz.Rect(bb)  # type: ignore[union-attr]
-            try:
-                base = fitz.Rect(bb)
-            except Exception:
-                base = fitz.Rect(0, 0, 0, 0)
-            if base.width <= 1 or base.height <= 1:
-                return base
-
-            def _is_mathish_block(b2: TextBlock) -> bool:
-                try:
-                    if bool(getattr(b2, "is_math", False)):
-                        return True
-                except Exception:
-                    pass
-                t2 = (getattr(b2, "text", "") or "").strip()
-                if not t2:
-                    return False
-                if len(t2) <= 10 and re.fullmatch(r"[A-Za-z0-9\s\(\)\[\]\{\}=+\-*/^_.,\\]+", t2):
-                    return True
-                if re.fullmatch(r"[A-Za-z]\s+[A-Za-z]", t2):
-                    return True
-                if any(ch in t2 for ch in ["∈", "≤", "≥", "≈", "×", "·", "Σ", "∑", "∫", "∞", "→", "←", "⇔", "⇒"]):
-                    return True
-                if ("\\" in t2) or ("^" in t2) or ("_" in t2):
-                    return True
-                return False
-
-            def _can_merge(r0: "fitz.Rect", r1: "fitz.Rect") -> bool:
-                try:
-                    y_ol = min(float(r0.y1), float(r1.y1)) - max(float(r0.y0), float(r1.y0))
-                    y_gap = max(0.0, max(float(r1.y0) - float(r0.y1), float(r0.y0) - float(r1.y1)))
-                    x_ol = min(float(r0.x1), float(r1.x1)) - max(float(r0.x0), float(r1.x0))
-                    x_ol = max(0.0, float(x_ol))
-                    min_w = max(1.0, min(float(r0.width), float(r1.width)))
-                    x_ratio = x_ol / min_w
-                    tiny = (float(r0.width) < 60.0) or (float(r1.width) < 60.0)
-                    return (y_ol > 0.0) or (y_gap <= max(3.0, min(float(r0.height), float(r1.height)) * 0.95) and (x_ratio >= 0.12 or tiny))
-                except Exception:
-                    return False
-
-            r = base
-            # Look forward/backward a few blocks.
-            max_hops = 6
-            for j in range(idx + 1, min(len(blocks), idx + 1 + max_hops)):
-                nb = blocks[j]
-                if not _is_mathish_block(nb):
-                    break
-                try:
-                    r2 = fitz.Rect(getattr(nb, "bbox", None) or bb)
-                except Exception:
-                    break
-                if _can_merge(r, r2):
-                    r |= r2
-                    continue
-                # Stop if it jumps too far downward.
-                try:
-                    if float(r2.y0) - float(r.y1) > max(18.0, float(r.height) * 1.8):
-                        break
-                except Exception:
-                    break
-            for j in range(idx - 1, max(-1, idx - 1 - max_hops), -1):
-                pb = blocks[j]
-                if not _is_mathish_block(pb):
-                    break
-                try:
-                    r2 = fitz.Rect(getattr(pb, "bbox", None) or bb)
-                except Exception:
-                    break
-                if _can_merge(r, r2):
-                    r |= r2
-                    continue
-                try:
-                    if float(r.y0) - float(r2.y1) > max(18.0, float(r.height) * 1.8):
-                        break
-                except Exception:
-                    break
-            return r
-        
-        out = []
-        try:
-            if bool(int(os.environ.get("KB_PDF_DEBUG_MATH_BLOCKS", "0") or "0")):
-                print(f"[DEBUG] Page {page_index+1} blocks dump (n={len(blocks)}):", flush=True)
-                for i0, b0 in enumerate(blocks[:180]):
-                    try:
-                        t0 = (b0.text or "").strip().replace("\n", "\\n")
-                    except Exception:
-                        t0 = ""
-                    try:
-                        bb0 = getattr(b0, "bbox", None)
-                    except Exception:
-                        bb0 = None
-                    try:
-                        is_m = bool(getattr(b0, "is_math", False))
-                    except Exception:
-                        is_m = False
-                    if (not is_m) and (not re.search(r"[=^_\\]|[∈≤≥≈×·Σ∑∫∞→←]", t0)):
-                        continue
-                    print(f"[DEBUG]  idx={i0:03d} is_math={int(is_m)} bbox={bb0} text={ascii(t0[:140])}", flush=True)
-        except Exception:
-            pass
-        block_times = []
-        for block_idx, b in enumerate(blocks):
-            block_start = time.time()
-            # Check if this is an image block (images are stored as text blocks with markdown image syntax)
-            if b.text and (b.text.startswith("![") or re.match(r'^!\[.*?\]\(.*?\)', b.text)):
-                # This is an image block - output it directly
-                out.append(b.text)
-                out.append("")  # Add blank line after image
-                block_time = time.time() - block_start
-                if block_time > 0.1:
-                    block_times.append((block_idx, "image", block_time))
-                continue
-            
-            if b.heading_level:
-                # [H1] -> #
-                lvl = int(b.heading_level.replace("[H", "").replace("]", ""))
-                heading_text = b.text.strip()
-                # Render-stage LLM calls are expensive and often redundant with Step 6 (LLM classify).
-                # Keep render deterministic: apply strict heuristics only.
-                if '@' in heading_text or re.search(r'\b(?:university|dept|department|institute|email|zhejiang|westlake)\b', heading_text, re.IGNORECASE):
-                    out.append(heading_text)
-                    continue
-
-                if re.search(r'[↑↓]', heading_text) or re.search(r'\b(?:PSNR|SSIM|LPIPS)\b', heading_text, re.IGNORECASE):
-                    out.append(heading_text)
-                    continue
-
-                # Quick heuristic: very short or math-like -> not heading
-                if len(heading_text) <= 5 or not re.search(r'[A-Za-z]{3,}', heading_text):
-                    out.append(heading_text)
-                    continue
-
-                math_symbol_count = len(re.findall(r'[+\-*/=^_{}\[\]()]', heading_text))
-                if math_symbol_count > 2:
-                    out.append(heading_text)
-                    continue
-
-                # Normalize for duplicate check
-                normalized_heading = re.sub(r'^[IVX]+\.\s*', '', heading_text, flags=re.IGNORECASE).strip()
-                normalized_heading = re.sub(r'^[A-Z]\.\s*', '', normalized_heading).strip()
-                # Remove full hierarchical numeric prefixes: "5.6. Title" -> "Title"
-                normalized_heading = re.sub(r'^\d+(?:\.\d+)*\.?\s*', '', normalized_heading).strip()
-
-                if normalized_heading in self.seen_headings:
-                    out.append(heading_text)
-                    continue
-
-                # Heuristic level determination based on numbering pattern
-                numbered_match = re.match(r'^(\d+(?:\.\d+)*)\.?\s+', heading_text)
-                if numbered_match:
-                    num_parts = numbered_match.group(1).split('.')
-                    if len(num_parts) == 1:
-                        lvl = 1
-                    elif len(num_parts) == 2:
-                        lvl = 2
-                    else:
-                        lvl = 3
-                else:
-                    letter_match = re.match(r'^[A-Z]\.\s+', heading_text)
-                    if letter_match:
-                        lvl = 2
-                    else:
-                        lvl = min(3, lvl)
-
-                while self.heading_stack and self.heading_stack[-1][0] >= lvl:
-                    self.heading_stack.pop()
-                self.heading_stack.append((lvl, heading_text))
-                self.seen_headings.add(normalized_heading)
-                out.append("#" * lvl + " " + heading_text)
-            elif b.is_table:
-                if b.table_markdown:
-                    out.append(b.table_markdown)
-                else:
-                    out.append(b.text) # Fallback
-            elif b.is_code:
-                out.append("```\n" + b.text + "\n```")
-            elif b.is_math:
-                math_block_start = time.time()
-                math_text_len = len(b.text)
-                text_stripped = b.text.strip()
-
-                # Some PDFs pack "equation + where explanation + figure caption" into one block/line.
-                # If we treat the whole thing as math, it becomes a giant broken $$...$$ block.
-                # Split out obvious prose/caption tails and only repair/render the math prefix.
-                prose_tail = ""
-                math_src = text_stripped
-                # For display equations, prefer a rawdict span-based extraction inside the bbox.
-                # This preserves superscript/subscript cues and improves LLM repair quality.
-                try:
-                    if page is not None:
-                        bb = getattr(b, "bbox", None)
-                        if bb and isinstance(bb, tuple) and len(bb) == 4:
-                            raw2 = _extract_math_raw_from_page(page, bb)
-                            # Only replace if it looks non-trivial.
-                            if raw2 and len(raw2) >= max(12, int(len(math_src) * 0.85)):
-                                math_src = raw2
-                                text_stripped = math_src.strip()
-                except Exception:
-                    pass
-                try:
-                    cap_m = re.search(r"(?i)(\*?Figure\s+\d+\b|\bFig\.?\s*\d+\b|\bTable\s+\d+\b)", math_src)
-                    if cap_m:
-                        prose_tail = math_src[cap_m.start():].strip()
-                        math_src = math_src[:cap_m.start()].strip()
-                except Exception:
-                    pass
-                try:
-                    low0 = math_src.lower()
-                    wpos = -1
-                    for tok in (" where ", "\nwhere ", "\r\nwhere "):
-                        p = low0.find(tok)
-                        if p >= 0:
-                            wstart = p + tok.find("where")
-                            if wpos < 0 or wstart < wpos:
-                                wpos = wstart
-                    if wpos < 0 and low0.startswith("where "):
-                        wpos = 0
-                    if wpos >= 0:
-                        tail = math_src[wpos:].strip()
-                        tail_words = len(re.findall(r"\b[A-Za-z]{2,}\b", tail))
-                        if tail_words >= 8:
-                            prose_tail = (tail + ("\n" + prose_tail if prose_tail else "")).strip()
-                            math_src = math_src[:wpos].strip()
-                except Exception:
-                    pass
-
-                if not math_src and prose_tail:
-                    out.append(prose_tail)
-                    out.append("")
-                    continue
-                if math_src:
-                    text_stripped = math_src
-
-                def _strip_prose_tail_from_math(s: str) -> str:
-                    ss = (s or "").strip()
-                    if not ss:
-                        return ss
-                    try:
-                        cap_m2 = re.search(r"(?i)(\*?Figure\s+\d+\b|\bFig\.?\s*\d+\b|\bTable\s+\d+\b)", ss)
-                        if cap_m2 and cap_m2.start() > 0:
-                            ss = ss[:cap_m2.start()].strip()
-                    except Exception:
-                        pass
-                    try:
-                        low1 = ss.lower()
-                        wpos2 = -1
-                        for tok in (" where ", "\nwhere ", "\r\nwhere "):
-                            p = low1.find(tok)
-                            if p >= 0:
-                                wstart = p + tok.find("where")
-                                if wpos2 < 0 or wstart < wpos2:
-                                    wpos2 = wstart
-                        if wpos2 < 0 and low1.startswith("where "):
-                            wpos2 = 0
-                        if wpos2 > 0:
-                            tail2 = ss[wpos2:].strip()
-                            tail_words2 = len(re.findall(r"\b[A-Za-z]{2,}\b", tail2))
-                            if tail_words2 >= 8:
-                                ss = ss[:wpos2].strip()
-                    except Exception:
-                        pass
-                    return ss
-
-                # Fast heuristic: some headings can be misclassified as math. Handle without LLM.
-                looks_like_heading = bool(
-                    re.match(r'^(?:\d+(?:\.\d+)*\.?|[A-Z]|[IVX]+)\.?\s+\S+', text_stripped)
-                    or re.match(r'^(?:abstract|introduction|related work|method|methods|experiments?|results?|discussion|conclusion|references|appendix)\b', text_stripped, re.IGNORECASE)
-                )
-                if looks_like_heading and (len(text_stripped) >= 6) and re.search(r'[A-Za-z]{3,}', text_stripped) and (len(re.findall(r'[+\-*/=^_{}\[\]()]', text_stripped)) <= 1):
-                    heading_text = text_stripped
-                    # Determine level by numbering pattern (keep it simple here)
-                    lvl2 = 2
-                    numbered_match = re.match(r'^(\d+(?:\.\d+)*)\.?\s+', heading_text)
-                    if numbered_match:
-                        n_parts = numbered_match.group(1).split('.')
-                        lvl2 = 1 if len(n_parts) == 1 else (2 if len(n_parts) == 2 else 3)
-                    elif re.match(r'^[A-Z]\.\s+', heading_text):
-                        lvl2 = 2
-                    normalized_heading = re.sub(r'^[IVX]+\.\s*', '', heading_text, flags=re.IGNORECASE).strip()
-                    normalized_heading = re.sub(r'^[A-Z]\.\s*', '', normalized_heading).strip()
-                    normalized_heading = re.sub(r'^\d+(?:\.\d+)*\.?\s*', '', normalized_heading).strip()
-                    if normalized_heading not in self.seen_headings:
-                        while self.heading_stack and self.heading_stack[-1][0] >= lvl2:
-                            self.heading_stack.pop()
-                        self.heading_stack.append((lvl2, heading_text))
-                        self.seen_headings.add(normalized_heading)
-                        out.append("#" * lvl2 + " " + heading_text)
-                        continue
-                
-                # Guard: if a "math" block is actually prose (common misclassification),
-                # render it as plain text and skip all math repair.
-                try:
-                    word_n = len(re.findall(r"\b\w+\b", text_stripped))
-                    letters_n = len(re.findall(r"[A-Za-z]", text_stripped))
-                    math_sym_n = len(re.findall(r"[=+\-*/^_{}\\\[\]]", text_stripped))
-                    has_sentence = (". " in text_stripped) or ("? " in text_stripped) or ("! " in text_stripped)
-                    # Long, wordy, low-math-symbol content is almost surely not an equation.
-                    if (
-                        len(text_stripped) >= 120
-                        and word_n >= 18
-                        and letters_n >= 60
-                        and math_sym_n <= 6
-                        and has_sentence
-                    ):
-                        out.append(text_stripped)
-                        continue
-                except Exception:
-                    pass
-
-                # LLM said it's not a heading, or LLM unavailable - proceed with math rendering
-                # Quick heuristic: very short or no letters -> definitely math
-                if len(text_stripped) <= 5 or not re.search(r'[A-Za-z]', text_stripped):
-                    # Too short or no letters - definitely math
-                    pass
-
-                # If the extracted "math" looks extremely fragmentary (common in PDF text extraction),
-                # avoid LLM guessing; rely on lightweight rule fixes instead.
-                try:
-                    frag = False
-                    if len(text_stripped) <= 14 and re.search(r"[A-Za-z]", text_stripped):
-                        frag = True
-                    # e.g., "N X", "r ∈ R", "C(r) 2"
-                    if re.match(r"^[A-Za-z]\s+[A-Za-z]$", text_stripped):
-                        frag = True
-                    if "∈" in text_stripped and len(text_stripped) <= 20:
-                        frag = True
-                except Exception:
-                    pass
-                
-                # It's actually math, proceed with math rendering
-                # ALWAYS try LLM repair first for better quality (user said speed is OK)
-                latex_text = None
-                speed_cfg = getattr(self, "_active_speed_config", None) or {}
-                # Check both use_llm_for_all and use_llm_in_render (balanced mode disables render LLM)
-                use_llm_in_render = speed_cfg.get("use_llm_in_render", speed_cfg.get("use_llm_for_all", True)) if self.cfg.llm else False
-                # Don't ask the LLM to "repair" tiny fragments; it tends to hallucinate.
-                prefer_llm_repair = (
-                    (len(text_stripped) >= 18)
-                    or ("\n" in b.text)
-                    or ("=" in text_stripped)
-                    or any(x in text_stripped for x in ["\\sum", "\\int", "\\frac", "\\sqrt"])
-                )
-                
-                if prefer_llm_repair and use_llm_in_render and self.cfg.llm and self.llm_worker._client:
-                    try:
-                        # First attempt: standard repair
-                        ctx_before = _ctx_from_neighbor_blocks(block_idx, direction=-1)
-                        ctx_after = _ctx_from_neighbor_blocks(block_idx, direction=+1)
-                        t0 = time.time()
-                        repaired = self.llm_worker.call_llm_repair_math(
-                            math_src,
-                            page_number=page_index,
-                            block_index=block_idx,
-                            context_before=ctx_before,
-                            context_after=ctx_after,
-                        )
-                        llm_call_count += 1
-                        llm_total_time += (time.time() - t0)
-                        if repaired:
-                            latex_text = repaired
-                        else:
-                            # Second attempt: more aggressive repair for inline math
-                            # Check if it looks like inline math (short, no line breaks)
-                            if len(b.text.strip()) <= 50 and "\n" not in b.text:
-                                # Try with a more specific prompt for inline math
-                                prompt = f"""Convert this garbled inline math expression to proper LaTeX.
-The expression is: {math_src}
-
-Requirements:
-- Use proper LaTeX syntax (e.g., \\hat{{C}} not ˆ C, C(r)^2 not C ( r ) 2)
-- Remove extra spaces
-- Fix subscripts and superscripts properly
-- Return ONLY the LaTeX code without $ delimiters
-
-LaTeX:"""
-                                try:
-                                    t1 = time.time()
-                                    resp = self.llm_worker._llm_create(
-                                        messages=[
-                                            {"role": "system", "content": "You are a LaTeX math expert specializing in inline math expressions."},
-                                            {"role": "user", "content": prompt}
-                                        ],
-                                        temperature=0.0,
-                                        max_tokens=200,
-                                    )
-                                    llm_call_count += 1
-                                    llm_total_time += (time.time() - t1)
-                                    repaired2 = (resp.choices[0].message.content or "").strip()
-                                    # Remove $ if present
-                                    if repaired2.startswith("$") and repaired2.endswith("$"):
-                                        repaired2 = repaired2[1:-1].strip()
-                                    if repaired2:
-                                        latex_text = repaired2
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-
-                # Vision math recovery (if enabled): screenshot the equation and ask a VL model for exact LaTeX.
-                # Important: do NOT require latex_text to be empty; we also retry when it looks suspiciously broken.
-                if _vision_math_enabled() and self.cfg.llm and self.llm_worker._client and page is not None:
-                    try:
-                        bb = getattr(b, "bbox", None)
-                        if bb and isinstance(bb, tuple) and len(bb) == 4:
-                            # "display-ish" heuristic (controls cost): include common non-'=' display equations too.
-                            # Many papers have short display equations without '=' (e.g., sums / norms / constraints).
-                            ms = (math_src or "").strip()
-                            sym_n = len(re.findall(r"[=+\-*/^_{}\\\[\]]|[∈≤≥≈×·Σ∑∫∞→←⇔⇒]", ms))
-                            complex_tok = bool(
-                                re.search(
-                                    r"[∑Σ∫∞≤≥≈≠→←⇔⇒√]|\\(?:frac|sqrt|sum|int|prod|log|exp|left|right|begin)\b",
-                                    ms,
-                                )
-                            )
-                            r = _expand_math_group_bbox(block_idx, bb)
-                            is_wide = False
-                            try:
-                                is_wide = float(r.width) >= float(page.rect.width) * 0.55
-                            except Exception:
-                                is_wide = False
-                            displayish = (
-                                ("\n" in ms)
-                                or ("=" in ms)
-                                or (len(ms) >= 60)
-                                or complex_tok
-                                or (sym_n >= 10 and len(ms) >= 25)
-                                or (is_wide and len(ms) >= 18)
-                            )
-                            policy = _vision_math_policy()
-                            should_try = False
-                            if policy == "off":
-                                should_try = False
-                            elif policy == "force":
-                                # Force: try vision whenever we have a bbox and the snippet looks math-ish enough.
-                                should_try = bool(displayish or complex_tok or sym_n >= 6 or len(ms) >= 18)
-                            elif policy == "prefer":
-                                # Prefer: for display-ish math, try vision first even if text repair produced something.
-                                should_try = bool(displayish)
-                            else:
-                                # Fallback: only when text repair failed or looks broken.
-                                should_try = bool(displayish and (latex_text is None or _looks_like_broken_display_math(ms, latex_text)))
-                            if _debug_vision_math() and not should_try:
-                                try:
-                                    mname = str(getattr(self.cfg.llm, "model", "") or "")
-                                except Exception:
-                                    mname = ""
-                                why = []
-                                if not displayish:
-                                    why.append(f"not_displayish(sym_n={sym_n},wide={int(is_wide)},len={len(ms)})")
-                                if (latex_text is not None) and (not _looks_like_broken_display_math(ms, latex_text)):
-                                    why.append("latex_not_suspicious")
-                                why.append(f"policy={policy}")
-                                why_s = ",".join(why) or "unknown"
-                                print(
-                                    f"[VISION_MATH] skip page={page_index+1} block={block_idx+1} model={mname!a} reason={why_s} src_snip={ms[:80]!a}",
-                                    flush=True,
-                                )
-
-                            if should_try:
-                                # pad to capture delimiters / equation number area
-                                pad_x = max(2.0, float(r.width) * 0.06)
-                                pad_y = max(2.0, float(r.height) * 0.20)
-                                # If policy is force and the extracted math looks fragmentary, expand the crop more.
-                                # This helps when PDF text extraction misses most of the equation but the glyphs
-                                # are still visible on the page.
-                                try:
-                                    fraggy = (policy == "force") and (
-                                        (len(ms) <= 40)
-                                        or (float(r.width) < float(page.rect.width) * 0.38)
-                                        or (float(r.height) < 18.0)
-                                    )
-                                except Exception:
-                                    fraggy = False
-                                if fraggy:
-                                    try:
-                                        pad_x = max(pad_x, float(page.rect.width) * 0.10)
-                                        pad_y = max(pad_y, 28.0)
-                                    except Exception:
-                                        pad_x = max(pad_x, 24.0)
-                                        pad_y = max(pad_y, 28.0)
-                                clip = fitz.Rect(
-                                    max(0.0, float(r.x0) - pad_x),
-                                    max(0.0, float(r.y0) - pad_y),
-                                    min(float(page.rect.width), float(r.x1) + pad_x),
-                                    min(float(page.rect.height), float(r.y1) + pad_y),
-                                )
-                                if clip.width > 4 and clip.height > 4:
-                                    # Qwen VL models may enforce minimum image dimensions (e.g. >10px).
-                                    # Expand clip to satisfy a conservative minimum in pixels at the chosen DPI.
-                                    try:
-                                        dpi0 = int(getattr(self, "dpi", 200) or 200)
-                                    except Exception:
-                                        dpi0 = 200
-                                    try:
-                                        min_px = int(os.environ.get("KB_PDF_VISION_MIN_PX", "12") or "12")
-                                    except Exception:
-                                        min_px = 12
-                                    try:
-                                        min_pt = (72.0 * float(min_px)) / max(50.0, float(dpi0))
-                                        if clip.width < min_pt or clip.height < min_pt:
-                                            ex = max(0.0, (min_pt - float(clip.width)) / 2.0)
-                                            ey = max(0.0, (min_pt - float(clip.height)) / 2.0)
-                                            clip = fitz.Rect(
-                                                max(0.0, float(clip.x0) - ex),
-                                                max(0.0, float(clip.y0) - ey),
-                                                min(float(page.rect.width), float(clip.x1) + ex),
-                                                min(float(page.rect.height), float(clip.y1) + ey),
-                                            )
-                                    except Exception:
-                                        pass
-                                    if _debug_vision_math():
-                                        try:
-                                            mname = str(getattr(self.cfg.llm, "model", "") or "")
-                                        except Exception:
-                                            mname = ""
-                                        print(
-                                            f"[VISION_MATH] call page={page_index+1} block={block_idx+1} model={mname!a} policy={policy} clip=({clip.x0:.1f},{clip.y0:.1f},{clip.x1:.1f},{clip.y1:.1f}) src_len={len(ms)} dpi={dpi0}",
-                                            flush=True,
-                                        )
-                                    pix = page.get_pixmap(clip=clip, dpi=dpi0)
-                                    try:
-                                        if (int(getattr(pix, "width", 0) or 0) < int(min_px)) or (
-                                            int(getattr(pix, "height", 0) or 0) < int(min_px)
-                                        ):
-                                            if _debug_vision_math():
-                                                print(
-                                                    f"[VISION_MATH] skip_small_image page={page_index+1} block={block_idx+1} pix=({pix.width}x{pix.height}) min_px={min_px}",
-                                                    flush=True,
-                                                )
-                                            pix = None
-                                    except Exception:
-                                        pass
-                                    if pix is not None:
-                                        v_start = time.time()
-                                        png = pix.tobytes("png")
-                                        repaired_v = self.llm_worker.call_llm_repair_math_from_image(
-                                            png,
-                                            page_number=page_index,
-                                            block_index=block_idx,
-                                        )
-                                        llm_call_count += 1
-                                        llm_total_time += (time.time() - v_start)
-                                        if repaired_v:
-                                            if _debug_vision_math():
-                                                print(
-                                                    f"[VISION_MATH] ok page={page_index+1} block={block_idx+1} out_len={len(repaired_v)}",
-                                                    flush=True,
-                                                )
-                                            latex_text = repaired_v
-                    except Exception as e:
-                        if _debug_vision_math():
-                            try:
-                                mname = str(getattr(self.cfg.llm, "model", "") or "")
-                            except Exception:
-                                mname = ""
-                            print(
-                                f"[VISION_MATH] error page={page_index+1} block={block_idx+1} model={mname!a} err={e!a}",
-                                flush=True,
-                            )
-                
-                # If LLM didn't help, use heuristic conversion
-                if not latex_text:
-                    convert_start = time.time()
-                    latex_text = self._convert_formula_to_latex(math_src)
-                    convert_time = time.time() - convert_start
-                    if convert_time > 0.5:
-                        print(f"      [Page {page_index+1}] Block {block_idx+1} _convert_formula_to_latex: {convert_time:.2f}s (SLOW!), text_len={len(b.text)}", flush=True)
-
-                # If still looks bad, fall back to equation image to preserve correctness.
-                try:
-                    if self.cfg.eq_image_fallback:
-                        bad = False
-                        s = (latex_text or "").strip()
-                        # too long text-like output or contains many normal words
-                        if len(s) >= 140 and len(re.findall(r"\b[A-Za-z]{3,}\b", s)) >= 10:
-                            bad = True
-                        # contains obvious prose markers
-                        if any(x in s.lower() for x in ["the ", "appears", "likely", "interpretation", "here is"]):
-                            bad = True
-                        if bad:
-                            img_md = _save_eq_image(getattr(b, "bbox", None) or getattr(b, "bbox", (0, 0, 0, 0)))
-                            if img_md:
-                                out.append(img_md)
-                                out.append("")
-                                continue
-                except Exception:
-                    pass
-                
-                if latex_text:
-                    # Clean up latex_text: remove trailing commas, fix nested $, etc.
-                    latex_text = latex_text.strip()
-                    latex_text = _strip_prose_tail_from_math(latex_text)
-                    # Remove trailing commas and spaces
-                    latex_text = re.sub(r',\s*$', '', latex_text)
-                    # Fix nested $ symbols (should not have $ inside $...$)
-                    latex_text = latex_text.replace('$', '')
-                    
-                    # Check if it's inline or display math
-                    # Display math if:
-                    # - Contains line breaks
-                    # - Is long (> 60 chars)
-                    # - Contains = (equations)
-                    # - Contains complex structures (sum, integral, etc.)
-                    has_break = "\n" in math_src
-                    has_equals = "=" in latex_text
-                    has_complex = any(op in latex_text for op in ['\\sum', '\\int', '\\prod', '\\frac', '\\sqrt', '\\exp', '\\log'])
-                    is_long = len(latex_text) > 60
-                    
-                    is_inline = not (has_break or has_equals or has_complex or is_long)
-                    
-                    if is_inline:
-                        # Inline math: use LLM to polish for better quality (only if enabled in speed mode)
-                        speed_cfg = getattr(self, "_active_speed_config", None) or {}
-                        use_llm_in_render = speed_cfg.get("use_llm_in_render", speed_cfg.get("use_llm_for_all", True)) if self.cfg.llm else False
-                        # Avoid polishing very short expressions; LLM often over-edits/hallucinates.
-                        if use_llm_in_render and self.cfg.llm and self.llm_worker._client and len(latex_text.strip()) >= 12:
-                            try:
-                                # More aggressive LLM polish for inline math
-                                polish_prompt = f"""Convert this inline math expression to proper LaTeX. The expression may contain garbled characters or incorrect formatting.
-
-Input: {latex_text}
-
-Requirements:
-1. Fix garbled characters (e.g., "ˆ C" -> "\\hat{{C}}", "C ( r ) 2" -> "C(r)^2")
-2. Use proper LaTeX syntax:
-   - Subscripts: x_i not x i
-   - Superscripts: x^2 not x 2
-   - Functions: \\hat{{C}} not ˆ C
-   - Remove extra spaces
-3. Ensure proper grouping with braces when needed
-4. Return ONLY the cleaned LaTeX code without $ delimiters
-
-LaTeX:"""
-                                resp = self.llm_worker._llm_create(
-                                    messages=[
-                                        {"role": "system", "content": "You are a LaTeX math expert specializing in inline math expressions. Always return clean, correct LaTeX."},
-                                        {"role": "user", "content": polish_prompt}
-                                    ],
-                                    temperature=0.0,
-                                    max_tokens=300,
-                                )
-                                polished = (resp.choices[0].message.content or "").strip()
-                                # Remove $ if present
-                                if polished.startswith("$") and polished.endswith("$"):
-                                    polished = polished[1:-1].strip()
-                                elif polished.startswith("$$") and polished.endswith("$$"):
-                                    polished = polished[2:-2].strip()
-                                # Remove any markdown code fences
-                                if polished.startswith("```"):
-                                    polished = re.sub(r'^```(?:\w+)?\n?', '', polished)
-                                    polished = re.sub(r'\n?```$', '', polished)
-                                if polished and len(polished) > 0:
-                                    latex_text = polished
-                            except Exception as e:
-                                # If LLM fails, use the original
-                                pass
-                        
-                        # Inline math: ensure no nested $ and proper formatting
-                        out.append(f"${latex_text}$")
-                    else:
-                        # Display math
-                        out.append(f"$$\n{latex_text}\n$$")
-                else:
-                    # Fallback to original text if conversion fails
-                    # Clean up the text first
-                    fallback_text = math_src.strip()
-                    fallback_text = _strip_prose_tail_from_math(fallback_text)
-                    fallback_text = re.sub(r',\s*$', '', fallback_text)
-                    fallback_text = fallback_text.replace('$', '')
-                    out.append(f"$$\n{fallback_text}\n$$")
-                # Emit any prose/caption tail AFTER the math block.
-                if prose_tail:
-                    out.append(prose_tail)
-                math_block_time = time.time() - math_block_start
-                if math_block_time > 0.1:
-                    block_times.append((block_idx, f"math({math_text_len}chars)", math_block_time))
-            elif b.is_caption:
-                # Captions: italicize and add proper spacing
-                caption_text = b.text.strip()
-                # Remove leading "Fig." or "Figure" if already in markdown format
-                if not caption_text.startswith("*"):
-                    out.append(f"*{caption_text}*")
-                else:
-                    out.append(caption_text)
-            else:
-                # Regular text - use LLM to fix mojibake if available
-                text = b.text
-                if self.cfg.llm and hasattr(self.llm_worker, '_client') and self.llm_worker._client:
-                    # Check if text has mojibake
-                    if any(pattern in text for pattern in ['ďŹ', 'Ď', 'Î´', 'Îą', 'â']):
-                        try:
-                            t2 = time.time()
-                            repaired = self.llm_worker.call_llm_repair_body_paragraph(
-                                text,
-                                page_number=page_index,
-                                block_index=len(out)
-                            )
-                            llm_call_count += 1
-                            llm_total_time += (time.time() - t2)
-                            if repaired:
-                                text = repaired
-                        except Exception:
-                            pass
-                out.append(text)
-            out.append("")
-        
-        render_time = time.time() - render_start
-        if llm_call_count > 0:
-            avg_llm_time = llm_total_time / llm_call_count
-            print(f"    [Page {page_index+1}] Render: {render_time:.2f}s total, {llm_call_count} LLM calls, {llm_total_time:.2f}s LLM time (avg {avg_llm_time:.2f}s/call)", flush=True)
-        else:
-            print(f"    [Page {page_index+1}] Render: {render_time:.2f}s (no LLM calls)", flush=True)
-        
-        # Report slow blocks
-        if block_times:
-            slow_blocks = sorted(block_times, key=lambda x: x[2], reverse=True)[:5]
-            for block_idx, block_type, block_time in slow_blocks:
-                print(f"      [Page {page_index+1}] Slow block {block_idx+1} ({block_type}): {block_time:.2f}s", flush=True)
-        
-        return "\n".join(out)
+        return render_blocks_to_markdown(
+            self,
+            blocks,
+            page_index,
+            page=page,
+            assets_dir=assets_dir,
+        )
 
     def _merge_split_formulas(self, md: str) -> str:
         """Merge consecutive formula blocks that were split across lines."""
@@ -4793,7 +3713,7 @@ LaTeX:"""
                         blank_count = 0
                     else:
                         # Check if this line looks like a formula fragment (short, contains math symbols)
-                        if len(next_stripped) < 50 and re.search(r'[+\-*/=<>≤≥∈∑∫αβγδεθλμπστφω]', next_stripped):
+                        if len(next_stripped) < 50 and re.search(r'[+\-*/=<>鈮も墺鈭堚垜鈭蔽参澄次滴肝晃枷€蟽蟿蠁蠅]', next_stripped):
                             # Might be a formula fragment
                             inline_math_blocks.append(next_stripped)
                             i += 1
@@ -4819,7 +3739,7 @@ LaTeX:"""
     def _merge_fragmented_formulas(self, md: str) -> str:
         """
         Aggressively merge fragmented formula pieces that are on separate lines.
-        Detects formula fragments (like Σ, i=1, N, T(x,y), etc.) and merges them into complete formulas.
+        Detects formula fragments (like 危, i=1, N, T(x,y), etc.) and merges them into complete formulas.
         """
         lines = md.splitlines()
         result = []
@@ -4889,7 +3809,7 @@ LaTeX:"""
         
         # Check for common formula fragment patterns
         fragment_patterns = [
-            r'^[∑∫∏ΣΠ]',  # Sum/integral/product symbols
+            r'^[鈭戔埆鈭徫Ｎ燷',  # Sum/integral/product symbols
             r'^[a-zA-Z]_\{[^}]+\}',  # Subscript like x_{i}
             r'^[a-zA-Z]\^\{[^}]+\}',  # Superscript like x^{2}
             r'^[a-zA-Z]\^[0-9]',  # Superscript like x^2
@@ -4897,7 +3817,7 @@ LaTeX:"""
             r'^\\[a-zA-Z]+\{',  # LaTeX command with brace
             r'^[+\-*/=]',  # Operators at start
             r'^[()\[\]{}]',  # Brackets at start
-            r'^[αβγδεζηθικλμνξοπρστυφχψω]',  # Greek letters
+            r'^[伪尾纬未蔚味畏胃喂魏位渭谓尉慰蟺蟻蟽蟿蠀蠁蠂蠄蠅]',  # Greek letters
             r'^[0-9]+\s*[+\-*/=]',  # Number followed by operator
             r'^[a-zA-Z]\([^)]*\)',  # Function call like T(x,y)
             r'^<[^>]+>',  # Angle brackets like <B_i>
@@ -4909,7 +3829,7 @@ LaTeX:"""
                 return True
         
         # Check if it's a very short line with math-like content
-        if len(text) <= 15 and re.search(r'[+\-*/^_{}\[\]()=<>∑∫∏ΣΠα-ω]', text):
+        if len(text) <= 15 and re.search(r'[+\-*/^_{}\[\]()=<>鈭戔埆鈭徫Ｎ犖?蠅]', text):
             # But exclude if it looks like regular text
             if not re.search(r'\b(the|and|or|is|are|was|were|in|on|at|to|for|of|with|by)\b', text, re.IGNORECASE):
                 return True
@@ -4922,7 +3842,7 @@ LaTeX:"""
             return False
         
         # Check for math-like content
-        has_math = bool(re.search(r'[+\-*/^_{}\[\]()=<>∑∫∏ΣΠα-ω\\]', text))
+        has_math = bool(re.search(r'[+\-*/^_{}\[\]()=<>鈭戔埆鈭徫Ｎ犖?蠅\\]', text))
         
         # Check if it doesn't look like regular text
         has_text_words = bool(re.search(r'\b(the|and|or|is|are|was|were|in|on|at|to|for|of|with|by)\b', text, re.IGNORECASE))
@@ -4980,7 +3900,7 @@ LaTeX:"""
                 if not in_math_block:
                     if i + 1 < len(lines):
                         next_stripped = lines[i + 1].strip()
-                        if next_stripped and len(next_stripped) <= 10 and re.search(r'[+\-*/=<>∑∫∏ΣΠα-ω\\]', next_stripped):
+                        if next_stripped and len(next_stripped) <= 10 and re.search(r'[+\-*/=<>鈭戔埆鈭徫Ｎ犖?蠅\\]', next_stripped):
                             i += 1
                             continue
                     i += 1
@@ -5034,7 +3954,7 @@ LaTeX:"""
                 if re.search(r'^\s*[A-Z]?\s*\d+\s*[a-z]', text) or \
                    re.search(r'^\s*\d+\s*[a-z]+\s*[+\-]', text) or \
                    (len(text) <= 15 and re.search(r'\d+.*[a-z]|[a-z].*\d+', text) and '=' in text) or \
-                   re.search(r'[αβγδεζηθικλμνξοπρστυφχψω]', text, re.IGNORECASE) or \
+                   re.search(r'[伪尾纬未蔚味畏胃喂魏位渭谓尉慰蟺蟻蟽蟿蠀蠁蠂蠄蠅]', text, re.IGNORECASE) or \
                    (len(text) <= 20 and re.search(r'[+\-*/^_{}\[\]()]', text) and not re.search(r'[A-Z]{3,}', text)):
                     # This is likely a formula, not a heading - convert to math
                     out.append(f"$$\n{text}\n$$")
@@ -5079,8 +3999,8 @@ LaTeX:"""
             r'[a-zA-Z]_\{[^}]+\}',  # Subscripts like x_{i}
             r'[a-zA-Z]\^\{[^}]+\}',  # Superscripts like x^{2}
             r'\\[a-zA-Z]+',  # LaTeX commands like \alpha, \beta
-            r'[αβγδεζηθικλμνξοπρστυφχψω]',  # Greek letters
-            r'[∑∫∏∞≤≥≠≈∈∉⊂∪∩]',  # Math symbols
+            r'[伪尾纬未蔚味畏胃喂魏位渭谓尉慰蟺蟻蟽蟿蠀蠁蠂蠄蠅]',  # Greek letters
+            r'[鈭戔埆鈭忊垶鈮も墺鈮犫増鈭堚垑鈯傗埅鈭',  # Math symbols
         ]
         
         has_formula_pattern = any(re.search(pattern, text) for pattern in formula_indicators)
@@ -5111,7 +4031,7 @@ LaTeX:"""
         - Missing superscripts: x2 -> x^2
         - Split formulas (merged back together)
         - Prime symbols with subscripts: G' i -> G'_i
-        - Unrendered symbols (□, etc.)
+        - Unrendered symbols (鈻? etc.)
         - Formatting issues
         - Chinese text mixed in formulas
         - Table formatting
@@ -5198,12 +4118,12 @@ LaTeX:"""
                     line = re.sub(r'\\(alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|chi|psi|omega)([a-z])(?![_^{\\])', r'\\\1_{\2}', line)
                     
                     # Remove Chinese text from inside formulas
-                    line = re.sub(r'(\$[^$]*)[公式]+([^$]*\$)', r'\1\2', line)
-                    line = re.sub(r'(\$\$[^$]*)[公式]+([^$]*\$\$)', r'\1\2', line)
+                    line = re.sub(r'(\$[^$]*)[鍏紡]+([^$]*\$)', r'\1\2', line)
+                    line = re.sub(r'(\$\$[^$]*)[鍏紡]+([^$]*\$\$)', r'\1\2', line)
                     
-                    # Remove unrendered box symbols (□) from formulas
-                    line = re.sub(r'(\$[^$]*)[□]+([^$]*\$)', r'\1\2', line)
-                    line = re.sub(r'(\$\$[^$]*)[□]+([^$]*\$\$)', r'\1\2', line)
+                    # Remove unrendered box symbols (鈻? from formulas
+                    line = re.sub(r'(\$[^$]*)[鈻+([^$]*\$)', r'\1\2', line)
+                    line = re.sub(r'(\$\$[^$]*)[鈻+([^$]*\$\$)', r'\1\2', line)
                     
                     # Fix spaces before subscripts/superscripts: x _i -> x_i, x ^2 -> x^2
                     line = re.sub(r'([a-zA-Z])\s+_(\w)', r'\1_\2', line)
@@ -5588,8 +4508,8 @@ LaTeX:"""
                     if formula_text.startswith('$') or formula_text.endswith('$'):
                         continue
                     # Skip if it looks like already correct LaTeX (has backslashes and no garbled chars)
-                    # But include if it has garbled chars like ˆ
-                    has_garbled = any(c in formula_text for c in ['ˆ', ' ']) and '\\' not in formula_text
+                    # But include if it has garbled chars like 藛
+                    has_garbled = any(c in formula_text for c in ['藛', ' ']) and '\\' not in formula_text
                     if '\\' in formula_text and '\\hat' in formula_text and not has_garbled:
                         continue
                     all_formulas.append(formula_text)
@@ -5606,7 +4526,7 @@ LaTeX:"""
             prompt = f"""Fix these {len(all_formulas)} inline math expressions to proper LaTeX. Return a JSON array with the fixed formulas.
 
 CRITICAL FIXES for each formula:
-1. Fix garbled Unicode: "ˆ" -> "\\hat", "C ( r )" -> "C(r)", "C ( r ) 2" -> "C(r)^2"
+1. Fix garbled Unicode: "藛" -> "\\hat", "C ( r )" -> "C(r)", "C ( r ) 2" -> "C(r)^2"
 2. Use proper LaTeX: subscripts x_i, superscripts x^2, functions \\hat{{C}}
 3. Remove ALL extra spaces between symbols
 4. Group properly with braces
@@ -5797,12 +4717,12 @@ Return ONLY the JSON array, no other text:"""
 Requirements:
 1. Each reference should start with [number] followed by a space
 2. Format should be: [number] Author names. Title. Conference/Journal, pages, year.
-3. Fix any garbled text and mojibake (e.g., "Miloš Hašan" not garbled)
+3. Fix any garbled text and mojibake (e.g., "Milo拧 Ha拧an" not garbled)
 4. Ensure proper spacing and punctuation
 5. Keep all citation numbers exactly as they appear
 6. Each reference on a separate line
 7. Remove any duplicate references
-8. Fix special characters properly (e.g., "®" not garbled)
+8. Fix special characters properly (e.g., "庐" not garbled)
 
 References section:
 {ref_text}
@@ -6214,7 +5134,7 @@ Input:
 Requirements:
 1. Remove ALL $ symbols inside the math block (display math uses $$...$$, no $ inside)
 2. Remove any \\[ or \\] symbols (use $$ only for display math)
-3. Fix garbled characters (e.g., "ˆ" -> "\\hat", "C ( r )" -> "C(r)")
+3. Fix garbled characters (e.g., "藛" -> "\\hat", "C ( r )" -> "C(r)")
 4. Use proper LaTeX syntax (e.g., "Z_{{t}} f" -> "\\int_{{t_0}}^{{t_1}}" where t_0 and t_1 are time bounds)
 5. Return ONLY the cleaned math content without $$ or \\[ \\] delimiters
 
@@ -6309,7 +5229,7 @@ LaTeX:"""
                 return md
         
         # Only process if there are obvious mojibake issues
-        mojibake_patterns = ['ďŹ', 'Ď', 'Î´', 'Îą', 'âĽ', 'âĺ¤', 'â', 'ˆ', 'âĺ']
+        mojibake_patterns = ['膹殴', '膸', '脦麓', '脦膮', '芒慕', '芒暮陇', '芒', '藛', '芒暮']
         has_mojibake = any(pattern in md for pattern in mojibake_patterns)
         
         if not has_mojibake:
@@ -6352,18 +5272,18 @@ LaTeX:"""
         prompt = f"""Fix issues in this Markdown chunk:
 
 1. FIX MOJIBAKE (garbled Unicode):
-   - "ďŹ" -> "fi"
-   - "Ď" -> "σ" or "τ"
-   - "Î´" -> "δ"
-   - "Îą" -> "α"
-   - "â" -> correct symbol (—, ∈, ∥, ≤, ≥, etc.)
-   - "ˆ" -> "\\hat" (in math context)
+   - "膹殴" -> "fi"
+   - "膸" -> "蟽" or "蟿"
+   - "脦麓" -> "未"
+   - "脦膮" -> "伪"
+   - "芒" -> correct symbol (鈥? 鈭? 鈭? 鈮? 鈮? etc.)
+   - "藛" -> "\\hat" (in math context)
 
 2. FIX INLINE FORMULAS (single $...$):
-   - Fix garbled math: "ˆ C ( r ) - C ( r ) 2" -> "\\hat{{C}}(r) - C(r)^2"
+   - Fix garbled math: "藛 C ( r ) - C ( r ) 2" -> "\\hat{{C}}(r) - C(r)^2"
    - Remove extra spaces: "C ( r )" -> "C(r)"
    - Fix subscripts/superscripts: "x 2" -> "x^2" or "x_2"
-   - Use proper LaTeX: "ˆ" -> "\\hat", "α" -> "\\alpha"
+   - Use proper LaTeX: "藛" -> "\\hat", "伪" -> "\\alpha"
 
 3. PRESERVE:
    - All headings (do NOT change)
@@ -6451,20 +5371,20 @@ INPUT:
 CRITICAL TASKS:
 
 1. FIX ALL MOJIBAKE/GARBLED TEXT (This is the MOST IMPORTANT):
-   - "ďŹ" -> "fi" (e.g., "ďŹexible" -> "flexible", "ďŹrst" -> "first", "ďŹxed" -> "fixed")
-   - "Ď" -> "σ" (sigma) when in math context, or "τ" (tau) when appropriate
-   - "Î´" -> "δ" (delta)
-   - "Îą" -> "α" (alpha)
-   - "â" -> various symbols: "âĽ" -> "∥" (norm), "âĺ¤" -> "≤" (leq), "âĺ¥" -> "≥" (geq), "â" -> "—" (em dash), "â" -> "∈" (element of)
-   - "Ă" -> "×" (times)
-   - "Ě" -> "≠" (not equal) or other symbols
+   - "膹殴" -> "fi" (e.g., "膹殴exible" -> "flexible", "膹殴rst" -> "first", "膹殴xed" -> "fixed")
+   - "膸" -> "蟽" (sigma) when in math context, or "蟿" (tau) when appropriate
+   - "脦麓" -> "未" (delta)
+   - "脦膮" -> "伪" (alpha)
+   - "芒" -> various symbols: "芒慕" -> "鈭? (norm), "芒暮陇" -> "鈮? (leq), "芒暮楼" -> "鈮? (geq), "芒" -> "鈥? (em dash), "芒" -> "鈭? (element of)
+   - "膫" -> "脳" (times)
+   - "臍" -> "鈮? (not equal) or other symbols
    - Fix ALL garbled characters systematically
 
 2. FIX ALL FORMULAS (CRITICAL):
    - Convert ALL Unicode math symbols to LaTeX:
-     * α, β, γ, δ, ε, θ, λ, μ, π, σ, τ, φ, ω -> \\alpha, \\beta, \\gamma, \\delta, \\epsilon, \\theta, \\lambda, \\mu, \\pi, \\sigma, \\tau, \\phi, \\omega
-     * ≤ -> \\leq, ≥ -> \\geq, ≠ -> \\neq, ∈ -> \\in, ∉ -> \\notin
-     * ∑ -> \\sum, ∏ -> \\prod, ∫ -> \\int, ∞ -> \\infty
+     * 伪, 尾, 纬, 未, 蔚, 胃, 位, 渭, 蟺, 蟽, 蟿, 蠁, 蠅 -> \\alpha, \\beta, \\gamma, \\delta, \\epsilon, \\theta, \\lambda, \\mu, \\pi, \\sigma, \\tau, \\phi, \\omega
+     * 鈮?-> \\leq, 鈮?-> \\geq, 鈮?-> \\neq, 鈭?-> \\in, 鈭?-> \\notin
+     * 鈭?-> \\sum, 鈭?-> \\prod, 鈭?-> \\int, 鈭?-> \\infty
    - Fix subscripts: "\\tau 1" -> "\\tau_1", "x i" -> "x_i", "I j" -> "I_j"
    - Fix superscripts: "x 2" -> "x^2" when appropriate
    - Display math (block): use $$...$$ for equations that should be centered
@@ -6490,7 +5410,7 @@ CRITICAL TASKS:
    - Ensure proper hierarchy: H1 for title only, H2 for main sections (I, II, III, IV, V, APPENDIX, REFERENCES), H3 for subsections (A, B, C, etc.)
 
 4. FIX TEXT CONTENT:
-   - "â" -> "—" (em dash) in text
+   - "芒" -> "鈥? (em dash) in text
    - Fix all ligatures and special characters
    - Preserve mathematical notation in text
 
@@ -6605,7 +5525,7 @@ CRITICAL QUALITY REQUIREMENTS (must be PERFECT):
 2. FORMULAS - BOTH INLINE AND DISPLAY (MUST BE PERFECT):
    - Inline formulas ($...$): Must be proper LaTeX, no garbled Unicode, correct subscripts/superscripts
    - Display formulas ($$...$$): Must be proper LaTeX, no nested $ symbols, correct formatting
-   - Fix ALL Unicode math symbols to LaTeX (α -> \\alpha, ≤ -> \\leq, etc.)
+   - Fix ALL Unicode math symbols to LaTeX (伪 -> \\alpha, 鈮?-> \\leq, etc.)
    - Remove equation numbers from inside formulas (they should be outside or use \\tag)
    - Merge split formulas that belong together
    - Fix spacing: "log k" -> "\\log k", "exp" -> "\\exp", etc.
@@ -6633,11 +5553,11 @@ CRITICAL QUALITY REQUIREMENTS (must be PERFECT):
    - Remove duplicate references
 
 6. BODY TEXT (MUST BE PERFECT):
-   - Fix ALL mojibake/garbled text (ďŹ -> fi, Ď -> σ, Î´ -> δ, etc.)
+   - Fix ALL mojibake/garbled text (膹殴 -> fi, 膸 -> 蟽, 脦麓 -> 未, etc.)
    - Fix all ligatures and special characters
    - Ensure proper paragraph structure
    - Preserve mathematical notation in text
-   - Fix em dashes: "â" -> "—"
+   - Fix em dashes: "芒" -> "鈥?
 
 7. OVERALL STRUCTURE:
    - Ensure proper spacing between sections
@@ -6710,3 +5630,4 @@ INPUT MARKDOWN (make it PERFECT):
         }
 
         return configs.get(speed_mode, configs['normal'])
+
