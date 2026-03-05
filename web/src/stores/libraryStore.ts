@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { libraryApi, type ConvertProgress } from '../api/library'
+import { libraryApi, type LibraryFileItem } from '../api/library'
+import { referencesApi } from '../api/references'
 
 interface ConvertProgressState {
   total: number
@@ -11,39 +12,109 @@ interface ConvertProgressState {
   last: string
 }
 
+interface RefSyncState {
+  running: boolean
+  status: string
+  stage: string
+  message: string
+  error: string
+  current: string
+  docsDone: number
+  docsTotal: number
+  runId: number
+}
+
 interface LibraryState {
   pdfs: { name: string; path: string }[]
+  files: LibraryFileItem[]
+  viewScope: string
+  fileCounts: {
+    total_view: number
+    total_all: number
+    pending: number
+    converted: number
+    queued: number
+    running: number
+    reconverting: number
+  } | null
   converting: boolean
   progress: ConvertProgressState | null
   sseController: AbortController | null
+  refSync: RefSyncState | null
+  refSyncController: AbortController | null
   loadPdfs: () => Promise<void>
+  loadFiles: (scope?: string) => Promise<void>
   upload: (file: File, baseName?: string) => Promise<{ name: string; duplicate?: boolean; existing?: string }>
-  convert: (name: string, mode?: string) => Promise<void>
+  convert: (name: string, mode?: string, replace?: boolean) => Promise<void>
+  convertPending: (mode?: string, limit?: number) => Promise<{ ok: boolean; enqueued: number; skipped_busy: number; pending_total: number }>
+  openFile: (pdfName: string, target?: 'pdf' | 'md' | 'pdf_dir' | 'md_dir') => Promise<void>
+  deleteFile: (pdfName: string, alsoMd?: boolean) => Promise<{ ok: boolean; pdf_deleted: boolean; md_deleted: boolean; removed_queued: number; warnings: string[]; needs_reindex: boolean }>
   cancelConvert: () => Promise<void>
-  reindex: () => Promise<{ ok: boolean }>
+  reindex: () => Promise<{ ok: boolean; stdout: string; stderr: string; refsync: { started?: boolean; reason?: string; run_id?: number } | null; refsync_error: string }>
+  startReferenceSync: () => Promise<{ started: boolean; reason?: string; run_id?: number }>
   startProgressStream: () => void
   stopProgressStream: () => void
+  startRefSyncStream: () => void
+  stopRefSyncStream: () => void
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
   pdfs: [],
+  files: [],
+  viewScope: '200',
+  fileCounts: null,
   converting: false,
   progress: null,
   sseController: null,
+  refSync: null,
+  refSyncController: null,
 
   loadPdfs: async () => {
-    const list = await libraryApi.listPdfs()
-    set({ pdfs: list })
+    await get().loadFiles(get().viewScope || '200')
+  },
+
+  loadFiles: async (scope = '200') => {
+    const view = await libraryApi.listFiles(scope)
+    const files = Array.isArray(view.items) ? view.items : []
+    set({
+      viewScope: scope,
+      files,
+      fileCounts: view.counts || null,
+      pdfs: files.map((item) => ({ name: item.name, path: item.path })),
+    })
   },
 
   upload: async (file, baseName) => {
     return libraryApi.upload(file, baseName)
   },
 
-  convert: async (name, mode = 'balanced') => {
+  convert: async (name, mode = 'balanced', replace = false) => {
     set({ converting: true, progress: null })
-    await libraryApi.convert(name, mode)
+    await libraryApi.convert(name, mode, { replace })
+    await get().loadFiles(get().viewScope || '200')
     get().startProgressStream()
+  },
+
+  convertPending: async (mode = 'balanced', limit = 0) => {
+    const res = await libraryApi.convertPending(mode, limit)
+    if (res.enqueued > 0) {
+      set({ converting: true, progress: null })
+      await get().loadFiles(get().viewScope || '200')
+      get().startProgressStream()
+    } else {
+      await get().loadFiles(get().viewScope || '200')
+    }
+    return res
+  },
+
+  openFile: async (pdfName, target = 'pdf') => {
+    await libraryApi.openFile(pdfName, target)
+  },
+
+  deleteFile: async (pdfName, alsoMd = true) => {
+    const res = await libraryApi.deleteFile(pdfName, alsoMd)
+    await get().loadFiles(get().viewScope || '200')
+    return res
   },
 
   cancelConvert: async () => {
@@ -53,7 +124,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   reindex: async () => {
-    return libraryApi.reindex()
+    const res = await libraryApi.reindex()
+    if (res.ok) {
+      get().startRefSyncStream()
+    }
+    return res
+  },
+
+  startReferenceSync: async () => {
+    const res = await referencesApi.startSync()
+    get().startRefSyncStream()
+    return res
   },
 
   startProgressStream: () => {
@@ -76,7 +157,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       },
       () => {
         set({ converting: false, progress: null, sseController: null })
-        get().loadPdfs()
+        get().loadFiles(get().viewScope || '200')
       },
       () => {
         set({ converting: false, progress: null, sseController: null })
@@ -88,5 +169,45 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   stopProgressStream: () => {
     get().sseController?.abort()
     set({ sseController: null })
+  },
+
+  startRefSyncStream: () => {
+    get().stopRefSyncStream()
+    const ctrl = referencesApi.streamSyncStatus(
+      (data) => {
+        const status = String(data.status || '')
+        const running = Boolean(data.running)
+        set({
+          refSync: {
+            running,
+            status,
+            stage: String(data.stage || ''),
+            message: String(data.message || ''),
+            error: String(data.error || ''),
+            current: String(data.current || ''),
+            docsDone: Number(data.docs_done || 0),
+            docsTotal: Number(data.docs_total || 0),
+            runId: Number(data.run_id || 0),
+          },
+        })
+      },
+      () => {
+        set((state) => ({
+          refSyncController: null,
+          refSync: state.refSync
+            ? { ...state.refSync, running: false }
+            : state.refSync,
+        }))
+      },
+      () => {
+        set({ refSyncController: null })
+      },
+    )
+    set({ refSyncController: ctrl })
+  },
+
+  stopRefSyncStream: () => {
+    get().refSyncController?.abort()
+    set({ refSyncController: null })
   },
 }))

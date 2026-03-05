@@ -1,0 +1,324 @@
+from __future__ import annotations
+
+import hashlib
+import re
+from functools import lru_cache
+from pathlib import Path
+
+from kb.citation_meta import extract_first_doi
+from kb.config import load_settings
+from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
+from ui.chat_widgets import _md_to_plain_text, _normalize_copy_citation_links, _normalize_math_markdown
+from ui.refs_renderer import (
+    _annotate_equation_tags_with_sources,
+    _annotate_inpaper_citations_with_hover_meta,
+    _normalize_reference_for_popup,
+    _source_cite_id,
+)
+
+_STRUCT_CITE_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]", re.IGNORECASE)
+_STRUCT_CITE_SINGLE_RE = re.compile(r"(?<!\[)\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})(?:\s*:\s*(\d{1,4}))?\s*\](?!\])", re.IGNORECASE)
+_STRUCT_CITE_SID_ONLY_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]", re.IGNORECASE)
+_STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORECASE)
+_EQ_SOURCE_NOTE_RE = re.compile(
+    r"\*\s*（式\((\d{1,4})\)\s*来自参考定位\s*#\d+\s*：\s*`([^`]+)`(?:，可在下方参考定位点\s*Open/Page)?）\s*\*"
+)
+_REF_MAP_CACHE: dict[str, dict[int, str]] = {}
+
+
+@lru_cache(maxsize=1)
+def _load_reference_index_cached() -> dict:
+    try:
+        return load_reference_index(load_settings().db_dir)
+    except Exception:
+        return {}
+
+
+def _split_kb_miss_notice(text: str) -> tuple[str, str]:
+    if not text:
+        return "", ""
+    s = text.lstrip()
+    prefix = "未命中知识库片段"
+    if not s.startswith(prefix):
+        return "", text
+
+
+def _normalize_equation_source_notes(md: str) -> str:
+    def _replace(m: re.Match[str]) -> str:
+        eq_num = str(m.group(1) or "").strip()
+        label = str(m.group(2) or "").strip()
+        if not eq_num or not label:
+            return m.group(0)
+        return f"*（式({eq_num}) 对应命中的库内文献：`{label}`）*"
+
+    return _EQ_SOURCE_NOTE_RE.sub(_replace, str(md or ""))
+
+    nl = s.find("\n")
+    if nl != -1:
+        return s[:nl].strip(), s[nl + 1 :].lstrip("\n")
+
+    for sep in ("。", ".", "！", "!", "？", "?", ";", "；"):
+        idx = s.find(sep)
+        if 0 <= idx <= 80:
+            return s[: idx + 1].strip(), s[idx + 1 :].lstrip()
+
+    return prefix, s[len(prefix) :].lstrip("：: \t")
+
+
+def _split_kb_miss_notice(text: str) -> tuple[str, str]:
+    if not text:
+        return "", ""
+    s = text.lstrip()
+    prefix = "未命中知识库片段"
+    if not s.startswith(prefix):
+        return "", text
+
+    nl = s.find("\n")
+    if nl != -1:
+        return s[:nl].strip(), s[nl + 1 :].lstrip("\n")
+
+    for sep in ("。", ".", "！", "!", "？", "?", ";", "；"):
+        idx = s.find(sep)
+        if 0 <= idx <= 80:
+            return s[: idx + 1].strip(), s[idx + 1 :].lstrip()
+
+    return prefix, s[len(prefix) :].lstrip("：: \t")
+
+
+def _normalize_equation_source_notes(md: str) -> str:
+    note_re = re.compile(
+        r"\*\s*（式\((\d{1,4})\)\s*来自参考定位\s*#\d+\s*：\s*`([^`]+)`(?:，可在下方参考定位点\s*Open/Page)?）\s*\*"
+    )
+
+    def _replace(m: re.Match[str]) -> str:
+        eq_num = str(m.group(1) or "").strip()
+        label = str(m.group(2) or "").strip()
+        if not eq_num or not label:
+            return m.group(0)
+        return f"*（式({eq_num}) 对应命中的库内文献：`{label}`）*"
+
+    return note_re.sub(_replace, str(md or ""))
+
+
+def _strip_structured_cite_tokens_for_display(md: str) -> str:
+    s = str(md or "")
+    if (not s) or ("CITE" not in s.upper()):
+        return s
+    out = _STRUCT_CITE_RE.sub(lambda m: f"[{int(m.group(2))}]", s)
+    out = _STRUCT_CITE_SINGLE_RE.sub(
+        lambda m: f"[{int(m.group(2))}]" if str(m.group(2) or "").strip() else "",
+        out,
+    )
+    out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
+    out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
+    return out
+
+
+def _normalize_chat_markdown_for_display(md: str) -> str:
+    return _normalize_math_markdown(_strip_structured_cite_tokens_for_display(md))
+
+
+def _source_name_from_path(source_path: str) -> str:
+    name = Path(str(source_path or "")).name or str(source_path or "")
+    low = name.lower()
+    if low.endswith(".en.md"):
+        return name[:-6] + ".pdf"
+    if low.endswith(".md"):
+        return name[:-3] + ".pdf"
+    return name or "unknown.pdf"
+
+
+def _load_ref_map(source_path: str) -> dict[int, str]:
+    key = str(source_path or "").strip().lower()
+    if not key:
+        return {}
+    cached = _REF_MAP_CACHE.get(key)
+    if isinstance(cached, dict):
+        return cached
+    path = Path(source_path)
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        ref_map = extract_references_map_from_md(text)
+    except Exception:
+        ref_map = {}
+    _REF_MAP_CACHE[key] = ref_map
+    return ref_map
+
+
+def _build_anchor(anchor_ns: str, sid: str, ref_num: int, source_name: str) -> str:
+    base = f"{anchor_ns}|{sid}|{int(ref_num)}|{source_name.lower()}"
+    sig = hashlib.sha1(base.encode("utf-8", "ignore")).hexdigest()[:10]
+    return f"kb-cite-{sig}-{int(ref_num)}"
+
+
+def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_ns: str) -> tuple[str, list[dict]]:
+    src_by_sid: dict[str, str] = {}
+    sha_by_source: dict[str, str] = {}
+    for hit in hits or []:
+        meta = (hit or {}).get("meta", {}) or {}
+        source_path = str(meta.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        src_by_sid.setdefault(_source_cite_id(source_path).lower(), source_path)
+        source_sha1 = str(meta.get("source_sha1") or "").strip().lower()
+        if source_sha1:
+            sha_by_source.setdefault(source_path, source_sha1)
+
+    details_by_key: dict[str, dict] = {}
+    index_data = _load_reference_index_cached()
+
+    def _mk_detail(sid: str, ref_num: int) -> dict | None:
+        source_path = src_by_sid.get(str(sid or "").strip().lower())
+        if not source_path:
+            return None
+        key = f"{sid.lower()}|{int(ref_num)}"
+        rec = details_by_key.get(key)
+        if isinstance(rec, dict):
+            return rec
+
+        source_name = _source_name_from_path(source_path)
+        anchor = _build_anchor(anchor_ns, sid, int(ref_num), source_name)
+
+        ref_rec: dict | None = None
+        try:
+            resolved = resolve_reference_entry(
+                index_data,
+                source_path,
+                int(ref_num),
+                source_sha1=sha_by_source.get(source_path, ""),
+            )
+        except Exception:
+            resolved = None
+        if isinstance(resolved, dict):
+            ref0 = resolved.get("ref")
+            if isinstance(ref0, dict):
+                ref_rec = dict(ref0)
+
+        if not isinstance(ref_rec, dict):
+            ref_map = _load_ref_map(source_path)
+            raw = str(ref_map.get(int(ref_num)) or "").strip()
+            if not raw:
+                return None
+            ref_rec = {
+                "raw": raw,
+                "doi": str(extract_first_doi(raw) or "").strip(),
+            }
+
+        ref2 = _normalize_reference_for_popup(
+            ref_rec
+        ) or {}
+        raw = str(ref2.get("raw") or ref_rec.get("raw") or "").strip()
+        doi = str(ref2.get("doi") or ref_rec.get("doi") or extract_first_doi(raw) or "").strip()
+        doi_url = str(ref2.get("doi_url") or "").strip()
+        if (not doi_url) and doi:
+            doi_url = f"https://doi.org/{doi}"
+        rec = {
+            "num": int(ref_num),
+            "anchor": anchor,
+            "source_name": source_name,
+            "source_path": source_path,
+            "raw": str(ref2.get("raw") or raw).strip(),
+            "title": str(ref2.get("title") or "").strip(),
+            "authors": str(ref2.get("authors") or "").strip(),
+            "venue": str(ref2.get("venue") or "").strip(),
+            "year": str(ref2.get("year") or "").strip(),
+            "volume": str(ref2.get("volume") or "").strip(),
+            "issue": str(ref2.get("issue") or "").strip(),
+            "pages": str(ref2.get("pages") or "").strip(),
+            "doi": str(ref2.get("doi") or doi).strip(),
+            "doi_url": doi_url,
+            "cite_fmt": str(ref2.get("cite_fmt") or raw).strip(),
+        }
+        details_by_key[key] = rec
+        return rec
+
+    def _replace(m: re.Match) -> str:
+        sid = str(m.group(1) or "").strip()
+        n_txt = str(m.group(2) or "").strip()
+        if not n_txt:
+            return ""
+        try:
+            n = int(n_txt)
+        except Exception:
+            return ""
+        detail = _mk_detail(sid, n)
+        if not detail:
+            return f"[{n}]"
+        return f"[{n}](#{detail['anchor']})"
+
+    out = _STRUCT_CITE_RE.sub(_replace, str(md or ""))
+    out = _STRUCT_CITE_SINGLE_RE.sub(_replace, out)
+    out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
+    out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
+    details = sorted(details_by_key.values(), key=lambda item: (int(item.get("num") or 0), str(item.get("source_name") or "")))
+    return out, details
+
+
+def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: dict[int, dict], *, conv_id: str) -> list[dict]:
+    out: list[dict] = []
+    last_user_msg_id = 0
+    for idx, msg in enumerate(messages or []):
+        rec = dict(msg or {})
+        role = str(rec.get("role") or "")
+        content = str(rec.get("content") or "")
+        try:
+            msg_id = int(rec.get("id") or 0)
+        except Exception:
+            msg_id = 0
+
+        if role == "user":
+            if msg_id > 0:
+                last_user_msg_id = msg_id
+            out.append(rec)
+            continue
+
+        ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
+        hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
+        notice, body = _split_kb_miss_notice(content)
+        # If refs exist for this turn, keep the answer and suppress stale "KB miss" hints.
+        if notice and hits:
+            notice = ""
+            body = content
+        cite_details: list[dict] = []
+        rendered_body = str(body or "")
+        raw_body = rendered_body
+        if rendered_body.strip():
+            rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
+            rendered_body = _normalize_equation_source_notes(rendered_body)
+            rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                rendered_body,
+                hits,
+                anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+            )
+            if (not cite_details) and ("CITE" in raw_body.upper()):
+                rendered_body, cite_details = _fallback_render_structured_citations(
+                    raw_body,
+                    hits,
+                    anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+                )
+
+        rendered_full = ""
+        if notice and rendered_body:
+            rendered_full = f"{notice}\n\n{rendered_body}"
+        elif notice:
+            rendered_full = notice
+        elif rendered_body:
+            rendered_full = rendered_body
+        else:
+            rendered_full = content
+
+        rendered_markdown = _normalize_chat_markdown_for_display(rendered_full)
+        copy_markdown = _normalize_copy_citation_links(rendered_markdown, cite_details)
+        rec["cite_details"] = cite_details
+        rec["copy_markdown"] = copy_markdown
+        rec["copy_text"] = _md_to_plain_text(copy_markdown)
+        rec["rendered_content"] = rendered_markdown
+        rec["notice"] = notice
+        rec["rendered_body"] = _normalize_chat_markdown_for_display(rendered_body) if rendered_body else ""
+        rec["refs_user_msg_id"] = int(last_user_msg_id or 0)
+        rec["render_cache_key"] = hashlib.sha1(
+            f"{conv_id}|{msg_id}|{last_user_msg_id}|{content}".encode("utf-8", "ignore")
+        ).hexdigest()[:12]
+        out.append(rec)
+
+    return out

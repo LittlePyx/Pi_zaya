@@ -26,7 +26,6 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
 
   const SHELF_ROOT_KEY = "__kbCiteShelfRootV2";
   const SHELF_STORAGE_KEY = "__kb_cite_shelf_by_conv_v2";
-
   function normalizeConvId(v) {{
     const s = String(v || "").trim();
     if (!s) return "default";
@@ -560,9 +559,11 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
           );
         }} catch (e) {{}}
         try {{
-          trashBtn = block.querySelector(
+          const lastColBtn = block.querySelector(
             'div[data-testid="column"]:last-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:last-child div[data-testid="stButton"] > button'
           );
+          const trashChar = String.fromCodePoint(0x1F5D1);
+          if (lastColBtn && (lastColBtn.textContent || "").trim().indexOf(trashChar) >= 0) trashBtn = lastColBtn;
         }} catch (e) {{}}
         if (!rowBtn || !trashBtn) {{
           try {{
@@ -574,7 +575,11 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
               btns.push(b);
             }}
             if (!rowBtn && btns.length) rowBtn = btns[0];
-            if (!trashBtn && btns.length > 1) trashBtn = btns[btns.length - 1];
+            if (!trashBtn && btns.length > 1) {{
+              const trashChar = String.fromCodePoint(0x1F5D1);
+              const lastBtn = btns[btns.length - 1];
+              if ((lastBtn.textContent || "").trim().indexOf(trashChar) >= 0) trashBtn = lastBtn;
+            }}
           }} catch (e) {{}}
         }}
         try {{
@@ -659,10 +664,12 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
                   firstCol.style.setProperty("min-width", "0", "important");
                 }}
                 const rowBtn = block.querySelector('div[data-testid="column"]:first-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:first-child div[data-testid="stButton"] > button');
-                const trashBtn = block.querySelector('div[data-testid="column"]:last-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:last-child div[data-testid="stButton"] > button');
+                const lastColBtn = block.querySelector('div[data-testid="column"]:last-child div[data-testid="stButton"] > button, div[data-testid="stColumn"]:last-child div[data-testid="stButton"] > button');
+                const trashChar = String.fromCodePoint(0x1F5D1);
+                const trashBtn = (lastColBtn && (lastColBtn.textContent || "").trim().indexOf(trashChar) >= 0) ? lastColBtn : null;
                 const btns = block.querySelectorAll ? block.querySelectorAll('div[data-testid="stButton"] > button, div.stButton > button, button') : [];
                 const r = rowBtn || (btns[0] || null);
-                const t = trashBtn || (btns.length >= 2 ? btns[btns.length - 1] : null);
+                const t = trashBtn || (btns.length >= 2 && (btns[btns.length - 1].textContent || "").trim().indexOf(trashChar) >= 0 ? btns[btns.length - 1] : null);
                 if (r && r.classList) r.classList.add("kb-history-row-btn");
                 if (t && t.classList) {{
                   t.classList.add("kb-history-trash-btn");
@@ -1379,4 +1386,3 @@ def _inject_runtime_ui_fixes(theme_mode: str, conv_id: str = "") -> None:
         """,
         height=0,
     )
-

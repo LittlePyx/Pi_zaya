@@ -47,12 +47,17 @@ class ChatStore:
                   conv_id TEXT NOT NULL,
                   role TEXT NOT NULL,
                   content TEXT NOT NULL,
+                  attachments_json TEXT NOT NULL DEFAULT '[]',
                   created_at REAL NOT NULL,
                   FOREIGN KEY(conv_id) REFERENCES conversations(id)
                 );
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_id ON messages(conv_id);")
+            try:
+                conn.execute("ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
+            except sqlite3.OperationalError:
+                pass
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS message_refs (
@@ -86,6 +91,20 @@ class ChatStore:
             except sqlite3.OperationalError:
                 pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_sources (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  conv_id TEXT NOT NULL,
+                  source_path TEXT NOT NULL,
+                  source_name TEXT NOT NULL,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  UNIQUE(conv_id, source_path)
+                );
+                """
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_sources_conv_id ON conversation_sources(conv_id);")
 
     def create_project(self, name: str) -> str:
         pid = uuid.uuid4().hex
@@ -185,12 +204,58 @@ class ChatStore:
 
     def delete_conversation(self, conv_id: str) -> None:
         with self._connect() as conn:
+            conn.execute("DELETE FROM conversation_sources WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM message_refs WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM messages WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
 
+    def bind_conversation_source(self, conv_id: str, source_path: str, source_name: str = "") -> bool:
+        cid = str(conv_id or "").strip()
+        src = str(source_path or "").strip()
+        if (not cid) or (not src):
+            return False
+        name = str(source_name or "").strip() or Path(src).name
+        now = time.time()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO conversation_sources (conv_id, source_path, source_name, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(conv_id, source_path)
+                DO UPDATE SET source_name = excluded.source_name, updated_at = excluded.updated_at
+                """,
+                (cid, src, name, now, now),
+            )
+            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
+        return True
+
+    def list_conversation_sources(self, conv_id: str, limit: int = 8) -> list[dict]:
+        cid = str(conv_id or "").strip()
+        if not cid:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_path, source_name, created_at, updated_at
+                FROM conversation_sources
+                WHERE conv_id = ?
+                ORDER BY updated_at DESC, id DESC
+                LIMIT ?
+                """,
+                (cid, max(1, int(limit))),
+            ).fetchall()
+        return [
+            {
+                "source_path": str(r["source_path"] or ""),
+                "source_name": str(r["source_name"] or ""),
+                "created_at": float(r["created_at"] or 0.0),
+                "updated_at": float(r["updated_at"] or 0.0),
+            }
+            for r in rows
+        ]
+
     def get_messages(self, conv_id: str, limit: int | None = None) -> list[dict]:
-        sql = "SELECT id, role, content, created_at FROM messages WHERE conv_id = ? ORDER BY id ASC"
+        sql = "SELECT id, role, content, attachments_json, created_at FROM messages WHERE conv_id = ? ORDER BY id ASC"
         params: tuple = (conv_id,)
         if limit is not None:
             sql += " LIMIT ?"
@@ -198,31 +263,59 @@ class ChatStore:
 
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        out: list[dict] = []
+        for row in rows:
+            rec = dict(row)
+            try:
+                attachments = json.loads(rec.get("attachments_json") or "[]")
+            except Exception:
+                attachments = []
+            if not isinstance(attachments, list):
+                attachments = []
+            rec["attachments"] = attachments
+            rec.pop("attachments_json", None)
+            out.append(rec)
+        return out
 
     def get_messages_upto_id(self, conv_id: str, max_id: int, limit: int | None = None) -> list[dict]:
         mid = int(max_id or 0)
         if mid <= 0:
             return self.get_messages(conv_id, limit=limit)
-        sql = "SELECT id, role, content, created_at FROM messages WHERE conv_id = ? AND id <= ? ORDER BY id ASC"
+        sql = "SELECT id, role, content, attachments_json, created_at FROM messages WHERE conv_id = ? AND id <= ? ORDER BY id ASC"
         params: tuple = (conv_id, mid)
         if limit is not None:
             sql += " LIMIT ?"
             params = (conv_id, mid, int(limit))
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        out: list[dict] = []
+        for row in rows:
+            rec = dict(row)
+            try:
+                attachments = json.loads(rec.get("attachments_json") or "[]")
+            except Exception:
+                attachments = []
+            if not isinstance(attachments, list):
+                attachments = []
+            rec["attachments"] = attachments
+            rec.pop("attachments_json", None)
+            out.append(rec)
+        return out
 
-    def append_message(self, conv_id: str, role: str, content: str) -> int:
+    def append_message(self, conv_id: str, role: str, content: str, attachments: list[dict] | None = None) -> int:
         role = (role or "").strip()
         if role not in ("user", "assistant", "system"):
             role = "user"
         content = (content or "").strip()
+        try:
+            attachments_json = json.dumps(list(attachments or []), ensure_ascii=False, default=str)
+        except Exception:
+            attachments_json = "[]"
         now = time.time()
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO messages (conv_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-                (conv_id, role, content, now),
+                "INSERT INTO messages (conv_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (conv_id, role, content, attachments_json, now),
             )
             conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id))
             try:

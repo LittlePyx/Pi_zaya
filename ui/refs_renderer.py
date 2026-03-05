@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import logging
 import os
 import re
 import subprocess
@@ -16,6 +17,7 @@ import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.file_naming import citation_meta_display_pdf_name
+from kb.source_filters import is_excluded_source_path
 from kb.reference_index import (
     extract_references_map_from_md as _extract_references_map_from_md_index,
     load_reference_index as _load_reference_index_file,
@@ -74,6 +76,8 @@ def _display_source_name(source_path: str) -> str:
 def _is_temp_source_path(source_path: str) -> bool:
     s = (source_path or "").strip()
     if not s:
+        return True
+    if is_excluded_source_path(s):
         return True
     p = Path(s)
     parts = [str(x).strip().lower() for x in p.parts]
@@ -1797,10 +1801,22 @@ def _openalex_work_by_doi(doi: str) -> dict | None:
 
 
 def _lookup_journal_if(meta: dict) -> dict | None:
+    try:
+        logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy.pool").setLevel(logging.WARNING)
+        logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+    except Exception:
+        pass
     venue = str((meta or {}).get("venue") or "").strip()
+    ox_venue = str((meta or {}).get("openalex_venue") or "").strip()
     issn = _normalize_issn(str((meta or {}).get("issn") or ""))
     eissn = _normalize_issn(str((meta or {}).get("eissn") or ""))
-    if not venue and not issn and not eissn:
+    ox_issn_l = _normalize_issn(str((meta or {}).get("openalex_issn_l") or ""))
+    ox_issn_all = set(_normalize_issn_list((meta or {}).get("openalex_issn_set") or []))
+    issn_candidates = [x for x in {issn, eissn, ox_issn_l, *ox_issn_all} if x]
+    venue_candidates = [x for x in [venue, ox_venue] if x]
+    if not venue_candidates and not issn_candidates:
         return None
     try:
         from impact_factor.core import Factor  # type: ignore
@@ -1812,21 +1828,27 @@ def _lookup_journal_if(meta: dict) -> dict | None:
         return None
 
     recs = []
-    if issn:
+    for cand in issn_candidates:
+        if recs:
+            break
         try:
-            recs = fa.search(issn, key="issn") or []
+            recs = fa.search(cand, key="issn") or []
         except Exception:
             recs = []
-    if (not recs) and eissn:
+        if recs:
+            break
         try:
-            recs = fa.search(eissn, key="eissn") or []
+            recs = fa.search(cand, key="eissn") or []
         except Exception:
             recs = []
-    if (not recs) and venue:
-        try:
-            recs = fa.search(venue, key="journal") or []
-        except Exception:
-            recs = []
+    if not recs:
+        for cand in venue_candidates:
+            try:
+                recs = fa.search(cand, key="journal") or []
+            except Exception:
+                recs = []
+            if recs:
+                break
     if not recs:
         return None
 
@@ -1836,10 +1858,15 @@ def _lookup_journal_if(meta: dict) -> dict | None:
         if not isinstance(r, dict):
             continue
         jname = str(r.get("journal") or "").strip()
-        sc = _text_sim(venue, jname) if venue else 0.0
-        if issn and (_normalize_issn(str(r.get("issn") or "")) == issn):
+        r_issn = _normalize_issn(str(r.get("issn") or ""))
+        r_eissn = _normalize_issn(str(r.get("eissn") or ""))
+        sc = 0.0
+        for cand in venue_candidates:
+            if cand:
+                sc = max(sc, _text_sim(cand, jname))
+        if r_issn and (r_issn in issn_candidates):
             sc += 1.6
-        if eissn and (_normalize_issn(str(r.get("eissn") or "")) == eissn):
+        if r_eissn and (r_eissn in issn_candidates):
             sc += 1.3
         if sc > best_sc:
             best_sc = sc

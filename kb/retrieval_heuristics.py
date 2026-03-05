@@ -91,6 +91,65 @@ def _norm_text_for_match(s: str) -> str:
     s = re.sub(r"[\s_]+", " ", s)
     return s
 
+
+def _should_bypass_kb_retrieval(prompt_text: str) -> bool:
+    """
+    Skip academic retrieval for generic coding/programming prompts that are
+    clearly not asking about the literature corpus.
+    """
+    q = (prompt_text or "").strip().lower()
+    if not q:
+        return False
+
+    code_like = bool(re.search(
+        r"(\bhello\s*world\b|\brandom\b|\brandom\s+number\b|\bcode\b|\bpython\b|\bjavascript\b|\bjs\b|\bjava\b|\bc\+\+\b|\bcpp\b|\bfunction\b|\bscript\b|\bdebug\b|\bbug\b)|"
+        r"(\u5199.*\u4ee3\u7801|\u751f\u6210.*\u968f\u673a\u6570|\u968f\u673a\u6570|\u51fd\u6570|\u811a\u672c|\u4ee3\u7801|\u8c03\u8bd5|\u62a5\u9519|\u793a\u4f8b\u4ee3\u7801)",
+        q,
+        flags=re.I,
+    ))
+    if not code_like:
+        return False
+
+    academic_or_domain = bool(re.search(
+        r"(\breference\b|\bcitation\b|\bpaper\b|\bpdf\b|\bdoi\b|\bequation\b|\bderive\b|\bgaussian splatting\b|\b3dgs\b|\bsingle[- ]pixel\b|\bsingle[- ]photon\b|\bcompressive\b|\bspectral\b|\boptics?\b|\bimaging\b|\bdetector\b)|"
+        r"(\u53c2\u8003\u6587\u732e|\u5f15\u7528|\u8bba\u6587|\u6587\u732e|\u516c\u5f0f|\u63a8\u5bfc|\u5355\u50cf\u7d20|\u5355\u5149\u5b50|\u538b\u7f29|\u5149\u8c31|\u5149\u5b66|\u6210\u50cf|\u63a2\u6d4b\u5668|\u9ad8\u65af\u6cfc\u6ea2)",
+        q,
+        flags=re.I,
+    ))
+    return not academic_or_domain
+
+
+def _should_prioritize_attached_image(prompt_text: str) -> bool:
+    """
+    Detect prompts that are mainly asking about the currently attached image itself,
+    where KB retrieval is more likely to distract than help.
+    """
+    q = (prompt_text or "").strip().lower()
+    if not q:
+        return True
+
+    image_focus = bool(re.search(
+        r"(\bthis image\b|\bthis figure\b|\bthe image\b|\bthe figure\b|\blook at (the )?image\b|\blook at (the )?figure\b|"
+        r"\bdescribe (this )?(image|figure)\b|\bwhat is in (this )?(image|figure)\b|\bwhat does (this )?(image|figure) say\b|"
+        r"\bexplain (this )?(image|figure)\b|\bcaption (this )?(image|figure)\b)|"
+        r"(\u8fd9\u5f20\u56fe|\u8fd9\u5f20\u56fe\u7247|\u8fd9\u4e2a\u56fe|\u8fd9\u5e45\u56fe|\u770b\u56fe|\u770b\u4e0b\u56fe|\u89e3\u91ca.*\u56fe|"
+        r"\u8fd9\u56fe\u5199\u4e86\u5565|\u8fd9\u56fe\u5199\u4e86\u4ec0\u4e48|\u8fd9\u56fe\u4ec0\u4e48\u610f\u601d|"
+        r"\u8fd9\u5f20\u56fe\u662f\u4ec0\u4e48|\u8fd9\u5f20\u56fe\u8bb2\u4e86\u4ec0\u4e48|\u8fd9\u5f20\u56fe\u5199\u4e86\u4ec0\u4e48|"
+        r"\u63cf\u8ff0.*\u56fe|\u6982\u62ec.*\u56fe|\u56fe\u91cc\u5199\u4e86\u4ec0\u4e48)",
+        q,
+        flags=re.I,
+    ))
+    if not image_focus:
+        return False
+
+    explicit_doc_link = bool(re.search(
+        r"(\bpaper\b|\bpdf\b|\bsection\b|\bchapter\b|\bcitation\b|\breference\b|\bwhich paper\b|\bfrom which paper\b)|"
+        r"(\u8bba\u6587|\u6587\u732e|\u7ae0\u8282|\u5f15\u7528|\u53c2\u8003\u6587\u732e|\u51fa\u81ea\u54ea\u7bc7|\u54ea\u7bc7\u8bba\u6587|\u54ea\u4e2a\u7ae0\u8282)",
+        q,
+        flags=re.I,
+    ))
+    return not explicit_doc_link
+
 def _query_term_profile(prompt_text: str, used_query: str) -> dict[str, bool]:
     """
     Identify key intent terms to help rerank documents.

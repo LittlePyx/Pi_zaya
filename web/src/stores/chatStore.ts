@@ -1,6 +1,201 @@
 import { create } from 'zustand'
-import { chatApi, type Conversation, type Message } from '../api/chat'
+import {
+  chatApi,
+  type ChatImageAttachment,
+  type ChatUploadItem,
+  type Conversation,
+  type Message,
+  type Project,
+} from '../api/chat'
 import { api } from '../api/client'
+
+let refsPollToken = 0
+let refsPollTimer: number | null = null
+let uploadPollToken = 0
+let uploadPollTimer: number | null = null
+
+function stopRefsPolling() {
+  refsPollToken += 1
+  if (refsPollTimer !== null) {
+    window.clearTimeout(refsPollTimer)
+    refsPollTimer = null
+  }
+}
+
+function stopUploadPolling() {
+  uploadPollToken += 1
+  if (uploadPollTimer !== null) {
+    window.clearTimeout(uploadPollTimer)
+    uploadPollTimer = null
+  }
+}
+
+function needsRefsEnrichment(refs: Record<string, unknown>) {
+  for (const value of Object.values(refs || {})) {
+    const rec = value as { hits?: Array<{ ui_meta?: Record<string, unknown>; meta?: Record<string, unknown> }> }
+    const hits = Array.isArray(rec?.hits) ? rec.hits : []
+    for (const hit of hits) {
+      const meta = hit?.meta || {}
+      if (String(meta.ref_pack_state || '').trim().toLowerCase() === 'pending') {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function uploadItemKey(item: ChatUploadItem) {
+  if (item.kind === 'pdf' && item.ingest_job_id) {
+    return `pdf-job:${item.ingest_job_id}`
+  }
+  return [item.kind, item.sha1 || '', item.path || '', item.name].join(':')
+}
+
+function attachmentKey(item: ChatImageAttachment) {
+  return item.sha1 || item.path
+}
+
+function mergeUploadItems(current: ChatUploadItem[], incoming: ChatUploadItem[]) {
+  const next = [...current]
+  const positions = new Map(next.map((item, index) => [uploadItemKey(item), index]))
+  for (const item of incoming) {
+    const key = uploadItemKey(item)
+    const index = positions.get(key)
+    if (index === undefined) {
+      positions.set(key, next.length)
+      next.push(item)
+    } else {
+      next[index] = item
+    }
+  }
+  return next
+}
+
+function isPdfUploadJobRunning(item: ChatUploadItem) {
+  if (item.kind !== 'pdf') return false
+  const ingestRunning = ['processing', 'renaming', 'converting', 'ingesting'].includes(String(item.ingest_status || ''))
+  const qualityRunning = ['pending', 'running'].includes(String(item.quality_status || ''))
+  return ingestRunning || qualityRunning
+}
+
+function needsUploadStatusPolling(uploadItems: ChatUploadItem[]) {
+  return uploadItems.some((item) =>
+    isPdfUploadJobRunning(item) && item.ingest_job_id,
+  )
+}
+
+async function startUploadPolling(set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void, getState: () => ChatState) {
+  stopUploadPolling()
+  const token = ++uploadPollToken
+  let tries = 0
+  const maxTries = 240
+  const nextDelay = () => {
+    if (tries <= 10) return 500
+    if (tries <= 40) return 1000
+    return 1800
+  }
+
+  const tick = async () => {
+    if (token !== uploadPollToken) return
+    tries += 1
+    const state = getState()
+    const jobIds = state.uploadItems
+      .filter((item) => isPdfUploadJobRunning(item) && item.ingest_job_id)
+      .map((item) => String(item.ingest_job_id || '').trim())
+      .filter(Boolean)
+    if (jobIds.length === 0) {
+      uploadPollTimer = null
+      return
+    }
+    try {
+      const res = await chatApi.getUploadStatuses(jobIds)
+      if (token !== uploadPollToken) return
+      const items = Array.isArray(res.items) ? res.items : []
+      set((cur) => {
+        const nextItems = mergeUploadItems(cur.uploadItems, items)
+        return { uploadItems: nextItems }
+      })
+      const nextState = getState()
+      if (!needsUploadStatusPolling(nextState.uploadItems) || tries >= maxTries) {
+        uploadPollTimer = null
+        return
+      }
+    } catch {
+      if (tries >= maxTries) {
+        uploadPollTimer = null
+        return
+      }
+    }
+    uploadPollTimer = window.setTimeout(tick, nextDelay())
+  }
+
+  void tick()
+}
+
+function mergeImageAttachments(current: ChatImageAttachment[], incoming: ChatImageAttachment[]) {
+  const next = [...current]
+  const seen = new Set(next.map(attachmentKey))
+  for (const item of incoming) {
+    const key = attachmentKey(item)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    next.push(item)
+  }
+  return next
+}
+
+async function loadRefsForConversation(
+  convId: string,
+  set: (patch: Partial<ChatState>) => void,
+  getActiveConvId: () => string | null,
+) {
+  try {
+    const refs = await chatApi.getRefs(convId)
+    if (getActiveConvId() !== convId) return
+    set({ refs })
+    if (needsRefsEnrichment(refs)) {
+      void startRefsPolling(convId, set)
+    }
+  } catch {
+    if (getActiveConvId() === convId) {
+      set({ refs: {} })
+    }
+  }
+}
+
+async function startRefsPolling(convId: string, set: (patch: Partial<ChatState>) => void) {
+  stopRefsPolling()
+  const token = ++refsPollToken
+  let tries = 0
+  const maxTries = 60
+  const nextDelay = () => {
+    if (tries <= 6) return 350
+    if (tries <= 18) return 700
+    return 1200
+  }
+
+  const tick = async () => {
+    if (token !== refsPollToken) return
+    tries += 1
+    try {
+      const refs = await chatApi.getRefs(convId)
+      if (token !== refsPollToken) return
+      set({ refs })
+      if (!needsRefsEnrichment(refs) || tries >= maxTries) {
+        refsPollTimer = null
+        return
+      }
+    } catch {
+      if (tries >= maxTries) {
+        refsPollTimer = null
+        return
+      }
+    }
+    refsPollTimer = window.setTimeout(tick, nextDelay())
+  }
+
+  void tick()
+}
 
 interface GenerationState {
   sessionId: string
@@ -11,17 +206,34 @@ interface GenerationState {
 }
 
 interface ChatState {
-  conversations: Conversation[]
+  projects: Project[]
+  activeProjectId: string | null
+  projectConversations: Record<string, Conversation[]>
+  rootConversations: Conversation[]
   activeConvId: string | null
   messages: Message[]
   refs: Record<string, unknown>
+  uploadItems: ChatUploadItem[]
+  pendingImages: ChatImageAttachment[]
+  uploading: boolean
   generation: GenerationState | null
   sseController: AbortController | null
 
-  loadConversations: () => Promise<void>
+  loadSidebarData: () => Promise<void>
+  selectProject: (id: string | null) => void
+  createProject: (name: string) => Promise<string>
+  renameProject: (id: string, name: string) => Promise<void>
+  deleteProject: (id: string) => Promise<void>
   selectConversation: (id: string) => Promise<void>
   createConversation: () => Promise<string>
+  renameConversation: (id: string, title: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
+  moveConversation: (convId: string, projectId: string | null) => Promise<void>
+  uploadFiles: (files: File[], opts?: { quickIngest?: boolean; speedMode?: string; convId?: string | null }) => Promise<void>
+  retryUploadItem: (key: string) => Promise<void>
+  cancelUploadItem: (key: string) => Promise<void>
+  removePendingImage: (key: string) => void
+  dismissUploadItem: (key: string) => void
   sendMessage: (prompt: string, opts: {
     topK: number; temperature: number; maxTokens: number; deepRead: boolean
   }) => Promise<void>
@@ -29,42 +241,227 @@ interface ChatState {
   clearGeneration: () => void
 }
 
+async function loadGroupedConversations(projects: Project[]) {
+  const rootConversations = await chatApi.listConversations(200, null)
+  const groupedEntries = await Promise.all(
+    projects.map(async (project) => {
+      const conversations = await chatApi.listConversations(100, project.id)
+      return [project.id, conversations] as const
+    }),
+  )
+  return {
+    rootConversations,
+    projectConversations: Object.fromEntries(groupedEntries) as Record<string, Conversation[]>,
+  }
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
-  conversations: [],
+  projects: [],
+  activeProjectId: null,
+  projectConversations: {},
+  rootConversations: [],
   activeConvId: null,
   messages: [],
   refs: {},
+  uploadItems: [],
+  pendingImages: [],
+  uploading: false,
   generation: null,
   sseController: null,
 
-  loadConversations: async () => {
-    const list = await chatApi.listConversations()
-    set({ conversations: list })
+  loadSidebarData: async () => {
+    const projects = await chatApi.listProjects()
+    const grouped = await loadGroupedConversations(projects)
+    set((state) => ({
+      projects,
+      projectConversations: grouped.projectConversations,
+      rootConversations: grouped.rootConversations,
+      activeProjectId:
+        state.activeProjectId && projects.some((project) => project.id === state.activeProjectId)
+          ? state.activeProjectId
+          : null,
+    }))
   },
 
-  selectConversation: async (id) => {
-    set({ activeConvId: id, generation: null })
-    const [msgs, refs] = await Promise.all([
-      chatApi.getMessages(id),
-      chatApi.getRefs(id),
-    ])
-    set({ messages: msgs, refs })
+  selectProject: (id) => {
+    set({ activeProjectId: id })
   },
 
-  createConversation: async () => {
-    const { id } = await chatApi.createConversation()
-    await get().loadConversations()
-    set({ activeConvId: id, messages: [], refs: {}, generation: null })
+  createProject: async (name) => {
+    const { id } = await chatApi.createProject(name)
+    await get().loadSidebarData()
+    set({ activeProjectId: id })
     return id
   },
 
-  deleteConversation: async (id) => {
-    await chatApi.deleteConversation(id)
-    const s = get()
-    if (s.activeConvId === id) {
-      set({ activeConvId: null, messages: [], refs: {} })
+  renameProject: async (id, name) => {
+    await chatApi.renameProject(id, name)
+    await get().loadSidebarData()
+  },
+
+  deleteProject: async (id) => {
+    await chatApi.deleteProject(id)
+    const state = get()
+    if (state.activeProjectId === id) {
+      set({ activeProjectId: null })
     }
-    await get().loadConversations()
+    await get().loadSidebarData()
+    const activeConvId = get().activeConvId
+    if (activeConvId) {
+      const conv = await chatApi.getConversation(activeConvId).catch(() => null)
+      if (conv) {
+        set({ activeProjectId: conv.project_id ?? null })
+      }
+    }
+  },
+
+  selectConversation: async (id) => {
+    stopRefsPolling()
+    stopUploadPolling()
+    set({
+      activeConvId: id,
+      generation: null,
+      refs: {},
+      uploadItems: [],
+      pendingImages: [],
+    })
+    const [conv, msgs] = await Promise.all([
+      chatApi.getConversation(id),
+      chatApi.getMessages(id),
+    ])
+    set({
+      activeProjectId: conv.project_id ?? null,
+      messages: msgs,
+    })
+    void loadRefsForConversation(id, set, () => get().activeConvId)
+  },
+
+  createConversation: async () => {
+    const projectId = get().activeProjectId
+    const { id } = await chatApi.createConversation('新对话', projectId)
+    await get().loadSidebarData()
+    stopUploadPolling()
+    set({ activeConvId: id, messages: [], refs: {}, generation: null, uploadItems: [], pendingImages: [] })
+    return id
+  },
+
+  renameConversation: async (id, title) => {
+    const nextTitle = String(title || '').trim()
+    if (!nextTitle) return
+    await chatApi.updateTitle(id, nextTitle)
+    await get().loadSidebarData()
+  },
+
+  deleteConversation: async (id) => {
+    stopRefsPolling()
+    stopUploadPolling()
+    await chatApi.deleteConversation(id)
+    const state = get()
+    if (state.activeConvId === id) {
+      set({ activeConvId: null, messages: [], refs: {}, generation: null, uploadItems: [], pendingImages: [] })
+    }
+    await get().loadSidebarData()
+  },
+
+  moveConversation: async (convId, projectId) => {
+    await chatApi.updateConversationProject(convId, projectId)
+    await get().loadSidebarData()
+    if (get().activeConvId === convId) {
+      set({ activeProjectId: projectId })
+    }
+  },
+
+  uploadFiles: async (files, opts) => {
+    if (!files.length) return
+    set({ uploading: true })
+    try {
+      const hasPdf = files.some((file) => String(file.name || '').toLowerCase().endsWith('.pdf') || String(file.type || '').toLowerCase() === 'application/pdf')
+      let convId = String(opts?.convId || '').trim()
+      if (!convId) {
+        convId = String(get().activeConvId || '').trim()
+      }
+      if (hasPdf && !convId) {
+        convId = await get().createConversation()
+      }
+      const res = await chatApi.uploadFiles(files, { ...(opts || {}), convId: convId || null })
+      const imageAttachments = (res.items || [])
+        .map((item) => item.attachment)
+        .filter((item): item is ChatImageAttachment => Boolean(item && item.path))
+      set((state) => ({
+        uploading: false,
+        uploadItems: mergeUploadItems(state.uploadItems, res.items || []),
+        pendingImages: mergeImageAttachments(state.pendingImages, imageAttachments),
+      }))
+      if (needsUploadStatusPolling(get().uploadItems)) {
+        void startUploadPolling(set, get)
+      }
+    } catch {
+      set((state) => ({
+        uploading: false,
+        uploadItems: mergeUploadItems(state.uploadItems, [{
+          kind: 'unknown',
+          status: 'error',
+          name: 'upload',
+          error: 'upload failed',
+        }]),
+      }))
+      throw new Error('upload failed')
+    }
+  },
+
+  retryUploadItem: async (key) => {
+    const current = get().uploadItems.find((item) => uploadItemKey(item) === key)
+    if (!current || current.kind !== 'pdf' || !current.ingest_job_id) return
+    const shouldRetryQuality = (
+      current.ready === true
+      && String(current.ingest_status || '') === 'ready'
+      && String(current.quality_status || '') === 'error'
+    )
+    const res = shouldRetryQuality
+      ? await chatApi.retryUploadQualityJob(current.ingest_job_id)
+      : await chatApi.retryUploadJob(current.ingest_job_id)
+    const nextItem = res.item
+    set((state) => ({
+      uploadItems: mergeUploadItems(
+        state.uploadItems.filter((item) => uploadItemKey(item) !== key),
+        nextItem ? [nextItem] : [],
+      ),
+    }))
+    if (needsUploadStatusPolling(get().uploadItems)) {
+      void startUploadPolling(set, get)
+    }
+  },
+
+  cancelUploadItem: async (key) => {
+    const current = get().uploadItems.find((item) => uploadItemKey(item) === key)
+    if (!current || current.kind !== 'pdf' || !current.ingest_job_id) return
+    const res = await chatApi.cancelUploadJob(current.ingest_job_id)
+    const nextItem = res.item
+    set((state) => ({
+      uploadItems: mergeUploadItems(state.uploadItems, nextItem ? [nextItem] : []),
+    }))
+    if (!needsUploadStatusPolling(get().uploadItems)) {
+      stopUploadPolling()
+    }
+  },
+
+  removePendingImage: (key) => {
+    set((state) => ({
+      pendingImages: state.pendingImages.filter((item) => attachmentKey(item) !== key),
+      uploadItems: state.uploadItems.filter((item) => {
+        const attachment = item.attachment
+        return !attachment || attachmentKey(attachment) !== key
+      }),
+    }))
+  },
+
+  dismissUploadItem: (key) => {
+    set((state) => ({
+      uploadItems: state.uploadItems.filter((item) => uploadItemKey(item) !== key),
+    }))
+    if (!needsUploadStatusPolling(get().uploadItems)) {
+      stopUploadPolling()
+    }
   },
 
   sendMessage: async (prompt, opts) => {
@@ -73,27 +470,50 @@ export const useChatStore = create<ChatState>((set, get) => ({
       convId = await get().createConversation()
     }
 
+    const pendingImages = get().pendingImages
+    const preferredSources = get().uploadItems
+      .filter((item) => item.kind === 'pdf' && (item.status === 'duplicate' || item.ingest_status === 'ready'))
+      .flatMap((item) => [String(item.path || '').trim(), String(item.name || '').trim()])
+      .filter(Boolean)
+      .slice(0, 4)
+    const trimmedPrompt = prompt.trim()
+    const userStoreText = trimmedPrompt || `[Image attachment x${pendingImages.length}]`
+
     const res = await api.post<{
-      session_id: string; task_id: string;
-      user_msg_id: number; assistant_msg_id: number
+      session_id: string
+      task_id: string
+      user_msg_id: number
+      assistant_msg_id: number
     }>('/api/generate', {
-      conv_id: convId, prompt,
-      top_k: opts.topK, temperature: opts.temperature,
-      max_tokens: opts.maxTokens, deep_read: opts.deepRead,
+      conv_id: convId,
+      prompt: trimmedPrompt,
+      image_attachments: pendingImages,
+      preferred_sources: preferredSources,
+      top_k: opts.topK,
+      temperature: opts.temperature,
+      max_tokens: opts.maxTokens,
+      deep_read: opts.deepRead,
     })
 
-    // Add user message to local state immediately
-    set(s => ({
-      messages: [...s.messages, {
-        id: res.user_msg_id, role: 'user', content: prompt, created_at: Date.now() / 1000,
+    set((state) => ({
+      messages: [...state.messages, {
+        id: res.user_msg_id,
+        role: 'user',
+        content: userStoreText,
+        created_at: Date.now() / 1000,
+        attachments: pendingImages,
       }],
+      pendingImages: [],
+      uploadItems: state.uploadItems.filter((item) => item.kind !== 'image'),
       generation: {
-        sessionId: res.session_id, taskId: res.task_id,
-        stage: 'starting', partial: '', done: false,
+        sessionId: res.session_id,
+        taskId: res.task_id,
+        stage: 'starting',
+        partial: '',
+        done: false,
       },
     }))
 
-    // Start SSE
     const ctrl = new AbortController()
     set({ sseController: ctrl })
 
@@ -118,20 +538,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const data = JSON.parse(line.slice(6))
             set({
               generation: {
-                sessionId: res.session_id, taskId: res.task_id,
-                stage: data.stage || '', partial: data.partial || '',
+                sessionId: res.session_id,
+                taskId: res.task_id,
+                stage: data.stage || '',
+                partial: data.partial || '',
                 done: !!data.done,
               },
             })
             if (data.done) {
-              // Reload messages from server
               const msgs = await chatApi.getMessages(convId!)
-              const refs = await chatApi.getRefs(convId!)
-              set({ messages: msgs, refs, generation: null })
-              await get().loadConversations()
+              set({ messages: msgs, generation: null })
+              void loadRefsForConversation(convId!, set, () => get().activeConvId)
+              await get().loadSidebarData()
               return
             }
-          } catch { /* skip bad JSON */ }
+          } catch {
+            // ignore malformed SSE chunks
+          }
         }
       }
     } catch {
@@ -142,12 +565,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   cancelGeneration: () => {
-    const s = get()
-    if (s.generation && s.sseController) {
-      s.sseController.abort()
-      api.post(`/api/generate/${s.generation.sessionId}/cancel?task_id=${s.generation.taskId}`)
+    const state = get()
+    if (state.generation && state.sseController) {
+      state.sseController.abort()
+      api.post(`/api/generate/${state.generation.sessionId}/cancel?task_id=${state.generation.taskId}`)
         .catch(() => {})
     }
+    stopRefsPolling()
     set({ generation: null, sseController: null })
   },
 

@@ -22,11 +22,16 @@ def _history_sidebar_compact_css() -> str:
    This block is injected in the sidebar so it applies to the same document.
    Fallback: section.stSidebar (Streamlit class) if data-testid differs. */
 
-/* 侧边栏主滚动区：预留滚动条、适度左侧留白 */
+/* 侧边栏 section 与主滚动区：与「展开更早会话」内滚动区一致，预留滚动条与右侧留白，避免项目列表/会话列表右侧被挡 */
+section[data-testid="stSidebar"],
+section.stSidebar{
+  scrollbar-gutter: stable !important;
+}
 section[data-testid="stSidebar"] > div,
 section.stSidebar > div{
   scrollbar-gutter: stable !important;
   padding-left: 0.5rem !important;
+  padding-right: 0.75rem !important;
   margin-left: 0 !important;
 }
 section[data-testid="stSidebar"] > div > div,
@@ -254,7 +259,7 @@ section.stSidebar div:has(.kb-history-project-row) + div [data-testid="stHorizon
   display: none !important;
   content: none !important;
 }
-/* 项目行垃圾桶：与 ⋮ 对齐，微调上移、无边框 */
+/* 项目行垃圾桶：与 ⋮ 对齐，微调上移、无边框；右侧留白与更早会话列表一致，避免被挡 */
 section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div[data-testid="stHorizontalBlock"] > div:nth-child(3),
 section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:nth-child(3),
 section.stSidebar div:has(.kb-history-project-row) + div[data-testid="stHorizontalBlock"] > div:nth-child(3),
@@ -262,6 +267,7 @@ section.stSidebar div:has(.kb-history-project-row) + div[data-testid="element-co
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+  margin-right: 0.5rem !important;
 }
 section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div[data-testid="stHorizontalBlock"] > div:nth-child(3) button,
 section[data-testid="stSidebar"] div:has(.kb-history-project-row) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:nth-child(3) button,
@@ -329,11 +335,12 @@ section.stSidebar div:has(.kb-history-project-convs) .stCaptionContainer{
   line-height: 1.2 !important;
 }
 
-/* 零散会话区块（Your chats）：在下方，无多余横线 */
+/* 零散会话区块（Your chats）：在下方，无多余横线；预留右侧空间避免收起更早会话时垃圾桶被滚动条挡住 */
 section[data-testid="stSidebar"] div:has(.kb-history-scattered-section),
 section.stSidebar div:has(.kb-history-scattered-section){
   margin-top: 0.35rem !important;
   padding-top: 0 !important;
+  padding-right: 0.25rem !important;
   border: none !important;
   border-top: none !important;
   border-bottom: none !important;
@@ -471,7 +478,7 @@ section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(.kb-h
   margin-bottom: 0 !important;
 }
 
-/* 新建会话所在块：占满侧边栏宽度（align-self: stretch），展开/收起更早会话时不收缩 */
+/* 新建会话所在块：占满侧边栏宽度（align-self: stretch），展开/收起更早会话时不收缩；右侧留白与「更早会话」滚动区一致，避免项目列表/会话列表垃圾桶被挡 */
 section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"]:has(.kb-history-actions)),
 section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"]:has(.kb-history-actions)),
 section.stSidebar div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"]:has(.kb-history-actions)),
@@ -481,6 +488,7 @@ section.stSidebar div[data-testid="stVerticalBlock"]:has(> div[data-testid="stEl
   max-width: 100% !important;
   align-self: stretch !important;
   box-sizing: border-box !important;
+  padding-right: 0.75rem !important;
 }
 /* 新建会话所在块：不参与 flex 收缩，展开/收起更早会话时布局不变 */
 section[data-testid="stSidebar"] div.kb-history-actions-block,
@@ -820,11 +828,12 @@ section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-hi
   all: unset !important;
   box-sizing: border-box !important;
   display: flex !important;
-  align-items: flex-start !important;
+  align-items: center !important;
   width: 100% !important;
-  min-height: 2.5rem !important;
+  min-height: 0 !important;
+  height: auto !important;
   max-height: none !important;
-  padding: 0.25rem 0.1rem 0.2rem !important;
+  padding: 0.2rem 0.1rem !important;
   border: 0 !important;
   border-radius: 0 !important;
   background: transparent !important;
@@ -944,8 +953,7 @@ section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(.kb-h
   box-shadow: inset 4px 0 0 var(--blue-line, #4a9eff) !important;
   border: none !important;
   outline: none !important;
-  padding-top: 0.05rem !important;
-  padding-bottom: 0.05rem !important;
+  padding: 0.08rem 0 !important;
   min-height: 0 !important;
   border-radius: 4px !important;
 }
@@ -1076,6 +1084,7 @@ section.stSidebar div:has(.kb-history-older-list) div[data-testid="stHorizontalB
   display: flex !important;
   padding: 0 !important;
   padding-right: 0 !important;
+  margin-right: 0.5rem !important;
 }
 /* 更早会话滚动区预留滚动条宽度，与七天内列表视觉宽度一致，垃圾桶列才能对齐 */
 section[data-testid="stSidebar"] div:has(.kb-history-older-list),
@@ -1121,17 +1130,9 @@ section.stSidebar div:has(.kb-history-older-list) div[data-testid="stHorizontalB
   display: none !important;
   content: none !important;
 }
+/* 仅对带 .kb-history-trash-btn 的按钮应用垃圾桶样式（会话/项目已改为两列，最后一列为 ⋮ 菜单，不再单独显示垃圾桶） */
 section[data-testid="stSidebar"] button.kb-history-trash-btn,
-section[data-testid="stSidebar"] div:has(.kb-history-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div[data-testid="stButton"] > button,
-section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(.kb-history-row-btn-slot) > div[data-testid="column"]:last-child div[data-testid="stButton"] > button,
-section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"]:has(.kb-history-row-btn-slot) > div[data-testid="stColumn"]:last-child div[data-testid="stButton"] > button,
-section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div[data-testid="stButton"] > button,
-section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div.stButton > button,
-section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(.kb-history-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div[data-testid="stButton"] > button,
-section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(.kb-history-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div.stButton > button,
-section[data-testid="stSidebar"] div:has(.kb-history-older-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div[data-testid="stButton"] > button,
-section.stSidebar div:has(.kb-history-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div[data-testid="stButton"] > button,
-section.stSidebar div:has(.kb-history-older-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child div[data-testid="stButton"] > button{
+section.stSidebar button.kb-history-trash-btn{
   all: unset !important;
   box-sizing: border-box !important;
   width: 18px !important;
@@ -1265,17 +1266,32 @@ section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-hi
   -webkit-text-fill-color: color-mix(in srgb, var(--sidebar-strong-text) 88%, var(--sidebar-soft-text)) !important;
 }
 
-/* Dummy row in older section: hide so first real row has same DOM position as others (no first-child layout). */
+/* Dummy row in older section: 完全隐藏，避免底部出现多余横条 */
 section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-dummy-row),
 section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(.kb-history-dummy-row),
-section[data-testid="stSidebar"] div:has(> .kb-history-dummy-row){
+section[data-testid="stSidebar"] div:has(> .kb-history-dummy-row),
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-dummy-row),
+section.stSidebar div[data-testid="stElementContainer"]:has(.kb-history-dummy-row),
+section.stSidebar div:has(> .kb-history-dummy-row){
   display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
 }
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-dummy-row) + div,
 section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-dummy-row) + div[data-testid="stHorizontalBlock"],
-section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(.kb-history-dummy-row) + div[data-testid="stHorizontalBlock"],
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-dummy-row) + div[data-testid="element-container"],
+section[data-testid="stSidebar"] div[data-testid="stElementContainer"]:has(.kb-history-dummy-row) + div,
 section[data-testid="stSidebar"] div:has(> .kb-history-dummy-row) + div[data-testid="stHorizontalBlock"],
-section[data-testid="stSidebar"] div:has(> .kb-history-dummy-row) + div + div[data-testid="stHorizontalBlock"]{
+section[data-testid="stSidebar"] div:has(> .kb-history-dummy-row) + div + div[data-testid="stHorizontalBlock"],
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-dummy-row) + div,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-dummy-row) + div[data-testid="stHorizontalBlock"],
+section.stSidebar div:has(> .kb-history-dummy-row) + div,
+section.stSidebar div:has(> .kb-history-dummy-row) + div[data-testid="stHorizontalBlock"]{
   display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
 }
 
 /* Remove older block framed card and all borders in 更早会话 area. */
@@ -1338,7 +1354,7 @@ section.stSidebar div:has(.kb-history-older-list) div[data-testid="stHorizontalB
   background: transparent !important;
   background-color: transparent !important;
 }
-/* ⋮ 列：去掉 button 伪元素（避免主题画出的外轮廓） */
+/* 会话行 › 按钮：去掉伪元素，避免多余图标（已改为 st.button+对话框，无 popover） */
 section[data-testid="stSidebar"] div:has(.kb-history-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) div[data-testid="stButton"] > button::before,
 section[data-testid="stSidebar"] div:has(.kb-history-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) div[data-testid="stButton"] > button::after,
 section[data-testid="stSidebar"] div:has(.kb-history-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) div[data-testid="stButton"] > button::before,
@@ -1354,7 +1370,7 @@ section.stSidebar div:has(.kb-history-older-list) div[data-testid="stHorizontalB
   display: none !important;
   content: none !important;
 }
-/* 会话行右侧：⋮ 与删除按钮统一样式（与展开更早会话后一致），无边框无背景、同色系，右对齐 */
+/* 会话行右侧：› 按钮统一样式，无边框无背景、同色系，右对齐 */
 section[data-testid="stSidebar"] div:has(.kb-history-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) button,
 section[data-testid="stSidebar"] div:has(.kb-history-list) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) button,
 section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-row) + div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) button,
@@ -1519,11 +1535,12 @@ section.stSidebar div:has(.kb-history-older-list) div[data-testid="stHorizontalB
   all: unset !important;
   box-sizing: border-box !important;
   display: flex !important;
-  align-items: flex-start !important;
+  align-items: center !important;
   width: 100% !important;
-  min-height: 2.5rem !important;
+  min-height: 0 !important;
+  height: auto !important;
   max-height: none !important;
-  padding: 0.25rem 0.1rem 0.2rem !important;
+  padding: 0.2rem 0.1rem !important;
   border: 0 !important;
   border-radius: 0 !important;
   background: transparent !important;
@@ -1590,10 +1607,415 @@ section[data-testid="stSidebar"] div.kb-sidebar-test-llm-marker + div,
 section.stSidebar div.kb-sidebar-test-llm-marker + div{
   display: none !important;
 }
+
+/* 会话操作对话框：紧贴内容，三个按钮多大地就多大框，无多余留白 */
+[role="dialog"],
+div[data-testid="stDialog"],
+div[data-testid="stDialog"] > div,
+div[data-testid="stDialog"] > div:first-child{
+  position: fixed !important;
+  left: 21rem !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  right: auto !important;
+  margin: 0 !important;
+  max-width: 11rem !important;
+  width: max-content !important;
+  min-width: 10rem !important;
+  min-height: 0 !important;
+  height: auto !important;
+  border-radius: 10px !important;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.28) !important;
+  padding: 0.35rem 0.4rem !important;
+  border: none !important;
+  outline: none !important;
+  background: var(--sidebar-background-color, #1a1a1a) !important;
+  background-color: var(--sidebar-background-color, #1a1a1a) !important;
+}
+div[data-testid="stDialog"] [data-testid="stVerticalBlock"],
+[role="dialog"] [data-testid="stVerticalBlock"]{
+  position: static !important;
+  min-height: 0 !important;
+  height: auto !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  gap: 0.12rem !important;
+}
+[role="dialog"] h1,
+[role="dialog"] h2,
+[role="dialog"] p,
+div[data-testid="stDialog"] [data-testid="stMarkdown"]:first-child,
+div[data-testid="stDialog"] p:first-of-type,
+div[data-testid="stDialog"] h1,
+div[data-testid="stDialog"] h2{
+  font-size: 0.65rem !important;
+  margin: 0 0 0.25rem 0 !important;
+  padding: 0 !important;
+  font-weight: 500 !important;
+  color: var(--sidebar-secondary-color, #888) !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+}
+[role="dialog"] button,
+div[data-testid="stDialog"] button{
+  min-height: 1.5rem !important;
+  height: auto !important;
+  padding: 0.28rem 0.45rem !important;
+  font-size: 0.74rem !important;
+  border-radius: 6px !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  width: 100% !important;
+  text-align: left !important;
+  transition: background 0.15s ease, color 0.15s ease !important;
+  color: var(--sidebar-text-color, #f0f0f0) !important;
+  outline: none !important;
+}
+[role="dialog"] button:hover,
+[role="dialog"] button:focus,
+[role="dialog"] button:focus-visible,
+div[data-testid="stDialog"] button:hover,
+div[data-testid="stDialog"] button:focus,
+div[data-testid="stDialog"] button:focus-visible{
+  background: rgba(255,255,255,0.06) !important;
+  background-color: rgba(255,255,255,0.06) !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+[role="dialog"],
+[role="dialog"] *,
+div[data-testid="stDialog"],
+div[data-testid="stDialog"] *{
+  border: none !important;
+  border-color: transparent !important;
+  outline: none !important;
+}
+/* 对话框内所有容器不撑高，让框紧贴三个按钮 */
+div[data-testid="stDialog"] div,
+[role="dialog"] div{
+  min-height: 0 !important;
+}
+[role="dialog"] button:focus-visible,
+div[data-testid="stDialog"] button:focus-visible{
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* 行内会话操作条：紧凑、带左边线归属感，按钮精简无大留白 */
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar),
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar){
+  min-height: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+/* 磨砂渐变背景：同时作用在「紧邻的 element-container」和「其内的 stHorizontalBlock」上，兼容不同 DOM */
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"],
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"]{
+  margin: 0.15rem 0 0 0.5rem !important;
+  padding: 0.28rem 0.4rem !important;
+  border-radius: 8px !important;
+  border-left: none !important;
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--sidebar-background-color) 78%, rgba(255,255,255,0.4)) 0%,
+    color-mix(in srgb, var(--sidebar-background-color) 88%, rgba(255,255,255,0.15)) 50%,
+    color-mix(in srgb, var(--sidebar-background-color) 85%, var(--sidebar-text-color)) 100%) !important;
+  background-color: transparent !important;
+  -webkit-backdrop-filter: blur(12px) saturate(1.25) !important;
+  backdrop-filter: blur(12px) saturate(1.25) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.08) !important;
+}
+/* 当紧邻的是 stHorizontalBlock 时，磨砂背景直接做在块上 */
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"],
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"]{
+  margin: 0.15rem 0 0 0.5rem !important;
+  padding: 0.28rem 0.4rem !important;
+  gap: 0.25rem !important;
+  align-items: stretch !important;
+  min-height: 0 !important;
+  border-radius: 8px !important;
+  border-left: none !important;
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--sidebar-background-color) 78%, rgba(255,255,255,0.4)) 0%,
+    color-mix(in srgb, var(--sidebar-background-color) 88%, rgba(255,255,255,0.15)) 50%,
+    color-mix(in srgb, var(--sidebar-background-color) 85%, var(--sidebar-text-color)) 100%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(1.25) !important;
+  backdrop-filter: blur(12px) saturate(1.25) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.08) !important;
+}
+/* 当紧邻的是 element-container 时，其内 stHorizontalBlock 透明以露出父级磨砂 */
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"],
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] [data-testid="stHorizontalBlock"],
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"]{
+  margin: 0 !important;
+  padding: 0 !important;
+  gap: 0.25rem !important;
+  align-items: stretch !important;
+  min-height: 0 !important;
+  border-radius: 0 !important;
+  border-left: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:first-child,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stHorizontalBlock"] > div:first-child,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:first-child,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:first-child,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:first-child{
+  padding: 0 !important;
+  min-height: 0 !important;
+}
+/* 操作条第一列：按钮纵向排列，每个按钮内文字横向完整显示 */
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stVerticalBlock"],
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] [data-testid="stVerticalBlock"],
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stVerticalBlock"],
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] [data-testid="stVerticalBlock"]{
+  gap: 0.12rem !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+}
+/* 操作条内所有文字统一缩小、横排完整显示（覆盖 Streamlit 默认） */
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] button,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] button,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] button,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] button{
+  font-size: 0.32rem !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  min-width: fit-content !important;
+  text-align: center !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:first-child button,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stHorizontalBlock"] > div:first-child button,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:first-child button,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:first-child button,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:first-child button{
+  min-height: 1rem !important;
+  height: auto !important;
+  padding: 0.12rem 0.2rem !important;
+  font-size: 0.32rem !important;
+  border-radius: 4px !important;
+  border: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--sidebar-text-color, inherit) !important;
+  box-shadow: none !important;
+  transition: background 0.12s ease !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  min-width: fit-content !important;
+  text-align: center !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:first-child button:hover,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stHorizontalBlock"] > div:first-child button:hover,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:first-child button:hover,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:first-child button:hover,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:first-child button:hover{
+  background: rgba(255,255,255,0.07) !important;
+  background-color: rgba(255,255,255,0.07) !important;
+}
+/* 右上角小叉：透明无边框，仅第二列 */
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:last-child,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stHorizontalBlock"] > div:last-child,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:last-child,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:last-child,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:last-child{
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: flex-end !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:last-child button,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stHorizontalBlock"] > div:last-child button,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:last-child button,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:last-child button,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:last-child button{
+  min-height: 0 !important;
+  height: 0.95rem !important;
+  width: 0.95rem !important;
+  padding: 0 !important;
+  font-size: 0.6rem !important;
+  line-height: 1 !important;
+  border: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--sidebar-text-color, inherit) !important;
+  opacity: 0.75 !important;
+  box-shadow: none !important;
+  border-radius: 2px !important;
+}
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:last-child button:hover,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div [data-testid="stHorizontalBlock"] > div:last-child button:hover,
+section[data-testid="stSidebar"] div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:last-child button:hover,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="stHorizontalBlock"] > div:last-child button:hover,
+section.stSidebar div[data-testid="element-container"]:has(.kb-history-menu-bar) + div[data-testid="element-container"] div[data-testid="stHorizontalBlock"] > div:last-child button:hover{
+  opacity: 1 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
+/* 行内会话操作条：用 id + 多种可能兄弟选择器，兼容不同 Streamlit DOM */
+#kb-conv-menu-marker,
+#kb-conv-menu-marker.kb-history-menu-bar{
+  display: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+}
+/* 操作条容器：任一种「含 marker 的块」的下一兄弟（兼容 element-container / stHorizontalBlock / stElementContainer） */
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + div,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="element-container"],
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"],
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + div,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"],
+div:has(#kb-conv-menu-marker) + div{
+  margin: 0.15rem 0 0 0.5rem !important;
+  padding: 0.28rem 0.4rem !important;
+  border-radius: 8px !important;
+  border-left: none !important;
+  background: linear-gradient(145deg,
+    color-mix(in srgb, var(--sidebar-background-color) 78%, rgba(255,255,255,0.4)) 0%,
+    color-mix(in srgb, var(--sidebar-background-color) 88%, rgba(255,255,255,0.15)) 50%,
+    color-mix(in srgb, var(--sidebar-background-color) 85%, var(--sidebar-text-color)) 100%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(1.25) !important;
+  backdrop-filter: blur(12px) saturate(1.25) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.08) !important;
+}
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + div button,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="element-container"] button,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] button,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + div button,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] button,
+div:has(#kb-conv-menu-marker) + div button{
+  font-size: 0.32rem !important;
+  min-height: 1rem !important;
+  padding: 0.12rem 0.2rem !important;
+  border: none !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--sidebar-text-color, inherit) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+  white-space: nowrap !important;
+  overflow: visible !important;
+  min-width: fit-content !important;
+  text-align: center !important;
+}
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + div button:hover,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="element-container"] button:hover,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] button:hover,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + div button:hover,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] button:hover,
+div:has(#kb-conv-menu-marker) + div button:hover{
+  background: rgba(255,255,255,0.08) !important;
+  background-color: rgba(255,255,255,0.08) !important;
+}
+/* 右上角小叉：最后一列 */
+/* 操作条第一列（id 选择器）：按钮纵向排列，按钮内文字横向 */
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + div [data-testid="stVerticalBlock"],
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"],
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] [data-testid="stVerticalBlock"],
+div:has(#kb-conv-menu-marker) + div [data-testid="stVerticalBlock"]{
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 0.12rem !important;
+}
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + div > div:last-child,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] > div:last-child,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] > div:last-child,
+div:has(#kb-conv-menu-marker) + div > div:last-child{
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: flex-end !important;
+  padding: 0 !important;
+}
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + div > div:last-child button,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] > div:last-child button,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] > div:last-child button,
+div:has(#kb-conv-menu-marker) + div > div:last-child button{
+  min-height: 0 !important;
+  height: 0.95rem !important;
+  width: 0.95rem !important;
+  padding: 0 !important;
+  font-size: 0.6rem !important;
+  line-height: 1 !important;
+  opacity: 0.75 !important;
+}
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + div > div:last-child button:hover,
+[data-testid="element-container"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] > div:last-child button:hover,
+[data-testid="stElementContainer"]:has(#kb-conv-menu-marker) + [data-testid="stHorizontalBlock"] > div:last-child button:hover,
+div:has(#kb-conv-menu-marker) + div > div:last-child button:hover{
+  opacity: 1 !important;
+}
 </style>
 """
     )
 
 
-__all__ = ["_history_sidebar_compact_css"]
+def _history_menu_button_override_css() -> str:
+    """单独注入的会话操作条按钮字号 CSS（备用）。"""
+    return (
+        """
+<style id="kb-conv-menu-font-override">
+#kb-conv-menu-marker + * button, #kb-conv-menu-marker + * * button { font-size: 0.28rem !important; }
+#kb-conv-menu-marker + * > *:last-child button { font-size: 0.56rem !important; }
+</style>
+"""
+    )
+
+
+def _history_menu_button_override_js_html() -> str:
+    """返回用于 iframe 的 HTML：在父页面用 JS 直接设置会话操作条按钮字号，绕过 Streamlit 覆盖。"""
+    return (
+        """<!DOCTYPE html><html><head><meta charset="utf-8"></head><body style="margin:0">
+<script>
+(function() {
+  var doc;
+  try { doc = window.parent.document; } catch (e) { doc = document; }
+  function apply() {
+    var marker = doc.getElementById('kb-conv-menu-marker');
+    if (!marker || !marker.nextElementSibling) return;
+    var root = marker.nextElementSibling;
+    var buttons = root.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      var isClose = (btn.textContent || '').trim() === '\u00d7';
+      btn.style.setProperty('font-size', isClose ? '0.56rem' : '0.28rem', 'important');
+      if (!isClose) {
+        btn.style.setProperty('min-height', '0.9rem', 'important');
+        btn.style.setProperty('white-space', 'nowrap', 'important');
+        btn.style.setProperty('text-align', 'center', 'important');
+      }
+    }
+  }
+  var tries = 0;
+  var t = setInterval(function() {
+    tries++;
+    try {
+      if (doc.getElementById('kb-conv-menu-marker')) { apply(); clearInterval(t); }
+    } catch (e) {}
+    if (tries > 80) clearInterval(t);
+  }, 50);
+})();
+</script></body></html>"""
+    )
+
+
+__all__ = [
+    "_history_sidebar_compact_css",
+    "_history_menu_button_override_css",
+    "_history_menu_button_override_js_html",
+]
 

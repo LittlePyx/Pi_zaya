@@ -7,22 +7,22 @@
 
 ## 入口说明（当前阶段）
 
-- `app.py`（Streamlit）：当前功能更完整，建议作为日常默认入口。
-- `server.py` + `web/`（FastAPI + React）：重构中的新入口，建议作为阶段性保留/迁移目标。
+- `server.py` + `web/`（FastAPI + React）：当前默认入口（推荐）。
+- `app.py`（Streamlit）：兼容保留入口，仅用于历史功能回查。
 
 Windows（PowerShell）可直接使用：
 
 ```powershell
-# 旧版入口（默认推荐）
-.\run_old.ps1
-
 # 新版入口（开发模式：后端 + Vite）
 .\run_new.ps1 -StopExisting
+
+# 旧版入口（兼容保留）
+.\run_old.ps1
 ```
 
 说明：
 
-- `run.ps1` 仍然可用，它本质上就是旧版 Streamlit 启动脚本。
+- `run.ps1` 仍然可用（等价于旧版 Streamlit 启动脚本）。
 - `run_new.ps1` 默认不自动安装依赖，避免无意修改环境；需要时可加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
 
 ## 你可以用它做什么
@@ -131,10 +131,7 @@ cd web && npm run dev
    - `文献目录（PDF）`
    - `输出目录（Markdown）`
 3. 上传 PDF（支持批量）。
-4. 选择转换模式：
-   - `normal`：质量优先（截图识别 + VL）
-   - `ultra_fast`：更快，质量略降
-   - `no_llm`：不使用多模态模型（基础提取）
+4. 触发转换（当前默认固定为非极速策略，前端不提供“极速扫描”模式）。
 5. 点击「更新知识库」。
 6. 回到「对话」页提问。
 

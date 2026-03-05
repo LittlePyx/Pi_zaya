@@ -28,6 +28,7 @@ from .retrieval_heuristics import (
     _score_tokens,
 )
 from .retriever import BM25Retriever
+from .source_filters import is_excluded_source_path
 from .store import compute_file_sha1
 from .tokenize import tokenize
 
@@ -53,6 +54,8 @@ def _cache_set(bucket: str, key: str, val, *, max_items: int = 600) -> None:
 def _is_temp_source_path(source_path: str) -> bool:
     s = (source_path or "").strip()
     if not s:
+        return True
+    if is_excluded_source_path(s):
         return True
     p = Path(s)
     low_parts = [str(x).strip().lower() for x in p.parts]
@@ -309,6 +312,386 @@ def _sanitize_heading_path_for_navigation(heading_path: str, *, question: str, s
     if not keep:
         return ""
     return " / ".join(keep[:3])
+
+
+_DOC_HINT_STOP_TOKENS = {
+    "paper",
+    "pdf",
+    "article",
+    "figure",
+    "fig",
+    "table",
+    "equation",
+    "eq",
+    "formula",
+    "theorem",
+    "lemma",
+    "definition",
+    "proposition",
+    "corollary",
+    "图",
+    "表",
+    "公式",
+    "定理",
+    "引理",
+    "定义",
+    "命题",
+    "推论",
+    "文章",
+    "论文",
+    "这篇",
+    "这个",
+    "什么",
+    "讲了",
+    "讲的",
+    "内容",
+}
+_SMALL_CN_NUMS = {
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+_ANCHOR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("figure", re.compile(r"\bfig(?:ure)?\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("table", re.compile(r"\btable\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("equation", re.compile(r"\b(?:eq(?:uation)?|formula)\.?\s*[\(\[（]?\s*([0-9ivxlcdm]+)\s*[\)\]）]?", flags=re.I)),
+    ("theorem", re.compile(r"\btheorem\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("lemma", re.compile(r"\blemma\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("definition", re.compile(r"\bdefinition\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("proposition", re.compile(r"\bproposition\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("corollary", re.compile(r"\bcorollary\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("figure", re.compile(r"第\s*([零一二两三四五六七八九十百\d]+)\s*(?:张)?图")),
+    ("table", re.compile(r"第\s*([零一二两三四五六七八九十百\d]+)\s*表")),
+    ("equation", re.compile(r"(?:公式|式)\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
+    ("theorem", re.compile(r"定理\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
+    ("lemma", re.compile(r"引理\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
+    ("definition", re.compile(r"定义\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
+    ("proposition", re.compile(r"命题\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
+    ("corollary", re.compile(r"推论\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
+]
+_ANCHOR_KIND_LABELS = {
+    "figure": ("figure", "fig", "图", "张图"),
+    "table": ("table", "表"),
+    "equation": ("equation", "eq", "formula", "公式", "式"),
+    "theorem": ("theorem", "定理"),
+    "lemma": ("lemma", "引理"),
+    "definition": ("definition", "定义"),
+    "proposition": ("proposition", "命题"),
+    "corollary": ("corollary", "推论"),
+}
+
+
+def _parse_small_roman(text: str) -> int | None:
+    s = str(text or "").strip().lower()
+    if not s or not re.fullmatch(r"[ivxlcdm]+", s):
+        return None
+    vals = {"i": 1, "v": 5, "x": 10, "l": 50, "c": 100, "d": 500, "m": 1000}
+    total = 0
+    prev = 0
+    for ch in reversed(s):
+        cur = vals.get(ch, 0)
+        if cur < prev:
+            total -= cur
+        else:
+            total += cur
+            prev = cur
+    return total if total > 0 else None
+
+
+def _parse_small_cn_number(text: str) -> int | None:
+    s = str(text or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        try:
+            return int(s)
+        except Exception:
+            return None
+    if len(s) == 1:
+        return _SMALL_CN_NUMS.get(s)
+    if s == "十":
+        return 10
+    if s.startswith("十"):
+        tail = _SMALL_CN_NUMS.get(s[1:], 0)
+        return 10 + int(tail)
+    if s.endswith("十"):
+        head = _SMALL_CN_NUMS.get(s[:-1])
+        return (int(head) * 10) if head is not None else None
+    if "十" in s:
+        left, right = s.split("十", 1)
+        left_n = _SMALL_CN_NUMS.get(left, 1 if left == "" else None)
+        right_n = _SMALL_CN_NUMS.get(right, 0 if right == "" else None)
+        if left_n is None or right_n is None:
+            return None
+        return (int(left_n) * 10) + int(right_n)
+    return None
+
+
+def _parse_anchor_number(text: str) -> int | None:
+    s = str(text or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        try:
+            return int(s)
+        except Exception:
+            return None
+    roman = _parse_small_roman(s)
+    if roman is not None:
+        return roman
+    return _parse_small_cn_number(s)
+
+
+def _extract_explicit_anchor_hint(question: str) -> dict[str, object]:
+    q = str(question or "").strip()
+    if not q:
+        return {}
+    for kind, pat in _ANCHOR_PATTERNS:
+        m = pat.search(q)
+        if not m:
+            continue
+        num = _parse_anchor_number(m.group(1))
+        if num is None or num <= 0:
+            continue
+        phrases: list[str] = []
+        labels = _ANCHOR_KIND_LABELS.get(kind) or ()
+        for lab in labels:
+            if lab in {"fig", "eq"}:
+                phrases.append(f"{lab}. {num}")
+                phrases.append(f"{lab} {num}")
+            elif lab == "张图":
+                phrases.append(f"第{num}张图")
+            elif lab in {"图", "表", "公式", "式", "定理", "引理", "定义", "命题", "推论"}:
+                phrases.append(f"{lab}{num}")
+                phrases.append(f"{lab} {num}")
+                phrases.append(f"第{num}{lab}")
+            else:
+                phrases.append(f"{lab} {num}")
+        return {
+            "kind": kind,
+            "number": int(num),
+            "label": f"{kind} {num}",
+            "phrases": list(dict.fromkeys([p for p in phrases if str(p or "").strip()])),
+        }
+    return {}
+
+
+def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
+    prompt_raw = str(prompt_text or "").strip()
+    src = str(source_path or "").strip()
+    if (not prompt_raw) or (not src):
+        return 0.0
+    prompt_low = prompt_raw.lower()
+    prompt_norm = _norm_text_for_match(prompt_raw)
+    p = Path(src)
+    candidates = [p.name, p.stem, re.sub(r"^[A-Za-z]+-\d{4}[-_ ]*", "", p.stem)]
+    score = 0.0
+    for cand in candidates:
+        c = str(cand or "").strip()
+        if not c:
+            continue
+        c_low = c.lower()
+        c_norm = _norm_text_for_match(c)
+        if c_low and (c_low in prompt_low):
+            score = max(score, 9.0 if c_low.endswith(".pdf") else 8.0)
+        if c_norm and (len(c_norm) >= 12) and (c_norm in prompt_norm):
+            score = max(score, 8.0)
+
+    prompt_tokens = [t for t in tokenize(prompt_norm) if len(t) >= 3 and t not in _DOC_HINT_STOP_TOKENS]
+    src_tokens = [
+        t
+        for t in tokenize(_norm_text_for_match(" ".join(str(x or "") for x in candidates)))
+        if len(t) >= 3 and t not in _DOC_HINT_STOP_TOKENS
+    ]
+    if prompt_tokens and src_tokens:
+        inter = set(prompt_tokens) & set(src_tokens)
+        if len(inter) >= 3:
+            score += 2.0 + min(3.0, 0.6 * len(inter))
+            ratio = len(inter) / max(1, len(set(src_tokens)))
+            if ratio >= 0.55:
+                score += 2.0
+    return float(score)
+
+
+def _build_doc_anchor_focus_query(prompt_text: str, source_path: str, anchor_hint: dict[str, object]) -> str:
+    q = str(prompt_text or "").strip()
+    src = Path(str(source_path or "").strip())
+    for cand in (src.name, src.stem, re.sub(r"^[A-Za-z]+-\d{4}[-_ ]*", "", src.stem)):
+        s = str(cand or "").strip()
+        if not s:
+            continue
+        q = re.sub(re.escape(s), " ", q, flags=re.I)
+    parts: list[str] = []
+    phrases = anchor_hint.get("phrases") if isinstance(anchor_hint, dict) else None
+    if isinstance(phrases, list):
+        parts.extend(str(x).strip() for x in phrases if str(x or "").strip())
+    remain_tokens = [
+        t
+        for t in tokenize(_norm_text_for_match(q))
+        if len(t) >= 2 and t not in _DOC_HINT_STOP_TOKENS
+    ]
+    parts.extend(remain_tokens[:6])
+    return " ".join(dict.fromkeys(parts)).strip()
+
+
+def _anchor_text_bonus(text: str, anchor_hint: dict[str, object]) -> float:
+    if not isinstance(anchor_hint, dict) or not anchor_hint:
+        return 0.0
+    kind = str(anchor_hint.get("kind") or "").strip().lower()
+    try:
+        num = int(anchor_hint.get("number") or 0)
+    except Exception:
+        num = 0
+    if (not kind) or (num <= 0):
+        return 0.0
+    low = str(text or "").lower()
+    if not low:
+        return 0.0
+    score = 0.0
+    patterns_by_kind = {
+        "figure": rf"(?:fig(?:ure)?\.?\s*{num}\b|图\s*{num}\b|图{num}\b|第\s*{num}\s*张图)",
+        "table": rf"(?:table\.?\s*{num}\b|表\s*{num}\b|表{num}\b|第\s*{num}\s*表)",
+        "equation": rf"(?:eq(?:uation)?\.?\s*{num}\b|formula\s*{num}\b|公式\s*{num}\b|公式{num}\b|式\s*{num}\b|式{num}\b|[\(\[（]\s*{num}\s*[\)\]）]|\\tag\{{\s*{num}\s*\}})",
+        "theorem": rf"(?:theorem\.?\s*{num}\b|定理\s*{num}\b|定理{num}\b)",
+        "lemma": rf"(?:lemma\.?\s*{num}\b|引理\s*{num}\b|引理{num}\b)",
+        "definition": rf"(?:definition\.?\s*{num}\b|定义\s*{num}\b|定义{num}\b)",
+        "proposition": rf"(?:proposition\.?\s*{num}\b|命题\s*{num}\b|命题{num}\b)",
+        "corollary": rf"(?:corollary\.?\s*{num}\b|推论\s*{num}\b|推论{num}\b)",
+    }
+    pat = patterns_by_kind.get(kind)
+    if pat and re.search(pat, low, flags=re.I):
+        score += 12.0
+    labels = _ANCHOR_KIND_LABELS.get(kind) or ()
+    if any(lab in low for lab in labels):
+        score += 2.0
+    if str(num) in low:
+        score += 1.2
+    return score
+
+
+def _anchor_regexes(anchor_hint: dict[str, object]) -> list[re.Pattern[str]]:
+    if not isinstance(anchor_hint, dict) or not anchor_hint:
+        return []
+    kind = str(anchor_hint.get("kind") or "").strip().lower()
+    try:
+        num = int(anchor_hint.get("number") or 0)
+    except Exception:
+        num = 0
+    if (not kind) or (num <= 0):
+        return []
+    raw_patterns = {
+        "figure": [
+            rf"fig(?:ure)?\.?\s*{num}\b",
+            rf"第\s*{num}\s*张?图",
+            rf"图\s*{num}\b",
+            rf"图{num}\b",
+        ],
+        "table": [
+            rf"table\.?\s*{num}\b",
+            rf"第\s*{num}\s*表",
+            rf"表\s*{num}\b",
+            rf"表{num}\b",
+        ],
+        "equation": [
+            rf"eq(?:uation)?\.?\s*{num}\b",
+            rf"formula\s*{num}\b",
+            rf"(?:公式|式)\s*{num}\b",
+            rf"(?:公式|式){num}\b",
+            rf"[\(\[（]\s*{num}\s*[\)\]）]",
+            rf"\\tag\{{\s*{num}\s*\}}",
+        ],
+        "theorem": [rf"theorem\.?\s*{num}\b", rf"定理\s*{num}\b", rf"定理{num}\b"],
+        "lemma": [rf"lemma\.?\s*{num}\b", rf"引理\s*{num}\b", rf"引理{num}\b"],
+        "definition": [rf"definition\.?\s*{num}\b", rf"定义\s*{num}\b", rf"定义{num}\b"],
+        "proposition": [rf"proposition\.?\s*{num}\b", rf"命题\s*{num}\b", rf"命题{num}\b"],
+        "corollary": [rf"corollary\.?\s*{num}\b", rf"推论\s*{num}\b", rf"推论{num}\b"],
+    }
+    out: list[re.Pattern[str]] = []
+    for pat in raw_patterns.get(kind, []):
+        try:
+            out.append(re.compile(pat, flags=re.I))
+        except Exception:
+            continue
+    return out
+
+
+def _find_anchor_snippets_in_md(
+    md_path: Path,
+    anchor_hint: dict[str, object],
+    *,
+    max_snippets: int = 3,
+    snippet_chars: int = 1600,
+) -> list[dict]:
+    md_path = Path(md_path)
+    if not md_path.exists():
+        return []
+    pats = _anchor_regexes(anchor_hint)
+    if not pats:
+        return []
+
+    text = _read_text_cached(md_path)
+    if not text.strip():
+        return []
+
+    chunks = chunk_markdown(text, source_path=str(md_path), chunk_size=900, overlap=0)
+    scored: list[tuple[float, dict]] = []
+    for c in chunks:
+        body = str(c.get("text") or "").strip()
+        if len(body) < 40:
+            continue
+        hits = 0
+        first_match_pos: int | None = None
+        for pat in pats:
+            try:
+                matches = list(pat.finditer(body))
+                hits += len(matches)
+                if matches and ((first_match_pos is None) or (matches[0].start() < first_match_pos)):
+                    first_match_pos = int(matches[0].start())
+            except Exception:
+                continue
+        if hits <= 0:
+            continue
+        score = 40.0 + (12.0 * float(hits))
+        body_low = body.lower()
+        if body_low.lstrip().startswith(("fig.", "figure", "图", "table", "表", "equation", "theorem", "lemma", "definition", "proposition", "corollary", "定理", "引理", "定义", "命题", "推论")):
+            score += 8.0
+        meta = dict((c.get("meta") or {}))
+        meta.setdefault("source_path", str(md_path))
+        meta["anchor_read"] = True
+        body_out = body
+        if first_match_pos is not None and len(body_out) > snippet_chars:
+            start = max(0, int(first_match_pos) - min(240, max(80, snippet_chars // 5)))
+            end = min(len(body_out), start + max(240, int(snippet_chars)))
+            body_out = body_out[start:end].strip()
+            if start > 0:
+                body_out = "..." + body_out
+            if end < len(body):
+                body_out = body_out.rstrip() + "..."
+        elif len(body_out) > snippet_chars:
+            body_out = body_out[:snippet_chars].rstrip() + "..."
+        scored.append((float(score), {"score": float(score), "id": str(c.get("id") or ""), "text": body_out, "meta": meta}))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for _score, item in scored:
+        body = str(item.get("text") or "").strip()
+        if (not body) or (body in seen):
+            continue
+        seen.add(body)
+        out.append(item)
+        if len(out) >= max(1, int(max_snippets)):
+            break
+    return out
 
 
 _INTENT_METHOD_RE = re.compile(
@@ -738,12 +1121,16 @@ def _group_hits_by_doc_for_refs(
 
     # Pre-sort docs by best lexical hit; later stages can override with deep-read/LLM semantics.
     doc_order: list[tuple[float, str]] = []
+    doc_hint_scores: dict[str, float] = {}
+    anchor_hint = _extract_explicit_anchor_hint(prompt_text or deep_query or "")
     for src, hs in by_doc.items():
         try:
             best_score = float(max(float(h.get("score", 0.0) or 0.0) for h in hs))
         except Exception:
             best_score = 0.0
-        doc_order.append((best_score, src))
+        doc_hint_score = _source_prompt_match_score(prompt_text or deep_query or "", src)
+        doc_hint_scores[src] = float(doc_hint_score)
+        doc_order.append((best_score + (1.6 * doc_hint_score), src))
     doc_order.sort(key=lambda x: x[0], reverse=True)
 
     docs: list[dict] = []
@@ -757,18 +1144,39 @@ def _group_hits_by_doc_for_refs(
         hs = by_doc.get(src) or []
         hs2 = sorted(hs, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
         best_score = float(hs2[0].get("score", 0.0) or 0.0) if hs2 else 0.0
+        doc_hint_score = float(doc_hint_scores.get(src, 0.0) or 0.0)
+        force_anchor_focus = bool(anchor_hint) and (doc_hint_score >= 6.0)
+        anchor_focus_query = (
+            _build_doc_anchor_focus_query(prompt_text or deep_query or "", src, anchor_hint)
+            if force_anchor_focus
+            else ""
+        )
         # Candidate headings: (score, top_heading)
         cand: list[tuple[float, str]] = []
         snippets: list[str] = []
+        snippet_anchor_bonus: dict[str, float] = {}
         locs_full: list[dict] = []
         for h in hs2[:6]:
             meta = h.get("meta", {}) or {}
             sc_h = float(h.get("score", 0.0) or 0.0)
             top = (meta.get("top_heading") or _top_heading(meta.get("heading_path", "")) or "").strip()
+            anchor_bonus = 0.0
+            if force_anchor_focus:
+                anchor_bonus = _anchor_text_bonus(
+                    "\n".join(
+                        x
+                        for x in [
+                            str(meta.get("heading_path") or "").strip(),
+                            str(h.get("text") or "").strip(),
+                        ]
+                        if x
+                    ),
+                    anchor_hint,
+                )
             if top and (not _is_non_navigational_heading(top, question=nav_question, source_path=src)):
                 hp_raw = _normalize_heading_path_for_display(str(meta.get("heading_path") or ""))
                 hp = _sanitize_heading_path_for_navigation(hp_raw or top, question=nav_question, source_path=src)
-                sc_adj = sc_h + _heading_intent_bonus_for_question(hp or top, nav_question)
+                sc_adj = sc_h + _heading_intent_bonus_for_question(hp or top, nav_question) + (0.35 * anchor_bonus)
                 cand.append((sc_adj, top))
                 if hp:
                     p0, p1 = _page_range_from_meta(meta)
@@ -786,19 +1194,63 @@ def _group_hits_by_doc_for_refs(
                     )
             t = (h.get("text") or "").strip()
             if t:
+                if force_anchor_focus and anchor_bonus > 0.0:
+                    snippet_anchor_bonus[t] = max(float(snippet_anchor_bonus.get(t, 0.0) or 0.0), float(anchor_bonus))
                 if t not in snippets:
                     snippets.append(t)
 
         # Optional deep-read for better section targeting + aspects + ranking.
         deep_best = 0.0
-        if deep_read and deep_query and (len(docs) < deep_expand_docs):
+        do_deep_read = (deep_read and deep_query and (len(docs) < deep_expand_docs)) or force_anchor_focus
+        if do_deep_read:
+            read_query = (anchor_focus_query or deep_query or prompt_text or "").strip()
+            anchor_extra: list[dict] = []
+            if force_anchor_focus:
+                try:
+                    anchor_extra = _find_anchor_snippets_in_md(
+                        Path(src),
+                        anchor_hint,
+                        max_snippets=3,
+                        snippet_chars=900,
+                    )
+                except Exception:
+                    anchor_extra = []
             try:
-                extra = _deep_read_md_for_context(Path(src), deep_query, max_snippets=3, snippet_chars=1600)
+                deep_extra = _deep_read_md_for_context(
+                    Path(src),
+                    read_query,
+                    max_snippets=(5 if force_anchor_focus else 3),
+                    snippet_chars=1600,
+                )
             except Exception:
-                extra = []
+                deep_extra = []
+            extra = list(anchor_extra or [])
+            seen_extra_text = {str(x.get("text") or "").strip() for x in extra if str(x.get("text") or "").strip()}
+            for ex in deep_extra or []:
+                tx0 = str(ex.get("text") or "").strip()
+                if tx0 and (tx0 in seen_extra_text):
+                    continue
+                if tx0:
+                    seen_extra_text.add(tx0)
+                extra.append(ex)
             for ex in extra or []:
                 meta_ex = ex.get("meta", {}) or {}
                 sc_ex = float(ex.get("score", 0.0) or 0.0)
+                anchor_bonus_ex = (
+                    _anchor_text_bonus(
+                        "\n".join(
+                            x
+                            for x in [
+                                str(meta_ex.get("heading_path") or "").strip(),
+                                str(ex.get("text") or "").strip(),
+                            ]
+                            if x
+                        ),
+                        anchor_hint,
+                    )
+                    if force_anchor_focus
+                    else 0.0
+                )
                 hp2_raw = str(meta_ex.get("heading_path", "") or "").strip()
                 hp2 = _sanitize_heading_path_for_navigation(
                     _normalize_heading_path_for_display(hp2_raw),
@@ -807,7 +1259,7 @@ def _group_hits_by_doc_for_refs(
                 )
                 top2 = _top_heading(hp2 or hp2_raw)
                 if top2 and (not _is_non_navigational_heading(top2, question=nav_question, source_path=src)):
-                    sc2_raw = sc_ex + 0.2
+                    sc2_raw = sc_ex + 0.2 + (0.35 * anchor_bonus_ex)
                     sc2_adj = sc2_raw + _heading_intent_bonus_for_question(hp2 or top2, nav_question)
                     cand.append((sc2_adj, top2))
                     if hp2:
@@ -825,10 +1277,12 @@ def _group_hits_by_doc_for_refs(
                         )
                 tx = (ex.get("text") or "").strip()
                 if tx:
+                    if force_anchor_focus and anchor_bonus_ex > 0.0:
+                        snippet_anchor_bonus[tx] = max(float(snippet_anchor_bonus.get(tx, 0.0) or 0.0), float(anchor_bonus_ex))
                     if tx not in snippets:
                         snippets.append(tx)
                 try:
-                    deep_best = max(deep_best, float(ex.get("score", 0.0) or 0.0))
+                    deep_best = max(deep_best, float(ex.get("score", 0.0) or 0.0) + (0.20 * anchor_bonus_ex))
                 except Exception:
                     pass
 
@@ -838,7 +1292,12 @@ def _group_hits_by_doc_for_refs(
         headings_for_pack: list[str] = []
         try:
             prefer = _preferred_section_keys(prompt_text)
-            picked = _pick_heading_from_md(Path(src), deep_query or prompt_text, prefer=prefer, source_path=src)
+            picked = _pick_heading_from_md(
+                Path(src),
+                anchor_focus_query or deep_query or prompt_text,
+                prefer=prefer,
+                source_path=src,
+            )
             if picked:
                 best_heading = picked
         except Exception:
@@ -891,19 +1350,22 @@ def _group_hits_by_doc_for_refs(
             ]
 
         # Build display snippets: pick the most relevant, non-noise snippets.
-        q_for_pick = (deep_query or prompt_text or "").strip()
+        q_for_pick = (anchor_focus_query or deep_query or prompt_text or "").strip()
         q_tokens = [t for t in tokenize(q_for_pick) if len(t) >= 3]
         scored_snips: list[tuple[float, str]] = []
         for s in snippets:
             s2 = (s or "").strip()
             if not s2:
                 continue
-            if _is_noise_snippet_text(s2):
+            anchor_snip_bonus = float(snippet_anchor_bonus.get(s2, 0.0) or 0.0)
+            if _is_noise_snippet_text(s2) and (anchor_snip_bonus <= 0.0):
                 continue
             try:
                 sc = _score_tokens(s2, q_tokens) if q_tokens else 0.0
             except Exception:
                 sc = 0.0
+            if force_anchor_focus:
+                sc += anchor_snip_bonus
             # Prefer snippets that literally contain key phrases for single-shot/single-pixel disambiguation.
             low = _norm_text_for_match(s2)
             if profile.get("wants_single_shot") and any(k in low for k in ["single-shot", "single shot", "single exposure", "snapshot"]):
@@ -913,6 +1375,22 @@ def _group_hits_by_doc_for_refs(
             scored_snips.append((float(sc), s2))
         scored_snips.sort(key=lambda x: x[0], reverse=True)
         show_snips = [_clean_snippet_for_display(s, max_chars=900) for _, s in scored_snips[:2]]
+        show_snips = [s for s in show_snips if str(s or "").strip()]
+        if force_anchor_focus:
+            anchored_raw = [
+                s
+                for s in sorted(
+                    snippets,
+                    key=lambda x: float(snippet_anchor_bonus.get(x, 0.0) or 0.0),
+                    reverse=True,
+                )
+                if float(snippet_anchor_bonus.get(s, 0.0) or 0.0) > 0.0
+            ]
+            anchored = [_clean_snippet_for_display(s, max_chars=900) for s in anchored_raw]
+            anchored = [s for s in anchored if str(s or "").strip()]
+            if anchored:
+                rest = [s for s in show_snips if s not in anchored]
+                show_snips = (anchored + rest)[:2]
 
         # Best location candidates (prefer deep-read heading_path with subsection detail)
         locs_full.sort(
@@ -986,7 +1464,14 @@ def _group_hits_by_doc_for_refs(
         doc_name = Path(src).name
         term_bonus = _doc_term_bonus(profile, doc_name, snippets[:3])
         deep_scaled = 1.6 * (deep_best ** 0.6) if deep_best > 0 else 0.0
-        combined = (0.75 * best_score) + (0.25 * deep_scaled) + term_bonus
+        anchor_best = max((float(v or 0.0) for v in snippet_anchor_bonus.values()), default=0.0)
+        combined = (
+            (0.75 * best_score)
+            + (0.25 * deep_scaled)
+            + term_bonus
+            + (1.5 * doc_hint_score)
+            + (0.35 * anchor_best)
+        )
 
         meta_out = {"source_path": src}
         src_sha1 = _file_sha1_cached(Path(src))
@@ -995,11 +1480,26 @@ def _group_hits_by_doc_for_refs(
         if best_heading and (not _is_low_quality_navigation_heading(best_heading, question=nav_question, source_path=src)):
             meta_out["top_heading"] = best_heading
         meta_out["ref_aspects"] = aspects
-        meta_out["ref_snippets"] = snippets[:3]
+        anchor_primary_text = ""
+        if force_anchor_focus:
+            snippets_sorted = sorted(snippets, key=lambda s: float(snippet_anchor_bonus.get(s, 0.0) or 0.0), reverse=True)
+            meta_out["ref_snippets"] = snippets_sorted[:3]
+            anchor_primary_text = next(
+                (str(s or "").strip() for s in snippets_sorted if float(snippet_anchor_bonus.get(s, 0.0) or 0.0) > 0.0 and str(s or "").strip()),
+                "",
+            )
+        else:
+            meta_out["ref_snippets"] = snippets[:3]
         meta_out["ref_show_snippets"] = show_snips[:3]
         meta_out["ref_overview_snippets"] = [x for x in overview_snips if str(x or "").strip()][:3]
         meta_out["ref_locs"] = locs2
         meta_out["ref_headings"] = headings_for_pack
+        if doc_hint_score > 0.0:
+            meta_out["explicit_doc_match_score"] = float(doc_hint_score)
+        if force_anchor_focus and anchor_hint:
+            meta_out["anchor_target_kind"] = str(anchor_hint.get("kind") or "")
+            meta_out["anchor_target_number"] = int(anchor_hint.get("number") or 0)
+            meta_out["anchor_match_score"] = float(anchor_best)
         if locs2:
             loc0 = locs2[0]
             hp0 = str(loc0.get("heading_path") or "").strip()
@@ -1020,13 +1520,30 @@ def _group_hits_by_doc_for_refs(
                 meta_out["page_end"] = int(loc0.get("page_end"))
         else:
             meta_out["ref_loc_quality"] = "none"
-        meta_out["ref_rank"] = {"bm25": best_score, "deep": deep_best, "term_bonus": term_bonus, "llm": 0.0, "why": "", "score": combined}
+        meta_out["ref_rank"] = {
+            "bm25": best_score,
+            "deep": deep_best,
+            "term_bonus": term_bonus,
+            "llm": 0.0,
+            "why": "",
+            "score": combined,
+            "display_score": combined,
+            "semantic_score": 0.0,
+        }
 
         docs.append(
             {
                 "score": float(combined),
                 "id": f"doc:{hashlib.sha1(src.encode('utf-8','ignore')).hexdigest()[:12]}",
-                "text": snippets[0] if snippets else "",
+                "text": (
+                    anchor_primary_text
+                    if anchor_primary_text
+                    else (
+                        show_snips[0]
+                        if show_snips
+                        else (snippets[0] if snippets else "")
+                    )
+                ),
                 "meta": meta_out,
             }
         )
@@ -1542,6 +2059,20 @@ def _extract_anchor_terms_from_meta(meta: dict, *, question: str = "", max_n: in
     if not isinstance(meta, dict):
         return []
     texts: list[str] = []
+    target_kind = str(meta.get("anchor_target_kind") or "").strip().lower()
+    try:
+        target_num = int(meta.get("anchor_target_number") or 0)
+    except Exception:
+        target_num = 0
+    if target_kind and target_num > 0:
+        if target_kind == "figure":
+            texts.extend([f"Figure {target_num}", f"Fig. {target_num}", f"图{target_num}", f"第{target_num}张图"])
+        elif target_kind == "equation":
+            texts.extend([f"Equation ({target_num})", f"Eq. {target_num}", f"公式{target_num}", f"式({target_num})", f"\\tag{{{target_num}}}"])
+        elif target_kind == "table":
+            texts.extend([f"Table {target_num}", f"表{target_num}"])
+        else:
+            texts.extend([f"{target_kind} {target_num}", f"{target_kind} ({target_num})"])
     for s in (meta.get("ref_show_snippets") or [])[:3]:
         s2 = " ".join(str(s or "").strip().split())
         if s2:
@@ -1754,6 +2285,66 @@ def _postprocess_refs_pack(result: dict[int, dict], docs: list[dict], *, questio
         meta_by_i[i] = meta
         source_by_i[i] = str(meta.get("source_path") or "").strip()
 
+    def _anchor_target_label(meta: dict) -> str:
+        kind = str((meta or {}).get("anchor_target_kind") or "").strip().lower()
+        try:
+            num = int((meta or {}).get("anchor_target_number") or 0)
+        except Exception:
+            num = 0
+        if (not kind) or num <= 0:
+            return ""
+        if cjk:
+            if kind == "figure":
+                return f"图{num}"
+            if kind == "equation":
+                return f"公式{num}"
+            if kind == "table":
+                return f"表{num}"
+            if kind == "theorem":
+                return f"定理{num}"
+            if kind == "lemma":
+                return f"引理{num}"
+            return f"{kind}{num}"
+        if kind == "figure":
+            return f"Figure {num}"
+        if kind == "equation":
+            return f"Equation ({num})"
+        if kind == "table":
+            return f"Table {num}"
+        return f"{kind} {num}"
+
+    def _anchor_conflict_text(text: str) -> bool:
+        low = " ".join(str(text or "").strip().split()).lower()
+        if not low:
+            return False
+        pats = (
+            "未直接给出",
+            "无法确认",
+            "未包含",
+            "仅提及",
+            "并未给出",
+            "not directly",
+            "cannot confirm",
+            "not enough context",
+            "only partial",
+            "not explicitly given",
+            "does not directly give",
+        )
+        return any(p in low for p in pats)
+
+    def _anchor_grounded_why(meta: dict, sec: str) -> str:
+        label = _anchor_target_label(meta)
+        if not label:
+            return ""
+        loc = str(sec or (meta.get("ref_section") or meta.get("top_heading") or "")).strip()
+        if cjk:
+            if loc:
+                return f"问题直接询问{label}的具体内容，而该文已在“{loc}”附近命中对应编号的原文片段，可直接作为回答依据。"
+            return f"问题直接询问{label}的具体内容，而该文已命中对应编号的原文片段，可直接作为回答依据。"
+        if loc:
+            return f"The question asks for {label}, and this paper directly matches that numbered item near '{loc}', so it can be used as direct evidence."
+        return f"The question asks for {label}, and this paper directly matches that numbered item in the retrieved snippets."
+
     def _clean_model_text(s: str, *, max_sentences: int, min_cjk_chars: int = 14) -> str:
         t = " ".join(str(s or "").strip().split())
         if not t:
@@ -1825,6 +2416,12 @@ def _postprocess_refs_pack(result: dict[int, dict], docs: list[dict], *, questio
         find = [str(x or "").strip() for x in (raw_find or []) if str(x or "").strip()]
         find = [x for x in find if not _looks_generic_guidance_text(x)][:4]
 
+        has_anchor_hit = bool(str(meta_i.get("anchor_target_kind") or "").strip()) and float(meta_i.get("anchor_match_score", 0.0) or 0.0) > 0.0
+        if has_anchor_hit and (_anchor_conflict_text(why) or (not why)):
+            why = _anchor_grounded_why(meta_i, sec)
+        if has_anchor_hit and _anchor_conflict_text(gain):
+            gain = ""
+
         it["what"] = what
         it["why"] = why
         it["gain"] = gain
@@ -1862,7 +2459,7 @@ def _parse_json_object_lenient(text: str) -> dict | None:
         return None
 
 
-def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict]) -> list[dict]:
+def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict], on_item=None) -> list[dict]:
     """
     Fallback path when one-shot pack generation fails.
     Generate each doc's ref pack independently so one bad sample doesn't block all docs.
@@ -1894,7 +2491,14 @@ def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict]) 
         "- Output JSON only. No markdown fences.\n"
     )
 
-    def _one_doc(it: dict) -> dict | None:
+    def _is_usable_docwise_result(data: dict) -> bool:
+        if not isinstance(data, dict):
+            return False
+        what = str(data.get("what") or "").strip()
+        why = str(data.get("why") or "").strip()
+        return bool(what and why)
+
+    def _run_docwise_once(it: dict, *, timeout_s: float, max_tokens: int) -> dict | None:
         if not isinstance(it, dict):
             return None
         try:
@@ -1916,11 +2520,19 @@ def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict]) 
         }
         user = json.dumps(payload, ensure_ascii=False)
         try:
-            ds = DeepSeekChat(settings_fast)
+            try:
+                local_settings = replace(
+                    settings_fast,
+                    timeout_s=float(timeout_s),
+                    max_retries=0,
+                )
+            except Exception:
+                local_settings = settings_fast
+            ds = DeepSeekChat(local_settings)
             out = (ds.chat(
                 messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
                 temperature=0.0,
-                max_tokens=280,
+                max_tokens=max_tokens,
             ) or "").strip()
         except Exception:
             return None
@@ -1938,9 +2550,18 @@ def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict]) 
             "section": str(data.get("section") or "").strip(),
         }
 
+    def _one_doc(it: dict) -> dict | None:
+        rec = _run_docwise_once(it, timeout_s=18.0, max_tokens=280)
+        if _is_usable_docwise_result(rec or {}):
+            return rec
+        rec_retry = _run_docwise_once(it, timeout_s=24.0, max_tokens=420)
+        if _is_usable_docwise_result(rec_retry or {}):
+            return rec_retry
+        return rec if _is_usable_docwise_result(rec or {}) else None
+
     arr: list[dict] = []
     seed = [x for x in items[:8] if isinstance(x, dict)]
-    max_workers = max(1, min(4, len(seed)))
+    max_workers = max(1, min(6, len(seed)))
     try:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futs = [ex.submit(_one_doc, it) for it in seed]
@@ -1951,29 +2572,27 @@ def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict]) 
                     rec = None
                 if isinstance(rec, dict):
                     arr.append(rec)
+                    if callable(on_item):
+                        try:
+                            on_item(dict(rec))
+                        except Exception:
+                            pass
     except Exception:
         for it in seed:
             rec = _one_doc(it)
             if isinstance(rec, dict):
                 arr.append(rec)
+                if callable(on_item):
+                    try:
+                        on_item(dict(rec))
+                    except Exception:
+                        pass
     return arr
 
 
-def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, dict]:
-    """
-    One-shot LLM pack for refs:
-    - semantic relevance score (0..100) for reranking
-    - concise summary + relevance + reading-start + expected gain (grounded on snippets/headings)
-
-    Returns: {idx -> {"score":float, "why":str, "what":str, "start":str, "gain":str, "find":[str], "section":str}}
-    """
-    if not settings or (not getattr(settings, "api_key", None)):
-        return {}
+def _build_llm_refs_pack_items(question: str, docs: list[dict]) -> tuple[list[dict], dict[int, str]]:
     q = (question or "").strip()
-    if not q or not docs:
-        return {}
-
-    items = []
+    items: list[dict] = []
     source_by_i: dict[int, str] = {}
     for i, d in enumerate(docs, start=1):
         meta = d.get("meta", {}) or {}
@@ -1995,13 +2614,13 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
                 continue
             hs_seen.add(k)
             hs_clean.append(hh2)
-            if len(hs_clean) >= 20:
+            if len(hs_clean) >= 8:
                 break
         headings = hs_clean
         locs_payload: list[dict] = []
         raw_locs = meta.get("ref_locs")
         if isinstance(raw_locs, list):
-            for loc in raw_locs[:3]:
+            for loc in raw_locs[:2]:
                 if not isinstance(loc, dict):
                     continue
                 hp = str(loc.get("heading_path") or loc.get("heading") or "").strip()
@@ -2025,27 +2644,34 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
                     rec["page_end"] = p1
                 locs_payload.append(rec)
         snippets = []
-        for s in (meta.get("ref_show_snippets") or [])[:3]:
+        for s in (meta.get("ref_show_snippets") or [])[:2]:
             s2 = " ".join(str(s).strip().split())
-            if len(s2) > 520:
-                s2 = s2[:520].rstrip() + "..."
+            if len(s2) > 360:
+                s2 = s2[:360].rstrip() + "..."
             if s2:
                 snippets.append(s2)
         overview_snippets = []
-        for s in (meta.get("ref_overview_snippets") or [])[:3]:
+        for s in (meta.get("ref_overview_snippets") or [])[:2]:
             s2 = " ".join(str(s).strip().split())
-            if len(s2) > 520:
-                s2 = s2[:520].rstrip() + "..."
+            if len(s2) > 360:
+                s2 = s2[:360].rstrip() + "..."
             if s2:
                 overview_snippets.append(s2)
         if not snippets:
-            # fallback to existing text field
             s = " ".join((d.get("text") or "").strip().split())
-            if len(s) > 520:
-                s = s[:520].rstrip() + "..."
+            if len(s) > 360:
+                s = s[:360].rstrip() + "..."
             if s:
                 snippets.append(s)
         anchors_i = _extract_anchor_terms_from_meta(meta, question=q, max_n=5)
+        target_anchor = {}
+        kind_i = str(meta.get("anchor_target_kind") or "").strip().lower()
+        try:
+            num_i = int(meta.get("anchor_target_number") or 0)
+        except Exception:
+            num_i = 0
+        if kind_i and num_i > 0:
+            target_anchor = {"kind": kind_i, "number": num_i}
         items.append(
             {
                 "i": i,
@@ -2054,30 +2680,26 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
                 "overview_snippets": overview_snippets,
                 "snippets": snippets,
                 "anchors": anchors_i,
+                "target_anchor": target_anchor,
             }
         )
+    return items, source_by_i
 
-    try:
-        # Include mtimes so updates invalidate cache.
-        sig_parts = ["refs_pack_v9", q]
-        for d in docs:
-            src = str((d.get("meta", {}) or {}).get("source_path") or "")
-            try:
-                mtime = float(Path(src).stat().st_mtime) if src else 0.0
-            except Exception:
-                mtime = 0.0
-            sig_parts.append(src + "|" + str(mtime))
-        sig = "|".join(sig_parts)
-        cache_key = hashlib.sha1(sig.encode("utf-8", "ignore")).hexdigest()[:16]
-    except Exception:
-        cache_key = hashlib.sha1(q.encode("utf-8", "ignore")).hexdigest()[:16]
 
-    v0 = _cache_get("refs_pack", cache_key)
-    if isinstance(v0, dict):
-        return v0
+def _llm_refs_pack_batch(
+    settings,
+    *,
+    question: str,
+    docs: list[dict],
+    items: list[dict],
+    source_by_i: dict[int, str],
+) -> dict[int, dict]:
+    if not settings or (not getattr(settings, "api_key", None)):
+        return {}
+    q = (question or "").strip()
+    if (not q) or (not docs) or (not items):
+        return {}
 
-    # Refs pack is a secondary UX enhancement; keep latency bounded so it never
-    # blocks the chat/session for minutes when provider/network is unstable.
     try:
         settings_fast = replace(
             settings,
@@ -2087,10 +2709,6 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
     except Exception:
         settings_fast = settings
     ds = DeepSeekChat(settings_fast)
-    en = _has_latin(q) and (not _has_cjk(q))
-    # Use an English instruction body to avoid encoding issues in long-lived terminals,
-    # but require the model to match the user's language.
-    _ = en  # language heuristic kept for potential future tuning
     sys = (
         "You are a strict academic retriever reranker and reading guide generator.\n"
         "Output JSON ONLY: "
@@ -2099,6 +2717,7 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
         "- score: 0..100, based on how directly snippets answer the question.\n"
         "- Penalize false-friend term mismatch (e.g., single-shot vs single-pixel).\n"
         "- Use ONLY snippets/headings; DO NOT use filenames.\n"
+        "- If target_anchor is provided and snippets/anchors directly contain that numbered figure/equation/theorem, do NOT claim the item is missing, not directly given, or unverifiable.\n"
         "- section MUST be chosen from provided headings; otherwise empty string.\n"
         "- Prefer using candidate locs.heading_path when writing the start field.\n"
         "- NEVER use journal/venue names as section (e.g., Nature Photonics, Science Advances).\n"
@@ -2117,6 +2736,7 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
         "- Do NOT output ellipsis ('...' or '…') in `what`.\n"
         "- If one part is weakly supported, state uncertainty briefly instead of fabricating.\n"
         "- `why` MUST focus on why this paper is relevant to the current question, and point to concrete evidence in snippets/locs.\n"
+        "- When target_anchor is present, `why` should explicitly state that the matching numbered item is found in snippets/locs and where it appears.\n"
         "- Keep `what` and `why` semantically distinct; do not paraphrase one into the other.\n"
         "- start: where to start reading (section/subsection + what to look for first).\n"
         "- gain: what the user can extract from this paper that helps answer the question.\n"
@@ -2130,19 +2750,23 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
         "- Keep each field concise but informative. Avoid boilerplate and avoid repeating the same words across fields.\n"
         "- If evidence is weak or only partial, reduce score and state the limitation in why/gain.\n"
     )
-
-    # Keep payload small
     payload = {"question": q, "allow_reference_section": bool(_wants_reference_navigation(q)), "docs": items}
     user = json.dumps(payload, ensure_ascii=False)
     out = ""
     try:
-        out = (ds.chat(messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}], temperature=0.0, max_tokens=900) or "").strip()
+        max_tokens = min(720, max(360, 220 * len(items) + 80))
+        out = (
+            ds.chat(
+                messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+                temperature=0.0,
+                max_tokens=max_tokens,
+            )
+            or ""
+        ).strip()
     except Exception:
         out = ""
     data = _parse_json_object_lenient(out)
     arr = data.get("items") if isinstance(data, dict) else None
-    if not isinstance(arr, list):
-        arr = _llm_refs_pack_docwise_items(settings_fast, question=q, items=items)
     if not isinstance(arr, list):
         return {}
 
@@ -2192,11 +2816,132 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
         }
 
     result = _postprocess_refs_pack(result, docs, question=q)
+    return result
+
+
+def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, dict]:
+    """
+    LLM-only refs pack with bounded latency:
+    - split docs into small batches
+    - run batches in parallel
+    - fallback docwise only for missing items
+
+    Returns: {idx -> {"score":float, "why":str, "what":str, "start":str, "gain":str, "find":[str], "section":str}}
+    """
+    if not settings or (not getattr(settings, "api_key", None)):
+        return {}
+    q = (question or "").strip()
+    if not q or not docs:
+        return {}
+
+    items, source_by_i = _build_llm_refs_pack_items(q, docs)
+
+    try:
+        sig_parts = ["refs_pack_v10", q]
+        for d in docs:
+            src = str((d.get("meta", {}) or {}).get("source_path") or "")
+            try:
+                mtime = float(Path(src).stat().st_mtime) if src else 0.0
+            except Exception:
+                mtime = 0.0
+            sig_parts.append(src + "|" + str(mtime))
+        sig = "|".join(sig_parts)
+        cache_key = hashlib.sha1(sig.encode("utf-8", "ignore")).hexdigest()[:16]
+    except Exception:
+        cache_key = hashlib.sha1(q.encode("utf-8", "ignore")).hexdigest()[:16]
+
+    v0 = _cache_get("refs_pack", cache_key)
+    if isinstance(v0, dict):
+        return v0
+
+    item_batches: list[list[dict]] = []
+    batch_size = 2 if len(items) > 4 else 3
+    batch_size = max(1, batch_size)
+    for pos in range(0, len(items), batch_size):
+        batch = [it for it in items[pos : pos + batch_size] if isinstance(it, dict)]
+        if batch:
+            item_batches.append(batch)
+
+    pack_batch: dict[int, dict] = {}
+    if len(item_batches) <= 1:
+        try:
+            pack_batch = _llm_refs_pack_batch(
+                settings,
+                question=q,
+                docs=docs,
+                items=items,
+                source_by_i=source_by_i,
+            )
+        except Exception:
+            pack_batch = {}
+    else:
+        max_workers = max(1, min(3, len(item_batches)))
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futs = [
+                    ex.submit(
+                        _llm_refs_pack_batch,
+                        settings,
+                        question=q,
+                        docs=docs,
+                        items=batch,
+                        source_by_i=source_by_i,
+                    )
+                    for batch in item_batches
+                ]
+                for fu in as_completed(futs):
+                    try:
+                        rec = fu.result()
+                    except Exception:
+                        rec = {}
+                    if isinstance(rec, dict) and rec:
+                        pack_batch.update(rec)
+        except Exception:
+            pack_batch = {}
+
+    ready_ids = {int(i) for i, rec in (pack_batch or {}).items() if isinstance(rec, dict)}
+    missing_items = [it for it in items if int(it.get("i") or 0) not in ready_ids]
+    arr: list[dict] = [dict(rec) for rec in (pack_batch or {}).values() if isinstance(rec, dict)]
+    if missing_items:
+        try:
+            settings_fast = replace(
+                settings,
+                timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), 18.0),
+                max_retries=0,
+            )
+        except Exception:
+            settings_fast = settings
+        try:
+            arr_retry = _llm_refs_pack_docwise_items(settings_fast, question=q, items=missing_items)
+        except Exception:
+            arr_retry = []
+        for rec in arr_retry:
+            if isinstance(rec, dict):
+                arr.append(rec)
+
+    result: dict[int, dict] = {}
+    for rec in arr:
+        if not isinstance(rec, dict):
+            continue
+        try:
+            idx = int(rec.get("i") or 0)
+        except Exception:
+            idx = 0
+        if idx <= 0:
+            continue
+        result[idx] = dict(rec)
+    result = _postprocess_refs_pack(result, docs, question=q)
     _cache_set("refs_pack", cache_key, result, max_items=260)
     return result
 
 
-def _apply_llm_pack_to_grouped_docs(docs: list[dict], *, pack: dict[int, dict], question: str) -> list[dict]:
+def _apply_llm_pack_to_grouped_docs(
+    docs: list[dict],
+    *,
+    pack: dict[int, dict],
+    question: str,
+    clear_missing: bool = True,
+) -> list[dict]:
     if not isinstance(docs, list) or (not docs):
         return docs
     if not isinstance(pack, dict) or (not pack):
@@ -2209,7 +2954,7 @@ def _apply_llm_pack_to_grouped_docs(docs: list[dict], *, pack: dict[int, dict], 
         src_meta = str(meta.get("source_path") or "").strip()
         pr = pack.get(i) or {}
         if not isinstance(pr, dict):
-            if str(meta.get("ref_pack_state") or "").strip().lower() == "pending":
+            if clear_missing and str(meta.get("ref_pack_state") or "").strip().lower() == "pending":
                 meta["ref_pack_state"] = "none"
                 d["meta"] = meta
             continue
@@ -2280,9 +3025,19 @@ def _apply_llm_pack_to_grouped_docs(docs: list[dict], *, pack: dict[int, dict], 
         except Exception:
             term_bonus = 0.0
         deep_scaled = 1.6 * (deep_best ** 0.6) if deep_best > 0 else 0.0
-        combined2 = (llm_score / 10.0) + (0.25 * deep_scaled) + (0.10 * bm25) + (0.50 * term_bonus)
-        d["score"] = float(combined2)
-        meta["ref_rank"] = {"bm25": bm25, "deep": deep_best, "term_bonus": term_bonus, "llm": llm_score, "why": llm_why, "score": combined2}
+        display_score = llm_score / 10.0
+        combined2 = display_score + (0.25 * deep_scaled) + (0.10 * bm25) + (0.50 * term_bonus)
+        meta["ref_rank"] = {
+            "bm25": bm25,
+            "deep": deep_best,
+            "term_bonus": term_bonus,
+            "llm": llm_score,
+            "why": llm_why,
+            "score": display_score,
+            "display_score": display_score,
+            "semantic_score": combined2,
+        }
+        d["score"] = display_score
         d["meta"] = meta
     return docs
 
@@ -2324,6 +3079,7 @@ def _enrich_grouped_refs_with_llm_pack(
     question: str,
     settings=None,
     top_k_docs: int | None = None,
+    progress_cb=None,
 ) -> list[dict]:
     """
     Enrich already-grouped refs with LLM pack (semantic rerank + reading guide),
@@ -2338,7 +3094,7 @@ def _enrich_grouped_refs_with_llm_pack(
                 continue
             m = d.get("meta", {}) or {}
             if str(m.get("ref_pack_state") or "").strip().lower() == "pending":
-                m["ref_pack_state"] = "none"
+                m["ref_pack_state"] = "failed"
                 d["meta"] = m
         return docs_no_llm
     q = (question or "").strip()
@@ -2349,28 +3105,76 @@ def _enrich_grouped_refs_with_llm_pack(
                 continue
             m = d.get("meta", {}) or {}
             if str(m.get("ref_pack_state") or "").strip().lower() == "pending":
-                m["ref_pack_state"] = "none"
+                m["ref_pack_state"] = "failed"
                 d["meta"] = m
         return docs_no_q
 
     docs2 = copy.deepcopy(docs)
+    pack_batch: dict[int, dict] = {}
+    partial_pack: dict[int, dict] = {}
+    items, _source_by_i = _build_llm_refs_pack_items(q, docs2)
+
+    def _on_item(rec: dict) -> None:
+        if not isinstance(rec, dict):
+            return
+        try:
+            idx = int(rec.get("i") or 0)
+        except Exception:
+            idx = 0
+        if idx <= 0:
+            return
+        partial_pack[idx] = dict(rec)
+        _apply_llm_pack_to_grouped_docs(docs2, pack={idx: dict(rec)}, question=q, clear_missing=False)
+        if callable(progress_cb):
+            try:
+                progress_cb(copy.deepcopy(docs2))
+            except Exception:
+                pass
+
     try:
-        pack = _llm_refs_pack(settings, question=q, docs=docs2)
+        pack_batch = _llm_refs_pack(settings, question=q, docs=docs2)
     except Exception:
-        # Do not propagate enrichment failures. We still need to clear
-        # ref_pack_state=pending to avoid a permanent "waiting for LLM" UI.
-        pack = {}
-    if isinstance(pack, dict) and pack:
-        docs2 = _apply_llm_pack_to_grouped_docs(docs2, pack=pack, question=q)
-        docs2.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
-        docs2 = _semantic_filter_docs_by_llm(docs2)
-    else:
+        pack_batch = {}
+
+    if isinstance(pack_batch, dict) and pack_batch:
+        _apply_llm_pack_to_grouped_docs(docs2, pack=pack_batch, question=q, clear_missing=False)
+        if callable(progress_cb):
+            try:
+                progress_cb(copy.deepcopy(docs2))
+            except Exception:
+                pass
+
+    ready_ids = {int(i) for i, rec in (pack_batch or {}).items() if isinstance(rec, dict)}
+    missing_items = [it for it in items if int(it.get("i") or 0) not in ready_ids]
+
+    arr: list[dict] = [dict(rec) for rec in (pack_batch or {}).values() if isinstance(rec, dict)]
+    if missing_items:
+        try:
+            arr_retry = _llm_refs_pack_docwise_items(settings, question=q, items=missing_items, on_item=_on_item)
+        except Exception:
+            arr_retry = []
+        for rec in arr_retry:
+            if isinstance(rec, dict):
+                arr.append(rec)
+
+    ready_ids = {int(x.get("i") or 0) for x in arr if isinstance(x, dict)}
+    if not ready_ids:
         for d in docs2:
             if not isinstance(d, dict):
                 continue
             m = d.get("meta", {}) or {}
             if str(m.get("ref_pack_state") or "").strip().lower() == "pending":
-                m["ref_pack_state"] = "none"
+                m["ref_pack_state"] = "failed"
+                d["meta"] = m
+    else:
+        for i, d in enumerate(docs2, start=1):
+            if not isinstance(d, dict):
+                continue
+            if i in ready_ids:
+                continue
+            m = d.get("meta", {}) or {}
+            if str(m.get("ref_pack_state") or "").strip().lower() == "pending":
+                m["ref_pack_state"] = "failed"
                 d["meta"] = m
     docs2.sort(key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
     if top_k_docs is not None:

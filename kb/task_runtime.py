@@ -9,7 +9,9 @@ import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import quote
 
 from kb import runtime_state as RUNTIME
 from kb.bg_queue_state import (
@@ -33,7 +35,12 @@ from kb.retrieval_engine import (
     _search_hits_with_fallback,
     _top_heading,
 )
-from kb.retrieval_heuristics import _is_probably_bad_heading, _quick_answer_for_prompt
+from kb.retrieval_heuristics import (
+    _is_probably_bad_heading,
+    _quick_answer_for_prompt,
+    _should_bypass_kb_retrieval,
+    _should_prioritize_attached_image,
+)
 from kb.store import load_all_chunks
 from kb.retriever import BM25Retriever
 from ui.chat_widgets import _normalize_math_markdown
@@ -56,6 +63,237 @@ _VISION_IMAGE_MIME_BY_SUFFIX = {
     ".gif": "image/gif",
     ".bmp": "image/bmp",
 }
+_DOC_FIGURE_CACHE_LOCK = threading.Lock()
+_DOC_FIGURE_CACHE: dict[str, tuple[float, list[dict]]] = {}
+_DOC_FIGURE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+_MD_IMAGE_LINK_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_FIG_NUMBER_PATTERNS = (
+    re.compile(r"\bfig(?:ure)?\.?\s*(\d{1,3})\b", flags=re.IGNORECASE),
+    re.compile(r"\bfigure\s*#?\s*(\d{1,3})\b", flags=re.IGNORECASE),
+    re.compile(r"图\s*([0-9]{1,3})\b"),
+    re.compile(r"第\s*([0-9]{1,3})\s*张图"),
+    re.compile(r"(?:^|[_\-/])fig(?:ure)?[_\-]?(\d{1,3})(?:\D|$)", flags=re.IGNORECASE),
+)
+
+
+def _perf_log(stage: str, **metrics) -> None:
+    parts: list[str] = []
+    for key, val in metrics.items():
+        if isinstance(val, float):
+            parts.append(f"{key}={val:.3f}s")
+        else:
+            parts.append(f"{key}={val}")
+    try:
+        print("[kb-perf]", stage, " ".join(parts), flush=True)
+    except Exception:
+        pass
+
+
+def _warm_refs_citation_meta_background(source_paths: list[str], *, library_db_path: Path | str | None) -> None:
+    uniq_paths: list[str] = []
+    seen: set[str] = set()
+    for src in source_paths or []:
+        s = str(src or "").strip()
+        if (not s) or (s in seen):
+            continue
+        seen.add(s)
+        uniq_paths.append(s)
+        if len(uniq_paths) >= 8:
+            break
+    if not uniq_paths:
+        return
+
+    def _run() -> None:
+        try:
+            from api.reference_ui import ensure_source_citation_meta
+            from api.routers.library import _md_dir, _pdf_dir
+            from kb.library_store import LibraryStore
+        except Exception:
+            return
+
+        try:
+            pdf_root = _pdf_dir()
+        except Exception:
+            pdf_root = None
+        try:
+            md_root = _md_dir()
+        except Exception:
+            md_root = None
+        try:
+            lib_store = LibraryStore(library_db_path) if library_db_path else None
+        except Exception:
+            lib_store = None
+
+        def _one(src: str) -> None:
+            try:
+                ensure_source_citation_meta(
+                    source_path=src,
+                    pdf_root=pdf_root,
+                    md_root=md_root,
+                    lib_store=lib_store,
+                )
+            except Exception:
+                return
+
+        max_workers = max(1, min(4, len(uniq_paths)))
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futs = [ex.submit(_one, src) for src in uniq_paths]
+                for fu in as_completed(futs):
+                    try:
+                        fu.result()
+                    except Exception:
+                        continue
+        except Exception:
+            for src in uniq_paths:
+                _one(src)
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="kb_refs_meta_warm").start()
+    except Exception:
+        pass
+
+
+def _split_kb_miss_notice(text: str) -> tuple[str, str]:
+    s = str(text or "").lstrip()
+    prefix = "未命中知识库片段"
+    if not s.startswith(prefix):
+        return "", str(text or "")
+
+    nl = s.find("\n")
+    if nl != -1:
+        return s[:nl].strip(), s[nl + 1 :].lstrip("\n")
+
+    for sep in ("。", ".", "！", "!", "？", "?", ";", "；"):
+        idx = s.find(sep)
+        if 0 <= idx <= 80:
+            return s[: idx + 1].strip(), s[idx + 1 :].lstrip()
+
+    return prefix, s[len(prefix) :].lstrip("：: \t")
+
+
+def _reconcile_kb_notice(answer: str, *, has_hits: bool) -> str:
+    notice, body = _split_kb_miss_notice(answer)
+    body = str(body or "").strip()
+    if has_hits:
+        return body or str(answer or "").strip()
+
+    if notice:
+        return str(answer or "").strip()
+    if not body:
+        return "未命中知识库片段"
+    return f"未命中知识库片段。\n\n{body}"
+
+_DEICTIC_DOC_RE = re.compile(
+    r"(\bthis paper\b|\bthat paper\b|\bthis article\b|\bthat article\b|\bin this paper\b|\bin that paper\b|"
+    r"\bthe paper\b|\bthe article\b|"
+    r"这篇文章|那篇文章|这篇论文|那篇论文|本文|这篇文献|那篇文献|文中|文里|文章里|论文里)",
+    flags=re.I,
+)
+_EXPLICIT_DOC_RE = re.compile(
+    r"(\.pdf\b|[A-Za-z]+-\d{4}[-_ ][A-Za-z0-9][A-Za-z0-9 _\-]{8,}|"
+    r"[A-Z][A-Za-z0-9&'._\-]+(?: [A-Za-z0-9&'._\-]+){3,})",
+    flags=re.I,
+)
+
+
+def _needs_conversational_source_hint(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    if _EXPLICIT_DOC_RE.search(q):
+        return False
+    return bool(_DEICTIC_DOC_RE.search(q))
+
+
+def _pick_recent_source_hint(*, conv_id: str, user_msg_id: int, chat_store: ChatStore) -> str:
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return ""
+    try:
+        refs_by_user = chat_store.list_message_refs(cid) or {}
+    except Exception:
+        refs_by_user = {}
+    items = sorted(
+        (
+            (int(mid), rec)
+            for mid, rec in refs_by_user.items()
+            if isinstance(rec, dict) and int(mid or 0) > 0 and int(mid or 0) < int(user_msg_id or 0)
+        ),
+        key=lambda x: x[0],
+        reverse=True,
+    )
+    for _mid, rec in items:
+        hits = rec.get("hits") or []
+        if not isinstance(hits, list):
+            continue
+        for h in hits:
+            if not isinstance(h, dict):
+                continue
+            meta = h.get("meta", {}) or {}
+            src = str(meta.get("source_path") or "").strip()
+            if not src:
+                continue
+            p = Path(src)
+            cand0 = re.sub(r"\.en\.md$", ".pdf", p.name, flags=re.I)
+            cand1 = re.sub(r"\.en$", "", p.stem, flags=re.I)
+            for cand in (cand0, cand1, p.name, p.stem):
+                s = str(cand or "").strip()
+                if s:
+                    return s
+    return ""
+
+
+def _augment_prompt_with_source_hint(prompt: str, source_hint: str) -> str:
+    q = str(prompt or "").strip()
+    hint = str(source_hint or "").strip()
+    if (not q) or (not hint):
+        return q
+    return f"{hint} {q}".strip()
+
+
+_INPAPER_QUERY_RE = re.compile(
+    r"(\bfig(?:ure)?\b|\beq(?:uation)?\b|\bformula\b|\btheorem\b|\blemma\b|\bdefinition\b|\bproposition\b|\bcorollary\b|"
+    r"图|公式|定理|引理|定义|命题|推论|这篇|本文|文中|这篇文章|这篇论文)",
+    flags=re.I,
+)
+
+
+def _needs_bound_source_hint(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    if re.search(r"(\.pdf\b|[A-Za-z]+-\d{4}[-_ ][A-Za-z0-9])", q, flags=re.I):
+        return False
+    if _DEICTIC_DOC_RE.search(q):
+        return True
+    return bool(_INPAPER_QUERY_RE.search(q))
+
+
+def _pick_recent_bound_source_hints(*, conv_id: str, chat_store: ChatStore, limit: int = 2) -> list[str]:
+    cid = str(conv_id or "").strip()
+    if not cid:
+        return []
+    try:
+        rows = chat_store.list_conversation_sources(cid, limit=max(1, int(limit)))
+    except Exception:
+        rows = []
+    out: list[str] = []
+    seen: set[str] = set()
+    for rec in rows or []:
+        if not isinstance(rec, dict):
+            continue
+        name = str(rec.get("source_name") or "").strip()
+        src = str(rec.get("source_path") or "").strip()
+        cand = name or Path(src).name or Path(src).stem
+        if (not cand) or (cand in seen):
+            continue
+        seen.add(cand)
+        out.append(cand)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
 
 # Backward-compat for long-lived Streamlit processes that loaded older runtime_state.
 if not hasattr(RUNTIME, "BG_LOCK"):
@@ -193,6 +431,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     if str(task.get("id") or "") != str(task_id or ""):
         return
 
+    worker_t0 = time.perf_counter()
     _gen_update_task(session_id, task_id, status="running", stage="starting", started_at=time.time())
 
     try:
@@ -208,6 +447,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         llm_rerank = bool(task.get("llm_rerank", True))
         settings_obj = task.get("settings_obj")
         chat_store = ChatStore(chat_db)
+        preferred_sources_raw = task.get("preferred_sources") or []
 
         image_attachments: list[dict] = []
         if isinstance(raw_image_atts, list):
@@ -239,6 +479,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             raise RuntimeError("canceled")
 
         quick_answer = _quick_answer_for_prompt(prompt) if prompt else None
+        image_first_prompt = bool(image_attachments) and _should_prioritize_attached_image(prompt)
+        bypass_kb = bool(prompt) and (_should_bypass_kb_retrieval(prompt) or image_first_prompt)
         if quick_answer is not None:
             try:
                 umid0 = int(task.get("user_msg_id") or 0)
@@ -259,11 +501,48 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 except Exception:
                     pass
             _gen_store_answer(task, quick_answer)
+            _perf_log("gen.quick_answer", total=time.perf_counter() - worker_t0, conv_id=conv_id)
             _gen_update_task(session_id, task_id, status="done", stage="done", answer=quick_answer, partial=quick_answer, char_count=len(quick_answer), finished_at=time.time())
             return
 
+        try:
+            cur_user_msg_id = int(task.get("user_msg_id") or 0)
+        except Exception:
+            cur_user_msg_id = 0
+        retrieval_prompt = str(prompt or "").strip()
+        preferred_source_hints: list[str] = []
+        if isinstance(preferred_sources_raw, list):
+            seen_pref: set[str] = set()
+            for it in preferred_sources_raw:
+                cand = str(it or "").strip()
+                if (not cand) or (cand in seen_pref):
+                    continue
+                seen_pref.add(cand)
+                preferred_source_hints.append(cand)
+                if len(preferred_source_hints) >= 3:
+                    break
+        inferred_source_hint = ""
+        if retrieval_prompt and _needs_conversational_source_hint(retrieval_prompt):
+            inferred_source_hint = _pick_recent_source_hint(
+                conv_id=conv_id,
+                user_msg_id=cur_user_msg_id,
+                chat_store=chat_store,
+            )
+            if inferred_source_hint:
+                retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, inferred_source_hint)
+        if retrieval_prompt and _needs_bound_source_hint(retrieval_prompt):
+            if preferred_source_hints:
+                for h in preferred_source_hints[:2]:
+                    retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
+            else:
+                bound_hints = _pick_recent_bound_source_hints(conv_id=conv_id, chat_store=chat_store, limit=2)
+                for h in bound_hints:
+                    retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
+
+        t_load0 = time.perf_counter()
         chunks = load_all_chunks(db_dir)
         retriever = BM25Retriever(chunks)
+        _perf_log("gen.load_retriever", elapsed=time.perf_counter() - t_load0, chunks=len(chunks))
 
         hits_raw: list[dict] = []
         scores_raw: list[float] = []
@@ -273,28 +552,37 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         grouped_docs: list[dict] = []
         refs_async_will_run = False
         refs_async_seed_docs: list[dict] = []
-        if prompt:
+        if prompt and (not bypass_kb):
             _gen_update_task(session_id, task_id, stage="retrieve")
+            t_ret0 = time.perf_counter()
             hits_raw, scores_raw, used_query, used_translation = _search_hits_with_fallback(
-                prompt,
+                retrieval_prompt,
                 retriever,
                 top_k=top_k,
                 settings=settings_obj,
+            )
+            _perf_log(
+                "gen.retrieve",
+                elapsed=time.perf_counter() - t_ret0,
+                hits_raw=len(hits_raw),
+                translated=bool(used_translation),
             )
             hits = _group_hits_by_top_heading(hits_raw, top_k=top_k)
 
             _gen_update_task(session_id, task_id, stage="refs")
             if not getattr(retriever, "is_empty", False):
                 try:
+                    t_seed0 = time.perf_counter()
                     grouped_docs = _group_hits_by_doc_for_refs(
                         hits_raw,
-                        prompt_text=prompt,
+                        prompt_text=retrieval_prompt,
                         top_k_docs=top_k,
-                        deep_query=(used_query or prompt or ""),
-                        deep_read=True,  # refs quality: always deep-read candidate docs
-                        llm_rerank=False,  # quick refs first; LLM guidance is refined asynchronously
+                        deep_query=(used_query or retrieval_prompt or prompt or ""),
+                        deep_read=False,  # fast seed first; deep-read is moved to async refs enrichment
+                        llm_rerank=False,
                         settings=settings_obj,
                     )
+                    _perf_log("gen.refs_seed", elapsed=time.perf_counter() - t_seed0, docs=len(grouped_docs))
                 except Exception:
                     grouped_docs = []
 
@@ -322,7 +610,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 except Exception:
                     refs_async_seed_docs = list(grouped_docs)
         else:
-            _gen_update_task(session_id, task_id, stage="retrieve (image-only)")
+            _gen_update_task(
+                session_id,
+                task_id,
+                stage=(
+                    "retrieve skipped (image-first prompt)"
+                    if image_first_prompt
+                    else ("retrieve skipped (general coding request)" if bypass_kb else "retrieve (image-only)")
+                ),
+            )
 
         try:
             umid = int(task.get("user_msg_id") or 0)
@@ -364,13 +660,60 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _gen_update_task(session_id, task_id, refs_async_pending=True, refs_async_state="running")
 
             def _bg_enrich_refs() -> None:
+                def _push_partial(partial_docs: list[dict]) -> None:
+                    try:
+                        cs = ChatStore(chat_db)
+                        cs.upsert_message_refs(
+                            user_msg_id=umid,
+                            conv_id=conv_id,
+                            prompt=prompt,
+                            prompt_sig=str(task.get("prompt_sig") or ""),
+                            hits=list(partial_docs or []),
+                            scores=list(scores_raw or []),
+                            used_query=str(used_query or ""),
+                            used_translation=bool(used_translation),
+                        )
+                    except Exception:
+                        pass
+
+                seed_docs = list(refs_async_seed_docs)
                 try:
+                    if hits_raw:
+                        t_rebuild0 = time.perf_counter()
+                        rebuilt_docs = _group_hits_by_doc_for_refs(
+                            hits_raw,
+                            prompt_text=retrieval_prompt,
+                            top_k_docs=top_k,
+                            deep_query=(used_query or retrieval_prompt or prompt or ""),
+                            deep_read=True,
+                            llm_rerank=False,
+                            settings=settings_obj,
+                        )
+                        if rebuilt_docs:
+                            seed_docs = rebuilt_docs
+                            for d in seed_docs:
+                                if not isinstance(d, dict):
+                                    continue
+                                meta_d = d.get("meta", {}) or {}
+                                if not isinstance(meta_d, dict):
+                                    meta_d = {}
+                                meta_d["ref_pack_state"] = "pending"
+                                d["meta"] = meta_d
+                            _push_partial(seed_docs)
+                        _perf_log("gen.refs_rebuild", elapsed=time.perf_counter() - t_rebuild0, docs=len(seed_docs))
+                except Exception:
+                    seed_docs = list(refs_async_seed_docs)
+
+                try:
+                    t_pack0 = time.perf_counter()
                     enriched = _enrich_grouped_refs_with_llm_pack(
-                        list(refs_async_seed_docs),
+                        list(seed_docs),
                         question=(prompt or used_query or ""),
                         settings=settings_obj,
                         top_k_docs=top_k,
+                        progress_cb=_push_partial,
                     )
+                    _perf_log("gen.refs_enrich", elapsed=time.perf_counter() - t_pack0, docs=len(enriched))
                 except Exception:
                     enriched = []
                 snap0 = _gen_get_task(session_id) or {}
@@ -397,6 +740,21 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     except Exception:
                         pass
                     _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="done", refs_async_docs=int(len(enriched)))
+                    try:
+                        warm_paths: list[str] = []
+                        for d in list(enriched or []):
+                            if not isinstance(d, dict):
+                                continue
+                            meta_d = d.get("meta", {}) or {}
+                            src = str(meta_d.get("source_path") or "").strip()
+                            if src:
+                                warm_paths.append(src)
+                        _warm_refs_citation_meta_background(
+                            warm_paths,
+                            library_db_path=getattr(settings_obj, "library_db_path", None),
+                        )
+                    except Exception:
+                        pass
                 else:
                     _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="empty")
                 _finalize_task_after_refs_async()
@@ -412,7 +770,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         ctx_parts: list[str] = []
         doc_first_idx: dict[str, int] = {}
         # Keep prompt compact for fast first-token latency.
-        answer_hits = list((grouped_docs or hits)[: max(1, min(int(top_k), 4))])
+        prefer_grouped_docs = _should_prefer_grouped_docs_for_answer(grouped_docs)
+        answer_seed = grouped_docs if prefer_grouped_docs else (hits or grouped_docs)
+        answer_hits = list((answer_seed or [])[: max(1, min(int(top_k), 4))])
+        anchor_grounded_answer = _has_anchor_grounded_answer_hits(answer_hits)
         for i, h in enumerate(answer_hits, start=1):
             meta = h.get("meta", {}) or {}
             src = (meta.get("source_path", "") or "").strip()
@@ -452,7 +813,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         if deep_read and answer_hits:
             deep_budget_s = 9.0
             deep_begin = time.monotonic()
-            q_fine = (used_query or prompt or "").strip()
+            q_fine = (used_query or retrieval_prompt or prompt or "").strip()
             items = list(doc_first_idx.items())[: min(3, max(1, len(doc_first_idx)))]
             total = len(items)
             for n, (src, idx0) in enumerate(items, start=1):
@@ -494,6 +855,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     base += "\n\n（深读补充定位：来自原文）\n" + t
                     deep_added += 1
                 ctx_parts[idx0 - 1] = base
+            _perf_log("gen.deep_read", elapsed=time.monotonic() - deep_begin, docs=deep_docs, added=deep_added)
 
         _gen_update_task(session_id, task_id, deep_read_docs=int(deep_docs), deep_read_added=int(deep_added), stage="answer")
         ctx = "\n\n---\n\n".join(ctx_parts)
@@ -508,6 +870,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "3) 不要编造不存在的论文、公式、数据或结论。\n"
             "4) 不要输出‘参考定位/Top-K/引用列表’之类的额外段落（我会在页面里单独展示）。\n"
             "5) 数学公式输出格式：短的变量/符号用 $...$（行内）；较长的等式/推导用 $$...$$（行间）。不要用反引号包裹公式。\n"
+            "6) 先直接回答用户最核心的问题，再补充必要依据、步骤或限制条件。\n"
+            "7) 如果上下文不足以支撑某个细节，要明确说明该部分是基于通用知识的补充，而不是检索片段直接给出的结论。\n"
+            "8) 如果用户请求代码、伪代码、步骤或公式推导，要给出可直接使用的结果，不要只讲概念。\n"
+            "9) 代码必须放在 fenced code block 中；优先给出最小正确、可运行、命名清晰的实现，并简要说明关键参数、边界条件或复杂度。\n"
+            "10) 回答要信息密度高，避免空泛套话、重复表述和模板化总结。\n"
         )
         system += (
             "\nStructured citation protocol:\n"
@@ -517,15 +884,54 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "- Do NOT output free-form numeric citations like [24] / [2][4].\n"
             "- NEVER output malformed markers like [[CITE:<sid>]] or [CITE:<sid>] (missing ref_num).\n"
         )
+        if image_first_prompt:
+            system += (
+                "\nImage-first rule:\n"
+                "- The user is asking about the attached image itself.\n"
+                "- Analyze the attached image first.\n"
+                "- Use retrieved paper context only as secondary background, not as a substitute for visual inspection.\n"
+            )
+        if anchor_grounded_answer:
+            system += (
+                "\nAnchor-grounded answer rule:\n"
+                "- The requested numbered figure/equation/theorem is already matched in the retrieved library context.\n"
+                "- Answer from the matched snippets and the same document's retrieved context.\n"
+                "- Do NOT say the item is missing, unavailable, inferred only from a public version, or that later sections may possibly add details unless the retrieved context explicitly shows that.\n"
+                "- If a detail is not shown in the retrieved context, say it is not shown in the retrieved context; do not speculate that it might appear later.\n"
+            )
         prompt_for_user = prompt or "[Image attachment only request]"
         user = (
             f"Question:\\n{prompt_for_user}\\n\\n"
             f"Retrieved context (with deep-read supplements):\\n{ctx if ctx else '(none)'}\\n"
         )
+        if anchor_grounded_answer:
+            user += (
+                "\\nAnchor-grounded retrieval: the requested numbered item is already matched in the library snippets above. "
+                "Resolve the answer from those snippets and any explicit follow-up context already retrieved from the same document.\\n"
+            )
         if image_attachments:
-            user += f"\\nAttached images: {len(image_attachments)} (analyze them directly if relevant).\\n"
+            user += (
+                f"\\nAttached images: {len(image_attachments)}. "
+                "These images are part of the current request. Inspect them directly before answering. "
+                "Do not claim that no image was uploaded.\\n"
+            )
         history = chat_store.get_messages(conv_id)
-        hist = [m for m in history if m.get("role") in ("user", "assistant")][-10:]
+        try:
+            cur_user_msg_id = int(task.get("user_msg_id") or 0)
+        except Exception:
+            cur_user_msg_id = 0
+        try:
+            cur_assistant_msg_id = int(task.get("assistant_msg_id") or 0)
+        except Exception:
+            cur_assistant_msg_id = 0
+
+        hist = _filter_history_for_multimodal_turn(
+            history,
+            cur_user_msg_id=cur_user_msg_id,
+            cur_assistant_msg_id=cur_assistant_msg_id,
+            has_current_images=bool(image_attachments),
+        )
+        hist = hist[-10:]
         user_content: str | list[dict] = user
         if image_attachments:
             mm_parts: list[dict] = [{"type": "text", "text": user}]
@@ -550,6 +956,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         streamed = False
         last_store_ts = 0.0
         last_store_len = 0
+        t_answer0 = time.perf_counter()
         try:
             for piece in ds.chat_stream(messages=messages, temperature=temperature, max_tokens=max_tokens):
                 if _gen_should_cancel(session_id, task_id):
@@ -582,7 +989,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             return
 
         answer = _normalize_math_markdown(_strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))).strip() or "（未返回文本）"
+        answer = _reconcile_kb_notice(answer, has_hits=bool(answer_hits))
+        answer = _maybe_append_library_figure_markdown(answer, prompt=prompt, answer_hits=answer_hits)
         _gen_store_answer(task, answer)
+        _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))
+        _perf_log("gen.total", elapsed=time.perf_counter() - worker_t0, conv_id=conv_id)
         _gen_update_task(session_id, task_id, status="done", stage="done", answer=answer, partial=answer, char_count=len(answer), finished_at=time.time())
 
     except Exception as e:
@@ -812,6 +1223,85 @@ def _group_hits_by_top_heading(hits: list[dict], top_k: int) -> list[dict]:
             break
     return grouped
 
+
+def _should_prefer_grouped_docs_for_answer(grouped_docs: list[dict]) -> bool:
+    for doc in grouped_docs or []:
+        if not isinstance(doc, dict):
+            continue
+        meta = doc.get("meta", {}) or {}
+        try:
+            doc_score = float(meta.get("explicit_doc_match_score") or 0.0)
+        except Exception:
+            doc_score = 0.0
+        if doc_score >= 6.0:
+            return True
+        if str(meta.get("anchor_target_kind") or "").strip():
+            try:
+                anchor_score = float(meta.get("anchor_match_score") or 0.0)
+            except Exception:
+                anchor_score = 0.0
+            if anchor_score > 0.0:
+                return True
+    return False
+
+
+def _has_anchor_grounded_answer_hits(answer_hits: list[dict]) -> bool:
+    for hit in answer_hits or []:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta", {}) or {}
+        if not str(meta.get("anchor_target_kind") or "").strip():
+            continue
+        try:
+            anchor_score = float(meta.get("anchor_match_score") or 0.0)
+        except Exception:
+            anchor_score = 0.0
+        if anchor_score > 0.0:
+            return True
+    return False
+
+
+def _filter_history_for_multimodal_turn(
+    history: list[dict],
+    *,
+    cur_user_msg_id: int,
+    cur_assistant_msg_id: int,
+    has_current_images: bool,
+) -> list[dict]:
+    hist: list[dict] = []
+    suppress_followup_assistant = False
+
+    for m in history or []:
+        if m.get("role") not in ("user", "assistant"):
+            continue
+        try:
+            mid = int(m.get("id") or 0)
+        except Exception:
+            mid = 0
+        if mid and mid in {cur_user_msg_id, cur_assistant_msg_id}:
+            continue
+        if _is_live_assistant_text(str(m.get("content") or "")):
+            continue
+
+        attachments = m.get("attachments") if isinstance(m.get("attachments"), list) else []
+        has_message_images = any(
+            isinstance(it, dict) and str(it.get("mime") or "").strip().lower().startswith("image/")
+            for it in attachments
+        )
+
+        if has_current_images and str(m.get("role") or "") == "user":
+            suppress_followup_assistant = bool(has_message_images)
+            if has_message_images:
+                continue
+        elif has_current_images and str(m.get("role") or "") == "assistant" and suppress_followup_assistant:
+            continue
+        else:
+            suppress_followup_assistant = False
+
+        hist.append(m)
+
+    return hist
+
 def _strip_model_ref_section(answer: str) -> str:
     if not answer:
         return answer
@@ -832,3 +1322,258 @@ def _sanitize_structured_cite_tokens(answer: str) -> str:
     # Drop malformed sid-only tokens; they have no ref number and cannot be resolved.
     s = _CITE_SID_ONLY_RE.sub("", s)
     return s
+
+
+def _extract_figure_number(text: str) -> int:
+    raw = str(text or "").strip()
+    if not raw:
+        return 0
+    for pat in _FIG_NUMBER_PATTERNS:
+        m = pat.search(raw)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except Exception:
+            n = 0
+        if n > 0:
+            return n
+    return 0
+
+
+def _requested_figure_number(prompt: str, answer_hits: list[dict]) -> int:
+    n = _extract_figure_number(prompt)
+    if n > 0:
+        return n
+    for hit in answer_hits or []:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta", {}) or {}
+        kind = str(meta.get("anchor_target_kind") or "").strip().lower()
+        if kind != "figure":
+            continue
+        try:
+            n2 = int(meta.get("anchor_target_number") or 0)
+        except Exception:
+            n2 = 0
+        if n2 > 0:
+            return n2
+    return 0
+
+
+def _source_name_from_md_path(source_path: str) -> str:
+    src = Path(str(source_path or "").strip())
+    name = src.name or src.stem or "unknown-source"
+    if name.lower().endswith(".en.md"):
+        return re.sub(r"\.en\.md$", ".pdf", name, flags=re.IGNORECASE)
+    if name.lower().endswith(".md"):
+        return re.sub(r"\.md$", ".pdf", name, flags=re.IGNORECASE)
+    return name
+
+
+def _resolve_doc_image_path(md_path: Path, raw_ref: str) -> Path | None:
+    ref = str(raw_ref or "").strip().strip("'").strip('"')
+    if not ref:
+        return None
+    low = ref.lower()
+    if low.startswith(("http://", "https://", "data:")):
+        return None
+    if "?" in ref:
+        ref = ref.split("?", 1)[0]
+    if "#" in ref:
+        ref = ref.split("#", 1)[0]
+    ref = ref.replace("\\", "/")
+    cand = Path(ref)
+    if not cand.is_absolute():
+        cand = (md_path.parent / cand).resolve()
+    else:
+        cand = cand.resolve()
+    if (not cand.exists()) or (not cand.is_file()):
+        return None
+    if cand.suffix.lower() not in _DOC_FIGURE_IMAGE_EXTS:
+        return None
+    return cand
+
+
+def _collect_doc_figure_assets(md_path: Path) -> list[dict]:
+    p = Path(md_path).expanduser()
+    if (not p.exists()) or (not p.is_file()):
+        return []
+    try:
+        mtime = float(p.stat().st_mtime)
+    except Exception:
+        mtime = 0.0
+    key = str(p.resolve())
+    with _DOC_FIGURE_CACHE_LOCK:
+        cached = _DOC_FIGURE_CACHE.get(key)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            old_mtime, old_items = cached
+            if float(old_mtime) == mtime:
+                return [dict(x) for x in (old_items or [])]
+
+    try:
+        text = p.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return []
+    lines = text.splitlines()
+    out: list[dict] = []
+    seen_paths: set[str] = set()
+
+    for i, ln in enumerate(lines):
+        for m in _MD_IMAGE_LINK_RE.finditer(ln):
+            alt = str(m.group(1) or "").strip()
+            raw_img = str(m.group(2) or "").strip()
+            img_path = _resolve_doc_image_path(p, raw_img)
+            if img_path is None:
+                continue
+            sp = str(img_path)
+            if sp in seen_paths:
+                continue
+            seen_paths.add(sp)
+            next_line = str(lines[i + 1] or "").strip() if (i + 1) < len(lines) else ""
+            prev_line = str(lines[i - 1] or "").strip() if i > 0 else ""
+            caption = next_line if _extract_figure_number(next_line) > 0 else ""
+            if (not caption) and (_extract_figure_number(prev_line) > 0):
+                caption = prev_line
+            number = _extract_figure_number(caption) or _extract_figure_number(alt) or _extract_figure_number(raw_img)
+            label = caption or alt or img_path.name
+            out.append(
+                {
+                    "path": sp,
+                    "number": int(number or 0),
+                    "label": str(label or "").strip(),
+                }
+            )
+
+    with _DOC_FIGURE_CACHE_LOCK:
+        _DOC_FIGURE_CACHE[key] = (mtime, [dict(x) for x in out])
+        if len(_DOC_FIGURE_CACHE) > 512:
+            try:
+                for k in list(_DOC_FIGURE_CACHE.keys())[:128]:
+                    _DOC_FIGURE_CACHE.pop(k, None)
+            except Exception:
+                pass
+    return out
+
+
+def _build_doc_figure_card(*, source_path: str, figure_num: int) -> dict | None:
+    src = Path(str(source_path or "").strip())
+    if (not src.exists()) or (not src.is_file()):
+        return None
+    items = _collect_doc_figure_assets(src)
+    if not items:
+        return None
+    selected = next((it for it in items if int(it.get("number") or 0) == int(figure_num)), None)
+    if selected is None:
+        return None
+    img_path = str(selected.get("path") or "").strip()
+    if not img_path:
+        return None
+    src_name = _source_name_from_md_path(str(source_path or ""))
+    label = str(selected.get("label") or "").strip()
+    if len(label) > 140:
+        label = label[:140].rstrip() + "..."
+    return {
+        "source_name": src_name,
+        "figure_num": int(figure_num),
+        "label": label,
+        "url": f"/api/references/asset?path={quote(img_path, safe='')}",
+    }
+
+
+def _score_figure_card_source_binding(*, prompt: str, meta: dict, figure_num: int, source_path: str) -> float:
+    q = str(prompt or "").strip().lower()
+    m = meta if isinstance(meta, dict) else {}
+    src = str(source_path or "").strip()
+    src_name = _source_name_from_md_path(src).lower()
+    src_stem = Path(src_name).stem.lower()
+
+    score = 0.0
+    try:
+        score += 2.0 * float(m.get("explicit_doc_match_score") or 0.0)
+    except Exception:
+        pass
+
+    kind = str(m.get("anchor_target_kind") or "").strip().lower()
+    try:
+        n0 = int(m.get("anchor_target_number") or 0)
+    except Exception:
+        n0 = 0
+    try:
+        a0 = float(m.get("anchor_match_score") or 0.0)
+    except Exception:
+        a0 = 0.0
+    if kind == "figure" and n0 > 0:
+        if int(figure_num) == int(n0):
+            score += 40.0 + max(0.0, a0)
+        else:
+            score -= 16.0
+    elif kind and kind != "figure":
+        score -= 10.0
+
+    if q:
+        if src_name and src_name in q:
+            score += 36.0
+        if src_stem and src_stem in q:
+            score += 26.0
+        if src_stem:
+            tokens = [t for t in re.split(r"[^a-z0-9]+", src_stem) if len(t) >= 4]
+            if tokens:
+                overlap = sum(1 for t in set(tokens) if t in q)
+                score += min(18.0, 4.0 * float(overlap))
+
+    return float(score)
+
+
+def _maybe_append_library_figure_markdown(answer: str, *, prompt: str, answer_hits: list[dict]) -> str:
+    base = str(answer or "").rstrip()
+    if (not base) or (not answer_hits):
+        return base
+    # Avoid duplicate injection on retries/rerenders.
+    if "/api/references/asset?path=" in base:
+        return base
+    target_num = _requested_figure_number(prompt, answer_hits)
+    if target_num <= 0:
+        return base
+
+    cards_scored: list[tuple[float, dict]] = []
+    seen_src: set[str] = set()
+    for hit in answer_hits:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta", {}) or {}
+        src = str(meta.get("source_path") or "").strip()
+        if (not src) or (src in seen_src):
+            continue
+        seen_src.add(src)
+        card = _build_doc_figure_card(source_path=src, figure_num=target_num)
+        if card is None:
+            continue
+        score = _score_figure_card_source_binding(
+            prompt=prompt,
+            meta=meta,
+            figure_num=target_num,
+            source_path=src,
+        )
+        cards_scored.append((score, card))
+
+    if not cards_scored:
+        return base
+
+    cards_scored.sort(key=lambda x: float(x[0]), reverse=True)
+    cards = [cards_scored[0][1]]
+
+    lines: list[str] = ["### 文献图示（库内截图）"]
+    for card in cards:
+        src_name = str(card.get("source_name") or "unknown-source")
+        fig_num = int(card.get("figure_num") or target_num)
+        url = str(card.get("url") or "").strip()
+        label = str(card.get("label") or "").strip()
+        alt = f"{src_name} Fig. {fig_num}"
+        lines.append(f"![{alt}]({url})")
+        if label:
+            lines.append(f"*来源：{src_name}，Fig. {fig_num}。{label}*")
+        else:
+            lines.append(f"*来源：{src_name}，Fig. {fig_num}（库内截图）*")
+
+    return f"{base}\n\n" + "\n\n".join(lines)

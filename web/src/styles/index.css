@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
+@import "highlight.js/styles/github.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -11,6 +12,14 @@
   --msg-user-bg: #eef3f9;
   --msg-ai-bg: #ffffff;
   --border: #e8e8e8;
+  --muted-text: #667085;
+  --refs-panel-bg: #fbfcfe;
+  --refs-card-bg: #f5f9ff;
+  --refs-card-border: #cfe1fb;
+  --refs-chip-bg: #e9f2ff;
+  --refs-chip-text: #1864d8;
+  --refs-score-bg: #eef8ea;
+  --refs-score-text: #2f9e44;
 }
 
 .dark {
@@ -19,8 +28,16 @@
   --text-main: #e7eaef;
   --accent: #4daafc;
   --msg-user-bg: rgba(77, 170, 252, 0.12);
-  --msg-ai-bg: #1a1a2e;
-  --border: #303030;
+  --msg-ai-bg: #181a20;
+  --border: #303543;
+  --muted-text: #98a2b3;
+  --refs-panel-bg: #171a21;
+  --refs-card-bg: #1d2330;
+  --refs-card-border: #314159;
+  --refs-chip-bg: #1f3558;
+  --refs-chip-text: #8ec5ff;
+  --refs-score-bg: rgba(54, 179, 126, 0.16);
+  --refs-score-text: #7ddc9a;
 }
 
 body {
@@ -30,10 +47,509 @@ body {
   font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html,
+body {
+  overflow: hidden;
+}
+
+#root {
+  overflow: hidden;
+}
+
+body,
+.kb-main-scroll,
+.ant-layout-sider-children,
+.ant-layout-content {
+  scrollbar-gutter: stable;
+}
+
 /* markdown code blocks */
 .kb-markdown pre {
   border-radius: 8px;
   overflow-x: auto;
+}
+
+.kb-markdown .kb-code-block {
+  margin: 1.1rem 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg));
+}
+
+.kb-markdown .kb-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--msg-user-bg) 44%, var(--panel));
+}
+
+.kb-markdown .kb-code-lang {
+  color: var(--muted-text);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.kb-markdown .kb-code-copy {
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  color: var(--text-main);
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.kb-markdown .kb-code-block pre {
+  margin: 0 !important;
+  border-radius: 0;
+  background: transparent !important;
+  padding: 14px 16px !important;
+}
+
+.kb-markdown .kb-code-block code {
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.dark .kb-markdown .kb-code-block {
+  background: #151922;
+}
+
+.dark .kb-markdown .hljs {
+  background: #151922;
+  color: #dbe4f0;
+}
+
+.kb-markdown .kb-table-wrap {
+  margin: 1.1rem 0;
+  overflow-x: auto;
+  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+}
+
+.kb-markdown table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.kb-markdown thead {
+  background: color-mix(in srgb, var(--msg-user-bg) 60%, var(--panel));
+}
+
+.kb-markdown th,
+.kb-markdown td {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.kb-markdown th {
+  color: var(--text-main);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.kb-markdown tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.kb-markdown .kb-md-image-link {
+  display: inline-block;
+  max-width: min(100%, 520px);
+  margin: 10px 0;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 14px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+}
+
+.kb-markdown .kb-md-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.kb-markdown .kb-cite-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.kb-markdown .kb-cite-chip {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 1em;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+
+.kb-markdown .kb-cite-chip:hover {
+  color: color-mix(in srgb, var(--accent) 84%, black 16%);
+  text-decoration: underline;
+}
+
+.kb-markdown .kb-cite-chip::before {
+  content: "[";
+}
+
+.kb-markdown .kb-cite-chip::after {
+  content: "]";
+}
+
+.kb-cite-pop {
+  border: 1px solid color-mix(in srgb, var(--border) 90%, rgba(255,255,255,0.45));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 98%, rgba(255,255,255,0.05));
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
+  padding: 12px 14px 12px;
+}
+
+.kb-cite-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.kb-cite-pop-title {
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.kb-cite-pop-main {
+  color: var(--text-main);
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.kb-cite-pop-sub {
+  margin-top: 7px;
+  color: color-mix(in srgb, var(--text-main) 66%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.kb-cite-pop-doi {
+  margin-top: 9px;
+  color: var(--text-main);
+  font-size: 11px;
+}
+
+.kb-cite-pop-doi a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kb-cite-pop-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.kb-cite-pop-metric,
+.kb-shelf-metric {
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--msg-user-bg) 58%, var(--panel));
+  color: var(--text-main);
+  padding: 3px 8px;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.kb-cite-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.kb-cite-pop-add,
+.kb-cite-pop-open-shelf {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 92%, rgba(255,255,255,0.08));
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.kb-cite-pop-add {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 86%, white 14%), color-mix(in srgb, var(--accent) 96%, black 4%));
+  color: #fff;
+}
+
+.kb-cite-pop-add.kb-added {
+  background: color-mix(in srgb, var(--panel) 88%, rgba(255,255,255,0.12));
+  color: color-mix(in srgb, var(--text-main) 72%, transparent);
+  border-color: var(--border);
+}
+
+.kb-cite-pop-close {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, rgba(255,255,255,0.08));
+  color: color-mix(in srgb, var(--text-main) 78%, transparent);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kb-markdown hr {
+  margin: 1.6rem 0;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--text-main) 16%, transparent);
+}
+
+.kb-refs-panel {
+  position: relative;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--refs-panel-bg) 92%, white 8%), color-mix(in srgb, var(--panel) 96%, transparent)),
+    var(--panel);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.04);
+}
+
+.dark .kb-refs-panel {
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+}
+
+.kb-refs-panel .ant-collapse-header {
+  align-items: center !important;
+  min-height: 58px;
+  padding: 16px 22px !important;
+  background: color-mix(in srgb, var(--refs-panel-bg) 78%, transparent);
+}
+
+.kb-refs-panel .ant-collapse-content > .ant-collapse-content-box {
+  padding: 18px 22px 20px !important;
+}
+
+.kb-refs-panel .ant-collapse-expand-icon {
+  color: color-mix(in srgb, var(--text-main) 72%, transparent);
+  transform: scale(0.92);
+}
+
+.kb-refs-panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.kb-ref-rank {
+  margin-top: 1px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--refs-chip-bg) 78%, var(--panel));
+  color: var(--accent);
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.kb-ref-title {
+  color: var(--text-main);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.kb-ref-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted-text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.kb-ref-score {
+  border: 1px solid color-mix(in srgb, var(--refs-score-text) 24%, transparent);
+  border-radius: 999px;
+  background: var(--refs-score-bg);
+  color: var(--refs-score-text);
+  padding: 2px 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.kb-ref-semantic {
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: color-mix(in srgb, var(--accent) 84%, black 16%);
+  padding: 2px 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.kb-ref-action.ant-btn {
+  height: 38px;
+  min-width: 82px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border-color: color-mix(in srgb, var(--border) 86%, white 14%);
+  background: color-mix(in srgb, var(--panel) 92%, rgba(255, 255, 255, 0.08));
+  color: var(--text-main);
+  box-shadow: none;
+  font-size: 13px;
+}
+
+.kb-ref-action.ant-btn:hover,
+.kb-ref-action.ant-btn:focus {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  color: var(--accent);
+}
+
+.kb-ref-card {
+  border: 1px solid var(--refs-card-border);
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--refs-card-bg) 86%, white 14%), color-mix(in srgb, var(--refs-card-bg) 96%, transparent)),
+    var(--refs-card-bg);
+  padding: 16px 18px;
+}
+
+.kb-ref-chip {
+  border-radius: 999px;
+  background: var(--refs-chip-bg);
+  color: var(--refs-chip-text);
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.kb-ref-card-title {
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.kb-ref-card-text {
+  color: color-mix(in srgb, var(--text-main) 94%, transparent) !important;
+  font-size: 13px !important;
+  line-height: 1.82 !important;
+}
+
+.kb-ref-metrics {
+  border: 1px dashed color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 60%, var(--bg));
+  color: var(--muted-text);
+  padding: 10px 13px;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.kb-ref-metrics a {
+  color: var(--accent);
+}
+
+.kb-ref-cite-modal .ant-modal-content {
+  border-radius: 18px;
+  padding: 16px 16px 14px;
+}
+
+.kb-ref-cite-modal .ant-modal-close {
+  top: 12px;
+  inset-inline-end: 12px;
+}
+
+.kb-ref-cite-head {
+  margin-bottom: 10px;
+  padding-right: 34px;
+}
+
+.kb-ref-cite-label {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.kb-ref-cite-main {
+  margin-top: 6px;
+  color: var(--text-main);
+  font-size: 19px;
+  line-height: 1.45;
+  font-weight: 700;
+}
+
+.kb-ref-cite-sub {
+  margin-top: 7px;
+  color: color-mix(in srgb, var(--text-main) 66%, transparent);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.kb-ref-cite-doi {
+  margin-bottom: 12px;
+  color: var(--text-main);
+  font-size: 12px;
+}
+
+.kb-ref-cite-doi a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.kb-ref-cite-modal .ant-tabs-nav {
+  margin-bottom: 10px;
+}
+
+.kb-ref-cite-modal .ant-tabs-tab {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.kb-ref-cite-pre {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+  color: var(--text-main);
+  padding: 12px 13px;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 /* Typing indicator dots */

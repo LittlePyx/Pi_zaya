@@ -12,12 +12,15 @@
   "dependencies": {
     "@ant-design/icons": "^6.1.0",
     "antd": "^6.3.0",
+    "highlight.js": "^11.11.1",
     "katex": "^0.16.28",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.0",
+    "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "zustand": "^5.0.11"
   },

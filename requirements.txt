@@ -14,3 +14,4 @@ uvicorn[standard]>=0.30
 sse-starlette>=2.0
 python-multipart>=0.0.9
 python-dotenv>=1.0
+impact-factor>=1.1.3

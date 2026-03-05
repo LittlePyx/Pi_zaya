@@ -14,7 +14,11 @@ import uuid
 from pathlib import Path
 
 import streamlit as st
-from ui.runtime_patches_parts.theme_history_overrides import _history_sidebar_compact_css
+from ui.runtime_patches_parts.theme_history_overrides import (
+    _history_menu_button_override_css,
+    _history_menu_button_override_js_html,
+    _history_sidebar_compact_css,
+)
 from ui.runtime_patches import (
     _init_theme_css,
     _inject_auto_rerun_once,
@@ -227,6 +231,8 @@ if not hasattr(RUNTIME, "CITATION_TASKS"):
 # This survives Streamlit reruns more reliably than script-level globals.
 _CACHE_LOCK = RUNTIME.CACHE_LOCK
 _CACHE = RUNTIME.CACHE
+_CHAT_HISTORY_OPEN_PAGE_SIZE = 24
+_CHAT_HISTORY_STATE_MAX_CONVS = 40
 
 
 _APP_STRUCT_CITE_CANON_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]", re.IGNORECASE)
@@ -476,6 +482,9 @@ def _page_chat(
 
     cur_task = _gen_get_task(session_id)
     running_for_conv = _task_is_actively_generating(cur_task, conv_match=conv_id)
+    prev_running_for_conv = bool(st.session_state.get("_chat_prev_running_for_conv", False))
+    just_finished_for_conv = bool(prev_running_for_conv and (not running_for_conv))
+    st.session_state["_chat_prev_running_for_conv"] = bool(running_for_conv)
     _set_live_streaming_mode(running_for_conv, hide_stale=False)
     _restore_scroll_after_rerun_if_needed()
 
@@ -483,8 +492,10 @@ def _page_chat(
 
     # During streaming reruns, avoid repeated full DB reads to keep UI smooth.
     msgs_cache_conv = str(st.session_state.get("_chat_msgs_cache_conv") or "")
+    force_refresh_msgs = bool(st.session_state.pop("_chat_force_refresh_msgs", False))
     need_refresh_msgs = (
-        (not running_for_conv)
+        force_refresh_msgs
+        or just_finished_for_conv
         or (msgs_cache_conv != conv_id)
         or (not isinstance(st.session_state.get("messages"), list))
     )
@@ -497,8 +508,10 @@ def _page_chat(
     msgs = list(st.session_state.get("messages") or [])
 
     refs_cache_conv = str(st.session_state.get("_chat_refs_cache_conv") or "")
+    force_refresh_refs = bool(st.session_state.pop("_chat_force_refresh_refs", False))
     need_refresh_refs = (
-        (not running_for_conv)
+        force_refresh_refs
+        or just_finished_for_conv
         or (refs_cache_conv != conv_id)
         or (not isinstance(st.session_state.get("_chat_refs_cache"), dict))
     )
@@ -511,6 +524,38 @@ def _page_chat(
     refs_by_user = st.session_state.get("_chat_refs_cache") or {}
     if not isinstance(refs_by_user, dict):
         refs_by_user = {}
+
+    hist_state = st.session_state.get("_chat_history_visible_by_conv")
+    if not isinstance(hist_state, dict):
+        hist_state = {}
+    hist_page_size = max(8, int(_CHAT_HISTORY_OPEN_PAGE_SIZE))
+    hist_visible_count = int(hist_state.get(conv_id) or 0) if conv_id else 0
+    if msgs:
+        if hist_visible_count <= 0:
+            hist_visible_count = len(msgs) if len(msgs) <= hist_page_size else hist_page_size
+        hist_visible_count = max(1, min(len(msgs), hist_visible_count))
+        hist_state[conv_id] = hist_visible_count
+    elif conv_id:
+        hist_state[conv_id] = 0
+    if len(hist_state) > int(_CHAT_HISTORY_STATE_MAX_CONVS):
+        keep_ids = []
+        if conv_id:
+            keep_ids.append(conv_id)
+        keep_ids.extend(str(k or "") for k in list(hist_state.keys())[-max(1, int(_CHAT_HISTORY_STATE_MAX_CONVS) - len(keep_ids)):])
+        keep_set = {x for x in keep_ids if x}
+        hist_state = {k: v for k, v in hist_state.items() if k in keep_set}
+    st.session_state["_chat_history_visible_by_conv"] = hist_state
+    deferred_rich_conv = str(st.session_state.get("_chat_deferred_rich_conv") or "").strip()
+    defer_heavy_open = bool(
+        conv_id
+        and (deferred_rich_conv == conv_id)
+        and (not running_for_conv)
+        and (len(msgs) > max(10, hist_page_size))
+    )
+
+    def _finish_deferred_chat_open() -> None:
+        if conv_id and str(st.session_state.get("_chat_deferred_rich_conv") or "").strip() == conv_id:
+            st.session_state.pop("_chat_deferred_rich_conv", None)
 
     def _get_refs_pack_for_user(user_msg_id: int) -> dict | None:
         nonlocal refs_by_user
@@ -537,6 +582,67 @@ def _page_chat(
             pass
         pack1 = latest.get(uid)
         return pack1 if isinstance(pack1, dict) else None
+
+    def _set_history_visible_count(next_count: int) -> None:
+        if not conv_id:
+            return
+        cur_state = st.session_state.get("_chat_history_visible_by_conv")
+        if not isinstance(cur_state, dict):
+            cur_state = {}
+        total_msgs = len(msgs)
+        bounded = max(0, min(total_msgs, int(next_count or 0)))
+        cur_state[conv_id] = bounded
+        st.session_state["_chat_history_visible_by_conv"] = cur_state
+
+    def _show_more_history_messages() -> None:
+        _set_history_visible_count(max(hist_visible_count, hist_page_size) + hist_page_size)
+
+    def _show_all_history_messages() -> None:
+        _set_history_visible_count(len(msgs))
+
+    def _collapse_history_messages() -> None:
+        _set_history_visible_count(len(msgs) if len(msgs) <= hist_page_size else hist_page_size)
+
+    def _get_cached_hist_assistant_render(
+        *,
+        content: str,
+        msg_id: int,
+        user_msg_id: int,
+        anchor_ns: str,
+    ) -> dict:
+        ref_pack = _get_refs_pack_for_user(user_msg_id)
+        hits_for_anno: list[dict] = []
+        refs_updated_at = 0.0
+        if isinstance(ref_pack, dict):
+            hits_for_anno = list(ref_pack.get("hits") or [])
+            try:
+                refs_updated_at = float(ref_pack.get("updated_at") or ref_pack.get("created_at") or 0.0)
+            except Exception:
+                refs_updated_at = 0.0
+
+        text_sig = hashlib.sha1(str(content or "").encode("utf-8", "ignore")).hexdigest()
+        cache_key = f"{conv_id}:{int(msg_id)}:{int(user_msg_id)}:{refs_updated_at:.6f}:{anchor_ns}:{text_sig}"
+        cached = _cache_get("chat_hist_render_v1", cache_key)
+        if isinstance(cached, dict):
+            return cached
+
+        notice, body = _split_kb_miss_notice(content or "")
+        body3 = str(body or "")
+        cite_details: list[dict] = []
+        if (body or "").strip():
+            body2 = _annotate_equation_tags_with_sources(body, hits_for_anno)
+            body3, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                body2,
+                hits_for_anno,
+                anchor_ns=anchor_ns,
+            )
+        rec = {
+            "notice": notice,
+            "body": body3,
+            "cite_details": cite_details,
+        }
+        _cache_set("chat_hist_render_v1", cache_key, rec, max_items=800)
+        return rec
 
     def _render_refs_for_user(user_msg_id: int, prompt_text: str, *, pending: bool = False) -> None:
         ref_pack = _get_refs_pack_for_user(user_msg_id)
@@ -570,7 +676,7 @@ def _page_chat(
 
     chat_fragment_refresh_ok = bool(callable(getattr(st, "fragment", None)))
 
-    def _render_chat_messages_area(*, live_running: bool, compact_live: bool = False) -> None:
+    def _render_chat_messages_area(*, live_running: bool, compact_live: bool = False, defer_heavy: bool = False) -> None:
             if (not msgs) and (not live_running):
                 st.markdown(f"<div class='chat-empty-state'>{html.escape(S['no_msgs'])}</div>", unsafe_allow_html=True)
             else:
@@ -584,6 +690,48 @@ def _page_chat(
                         render_msgs = render_msgs[-live_window:]
                     if hidden_msgs > 0:
                         st.caption(f"（为保证流式输出流畅，已折叠更早的 {hidden_msgs} 条消息）")
+
+                if (not live_running):
+                    if defer_heavy:
+                        preview_window = min(max(8, hist_page_size // 2), 12)
+                        if len(render_msgs) > preview_window:
+                            hidden_msgs = len(render_msgs) - preview_window
+                            render_msgs = render_msgs[-preview_window:]
+                        if hidden_msgs > 0:
+                            st.caption(f"正在快速打开会话，先显示最近 {len(render_msgs)} 条消息，完整内容随后加载。")
+                    hist_visible_now = max(0, min(len(render_msgs), int(hist_visible_count or 0)))
+                    if (not defer_heavy) and hist_visible_now and len(render_msgs) > hist_visible_now:
+                        hidden_msgs = len(render_msgs) - hist_visible_now
+                        render_msgs = render_msgs[-hist_visible_now:]
+                    if (not defer_heavy) and hidden_msgs > 0:
+                        action_cols = st.columns([2.6, 2.0, 7.4], gap="small")
+                        with action_cols[0]:
+                            st.button(
+                                f"\u663e\u793a\u66f4\u65e9 {min(hist_page_size, hidden_msgs)} \u6761",
+                                key=f"chat_hist_more_{conv_id}_{hist_visible_now}_{hidden_msgs}",
+                                on_click=_show_more_history_messages,
+                            )
+                        with action_cols[1]:
+                            st.button(
+                                "\u5c55\u5f00\u5168\u90e8",
+                                key=f"chat_hist_all_{conv_id}_{hist_visible_now}_{hidden_msgs}",
+                                on_click=_show_all_history_messages,
+                            )
+                        with action_cols[2]:
+                            st.caption(
+                                f"\u4e3a\u4fdd\u8bc1\u6253\u5f00\u901f\u5ea6\uff0c\u5148\u663e\u793a\u6700\u8fd1 {len(render_msgs)} "
+                                f"\u6761\u6d88\u606f\uff0c\u8f83\u65e9\u6d88\u606f {hidden_msgs} \u6761\u5df2\u6298\u53e0\u3002"
+                            )
+                    elif (not defer_heavy) and len(msgs) > hist_page_size and hist_visible_now > hist_page_size:
+                        action_cols = st.columns([2.0, 10.0], gap="small")
+                        with action_cols[0]:
+                            st.button(
+                                "\u6536\u8d77\u8f83\u65e9\u6d88\u606f",
+                                key=f"chat_hist_collapse_{conv_id}_{hist_visible_now}",
+                                on_click=_collapse_history_messages,
+                            )
+                        with action_cols[1]:
+                            st.caption(f"\u5f53\u524d\u5df2\u5c55\u5f00 {hist_visible_now} \u6761\u6d88\u606f\u3002")
 
                 last_user_for_refs = None
                 last_user_msg_id = 0
@@ -693,46 +841,45 @@ def _page_chat(
                         else:
                             msg_key = hashlib.md5((st.session_state.get("conv_id", "") + "|" + str(idx)).encode("utf-8", "ignore")).hexdigest()[:10]
                             copy_hist_rendered = False
-                            notice, body = _split_kb_miss_notice(content or "")
+                            if defer_heavy:
+                                notice, body = _split_kb_miss_notice(content or "")
+                                cite_details = []
+                            else:
+                                hist_render = _get_cached_hist_assistant_render(
+                                    content=content,
+                                    msg_id=msg_id,
+                                    user_msg_id=last_user_msg_id,
+                                    anchor_ns=f"{conv_id}:{idx}:{msg_id}:hist",
+                                )
+                                notice = str(hist_render.get("notice") or "")
+                                body = str(hist_render.get("body") or "")
+                                cite_details = list(hist_render.get("cite_details") or [])
                             if notice:
                                 st.markdown(f"<div class='kb-notice'>{html.escape(notice)}</div>", unsafe_allow_html=True)
                             if (body or "").strip():
-                                if lite_live:
+                                if lite_live or defer_heavy:
                                     st.markdown(_normalize_chat_markdown_for_display(body))
                                     copy_hist_rendered = True
                                 else:
-                                    hits_for_anno = []
-                                    try:
-                                        pack = _get_refs_pack_for_user(last_user_msg_id)
-                                        if isinstance(pack, dict):
-                                            hits_for_anno = list(pack.get("hits") or [])
-                                    except Exception:
-                                        hits_for_anno = []
-                                    body2 = _annotate_equation_tags_with_sources(body, hits_for_anno)
-                                    body3, cite_details = _annotate_inpaper_citations_with_hover_meta(
-                                        body2,
-                                        hits_for_anno,
-                                        anchor_ns=f"{conv_id}:{idx}:{msg_id}:hist",
-                                    )
-                                    copy_md_hist = f"{notice}\n\n{body3}" if notice else body3
+                                    copy_md_hist = f"{notice}\n\n{body}" if notice else body
                                     _render_answer_copy_bar(
                                         copy_md_hist,
                                         key_ns=f"copy_{msg_key}",
                                         cite_details=cite_details,
                                     )
                                     copy_hist_rendered = True
-                                    st.markdown(_normalize_chat_markdown_for_display(body3))
+                                    st.markdown(_normalize_chat_markdown_for_display(body))
                                     _render_inpaper_citation_details(
                                         cite_details,
                                         key_ns=f"{conv_id}_{idx}_{msg_id}_hist",
                                     )
                             if not copy_hist_rendered:
-                                if lite_live:
+                                if lite_live or defer_heavy:
                                     st.markdown(_normalize_chat_markdown_for_display(content))
                                 else:
                                     _render_answer_copy_bar(content, key_ns=f"copy_{msg_key}")
 
-                        if (not lite_live) and (last_user_msg_id > 0) and (last_user_msg_id not in shown_refs_user_ids):
+                        if (not lite_live) and (not defer_heavy) and (last_user_msg_id > 0) and (last_user_msg_id not in shown_refs_user_ids):
                             _render_refs_for_user(
                                 last_user_msg_id,
                                 str(last_user_for_refs or "").strip(),
@@ -754,7 +901,7 @@ def _page_chat(
             )
             # Keep body runtime classes in sync even without an app-wide rerun.
             _set_live_streaming_mode(running_now, hide_stale=False)
-            _render_chat_messages_area(live_running=running_now, compact_live=True)
+            _render_chat_messages_area(live_running=running_now, compact_live=True, defer_heavy=False)
             st.session_state["_kb_chat_fragment_prev_running"] = running_now
             pending_finish_rerun = bool(st.session_state.get("_kb_chat_finish_app_rerun_pending", False))
             if running_now and pending_finish_rerun:
@@ -791,7 +938,23 @@ def _page_chat(
         st.session_state.pop("_kb_chat_fragment_prev_running", None)
         st.session_state.pop("_kb_chat_finish_app_rerun_pending", None)
         st.session_state.pop("_kb_chat_finish_app_rerun_after_ts", None)
-        _render_chat_messages_area(live_running=running_for_conv, compact_live=False)
+        _render_chat_messages_area(live_running=running_for_conv, compact_live=False, defer_heavy=defer_heavy_open)
+
+    if defer_heavy_open:
+        pulse_label = "__KB_CHAT_DEFERRED_OPEN_PULSE__"
+        try:
+            if st.button(pulse_label, key=f"_kb_chat_deferred_open_btn_{conv_id}"):
+                _finish_deferred_chat_open()
+        except Exception:
+            pass
+        try:
+            _inject_auto_rerun_once(
+                delay_ms=90,
+                pulse_button_label=pulse_label,
+                nonce=f"chat-open:{conv_id}:{len(msgs)}",
+            )
+        except Exception:
+            pass
 
     def _quick_chat_upload_to_library(selected_files) -> None:
         if not selected_files:
@@ -1087,6 +1250,13 @@ def _page_chat(
                     assistant_msg_id = 0
                 chat_store.set_title_if_default(conv_id, txt or user_store_text)
                 st.session_state["messages"] = chat_store.get_messages(conv_id)
+                st.session_state["_chat_msgs_cache_conv"] = conv_id
+                cached_refs_conv = str(st.session_state.get("_chat_refs_cache_conv") or "")
+                cached_refs = st.session_state.get("_chat_refs_cache") if cached_refs_conv == conv_id else {}
+                if not isinstance(cached_refs, dict):
+                    cached_refs = {}
+                st.session_state["_chat_refs_cache"] = cached_refs
+                st.session_state["_chat_refs_cache_conv"] = conv_id
 
                 ok = _gen_start_task(
                     {
@@ -2684,6 +2854,45 @@ def main() -> None:
         # Inject history sidebar CSS via st.markdown (st.html has CSS regression in Streamlit 1.42+)
         history_slot.markdown(_history_sidebar_compact_css(), unsafe_allow_html=True)
         history_slot.markdown("<div class='kb-history-root' aria-hidden='true'></div>", unsafe_allow_html=True)
+
+        def _prime_chat_view_state(target_id: str) -> None:
+            cid = str(target_id or "").strip()
+            if not cid:
+                return
+            try:
+                prefetched_msgs = chat_store.get_messages(cid)
+            except Exception:
+                prefetched_msgs = []
+            st.session_state["messages"] = prefetched_msgs
+            st.session_state["_chat_msgs_cache_conv"] = cid
+            try:
+                prefetched_refs = chat_store.list_message_refs(cid) or {}
+            except Exception:
+                prefetched_refs = {}
+            if not isinstance(prefetched_refs, dict):
+                prefetched_refs = {}
+            st.session_state["_chat_refs_cache"] = prefetched_refs
+            st.session_state["_chat_refs_cache_conv"] = cid
+
+            hist_state = st.session_state.get("_chat_history_visible_by_conv")
+            if not isinstance(hist_state, dict):
+                hist_state = {}
+            default_visible = len(prefetched_msgs) if len(prefetched_msgs) <= int(_CHAT_HISTORY_OPEN_PAGE_SIZE) else int(_CHAT_HISTORY_OPEN_PAGE_SIZE)
+            hist_state[cid] = int(default_visible)
+            if len(hist_state) > int(_CHAT_HISTORY_STATE_MAX_CONVS):
+                keep_ids = [cid] + [str(k or "") for k in list(hist_state.keys())[-max(1, int(_CHAT_HISTORY_STATE_MAX_CONVS) - 1):]]
+                keep_set = {x for x in keep_ids if x}
+                hist_state = {k: v for k, v in hist_state.items() if k in keep_set}
+            st.session_state["_chat_history_visible_by_conv"] = hist_state
+            if len(prefetched_msgs) > max(10, int(_CHAT_HISTORY_OPEN_PAGE_SIZE)):
+                st.session_state["_chat_deferred_rich_conv"] = cid
+            else:
+                try:
+                    if str(st.session_state.get("_chat_deferred_rich_conv") or "") == cid:
+                        st.session_state.pop("_chat_deferred_rich_conv", None)
+                except Exception:
+                    pass
+
         def _history_new_chat_click() -> None:
             try:
                 _pid = st.session_state.get("project_id")
@@ -2692,12 +2901,16 @@ def main() -> None:
                 new_id = ""
             if new_id:
                 st.session_state["conv_id"] = new_id
+                _prime_chat_view_state(new_id)
+            else:
+                st.session_state.pop("_chat_deferred_rich_conv", None)
 
         def _history_pick_chat_click(target_id: str) -> None:
             cid = str(target_id or "").strip()
             if not cid:
                 return
             st.session_state["conv_id"] = cid
+            _prime_chat_view_state(cid)
             try:
                 c = chat_store.get_conversation(cid)
                 if c is not None:
@@ -2741,6 +2954,7 @@ def main() -> None:
 
             if next_id:
                 st.session_state["conv_id"] = next_id
+                _prime_chat_view_state(next_id)
             st.session_state.pop("conv_select", None)
 
         actions_slot = history_slot.container()
@@ -2896,16 +3110,32 @@ def main() -> None:
             st.session_state["history_show_older_project_convs"] = False
         if "history_show_older_scattered_convs" not in st.session_state:
             st.session_state["history_show_older_scattered_convs"] = False
+        if "conv_menu_sub" not in st.session_state:
+            st.session_state["conv_menu_sub"] = None
 
-        def _render_history_rows(row_ids: list[str], *, slot=None, older_section: bool = False) -> None:
+        def _open_conv_menu(cid: str) -> None:
+            st.session_state["conv_menu_cid"] = cid
+            st.session_state["conv_menu_sub"] = None
+            # 不在此处调用 rerun：Streamlit 在 on_click 回调里执行 st.rerun() 会被忽略 (no-op)，点击后会自动 rerun
+
+        def _render_history_rows(
+            row_ids: list[str],
+            *,
+            slot=None,
+            older_section: bool = False,
+            projects: list | None = None,
+            conv_project_ids: dict | None = None,
+        ) -> None:
             host = slot or history_slot
+            _projects = projects or []
+            _conv_project_ids = conv_project_ids or {}
             for cid in row_ids:
                 row_label = conv_labels.get(cid, cid)
                 marker_cls = "kb-history-row kb-history-row-current" if cid == cur_conv_id else "kb-history-row"
                 if older_section:
                     marker_cls += " kb-history-older-row"
                 host.markdown(f"<div class='{marker_cls}' aria-hidden='true'></div>", unsafe_allow_html=True)
-                row_cols = host.columns([8.4, 0.5, 0.5], gap="small")
+                row_cols = host.columns([8.4, 0.5], gap="small")  # 标题 + 箭头悬浮菜单（第一级：移动到/删除，第二级：项目列表）
                 with row_cols[0]:
                     st.markdown(
                         "<div class='kb-history-row-btn-slot' aria-hidden='true' style='display:none;height:0;margin:0;padding:0;overflow:hidden'></div>",
@@ -2918,25 +3148,68 @@ def main() -> None:
                         args=(cid,),
                     )
                 with row_cols[1]:
-                    if st.button("\u22ee", key=f"conv_menu_btn_{cid}", help=S["conv_move_to_project"]):
-                        st.session_state["conv_menu_cid"] = cid
-                        st.experimental_rerun()
-                with row_cols[2]:
-                    st.button(
-                        "\U0001F5D1",
-                        key=f"conv_del_{cid}",
-                        on_click=_history_delete_chat_by_id,
-                        args=(cid,),
-                        help="Delete this conversation",
+                    st.button("\u203a", key=f"conv_menu_btn_{cid}", on_click=_open_conv_menu, args=(cid,))
+                # 行内操作条：仅当该行为当前打开菜单时，在下方插入一小条（移动到/删除/关闭），无浮层、框即内容
+                if cid == st.session_state.get("conv_menu_cid"):
+                    host.markdown(
+                        "<div id='kb-conv-menu-marker' class='kb-history-menu-bar' aria-hidden='true'></div>",
+                        unsafe_allow_html=True,
                     )
+                    _mcols = host.columns([8.4, 0.5], gap="small")
+                    with _mcols[0]:
+                        _menu_sub = st.session_state.get("conv_menu_sub")
+                        if _menu_sub == "move":
+                            _cur_pid = _conv_project_ids.get(cid)
+                            if _cur_pid is not None:
+                                if st.button(S["project_global"], key=f"conv_inline_global_{cid}"):
+                                    chat_store.set_conversation_project(cid, None)
+                                    st.session_state.pop("conv_menu_cid", None)
+                                    st.session_state.pop("conv_menu_sub", None)
+                                    st.experimental_rerun()
+                            for _p in _projects:
+                                if _p.get("id") == _cur_pid:
+                                    continue
+                                if st.button(_p.get("name") or _p.get("id", ""), key=f"conv_inline_to_{cid}_{_p.get('id', '')}"):
+                                    chat_store.set_conversation_project(cid, _p["id"])
+                                    st.session_state.pop("conv_menu_cid", None)
+                                    st.session_state.pop("conv_menu_sub", None)
+                                    st.experimental_rerun()
+                        else:
+                            if st.button(S["conv_move_to"], key=f"conv_inline_move_{cid}"):
+                                st.session_state["conv_menu_sub"] = "move"
+                                st.experimental_rerun()
+                            if st.button(S["conv_delete"], key=f"conv_inline_del_{cid}"):
+                                _history_delete_chat_by_id(cid)
+                                st.session_state.pop("conv_menu_cid", None)
+                                st.session_state.pop("conv_menu_sub", None)
+                                st.experimental_rerun()
+                    with _mcols[1]:
+                        if st.button("\u00d7", key=f"conv_inline_close_{cid}"):
+                            st.session_state.pop("conv_menu_cid", None)
+                            st.session_state.pop("conv_menu_sub", None)
+                            st.experimental_rerun()
 
         def _make_toggle_older(toggle_key: str):
             def _fn():
                 st.session_state[toggle_key] = not st.session_state.get(toggle_key)
+                # 避免展开/收起更早会话时误触发展开会话操作框
+                st.session_state.pop("conv_menu_cid", None)
+                st.session_state.pop("conv_menu_sub", None)
             return _fn
 
-        def _render_section(slot, recent_ids: list, older_ids: list, toggle_key: str, toggle_click_key: str) -> None:
-            _render_history_rows(recent_ids, slot=slot)
+        def _render_section(
+            slot,
+            recent_ids: list,
+            older_ids: list,
+            toggle_key: str,
+            toggle_click_key: str,
+            *,
+            projects: list | None = None,
+            conv_project_ids: dict | None = None,
+        ) -> None:
+            _projs = projects or []
+            _cpid = conv_project_ids or {}
+            _render_history_rows(recent_ids, slot=slot, projects=_projs, conv_project_ids=_cpid)
             if older_ids:
                 _show = bool(st.session_state.get(toggle_key))
                 _label = "\u25b8 \u5c55\u5f00\u66f4\u65e9\u4f1a\u8bdd" if not _show else "\u25be \u6536\u8d77\u66f4\u65e9\u4f1a\u8bdd"
@@ -2954,11 +3227,10 @@ def main() -> None:
                         "<div class='kb-history-row kb-history-older-row kb-history-dummy-row' aria-hidden='true'></div>",
                         unsafe_allow_html=True,
                     )
-                    _dc = _scroll.columns([8.4, 0.5, 0.5], gap="small")
+                    _dc = _scroll.columns([8.4, 0.5], gap="small")
                     with _dc[0]: st.empty()
                     with _dc[1]: st.empty()
-                    with _dc[2]: st.empty()
-                    _render_history_rows(older_ids, slot=_scroll, older_section=True)
+                    _render_history_rows(older_ids, slot=_scroll, older_section=True, projects=_projs, conv_project_ids=_cpid)
 
         for oid in _option_ids:
             _is_selected = _cur_radio == oid
@@ -2976,7 +3248,7 @@ def main() -> None:
                 _proj_name = _project_label(oid)
                 _row_cls = "kb-history-project-row" + (" kb-history-project-row-selected" if _is_selected else "")
                 _proj_container.markdown(f"<div class='{_row_cls}' aria-hidden='true'></div>", unsafe_allow_html=True)
-                _pcols = _proj_container.columns([7.0, 0.4, 0.4])
+                _pcols = _proj_container.columns([7.0, 0.4])  # 名称 + ⋮ 菜单（重命名/删除并入菜单，避免右侧被挡）
                 _folder_icon = "\U0001F4C2" if _is_selected else "\U0001F4C1"  # open / closed folder
                 _proj_display = f"{_folder_icon} {_proj_name}"
                 with _pcols[0]:
@@ -2989,10 +3261,9 @@ def main() -> None:
                         if st.button(S["project_rename"], key=f"proj_pop_rename_{oid}"):
                             st.session_state["rename_project_id"] = oid
                             st.experimental_rerun()
-                with _pcols[2]:
-                    if st.button("\U0001F5D1", key=f"proj_trash_{oid}", help=S["project_delete"]):
-                        st.session_state["delete_project_id"] = oid
-                        st.experimental_rerun()
+                        if st.button(S["project_delete"], key=f"proj_pop_del_{oid}"):
+                            st.session_state["delete_project_id"] = oid
+                            st.experimental_rerun()
                 if _is_selected and _pid and oid == _pid:
                     _proj_container.markdown("<div class='kb-history-project-convs' aria-hidden='true'></div>", unsafe_allow_html=True)
                     if not project_recent and not project_older:
@@ -3001,6 +3272,7 @@ def main() -> None:
                         _render_section(
                             _proj_container, project_recent, project_older,
                             "history_show_older_project_convs", "history_toggle_older_project_convs",
+                            projects=_projects, conv_project_ids=conv_project_ids,
                         )
 
         if st.session_state.get("project_radio") == "__new__":
@@ -3039,32 +3311,19 @@ def main() -> None:
         _render_section(
             _scattered_slot, global_recent, global_older,
             "history_show_older_scattered_convs", "history_toggle_older_scattered_convs",
+            projects=_projects, conv_project_ids=conv_project_ids,
         )
-
-        if st.session_state.get("conv_menu_cid"):
-            _menu_cid = st.session_state["conv_menu_cid"]
-            with history_slot.expander("\u4f1a\u8bdd\u64cd\u4f5c", expanded=True):
-                _mpid = conv_project_ids.get(_menu_cid)
-                if _mpid:
-                    if st.button(S["conv_remove_from_project"], key="conv_menu_remove"):
-                        chat_store.set_conversation_project(_menu_cid, None)
-                        st.session_state.pop("conv_menu_cid", None)
-                        st.experimental_rerun()
-                if _projects or not _mpid:
-                    if st.button(S["project_global"], key="conv_menu_global"):
-                        chat_store.set_conversation_project(_menu_cid, None)
-                        st.session_state.pop("conv_menu_cid", None)
-                        st.experimental_rerun()
-                    for _p in _projects:
-                        if _p.get("id") == _mpid:
-                            continue
-                        if st.button(_p.get("name") or _p.get("id", ""), key=f"conv_menu_to_{_p.get('id', '')}"):
-                            chat_store.set_conversation_project(_menu_cid, _p["id"])
-                            st.session_state.pop("conv_menu_cid", None)
-                            st.experimental_rerun()
-                if st.button("\u5173\u95ed", key="conv_menu_close"):
-                    st.session_state.pop("conv_menu_cid", None)
-                    st.experimental_rerun()
+        # CSS 备用；用 iframe 内 JS 在父页面直接设按钮字号，确保覆盖 Streamlit 默认
+        history_slot.markdown(_history_menu_button_override_css(), unsafe_allow_html=True)
+        try:
+            st.components.v1.html(
+                _history_menu_button_override_js_html(),
+                height=1,
+                scrolling=False,
+                key="kb_conv_menu_font_override",
+            )
+        except Exception:
+            pass
 
     _inject_runtime_ui_fixes("auto", st.session_state.get("conv_id", ""))
 
@@ -3125,7 +3384,8 @@ def main() -> None:
             st.session_state["db_mtime"] = cur_mtime or time.time()
             retriever_reload_flag["reload"] = False
 
-    st.session_state["messages"] = chat_store.get_messages(st.session_state["conv_id"])
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []
 
     if page != S["page_chat"]:
         _teardown_chat_dock_runtime()
@@ -3160,12 +3420,21 @@ def main() -> None:
     ref_running_end = (page == S["page_library"]) and refsync_is_running_snapshot(ref_end)
     is_running_end = bg_is_running_snapshot(bg_end) or bool(ref_running_end)
     was_running = bool(st.session_state.get("_bg_was_running", False))
+    chat_page_active = page == S["page_chat"]
     lib_local_fragment_refresh = bool(
         (page == S["page_library"])
         and callable(getattr(st, "fragment", None))
         and st.session_state.get("_kb_library_progress_fragments_active", False)
     )
-    if is_running_end:
+    if chat_page_active:
+        # Chat page owns its own refresh cadence; a global heartbeat causes the
+        # entire page shell (title/sidebar) to rerender and visibly flicker.
+        st.session_state["_bg_was_running"] = is_running_end
+        st.session_state["_global_auto_rerun_ts"] = 0.0
+        st.session_state["_global_server_rerun_ts"] = 0.0
+        st.session_state["_kb_auto_hb_started_ts"] = 0.0
+        st.session_state["_kb_client_auto_rerun_ts"] = 0.0
+    elif is_running_end:
         st.session_state["_bg_was_running"] = True
         if lib_local_fragment_refresh:
             # Library page progress runs via st.fragment local reruns; avoid app-wide heartbeat flicker.
