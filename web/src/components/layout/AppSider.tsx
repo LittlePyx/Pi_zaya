@@ -54,6 +54,60 @@ function matchesKeyword(text: string, keyword: string) {
   return String(text || '').toLowerCase().includes(keyword)
 }
 
+interface SwitchStressOptions {
+  rounds?: number
+  delayMs?: number
+  includeLibrary?: boolean
+  awaitSelect?: boolean
+  convIds?: string[]
+}
+
+interface KbSwitchPerfSummary {
+  total: number
+  success: number
+  stale: number
+  error: number
+  sameConv: number
+  avgSuccessMs: number
+}
+
+interface SwitchStressResult {
+  rounds: number
+  delayMs: number
+  includeLibrary: boolean
+  awaitSelect: boolean
+  elapsedMs: number
+  summary: KbSwitchPerfSummary | null
+}
+
+interface KbSwitchPerfEvent {
+  ts: number
+  convId: string
+  token: number
+  status: string
+  durationMs: number
+  usedCache: boolean
+  messageCount: number
+  note: string
+}
+
+interface KbSwitchPerfApi {
+  getLogs: () => KbSwitchPerfEvent[]
+  clear: () => void
+  summary: () => KbSwitchPerfSummary
+}
+
+interface KbDebugApi {
+  runSwitchStress?: (opts?: SwitchStressOptions) => Promise<SwitchStressResult>
+  getSwitchPerf?: () => KbSwitchPerfEvent[]
+  clearSwitchPerf?: () => void
+}
+
+interface DebugWindow extends Window {
+  __kbDebug?: KbDebugApi
+  __kbSwitchPerf?: KbSwitchPerfApi
+}
+
 function ConversationRow({
   conversation,
   active,
@@ -319,6 +373,94 @@ export function AppLayout({ children }: { children: ReactNode }) {
     () => filteredRootConversations.length + visibleProjects.reduce((sum, item) => sum + item.conversations.length, 0),
     [filteredRootConversations, visibleProjects],
   )
+  const allConversationIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const item of rootConversations) ids.add(item.id)
+    for (const group of Object.values(projectConversations)) {
+      for (const item of group) ids.add(item.id)
+    }
+    return Array.from(ids)
+  }, [projectConversations, rootConversations])
+
+  useEffect(() => {
+    const w = window as DebugWindow
+    const base = w.__kbDebug || {}
+    let running = false
+
+    const runSwitchStress = async (opts: SwitchStressOptions = {}): Promise<SwitchStressResult> => {
+      if (running) throw new Error('switch stress is already running')
+      const rounds = Math.min(500, Math.max(1, Math.floor(Number(opts.rounds ?? 50))))
+      const delayMs = Math.max(0, Math.floor(Number(opts.delayMs ?? 40)))
+      const includeLibrary = opts.includeLibrary !== false
+      const awaitSelect = opts.awaitSelect !== false
+      const inputIds = Array.isArray(opts.convIds)
+        ? opts.convIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : []
+      const idPool = inputIds.length > 0 ? inputIds : allConversationIds
+      if (idPool.length === 0) {
+        throw new Error('no conversations available for stress run')
+      }
+      const sleep = (ms: number) => new Promise<void>((resolve) => {
+        window.setTimeout(resolve, ms)
+      })
+      w.__kbSwitchPerf?.clear()
+      running = true
+      const startedAt = performance.now()
+      try {
+        for (let i = 0; i < rounds; i += 1) {
+          const convId = idPool[i % idPool.length]
+          if (awaitSelect) {
+            await selectConv(convId)
+          } else {
+            void selectConv(convId)
+          }
+          if (includeLibrary) {
+            nav('/library')
+            if (delayMs > 0) await sleep(delayMs)
+            nav('/')
+          }
+          if (delayMs > 0) await sleep(delayMs)
+        }
+      } finally {
+        running = false
+      }
+      const elapsedMs = Number((performance.now() - startedAt).toFixed(2))
+      return {
+        rounds,
+        delayMs,
+        includeLibrary,
+        awaitSelect,
+        elapsedMs,
+        summary: w.__kbSwitchPerf?.summary ? w.__kbSwitchPerf.summary() : null,
+      }
+    }
+
+    const getSwitchPerf = () => (w.__kbSwitchPerf?.getLogs ? w.__kbSwitchPerf.getLogs() : [])
+    const clearSwitchPerf = () => {
+      w.__kbSwitchPerf?.clear()
+    }
+
+    w.__kbDebug = {
+      ...base,
+      runSwitchStress,
+      getSwitchPerf,
+      clearSwitchPerf,
+    }
+
+    return () => {
+      const current = w.__kbDebug
+      if (!current || current.runSwitchStress !== runSwitchStress) return
+      const next: KbDebugApi = { ...current }
+      delete next.runSwitchStress
+      delete next.getSwitchPerf
+      delete next.clearSwitchPerf
+      if (Object.keys(next).length === 0) {
+        delete w.__kbDebug
+      } else {
+        w.__kbDebug = next
+      }
+    }
+  }, [allConversationIds, nav, selectConv])
 
   const toggleProjectCollapsed = (projectId: string) => {
     setCollapsedProjects((cur) => ({ ...cur, [projectId]: !cur[projectId] }))

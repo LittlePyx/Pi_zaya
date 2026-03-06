@@ -1865,13 +1865,24 @@ class PDFConverter:
         t = _normalize_text(text or "").strip()
         if not t:
             return None
-        m = re.search(r"\b(?:fig(?:ure)?\.?)\s*(\d{1,4})\b", t, flags=re.IGNORECASE)
+        m = re.search(
+            r"\b(?:fig(?:ure)?\.?)\s*(\d{1,4})(?:[A-Za-z])?\b",
+            t,
+            flags=re.IGNORECASE,
+        )
         if not m:
             return None
         try:
             return int(m.group(1))
         except Exception:
             return None
+
+    @staticmethod
+    def _figure_remap_debug_enabled() -> bool:
+        try:
+            return bool(int(os.environ.get("KB_PDF_DEBUG_FIG_REMAP", "0") or "0"))
+        except Exception:
+            return False
 
     @staticmethod
     def _reorder_page_figure_pairs_by_number(
@@ -1892,7 +1903,7 @@ class PDFConverter:
             flags=re.IGNORECASE,
         )
         cap_re = re.compile(
-            r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?)\s*(\d{1,4})\b",
+            r"^\s*(?:[*_`>#\[\(]\s*)*(?:fig(?:ure)?\.?)\s*(\d{1,4})(?:[A-Za-z])?\b",
             flags=re.IGNORECASE,
         )
         heading_re = re.compile(r"^\s*#{1,6}\s+")
@@ -2049,38 +2060,54 @@ class PDFConverter:
         page_no = int(page_index) + 1
         page_fig_re = re.compile(rf"^page_{page_no}_fig_(\d+)\.[A-Za-z0-9]+$", flags=re.IGNORECASE)
         img_re = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        heading_re = re.compile(r"^\s*#{1,6}\s+")
         cap_re = re.compile(
-            r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?)\s*(\d{1,4})\b",
+            r"^\s*(?:[*_`>#\[\(]\s*)*(?:fig(?:ure)?\.?)\s*(\d{1,4})(?:[A-Za-z])?\b",
             flags=re.IGNORECASE,
         )
 
         lines = md.splitlines()
         changed = 0
+        debug = PDFConverter._figure_remap_debug_enabled()
+        trace: list[str] = []
+        if debug:
+            try:
+                pairs = ", ".join(f"{k}->{v}" for k, v in sorted(fig_to_asset.items(), key=lambda x: x[0]))
+                trace.append(f"[FIG_DEBUG] page {page_no} mapping: {pairs or '<empty>'}")
+            except Exception:
+                pass
 
         def _find_nearby_caption_fig(line_idx: int) -> Optional[int]:
+            def _scan(*, delta: int, max_steps: int, max_non_empty: int) -> Optional[int]:
+                non_empty = 0
+                for step in range(1, max_steps + 1):
+                    j = line_idx + delta * step
+                    if not (0 <= j < len(lines)):
+                        break
+                    raw = lines[j] or ""
+                    s = raw.strip()
+                    if not s:
+                        continue
+                    if heading_re.match(raw) or img_re.search(raw):
+                        break
+                    non_empty += 1
+                    m = cap_re.match(_normalize_text(s))
+                    if m:
+                        try:
+                            return int(m.group(1))
+                        except Exception:
+                            return None
+                    if non_empty >= max_non_empty:
+                        break
+                return None
+
             # Prefer caption below image, then above.
-            for step in range(1, 4):
-                j = line_idx + step
-                if 0 <= j < len(lines):
-                    s = (lines[j] or "").strip()
-                    if s:
-                        m = cap_re.match(_normalize_text(s))
-                        if m:
-                            try:
-                                return int(m.group(1))
-                            except Exception:
-                                pass
-            for step in range(1, 3):
-                j = line_idx - step
-                if 0 <= j < len(lines):
-                    s = (lines[j] or "").strip()
-                    if s:
-                        m = cap_re.match(_normalize_text(s))
-                        if m:
-                            try:
-                                return int(m.group(1))
-                            except Exception:
-                                pass
+            down = _scan(delta=1, max_steps=8, max_non_empty=3)
+            if down is not None:
+                return down
+            up = _scan(delta=-1, max_steps=6, max_non_empty=2)
+            if up is not None:
+                return up
             return None
 
         out_lines: list[str] = []
@@ -2102,10 +2129,19 @@ class PDFConverter:
                 if fig_no is None:
                     fig_no = _find_nearby_caption_fig(idx)
                 if fig_no is None:
+                    if debug:
+                        trace.append(
+                            f"[FIG_DEBUG] page {page_no} line {idx+1}: skip {base} (no fig number from alt/caption)"
+                        )
                     continue
 
                 target = fig_to_asset.get(int(fig_no))
                 if not target or target == base:
+                    if debug:
+                        target_show = target if target else "<none>"
+                        trace.append(
+                            f"[FIG_DEBUG] page {page_no} line {idx+1}: keep {base} (fig_no={fig_no}, target={target_show})"
+                        )
                     continue
 
                 new_ref = f"![{alt}](./assets/{target})"
@@ -2117,8 +2153,18 @@ class PDFConverter:
                 out = out[:s0] + new_ref + out[e0:]
                 shift += len(new_ref) - (e0 - s0)
                 changed += 1
+                if debug:
+                    trace.append(
+                        f"[FIG_DEBUG] page {page_no} line {idx+1}: remap {base} -> {target} (fig_no={fig_no})"
+                    )
             out_lines.append(out)
 
+        if debug and trace:
+            for row in trace:
+                try:
+                    print(row, flush=True)
+                except Exception:
+                    pass
         if changed:
             try:
                 print(f"[IMAGE_REMAP] page {page_no}: remapped {changed} figure link(s) by caption metadata", flush=True)

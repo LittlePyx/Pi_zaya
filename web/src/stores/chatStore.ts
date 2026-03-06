@@ -14,6 +14,97 @@ let refsPollTimer: number | null = null
 let uploadPollToken = 0
 let uploadPollTimer: number | null = null
 let conversationSwitchToken = 0
+type SwitchPerfStatus = 'same_conv' | 'success' | 'stale' | 'error'
+interface SwitchPerfEvent {
+  ts: number
+  convId: string
+  token: number
+  status: SwitchPerfStatus
+  durationMs: number
+  usedCache: boolean
+  messageCount: number
+  note: string
+}
+interface SwitchPerfSummary {
+  total: number
+  success: number
+  stale: number
+  error: number
+  sameConv: number
+  avgSuccessMs: number
+}
+interface SwitchPerfApi {
+  getLogs: () => SwitchPerfEvent[]
+  clear: () => void
+  summary: () => SwitchPerfSummary
+}
+interface DebugWindow extends Window {
+  __kbSwitchPerf?: SwitchPerfApi
+}
+const switchPerfLog: SwitchPerfEvent[] = []
+const SWITCH_PERF_LIMIT = 240
+
+function nowMs() {
+  try {
+    return performance.now()
+  } catch {
+    return Date.now()
+  }
+}
+
+function getSwitchPerfSummary(): SwitchPerfSummary {
+  const total = switchPerfLog.length
+  let success = 0
+  let stale = 0
+  let error = 0
+  let sameConv = 0
+  let successDuration = 0
+  for (const event of switchPerfLog) {
+    if (event.status === 'success') {
+      success += 1
+      successDuration += event.durationMs
+    } else if (event.status === 'stale') {
+      stale += 1
+    } else if (event.status === 'error') {
+      error += 1
+    } else if (event.status === 'same_conv') {
+      sameConv += 1
+    }
+  }
+  return {
+    total,
+    success,
+    stale,
+    error,
+    sameConv,
+    avgSuccessMs: success > 0 ? Number((successDuration / success).toFixed(2)) : 0,
+  }
+}
+
+function ensureSwitchPerfApi() {
+  if (typeof window === 'undefined') return
+  const w = window as DebugWindow
+  if (w.__kbSwitchPerf) return
+  w.__kbSwitchPerf = {
+    getLogs: () => switchPerfLog.slice(),
+    clear: () => {
+      switchPerfLog.length = 0
+    },
+    summary: () => getSwitchPerfSummary(),
+  }
+}
+
+function pushSwitchPerf(event: SwitchPerfEvent) {
+  switchPerfLog.push(event)
+  if (switchPerfLog.length > SWITCH_PERF_LIMIT) {
+    switchPerfLog.splice(0, switchPerfLog.length - SWITCH_PERF_LIMIT)
+  }
+  ensureSwitchPerfApi()
+}
+
+if (typeof window !== 'undefined') {
+  ensureSwitchPerfApi()
+}
 
 function stopRefsPolling() {
   refsPollToken += 1
@@ -256,6 +347,18 @@ async function loadGroupedConversations(projects: Project[]) {
   }
 }
 
+function findConversationInState(state: ChatState, convId: string): Conversation | null {
+  for (const item of state.rootConversations) {
+    if (item.id === convId) return item
+  }
+  for (const items of Object.values(state.projectConversations)) {
+    for (const item of items) {
+      if (item.id === convId) return item
+    }
+  }
+  return null
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   projects: [],
   activeProjectId: null,
@@ -319,6 +422,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
   selectConversation: async (id) => {
     const convId = String(id || '').trim()
     if (!convId) return
+    const startedAt = nowMs()
+    const current = get()
+    if (current.activeConvId === convId) {
+      if (Object.keys(current.refs || {}).length === 0) {
+        void loadRefsForConversation(convId, set, () => get().activeConvId)
+      }
+      pushSwitchPerf({
+        ts: Date.now(),
+        convId,
+        token: conversationSwitchToken,
+        status: 'same_conv',
+        durationMs: Number((nowMs() - startedAt).toFixed(2)),
+        usedCache: true,
+        messageCount: current.messages.length,
+        note: 'skip_same_conversation',
+      })
+      return
+    }
     const myToken = ++conversationSwitchToken
     stopRefsPolling()
     stopUploadPolling()
@@ -329,20 +450,68 @@ export const useChatStore = create<ChatState>((set, get) => ({
       uploadItems: [],
       pendingImages: [],
     })
+    const cachedConv = findConversationInState(current, convId)
+    if (cachedConv) {
+      set({ activeProjectId: cachedConv.project_id ?? null })
+    }
     try {
       const [conv, msgs] = await Promise.all([
-        chatApi.getConversation(convId),
+        cachedConv ? Promise.resolve(cachedConv) : chatApi.getConversation(convId).catch(() => null),
         chatApi.getMessages(convId),
       ])
-      if (myToken !== conversationSwitchToken || get().activeConvId !== convId) return
+      if (myToken !== conversationSwitchToken || get().activeConvId !== convId) {
+        pushSwitchPerf({
+          ts: Date.now(),
+          convId,
+          token: myToken,
+          status: 'stale',
+          durationMs: Number((nowMs() - startedAt).toFixed(2)),
+          usedCache: Boolean(cachedConv),
+          messageCount: 0,
+          note: 'stale_after_fetch',
+        })
+        return
+      }
       set({
-        activeProjectId: conv.project_id ?? null,
+        activeProjectId: conv?.project_id ?? null,
         messages: msgs,
       })
       void loadRefsForConversation(convId, set, () => get().activeConvId)
+      pushSwitchPerf({
+        ts: Date.now(),
+        convId,
+        token: myToken,
+        status: 'success',
+        durationMs: Number((nowMs() - startedAt).toFixed(2)),
+        usedCache: Boolean(cachedConv),
+        messageCount: msgs.length,
+        note: conv ? 'ok' : 'ok_without_conv_meta',
+      })
     } catch {
-      if (myToken !== conversationSwitchToken || get().activeConvId !== convId) return
+      if (myToken !== conversationSwitchToken || get().activeConvId !== convId) {
+        pushSwitchPerf({
+          ts: Date.now(),
+          convId,
+          token: myToken,
+          status: 'stale',
+          durationMs: Number((nowMs() - startedAt).toFixed(2)),
+          usedCache: Boolean(cachedConv),
+          messageCount: 0,
+          note: 'stale_after_error',
+        })
+        return
+      }
       set({ messages: [], refs: {} })
+      pushSwitchPerf({
+        ts: Date.now(),
+        convId,
+        token: myToken,
+        status: 'error',
+        durationMs: Number((nowMs() - startedAt).toFixed(2)),
+        usedCache: Boolean(cachedConv),
+        messageCount: 0,
+        note: 'fetch_failed',
+      })
     }
   },
 
