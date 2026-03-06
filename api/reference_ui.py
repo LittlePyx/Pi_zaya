@@ -33,6 +33,14 @@ _MIN_REF_UI_SCORE = 5.2
 _MAX_REF_UI_GAP = 1.8
 
 
+def _source_filename(source_path: str) -> str:
+    s = str(source_path or "").strip()
+    if not s:
+        return ""
+    parts = re.split(r"[\\/]+", s)
+    return str(parts[-1] or "").strip() if parts else s
+
+
 def _clamp_ui_score(score: float) -> float:
     try:
         v = float(score)
@@ -152,7 +160,7 @@ def _display_source_name(source_path: str, pdf_path: Path | None, lib_store: Lib
     except Exception:
         pass
 
-    name = Path(str(source_path or "")).name or str(source_path or "")
+    name = _source_filename(source_path) or str(source_path or "")
     low = name.lower()
     if low.endswith(".en.md"):
         name = name[:-6] + ".pdf"
@@ -577,7 +585,7 @@ def ensure_source_citation_meta(*, source_path: str, pdf_root: Path | None, md_r
         return meta
 
     venue_hint, year_hint, _ = _parse_filename_meta(source_path)
-    fallback_title = Path(str(source_path or "")).name
+    fallback_title = _source_filename(source_path) or str(source_path or "")
     if fallback_title.lower().endswith(".pdf"):
         fallback_title = fallback_title[:-4]
     fallback_title = re.sub(r"\.en\.md$", "", fallback_title, flags=re.I)

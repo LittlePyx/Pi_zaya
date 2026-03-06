@@ -2214,8 +2214,14 @@ def _metrics_html(meta: dict) -> str:
 
 
 def _parse_filename_meta(path_str: str) -> tuple[str, str, str]:
-    name = Path(path_str).stem
-    if name.lower().endswith(".en"):
+    raw = str(path_str or "").strip()
+    parts = re.split(r"[\\/]+", raw) if raw else []
+    name = str(parts[-1] or "").strip() if parts else raw
+    low = name.lower()
+    if low.endswith(".md"):
+        name = name[:-3]
+        low = name.lower()
+    if low.endswith(".en"):
         name = name[:-3]
     m = re.match(r"^([^-]+)\s*-\s*(19\d{2}|20\d{2})\s*-\s*(.+)$", name)
     if m:
