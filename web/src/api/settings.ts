@@ -17,6 +17,9 @@ export interface SettingsPatch {
   theme?: 'light' | 'dark'
   pdfDir?: string
   mdDir?: string
+  answerContractV1?: boolean
+  answerDepthAuto?: boolean
+  answerModeHint?: string
 }
 
 export interface PickDirResponse {
@@ -34,6 +37,9 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.theme !== undefined) out.theme = patch.theme
   if (patch.pdfDir !== undefined) out.pdf_dir = patch.pdfDir
   if (patch.mdDir !== undefined) out.md_dir = patch.mdDir
+  if (patch.answerContractV1 !== undefined) out.answer_contract_v1 = patch.answerContractV1
+  if (patch.answerDepthAuto !== undefined) out.answer_depth_auto = patch.answerDepthAuto
+  if (patch.answerModeHint !== undefined) out.answer_mode_hint = patch.answerModeHint
   return out
 }
 

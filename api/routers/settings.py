@@ -34,6 +34,9 @@ class PrefsPatch(BaseModel):
     theme: str | None = None
     pdf_dir: str | None = None
     md_dir: str | None = None
+    answer_contract_v1: bool | None = None
+    answer_depth_auto: bool | None = None
+    answer_mode_hint: str | None = None
 
 
 @router.patch("/settings")

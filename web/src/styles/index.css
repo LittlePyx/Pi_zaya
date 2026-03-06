@@ -373,6 +373,59 @@ body,
   border-top: 1px solid color-mix(in srgb, var(--text-main) 16%, transparent);
 }
 
+.kb-markdown .kb-answer-contract {
+  display: grid;
+  gap: 12px;
+  margin: 0.6rem 0;
+}
+
+.kb-markdown .kb-answer-section {
+  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg));
+  padding: 10px 12px 9px;
+}
+
+.kb-markdown .kb-answer-title {
+  display: inline-flex;
+  align-items: center;
+  margin-bottom: 6px;
+  color: color-mix(in srgb, var(--text-main) 90%, transparent);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+.kb-markdown .kb-answer-section :where(p, ul, ol, blockquote, pre, table) {
+  margin-top: 0.45rem;
+  margin-bottom: 0.45rem;
+}
+
+.kb-markdown .kb-answer-section :where(p, ul, ol):first-child {
+  margin-top: 0.15rem;
+}
+
+.kb-markdown .kb-answer-section > :last-child {
+  margin-bottom: 0;
+}
+
+.kb-markdown .kb-answer-conclusion {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 62%, transparent);
+}
+
+.kb-markdown .kb-answer-evidence {
+  border-left: 3px solid color-mix(in srgb, #3aa86f 68%, transparent);
+}
+
+.kb-markdown .kb-answer-limits {
+  border-left: 3px solid color-mix(in srgb, #d48a2a 72%, transparent);
+}
+
+.kb-markdown .kb-answer-next_steps {
+  border-left: 3px solid color-mix(in srgb, #6d79df 64%, transparent);
+}
+
 .kb-refs-panel {
   position: relative;
   background:

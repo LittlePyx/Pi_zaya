@@ -65,7 +65,12 @@ function pickNumber(rec: Record<string, unknown>, ...keys: string[]): number {
 function isWeakField(key: string, value: string): boolean {
   const s = String(value || '').trim()
   if (!s) return true
-  if (key === 'title') return s.length <= 4 || (s.match(/[A-Za-z0-9\u4e00-\u9fff]+/g)?.length || 0) <= 1
+  if (key === 'title') {
+    if (s.length <= 4 || (s.match(/[A-Za-z0-9\u4e00-\u9fff]+/g)?.length || 0) <= 1) return true
+    if (/^[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.?)(?:\s*[A-Z]\.?)?$/i.test(s)) return true
+    if (/^[A-Z][A-Za-z'`-]+(?:\s+[A-Z][A-Za-z'`-]+){0,2},\s*(?:[A-Z]\.?\s*){1,3}$/i.test(s)) return true
+    if (/\bet\s+al\.?$/i.test(s) && (s.match(/[A-Za-z\u4e00-\u9fff]+/g)?.length || 0) <= 4) return true
+  }
   if (key === 'authors') return s.length <= 3 || (s.match(/[A-Za-z\u4e00-\u9fff]+/g)?.length || 0) <= 1
   if (key === 'venue') return s.length <= 1
   return false
@@ -222,6 +227,37 @@ function baseName(path: string): string {
   return String(parts[parts.length - 1] || '').trim()
 }
 
+function stripKnownExt(name: string): string {
+  return String(name || '')
+    .replace(/\.en\.md$/i, '')
+    .replace(/\.md$/i, '')
+    .replace(/\.pdf$/i, '')
+    .trim()
+}
+
+function titleFromSourceName(sourceName: string, sourcePath: string): string {
+  const raw = stripKnownExt(sourceName || baseName(sourcePath))
+  if (!raw) return ''
+  let candidate = raw.replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+  const m = candidate.match(/^[A-Za-z]{2,20}-\d{4}-(.+)$/)
+  if (m && m[1]) candidate = String(m[1]).trim()
+  const m2 = candidate.match(/^\d{4}[-_ ]+(.+)$/)
+  if (m2 && m2[1]) candidate = String(m2[1]).trim()
+  return isWeakField('title', candidate) ? '' : candidate
+}
+
+function looksCitationLine(text: string): boolean {
+  const s = String(text || '').replace(/\*+/g, '').replace(/\s+/g, ' ').trim()
+  if (s.length < 24) return false
+  const hasYear = /\b(?:19|20)\d{2}\b/.test(s)
+  const hasVolumePagesTail = /,\s*\d{1,4}\s*,\s*\d{1,6}\.?$/.test(s)
+  const hasVenueToken = /\b(?:Nat\.?|IEEE|ACM|Opt\.?|Phys\.?|Commun\.?|Journal|Proceedings|CVPR|ICCV|ICML|NeurIPS)\b/i.test(s)
+  const startsLikeAuthors = /^(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})(?:,\s*[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})*/.test(s)
+  if (hasYear && hasVolumePagesTail) return true
+  if (startsLikeAuthors && hasYear && hasVenueToken) return true
+  return false
+}
+
 export function citationSourceLabel(detail: CiteDetail): string {
   return detail.sourceName || baseName(detail.sourcePath)
 }
@@ -230,7 +266,12 @@ export function citationDisplay(detail: CiteDetail) {
   const main = (() => {
     const title = String(detail.title || '').trim()
     if (!isWeakField('title', title)) return title
-    return citationMain(detail)
+    const sourceDerived = titleFromSourceName(detail.sourceName, detail.sourcePath)
+    const fallbackMain = citationMain(detail)
+    if (sourceDerived && (isWeakField('title', fallbackMain) || looksCitationLine(fallbackMain))) {
+      return sourceDerived
+    }
+    return fallbackMain
   })()
   const authors = isWeakField('authors', detail.authors) ? '' : String(detail.authors || '').trim()
   const venue = isWeakField('venue', detail.venue) ? '' : String(detail.venue || '').trim()

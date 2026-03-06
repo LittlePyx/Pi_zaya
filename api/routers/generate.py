@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from api.deps import get_settings, get_chat_store
+from api.deps import get_settings, get_chat_store, load_prefs
 from api.routers.chat import _normalize_chat_image_attachment
 from api.sse import sse_generator, sse_response
 from kb.task_runtime import (
@@ -33,9 +33,11 @@ class GenerateBody(BaseModel):
 def start_generation(body: GenerateBody):
     settings = get_settings()
     chat_store = get_chat_store()
+    prefs = load_prefs()
     session_id = uuid.uuid4().hex
     task_id = uuid.uuid4().hex
     prompt = str(body.prompt or "").strip()
+    max_tokens = max(256, min(4096, int(body.max_tokens or 1216)))
     image_attachments = [_normalize_chat_image_attachment(it) for it in list(body.image_attachments or []) if isinstance(it, dict)]
     if (not prompt) and (not image_attachments):
         raise HTTPException(400, "prompt or image_attachments required")
@@ -59,11 +61,14 @@ def start_generation(body: GenerateBody):
         "db_dir": str(settings.db_dir),
         "top_k": body.top_k,
         "temperature": body.temperature,
-        "max_tokens": body.max_tokens,
+        "max_tokens": max_tokens,
         "deep_read": body.deep_read,
         "settings_obj": settings,
         "user_msg_id": user_msg_id,
         "assistant_msg_id": assistant_msg_id,
+        "answer_contract_v1": bool(prefs.get("answer_contract_v1", False)),
+        "answer_depth_auto": bool(prefs.get("answer_depth_auto", True)),
+        "answer_mode_hint": str(prefs.get("answer_mode_hint") or "").strip()[:32],
     }
     _gen_start_task(task)
     return {

@@ -56,6 +56,17 @@ interface ShelfSnapshot {
   open: boolean
   items: CiteShelfItem[]
 }
+const shelfSnapshotMemory = new Map<string, ShelfSnapshot>()
+
+function cloneShelfSnapshot(snapshot: ShelfSnapshot): ShelfSnapshot {
+  return {
+    version: Number(snapshot.version || 0),
+    revision: Number(snapshot.revision || 0),
+    updatedAt: Number(snapshot.updatedAt || 0),
+    open: Boolean(snapshot.open),
+    items: (snapshot.items || []).map((item) => ({ ...item })),
+  }
+}
 
 function listShelfStorages(): Storage[] {
   const out: Storage[] = []
@@ -88,6 +99,8 @@ function readShelfStorage(key: string): string {
 }
 
 function writeShelfStorage(key: string, payload: string) {
+  // Always keep in-memory raw snapshot first to survive temporary storage failures.
+  shelfStorageFallback.set(key, payload)
   let wrote = false
   for (const storage of listShelfStorages()) {
     try {
@@ -97,14 +110,11 @@ function writeShelfStorage(key: string, payload: string) {
       // ignore
     }
   }
-  if (!wrote) {
-    shelfStorageFallback.set(key, payload)
-    return
-  }
-  shelfStorageFallback.set(key, payload)
+  if (!wrote) return
 }
 
 function removeShelfStorage(key: string) {
+  shelfSnapshotMemory.delete(key)
   for (const storage of listShelfStorages()) {
     try {
       storage.removeItem(key)
@@ -135,6 +145,10 @@ function restoreShelfItems(rawItems: unknown[]): CiteShelfItem[] {
 }
 
 function readShelfSnapshot(key: string, rawOverride?: string): ShelfSnapshot | null {
+  if (typeof rawOverride !== 'string') {
+    const mem = shelfSnapshotMemory.get(key)
+    if (mem) return cloneShelfSnapshot(mem)
+  }
   const raw = typeof rawOverride === 'string' ? rawOverride : readShelfStorage(key)
   if (!raw) return null
   try {
@@ -142,15 +156,18 @@ function readShelfSnapshot(key: string, rawOverride?: string): ShelfSnapshot | n
     const itemsRaw: unknown[] = Array.isArray(parsed?.items) ? parsed.items : []
     const revision0 = Number(parsed?.revision || 0)
     const updatedAt0 = Number(parsed?.updatedAt || 0)
-    return {
+    const snapshot: ShelfSnapshot = {
       version: Number(parsed?.version || 0) || 0,
       revision: Number.isFinite(revision0) && revision0 > 0 ? Math.floor(revision0) : 0,
       updatedAt: Number.isFinite(updatedAt0) && updatedAt0 > 0 ? Math.floor(updatedAt0) : 0,
       open: Boolean(parsed?.open),
       items: restoreShelfItems(itemsRaw),
     }
+    shelfSnapshotMemory.set(key, snapshot)
+    return cloneShelfSnapshot(snapshot)
   } catch {
     // Corrupted payload: keep running and clear stale bad data.
+    shelfSnapshotMemory.delete(key)
     removeShelfStorage(key)
     return null
   }
@@ -272,13 +289,15 @@ function persistShelfSnapshot(
     return Math.max(currentRevision, existing.revision)
   }
   const nextRevision = Math.max(currentRevision, existing?.revision || 0) + 1
-  const raw = JSON.stringify({
+  const snapshot: ShelfSnapshot = {
     version: SHELF_SCHEMA_VERSION,
     revision: nextRevision,
     updatedAt: Date.now(),
     open: payload.open,
     items: normalizedItems,
-  })
+  }
+  shelfSnapshotMemory.set(storageKey, cloneShelfSnapshot(snapshot))
+  const raw = JSON.stringify(snapshot)
   writeShelfStorage(storageKey, raw)
   return nextRevision
 }
@@ -409,6 +428,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     const onStorage = (event: StorageEvent) => {
       if (event.key !== storageKey) return
       if (event.newValue === null) {
+        shelfSnapshotMemory.delete(storageKey)
         skipShelfPersistOnceRef.current = true
         shelfRevisionByKeyRef.current[storageKey] = 0
         setShelfItems([])
@@ -440,15 +460,6 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
         window.clearTimeout(persistShelfTimerRef.current)
         persistShelfTimerRef.current = null
       }
-      const latest = latestShelfStateRef.current
-      const storageKey = shelfStorageKey(latest.convId)
-      const currentRevision = Number(shelfRevisionByKeyRef.current[storageKey] || 0)
-      const nextRevision = persistShelfSnapshot(
-        storageKey,
-        { open: latest.open, items: latest.items },
-        currentRevision,
-      )
-      shelfRevisionByKeyRef.current[storageKey] = nextRevision
     }
   }, [])
 
@@ -543,20 +554,48 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const openCitation = (detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
     setPopoverDetail(detail)
     setPopoverPos({ x: event.clientX, y: event.clientY })
-    if (!detail.bibliometricsChecked && (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)) {
-      setPopoverLoading(true)
-      referencesApi.bibliometricsCached(detail as unknown as Record<string, unknown>)
-        .then((meta) => {
-          setPopoverDetail((current) => (current ? mergeCiteMeta(current, meta) : current))
-          setShelfItems((current) => current.map((item) => (
-            item.key === toShelfItem(detail).key ? toShelfItem(mergeCiteMeta(item, meta)) : item
-          )))
-        })
-        .catch(() => {})
-        .finally(() => setPopoverLoading(false))
-    } else {
+    const sourcePath = String(detail.sourcePath || '').trim()
+    const shouldFetchCitationMeta = Boolean(sourcePath)
+    const shouldFetchBibliometrics = !detail.bibliometricsChecked && (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
+    if (!shouldFetchCitationMeta && !shouldFetchBibliometrics) {
       setPopoverLoading(false)
+      return
     }
+
+    const reqs: Array<Promise<Record<string, unknown>>> = []
+    if (shouldFetchCitationMeta && sourcePath) {
+      reqs.push(referencesApi.citationMetaCached(sourcePath).catch(() => ({})))
+    }
+    if (shouldFetchBibliometrics) {
+      reqs.push(referencesApi.bibliometricsCached(detail as unknown as Record<string, unknown>).catch(() => ({})))
+    }
+
+    const itemKey = toShelfItem(detail).key
+    setPopoverLoading(true)
+    Promise.all(reqs)
+      .then((metas) => {
+        setPopoverDetail((current) => {
+          if (!current) return current
+          let merged = current
+          for (const meta of metas) {
+            if (meta && Object.keys(meta).length > 0) {
+              merged = mergeCiteMeta(merged, meta)
+            }
+          }
+          return merged
+        })
+        setShelfItems((current) => current.map((item) => {
+          if (item.key !== itemKey) return item
+          let merged: CiteDetail = item
+          for (const meta of metas) {
+            if (meta && Object.keys(meta).length > 0) {
+              merged = mergeCiteMeta(merged, meta)
+            }
+          }
+          return toShelfItem(merged)
+        }))
+      })
+      .finally(() => setPopoverLoading(false))
   }
 
   const addToShelf = (detail: CiteDetail) => {

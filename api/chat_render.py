@@ -20,6 +20,11 @@ _STRUCT_CITE_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d
 _STRUCT_CITE_SINGLE_RE = re.compile(r"(?<!\[)\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})(?:\s*:\s*(\d{1,4}))?\s*\](?!\])", re.IGNORECASE)
 _STRUCT_CITE_SID_ONLY_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]", re.IGNORECASE)
 _STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORECASE)
+_STRUCT_SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
+_STRUCT_SID_HEADER_LINE_RE = re.compile(
+    r"(?im)^\s*\[\d{1,3}\]\s*\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\][^\n]*\n?",
+    re.IGNORECASE,
+)
 _EQ_SOURCE_NOTE_RE = re.compile(
     r"\*\s*（式\((\d{1,4})\)\s*来自参考定位\s*#\d+\s*：\s*`([^`]+)`(?:，可在下方参考定位点\s*Open/Page)?）\s*\*"
 )
@@ -42,6 +47,17 @@ def _split_kb_miss_notice(text: str) -> tuple[str, str]:
     if not s.startswith(prefix):
         return "", text
 
+    nl = s.find("\n")
+    if nl != -1:
+        return s[:nl].strip(), s[nl + 1 :].lstrip("\n")
+
+    for sep in ("。", ".", "！", "!", "？", "?", ";", "；"):
+        idx = s.find(sep)
+        if 0 <= idx <= 80:
+            return s[: idx + 1].strip(), s[idx + 1 :].lstrip()
+
+    return prefix, s[len(prefix) :].lstrip("：: \t")
+
 
 def _normalize_equation_source_notes(md: str) -> str:
     def _replace(m: re.Match[str]) -> str:
@@ -53,69 +69,37 @@ def _normalize_equation_source_notes(md: str) -> str:
 
     return _EQ_SOURCE_NOTE_RE.sub(_replace, str(md or ""))
 
-    nl = s.find("\n")
-    if nl != -1:
-        return s[:nl].strip(), s[nl + 1 :].lstrip("\n")
-
-    for sep in ("。", ".", "！", "!", "？", "?", ";", "；"):
-        idx = s.find(sep)
-        if 0 <= idx <= 80:
-            return s[: idx + 1].strip(), s[idx + 1 :].lstrip()
-
-    return prefix, s[len(prefix) :].lstrip("：: \t")
-
-
-def _split_kb_miss_notice(text: str) -> tuple[str, str]:
-    if not text:
-        return "", ""
-    s = text.lstrip()
-    prefix = "未命中知识库片段"
-    if not s.startswith(prefix):
-        return "", text
-
-    nl = s.find("\n")
-    if nl != -1:
-        return s[:nl].strip(), s[nl + 1 :].lstrip("\n")
-
-    for sep in ("。", ".", "！", "!", "？", "?", ";", "；"):
-        idx = s.find(sep)
-        if 0 <= idx <= 80:
-            return s[: idx + 1].strip(), s[idx + 1 :].lstrip()
-
-    return prefix, s[len(prefix) :].lstrip("：: \t")
-
-
-def _normalize_equation_source_notes(md: str) -> str:
-    note_re = re.compile(
-        r"\*\s*（式\((\d{1,4})\)\s*来自参考定位\s*#\d+\s*：\s*`([^`]+)`(?:，可在下方参考定位点\s*Open/Page)?）\s*\*"
-    )
-
-    def _replace(m: re.Match[str]) -> str:
-        eq_num = str(m.group(1) or "").strip()
-        label = str(m.group(2) or "").strip()
-        if not eq_num or not label:
-            return m.group(0)
-        return f"*（式({eq_num}) 对应命中的库内文献：`{label}`）*"
-
-    return note_re.sub(_replace, str(md or ""))
-
 
 def _strip_structured_cite_tokens_for_display(md: str) -> str:
     s = str(md or "")
-    if (not s) or ("CITE" not in s.upper()):
+    if not s:
         return s
-    out = _STRUCT_CITE_RE.sub(lambda m: f"[{int(m.group(2))}]", s)
-    out = _STRUCT_CITE_SINGLE_RE.sub(
-        lambda m: f"[{int(m.group(2))}]" if str(m.group(2) or "").strip() else "",
-        out,
-    )
-    out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
-    out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
+    out = s
+    if "CITE" in s.upper():
+        out = _STRUCT_CITE_RE.sub(lambda m: f"[{int(m.group(2))}]", out)
+        out = _STRUCT_CITE_SINGLE_RE.sub(
+            lambda m: f"[{int(m.group(2))}]" if str(m.group(2) or "").strip() else "",
+            out,
+        )
+        out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
+        out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
+    out = _STRUCT_SID_HEADER_LINE_RE.sub("", out)
+    out = _STRUCT_SID_INLINE_RE.sub("", out)
     return out
 
 
 def _normalize_chat_markdown_for_display(md: str) -> str:
     return _normalize_math_markdown(_strip_structured_cite_tokens_for_display(md))
+
+
+def _build_render_texts(*, rendered_full: str, rendered_body: str, notice: str, cite_details: list[dict]) -> tuple[str, str, str, str]:
+    rendered_content = _normalize_chat_markdown_for_display(rendered_full)
+    body_norm = _normalize_chat_markdown_for_display(rendered_body) if rendered_body else ""
+    if (not body_norm) and (not notice):
+        body_norm = rendered_content
+    copy_markdown = _normalize_copy_citation_links(rendered_content, cite_details)
+    copy_text = _md_to_plain_text(copy_markdown)
+    return rendered_content, body_norm, copy_markdown, copy_text
 
 
 def _source_name_from_path(source_path: str) -> str:
@@ -307,14 +291,18 @@ def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: di
         else:
             rendered_full = content
 
-        rendered_markdown = _normalize_chat_markdown_for_display(rendered_full)
-        copy_markdown = _normalize_copy_citation_links(rendered_markdown, cite_details)
+        rendered_markdown, rendered_body_norm, copy_markdown, copy_text = _build_render_texts(
+            rendered_full=rendered_full,
+            rendered_body=str(rendered_body or ""),
+            notice=notice,
+            cite_details=cite_details,
+        )
         rec["cite_details"] = cite_details
         rec["copy_markdown"] = copy_markdown
-        rec["copy_text"] = _md_to_plain_text(copy_markdown)
+        rec["copy_text"] = copy_text
         rec["rendered_content"] = rendered_markdown
         rec["notice"] = notice
-        rec["rendered_body"] = _normalize_chat_markdown_for_display(rendered_body) if rendered_body else ""
+        rec["rendered_body"] = rendered_body_norm
         rec["refs_user_msg_id"] = int(last_user_msg_id or 0)
         rec["render_cache_key"] = hashlib.sha1(
             f"{conv_id}|{msg_id}|{last_user_msg_id}|{content}".encode("utf-8", "ignore")
