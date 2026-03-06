@@ -316,6 +316,9 @@ NOISE_LINE_PATTERNS = [
     r"^\s*\d+:\d+\s*$",  # e.g. "139:2" page labels in ACM PDFs
     r"^\s*-\s+Bernhard Kerbl, Georgios Kopanas,.*$",  # running author header
     r"^\s*-\s*$",  # stray single dash line
+    r"^\s*REVIEW\s+ARTICLE\s*$",
+    r"^\s*NATURAL\s+PHOTONICS\s*$",
+    r"^\s*NATURE\s+PHOTONICS\s*$",
 ]
 
 def _is_noise_line(text: str) -> bool:
@@ -408,6 +411,8 @@ def _is_non_body_metadata_text(
         return True
     if has_page_counter:
         return True
+    if re.fullmatch(r"(?:review article|natural photonics|nature photonics)", low):
+        return True
     if has_doi and (edge_zone or word_n <= 28):
         return True
     if has_url and edge_zone:
@@ -447,6 +452,17 @@ def _is_non_body_metadata_text(
     # Running header/footer in smaller font near page edge.
     if edge_zone and body_font_size > 0 and max_font_size > 0:
         if max_font_size <= body_font_size * 0.92 and (has_url or has_doi or journal_n >= 1):
+            return True
+        plain = re.sub(r"[^A-Za-z\s&\-]", " ", t).strip()
+        plain_u = re.sub(r"\s+", " ", plain).upper()
+        upper_token_n = len(re.findall(r"[A-Z]{2,}", plain_u))
+        if (
+            plain_u
+            and plain_u == plain_u.upper()
+            and upper_token_n <= 5
+            and (not _is_common_section_heading(plain_u))
+            and re.search(r"\b(?:article|nature|photonics|journal|letters|communications)\b", plain_u, flags=re.IGNORECASE)
+        ):
             return True
 
     # Extremely long metadata merges (common OCR/LLM collapse case).

@@ -13,6 +13,7 @@ let refsPollToken = 0
 let refsPollTimer: number | null = null
 let uploadPollToken = 0
 let uploadPollTimer: number | null = null
+let conversationSwitchToken = 0
 
 function stopRefsPolling() {
   refsPollToken += 1
@@ -316,24 +317,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   selectConversation: async (id) => {
+    const convId = String(id || '').trim()
+    if (!convId) return
+    const myToken = ++conversationSwitchToken
     stopRefsPolling()
     stopUploadPolling()
     set({
-      activeConvId: id,
+      activeConvId: convId,
       generation: null,
       refs: {},
       uploadItems: [],
       pendingImages: [],
     })
-    const [conv, msgs] = await Promise.all([
-      chatApi.getConversation(id),
-      chatApi.getMessages(id),
-    ])
-    set({
-      activeProjectId: conv.project_id ?? null,
-      messages: msgs,
-    })
-    void loadRefsForConversation(id, set, () => get().activeConvId)
+    try {
+      const [conv, msgs] = await Promise.all([
+        chatApi.getConversation(convId),
+        chatApi.getMessages(convId),
+      ])
+      if (myToken !== conversationSwitchToken || get().activeConvId !== convId) return
+      set({
+        activeProjectId: conv.project_id ?? null,
+        messages: msgs,
+      })
+      void loadRefsForConversation(convId, set, () => get().activeConvId)
+    } catch {
+      if (myToken !== conversationSwitchToken || get().activeConvId !== convId) return
+      set({ messages: [], refs: {} })
+    }
   },
 
   createConversation: async () => {

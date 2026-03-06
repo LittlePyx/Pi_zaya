@@ -235,6 +235,24 @@ export default function LibraryPage() {
       : 0),
     [store.progress],
   )
+  const convertPageProgress = useMemo(() => {
+    const done0 = Number(store.progress?.curPageDone || 0)
+    const total0 = Number(store.progress?.curPageTotal || 0)
+    if (total0 > 0) return { done: Math.max(0, done0), total: Math.max(0, total0) }
+    const msg = String(store.progress?.curPageMsg || '')
+    const m = msg.match(/\b(\d{1,4})\s*\/\s*(\d{1,4})\b/)
+    if (!m) return { done: 0, total: 0 }
+    const done = Number(m[1] || 0)
+    const total = Number(m[2] || 0)
+    if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0) return { done: 0, total: 0 }
+    return { done: Math.max(0, done), total: Math.max(0, total) }
+  }, [store.progress])
+  const convertPagePercent = useMemo(
+    () => (convertPageProgress.total > 0
+      ? Math.round((convertPageProgress.done / Math.max(1, convertPageProgress.total)) * 100)
+      : 0),
+    [convertPageProgress],
+  )
   const refSyncPercent = useMemo(
     () => (store.refSync && store.refSync.docsTotal > 0
       ? Math.round((store.refSync.docsDone / Math.max(1, store.refSync.docsTotal)) * 100)
@@ -846,8 +864,18 @@ export default function LibraryPage() {
                 <div className="kb-lib-sticky-main">
                   <Text className="kb-lib-sticky-title">转换中 {store.progress.completed}/{store.progress.total}</Text>
                   {store.progress.current ? <Text type="secondary" className="kb-lib-sticky-sub">{store.progress.current}</Text> : null}
+                  {convertPageProgress.total > 0 ? (
+                    <Text type="secondary" className="kb-lib-sticky-sub">
+                      篇内进度 {convertPageProgress.done}/{convertPageProgress.total}
+                    </Text>
+                  ) : null}
                 </div>
-                <Progress className="kb-lib-sticky-progress" percent={convertPercent} status="active" size="small" />
+                <div className="kb-lib-sticky-progress-stack">
+                  <Progress className="kb-lib-sticky-progress" percent={convertPercent} status="active" size="small" />
+                  {convertPageProgress.total > 0 ? (
+                    <Progress className="kb-lib-sticky-progress kb-lib-sticky-progress-inner" percent={convertPagePercent} status="active" size="small" />
+                  ) : null}
+                </div>
                 <Button size="small" danger icon={<StopOutlined />} onClick={() => { void store.cancelConvert() }}>
                   停止
                 </Button>

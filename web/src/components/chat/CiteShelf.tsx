@@ -41,7 +41,7 @@ export function CiteShelf({ open, items, focusedKey, onToggle, onClear, onRemove
               </Button>
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="kb-shelf-scroll flex-1 overflow-y-auto px-4 py-4">
             {items.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-5 text-sm text-black/45 dark:text-white/45">
                 从文内参考弹窗点击“加入文献篮”，这里会保存题名、作者、来源、DOI 和文献指标。

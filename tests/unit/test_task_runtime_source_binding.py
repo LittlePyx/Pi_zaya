@@ -72,16 +72,16 @@ def test_collect_doc_figure_assets_and_append_markdown(tmp_path: Path):
 def test_append_library_figure_markdown_prefers_bound_source(tmp_path: Path):
     from kb import task_runtime
 
-    doc_a = tmp_path / "NatPhoton-2019-Principles and prospects for single-pixel imaging"
-    doc_b = tmp_path / "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning"
+    doc_a = tmp_path / "NatPhoton-2019"
+    doc_b = tmp_path / "LPR-2025"
     for d in (doc_a, doc_b):
         (d / "assets").mkdir(parents=True, exist_ok=True)
 
     (doc_a / "assets" / "page_5_fig_1.png").write_bytes(b"\x89PNG\r\n\x1a\nA")
     (doc_b / "assets" / "page_8_fig_1.png").write_bytes(b"\x89PNG\r\n\x1a\nB")
 
-    md_a = doc_a / "NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md"
-    md_b = doc_b / "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.en.md"
+    md_a = doc_a / "NatPhoton-2019.en.md"
+    md_b = doc_b / "LPR-2025.en.md"
     md_a.write_text(
         "\n".join(
             [
@@ -128,9 +128,9 @@ def test_append_library_figure_markdown_prefers_bound_source(tmp_path: Path):
 
     out = task_runtime._maybe_append_library_figure_markdown(
         "这是图3。",
-        prompt="NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf 这篇文章的图3是什么",
+        prompt="NatPhoton-2019.pdf 这篇文章的图3是什么",
         answer_hits=hits,
     )
     assert out.count("/api/references/asset?path=") == 1
-    assert "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf" in out
-    assert "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf" not in out
+    assert "NatPhoton-2019.pdf" in out
+    assert "LPR-2025.pdf" not in out

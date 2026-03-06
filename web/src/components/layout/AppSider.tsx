@@ -453,8 +453,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 onToggleCollapsed={() => toggleProjectCollapsed(project.id)}
                 onSelect={() => selectProject(project.id)}
                 onOpenConversation={async (id) => {
-                  await selectConv(id)
                   nav('/')
+                  void selectConv(id)
                 }}
                 onRenameConversation={openRenameConversation}
                 onMoveConversation={async (id, target) => {
@@ -493,8 +493,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
                     active={conversation.id === activeConvId}
                     moveMenuItems={moveMenuItems.filter((item) => item.key !== '__ungrouped__')}
                     onOpen={async () => {
-                      await selectConv(conversation.id)
                       nav('/')
+                      void selectConv(conversation.id)
                     }}
                     onRename={() => openRenameConversation(conversation)}
                     onMove={async (target) => {

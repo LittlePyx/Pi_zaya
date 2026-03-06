@@ -46,6 +46,103 @@ function AssistantAvatar() {
   )
 }
 
+const shelfStorageFallback = new Map<string, string>()
+
+function readShelfStorage(key: string): string {
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (typeof raw === 'string') {
+      shelfStorageFallback.set(key, raw)
+      return raw
+    }
+  } catch {
+    // ignore
+  }
+  return shelfStorageFallback.get(key) || ''
+}
+
+function writeShelfStorage(key: string, payload: string) {
+  try {
+    window.localStorage.setItem(key, payload)
+  } catch {
+    shelfStorageFallback.set(key, payload)
+  }
+}
+
+function restoreShelfItems(rawItems: unknown[]): CiteShelfItem[] {
+  const out: CiteShelfItem[] = []
+  for (const raw of rawItems) {
+    if (!raw || typeof raw !== 'object') continue
+    const rec = raw as Record<string, unknown>
+    const detail = normalizeCiteDetail(rec)
+    if (!detail) continue
+    const base = toShelfItem(detail)
+    const key = String(rec.key || '').trim() || base.key
+    const main = String(rec.main || '').trim() || base.main
+    out.push({ ...base, key, main })
+  }
+  return out
+}
+
+function preferExistingText(current: string, incoming: string): string {
+  const cur = String(current || '').trim()
+  if (cur) return cur
+  return String(incoming || '').trim()
+}
+
+function preferPositiveNumber(current: number, incoming: number): number {
+  const cur = Number(current || 0)
+  if (Number.isFinite(cur) && cur > 0) return cur
+  const inc = Number(incoming || 0)
+  if (Number.isFinite(inc) && inc > 0) return inc
+  return 0
+}
+
+function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteShelfItem {
+  const mergedLike = {
+    ...item,
+    sourceName: preferExistingText(item.sourceName, live.sourceName),
+    sourcePath: preferExistingText(item.sourcePath, live.sourcePath),
+    raw: preferExistingText(item.raw, live.raw),
+    citeFmt: preferExistingText(item.citeFmt, live.citeFmt),
+    title: preferExistingText(item.title, live.title),
+    authors: preferExistingText(item.authors, live.authors),
+    venue: preferExistingText(item.venue, live.venue),
+    year: preferExistingText(item.year, live.year),
+    volume: preferExistingText(item.volume, live.volume),
+    issue: preferExistingText(item.issue, live.issue),
+    pages: preferExistingText(item.pages, live.pages),
+    doi: preferExistingText(item.doi, live.doi),
+    doiUrl: preferExistingText(item.doiUrl, live.doiUrl),
+    citationSource: preferExistingText(item.citationSource, live.citationSource),
+    venueKind: preferExistingText(item.venueKind, live.venueKind),
+    venueVerifiedBy: preferExistingText(item.venueVerifiedBy, live.venueVerifiedBy),
+    openalexVenue: preferExistingText(item.openalexVenue, live.openalexVenue),
+    journalIf: preferExistingText(item.journalIf, live.journalIf),
+    journalQuartile: preferExistingText(item.journalQuartile, live.journalQuartile),
+    journalIfSource: preferExistingText(item.journalIfSource, live.journalIfSource),
+    conferenceTier: preferExistingText(item.conferenceTier, live.conferenceTier),
+    conferenceRankSource: preferExistingText(item.conferenceRankSource, live.conferenceRankSource),
+    conferenceCcf: preferExistingText(item.conferenceCcf, live.conferenceCcf),
+    conferenceCcfSource: preferExistingText(item.conferenceCcfSource, live.conferenceCcfSource),
+    conferenceName: preferExistingText(item.conferenceName, live.conferenceName),
+    conferenceAcronym: preferExistingText(item.conferenceAcronym, live.conferenceAcronym),
+    citationCount: preferPositiveNumber(item.citationCount, live.citationCount),
+    num: preferPositiveNumber(item.num, live.num),
+    bibliometricsChecked: Boolean(item.bibliometricsChecked || live.bibliometricsChecked),
+  }
+
+  const normalized = normalizeCiteDetail(mergedLike) || item
+  const autoMain = toShelfItem(normalized).main
+  return {
+    ...item,
+    ...normalized,
+    key: item.key,
+    // Keep user's current rich display first; only fallback to live/auto main.
+    main: preferExistingText(item.main, preferExistingText(live.main, autoMain)),
+  }
+}
+
 export function MessageList({ activeConvId, messages, refs, generationPartial, generationStage }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [popoverDetail, setPopoverDetail] = useState<CiteDetail | null>(null)
@@ -55,6 +152,11 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
   const skipShelfPersistOnceRef = useRef(false)
+  const latestShelfStateRef = useRef<{ convId?: string | null; open: boolean; items: CiteShelfItem[] }>({
+    convId: activeConvId,
+    open: false,
+    items: [],
+  })
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -71,7 +173,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     skipShelfPersistOnceRef.current = true
     const storageKey = shelfStorageKey(activeConvId)
     try {
-      const raw = window.localStorage.getItem(storageKey)
+      const raw = readShelfStorage(storageKey)
       if (!raw) {
         setShelfItems([])
         setShelfOpen(false)
@@ -80,7 +182,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
       }
       const parsed = JSON.parse(raw)
       const items: unknown[] = Array.isArray(parsed?.items) ? parsed.items : []
-      setShelfItems(items.filter((item): item is CiteShelfItem => Boolean(item && typeof item === 'object')))
+      setShelfItems(restoreShelfItems(items))
       setShelfOpen(Boolean(parsed?.open))
       setFocusedShelfKey('')
     } catch {
@@ -91,12 +193,26 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   }, [activeConvId])
 
   useEffect(() => {
+    latestShelfStateRef.current = { convId: activeConvId, open: shelfOpen, items: shelfItems }
+  }, [activeConvId, shelfItems, shelfOpen])
+
+  useEffect(() => {
+    return () => {
+      const latest = latestShelfStateRef.current
+      const storageKey = shelfStorageKey(latest.convId)
+      const payload = JSON.stringify({ open: latest.open, items: latest.items })
+      writeShelfStorage(storageKey, payload)
+    }
+  }, [])
+
+  useEffect(() => {
     if (skipShelfPersistOnceRef.current) {
       skipShelfPersistOnceRef.current = false
       return
     }
     const storageKey = shelfStorageKey(activeConvId)
-    window.localStorage.setItem(storageKey, JSON.stringify({ open: shelfOpen, items: shelfItems }))
+    const payload = JSON.stringify({ open: shelfOpen, items: shelfItems })
+    writeShelfStorage(storageKey, payload)
   }, [activeConvId, shelfItems, shelfOpen])
 
   const rows = useMemo(() => {
@@ -142,7 +258,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
       const next = current.map((item) => {
         const live = liveCiteMap.get(item.key)
         if (!live) return item
-        const merged = { ...item, ...live, main: live.main || item.main }
+        const merged = mergeShelfItemWithLive(item, live)
         if (JSON.stringify(merged) !== JSON.stringify(item)) {
           changed = true
           return merged

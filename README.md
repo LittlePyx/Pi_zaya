@@ -162,3 +162,54 @@ python server.py
 - API 入口：`api/main.py`
 - 生产启动文件：`server.py`
 - React 迁移计划：`docs/REACT_MIGRATION_PLAN.md`
+
+## 9. 稳定性基线（推荐）
+
+为减少“我这边正常、用户那边异常”的环境差异，建议统一以下约束：
+
+- Python 版本锚点：`.python-version`（当前 `3.10.11`）
+- Node 版本锚点：`.nvmrc`（当前 `24.13.0`）
+- 前端安装优先用 `npm ci`（锁定 `web/package-lock.json`）
+
+### 9.1 环境体检（doctor）
+
+新增脚本：`tools/stability/doctor.ps1`
+
+```powershell
+# 输出版本、git 状态、锁文件 hash、KB_* 环境变量
+.\tools\stability\doctor.ps1
+
+# 严格模式：版本不匹配时返回非 0
+.\tools\stability\doctor.ps1 -Strict
+```
+
+### 9.2 运行态重置（reset）
+
+新增脚本：`tools/stability/reset_state.ps1`
+
+```powershell
+# 默认安全重置（运行临时文件 + 日志 + Python 缓存）
+.\tools\stability\reset_state.ps1
+
+# 仅预览将删除内容
+.\tools\stability\reset_state.ps1 -DryRun
+
+# 如需清空数据库，必须显式指定（谨慎）
+.\tools\stability\reset_state.ps1 -ClearChatDb -ClearLibraryDb
+
+# 需要全仓深度日志扫描时（较慢）
+.\tools\stability\reset_state.ps1 -ClearLogs -DeepLogScan
+
+# 需要深度扫描所有 __pycache__ 时（较慢）
+.\tools\stability\reset_state.ps1 -ClearPyCaches -DeepPyCacheScan
+```
+
+说明：默认不会删除聊天库/文献库，避免误清空业务数据。
+
+### 9.3 CI 基线
+
+仓库新增 GitHub Actions：`.github/workflows/ci.yml`，在 push / PR 时执行：
+
+1. 按 `.nvmrc` 安装 Node 并构建前端
+2. 使用 Python `3.10.11` 安装后端依赖
+3. 执行 `tests/unit` 回归测试

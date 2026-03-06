@@ -147,9 +147,14 @@ export default function ChatPage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!activeConvId && messages.length === 0 ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4">
-          <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-[var(--border)] bg-white/90 shadow-sm dark:bg-white/5">
-            <img src="/pi_logo.png" alt="Pi assistant" className="h-9 w-9 object-contain" loading="lazy" />
+        <div className="kb-empty-state flex flex-1 flex-col items-center justify-center gap-4 px-4">
+          <div className="kb-empty-brand">
+            <div className="kb-empty-logo-wrap flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
+              <img src="/pi_logo.png" alt="Pi assistant" className="kb-empty-logo h-9 w-9 object-contain" loading="lazy" />
+            </div>
+            <div className="kb-empty-typewriter" aria-label="π-zaya · 你的知识库助理">
+              π-zaya · 你的知识库助理
+            </div>
           </div>
           <Text type="secondary" className="max-w-xs text-center">
             {S.no_msgs}

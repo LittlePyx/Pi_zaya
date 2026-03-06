@@ -215,10 +215,11 @@ def _collect_visual_rects(page, *, image_rects: Optional[list["fitz.Rect"]] = No
         seen.add(key)
         uniq.append(r)
     merged = _merge_nearby_visual_rects(uniq, page_w=page_w, page_h=page_h)
-    # Stabilize figure numbering/order across runs: top-to-bottom, then left-to-right.
+    # Stabilize figure numbering/order across runs: strict top-to-bottom, then left-to-right.
     # `get_image_info()` ordering can vary by PDF internals and cause fig_1/fig_2 swaps.
+    # Do not quantize y0 here: small y differences in two-column layouts can invert left/right order.
     try:
-        merged.sort(key=lambda r: (int(round(float(r.y0) / 6.0)), float(r.x0), float(r.y0), float(r.x1)))
+        merged.sort(key=lambda r: (float(r.y0), float(r.x0), float(r.y1), float(r.x1)))
     except Exception:
         pass
     return merged
