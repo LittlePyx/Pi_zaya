@@ -1021,23 +1021,42 @@ export default function LibraryPage() {
       />
 
       <Card size="small" className="kb-lib-card" title="转换与列表筛选">
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={scope} onChange={(value) => { setScope(value); void store.loadFiles(value) }} className="w-40" options={SCOPE_OPTIONS} />
-          <Input
-            value={fileKeyword}
-            onChange={(e) => setFileKeyword(e.target.value)}
-            allowClear
-            prefix={<SearchOutlined className="opacity-50" />}
-            placeholder="筛选文件名"
-            className="w-[280px] max-w-full"
-          />
-          <Switch checked={onlyBusyFiles} onChange={setOnlyBusyFiles} />
-          <Text className="text-sm text-[var(--muted)]">仅显示排队/运行</Text>
-          <Switch checked={replaceMd} onChange={setReplaceMd} />
-          <Text className="text-sm text-[var(--muted)]">重新转换时覆盖已有 Markdown</Text>
-          <Button onClick={() => { void handleConvertPending() }}>立即转换待处理</Button>
-          {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>停止</Button> : null}
-          <Button icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>刷新</Button>
+        <div className="kb-lib-convert-shell">
+          <div className="kb-lib-convert-row kb-lib-convert-row-top">
+            <Select
+              value={scope}
+              onChange={(value) => { setScope(value); void store.loadFiles(value) }}
+              className="kb-lib-convert-scope"
+              options={SCOPE_OPTIONS}
+            />
+            <Input
+              value={fileKeyword}
+              onChange={(e) => setFileKeyword(e.target.value)}
+              allowClear
+              prefix={<SearchOutlined className="opacity-50" />}
+              placeholder="筛选文件名"
+              className="kb-lib-convert-search"
+            />
+            <Button className="kb-lib-convert-refresh" icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>
+              刷新
+            </Button>
+          </div>
+
+          <div className="kb-lib-convert-row kb-lib-convert-row-toggle">
+            <div className="kb-lib-switch-item">
+              <Switch checked={onlyBusyFiles} onChange={setOnlyBusyFiles} />
+              <Text className="text-sm text-[var(--muted)]">仅显示排队/运行</Text>
+            </div>
+            <div className="kb-lib-switch-item">
+              <Switch checked={replaceMd} onChange={setReplaceMd} />
+              <Text className="text-sm text-[var(--muted)]">重新转换时覆盖已有 Markdown</Text>
+            </div>
+          </div>
+
+          <div className="kb-lib-convert-row kb-lib-convert-row-actions">
+            <Button type="primary" onClick={() => { void handleConvertPending() }}>立即转换待处理</Button>
+            {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>停止</Button> : null}
+          </div>
         </div>
       </Card>
 

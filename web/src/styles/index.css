@@ -240,9 +240,10 @@ body,
   color: var(--accent);
   font-size: 1em;
   font-weight: 600;
-  line-height: 1;
+  line-height: inherit;
   cursor: pointer;
   vertical-align: baseline;
+  white-space: nowrap;
 }
 
 .kb-markdown .kb-cite-chip:hover {
@@ -1195,135 +1196,179 @@ textarea.kb-chat-textarea:focus {
 
 /* Library polish */
 .kb-library-page {
-  background:
-    radial-gradient(140% 90% at 0% -10%, color-mix(in srgb, var(--msg-user-bg) 45%, transparent), transparent 60%),
-    var(--bg);
+  --muted: var(--muted-text);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--bg) 86%, var(--panel) 14%),
+    var(--bg)
+  );
 }
 
 .kb-lib-head {
-  padding: 4px 2px 2px;
+  padding: 0 2px;
 }
 
 .kb-lib-head-main .ant-typography {
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
+}
+
+.kb-lib-head-main .ant-typography:first-child {
+  line-height: 1.1;
+}
+
+.kb-lib-head-main .ant-typography + div .ant-typography {
+  font-size: 13px;
 }
 
 .kb-lib-head-actions .ant-btn {
-  border-radius: 11px;
-  height: 36px;
-  padding-inline: 14px;
+  border-radius: 10px;
+  height: 38px;
+  padding-inline: 16px;
+  font-weight: 600;
 }
 
 .kb-lib-head-btn.ant-btn-primary {
-  box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 20%, transparent);
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .kb-library-page .ant-card {
-  border-radius: 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--panel) 98%, transparent);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
 }
 
 .kb-library-page .ant-card .ant-card-head {
-  min-height: 46px;
+  min-height: 44px;
   padding-inline: 16px;
-  border-bottom-color: color-mix(in srgb, var(--border) 86%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 82%, transparent);
 }
 
 .kb-library-page .ant-card .ant-card-head-title {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .kb-library-page .ant-card .ant-card-body {
-  padding: 14px 16px;
+  padding: 15px 16px;
+}
+
+.kb-library-page .ant-btn {
+  border-radius: 10px;
+}
+
+.kb-library-page .ant-input,
+.kb-library-page .ant-input-affix-wrapper,
+.kb-library-page .ant-select-selector {
+  border-radius: 10px !important;
+}
+
+.kb-library-page .ant-input,
+.kb-library-page .ant-input-affix-wrapper,
+.kb-library-page .ant-select-selector,
+.kb-library-page .ant-btn {
+  min-height: 36px;
 }
 
 .kb-lib-card {
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, rgba(255, 255, 255, 0.2)), color-mix(in srgb, var(--panel) 98%, transparent)),
-    var(--panel);
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+  border-color: color-mix(in srgb, var(--border) 84%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 98%, rgba(255, 255, 255, 0.04)),
+    color-mix(in srgb, var(--panel) 96%, transparent)
+  );
+}
+
+.kb-lib-ops-grid {
+  align-items: stretch;
 }
 
 .kb-library-page .ant-collapse > .ant-collapse-item {
-  border-radius: 14px;
+  border-radius: 13px;
   overflow: hidden;
 }
 
 .kb-lib-collapse.ant-collapse {
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--panel) 96%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel) 97%, transparent);
 }
 
 .kb-lib-collapse .ant-collapse-header {
-  padding: 12px 14px !important;
+  padding: 11px 14px !important;
   font-weight: 650;
 }
 
 .kb-lib-collapse .ant-collapse-content > .ant-collapse-content-box {
-  padding: 14px !important;
+  padding: 12px 14px 14px !important;
 }
 
 .kb-lib-stat {
-  border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--panel) 90%, var(--msg-user-bg) 10%), color-mix(in srgb, var(--panel) 96%, transparent));
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--panel) 94%, var(--msg-user-bg) 6%),
+    color-mix(in srgb, var(--panel) 98%, transparent)
+  );
 }
 
 .kb-lib-stat .ant-card-body {
-  padding: 12px 14px;
+  padding: 11px 14px;
 }
 
 .kb-lib-stat-value {
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--text-main);
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 30px;
+  font-weight: 680;
   line-height: 1.1;
+  letter-spacing: -0.02em;
 }
 
 .kb-lib-upload-card .ant-card-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .kb-lib-sticky-status.ant-card {
   position: sticky;
   top: 10px;
   z-index: 20;
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
-  box-shadow: 0 14px 26px rgba(15, 23, 42, 0.1);
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.1);
 }
 
 .kb-lib-sticky-wrap {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .kb-lib-sticky-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(180px, 0.9fr) auto;
   align-items: center;
-  gap: 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 12px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--msg-user-bg) 50%, transparent), color-mix(in srgb, var(--panel) 96%, transparent));
-  padding: 9px 10px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--msg-user-bg) 42%, transparent),
+    color-mix(in srgb, var(--panel) 97%, transparent)
+  );
+  padding: 8px 10px;
 }
 
 .kb-lib-sticky-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .kb-lib-sticky-title {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 680;
 }
 
 .kb-lib-sticky-sub.ant-typography {
@@ -1349,17 +1394,17 @@ textarea.kb-chat-textarea:focus {
 
 .kb-lib-upload-toolbar {
   padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--panel) 98%, transparent);
+  background: color-mix(in srgb, var(--panel) 99%, transparent);
 }
 
 .kb-lib-upload-filter {
-  width: 138px;
+  width: 146px;
 }
 
 .kb-lib-upload-meta {
-  padding-inline: 2px;
+  padding-inline: 1px;
 }
 
 .kb-lib-failed-summary {
@@ -1445,11 +1490,17 @@ textarea.kb-chat-textarea:focus {
 }
 
 .kb-lib-upload-drop .ant-upload-drag {
-  border-radius: 14px !important;
-  border: 1px dashed color-mix(in srgb, var(--accent) 24%, var(--border)) !important;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--msg-user-bg) 52%, transparent), color-mix(in srgb, var(--panel) 96%, transparent)) !important;
-  padding: 20px 10px !important;
+  display: grid;
+  place-content: center;
+  min-height: 178px;
+  border-radius: 13px !important;
+  border: 1px dashed color-mix(in srgb, var(--accent) 20%, var(--border)) !important;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--msg-user-bg) 34%, transparent),
+    color-mix(in srgb, var(--panel) 98%, transparent)
+  ) !important;
+  padding: 18px 12px !important;
 }
 
 .kb-lib-upload-drop .ant-upload-drag .ant-upload-drag-icon,
@@ -1457,20 +1508,24 @@ textarea.kb-chat-textarea:focus {
   margin-bottom: 6px !important;
 }
 
+.kb-lib-upload-drop .ant-upload-drag p {
+  margin-top: 0;
+}
+
 .kb-library-page .ant-list-item {
-  border-bottom-color: color-mix(in srgb, var(--border) 84%, transparent) !important;
+  border-bottom-color: color-mix(in srgb, var(--border) 80%, transparent) !important;
 }
 
 .kb-lib-file-item.ant-list-item {
-  padding: 8px 0 !important;
+  padding: 7px 0 !important;
   border-bottom: none !important;
 }
 
 .kb-lib-file-virtual-shell {
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 14px;
-  background: color-mix(in srgb, var(--panel) 98%, transparent);
-  padding: 8px 10px 10px;
+  background: color-mix(in srgb, var(--panel) 99%, transparent);
+  padding: 8px 9px 10px;
 }
 
 .kb-lib-file-virtual-tip {
@@ -1493,23 +1548,23 @@ textarea.kb-chat-textarea:focus {
 }
 
 .kb-lib-file-row {
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--panel) 96%, transparent);
-  padding: 10px 12px;
+  background: color-mix(in srgb, var(--panel) 99%, transparent);
+  padding: 11px 12px;
 }
 
 .kb-lib-file-actions .ant-btn {
-  border-radius: 9px;
+  border-radius: 10px;
 }
 
 .kb-lib-file-action-main.ant-btn {
   min-width: 86px;
-  font-weight: 560;
+  font-weight: 600;
 }
 
 .kb-lib-file-action-main.ant-btn.ant-btn-primary.ant-btn-background-ghost {
-  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
   color: color-mix(in srgb, var(--accent) 72%, var(--text-main));
 }
 
@@ -1525,25 +1580,74 @@ textarea.kb-chat-textarea:focus {
 }
 
 .kb-lib-tabs .ant-tabs-nav {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .kb-lib-tabs .ant-tabs-tab {
-  padding-top: 8px;
-  padding-bottom: 8px;
+  padding-top: 7px;
+  padding-bottom: 7px;
   font-size: 14px;
 }
 
 .kb-lib-tabs .ant-tabs-content-holder {
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 14px;
-  background: color-mix(in srgb, var(--panel) 98%, transparent);
-  padding: 10px 12px;
+  background: color-mix(in srgb, var(--panel) 99%, transparent);
+  padding: 10px 11px;
+}
+
+.kb-lib-convert-shell {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-lib-convert-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.kb-lib-convert-row-top {
+  display: grid;
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto;
+}
+
+.kb-lib-convert-scope {
+  width: 100%;
+}
+
+.kb-lib-convert-search {
+  width: 100%;
+}
+
+.kb-lib-convert-refresh.ant-btn {
+  min-width: 90px;
+}
+
+.kb-lib-convert-row-toggle {
+  gap: 8px;
+}
+
+.kb-lib-switch-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 99%, transparent);
+  padding: 0 10px;
+}
+
+.kb-lib-convert-row-actions .ant-btn {
+  min-width: 126px;
+  font-weight: 600;
 }
 
 @media (max-width: 1200px) {
   .kb-library-page {
-    padding: 14px;
+    padding: 14px 12px;
   }
 
   .kb-lib-head {
@@ -1560,5 +1664,24 @@ textarea.kb-chat-textarea:focus {
 
   .kb-lib-file-virtual-shell .rc-virtual-list-holder {
     height: 520px !important;
+  }
+
+  .kb-lib-convert-row-top {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-lib-convert-refresh.ant-btn {
+    width: 100%;
+  }
+}
+
+@media (max-width: 760px) {
+  .kb-lib-convert-row-actions .ant-btn {
+    width: 100%;
+  }
+
+  .kb-lib-switch-item {
+    width: 100%;
+    justify-content: space-between;
   }
 }
