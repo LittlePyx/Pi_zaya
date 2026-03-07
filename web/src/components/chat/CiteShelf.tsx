@@ -1,17 +1,47 @@
 import { Button } from 'antd'
 import type { CiteShelfItem } from './citationState'
-import { citationDisplay, citeMetricSummary } from './citationState'
+import { citationDisplay, citeMetricSummary, summarySourceLabel } from './citationState'
 
 interface Props {
   open: boolean
   items: CiteShelfItem[]
   focusedKey: string
+  summaryLoadingKey: string
   onToggle: () => void
   onClear: () => void
+  onSelect: (item: CiteShelfItem) => void
   onRemove: (key: string) => void
 }
 
-export function CiteShelf({ open, items, focusedKey, onToggle, onClear, onRemove }: Props) {
+export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle, onClear, onSelect, onRemove }: Props) {
+  const splitSummary = (text: string): string[] => {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim()
+    if (!normalized) return []
+    const sentences = normalized
+      .split(/(?<=[。！？!?；;])\s*/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    if (sentences.length >= 2) return sentences.slice(0, 4)
+
+    if (normalized.length <= 100) return [normalized]
+    const chunks: string[] = []
+    let current = ''
+    const parts = normalized
+      .split(/(?<=[，,])\s*/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    for (const part of parts) {
+      if ((current + part).length > 56 && current) {
+        chunks.push(current.trim())
+        current = part
+      } else {
+        current += part
+      }
+    }
+    if (current.trim()) chunks.push(current.trim())
+    return (chunks.length > 0 ? chunks : [normalized]).slice(0, 4)
+  }
+
   return (
     <>
       <button
@@ -60,6 +90,15 @@ export function CiteShelf({ open, items, focusedKey, onToggle, onClear, onRemove
                           ? 'border-[var(--accent)] bg-[var(--msg-user-bg)]'
                           : 'border-[var(--border)] bg-[var(--panel)]'
                       }`}
+                      onClick={() => onSelect(item)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          onSelect(item)
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0 flex-1">
@@ -71,7 +110,10 @@ export function CiteShelf({ open, items, focusedKey, onToggle, onClear, onRemove
                         <button
                           type="button"
                           className="text-xs text-black/35 transition hover:text-black/70 dark:text-white/35 dark:hover:text-white/70"
-                          onClick={() => onRemove(item.key)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onRemove(item.key)
+                          }}
                         >
                           移除
                         </button>
@@ -97,6 +139,27 @@ export function CiteShelf({ open, items, focusedKey, onToggle, onClear, onRemove
                           <span className="text-black/35 dark:text-white/35">暂无 DOI 链接</span>
                         )}
                       </div>
+                      {item.key === focusedKey ? (
+                        <div className="kb-shelf-summary">
+                          {summaryLoadingKey === item.key ? (
+                            <div className="kb-shelf-summary-text">正在生成学术概括...</div>
+                          ) : item.summaryLine ? (
+                            <>
+                              <div className="kb-shelf-summary-meta">
+                                <span className="kb-shelf-summary-head">学术概括</span>
+                                <span className="kb-shelf-summary-source">{summarySourceLabel(item.summarySource)}</span>
+                              </div>
+                              <ol className="kb-shelf-summary-list">
+                                {splitSummary(item.summaryLine).map((line) => (
+                                  <li key={line} className="kb-shelf-summary-text">{line}</li>
+                                ))}
+                              </ol>
+                            </>
+                          ) : (
+                            <div className="kb-shelf-summary-empty">暂无可用学术概括</div>
+                          )}
+                        </div>
+                      ) : null}
                     </div>
                   )
                 })}

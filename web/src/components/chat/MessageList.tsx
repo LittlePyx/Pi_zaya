@@ -267,6 +267,8 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.num === b.num
     && a.anchor === b.anchor
     && a.bibliometricsChecked === b.bibliometricsChecked
+    && a.summaryLine === b.summaryLine
+    && a.summarySource === b.summarySource
   )
 }
 
@@ -345,6 +347,8 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     conferenceCcfSource: preferExistingText(item.conferenceCcfSource, live.conferenceCcfSource),
     conferenceName: preferExistingText(item.conferenceName, live.conferenceName),
     conferenceAcronym: preferExistingText(item.conferenceAcronym, live.conferenceAcronym),
+    summaryLine: preferRicherField('title', item.summaryLine, live.summaryLine),
+    summarySource: preferExistingText(item.summarySource, live.summarySource),
     citationCount: preferPositiveNumber(item.citationCount, live.citationCount),
     num: preferPositiveNumber(item.num, live.num),
     bibliometricsChecked: Boolean(item.bibliometricsChecked || live.bibliometricsChecked),
@@ -368,6 +372,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
+  const [shelfSummaryLoadingKey, setShelfSummaryLoadingKey] = useState('')
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
   const activeStorageKeyRef = useRef(shelfStorageKey(activeConvId))
@@ -551,12 +556,37 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     })
   }, [liveCiteMap])
 
+  const fetchShelfSummaryForItem = (item: CiteShelfItem) => {
+    const summaryLine = String(item.summaryLine || '').trim()
+    const summarySource = String(item.summarySource || '').trim().toLowerCase()
+    if (summaryLine && (summarySource === 'abstract' || summarySource === 'fulltext')) return
+    setShelfSummaryLoadingKey(item.key)
+    referencesApi.bibliometricsCached(item as unknown as Record<string, unknown>)
+      .then((meta) => {
+        if (!meta || Object.keys(meta).length === 0) return
+        setShelfItems((current) => current.map((entry) => {
+          if (entry.key !== item.key) return entry
+          const merged = mergeCiteMeta(entry, meta)
+          return { ...toShelfItem(merged), key: entry.key }
+        }))
+      })
+      .finally(() => {
+        setShelfSummaryLoadingKey((current) => (current === item.key ? '' : current))
+      })
+  }
+
   const openCitation = (detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
     setPopoverDetail(detail)
     setPopoverPos({ x: event.clientX, y: event.clientY })
     const sourcePath = String(detail.sourcePath || '').trim()
-    const shouldFetchCitationMeta = Boolean(sourcePath)
-    const shouldFetchBibliometrics = !detail.bibliometricsChecked && (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
+    const isInPaperReference = Number(detail.num || 0) > 0
+    const shouldFetchCitationMeta = Boolean(sourcePath) && !isInPaperReference
+    const hasDoi = Boolean(String(detail.doi || '').trim())
+    const shouldFetchBibliometrics = !detail.bibliometricsChecked && (
+      isInPaperReference
+        ? hasDoi
+        : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
+    )
     if (!shouldFetchCitationMeta && !shouldFetchBibliometrics) {
       setPopoverLoading(false)
       return
@@ -606,6 +636,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     })
     setFocusedShelfKey(item.key)
     setShelfOpen(true)
+    fetchShelfSummaryForItem(item)
   }
 
   return (
@@ -766,14 +797,21 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
         open={shelfOpen}
         items={shelfItems}
         focusedKey={focusedShelfKey}
+        summaryLoadingKey={shelfSummaryLoadingKey}
         onToggle={() => setShelfOpen((value) => !value)}
+        onSelect={(item) => {
+          setFocusedShelfKey(item.key)
+          fetchShelfSummaryForItem(item)
+        }}
         onRemove={(key) => {
           setShelfItems((current) => current.filter((item) => item.key !== key))
           if (focusedShelfKey === key) setFocusedShelfKey('')
+          if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
         }}
         onClear={() => {
           setShelfItems([])
           setFocusedShelfKey('')
+          setShelfSummaryLoadingKey('')
         }}
       />
     </>

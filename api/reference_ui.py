@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
+from functools import lru_cache
+import html
+import os
 from pathlib import Path
 from urllib.parse import quote
 import re
 
-from kb.citation_meta import fetch_best_crossref_for_reference, fetch_best_crossref_meta
+from kb.config import load_settings
+from kb.citation_meta import fetch_best_crossref_for_reference, fetch_best_crossref_meta, fetch_crossref_work_by_doi
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.library_store import LibraryStore
+from kb.llm import DeepSeekChat
 from kb.source_filters import is_excluded_source_path
 from ui.refs_renderer import (
     _enrich_bibliometrics,
+    _fallback_fill_reference_meta_from_raw,
     _has_metrics_payload,
     _infer_title_from_source_text,
     _normalize_reference_for_popup,
@@ -26,6 +33,7 @@ from ui.refs_renderer import (
     _score_tier,
     _split_section_subsection,
     _top_heading,
+    _openalex_work_by_doi,
     fetch_crossref_meta,
 )
 
@@ -524,10 +532,409 @@ def _is_weak_meta_value(key: str, value: str) -> bool:
     return False
 
 
+def _normalize_doi_like(value: str) -> str:
+    s = str(value or "").strip().lower()
+    if not s:
+        return ""
+    s = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", s, flags=re.I)
+    s = s.strip(" \t\r\n.,;:()[]{}<>")
+    return s
+
+
+def _clean_summary_line(text: str) -> str:
+    s = html.unescape(str(text or ""))
+    if not s:
+        return ""
+    s = re.sub(r"<[^>]+>", " ", s)
+    s = re.sub(r"\[[0-9,\-\s]{1,24}\]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    s = re.sub(r"^(?:abstract|摘要)\s*[:：-]?\s*", "", s, flags=re.I).strip()
+    if len(s) < 20:
+        return ""
+    return s
+
+
+def _first_summary_sentence(text: str, *, max_len: int = 220) -> str:
+    s = _clean_summary_line(text)
+    if not s:
+        return ""
+    parts = re.split(r"(?<=[。！？!?\.])\s+", s)
+    for part in parts:
+        cand = str(part or "").strip()
+        if len(cand) < 20:
+            continue
+        if len(cand) > max_len:
+            cand = cand[:max_len].rstrip(" ,;:") + "..."
+        return cand
+    if len(s) > max_len:
+        return s[:max_len].rstrip(" ,;:") + "..."
+    return s
+
+
+def _summary_excerpt(text: str, *, max_sentences: int = 3, max_len: int = 520) -> str:
+    s = _clean_summary_line(text)
+    if not s:
+        return ""
+    parts = re.split(r"(?<=[。！？!?\.])\s+", s)
+    picked: list[str] = []
+    total = 0
+    for part in parts:
+        cand = str(part or "").strip()
+        if len(cand) < 18:
+            continue
+        if (total + len(cand)) > max_len:
+            remain = max_len - total
+            if remain >= 30:
+                picked.append(cand[:remain].rstrip(" ,;:") + "...")
+            break
+        picked.append(cand)
+        total += len(cand)
+        if len(picked) >= max_sentences:
+            break
+    if picked:
+        return " ".join(picked).strip()
+    if len(s) > max_len:
+        return s[:max_len].rstrip(" ,;:") + "..."
+    return s
+
+
+def _metadata_summary_line(meta: dict) -> str:
+    title = _clean_summary_line(str((meta or {}).get("title") or ""))
+    venue = _clean_summary_line(str((meta or {}).get("venue") or ""))
+    year = str((meta or {}).get("year") or "").strip()
+    authors = _clean_summary_line(str((meta or {}).get("authors") or ""))
+    author_head = ""
+    if authors:
+        author_head = re.split(r"[,;&]| and ", authors, maxsplit=1, flags=re.I)[0].strip()
+    loc = ""
+    if venue and year:
+        loc = f"{venue}（{year}）"
+    elif venue:
+        loc = venue
+    elif year:
+        loc = year
+    if author_head and loc:
+        return (
+            f"当前仅检索到文献元数据：{author_head} 的相关研究发表于 {loc}。"
+            "由于缺少可用摘要文本，暂无法可靠提炼其方法细节与实验结论，建议通过 DOI 查看原文摘要与正文。"
+        )
+    if loc:
+        return (
+            f"当前仅检索到文献元数据：该工作发表于 {loc}。"
+            "由于缺少可用摘要文本，暂无法可靠提炼其方法细节与实验结论，建议通过 DOI 查看原文摘要与正文。"
+        )
+    if title:
+        return (
+            "当前仅检索到题名与基础元数据，尚未获取可用摘要文本。"
+            "为保证学术准确性，建议通过 DOI 查看原文摘要与正文后再进行方法和结论层面的判断。"
+        )
+    return (
+        "当前仅检索到有限元数据，尚未获取可用摘要文本。"
+        "为保证学术准确性，建议通过 DOI 查看原文摘要与正文后再进行方法和结论层面的判断。"
+    )
+
+
+def _summary_from_crossref_abstract(meta: dict) -> str:
+    doi_like = str((meta or {}).get("doi") or (meta or {}).get("doi_url") or "").strip()
+    doi = _normalize_doi_like(doi_like)
+    if not doi:
+        return ""
+    try:
+        work = fetch_crossref_work_by_doi(doi)
+    except Exception:
+        work = None
+    if not isinstance(work, dict):
+        return ""
+    abstract = str(work.get("abstract") or "").strip()
+    if not abstract:
+        return ""
+    return _summary_excerpt(abstract, max_sentences=3, max_len=520)
+
+
+def _openalex_abstract_text(work: dict) -> str:
+    if not isinstance(work, dict):
+        return ""
+    raw_abs = str(work.get("abstract") or "").strip()
+    if raw_abs:
+        return raw_abs
+    inv = work.get("abstract_inverted_index")
+    if not isinstance(inv, dict):
+        return ""
+    words: list[tuple[int, str]] = []
+    for token, positions in inv.items():
+        if not isinstance(token, str):
+            continue
+        if not isinstance(positions, list):
+            continue
+        for p in positions:
+            try:
+                pos = int(p)
+            except Exception:
+                continue
+            if pos < 0:
+                continue
+            words.append((pos, token))
+    if not words:
+        return ""
+    words.sort(key=lambda x: x[0])
+    return " ".join(w for _, w in words).strip()
+
+
+def _summary_from_openalex_abstract(meta: dict) -> str:
+    doi_like = str((meta or {}).get("doi") or (meta or {}).get("doi_url") or "").strip()
+    doi = _normalize_doi_like(doi_like)
+    if not doi:
+        return ""
+    try:
+        work = _openalex_work_by_doi(doi)
+    except Exception:
+        work = None
+    abstract = _openalex_abstract_text(work if isinstance(work, dict) else {})
+    if not abstract:
+        return ""
+    return _summary_excerpt(abstract, max_sentences=3, max_len=520)
+
+
+def _looks_like_title_echo(summary_line: str, title: str) -> bool:
+    s = _clean_summary_line(summary_line).lower()
+    t = _clean_summary_line(title).lower()
+    if (not s) or (not t):
+        return False
+    s_norm = "".join(re.findall(r"[a-z0-9\u4e00-\u9fff]+", s))
+    t_norm = "".join(re.findall(r"[a-z0-9\u4e00-\u9fff]+", t))
+    if (not s_norm) or (not t_norm):
+        return False
+    if (t_norm in s_norm) and (len(s_norm) <= len(t_norm) + 36):
+        return True
+    s_tokens = re.findall(r"[a-z0-9\u4e00-\u9fff]+", s)
+    t_tokens = re.findall(r"[a-z0-9\u4e00-\u9fff]+", t)
+    if (len(t_tokens) >= 4) and s_tokens:
+        common = len(set(s_tokens) & set(t_tokens))
+        if common >= max(3, int(0.85 * len(set(t_tokens)))) and len(set(s_tokens)) <= len(set(t_tokens)) + 3:
+            return True
+    return False
+
+
+def _has_cjk_text(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _has_latin_text(text: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", str(text or "")))
+
+
+def _has_summary_action_signal(text: str) -> bool:
+    s = str(text or "")
+    return bool(re.search(r"(提出|设计|构建|采用|引入|实现|develop|propose|introduce|present)", s, flags=re.I))
+
+
+def _has_summary_result_signal(text: str) -> bool:
+    s = str(text or "")
+    return bool(re.search(r"(结果|显示|提升|降低|加速|优于|有效|性能|实验|result|show|improv|outperform|achiev)", s, flags=re.I))
+
+
+def _is_summary_quality_ok(text: str) -> bool:
+    s = _clean_summary_line(text)
+    if len(s) < 50:
+        return False
+    if not _has_summary_action_signal(s):
+        return False
+    if not _has_summary_result_signal(s):
+        return False
+    return True
+
+
+@lru_cache(maxsize=512)
+def _llm_summarize_abstract_zh(title: str, abstract_text: str) -> str:
+    abs_text = _summary_excerpt(abstract_text, max_sentences=5, max_len=900)
+    title_text = _clean_summary_line(title)
+    if not abs_text:
+        return ""
+    raw_flag = str(os.environ.get("KB_CITE_SUMMARY_USE_LLM", "1") or "").strip().lower()
+    if raw_flag in {"0", "false", "off", "no"}:
+        return ""
+    try:
+        settings = load_settings()
+    except Exception:
+        return ""
+    if not getattr(settings, "api_key", None):
+        return ""
+    try:
+        fast_settings = replace(
+            settings,
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), 10.0),
+            max_retries=0,
+        )
+    except Exception:
+        fast_settings = settings
+    try:
+        ds = DeepSeekChat(fast_settings)
+        out = (
+            ds.chat(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是科研论文助手。请基于给定信息输出2-3句中文学术概括，要求："
+                            "第1句说明研究问题或目标；"
+                            "第2句说明核心方法或机制（作者具体做了什么）；"
+                            "第3句说明关键结果、贡献或适用边界（若摘要未给量化指标需明确说明）。"
+                            "严禁编造数据或结论，严禁只复述标题。只输出概括正文。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"论文标题：{title_text}\n"
+                            f"摘要原文：{abs_text}\n\n"
+                            "请给出中文学术概括："
+                        ),
+                    },
+                ],
+                temperature=0.0,
+                max_tokens=360,
+            )
+            or ""
+        ).strip()
+    except Exception:
+        return ""
+    out = _summary_excerpt(out, max_sentences=3, max_len=360)
+    if not _has_cjk_text(out):
+        return ""
+    if not _is_summary_quality_ok(out):
+        return ""
+    return out
+
+
+@lru_cache(maxsize=512)
+def _translate_summary_to_zh(text: str) -> str:
+    src = str(text or "").strip()
+    if not src:
+        return ""
+    src = _summary_excerpt(src, max_sentences=3, max_len=520)
+    if not src:
+        return ""
+    if _has_cjk_text(src) and (not _has_latin_text(src)):
+        return src
+    raw_flag = str(os.environ.get("KB_CITE_SUMMARY_TRANSLATE_ZH", "1") or "").strip().lower()
+    if raw_flag in {"0", "false", "off", "no"}:
+        return src
+    try:
+        settings = load_settings()
+    except Exception:
+        return src
+    if not getattr(settings, "api_key", None):
+        return src
+    try:
+        fast_settings = replace(
+            settings,
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), 8.0),
+            max_retries=0,
+        )
+    except Exception:
+        fast_settings = settings
+    try:
+        ds = DeepSeekChat(fast_settings)
+        out = (
+            ds.chat(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "将给定文献摘要改写为中文学术概括，输出 2-3 句。"
+                            "要求："
+                            "1) 尽量覆盖研究问题/方法/主要结果或贡献；"
+                            "2) 术语准确、语气学术；"
+                            "3) 不编造原文没有的信息；"
+                            "4) 只输出概括正文，不要列表或前缀标签。"
+                        ),
+                    },
+                    {"role": "user", "content": src},
+                ],
+                temperature=0.0,
+                max_tokens=320,
+            )
+            or ""
+        ).strip()
+    except Exception:
+        return src
+    out = re.sub(r"\s+", " ", out).strip()
+    if not out:
+        return src
+    if not _has_cjk_text(out):
+        return src
+    return _summary_excerpt(out, max_sentences=3, max_len=360)
+
+
+def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
+    out = dict(meta or {})
+    existing_line = _summary_excerpt(str(out.get("summary_line") or ""), max_sentences=3, max_len=360)
+    existing_source = str(out.get("summary_source") or "").strip().lower()
+    title = str(out.get("title") or "").strip()
+    if existing_line:
+        if (existing_source == "metadata") and _looks_like_title_echo(existing_line, title):
+            existing_line = ""
+        else:
+            out["summary_line"] = _translate_summary_to_zh(existing_line)
+            out["summary_source"] = existing_source if existing_source in {"fulltext", "abstract", "metadata"} else "fulltext"
+            return out
+
+    if allow_crossref_abstract:
+        abstract_line = _summary_from_crossref_abstract(out)
+        if abstract_line:
+            llm_summary = _llm_summarize_abstract_zh(title=title, abstract_text=abstract_line)
+            out["summary_line"] = llm_summary or _translate_summary_to_zh(abstract_line)
+            out["summary_source"] = "abstract"
+            return out
+        openalex_line = _summary_from_openalex_abstract(out)
+        if openalex_line:
+            llm_summary = _llm_summarize_abstract_zh(title=title, abstract_text=openalex_line)
+            out["summary_line"] = llm_summary or _translate_summary_to_zh(openalex_line)
+            out["summary_source"] = "abstract"
+            return out
+
+    fallback = _metadata_summary_line(out)
+    if fallback:
+        out["summary_line"] = fallback
+        out["summary_source"] = "metadata"
+    return out
+
+
 def _merge_meta_prefer_richer(base: dict, incoming: dict) -> dict:
     out = dict(base or {})
+    base_doi = _normalize_doi_like(str(out.get("doi") or out.get("doi_url") or ""))
+    incoming_doi = _normalize_doi_like(str((incoming or {}).get("doi") or (incoming or {}).get("doi_url") or ""))
+    doi_conflict = bool(base_doi and incoming_doi and (base_doi != incoming_doi))
+    conflict_sensitive_keys = {
+        "title",
+        "authors",
+        "venue",
+        "year",
+        "volume",
+        "issue",
+        "pages",
+        "doi",
+        "doi_url",
+        "citation_count",
+        "citation_source",
+        "journal_if",
+        "journal_quartile",
+        "journal_if_source",
+        "conference_tier",
+        "conference_rank_source",
+        "conference_ccf",
+        "conference_ccf_source",
+        "venue_kind",
+        "openalex_venue",
+        "conference_name",
+        "conference_acronym",
+        "bibliometrics_checked",
+    }
     for key, raw_value in (incoming or {}).items():
         if raw_value in (None, "", [], {}):
+            continue
+        if doi_conflict and key in conflict_sensitive_keys:
+            # Identity mismatch: keep current citation-level metadata.
             continue
         value = raw_value
         if not isinstance(value, str):
@@ -582,7 +989,7 @@ def ensure_source_citation_meta(*, source_path: str, pdf_root: Path | None, md_r
             meta = {}
 
     if _has_metrics_payload(meta):
-        return meta
+        return _ensure_summary_line(meta, allow_crossref_abstract=False)
 
     venue_hint, year_hint, _ = _parse_filename_meta(source_path)
     fallback_title = _source_filename(source_path) or str(source_path or "")
@@ -618,6 +1025,8 @@ def ensure_source_citation_meta(*, source_path: str, pdf_root: Path | None, md_r
     enriched = _enrich_bibliometrics(meta or {})
     if isinstance(enriched, dict):
         meta = enriched
+    if isinstance(meta, dict):
+        meta = _ensure_summary_line(meta, allow_crossref_abstract=False)
 
     if pdf_path is not None and lib_store is not None and isinstance(meta, dict) and meta:
         try:
@@ -653,6 +1062,26 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
             if year2:
                 out["year"] = year2.group(0)
 
+        try:
+            shared = _fallback_fill_reference_meta_from_raw(
+                {
+                    "raw": s,
+                    "venue": str(meta.get("venue") or "").strip(),
+                    "title": str(meta.get("title") or "").strip(),
+                    "authors": str(meta.get("authors") or "").strip(),
+                    "year": str(meta.get("year") or "").strip(),
+                    "pages": str(meta.get("pages") or "").strip(),
+                    "volume": str(meta.get("volume") or "").strip(),
+                }
+            )
+        except Exception:
+            shared = {}
+        if isinstance(shared, dict):
+            for key in ("authors", "title", "venue", "year", "volume", "issue", "pages"):
+                value = str(shared.get(key) or "").strip()
+                if value:
+                    out.setdefault(key, value)
+
         etal_match = re.match(r"^(?P<authors>.+?\bet al\.)\s+(?P<title>.+?)\.\s+(?P<venue>.+)$", s, flags=re.I)
         if etal_match:
             out.setdefault("authors", etal_match.group("authors").strip(" ."))
@@ -660,14 +1089,15 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
             out.setdefault("venue", etal_match.group("venue").strip(" ."))
             return out
 
-        parts = [p.strip(" .") for p in re.split(r"\.\s+", s) if p.strip(" .")]
-        if len(parts) >= 3:
-            out.setdefault("authors", parts[0])
-            out.setdefault("title", parts[1])
-            out.setdefault("venue", parts[2])
-        elif len(parts) == 2:
-            out.setdefault("authors", parts[0])
-            out.setdefault("title", parts[1])
+        if not any(str(out.get(key) or "").strip() for key in ("authors", "title", "venue")):
+            parts = [p.strip(" .") for p in re.split(r"\.\s+", s) if p.strip(" .")]
+            if len(parts) >= 3:
+                out.setdefault("authors", parts[0])
+                out.setdefault("title", parts[1])
+                out.setdefault("venue", parts[2])
+            elif len(parts) == 2:
+                out.setdefault("authors", parts[0])
+                out.setdefault("title", parts[1])
         return out
 
     if raw0:
@@ -697,14 +1127,23 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
         except Exception:
             canonical = None
         if isinstance(canonical, dict):
-            meta = _merge_meta_prefer_richer(meta, canonical)
+            meta_doi = _normalize_doi_like(str(meta.get("doi") or meta.get("doi_url") or doi))
+            canonical_doi = _normalize_doi_like(str(canonical.get("doi") or canonical.get("doi_url") or ""))
+            if meta_doi and canonical_doi and (meta_doi == canonical_doi):
+                for key in ("title", "authors", "venue", "year", "volume", "issue", "pages", "doi", "doi_url"):
+                    value = canonical.get(key)
+                    if value not in (None, "", [], {}):
+                        meta[key] = value
+            else:
+                meta = _merge_meta_prefer_richer(meta, canonical)
             if str(meta.get("doi") or "").strip() and not str(meta.get("doi_url") or "").strip():
                 meta["doi_url"] = build_doi_url(str(meta.get("doi") or "").strip())
     if not doi:
         fetched_ref = None
         if raw:
             try:
-                fetched_ref = fetch_best_crossref_for_reference(reference_text=raw, min_score=0.62)
+                # Prefer "no enrichment" over wrong paper binding.
+                fetched_ref = fetch_best_crossref_for_reference(reference_text=raw, min_score=0.74)
             except Exception:
                 fetched_ref = None
         if isinstance(fetched_ref, dict):
@@ -732,7 +1171,9 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
                 if str(meta.get("doi") or "").strip() and not str(meta.get("doi_url") or "").strip():
                     meta["doi_url"] = build_doi_url(str(meta.get("doi") or "").strip())
             enriched = _enrich_bibliometrics(meta)
-            return enriched if isinstance(enriched, dict) else meta
+            if isinstance(enriched, dict):
+                meta = enriched
+            return _ensure_summary_line(meta, allow_crossref_abstract=True)
 
         search_title = title
         if not search_title:
@@ -754,4 +1195,6 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
             if doi and not str(meta.get("doi_url") or "").strip():
                 meta["doi_url"] = build_doi_url(doi)
     enriched = _enrich_bibliometrics(meta)
-    return enriched if isinstance(enriched, dict) else meta
+    if isinstance(enriched, dict):
+        meta = enriched
+    return _ensure_summary_line(meta, allow_crossref_abstract=True)

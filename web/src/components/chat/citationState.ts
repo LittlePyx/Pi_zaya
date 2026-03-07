@@ -29,6 +29,8 @@ export interface CiteDetail {
   conferenceName: string
   conferenceAcronym: string
   bibliometricsChecked: boolean
+  summaryLine: string
+  summarySource: string
 }
 
 export interface CiteShelfItem extends CiteDetail {
@@ -44,6 +46,15 @@ function asText(value: unknown): string {
 
 function asNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function normalizeDoiLike(value: unknown): string {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return ''
+  return raw
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
+    .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
+    .trim()
 }
 
 function pickText(rec: Record<string, unknown>, ...keys: string[]): string {
@@ -112,6 +123,8 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     conferenceName: pickText(rec, 'conference_name', 'conferenceName'),
     conferenceAcronym: pickText(rec, 'conference_acronym', 'conferenceAcronym'),
     bibliometricsChecked: Boolean(rec.bibliometrics_checked ?? rec.bibliometricsChecked),
+    summaryLine: pickText(rec, 'summary_line', 'summaryLine'),
+    summarySource: pickText(rec, 'summary_source', 'summarySource'),
   }
 }
 
@@ -140,6 +153,11 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
 
 export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>): CiteDetail {
   const merged: Record<string, unknown> = { ...detail }
+  const currentDoi = normalizeDoiLike(detail.doi || detail.doiUrl)
+  const incomingDoi = normalizeDoiLike(
+    asText(meta?.doi) || asText(meta?.doi_url) || asText(meta?.doiUrl),
+  )
+  const hasDoiConflict = Boolean(currentDoi && incomingDoi && currentDoi !== incomingDoi)
   const overwriteKeys = new Set([
     'doi',
     'doi_url',
@@ -158,9 +176,24 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'openalex_venue',
     'conference_name',
     'conference_acronym',
+    'summary_line',
+    'summary_source',
+  ])
+  const conflictSensitiveKeys = new Set([
+    'title',
+    'authors',
+    'venue',
+    'year',
+    'volume',
+    'issue',
+    'pages',
+    ...overwriteKeys,
   ])
   for (const [key, rawValue] of Object.entries(meta || {})) {
     if (rawValue === null || rawValue === undefined || rawValue === '' || (Array.isArray(rawValue) && rawValue.length === 0)) {
+      continue
+    }
+    if (hasDoiConflict && conflictSensitiveKeys.has(key)) {
       continue
     }
     if (overwriteKeys.has(key)) {
@@ -262,6 +295,33 @@ export function citationSourceLabel(detail: CiteDetail): string {
   return detail.sourceName || baseName(detail.sourcePath)
 }
 
+function trimLabel(value: string, maxLen = 18): string {
+  const s = String(value || '').trim()
+  if (!s || s.length <= maxLen) return s
+  return `${s.slice(0, Math.max(1, maxLen - 3)).trimEnd()}...`
+}
+
+function compactSourceChipLabel(sourceName: string, sourcePath: string): string {
+  const raw = stripKnownExt(sourceName || baseName(sourcePath))
+  if (!raw) return ''
+  const normalized = raw.replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+  const byYear = normalized.match(/^(.+?)[-_ ]((?:19|20)\d{2})(?:[-_ ].*)?$/)
+  if (byYear) {
+    const venue = trimLabel(String(byYear[1] || '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim())
+    const year = String(byYear[2] || '').trim()
+    return [venue, year].filter(Boolean).join(' ')
+  }
+  const short = trimLabel(normalized)
+  return short
+}
+
+export function citationInlineLabel(detail: CiteDetail): string {
+  const n = detail.num > 0 ? String(detail.num) : '?'
+  const sourceTag = compactSourceChipLabel(detail.sourceName, detail.sourcePath)
+  if (!sourceTag) return n
+  return `${sourceTag} #${n}`
+}
+
 export function citationDisplay(detail: CiteDetail) {
   const main = (() => {
     const title = String(detail.title || '').trim()
@@ -343,4 +403,12 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
 }`
 
   return { gbt, bibtex }
+}
+
+export function summarySourceLabel(source: string): string {
+  const s = String(source || '').trim().toLowerCase()
+  if (s === 'fulltext') return 'fulltext'
+  if (s === 'abstract') return 'abstract'
+  if (s === 'metadata') return 'metadata'
+  return 'metadata'
 }
