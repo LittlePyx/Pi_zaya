@@ -125,8 +125,48 @@ function removeShelfStorage(key: string) {
   shelfStorageFallback.delete(key)
 }
 
+function normalizeDoiLike(value: string): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
+    .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
+    .trim()
+}
+
+function normalizeTitleLike(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function shelfPaperIdentity(item: CiteShelfItem): string {
+  const doi = normalizeDoiLike(item.doi || item.doiUrl)
+  if (doi) return `doi:${doi}`
+  const title = normalizeTitleLike(item.title || item.main)
+  const year = /^\d{4}$/.test(String(item.year || '').trim()) ? String(item.year).trim() : ''
+  if (title) return `title:${title}|${year}`
+  return `key:${String(item.key || '').trim()}`
+}
+
+function dedupeShelfItems(items: CiteShelfItem[]): CiteShelfItem[] {
+  const seen = new Set<string>()
+  const out: CiteShelfItem[] = []
+  for (const item of items || []) {
+    const key = shelfPaperIdentity(item)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(item)
+    if (out.length >= SHELF_MAX_ITEMS) break
+  }
+  return out
+}
+
 function restoreShelfItems(rawItems: unknown[]): CiteShelfItem[] {
   const seen = new Set<string>()
+  const seenIdentity = new Set<string>()
   const out: CiteShelfItem[] = []
   for (const raw of rawItems) {
     if (!raw || typeof raw !== 'object') continue
@@ -137,7 +177,10 @@ function restoreShelfItems(rawItems: unknown[]): CiteShelfItem[] {
     const key = String(rec.key || '').trim() || base.key
     const main = String(rec.main || '').trim() || base.main
     if (!key || seen.has(key)) continue
+    const identity = shelfPaperIdentity({ ...base, key, main })
+    if (seenIdentity.has(identity)) continue
     seen.add(key)
+    seenIdentity.add(identity)
     out.push({ ...base, key, main })
     if (out.length >= SHELF_MAX_ITEMS) break
   }
@@ -552,7 +595,9 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
         }
         return item
       })
-      return changed ? next : current
+      const deduped = dedupeShelfItems(next)
+      if (deduped.length !== current.length) changed = true
+      return changed ? deduped : current
     })
   }, [liveCiteMap])
 
@@ -631,8 +676,12 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const addToShelf = (detail: CiteDetail) => {
     const item = toShelfItem(detail)
     setShelfItems((current) => {
-      const next = [item, ...current.filter((entry) => entry.key !== item.key)].slice(0, SHELF_MAX_ITEMS)
-      return next
+      const identity = shelfPaperIdentity(item)
+      const next = [item, ...current.filter((entry) => entry.key !== item.key && shelfPaperIdentity(entry) !== identity)]
+      const deduped = dedupeShelfItems(next)
+      if (deduped.length > SHELF_MAX_ITEMS) return deduped.slice(0, SHELF_MAX_ITEMS)
+      if (deduped.length === next.length) return deduped.slice(0, SHELF_MAX_ITEMS)
+      return deduped
     })
     setFocusedShelfKey(item.key)
     setShelfOpen(true)

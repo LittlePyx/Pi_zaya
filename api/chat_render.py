@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import re
@@ -25,8 +25,10 @@ _STRUCT_SID_HEADER_LINE_RE = re.compile(
     r"(?im)^\s*\[\d{1,3}\]\s*\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\][^\n]*\n?",
     re.IGNORECASE,
 )
+_VISIBLE_NUMERIC_CITE_RE = re.compile(r"\[\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*\]")
 _EQ_SOURCE_NOTE_RE = re.compile(
-    r"\*\s*（式\((\d{1,4})\)\s*来自参考定位\s*#\d+\s*：\s*`([^`]+)`(?:，可在下方参考定位点\s*Open/Page)?）\s*\*"
+    r"\*\s*.*?\((\d{1,4})\).*?`([^`]+)`.*?(?:Open/Page)?[^\n]*\*",
+    re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 
@@ -67,7 +69,29 @@ def _normalize_equation_source_notes(md: str) -> str:
             return m.group(0)
         return f"*（式({eq_num}) 对应命中的库内文献：`{label}`）*"
 
-    return _EQ_SOURCE_NOTE_RE.sub(_replace, str(md or ""))
+    out = _EQ_SOURCE_NOTE_RE.sub(_replace, str(md or ""))
+    # Fallback for legacy/mojibake variants that still contain "Open/Page".
+    out = re.sub(
+        r"(?im)^\*\s*.*?\((\d{1,4})\).*?`([^`]+)`.*?Open/Page[^\n]*$",
+        _replace,
+        out,
+    )
+    lines: list[str] = []
+    for ln in str(out).splitlines():
+        l = str(ln or "")
+        ll = l.lower()
+        if l.lstrip().startswith("*"):
+            m_eq = re.search(r"\((\d{1,4})\)", l)
+            m_label = re.search(r"([A-Za-z0-9][^\n`]{0,220}\.pdf)", l)
+            if m_eq and m_label and (
+                ("open/page" in ll)
+                or ("参考定位" in l)
+                or ("鍙傝€冨畾浣" in l)
+                or ("#1" in l)
+            ):
+                l = f"*（式({m_eq.group(1)}) 对应命中的库内文献：`{m_label.group(1).strip()}`）*"
+        lines.append(l)
+    return "\n".join(lines).replace("Open/Page", "")
 
 
 def _strip_structured_cite_tokens_for_display(md: str) -> str:
@@ -76,11 +100,8 @@ def _strip_structured_cite_tokens_for_display(md: str) -> str:
         return s
     out = s
     if "CITE" in s.upper():
-        out = _STRUCT_CITE_RE.sub(lambda m: f"[{int(m.group(2))}]", out)
-        out = _STRUCT_CITE_SINGLE_RE.sub(
-            lambda m: f"[{int(m.group(2))}]" if str(m.group(2) or "").strip() else "",
-            out,
-        )
+        out = _STRUCT_CITE_RE.sub("", out)
+        out = _STRUCT_CITE_SINGLE_RE.sub("", out)
         out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
         out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
     out = _STRUCT_SID_HEADER_LINE_RE.sub("", out)
@@ -90,6 +111,25 @@ def _strip_structured_cite_tokens_for_display(md: str) -> str:
 
 def _normalize_chat_markdown_for_display(md: str) -> str:
     return _normalize_math_markdown(_strip_structured_cite_tokens_for_display(md))
+
+
+def _should_retry_structured_cite_fallback(*, raw_body: str, rendered_body: str, cite_details: list[dict]) -> bool:
+    if cite_details:
+        return False
+    raw = str(raw_body or "")
+    rendered = str(rendered_body or "")
+    had_structured = bool(
+        _STRUCT_CITE_RE.search(raw)
+        or _STRUCT_CITE_SINGLE_RE.search(raw)
+        or _STRUCT_CITE_SID_ONLY_RE.search(raw)
+    )
+    if not had_structured:
+        return False
+    # If the primary annotator already preserved visible numeric markers as a
+    # safety downgrade, keep them and avoid re-linking.
+    if _VISIBLE_NUMERIC_CITE_RE.search(rendered):
+        return False
+    return True
 
 
 def _build_render_texts(*, rendered_full: str, rendered_body: str, notice: str, cite_details: list[dict]) -> tuple[str, str, str, str]:
@@ -227,7 +267,7 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             return ""
         detail = _mk_detail(sid, n)
         if not detail:
-            return f"[{n}]"
+            return ""
         return f"[{n}](#{detail['anchor']})"
 
     out = _STRUCT_CITE_RE.sub(_replace, str(md or ""))
@@ -274,7 +314,16 @@ def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: di
                 hits,
                 anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
             )
-            if (not cite_details) and ("CITE" in raw_body.upper()):
+            # API rendering can receive a primary annotator result that strips
+            # structured cite tokens before it has access to the reference
+            # index. Retry against the raw body only when the primary pass
+            # removed all cite markers entirely. If it already downgraded to
+            # visible numeric markers, keep that safer output.
+            if _should_retry_structured_cite_fallback(
+                raw_body=raw_body,
+                rendered_body=rendered_body,
+                cite_details=cite_details,
+            ):
                 rendered_body, cite_details = _fallback_render_structured_citations(
                     raw_body,
                     hits,
@@ -310,3 +359,4 @@ def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: di
         out.append(rec)
 
     return out
+

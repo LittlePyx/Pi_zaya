@@ -28,6 +28,7 @@ from kb.chat_store import ChatStore
 from kb.file_ops import _resolve_md_output_paths
 from kb.llm import DeepSeekChat
 from kb.pdf_tools import run_pdf_to_md
+from kb.reference_index import load_reference_index, resolve_reference_entry
 from kb.retrieval_engine import (
     _deep_read_md_for_context,
     _enrich_grouped_refs_with_llm_pack,
@@ -53,6 +54,10 @@ _CITE_SINGLE_BRACKET_RE = re.compile(
 )
 _CITE_SID_ONLY_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]",
+    re.IGNORECASE,
+)
+_CITE_CANON_RE = re.compile(
+    r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]",
     re.IGNORECASE,
 )
 _SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
@@ -332,9 +337,9 @@ _ANSWER_LIMITS_HINT_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _ANSWER_SECTION_PREFIX_RE = re.compile(
-    r"(?im)^\s*(Conclusion|Evidence|Limits|Next Steps|结论|依据|边界|下一步建议|下一步)\s*[:：]"
+    r"(?im)^\s*(Conclusion|Evidence|Limits|Next Steps|结论|依据|证据|边界|限制|局限|下一步建议|下一步)\s*[:：]"
 )
-_ANSWER_NEXT_STEPS_HEADER_RE = re.compile(r"(?im)^\s*(Next Steps|下一步建议|下一步)\s*[:：]")
+_ANSWER_NEXT_STEPS_HEADER_RE = re.compile(r"(?im)^\s*(Next Steps|Next Step|下一步建议|下一步|建议)\s*[:：]")
 _ANSWER_ORDERED_LIST_RE = re.compile(r"(?m)^\s*1\.\s+\S+")
 _ANSWER_INTENTS = {"reading", "compare", "idea", "experiment", "troubleshoot", "writing"}
 _ANSWER_DEPTHS = {"L1", "L2", "L3"}
@@ -414,9 +419,9 @@ def _normalize_answer_section_name(raw: str) -> str:
     s = str(raw or "").strip().lower().replace(" ", "")
     if s in {"conclusion", "结论"}:
         return "conclusion"
-    if s in {"evidence", "依据"}:
+    if s in {"evidence", "依据", "证据"}:
         return "evidence"
-    if s in {"limits", "边界"}:
+    if s in {"limits", "边界", "限制", "局限"}:
         return "limits"
     if s in {"nextsteps", "下一步", "下一步建议"}:
         return "next_steps"
@@ -432,11 +437,53 @@ def _extract_answer_section_keys(text: str) -> list[str]:
     return keys
 
 
-def _has_complete_answer_sections(text: str) -> bool:
+def _has_sufficient_answer_sections(text: str, *, has_hits: bool) -> bool:
     keys = set(_extract_answer_section_keys(text))
-    if len(keys) < 2:
+    if "conclusion" not in keys:
         return False
-    return "conclusion" in keys or "evidence" in keys
+    if "next_steps" not in keys:
+        return False
+    if bool(has_hits) and ("evidence" not in keys):
+        return False
+    return len(keys) >= 2
+
+
+def _build_answer_quality_probe(
+    answer: str,
+    *,
+    has_hits: bool,
+    contract_enabled: bool,
+    intent: str = "",
+    depth: str = "",
+) -> dict:
+    text = str(answer or "").strip()
+    keys = set(_extract_answer_section_keys(text))
+    has_conclusion = "conclusion" in keys
+    has_evidence = "evidence" in keys
+    has_limits = "limits" in keys
+    has_next_steps = "next_steps" in keys
+    core_sections = int(has_conclusion) + int(has_evidence) + int(has_next_steps)
+    core_ratio = round(float(core_sections) / 3.0, 3)
+    has_citations = bool(_ANSWER_CITE_HINT_RE.search(text) or re.search(r"\[\d{1,3}\]", text))
+    evidence_required = bool(has_hits)
+    evidence_ok = (not evidence_required) or bool(has_evidence)
+    minimum_ok = bool(has_conclusion and has_next_steps and evidence_ok)
+    return {
+        "contract_enabled": bool(contract_enabled),
+        "intent": str(intent or ""),
+        "depth": str(depth or ""),
+        "char_count": len(text),
+        "has_hits": bool(has_hits),
+        "has_conclusion": bool(has_conclusion),
+        "has_evidence": bool(has_evidence),
+        "has_limits": bool(has_limits),
+        "has_next_steps": bool(has_next_steps),
+        "has_citations": bool(has_citations),
+        "evidence_required": bool(evidence_required),
+        "evidence_ok": bool(evidence_ok),
+        "core_section_coverage": core_ratio,
+        "minimum_ok": bool(minimum_ok),
+    }
 
 
 def _build_answer_contract_system_rules(*, intent: str, depth: str, has_hits: bool) -> str:
@@ -579,7 +626,7 @@ def _apply_answer_contract_v1(
     body = str(body0 if notice else src).strip()
     if not body:
         return src
-    if _has_complete_answer_sections(body):
+    if _has_sufficient_answer_sections(body, has_hits=has_hits):
         return src
 
     paras = [p.strip() for p in re.split(r"\n{2,}", body) if str(p or "").strip()]
@@ -591,6 +638,10 @@ def _apply_answer_contract_v1(
     evidence: list[str] = []
     extra: list[str] = []
     for p in tail:
+        p1 = str(p or "").strip()
+        if _ANSWER_NEXT_STEPS_HEADER_RE.search(p1):
+            # Avoid carrying old next-steps fragments into extra paragraphs.
+            continue
         if _ANSWER_CITE_HINT_RE.search(p):
             evidence.append(p)
         else:
@@ -605,6 +656,12 @@ def _apply_answer_contract_v1(
         "limits": "边界" if prefer_zh else "Limits",
         "next_steps": "下一步" if prefer_zh else "Next Steps",
     }
+    if has_hits and (not evidence):
+        evidence.append(
+            "命中库内片段支持该结论，建议优先核对对应原文段落/图表。"
+            if prefer_zh
+            else "Retrieved library snippets support this conclusion; verify against the cited source passage/figure."
+        )
 
     limits: list[str] = []
     if _ANSWER_LIMITS_HINT_RE.search(body):
@@ -628,7 +685,7 @@ def _apply_answer_contract_v1(
 
     depth_level = depth if depth in _ANSWER_DEPTHS else "L2"
     step_limit = 1 if depth_level == "L1" else (3 if depth_level == "L3" else 2)
-    body_limit = 1 if depth_level == "L1" else (3 if depth_level == "L3" else 2)
+    body_limit = 2 if depth_level == "L1" else (6 if depth_level == "L3" else 4)
     steps = _build_default_next_steps(
         intent=intent if intent in _ANSWER_INTENTS else "reading",
         has_hits=has_hits,
@@ -647,7 +704,16 @@ def _apply_answer_contract_v1(
         parts.append(f"{labels['next_steps']}:\n" + "\n".join(f"{i}. {item}" for i, item in enumerate(steps, start=1)))
     if extra:
         parts.append("\n\n".join(extra[:body_limit]))
-    return "\n\n".join(parts).strip()
+
+    contracted = "\n\n".join(parts).strip()
+    # Guardrail: avoid over-shrinking long answers when we auto-repair structure.
+    # Keep the structured scaffold, but preserve more original detail if contraction is too aggressive.
+    if len(src) >= 700 and len(contracted) < int(len(src) * 0.65):
+        details = "\n\n".join(extra).strip()
+        if details and (details not in contracted):
+            details_title = "补充细节" if prefer_zh else "Additional Details"
+            contracted = f"{contracted}\n\n{details_title}:\n{details}".strip()
+    return contracted
 
 
 def _enhance_kb_miss_fallback(answer: str, *, has_hits: bool, intent: str, depth: str) -> str:
@@ -697,6 +763,8 @@ if not hasattr(RUNTIME, "BG_STATE"):
         "cancel": False,
         "last": "",
     }
+if not hasattr(RUNTIME, "GEN_QUALITY_EVENTS"):
+    RUNTIME.GEN_QUALITY_EVENTS = []
 
 _BG_STATE = RUNTIME.BG_STATE
 _BG_LOCK = RUNTIME.BG_LOCK
@@ -779,6 +847,217 @@ def _gen_mark_cancel(session_id: str, task_id: str) -> bool:
         cur2["updated_at"] = time.time()
         RUNTIME.GEN_TASKS[sid] = cur2
         return True
+
+
+def _gen_record_answer_quality(
+    *,
+    session_id: str,
+    task_id: str,
+    conv_id: str,
+    answer_quality: dict | None,
+) -> None:
+    q = dict(answer_quality or {})
+    if not q:
+        return
+    try:
+        max_keep = int(str(os.environ.get("KB_ANSWER_QUALITY_KEEP", "800") or "800"))
+    except Exception:
+        max_keep = 800
+    max_keep = max(100, min(5000, max_keep))
+    sample = {
+        "ts": float(time.time()),
+        "session_id": str(session_id or ""),
+        "task_id": str(task_id or ""),
+        "conv_id": str(conv_id or ""),
+        "intent": str(q.get("intent") or ""),
+        "depth": str(q.get("depth") or ""),
+        "contract_enabled": bool(q.get("contract_enabled", False)),
+        "has_hits": bool(q.get("has_hits", False)),
+        "has_conclusion": bool(q.get("has_conclusion", False)),
+        "has_evidence": bool(q.get("has_evidence", False)),
+        "has_next_steps": bool(q.get("has_next_steps", False)),
+        "evidence_required": bool(q.get("evidence_required", False)),
+        "evidence_ok": bool(q.get("evidence_ok", False)),
+        "minimum_ok": bool(q.get("minimum_ok", False)),
+        "core_section_coverage": float(q.get("core_section_coverage") or 0.0),
+        "char_count": int(q.get("char_count") or 0),
+    }
+    with RUNTIME.GEN_LOCK:
+        events = getattr(RUNTIME, "GEN_QUALITY_EVENTS", None)
+        if not isinstance(events, list):
+            events = []
+            RUNTIME.GEN_QUALITY_EVENTS = events
+        events.append(sample)
+        overflow = len(events) - max_keep
+        if overflow > 0:
+            del events[:overflow]
+
+
+def _gen_answer_quality_summary(
+    *,
+    limit: int = 200,
+    intent: str = "",
+    depth: str = "",
+    only_failed: bool = False,
+) -> dict:
+    try:
+        n_limit = int(limit)
+    except Exception:
+        n_limit = 200
+    n_limit = max(20, min(2000, n_limit))
+    intent_filter = str(intent or "").strip().lower()
+    depth_filter = str(depth or "").strip().upper()
+    failed_only = bool(only_failed)
+    with RUNTIME.GEN_LOCK:
+        events0 = getattr(RUNTIME, "GEN_QUALITY_EVENTS", None)
+        events = list(events0) if isinstance(events0, list) else []
+    if intent_filter:
+        events = [x for x in events if str(x.get("intent") or "").strip().lower() == intent_filter]
+    if depth_filter:
+        events = [x for x in events if str(x.get("depth") or "").strip().upper() == depth_filter]
+    if failed_only:
+        events = [x for x in events if not bool(x.get("minimum_ok", False))]
+    if n_limit and len(events) > n_limit:
+        events = events[-n_limit:]
+    total = len(events)
+    if total <= 0:
+        return {
+            "limit": n_limit,
+            "filters": {
+                "intent": intent_filter,
+                "depth": depth_filter,
+                "only_failed": failed_only,
+            },
+            "total": 0,
+            "failed_count": 0,
+            "failed_rate": 0.0,
+            "structure_complete_rate": 0.0,
+            "evidence_coverage_rate": 0.0,
+            "next_steps_coverage_rate": 0.0,
+            "minimum_ok_rate": 0.0,
+            "avg_core_section_coverage": 0.0,
+            "by_intent": {},
+            "by_depth": {},
+            "fail_reasons": {},
+        }
+
+    structure_ok = 0
+    evidence_ok = 0
+    next_steps_ok = 0
+    minimum_ok = 0
+    failed_count = 0
+    core_cov_sum = 0.0
+    by_intent: dict[str, dict] = {}
+    by_depth: dict[str, dict] = {}
+    fail_reasons: dict[str, int] = {}
+
+    for rec in events:
+        has_conclusion = bool(rec.get("has_conclusion", False))
+        has_next_steps = bool(rec.get("has_next_steps", False))
+        has_evidence = bool(rec.get("has_evidence", False))
+        evidence_required = bool(rec.get("evidence_required", False))
+        rec_structure_ok = bool(has_conclusion and has_next_steps)
+        rec_evidence_ok = bool((not evidence_required) or has_evidence)
+        rec_next_ok = bool(has_next_steps)
+        rec_minimum_ok = bool(rec.get("minimum_ok", False))
+        rec_core_cov = float(rec.get("core_section_coverage") or 0.0)
+
+        structure_ok += int(rec_structure_ok)
+        evidence_ok += int(rec_evidence_ok)
+        next_steps_ok += int(rec_next_ok)
+        minimum_ok += int(rec_minimum_ok)
+        failed_count += int(not rec_minimum_ok)
+        core_cov_sum += rec_core_cov
+
+        intent = str(rec.get("intent") or "unknown").strip().lower() or "unknown"
+        bucket = by_intent.setdefault(
+            intent,
+            {
+                "count": 0,
+                "structure_complete_rate": 0.0,
+                "evidence_coverage_rate": 0.0,
+                "next_steps_coverage_rate": 0.0,
+                "minimum_ok_rate": 0.0,
+            },
+        )
+        bucket["count"] += 1
+        bucket["_structure_ok"] = int(bucket.get("_structure_ok", 0)) + int(rec_structure_ok)
+        bucket["_evidence_ok"] = int(bucket.get("_evidence_ok", 0)) + int(rec_evidence_ok)
+        bucket["_next_ok"] = int(bucket.get("_next_ok", 0)) + int(rec_next_ok)
+        bucket["_minimum_ok"] = int(bucket.get("_minimum_ok", 0)) + int(rec_minimum_ok)
+
+        depth = str(rec.get("depth") or "unknown").strip().upper() or "UNKNOWN"
+        d_bucket = by_depth.setdefault(
+            depth,
+            {
+                "count": 0,
+                "minimum_ok_rate": 0.0,
+                "avg_char_count": 0.0,
+            },
+        )
+        d_bucket["count"] += 1
+        d_bucket["_minimum_ok"] = int(d_bucket.get("_minimum_ok", 0)) + int(rec_minimum_ok)
+        d_bucket["_char_sum"] = int(d_bucket.get("_char_sum", 0)) + int(rec.get("char_count") or 0)
+
+        if not rec_minimum_ok:
+            reasons: list[str] = []
+            if not has_conclusion:
+                reasons.append("missing_conclusion")
+            if not has_next_steps:
+                reasons.append("missing_next_steps")
+            if evidence_required and (not has_evidence):
+                reasons.append("missing_evidence")
+            if not reasons:
+                reasons.append("other")
+            for r in reasons:
+                fail_reasons[r] = int(fail_reasons.get(r, 0)) + 1
+
+    def _ratio(ok: int, n: int) -> float:
+        if n <= 0:
+            return 0.0
+        return round(float(ok) / float(n), 3)
+
+    for bucket in by_intent.values():
+        c = int(bucket.get("count") or 0)
+        bucket["structure_complete_rate"] = _ratio(int(bucket.get("_structure_ok") or 0), c)
+        bucket["evidence_coverage_rate"] = _ratio(int(bucket.get("_evidence_ok") or 0), c)
+        bucket["next_steps_coverage_rate"] = _ratio(int(bucket.get("_next_ok") or 0), c)
+        bucket["minimum_ok_rate"] = _ratio(int(bucket.get("_minimum_ok") or 0), c)
+        bucket.pop("_structure_ok", None)
+        bucket.pop("_evidence_ok", None)
+        bucket.pop("_next_ok", None)
+        bucket.pop("_minimum_ok", None)
+
+    for d_bucket in by_depth.values():
+        c = int(d_bucket.get("count") or 0)
+        d_bucket["minimum_ok_rate"] = _ratio(int(d_bucket.get("_minimum_ok") or 0), c)
+        if c > 0:
+            d_bucket["avg_char_count"] = round(float(int(d_bucket.get("_char_sum") or 0)) / float(c), 1)
+        else:
+            d_bucket["avg_char_count"] = 0.0
+        d_bucket.pop("_minimum_ok", None)
+        d_bucket.pop("_char_sum", None)
+
+    return {
+        "limit": n_limit,
+        "filters": {
+            "intent": intent_filter,
+            "depth": depth_filter,
+            "only_failed": failed_only,
+        },
+        "total": total,
+        "failed_count": failed_count,
+        "failed_rate": _ratio(failed_count, total),
+        "structure_complete_rate": _ratio(structure_ok, total),
+        "evidence_coverage_rate": _ratio(evidence_ok, total),
+        "next_steps_coverage_rate": _ratio(next_steps_ok, total),
+        "minimum_ok_rate": _ratio(minimum_ok, total),
+        "avg_core_section_coverage": round(core_cov_sum / float(total), 3),
+        "by_intent": by_intent,
+        "by_depth": by_depth,
+        "fail_reasons": dict(sorted(fail_reasons.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))),
+    }
+
 
 def _gen_store_answer(task: dict, answer: str) -> None:
     conv_id = str(task.get("conv_id") or "")
@@ -1165,6 +1444,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         answer_seed = grouped_docs if prefer_grouped_docs else (hits or grouped_docs)
         answer_hits = list((answer_seed or [])[: max(1, min(int(top_k), 4))])
         anchor_grounded_answer = _has_anchor_grounded_answer_hits(answer_hits)
+        locked_citation_source = _pick_locked_citation_source(answer_hits)
         for i, h in enumerate(answer_hits, start=1):
             meta = h.get("meta", {}) or {}
             src = (meta.get("source_path", "") or "").strip()
@@ -1256,6 +1536,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer_intent=answer_intent,
             answer_depth=answer_depth,
             answer_contract_v1=bool(answer_contract_v1),
+            citation_locked_sid=str((locked_citation_source or {}).get("sid") or ""),
             stage="answer",
         )
         ctx = "\n\n---\n\n".join(ctx_parts)
@@ -1265,7 +1546,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "如果用户问‘你是谁/你叫什么/你是谁开发的’之类的问题，统一回答：我是 P&I Lab 开发的 π-zaya。\n"
             "你是我的个人知识库助手。优先基于我提供的检索片段回答问题。\n"
             "规则：\n"
-            "1) 如果检索片段存在：优先基于片段回答；需要引用时，用 [1] [2] 这样的编号标注。\n"
+            "1) 如果检索片段存在：优先基于片段回答；需要引用时，必须用 [[CITE:<sid>:<ref_num>]] 结构化标注。\n"
             "2) 如果检索片段为空：也要给出可用的通用回答，但开头必须写明‘未命中知识库片段’。\n"
             "3) 不要编造不存在的论文、公式、数据或结论。\n"
             "4) 不要输出‘参考定位/Top-K/引用列表’之类的额外段落（我会在页面里单独展示）。\n"
@@ -1284,6 +1565,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "- Do NOT output free-form numeric citations like [24] / [2][4].\n"
             "- NEVER output malformed markers like [[CITE:<sid>]] or [CITE:<sid>] (missing ref_num).\n"
         )
+        if locked_citation_source:
+            locked_sid = str(locked_citation_source.get("sid") or "").strip()
+            locked_name = str(locked_citation_source.get("source_name") or "").strip()
+            system += (
+                "\nCitation source lock:\n"
+                f"- This answer is primarily grounded in [SID:{locked_sid}] {locked_name}.\n"
+                f"- Prefer citations from [SID:{locked_sid}] whenever possible.\n"
+                "- If a reference number cannot be verified in that source, do not guess or switch to another SID casually.\n"
+            )
         if image_first_prompt:
             system += (
                 "\nImage-first rule:\n"
@@ -1411,10 +1701,40 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             depth=answer_depth,
         )
         answer = _maybe_append_library_figure_markdown(answer, prompt=prompt, answer_hits=answer_hits)
+        answer, citation_validation = _validate_structured_citations(
+            answer,
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            locked_source=locked_citation_source,
+        )
+        answer_quality = _build_answer_quality_probe(
+            answer,
+            has_hits=bool(answer_hits),
+            contract_enabled=bool(answer_contract_v1),
+            intent=answer_intent,
+            depth=answer_depth,
+        )
         _gen_store_answer(task, answer)
         _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))
         _perf_log("gen.total", elapsed=time.perf_counter() - worker_t0, conv_id=conv_id)
-        _gen_update_task(session_id, task_id, status="done", stage="done", answer=answer, partial=answer, char_count=len(answer), finished_at=time.time())
+        _gen_record_answer_quality(
+            session_id=session_id,
+            task_id=task_id,
+            conv_id=conv_id,
+            answer_quality=answer_quality,
+        )
+        _gen_update_task(
+            session_id,
+            task_id,
+            status="done",
+            stage="done",
+            answer=answer,
+            partial=answer,
+            char_count=len(answer),
+            answer_quality=answer_quality,
+            citation_validation=citation_validation,
+            finished_at=time.time(),
+        )
 
     except Exception as e:
         if str(e) == "canceled":
@@ -1679,6 +1999,206 @@ def _has_anchor_grounded_answer_hits(answer_hits: list[dict]) -> bool:
         if anchor_score > 0.0:
             return True
     return False
+
+
+def _aggregate_answer_sources(answer_hits: list[dict]) -> list[dict]:
+    agg_by_src: dict[str, dict] = {}
+    for hit in answer_hits or []:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta", {}) or {}
+        src = str(meta.get("source_path") or "").strip()
+        if not src:
+            continue
+        rec = agg_by_src.get(src)
+        if not isinstance(rec, dict):
+            rec = {
+                "source_path": src,
+                "sid": _cite_source_id(src),
+                "source_name": _source_name_from_md_path(src),
+                "hits": 0,
+                "explicit_doc_score": 0.0,
+                "anchor_score": 0.0,
+                "source_sha1": "",
+            }
+            agg_by_src[src] = rec
+        rec["hits"] = int(rec.get("hits") or 0) + 1
+        sha1 = str(meta.get("source_sha1") or "").strip().lower()
+        if sha1 and (not str(rec.get("source_sha1") or "").strip()):
+            rec["source_sha1"] = sha1
+        try:
+            rec["explicit_doc_score"] = max(
+                float(rec.get("explicit_doc_score") or 0.0),
+                float(meta.get("explicit_doc_match_score") or 0.0),
+            )
+        except Exception:
+            pass
+        try:
+            rec["anchor_score"] = max(
+                float(rec.get("anchor_score") or 0.0),
+                float(meta.get("anchor_match_score") or 0.0),
+            )
+        except Exception:
+            pass
+    out = list(agg_by_src.values())
+    out.sort(
+        key=lambda item: (
+            float(item.get("anchor_score") or 0.0),
+            float(item.get("explicit_doc_score") or 0.0),
+            int(item.get("hits") or 0),
+            str(item.get("source_name") or ""),
+        ),
+        reverse=True,
+    )
+    return out
+
+
+def _pick_locked_citation_source(answer_hits: list[dict]) -> dict | None:
+    ranked = _aggregate_answer_sources(answer_hits)
+    if not ranked:
+        return None
+    if len(ranked) == 1:
+        rec = dict(ranked[0])
+        rec["lock_reason"] = "single_source"
+        return rec
+
+    top = ranked[0]
+    second = ranked[1]
+    top_anchor = float(top.get("anchor_score") or 0.0)
+    sec_anchor = float(second.get("anchor_score") or 0.0)
+    if top_anchor > 0.0 and top_anchor >= max(1.0, sec_anchor + 0.25):
+        rec = dict(top)
+        rec["lock_reason"] = "anchor_dominant"
+        return rec
+
+    top_doc = float(top.get("explicit_doc_score") or 0.0)
+    sec_doc = float(second.get("explicit_doc_score") or 0.0)
+    if top_doc >= 6.0 and top_doc >= max(6.0, sec_doc + 1.5):
+        rec = dict(top)
+        rec["lock_reason"] = "explicit_doc_dominant"
+        return rec
+
+    top_hits = int(top.get("hits") or 0)
+    sec_hits = int(second.get("hits") or 0)
+    if top_hits >= max(2, sec_hits * 2) and top_doc >= max(4.0, sec_doc):
+        rec = dict(top)
+        rec["lock_reason"] = "hit_dominant"
+        return rec
+    return None
+
+
+def _validate_structured_citations(
+    answer: str,
+    *,
+    answer_hits: list[dict],
+    db_dir: Path | None,
+    locked_source: dict | None = None,
+) -> tuple[str, dict]:
+    text = str(answer or "")
+    if ("[[CITE:" not in text) and ("[CITE:" not in text):
+        return text, {
+            "raw_count": 0,
+            "kept": 0,
+            "rewritten": 0,
+            "dropped": 0,
+            "locked_sid": str((locked_source or {}).get("sid") or ""),
+        }
+
+    cleaned = _sanitize_structured_cite_tokens(text)
+    raw_tokens = list(_CITE_CANON_RE.finditer(cleaned))
+    if not raw_tokens:
+        return cleaned, {
+            "raw_count": 0,
+            "kept": 0,
+            "rewritten": 0,
+            "dropped": 0,
+            "locked_sid": str((locked_source or {}).get("sid") or ""),
+        }
+
+    sid_to_source: dict[str, str] = {}
+    sha_by_source: dict[str, str] = {}
+    for hit in answer_hits or []:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta", {}) or {}
+        src = str(meta.get("source_path") or "").strip()
+        if not src:
+            continue
+        sid = _cite_source_id(src).lower()
+        sid_to_source[sid] = src
+        sha1 = str(meta.get("source_sha1") or "").strip().lower()
+        if sha1 and (src not in sha_by_source):
+            sha_by_source[src] = sha1
+
+    try:
+        index_data = load_reference_index(Path(db_dir).expanduser()) if db_dir else {}
+    except Exception:
+        index_data = {}
+
+    locked_sid = str((locked_source or {}).get("sid") or "").strip().lower()
+    locked_source_path = str((locked_source or {}).get("source_path") or "").strip()
+    if locked_sid and locked_source_path and (locked_sid not in sid_to_source):
+        sid_to_source[locked_sid] = locked_source_path
+        sha_locked = str((locked_source or {}).get("source_sha1") or "").strip().lower()
+        if sha_locked and (locked_source_path not in sha_by_source):
+            sha_by_source[locked_source_path] = sha_locked
+
+    def _resolves(sid: str, ref_num: int) -> bool:
+        sp = sid_to_source.get(str(sid or "").strip().lower())
+        if (not sp) or (int(ref_num) <= 0):
+            return False
+        try:
+            got = resolve_reference_entry(
+                index_data,
+                sp,
+                int(ref_num),
+                source_sha1=sha_by_source.get(sp, ""),
+            )
+        except Exception:
+            got = None
+        return bool(isinstance(got, dict) and isinstance(got.get("ref"), dict))
+
+    stats = {
+        "raw_count": int(len(raw_tokens)),
+        "kept": 0,
+        "rewritten": 0,
+        "dropped": 0,
+        "locked_sid": locked_sid,
+    }
+
+    def _repl(m: re.Match[str]) -> str:
+        sid = str(m.group(1) or "").strip().lower()
+        try:
+            n = int(m.group(2) or 0)
+        except Exception:
+            n = 0
+        if n <= 0:
+            stats["dropped"] = int(stats["dropped"]) + 1
+            return ""
+
+        if locked_sid:
+            if _resolves(locked_sid, n):
+                if sid == locked_sid:
+                    stats["kept"] = int(stats["kept"]) + 1
+                    return f"[[CITE:{locked_sid}:{n}]]"
+                stats["rewritten"] = int(stats["rewritten"]) + 1
+                return f"[[CITE:{locked_sid}:{n}]]"
+            if sid and _resolves(sid, n):
+                # Locked source could not validate this ref number; keep the
+                # original only when it resolves cleanly in the cited source.
+                stats["kept"] = int(stats["kept"]) + 1
+                return f"[[CITE:{sid}:{n}]]"
+            stats["dropped"] = int(stats["dropped"]) + 1
+            return ""
+
+        if sid and _resolves(sid, n):
+            stats["kept"] = int(stats["kept"]) + 1
+            return f"[[CITE:{sid}:{n}]]"
+        stats["dropped"] = int(stats["dropped"]) + 1
+        return ""
+
+    out = _CITE_CANON_RE.sub(_repl, cleaned)
+    return out, stats
 
 
 def _filter_history_for_multimodal_turn(

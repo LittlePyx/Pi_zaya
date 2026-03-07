@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -146,6 +147,79 @@ def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
     assert fake_store.messages[1][1] == "assistant"
     assert started_tasks
     assert started_tasks[0]["image_attachments"][0]["name"] == "img.png"
+
+
+def test_generate_stream_exposes_answer_probe_fields(monkeypatch):
+    from api.routers import generate as generate_router
+
+    monkeypatch.setattr(
+        generate_router,
+        "_gen_get_task",
+        lambda session_id: {
+            "stage": "done",
+            "partial": "ok",
+            "char_count": 2,
+            "status": "done",
+            "answer": "ok",
+            "answer_intent": "reading",
+            "answer_depth": "L2",
+            "answer_contract_v1": True,
+            "answer_quality": {"minimum_ok": True, "core_section_coverage": 1.0},
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/generate/sid-1/stream")
+    assert response.status_code == 200
+    lines = [ln for ln in response.text.splitlines() if ln.startswith("data: ")]
+    assert lines
+    payload = json.loads(lines[-1][6:])
+    assert payload["done"] is True
+    assert payload["status"] == "done"
+    assert payload["answer_intent"] == "reading"
+    assert payload["answer_depth"] == "L2"
+    assert payload["answer_contract_v1"] is True
+    assert payload["answer_quality"]["minimum_ok"] is True
+
+
+def test_generate_quality_summary_route(monkeypatch):
+    from api.routers import generate as generate_router
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        generate_router,
+        "_gen_answer_quality_summary",
+        lambda limit=200, intent="", depth="", only_failed=False: seen.update({"limit": limit, "intent": intent, "depth": depth, "only_failed": only_failed}) or {
+            "limit": limit,
+            "filters": {"intent": intent, "depth": depth, "only_failed": only_failed},
+            "total": 2,
+            "failed_count": 0,
+            "failed_rate": 0.0,
+            "structure_complete_rate": 1.0,
+            "evidence_coverage_rate": 1.0,
+            "next_steps_coverage_rate": 1.0,
+            "minimum_ok_rate": 1.0,
+            "avg_core_section_coverage": 1.0,
+            "by_intent": {"reading": {"count": 2}},
+            "by_depth": {"L2": {"count": 2, "minimum_ok_rate": 1.0, "avg_char_count": 120.0}},
+            "fail_reasons": {},
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/generate/quality/summary?limit=77&intent=reading&depth=L2&only_failed=true")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["limit"] == 77
+    assert payload["filters"]["intent"] == "reading"
+    assert payload["filters"]["depth"] == "L2"
+    assert payload["filters"]["only_failed"] is True
+    assert payload["total"] == 2
+    assert payload["by_intent"]["reading"]["count"] == 2
+    assert payload["by_depth"]["L2"]["count"] == 2
+    assert seen["intent"] == "reading"
+    assert seen["depth"] == "L2"
+    assert bool(seen["only_failed"]) is True
 
 
 def test_chat_uploads_route_marks_pdf_ingest_start_failure(monkeypatch, tmp_path: Path):

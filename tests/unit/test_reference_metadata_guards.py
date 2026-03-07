@@ -123,6 +123,39 @@ def test_enrich_citation_detail_meta_prefers_canonical_metadata_for_same_doi(mon
     assert str(out.get("citation_source") or "") == "OpenAlex"
 
 
+def test_enrich_citation_detail_meta_title_only_fallback_recovers_doi(monkeypatch):
+    monkeypatch.setattr(reference_ui, "fetch_crossref_meta", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+
+    def _fake_best_crossref_meta(**kwargs):
+        if kwargs.get("allow_title_only") and kwargs.get("query_title") == "Real-time methane leak imaging":
+            return {
+                "title": "Real-time methane leak imaging",
+                "authors": "Gibson G, Sun B, Edgar M",
+                "venue": "Optics Express",
+                "year": "2017",
+                "doi": "10.1364/oe.25.002998",
+                "doi_url": "https://doi.org/10.1364/oe.25.002998",
+            }
+        return None
+
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", _fake_best_crossref_meta)
+    monkeypatch.setattr(reference_ui, "_enrich_bibliometrics", lambda meta: dict(meta or {}))
+
+    out = enrich_citation_detail_meta(
+        {
+            "title": "Real-time methane leak imaging",
+            "venue": "Some noisy venue text",
+            "year": "2018",
+            "doi": "",
+            "raw": "",
+        }
+    )
+
+    assert str(out.get("doi") or "") == "10.1364/oe.25.002998"
+    assert str(out.get("doi_url") or "").startswith("https://doi.org/10.1364/oe.25.002998")
+
+
 def test_enrich_citation_detail_meta_uses_crossref_abstract_summary(monkeypatch):
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)

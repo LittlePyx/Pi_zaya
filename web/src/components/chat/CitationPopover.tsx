@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+﻿import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CiteDetail } from './citationState'
-import { citationDisplay, citeMetricSummary } from './citationState'
+import { citationDisplay, citationInlineLabel, citeMetricSummary } from './citationState'
 
 interface Props {
   detail: CiteDetail | null
@@ -59,6 +59,7 @@ export function CitationPopover({ detail, position, loading, inShelf, onClose, o
   const sourceLine = display.source ? `source: ${display.source}` : ''
   const doiLabel = compact(detail.doi) || compact(detail.doiUrl)
   const metrics = citeMetricSummary(detail)
+  const inlineLabel = citationInlineLabel(detail)
 
   return (
     <div
@@ -67,7 +68,7 @@ export function CitationPopover({ detail, position, loading, inShelf, onClose, o
       style={style ?? { left: position.x + 10, top: position.y + 10, visibility: 'hidden' }}
     >
       <div className="kb-cite-pop-head">
-        <div className="kb-cite-pop-title">[{detail.num || '?'}] 文内参考</div>
+        <div className="kb-cite-pop-title">[{inlineLabel}]</div>
         <button className="kb-cite-pop-close" onClick={onClose} type="button" aria-label="Close">
           ×
         </button>

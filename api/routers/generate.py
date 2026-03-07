@@ -12,6 +12,7 @@ from kb.task_runtime import (
     _gen_start_task,
     _gen_get_task,
     _gen_mark_cancel,
+    _gen_answer_quality_summary,
     _live_assistant_text,
 )
 
@@ -92,6 +93,10 @@ async def stream_generation(session_id: str):
             "done": t.get("status") in ("done", "error", "canceled"),
             "status": t.get("status", ""),
             "answer": t.get("answer", ""),
+            "answer_intent": t.get("answer_intent", ""),
+            "answer_depth": t.get("answer_depth", ""),
+            "answer_contract_v1": bool(t.get("answer_contract_v1", False)),
+            "answer_quality": t.get("answer_quality", {}),
         }
 
     return sse_response(sse_generator(poll, interval=0.15))
@@ -101,3 +106,18 @@ async def stream_generation(session_id: str):
 def cancel_generation(session_id: str, task_id: str):
     ok = _gen_mark_cancel(session_id, task_id)
     return {"ok": ok}
+
+
+@router.get("/quality/summary")
+def generation_quality_summary(
+    limit: int = 200,
+    intent: str = "",
+    depth: str = "",
+    only_failed: bool = False,
+):
+    return _gen_answer_quality_summary(
+        limit=limit,
+        intent=intent,
+        depth=depth,
+        only_failed=only_failed,
+    )

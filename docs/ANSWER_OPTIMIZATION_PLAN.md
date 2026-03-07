@@ -42,6 +42,11 @@
 3. 默认同步并行参数已上调并可配置（`KB_REFSYNC_WORKERS` 默认 `6`，API 可覆盖），并保持回滚能力。
 4. 当前索引质量基线已恢复并稳定：`refs_total=1084`、`refs_with_doi=983`、`unresolved=29`（对齐 stage9 基线）。
 5. 相关回归测试已补齐并通过（`tests/unit/test_reference_index.py`、`tests/sanity/test_library_phase1_api.py`）。
+6. 灰度复盘可观测性补强：新增回答质量探针聚合（运行时环形缓存）与只读汇总接口 `/api/generate/quality/summary`，可直接查看最近样本的结构完整率、证据覆盖率、下一步覆盖率和 `by_intent` 分布。
+7. 前端设置抽屉已接入质量汇总面板（可手动刷新），便于灰度期快速查看最近回答质量趋势，无需手工翻日志。
+8. 质量汇总已补充深度与失败维度（`failed_rate`、`by_depth`、`fail_reasons`），可直接判断是结构缺失还是证据缺失导致未达标。
+9. 质量汇总接口支持筛选（`intent/depth/only_failed`），设置面板已提供对应筛选项；同时将质量面板从 `SettingsDrawer` 中拆分为独立组件，降低主组件复杂度。
+10. D4 手工回归已补“可执行脚本”入口：`tools/manual_regression/run_answer_manual_regression.py`（自动检查 + 交互打分 + 报告落盘），并同步到清单文档使用说明。
 
 ## 1. 目标与边界
 

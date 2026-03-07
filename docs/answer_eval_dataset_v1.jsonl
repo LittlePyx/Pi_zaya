@@ -1,0 +1,37 @@
+{"id":"cs_reading_m_001","discipline":"计算机","user_level":"硕士","question_type":"reading","prompt":"这篇论文的核心贡献是什么？请用结论+依据+下一步给出。","top_k":6,"deep_read":false}
+{"id":"cs_reading_m_002","discipline":"计算机","user_level":"硕士","question_type":"reading","prompt":"请解释文中 method 部分最关键的一条技术点，并说明我应该先看哪一节。","top_k":6,"deep_read":true}
+{"id":"cs_compare_d_001","discipline":"计算机","user_level":"博士","question_type":"compare","prompt":"请对比这篇方法和传统 baseline 的差异、优劣和适用边界。","top_k":6,"deep_read":true}
+{"id":"cs_compare_d_002","discipline":"计算机","user_level":"博士","question_type":"compare","prompt":"如果我要在小样本场景选型，你更推荐哪种方案？请给出 trade-off。","top_k":6,"deep_read":true}
+{"id":"cs_idea_d_001","discipline":"计算机","user_level":"博士","question_type":"idea","prompt":"我想把这篇论文的思路迁移到多模态任务，这个 idea 可行吗？风险是什么？","top_k":6,"deep_read":true}
+{"id":"cs_exp_m_001","discipline":"计算机","user_level":"硕士","question_type":"experiment","prompt":"基于这篇论文，给我一个最小可验证实验方案，包含变量、对照和指标。","top_k":6,"deep_read":true}
+{"id":"cs_debug_m_001","discipline":"计算机","user_level":"硕士","question_type":"troubleshoot","prompt":"我复现时 loss 不收敛，先排查哪些最可能原因？","top_k":6,"deep_read":false}
+{"id":"cs_writing_m_001","discipline":"计算机","user_level":"硕士","question_type":"writing","prompt":"请帮我重写 related work 这一段，让逻辑更清晰且可直接放论文。","top_k":4,"deep_read":false}
+{"id":"ee_reading_m_001","discipline":"电子电气","user_level":"硕士","question_type":"reading","prompt":"这篇单像素成像论文主要解决了什么问题？","top_k":6,"deep_read":true}
+{"id":"ee_reading_m_002","discipline":"电子电气","user_level":"硕士","question_type":"reading","prompt":"图 3 和公式(8)分别表达了什么物理意义？","top_k":6,"deep_read":true}
+{"id":"ee_compare_d_001","discipline":"电子电气","user_level":"博士","question_type":"compare","prompt":"DMD 编码方案和随机编码方案在噪声鲁棒性上的差异是什么？","top_k":6,"deep_read":true}
+{"id":"ee_exp_d_001","discipline":"电子电气","user_level":"博士","question_type":"experiment","prompt":"如果验证系统在低照度下的稳定性，实验设计该怎么做？","top_k":6,"deep_read":true}
+{"id":"ee_idea_d_001","discipline":"电子电气","user_level":"博士","question_type":"idea","prompt":"能否把该方法用于高速动态场景？请给可行性和失败风险。","top_k":6,"deep_read":true}
+{"id":"ee_debug_m_001","discipline":"电子电气","user_level":"硕士","question_type":"troubleshoot","prompt":"实验重建出现条纹伪影，先检查哪几个环节？","top_k":6,"deep_read":false}
+{"id":"me_reading_m_001","discipline":"机械","user_level":"硕士","question_type":"reading","prompt":"请概括这篇工程论文的技术路线与关键贡献。","top_k":6,"deep_read":false}
+{"id":"me_compare_m_001","discipline":"机械","user_level":"硕士","question_type":"compare","prompt":"对比两种控制策略在响应速度和稳态误差上的表现。","top_k":6,"deep_read":true}
+{"id":"me_exp_m_001","discipline":"机械","user_level":"硕士","question_type":"experiment","prompt":"给我一个可复现实验计划，含设备、变量、采样频率和评价指标。","top_k":6,"deep_read":true}
+{"id":"me_idea_d_001","discipline":"机械","user_level":"博士","question_type":"idea","prompt":"把该方法迁移到柔性机构控制是否可行？最小验证路径是什么？","top_k":6,"deep_read":true}
+{"id":"me_debug_m_001","discipline":"机械","user_level":"硕士","question_type":"troubleshoot","prompt":"复现中控制器振荡严重，优先排查模型参数还是传感噪声？","top_k":6,"deep_read":false}
+{"id":"mat_reading_m_001","discipline":"材料","user_level":"硕士","question_type":"reading","prompt":"这篇材料方向论文的创新点和证据链分别是什么？","top_k":6,"deep_read":true}
+{"id":"mat_compare_d_001","discipline":"材料","user_level":"博士","question_type":"compare","prompt":"请对比两种制备工艺在性能提升和成本上的取舍。","top_k":6,"deep_read":true}
+{"id":"mat_exp_d_001","discipline":"材料","user_level":"博士","question_type":"experiment","prompt":"如何设计实验验证该材料在循环稳定性上的提升？","top_k":6,"deep_read":true}
+{"id":"mat_idea_d_001","discipline":"材料","user_level":"博士","question_type":"idea","prompt":"这个机理是否可以推广到另一类材料体系？请给边界条件。","top_k":6,"deep_read":true}
+{"id":"phy_reading_m_001","discipline":"物理","user_level":"硕士","question_type":"reading","prompt":"请解释文中关键公式的物理含义和适用条件。","top_k":6,"deep_read":true}
+{"id":"phy_compare_d_001","discipline":"物理","user_level":"博士","question_type":"compare","prompt":"该模型与经典近似模型相比，在哪些区间更准确？","top_k":6,"deep_read":true}
+{"id":"phy_exp_d_001","discipline":"物理","user_level":"博士","question_type":"experiment","prompt":"如果要验证理论预测，需要怎样的实验观测量和判据？","top_k":6,"deep_read":true}
+{"id":"phy_debug_m_001","discipline":"物理","user_level":"硕士","question_type":"troubleshoot","prompt":"模拟结果与论文不一致，我应该先排查边界条件还是参数设定？","top_k":6,"deep_read":false}
+{"id":"chem_reading_m_001","discipline":"化学","user_level":"硕士","question_type":"reading","prompt":"这篇化学论文的反应机制主线是什么？","top_k":6,"deep_read":true}
+{"id":"chem_compare_d_001","discipline":"化学","user_level":"博士","question_type":"compare","prompt":"两条反应路径在选择性和能垒上如何比较？","top_k":6,"deep_read":true}
+{"id":"chem_exp_d_001","discipline":"化学","user_level":"博士","question_type":"experiment","prompt":"设计一个实验去区分两种可能机理，给出关键观测指标。","top_k":6,"deep_read":true}
+{"id":"chem_idea_d_001","discipline":"化学","user_level":"博士","question_type":"idea","prompt":"是否可以把该催化体系用于更复杂底物？主要风险是什么？","top_k":6,"deep_read":true}
+{"id":"math_reading_m_001","discipline":"数学统计","user_level":"硕士","question_type":"reading","prompt":"请解释这篇论文中定理的结论、假设和直观意义。","top_k":6,"deep_read":true}
+{"id":"math_compare_d_001","discipline":"数学统计","user_level":"博士","question_type":"compare","prompt":"该证明方法与另一种常见方法相比的优势和局限是什么？","top_k":6,"deep_read":true}
+{"id":"math_exp_m_001","discipline":"数学统计","user_level":"硕士","question_type":"experiment","prompt":"若做数值实验验证收敛性，应选哪些指标和数据规模？","top_k":6,"deep_read":true}
+{"id":"edu_reading_t_001","discipline":"跨学科","user_level":"教师","question_type":"reading","prompt":"请把这篇论文总结成适合组会讲解的 3 分钟版本。","top_k":6,"deep_read":false}
+{"id":"edu_compare_t_001","discipline":"跨学科","user_level":"教师","question_type":"compare","prompt":"从教学视角比较两种方法，强调适用边界和误区。","top_k":6,"deep_read":true}
+{"id":"edu_idea_t_001","discipline":"跨学科","user_level":"教师","question_type":"idea","prompt":"如果据此组织一个研究方向，你建议的第一阶段里程碑是什么？","top_k":6,"deep_read":false}

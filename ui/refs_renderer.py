@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import html
@@ -16,6 +16,7 @@ import streamlit as st
 import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
+from kb.config import load_settings
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.source_filters import is_excluded_source_path
 from kb.reference_index import (
@@ -53,15 +54,16 @@ def _display_source_name(source_path: str) -> str:
     if not src:
         return "unknown"
     try:
-        pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
-        pdf_root = Path(pdf_root_str) if pdf_root_str else None
-        pdf_path = _resolve_pdf_for_source(pdf_root, src) if pdf_root else None
-        lib_store = st.session_state.get("lib_store")
-        if (pdf_path is not None) and hasattr(lib_store, "get_citation_meta"):
-            meta = lib_store.get_citation_meta(pdf_path)  # type: ignore[attr-defined]
-            full_name = citation_meta_display_pdf_name(meta)
-            if full_name:
-                return full_name
+        if bool(getattr(st, "_is_running_with_streamlit", False)):
+            pdf_root_str = str(st.session_state.get("pdf_dir") or "").strip()
+            pdf_root = Path(pdf_root_str) if pdf_root_str else None
+            pdf_path = _resolve_pdf_for_source(pdf_root, src) if pdf_root else None
+            lib_store = st.session_state.get("lib_store")
+            if (pdf_path is not None) and hasattr(lib_store, "get_citation_meta"):
+                meta = lib_store.get_citation_meta(pdf_path)  # type: ignore[attr-defined]
+                full_name = citation_meta_display_pdf_name(meta)
+                if full_name:
+                    return full_name
     except Exception:
         pass
     name = Path(src).name or src
@@ -315,17 +317,17 @@ _SECTION_WORDS_UI = {
     "analysis",
 }
 _METHOD_QUERY_RE_UI = re.compile(
-    r"(怎么|如何|方法|实现|步骤|流程|原理|机制|算法|模型|公式|推导|"
+    r"(鎬庝箞|濡備綍|鏂规硶|瀹炵幇|姝ラ|娴佺▼|鍘熺悊|鏈哄埗|绠楁硶|妯″瀷|鍏紡|鎺ㄥ|"
     r"\bhow\b|\bmethod\b|\bapproach\b|\bimplement(?:ation)?\b|\balgorithm\b|\bmodel\b|\bequation\b)",
     flags=re.I,
 )
 _LIMIT_QUERY_RE_UI = re.compile(
-    r"(局限|限制|不足|未来工作|讨论|结论|"
+    r"(灞€闄恷闄愬埗|涓嶈冻|鏈潵宸ヤ綔|璁ㄨ|缁撹|"
     r"\blimitation\b|\bfuture\s+work\b|\bdiscussion\b|\bconclusion\b)",
     flags=re.I,
 )
 _DISCUSS_HEAD_RE_UI = re.compile(
-    r"\b(discussion|conclusion|limitations?|future\s+work)\b|(讨论|结论|局限|未来工作)",
+    r"\b(discussion|conclusion|limitations?|future\s+work)\b|(璁ㄨ|缁撹|灞€闄恷鏈潵宸ヤ綔)",
     flags=re.I,
 )
 
@@ -334,7 +336,7 @@ def _wants_reference_nav_ui(prompt: str) -> bool:
     q = str(prompt or "").strip()
     if not q:
         return False
-    return bool(re.search(r"(参考文献|引用|cite|citation|reference|bibliography)", q, flags=re.I))
+    return bool(re.search(r"(鍙傝€冩枃鐚畖寮曠敤|cite|citation|reference|bibliography)", q, flags=re.I))
 
 
 def _is_reference_heading_ui(h: str) -> bool:
@@ -457,10 +459,10 @@ def _sanitize_heading_path_ui(hp: str, *, prompt: str, source_path: str) -> str:
 
 
 _GENERIC_HINT_PATTERNS_UI = (
-    "这篇文献可提供与该问题相关的信息",
-    "命中与问题直接相关的信息点",
-    "与当前问题相关内容",
-    "可用于回答问题的证据",
+    "this paper provides information related to the question",
+    "directly relevant information points",
+    "content relevant to the current question",
+    "evidence useful for answering the question",
     "information related to the question",
     "directly relevant information points",
     "evidence for the current question",
@@ -528,24 +530,24 @@ _ANCHOR_STOPWORDS_UI = {
     "table",
     "supplementary",
     "appendix",
-    "文献",
-    "论文",
-    "研究",
-    "问题",
-    "挑战",
-    "瓶颈",
-    "约束",
-    "相关",
-    "信息",
-    "内容",
-    "章节",
-    "小节",
-    "方法",
-    "结果",
-    "实验",
-    "模型",
-    "算法",
-    "数据",
+    "鏂囩尞",
+    "璁烘枃",
+    "鐮旂┒",
+    "闂",
+    "鎸戞垬",
+    "鐡堕",
+    "绾︽潫",
+    "鐩稿叧",
+    "淇℃伅",
+    "鍐呭",
+    "绔犺妭",
+    "灏忚妭",
+    "鏂规硶",
+    "缁撴灉",
+    "瀹為獙",
+    "妯″瀷",
+    "绠楁硶",
+    "鏁版嵁",
     "with",
     "using",
     "use",
@@ -590,12 +592,12 @@ def _looks_keyword_list_ui(text: str) -> bool:
         return True
     low = s.lower()
     verb_markers = (
-        "提出",
-        "采用",
-        "通过",
-        "实现",
-        "提升",
-        "验证",
+        "鎻愬嚭",
+        "閲囩敤",
+        "閫氳繃",
+        "瀹炵幇",
+        "鎻愬崌",
+        "楠岃瘉",
         "propose",
         "use",
         "introduce",
@@ -611,8 +613,8 @@ def _contains_question_echo_ui(text: str, prompt: str) -> bool:
     q = " ".join(str(prompt or "").strip().split()).lower()
     if not t or not q:
         return False
-    q_compact = re.sub(r"[\s`'\"“”‘’，。！？,.?!:;；：()（）\-_/\\]+", "", q)
-    t_compact = re.sub(r"[\s`'\"“”‘’，。！？,.?!:;；：()（）\-_/\\]+", "", t)
+    q_compact = re.sub(r"[\s`'\"鈥溾€濃€樷€欙紝銆傦紒锛?.?!:;锛涳細()锛堬級\-_/\\]+", "", q)
+    t_compact = re.sub(r"[\s`'\"鈥溾€濃€樷€欙紝銆傦紒锛?.?!:;锛涳細()锛堬級\-_/\\]+", "", t)
     if len(q_compact) < 10:
         return False
     for n in (24, 18, 14):
@@ -646,11 +648,13 @@ def _looks_template_artifact_ui(text: str) -> bool:
     if not s:
         return False
     low = s.lower()
-    if s.startswith("该文") and ("方法上" in s) and ("并在实验中" in s):
-        return True
+    # Common templated hint sentences that should not be used as anchors.
+    if s.startswith("该文"):
+        if ("方法中" in s) and ("实验中" in s):
+            return True
     if s.startswith("可直接支撑提问的证据主要位于"):
         return True
-    if ("目标任务" in s) or ("相关结果上有可核查提升" in s):
+    if ("目标任务" in s) or ("相关结果上有可核查提取" in s):
         return True
     if ("evidence is concentrated in" in low) and ("key points on" in low):
         return True
@@ -745,7 +749,7 @@ def _extract_anchor_terms_ui(meta: dict, *, prompt: str = "", max_n: int = 4) ->
             _bump(w, 1.0)
 
     for zh in re.findall(r"[\u4e00-\u9fff]{2,8}", all_text):
-        if zh in {"这篇文献", "当前问题", "相关信息"}:
+        if zh in {"杩欑瘒鏂囩尞", "褰撳墠闂", "鐩稿叧淇℃伅"}:
             continue
         _bump(zh, 1.4)
 
@@ -789,7 +793,7 @@ def _clean_sentence_candidate_ui(text: str) -> str:
     s = re.sub(r"\$?\^\{\s*\[\s*\d[^]]{0,60}\]\s*\}\$?", " ", s)
     s = re.sub(r"\[\s*\d{1,4}(?:\s*[,;\-–—]\s*\d{1,4})*\s*\]", " ", s)
     s = s.replace("**", " ").replace("*", " ")
-    s = re.sub(r"\s{2,}", " ", s).strip(" \t\r\n-–—:：;；,.。")
+    s = re.sub(r"\s{2,}", " ", s).strip(" \t\r\n-–—，。；：")
     return s
 
 
@@ -831,10 +835,10 @@ def _explode_find_terms_ui(text: str, *, max_n: int = 6) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for seg in seeds:
-        seg2 = re.sub(r"\s+", " ", seg).strip(" ,，;；:：")
+        seg2 = re.sub(r"\s+", " ", seg).strip(" ,，；。")
         if not seg2:
             continue
-        parts = re.split(r"[，,;；/、]", seg2)
+        parts = re.split(r"[，;；。]", seg2)
         for p in parts:
             t = _clean_sentence_candidate_ui(p)
             if not t:
@@ -1108,7 +1112,7 @@ def _split_sentences_ui(text: str, *, max_n: int = 24) -> list[str]:
     s = _clean_sentence_candidate_ui(text)
     if not s:
         return []
-    parts = re.split(r"(?<=[。！？.!?;；])\s+|[。！？；]", s)
+    parts = re.split(r"(?<=[銆傦紒锛?!?;锛沒)\s+|[銆傦紒锛燂紱]", s)
     out: list[str] = []
     seen: set[str] = set()
     for p in parts:
@@ -1131,8 +1135,8 @@ def _trim_clause_ui(text: str, *, max_chars: int = 110) -> str:
     s = " ".join(str(text or "").strip().split())
     if not s:
         return ""
-    s = re.sub(r"^[,;:，；：\-]+", "", s).strip()
-    s = re.sub(r"[。！？.!?;；]+$", "", s).strip()
+    s = re.sub(r"^[,;:锛岋紱锛歕-]+", "", s).strip()
+    s = re.sub(r"[銆傦紒锛?!?;锛沒+$", "", s).strip()
     if len(s) <= max_chars:
         return s
     return s[: max_chars - 3].rstrip() + "..."
@@ -1176,17 +1180,17 @@ def _pick_role_sentence_ui(sents: list[str], *, role: str, anchors: list[str]) -
     role_key = str(role or "").strip().lower()
     if role_key == "problem":
         pat = re.compile(
-            r"(问题|挑战|瓶颈|受限|难以|困难|problem|challenge|bottleneck|limitation|difficult|lack|struggle)",
+            r"(闂|鎸戞垬|鐡堕|鍙楅檺|闅句互|鍥伴毦|problem|challenge|bottleneck|limitation|difficult|lack|struggle)",
             flags=re.I,
         )
     elif role_key == "method":
         pat = re.compile(
-            r"(提出|采用|设计|构建|引入|实现|propose|introduce|design|develop|variant)",
+            r"(鎻愬嚭|閲囩敤|璁捐|鏋勫缓|寮曞叆|瀹炵幇|propose|introduce|design|develop|variant)",
             flags=re.I,
         )
     else:
         pat = re.compile(
-            r"(结果|显示|表明|提升|提高|优于|验证|性能|指标|result|results|show|demonstrate|improv|outperform|achieve|experiment)",
+            r"(缁撴灉|鏄剧ず|琛ㄦ槑|鎻愬崌|鎻愰珮|浼樹簬|楠岃瘉|鎬ц兘|鎸囨爣|result|results|show|demonstrate|improv|outperform|achieve|experiment)",
             flags=re.I,
         )
 
@@ -1212,7 +1216,7 @@ def _pick_role_sentence_ui(sents: list[str], *, role: str, anchors: list[str]) -
         if re.search(r"\b(table|fig|figure)\b", low):
             sc -= 1.2
         if role_key == "problem":
-            if re.search(r"(challenge|limitations?|struggle|bottleneck|受限|挑战|瓶颈|困难)", low):
+            if re.search(r"(challenge|limitations?|struggle|bottleneck|鍙楅檺|鎸戞垬|鐡堕|鍥伴毦)", low):
                 sc += 3.0
             if re.search(r"(did\s+not\s+outperform|not\s+outperform)", low):
                 sc -= 2.2
@@ -1224,7 +1228,7 @@ def _pick_role_sentence_ui(sents: list[str], *, role: str, anchors: list[str]) -
             if re.search(r"(compared?|comparison|baseline)", low):
                 sc -= 1.1
         else:
-            if re.search(r"(results?|show|demonstrate|outperform|improv|achieve|实验|结果)", low):
+            if re.search(r"(results?|show|demonstrate|outperform|improv|achieve|瀹為獙|缁撴灉)", low):
                 sc += 2.0
             if re.search(r"(second-best|underlined|bold)", low):
                 sc -= 0.8
@@ -1371,12 +1375,12 @@ def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = ""
             if hp_m:
                 start_from = start_from[: m.start()] + f"`{hp_m}`" + start_from[m.end() :]
             else:
-                start_from = (start_from[: m.start()] + start_from[m.end() :]).strip(" ，,;；。")
+                start_from = (start_from[: m.start()] + start_from[m.end() :]).strip(" ，;；。")
     if start_from:
-        compact_start = re.sub(r"[\s`|,;:，；。：·\-_/\\(){}\[\]]+", "", start_from)
+        compact_start = re.sub(r"[\s`|,;:锛岋紱銆傦細路\-_/\\(){}\[\]]+", "", start_from)
         if len(compact_start) < 6:
             start_from = ""
-        elif re.search(r"(先从\s*开始|start\s+with\s*$)", start_from, flags=re.I):
+        elif re.search(r"(鍏堜粠\s*寮€濮媩start\s+with\s*$)", start_from, flags=re.I):
             start_from = ""
     if start_from and _is_venue_heading_ui(start_from):
         start_from = ""
@@ -1387,7 +1391,7 @@ def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = ""
     if (not start_from) and (not pack_pending) and (not pack_ready):
         if heading_path:
             if anchors:
-                start_from = f"先从 `{heading_path}` 开始，优先定位 {anchors[0]}，再核对相关定义/设置与结果。"
+                start_from = f"先从 `{heading_path}` 开始，优先定位 {anchors[0]}，再核对相关定义、设置与结果。"
             else:
                 start_from = f"先从 `{heading_path}` 开始，优先看与当前问题直接相关的定义、设置和关键结果。"
         elif sec:
@@ -1404,11 +1408,11 @@ def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = ""
 
     gain = gain_s
     if (not gain) and (not pack_pending) and (not pack_ready):
-        gain = "；".join(find_list[:4]).strip()
+        gain = "、".join(find_list[:4]).strip()
     if (not gain) and what and (not pack_pending):
         gain = what
     if gain and _looks_generic_guidance_ui(gain) and anchors and (not pack_pending) and (not pack_ready):
-        gain = f"可直接提取 { '、'.join(anchors[:3]) } 等与提问强相关的证据。"
+        gain = f"可直接提取 {'、'.join(anchors[:3])} 等与提问强相关的证据。"
 
     summary_line = what
     if pack_ready:
@@ -1475,7 +1479,7 @@ def _fallback_why_line_ui(
 
 def _normalize_name_key(text: str) -> str:
     s = html.unescape((text or "").strip()).lower()
-    s = s.replace("‐", "-").replace("‑", "-").replace("–", "-").replace("—", "-")
+    s = s.replace("–", "-").replace("—", "-")
     s = re.sub(r"[^a-z0-9]+", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -2709,7 +2713,7 @@ def _render_refs(
             if insights_html:
                 st.markdown(insights_html, unsafe_allow_html=True)
             elif pack_pending:
-                st.caption("摘要与相关性正在生成中…")
+                st.caption("摘要与相关性正在生成中...")
             elif pack_ready_local:
                 st.caption("LLM 摘要暂不可用")
             elif pack_state_local == "none":
@@ -2722,13 +2726,13 @@ def _render_refs(
             if metrics_html:
                 st.markdown(metrics_html, unsafe_allow_html=True)
             elif metric_pending and (refs_panel_open or is_cite_open):
-                st.caption("文献指标检索中…")
+                st.caption("文献指标检索中...")
             elif metric_failed:
                 fail_reason = str(st.session_state.get(f"{net_key}_failed_reason") or "").strip()
                 if fail_reason:
-                    st.caption(f"文献指标检索失败（{fail_reason}），可点击 Cite 重试")
+                    st.caption(f"鏂囩尞鎸囨爣妫€绱㈠け璐ワ紙{fail_reason}锛夛紝鍙偣鍑?Cite 閲嶈瘯")
                 else:
-                    st.caption("文献指标检索失败，可点击 Cite 重试")
+                    st.caption("鏂囩尞鎸囨爣妫€绱㈠け璐ワ紝鍙偣鍑?Cite 閲嶈瘯")
 
             if st.session_state.get(cite_key, False):
                 _render_citation_ui(uid, source_path, key_ns)
@@ -2766,6 +2770,10 @@ _STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORE
 _CODE_FENCE_LINE_RE = re.compile(r"^\s*```")
 _INLINE_CODE_RE = re.compile(r"(`[^`]*`)")
 _INLINE_MATH_RE = re.compile(r"(\$[^$\n]+\$)")
+# Policy:
+# If a citation number is shown, it must be clickable. For ambiguous/unresolved
+# references, hide the marker instead of showing non-clickable plain text.
+_STRICT_STRUCTURED_CITATION_LINKING = True
 
 
 _EQ_TAG_RE = re.compile(r"\\tag\{(\d{1,4})\}")
@@ -2787,11 +2795,28 @@ def _collect_source_paths_from_hits(hits: list[dict], *, max_docs: int = 16) -> 
     return out
 
 
+@lru_cache(maxsize=8)
+def _load_reference_index_file_cached(sig: str, db_dir_str: str) -> dict:
+    del sig
+    try:
+        return _load_reference_index_file(Path(db_dir_str))
+    except Exception:
+        return {}
+
+
 def _load_reference_index_cached() -> dict:
-    db_dir_str = str(st.session_state.get("db_dir") or "").strip()
+    use_streamlit_state = bool(getattr(st, "_is_running_with_streamlit", False))
+    db_dir_str = ""
+    if use_streamlit_state:
+        db_dir_str = str(st.session_state.get("db_dir") or "").strip()
+    if not db_dir_str:
+        try:
+            db_dir_str = str(load_settings().db_dir or "").strip()
+        except Exception:
+            db_dir_str = ""
     if not db_dir_str:
         return {}
-    db_dir = Path(db_dir_str)
+    db_dir = Path(db_dir_str).expanduser().resolve()
     idx_path = db_dir / "references_index.json"
     if not idx_path.exists():
         return {}
@@ -2800,6 +2825,9 @@ def _load_reference_index_cached() -> dict:
         idx_sig = f"{str(idx_path.resolve())}|{int(idx_path.stat().st_mtime)}|{int(idx_path.stat().st_size)}"
     except Exception:
         idx_sig = str(idx_path)
+
+    if not use_streamlit_state:
+        return _load_reference_index_file_cached(idx_sig, str(db_dir))
 
     cache_key = "_kb_ref_index_cache_v1"
     cache = st.session_state.get(cache_key)
@@ -2863,7 +2891,7 @@ def _strip_reference_lead_label(text: str) -> str:
 
 
 def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
-    """Best-effort local parse of authors/title from raw numbered references.
+    """Best-effort local parse of authors/title/venue from raw numbered references.
 
     This is a render-time fallback only, used when the reference index stores
     sparse metadata (e.g. venue/year/doi present but title empty).
@@ -2877,23 +2905,38 @@ def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
     # Normalize spacing but keep punctuation shape; parser relies on ". " splits.
     raw = re.sub(r"\s+", " ", raw0).strip()
     venue_hint = _strip_reference_lead_label(str(ref_rec.get("venue") or "").strip())
-    if not venue_hint:
-        return {}
+    pageish_re = r"(?:\d+(?:\s*[–-]\s*\d+)?|[A-Za-z]{0,8}\d[\w.-]*)"
 
-    # Prefer the last venue occurrence (safer when title contains venue-like tokens).
-    try:
-        venue_matches = list(re.finditer(re.escape(venue_hint), raw, flags=re.IGNORECASE))
-    except Exception:
-        venue_matches = []
-    if not venue_matches:
-        return {}
-    m_venue = venue_matches[-1]
-    prefix = raw[: m_venue.start()].rstrip()
-    if not prefix:
-        return {}
+    tail = ""
+    prefix_core = ""
+    tail_year = ""
 
-    # Strip the sentence delimiter immediately before venue, if present.
-    prefix_core = re.sub(r"[.;,:]\s*$", "", prefix).strip()
+    if venue_hint:
+        # Prefer the last venue occurrence (safer when title contains venue-like tokens).
+        try:
+            venue_matches = list(re.finditer(re.escape(venue_hint), raw, flags=re.IGNORECASE))
+        except Exception:
+            venue_matches = []
+        if venue_matches:
+            m_venue = venue_matches[-1]
+            prefix = raw[: m_venue.start()].rstrip()
+            tail = raw[m_venue.start() :].strip()
+            prefix_core = re.sub(r"[.;,:]\s*$", "", prefix).strip()
+
+    if (not prefix_core) and raw:
+        m_year = re.search(r"\((?:[^()]*,\s*)?(?P<year>(?:19|20)\d{2})\)\.?\s*$", raw)
+        if not m_year:
+            m_year = re.search(r"\b(?P<year>(?:19|20)\d{2})\b\.?\s*$", raw)
+        if m_year:
+            tail_year = str(m_year.group("year") or "").strip()
+            split_at = raw.rfind(". ", 0, m_year.start())
+            if split_at >= 0:
+                prefix = raw[:split_at].rstrip()
+                tail = raw[split_at + 2 :].strip()
+                prefix_core = prefix.strip(" .;,:")
+
+    if not prefix_core:
+        prefix_core = raw.strip(" .;,:")
     if not prefix_core:
         return {}
 
@@ -2923,7 +2966,7 @@ def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
             return False
         if re.match(r"^(?:[A-Z]\.\s+){2,}", t):
             return False
-        if t.lower() == venue_hint.lower():
+        if venue_hint and t.lower() == venue_hint.lower():
             return False
         if _looks_noisy_reference_title(t):
             return False
@@ -2944,6 +2987,48 @@ def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
             t2 = str(m2.group(1) or "").strip().strip(" .;,:")
             if _title_ok(t2):
                 best = {"title": t2}
+
+    tail_core = str(tail or "").strip().strip(" .;,:")
+    if tail_core:
+        year_m = re.search(r"\((?:[^()]*,\s*)?(?P<year>(?:19|20)\d{2})\)\s*$", tail_core)
+        if year_m:
+            best.setdefault("year", str(year_m.group("year") or "").strip())
+            tail_no_year = tail_core[: year_m.start()].rstrip(" ,.;:")
+        else:
+            if tail_year:
+                best.setdefault("year", tail_year)
+                tail_no_year = re.sub(r"\b(?:19|20)\d{2}\b\.?\s*$", "", tail_core).rstrip(" ,.;:")
+            else:
+                tail_no_year = tail_core
+
+        if tail_no_year.lower().startswith("in "):
+            m_in_pages = re.match(rf"^(?P<venue>In .+?)\s+(?P<pages>{pageish_re})$", tail_no_year, flags=re.I)
+            if m_in_pages:
+                venue_p = str(m_in_pages.group("venue") or "").strip(" .;,:")
+                pages_p = str(m_in_pages.group("pages") or "").strip(" .;,:")
+                if venue_p:
+                    best.setdefault("venue", venue_p)
+                if pages_p:
+                    best.setdefault("pages", pages_p)
+            else:
+                venue_p = tail_no_year.strip(" .;,:")
+                if venue_p:
+                    best.setdefault("venue", venue_p)
+        else:
+            m_venue = re.match(
+                rf"^(?P<venue>.+?)(?:\s+(?P<volume>\d+[A-Za-z]?))?(?:\s*,\s*(?P<pages>{pageish_re}))?$",
+                tail_no_year,
+            )
+            if m_venue:
+                venue_p = str(m_venue.group("venue") or "").strip(" .;,:")
+                volume_p = str(m_venue.group("volume") or "").strip(" .;,:")
+                pages_p = str(m_venue.group("pages") or "").strip(" .;,:")
+                if venue_p:
+                    best.setdefault("venue", venue_p)
+                if volume_p:
+                    best.setdefault("volume", volume_p)
+                if pages_p:
+                    best.setdefault("pages", pages_p)
 
     return best
 
@@ -3025,6 +3110,22 @@ def _normalize_reference_for_popup(ref_rec: dict) -> dict:
             authors_p = _strip_reference_lead_label(str((parsed or {}).get("authors") or "").strip())
             if authors_p:
                 authors = authors_p
+        if not venue:
+            venue_p = _strip_reference_lead_label(str((parsed or {}).get("venue") or "").strip())
+            if venue_p:
+                venue = venue_p
+        if not year:
+            year_p = str((parsed or {}).get("year") or "").strip()
+            if year_p:
+                year = year_p
+        if not volume:
+            volume_p = str((parsed or {}).get("volume") or "").strip()
+            if volume_p:
+                volume = volume_p
+        if not pages:
+            pages_p = str((parsed or {}).get("pages") or "").strip()
+            if pages_p:
+                pages = pages_p
 
     out["title"] = title
     out["authors"] = authors
@@ -3084,8 +3185,8 @@ def _annotate_inpaper_citations_with_hover_meta(
     def _strip_unresolved_structured_tokens(text: str) -> str:
         if not text or "CITE" not in text.upper():
             return text
-        out = _STRUCT_CITE_RE.sub(lambda m: f"[{int(m.group(2))}]", text)
-        out = _STRUCT_CITE_SINGLE_RE.sub(lambda m: f"[{int(m.group(2))}]" if str(m.group(2) or "").strip() else "", out)
+        out = _STRUCT_CITE_RE.sub("", text)
+        out = _STRUCT_CITE_SINGLE_RE.sub("", out)
         out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
         return _STRUCT_CITE_GARBAGE_RE.sub("", out)
 
@@ -3093,11 +3194,13 @@ def _annotate_inpaper_citations_with_hover_meta(
     if not srcs:
         return _strip_unresolved_structured_tokens(s), []
     source_hint_by_path: dict[str, dict] = {}
+    source_hit_weight_by_path: dict[str, float] = {}
     for h in hits or []:
         meta_h = (h or {}).get("meta", {}) or {}
         sp_h = str(meta_h.get("source_path") or "").strip()
         if not sp_h or _is_temp_source_path(sp_h):
             continue
+        source_hit_weight_by_path[sp_h] = float(source_hit_weight_by_path.get(sp_h, 0.0) or 0.0) + 1.0
         rec = source_hint_by_path.get(sp_h)
         if not isinstance(rec, dict):
             rec = {}
@@ -3109,20 +3212,34 @@ def _annotate_inpaper_citations_with_hover_meta(
     for sp in srcs:
         sid = _source_cite_id(sp).lower()
         sid_to_source[sid] = sp
+    dominant_source_path = ""
+    if len(srcs) == 1:
+        dominant_source_path = str(srcs[0])
+    elif source_hit_weight_by_path:
+        ranked_sources = sorted(
+            source_hit_weight_by_path.items(),
+            key=lambda kv: float(kv[1] or 0.0),
+            reverse=True,
+        )
+        if ranked_sources:
+            top_sp, top_w = ranked_sources[0]
+            sec_w = float(ranked_sources[1][1]) if len(ranked_sources) > 1 else 0.0
+            if float(top_w) >= max(2.0, sec_w * 1.35):
+                dominant_source_path = str(top_sp)
 
     index_data = _load_reference_index_cached()
     if not isinstance(index_data, dict):
         index_data = {}
 
-    resolved_cache: dict[tuple[int, str], tuple[str, dict] | None] = {}
+    resolved_cache: dict[tuple[int, str], tuple[str, str, dict] | None] = {}
     detail_by_key: dict[str, dict] = {}
 
-    def _resolve_num(n: int, preferred_sp: str = "") -> tuple[str, dict] | None:
+    def _resolve_num(n: int, preferred_sp: str = "") -> tuple[str, str, dict] | None:
         pref = str(preferred_sp or "").strip()
         ckey = (int(n), pref.lower())
         if ckey in resolved_cache:
             return resolved_cache[ckey]
-        matches: list[tuple[str, dict]] = []
+        matches: list[tuple[str, str, dict]] = []
         ordered_srcs = list(srcs)
         if pref and pref in ordered_srcs:
             ordered_srcs = [pref] + [x for x in ordered_srcs if x != pref]
@@ -3138,9 +3255,9 @@ def _annotate_inpaper_citations_with_hover_meta(
                 ref = got.get("ref")
                 if isinstance(ref, dict):
                     src_name = _display_source_name(sp)
-                    matches.append((src_name, ref))
+                    matches.append((sp, src_name, ref))
 
-        picked: tuple[str, dict] | None = None
+        picked: tuple[str, str, dict] | None = None
         if matches:
             if pref:
                 # Preferred source is already first due reordering.
@@ -3153,8 +3270,26 @@ def _annotate_inpaper_citations_with_hover_meta(
         resolved_cache[ckey] = picked
         return picked
 
-    def _remember_detail(n: int, source_name: str, ref: dict) -> dict:
-        skey = f"{int(n)}|{str(source_name or '').strip().lower()}"
+    def _resolve_num_in_source(n: int, source_path: str) -> tuple[str, str, dict] | None:
+        sp = str(source_path or "").strip()
+        if (not sp) or (int(n) <= 0):
+            return None
+        hint = source_hint_by_path.get(sp) or {}
+        got = _resolve_reference_entry_from_index(
+            index_data,
+            sp,
+            int(n),
+            source_sha1=str(hint.get("source_sha1") or "").strip().lower(),
+        )
+        if not isinstance(got, dict):
+            return None
+        ref = got.get("ref")
+        if not isinstance(ref, dict):
+            return None
+        return sp, _display_source_name(sp), ref
+
+    def _remember_detail(n: int, source_path: str, source_name: str, ref: dict) -> dict:
+        skey = f"{int(n)}|{str(source_path or '').strip().lower()}"
         rec = detail_by_key.get(skey)
         if isinstance(rec, dict):
             return rec
@@ -3171,6 +3306,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             "num": int(n),
             "anchor": anchor,
             "source_name": str(source_name or "").strip(),
+            "source_path": str(source_path or "").strip(),
             "raw": raw_text,
             "title": str(ref2.get("title") or "").strip(),
             "authors": str(ref2.get("authors") or "").strip(),
@@ -3215,7 +3351,172 @@ def _annotate_inpaper_citations_with_hover_meta(
             t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
             return f"[{int(n)}](#{anchor} \"{t_attr}\")"
 
-        def _resolve_struct_token(sid_raw: str, n_raw: str) -> str:
+        def _extract_author_year_hint(pos: int) -> tuple[str, str, bool]:
+            try:
+                left = seg[max(0, int(pos) - 220) : int(pos)]
+            except Exception:
+                left = seg
+            text = re.sub(r"\s+", " ", str(left or "")).strip()
+            if not text:
+                return "", "", False
+
+            years = re.findall(r"(?:19|20)\d{2}", text)
+            year_hint = str(years[-1]) if years else ""
+
+            # Capture explicit author pattern like "Zhang et al. (2018) [50]".
+            m = re.search(
+                r"([A-Z][A-Za-z'`-]{1,40})\s+et\s+al\.?\s*(?:[,(]?\s*(?:19|20)\d{2}\s*[)]?)?\s*$",
+                text,
+                flags=re.I,
+            )
+            author_hint = str(m.group(1) or "").strip().lower() if m else ""
+            if author_hint in {
+                "the",
+                "this",
+                "that",
+                "these",
+                "those",
+                "figure",
+                "table",
+                "section",
+                "equation",
+                "model",
+                "method",
+            }:
+                author_hint = ""
+            return author_hint, year_hint, bool(author_hint)
+
+        def _normalize_doi_text(x: str) -> str:
+            d = str(x or "").strip().lower()
+            if not d:
+                return ""
+            d = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", d, flags=re.I)
+            return d.strip(" \t\r\n.,;:()[]{}<>")
+
+        def _context_window(pos: int, *, left_n: int = 260, right_n: int = 100) -> str:
+            try:
+                st0 = max(0, int(pos) - int(left_n))
+                ed0 = min(len(seg), int(pos) + int(right_n))
+                return str(seg[st0:ed0] or "")
+            except Exception:
+                return str(seg or "")
+
+        def _ref_year(ref2: dict) -> str:
+            y = str((ref2 or {}).get("year") or "").strip()
+            if re.fullmatch(r"(19|20)\d{2}", y):
+                return y
+            raw = " ".join(
+                [
+                    str((ref2 or {}).get("raw") or "").strip(),
+                    str((ref2 or {}).get("cite_fmt") or "").strip(),
+                    str((ref2 or {}).get("title") or "").strip(),
+                ]
+            )
+            m = re.search(r"\b(19|20)\d{2}\b", raw)
+            return str(m.group(0) or "").strip() if m else ""
+
+        def _verify_ref_by_local_context(ref: dict, pos: int) -> bool:
+            # Hard safety gate:
+            # link only when we can verify identity from local sentence context.
+            try:
+                ref2 = _normalize_reference_for_popup(ref or {})
+            except Exception:
+                ref2 = dict(ref or {})
+
+            ctx = _context_window(int(pos))
+            if not ctx.strip():
+                return False
+
+            # 1) DOI exact match -> verified.
+            doi_ctx = _normalize_doi_text(str(extract_first_doi(ctx) or ""))
+            doi_ref = _normalize_doi_text(str((ref2 or {}).get("doi") or extract_first_doi(str((ref2 or {}).get("raw") or "")) or ""))
+            if doi_ctx and doi_ref and (doi_ctx == doi_ref):
+                return True
+
+            # 2) Explicit "Author et al. (Year)" in context matching ref.
+            year = _ref_year(ref2)
+            if not year:
+                return False
+            if not re.search(rf"\b{re.escape(year)}\b", ctx):
+                return False
+            m = re.search(r"\b([A-Z][A-Za-z'`-]{1,40})\s+et\s+al\.?\b", ctx, flags=re.I)
+            if not m:
+                return False
+            fam = str(m.group(1) or "").strip().lower()
+            if not fam:
+                return False
+            ref_hay = " ".join(
+                [
+                    str((ref2 or {}).get("authors") or "").strip(),
+                    str((ref2 or {}).get("raw") or "").strip(),
+                ]
+            ).lower()
+            ref_hay_norm = re.sub(r"[^a-z0-9]+", " ", ref_hay).strip()
+            return bool(ref_hay_norm and (fam in ref_hay_norm))
+
+        def _has_explicit_ref_conflict(ref: dict, author_hint: str, year_hint: str, author_confident: bool) -> bool:
+            if (not author_hint) and (not year_hint):
+                return False
+            try:
+                ref2 = _normalize_reference_for_popup(ref or {})
+            except Exception:
+                ref2 = dict(ref or {})
+            ref_year = str((ref2 or {}).get("year") or "").strip()
+            if year_hint and ref_year and (ref_year != year_hint):
+                return True
+            # Author-only checks are noisy for model names (e.g., DenseNet),
+            # so require a strong "et al." context + year hint.
+            if author_confident and year_hint and author_hint:
+                auth = str((ref2 or {}).get("authors") or "").strip()
+                raw = str((ref2 or {}).get("raw") or "").strip()
+                hay = " ".join([auth, raw]).lower()
+                hay_norm = re.sub(r"[^a-z0-9]+", " ", hay).strip()
+                if auth and hay_norm and (author_hint not in hay_norm):
+                    return True
+            return False
+
+        def _has_positive_ref_alignment(ref: dict, author_hint: str, year_hint: str, author_confident: bool) -> bool:
+            # For free-form numeric citations (e.g., [12]), only link when context
+            # provides positive identity evidence; otherwise keep plain text to
+            # avoid wrong popup binding.
+            if (not year_hint) and (not (author_confident and author_hint)):
+                return False
+            try:
+                ref2 = _normalize_reference_for_popup(ref or {})
+            except Exception:
+                ref2 = dict(ref or {})
+
+            score = 0
+            ref_year = str((ref2 or {}).get("year") or "").strip()
+            if (not ref_year) and isinstance(ref2, dict):
+                raw_year_src = " ".join(
+                    [
+                        str(ref2.get("raw") or "").strip(),
+                        str(ref2.get("title") or "").strip(),
+                        str(ref2.get("cite_fmt") or "").strip(),
+                    ]
+                )
+                m_y = re.search(r"\b(19|20)\d{2}\b", raw_year_src)
+                if m_y:
+                    ref_year = str(m_y.group(0) or "").strip()
+            if year_hint and ref_year and (ref_year == year_hint):
+                score += 1
+
+            if author_confident and author_hint:
+                hay = " ".join(
+                    [
+                        str((ref2 or {}).get("authors") or "").strip(),
+                        str((ref2 or {}).get("title") or "").strip(),
+                        str((ref2 or {}).get("venue") or "").strip(),
+                        str((ref2 or {}).get("raw") or "").strip(),
+                    ]
+                ).lower()
+                hay_norm = re.sub(r"[^a-z0-9]+", " ", hay).strip()
+                if hay_norm and (author_hint in hay_norm):
+                    score += 1
+            return score > 0
+
+        def _resolve_struct_token(sid_raw: str, n_raw: str, *, pos: int = -1) -> str:
             nonlocal structured_seen
             sid = str(sid_raw or "").strip().lower()
             try:
@@ -3225,8 +3526,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             structured_seen = True
             sp = sid_to_source.get(sid) or sid_to_source.get(sid.lower())
             if not sp:
-                # Keep visible reference number even if sid cannot be mapped.
-                return f"[{int(n)}]"
+                return ""
             hint = source_hint_by_path.get(sp) or {}
             got = _resolve_reference_entry_from_index(
                 index_data,
@@ -3235,17 +3535,17 @@ def _annotate_inpaper_citations_with_hover_meta(
                 source_sha1=str(hint.get("source_sha1") or "").strip().lower(),
             )
             if not isinstance(got, dict):
-                return f"[{int(n)}]"
+                return ""
             ref = got.get("ref")
             if not isinstance(ref, dict):
-                return f"[{int(n)}]"
+                return ""
             src_name = _display_source_name(sp)
-            detail = _remember_detail(int(n), src_name, ref)
+            detail = _remember_detail(int(n), sp, src_name, ref)
             title_attr = _citation_hover_title(src_name, int(n), ref)
             return _mk_cite_link_md(int(n), detail, title_attr)
 
         def _repl_struct(m: re.Match) -> str:
-            return _resolve_struct_token(str(m.group(1) or ""), str(m.group(2) or ""))
+            return _resolve_struct_token(str(m.group(1) or ""), str(m.group(2) or ""), pos=int(m.start()))
 
         def _repl_struct_single(m: re.Match) -> str:
             sid = str(m.group(1) or "")
@@ -3253,7 +3553,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             if not n_txt:
                 # Malformed form like [CITE:sid] -> hide raw token.
                 return ""
-            return _resolve_struct_token(sid, n_txt)
+            return _resolve_struct_token(sid, n_txt, pos=int(m.start()))
 
         def _repl_struct_sid_only(_: re.Match) -> str:
             # Malformed form like [[CITE:sid]] -> hide raw token.
@@ -3265,21 +3565,29 @@ def _annotate_inpaper_citations_with_hover_meta(
             nums = _parse_int_set(spec)[:40]
             if not nums:
                 return raw
-            pref_sp = _preferred_source_by_context(int(m.start()))
+            target_sp = str(dominant_source_path or "").strip()
+            if not target_sp:
+                pref_sp = _preferred_source_by_context(int(m.start()))
+                if pref_sp:
+                    target_sp = pref_sp
             items: list[str] = []
             changed = False
             for n in nums:
-                picked = _resolve_num(int(n), preferred_sp=pref_sp)
+                if _STRICT_STRUCTURED_CITATION_LINKING and target_sp:
+                    picked = _resolve_num_in_source(int(n), target_sp)
+                else:
+                    picked = _resolve_num(int(n), preferred_sp=target_sp)
                 if not picked:
-                    items.append(f"[{int(n)}]")
+                    if not _STRICT_STRUCTURED_CITATION_LINKING:
+                        items.append(f"[{int(n)}]")
                     continue
-                src_name, ref = picked
-                detail = _remember_detail(int(n), src_name, ref)
+                sp_picked, src_name, ref = picked
+                detail = _remember_detail(int(n), sp_picked, src_name, ref)
                 title_attr = _citation_hover_title(src_name, int(n), ref)
                 items.append(_mk_cite_link_md(int(n), detail, title_attr))
                 changed = True
             if not changed:
-                return raw
+                return "" if _STRICT_STRUCTURED_CITATION_LINKING else raw
             return "".join(items)
 
         seg2 = _STRUCT_CITE_RE.sub(_repl_struct, seg)
@@ -3367,6 +3675,7 @@ def _render_inpaper_citation_details(
         payload = {
             "num": int(n),
             "source_name": str(rec.get("source_name") or "").strip(),
+            "source_path": str(rec.get("source_path") or "").strip(),
             "raw": str(rec.get("raw") or "").strip(),
             "cite_fmt": str(rec.get("cite_fmt") or "").strip(),
             "title": str(rec.get("title") or "").strip(),
@@ -3508,7 +3817,7 @@ def _best_eq_source_for_tag(
 def _annotate_equation_tags_with_sources(md: str, hits: list[dict]) -> str:
     """
     Add a small note under display equations with \\tag{n}:
-    '式(n) 来自参考定位 #k: filename'
+    '寮?n) 鏉ヨ嚜鍙傝€冨畾浣?#k: filename'
     """
     s = (md or "").replace("\r\n", "\n").replace("\r", "\n")
     if "$$" not in s or "\\tag{" not in s:
@@ -3555,7 +3864,7 @@ def _annotate_equation_tags_with_sources(md: str, hits: list[dict]) -> str:
         picked = _best_eq_source_for_tag(inner, tag_n, hits or [])
         if picked:
             ref_rank, label = picked
-            out.append(f"*（式({int(tag_n)}) 来自参考定位 #{int(ref_rank)}：`{label}`，可在下方参考定位点 Open/Page）*")
+            out.append(f"*锛堝紡({int(tag_n)}) 鏉ヨ嚜鍙傝€冨畾浣?#{int(ref_rank)}锛歚{label}`锛屽彲鍦ㄤ笅鏂瑰弬鑰冨畾浣嶇偣 Open/Page锛?")
         out.append("")
         i = j + 1
 
@@ -3569,14 +3878,14 @@ def _parse_int_set(spec: str) -> list[int]:
     s = (spec or "").strip()
     if not s:
         return []
-    s = s.replace("，", ",").replace("；", ",").replace(";", ",")
+    s = s.replace("，", ",").replace("、", ",").replace(";", ",")
     parts = re.split(r"[,\s]+", s)
     out: set[int] = set()
     for p in parts:
         t = (p or "").strip()
         if not t:
             continue
-        t = t.replace("—", "-").replace("–", "-")
+        t = t.replace("–", "-").replace("—", "-")
         if "-" in t:
             a, b = t.split("-", 1)
             a = a.strip()
@@ -3617,7 +3926,7 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
 
     if (not net_data) and pending:
         st.markdown(
-            "<div class='citation-loading'>检索中...</div>",
+            "<div class='citation-loading'>妫€绱腑...</div>",
             unsafe_allow_html=True,
         )
         time.sleep(0.5)
@@ -3667,3 +3976,4 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
         st.code(gbt_str, language="text")
     with t2:
         st.code(bib_str, language="latex")
+

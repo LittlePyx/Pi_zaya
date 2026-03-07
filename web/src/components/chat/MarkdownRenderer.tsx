@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
-import type { CiteDetail } from './citationState'
+import { citationInlineLabel, type CiteDetail } from './citationState'
 
 function normalize(text: string) {
   return text
@@ -28,7 +28,8 @@ const ANSWER_SECTION_LABEL: Record<AnswerSectionKey, string> = {
   next_steps: '下一步',
 }
 
-const ANSWER_SECTION_HEAD_RE = /^\s*(?:#{1,6}\s*)?(Conclusion|Evidence|Limits|Next\s*Steps|结论|依据|边界|下一步建议|下一步)(?:\s*[:：]\s*(.*))?$/i
+const ANSWER_SECTION_HEAD_RE =
+  /^\s*(?:#{1,6}\s*)?(Conclusion|Evidence|Limits|Next\s*Steps|结论|依据|证据|边界|限制|局限|下一步建议|下一步)(?:\s*[:：]\s*(.*))?$/i
 
 interface ParsedAnswerSection {
   key: AnswerSectionKey
@@ -39,8 +40,8 @@ interface ParsedAnswerSection {
 function toSectionKey(raw: string): AnswerSectionKey | '' {
   const t = String(raw || '').replace(/\s+/g, '').toLowerCase()
   if (t === 'conclusion' || t === '结论') return 'conclusion'
-  if (t === 'evidence' || t === '依据') return 'evidence'
-  if (t === 'limits' || t === '边界') return 'limits'
+  if (t === 'evidence' || t === '依据' || t === '证据') return 'evidence'
+  if (t === 'limits' || t === '边界' || t === '限制' || t === '局限') return 'limits'
   if (t === 'nextsteps' || t === '下一步' || t === '下一步建议') return 'next_steps'
   return ''
 }
@@ -153,12 +154,13 @@ function buildMarkdownComponents(
           <button
             type="button"
             className="kb-cite-chip"
+            title={detail.sourceName || detail.sourcePath || undefined}
             onClick={(event) => {
               event.preventDefault()
               onCitationClick?.(detail, event)
             }}
           >
-            {children}
+            {citationInlineLabel(detail)}
           </button>
         )
       }

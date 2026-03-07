@@ -341,6 +341,32 @@ def _normalize_math_markdown(text: str) -> str:
     s = re.sub(r"`(\$[^`]+?\$)`", r"\1", s)
     s = re.sub(r"`(\$\$[\s\S]+?\$\$)`", r"\1", s)
 
+    # In markdown tables, "|" inside inline math (e.g. $H(X|Y)$) can be
+    # misinterpreted as column separators by GFM parsers. Normalize to \vert{}.
+    table_sep_re = re.compile(r"^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$")
+    inline_code_re = re.compile(r"(`[^`\n]*`)")
+    inline_math_re = re.compile(r"\$([^$\n]+)\$")
+
+    def _fix_table_inline_math_pipes(line: str) -> str:
+        st_ln = str(line or "").strip()
+        is_table_row = st_ln.startswith("|") and st_ln.count("|") >= 2
+        if (not is_table_row) or table_sep_re.match(st_ln):
+            return line
+        code_parts = inline_code_re.split(line)
+        rebuilt: list[str] = []
+        for i, part in enumerate(code_parts):
+            if i % 2 == 1:
+                rebuilt.append(part)
+                continue
+            fixed = inline_math_re.sub(
+                lambda m: "$" + re.sub(r"(?<!\\)\|", r"\\vert{}", str(m.group(1) or "")) + "$",
+                part,
+            )
+            rebuilt.append(fixed)
+        return "".join(rebuilt)
+
+    s = "\n".join(_fix_table_inline_math_pipes(ln) for ln in s.split("\n"))
+
     return s
 
 def _md_to_plain_text(md: str) -> str:

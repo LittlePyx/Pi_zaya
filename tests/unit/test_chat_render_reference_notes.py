@@ -101,3 +101,81 @@ def test_sid_markers_are_removed_from_rendered_outputs():
     assert "[SID:" not in rendered_content
     assert "[SID:" not in copy_markdown
     assert "[SID:" not in copy_text
+
+
+def test_structured_cite_fallback_does_not_relink_after_safe_downgrade(monkeypatch):
+    from api import chat_render
+
+    def fake_primary(_md, _hits, *, anchor_ns=""):
+        del _md, _hits, anchor_ns
+        # Simulate safety downgrade result from primary annotator:
+        # CITE token resolved to plain numeric marker and no details.
+        return "Gehm et al. (2007) [24].", []
+
+    def fake_fallback(*args, **kwargs):
+        raise AssertionError("fallback should not run after safe downgrade")
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+    monkeypatch.setattr(chat_render, "_fallback_render_structured_citations", fake_fallback)
+
+    messages = [
+        {"id": 1, "role": "user", "content": "test"},
+        {"id": 2, "role": "assistant", "content": "Gehm et al. (2007) [[CITE:s1234abcd:24]]."},
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "dummy",
+                    "meta": {
+                        "source_path": r"db\doc\doc.en.md",
+                    },
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-test")
+    msg = rendered[-1]
+    assert "[24]" in str(msg.get("rendered_body") or "")
+    assert msg.get("cite_details") == []
+
+
+def test_structured_cite_fallback_recovers_links_when_primary_strips_tokens(monkeypatch):
+    from api import chat_render
+
+    def fake_primary(_md, _hits, *, anchor_ns=""):
+        del _md, _hits, anchor_ns
+        return "SPI relies on compressive sensing.", []
+
+    def fake_fallback(_md, _hits, *, anchor_ns=""):
+        del _md, _hits, anchor_ns
+        return (
+            "SPI relies on compressive sensing [1](#kb-cite-demo-1).",
+            [{"num": 1, "anchor": "kb-cite-demo-1", "source_name": "demo.pdf"}],
+        )
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+    monkeypatch.setattr(chat_render, "_fallback_render_structured_citations", fake_fallback)
+
+    messages = [
+        {"id": 1, "role": "user", "content": "test"},
+        {"id": 2, "role": "assistant", "content": "SPI relies on compressive sensing [[CITE:s1234abcd:1]]."},
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "dummy",
+                    "meta": {
+                        "source_path": r"db\doc\doc.en.md",
+                    },
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-test")
+    msg = rendered[-1]
+    assert "[1](#kb-cite-demo-1)" in str(msg.get("rendered_body") or "")
+    assert len(msg.get("cite_details") or []) == 1

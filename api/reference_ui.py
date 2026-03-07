@@ -1016,6 +1016,22 @@ def ensure_source_citation_meta(*, source_path: str, pdf_root: Path | None, md_r
         expected_year=year_hint,
         md_root_hint=str(md_root or ""),
     )
+    if (
+        (not isinstance(fetched, dict))
+        and search_title
+        and (not _is_weak_meta_value("title", search_title))
+    ):
+        try:
+            fetched = fetch_best_crossref_meta(
+                query_title=search_title,
+                expected_year="",
+                expected_venue="",
+                doi_hint="",
+                min_score=0.90,
+                allow_title_only=True,
+            )
+        except Exception:
+            fetched = None
     if isinstance(fetched, dict):
         meta = _merge_meta_prefer_richer(
             meta,
@@ -1186,6 +1202,22 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
             expected_year=year,
             md_root_hint="",
         )
+        if (
+            (not isinstance(fetched, dict))
+            and search_title
+            and (not _is_weak_meta_value("title", search_title))
+        ):
+            try:
+                fetched = fetch_best_crossref_meta(
+                    query_title=search_title,
+                    expected_year="",
+                    expected_venue="",
+                    doi_hint="",
+                    min_score=0.90,
+                    allow_title_only=True,
+                )
+            except Exception:
+                fetched = None
         if isinstance(fetched, dict):
             meta = _merge_meta_prefer_richer(
                 meta,
