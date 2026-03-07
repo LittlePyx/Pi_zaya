@@ -1,8 +1,47 @@
 # 会话回答优化计划（A0）
 
-更新时间：2026-03-06  
+更新时间：2026-03-07  
 负责人：当前迭代主线  
-状态：`planned`
+状态：`in_progress`
+
+## 0. 当前进度（2026-03-06）
+
+### 已完成
+
+1. 回答协议 v1 主链路已接入（结论/依据/边界/下一步，含中文优先本地化）。
+2. 意图识别与自动深度档位已落地（`reading/compare/idea/experiment/troubleshoot/writing` + `L1/L2/L3`）。
+3. 无命中降级策略已优化（不胡编 + 可执行下一步建议）。
+4. 渲染与复制一致性已修补（`rendered_content / copy_markdown / copy_text` 对齐）。
+5. 结构化渲染可读性优化已上线（分块渲染、异常结构保护、SID 清洗）。
+6. 回答优化核心单测已建立并纳入 `tests/unit` 回归。
+
+### 进行中
+
+1. 灰度验收与可观测性：新增回答质量探针（结构完整率、证据覆盖、下一步覆盖）并接入生成状态输出。
+2. 评测执行工具链已准备：
+   - 评测集：`docs/answer_eval_dataset_v1.jsonl`
+   - 运行手册：`docs/ANSWER_EVAL_RUNBOOK.md`
+   - 评测脚本：`tools/answer_eval/run_eval.py`
+   - 报告模板：`docs/ANSWER_EVAL_REPORT_TEMPLATE.md`
+3. 已完成本地 smoke 跑通（`--limit 3`），可进入完整评测集执行与失败样本分桶。
+4. 全量评测已完成（冻结偏好后）：
+   - 结果目录：`test_results/answer_eval/20260306_160650`
+   - 汇总：`minimum_ok_rate=100%`，`evidence_ok_rate=100%`，`error=0`
+   - 报告：`docs/ANSWER_EVAL_REPORT_20260306.md`
+
+### 未开始（下一步）
+
+1. Week2 D4：手工回归（引用弹窗、文献篮、流式展示稳定性）。
+   - 清单：`docs/ANSWER_MANUAL_REGRESSION_CHECKLIST.md`
+2. Week2 D5：灰度复盘，形成全量发布策略与回滚预案。
+
+### 2026-03-07 增量更新（引用链路相关）
+
+1. 引用同步已完成并行提速与质量防降级改造（含 `doi/bib/title/source_work/source_refs` 空结果不固化、stale 空缓存可重试）。
+2. 增量重建已加入“文档级质量对比保护”：同 SHA 情况下若重建结果变差则自动保留旧结果，避免高质量索引被覆盖。
+3. 默认同步并行参数已上调并可配置（`KB_REFSYNC_WORKERS` 默认 `6`，API 可覆盖），并保持回滚能力。
+4. 当前索引质量基线已恢复并稳定：`refs_total=1084`、`refs_with_doi=983`、`unresolved=29`（对齐 stage9 基线）。
+5. 相关回归测试已补齐并通过（`tests/unit/test_reference_index.py`、`tests/sanity/test_library_phase1_api.py`）。
 
 ## 1. 目标与边界
 
