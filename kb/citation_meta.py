@@ -319,6 +319,30 @@ def _crossref_search_bibliographic_raw(reference_text: str, rows: int) -> list[d
         return []
 
 
+def _venue_tokens(text: str) -> list[str]:
+    s = str(text or "").strip()
+    if not s:
+        return []
+    s = re.sub(r"([a-z])([A-Z])", r"\1 \2", s)
+    s = s.replace("&", " and ")
+    norm = normalize_title_for_match(s)
+    return [w for w in norm.split() if w]
+
+
+def _venue_shape_key(text: str) -> str:
+    toks = _venue_tokens(text)
+    if not toks:
+        return ""
+    return "".join(t[: min(4, len(t))] for t in toks)
+
+
+def _venue_initials(text: str) -> str:
+    toks = _venue_tokens(text)
+    if not toks:
+        return ""
+    return "".join(t[:1] for t in toks)
+
+
 def _venue_similarity(expected: str, got: str) -> float:
     ne = normalize_title_for_match(expected)
     ng = normalize_title_for_match(got)
@@ -328,6 +352,14 @@ def _venue_similarity(expected: str, got: str) -> float:
         return 1.0
     if ne in ng or ng in ne:
         return 0.92
+    se = _venue_shape_key(expected)
+    sg = _venue_shape_key(got)
+    if se and sg and (se == sg or se in sg or sg in se):
+        return 0.96
+    ie = _venue_initials(expected)
+    ig = _venue_initials(got)
+    if ie and ig and (ie == ig):
+        return 0.94
     return title_similarity(ne, ng)
 
 
@@ -384,9 +416,15 @@ def fetch_best_crossref_meta(
         if v:
             score += 0.05 * (2.0 * v_sim - 1.0)
 
-        score = max(0.0, min(1.0, score))
-        if score > best_score:
-            best_score = score
+        rank_score = score
+        if (
+            rank_score > best_score
+            or (
+                abs(rank_score - best_score) <= 1e-9
+                and (v_sim > best_venue_sim or (v_sim == best_venue_sim and y_match and (not best_year_match)))
+            )
+        ):
+            best_score = rank_score
             best_title_sim = t_sim
             best_year_match = y_match
             best_venue_sim = v_sim
@@ -421,7 +459,7 @@ def fetch_best_crossref_meta(
     out = dict(best_meta)
     out["match_method"] = "title"
     out["title_similarity"] = round(best_title_sim, 4)
-    out["match_score"] = round(best_score, 4)
+    out["match_score"] = round(max(0.0, min(1.0, best_score)), 4)
     return out
 
 
