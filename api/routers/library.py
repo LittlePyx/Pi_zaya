@@ -1366,6 +1366,10 @@ def reindex():
                 budget_s = float(os.environ.get("KB_CROSSREF_BUDGET_S", "45") or 45.0)
             except Exception:
                 budget_s = 45.0
+            try:
+                workers = int(os.environ.get("KB_REFSYNC_WORKERS", "6") or 6)
+            except Exception:
+                workers = 6
             refsync = start_reference_sync(
                 src_root=md_d,
                 db_dir=Path(s.db_dir).expanduser(),
@@ -1374,6 +1378,7 @@ def reindex():
                 incremental=True,
                 enable_title_lookup=True,
                 crossref_time_budget_s=float(max(5.0, budget_s)),
+                doi_prefetch_workers=int(max(1, min(16, workers))),
             )
         except Exception as exc:
             refsync_error = str(exc)

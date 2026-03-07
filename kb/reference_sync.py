@@ -133,6 +133,7 @@ def _worker(
     incremental: bool,
     enable_title_lookup: bool,
     crossref_time_budget_s: float,
+    doi_prefetch_workers: int,
 ) -> None:
     def _on_progress(payload: dict[str, Any]) -> None:
         if not isinstance(payload, dict):
@@ -156,6 +157,8 @@ def _worker(
             incremental=bool(incremental),
             enable_title_lookup=bool(enable_title_lookup),
             crossref_time_budget_s=float(max(5.0, crossref_time_budget_s)),
+            doi_prefetch_workers=int(max(1, doi_prefetch_workers)),
+            doc_prepare_workers=int(max(1, min(8, doi_prefetch_workers))),
             pdf_root=pdf_root,
             library_db_path=library_db_path,
             progress_cb=_on_progress,
@@ -206,6 +209,7 @@ def start_reference_sync(
     incremental: bool = True,
     enable_title_lookup: bool = True,
     crossref_time_budget_s: float = 45.0,
+    doi_prefetch_workers: int = 6,
 ) -> dict[str, Any]:
     global _THREAD
     src = Path(src_root).expanduser().resolve()
@@ -251,6 +255,7 @@ def start_reference_sync(
                 "incremental": bool(incremental),
                 "enable_title_lookup": bool(enable_title_lookup),
                 "crossref_time_budget_s": float(max(5.0, crossref_time_budget_s)),
+                "doi_prefetch_workers": int(max(1, doi_prefetch_workers)),
             },
             daemon=True,
             name=f"kb-ref-sync-{run_id}",

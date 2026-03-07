@@ -259,6 +259,8 @@ def test_reindex_route_starts_reference_sync_on_success(monkeypatch, tmp_path: P
     monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")))
     monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeProc())
     monkeypatch.setattr(library_router, "start_reference_sync", fake_start_reference_sync)
+    monkeypatch.setenv("KB_CROSSREF_BUDGET_S", "55")
+    monkeypatch.setenv("KB_REFSYNC_WORKERS", "8")
 
     client = TestClient(app)
     response = client.post("/api/library/reindex")
@@ -268,6 +270,42 @@ def test_reindex_route_starts_reference_sync_on_success(monkeypatch, tmp_path: P
     assert (payload.get("refsync") or {}).get("started") is True
     assert captured.get("src_root") == md_dir
     assert captured.get("pdf_root") == pdf_dir
+    assert float(captured.get("crossref_time_budget_s") or 0.0) == 55.0
+    assert int(captured.get("doi_prefetch_workers") or 0) == 8
+
+
+def test_references_sync_route_passes_workers_and_budget(monkeypatch, tmp_path: Path):
+    from api.routers import references as references_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+
+    captured: dict = {}
+
+    def fake_start_reference_sync(**kwargs):
+        captured.update(kwargs)
+        return {"started": True, "run_id": 11}
+
+    monkeypatch.setattr(references_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(references_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(
+        references_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(references_router, "start_reference_sync", fake_start_reference_sync)
+    monkeypatch.setenv("KB_REFSYNC_WORKERS", "7")
+    monkeypatch.setenv("KB_CROSSREF_BUDGET_S", "70")
+
+    client = TestClient(app)
+    response = client.post("/api/references/sync")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("started") is True
+    assert int(captured.get("doi_prefetch_workers") or 0) == 7
+    assert float(captured.get("crossref_time_budget_s") or 0.0) == 70.0
 
 
 def test_rename_suggestions_route_returns_items(monkeypatch, tmp_path: Path):

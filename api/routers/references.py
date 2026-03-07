@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import mimetypes
+import os
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -33,13 +34,31 @@ def _lib_store() -> LibraryStore:
 
 
 @router.post("/sync")
-def start_sync():
+def start_sync(workers: int | None = None, crossref_budget_s: float | None = None):
     s = get_settings()
+    try:
+        workers_default = int(os.environ.get("KB_REFSYNC_WORKERS", "6") or 6)
+    except Exception:
+        workers_default = 6
+    if workers is None:
+        workers = workers_default
+    workers_final = int(max(1, min(16, int(workers))))
+
+    try:
+        budget_default = float(os.environ.get("KB_CROSSREF_BUDGET_S", "45") or 45.0)
+    except Exception:
+        budget_default = 45.0
+    if crossref_budget_s is None:
+        crossref_budget_s = budget_default
+    budget_final = float(max(5.0, min(180.0, float(crossref_budget_s))))
+
     result = start_reference_sync(
         src_root=_md_dir(),
         db_dir=s.db_dir,
         pdf_root=_pdf_dir(),
         library_db_path=s.library_db_path,
+        crossref_time_budget_s=budget_final,
+        doi_prefetch_workers=workers_final,
     )
     return result
 
