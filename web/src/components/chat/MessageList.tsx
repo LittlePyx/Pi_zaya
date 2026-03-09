@@ -1,18 +1,30 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
-import { Typography } from 'antd'
+import { Typography, message } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
-import { mergeCiteMeta, normalizeCiteDetail, shelfStorageKey, toShelfItem, type CiteDetail, type CiteShelfItem } from './citationState'
+import {
+  mergeCiteMeta,
+  normalizeCiteDetail,
+  normalizeShelfNote,
+  normalizeShelfTags,
+  shelfStorageKey,
+  toShelfItem,
+  type CiteDetail,
+  type CiteShelfItem,
+} from './citationState'
 import { RefsPanel } from '../refs/RefsPanel'
 import type { ChatImageAttachment, Message } from '../../api/chat'
 import { referencesApi } from '../../api/references'
 
 const { Text } = Typography
 const SHELF_MAX_ITEMS = 120
-const SHELF_SCHEMA_VERSION = 2
+const SHELF_SCHEMA_VERSION = 4
+const SHELF_SAVED_SCHEMA_VERSION = 1
+const SHELF_SAVED_MAX_ITEMS = 16
+const SHELF_SAVED_SUFFIX = ':saved_snapshots'
 
 interface Props {
   activeConvId?: string | null
@@ -20,6 +32,7 @@ interface Props {
   refs: Record<string, unknown>
   generationPartial?: string
   generationStage?: string
+  jumpTarget?: { messageId: number; token: number } | null
 }
 
 function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
@@ -56,7 +69,19 @@ interface ShelfSnapshot {
   open: boolean
   items: CiteShelfItem[]
 }
+interface ShelfSavedSnapshot {
+  id: string
+  name: string
+  createdAt: number
+  items: CiteShelfItem[]
+}
+interface ShelfSavedSnapshotPayload {
+  version: number
+  updatedAt: number
+  snapshots: ShelfSavedSnapshot[]
+}
 const shelfSnapshotMemory = new Map<string, ShelfSnapshot>()
+const shelfSavedSnapshotMemory = new Map<string, ShelfSavedSnapshotPayload>()
 
 function cloneShelfSnapshot(snapshot: ShelfSnapshot): ShelfSnapshot {
   return {
@@ -65,6 +90,23 @@ function cloneShelfSnapshot(snapshot: ShelfSnapshot): ShelfSnapshot {
     updatedAt: Number(snapshot.updatedAt || 0),
     open: Boolean(snapshot.open),
     items: (snapshot.items || []).map((item) => ({ ...item })),
+  }
+}
+
+function cloneSavedSnapshot(snapshot: ShelfSavedSnapshot): ShelfSavedSnapshot {
+  return {
+    id: String(snapshot.id || ''),
+    name: String(snapshot.name || ''),
+    createdAt: Number(snapshot.createdAt || 0),
+    items: (snapshot.items || []).map((item) => ({ ...item })),
+  }
+}
+
+function cloneSavedSnapshotPayload(payload: ShelfSavedSnapshotPayload): ShelfSavedSnapshotPayload {
+  return {
+    version: Number(payload.version || 0),
+    updatedAt: Number(payload.updatedAt || 0),
+    snapshots: (payload.snapshots || []).map((entry) => cloneSavedSnapshot(entry)),
   }
 }
 
@@ -125,6 +167,10 @@ function removeShelfStorage(key: string) {
   shelfStorageFallback.delete(key)
 }
 
+function shelfSavedStorageKey(convId?: string | null): string {
+  return `${shelfStorageKey(convId)}${SHELF_SAVED_SUFFIX}`
+}
+
 function normalizeDoiLike(value: string): string {
   return String(value || '')
     .trim()
@@ -181,7 +227,13 @@ function restoreShelfItems(rawItems: unknown[]): CiteShelfItem[] {
     if (seenIdentity.has(identity)) continue
     seen.add(key)
     seenIdentity.add(identity)
-    out.push({ ...base, key, main })
+    out.push({
+      ...base,
+      key,
+      main,
+      tags: normalizeShelfTags(rec.tags),
+      note: normalizeShelfNote(rec.note),
+    })
     if (out.length >= SHELF_MAX_ITEMS) break
   }
   return out
@@ -214,6 +266,88 @@ function readShelfSnapshot(key: string, rawOverride?: string): ShelfSnapshot | n
     removeShelfStorage(key)
     return null
   }
+}
+
+function removeSavedShelfStorage(key: string) {
+  shelfSavedSnapshotMemory.delete(key)
+  for (const storage of listShelfStorages()) {
+    try {
+      storage.removeItem(key)
+    } catch {
+      // ignore
+    }
+  }
+  shelfStorageFallback.delete(key)
+}
+
+function readSavedShelfSnapshots(storageKey: string, rawOverride?: string): ShelfSavedSnapshot[] {
+  if (typeof rawOverride !== 'string') {
+    const mem = shelfSavedSnapshotMemory.get(storageKey)
+    if (mem) return cloneSavedSnapshotPayload(mem).snapshots
+  }
+  const raw = typeof rawOverride === 'string' ? rawOverride : readShelfStorage(storageKey)
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    const snapshotsRaw: unknown[] = Array.isArray(parsed?.snapshots) ? parsed.snapshots : []
+    const seen = new Set<string>()
+    const snapshots: ShelfSavedSnapshot[] = []
+    for (const rawItem of snapshotsRaw) {
+      if (!rawItem || typeof rawItem !== 'object') continue
+      const rec = rawItem as Record<string, unknown>
+      const id = String(rec.id || '').trim()
+      if (!id || seen.has(id)) continue
+      const createdAt0 = Number(rec.createdAt || 0)
+      const createdAt = Number.isFinite(createdAt0) && createdAt0 > 0 ? Math.floor(createdAt0) : Date.now()
+      const name = String(rec.name || '').trim() || '未命名快照'
+      const itemsRaw: unknown[] = Array.isArray(rec.items) ? rec.items : []
+      snapshots.push({
+        id,
+        name,
+        createdAt,
+        items: restoreShelfItems(itemsRaw),
+      })
+      seen.add(id)
+      if (snapshots.length >= SHELF_SAVED_MAX_ITEMS) break
+    }
+    const payload: ShelfSavedSnapshotPayload = {
+      version: Number(parsed?.version || 0) || 0,
+      updatedAt: Number(parsed?.updatedAt || 0) || 0,
+      snapshots,
+    }
+    shelfSavedSnapshotMemory.set(storageKey, payload)
+    return cloneSavedSnapshotPayload(payload).snapshots
+  } catch {
+    removeSavedShelfStorage(storageKey)
+    return []
+  }
+}
+
+function persistSavedShelfSnapshots(storageKey: string, snapshots: ShelfSavedSnapshot[]) {
+  if (!Array.isArray(snapshots) || snapshots.length <= 0) {
+    removeSavedShelfStorage(storageKey)
+    return
+  }
+  const normalized = snapshots
+    .slice(0, SHELF_SAVED_MAX_ITEMS)
+    .map((entry) => ({
+      id: String(entry.id || '').trim(),
+      name: String(entry.name || '').trim() || '未命名快照',
+      createdAt: Number(entry.createdAt || 0) > 0 ? Number(entry.createdAt) : Date.now(),
+      items: dedupeShelfItems(entry.items || []).slice(0, SHELF_MAX_ITEMS).map((item) => ({ ...item })),
+    }))
+    .filter((entry) => Boolean(entry.id))
+  if (normalized.length <= 0) {
+    removeSavedShelfStorage(storageKey)
+    return
+  }
+  const payload: ShelfSavedSnapshotPayload = {
+    version: SHELF_SAVED_SCHEMA_VERSION,
+    updatedAt: Date.now(),
+    snapshots: normalized,
+  }
+  shelfSavedSnapshotMemory.set(storageKey, cloneSavedSnapshotPayload(payload))
+  writeShelfStorage(storageKey, JSON.stringify(payload))
 }
 
 function isWeakTitle(text: string): boolean {
@@ -276,10 +410,22 @@ function preferRicherField(field: 'title' | 'authors' | 'venue' | 'year' | 'main
   return inc.length > cur.length + 12 ? inc : cur
 }
 
+function sameTags(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
 function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
   return (
     a.key === b.key
     && a.main === b.main
+    && a.traceConvId === b.traceConvId
+    && a.traceAssistantMsgId === b.traceAssistantMsgId
+    && a.traceAssistantOrder === b.traceAssistantOrder
+    && a.traceUserMsgId === b.traceUserMsgId
     && a.sourceName === b.sourceName
     && a.sourcePath === b.sourcePath
     && a.raw === b.raw
@@ -312,6 +458,8 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.bibliometricsChecked === b.bibliometricsChecked
     && a.summaryLine === b.summaryLine
     && a.summarySource === b.summarySource
+    && a.note === b.note
+    && sameTags(a.tags || [], b.tags || [])
   )
 }
 
@@ -364,6 +512,10 @@ function preferPositiveNumber(current: number, incoming: number): number {
 function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteShelfItem {
   const mergedLike = {
     ...item,
+    traceConvId: preferExistingText(item.traceConvId, live.traceConvId),
+    traceAssistantMsgId: preferPositiveNumber(item.traceAssistantMsgId, live.traceAssistantMsgId),
+    traceAssistantOrder: preferPositiveNumber(item.traceAssistantOrder, live.traceAssistantOrder),
+    traceUserMsgId: preferPositiveNumber(item.traceUserMsgId, live.traceUserMsgId),
     sourceName: preferExistingText(item.sourceName, live.sourceName),
     sourcePath: preferExistingText(item.sourcePath, live.sourcePath),
     raw: preferExistingText(item.raw, live.raw),
@@ -404,10 +556,96 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     ...normalized,
     key: item.key,
     main: preferRicherField('main', item.main, preferExistingText(live.main, autoMain)),
+    tags: normalizeShelfTags(item.tags),
+    note: normalizeShelfNote(item.note),
   }
 }
 
-export function MessageList({ activeConvId, messages, refs, generationPartial, generationStage }: Props) {
+function normalizeTextLite(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function firstAuthorToken(value: string): string {
+  const firstChunk = String(value || '')
+    .split(/[;,，；]/)[0]
+    ?.trim()
+    || ''
+  const tokens = firstChunk.match(/[A-Za-z\u4e00-\u9fff]+/g) || []
+  if (tokens.length <= 0) return ''
+  const first = tokens.at(0)
+  return first ? first.toLowerCase() : ''
+}
+
+function year4(value: string): string {
+  const match = String(value || '').match(/\b(19|20)\d{2}\b/)
+  return match ? match[0] : ''
+}
+
+function jaccardTokens(a: string, b: string): number {
+  const aSet = new Set(normalizeTextLite(a).split(' ').filter(Boolean))
+  const bSet = new Set(normalizeTextLite(b).split(' ').filter(Boolean))
+  if (aSet.size <= 0 || bSet.size <= 0) return 0
+  let inter = 0
+  for (const t of aSet) {
+    if (bSet.has(t)) inter += 1
+  }
+  const union = aSet.size + bSet.size - inter
+  return union > 0 ? inter / union : 0
+}
+
+function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<string, unknown>): CiteShelfItem | null {
+  if (!candidateMeta || Object.keys(candidateMeta).length <= 0) return null
+  const merged = mergeCiteMeta(base, candidateMeta)
+  const mergedItem = {
+    ...toShelfItem(merged),
+    key: base.key,
+    tags: normalizeShelfTags(base.tags),
+    note: normalizeShelfNote(base.note),
+  }
+
+  const baseDoi = normalizeDoiLike(base.doi || base.doiUrl)
+  const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
+  if (baseDoi && mergedDoi && baseDoi !== mergedDoi) return null
+
+  const titleSignal = jaccardTokens(base.title || base.main, mergedItem.title || mergedItem.main) >= 0.55
+  const authorSignal = (
+    Boolean(firstAuthorToken(base.authors))
+    && firstAuthorToken(base.authors) === firstAuthorToken(mergedItem.authors)
+  )
+  const yearSignal = Boolean(year4(base.year) && year4(base.year) === year4(mergedItem.year))
+  const venueSignal = jaccardTokens(base.venue, mergedItem.venue) >= 0.5
+  const newDoiSignal = !baseDoi && Boolean(mergedDoi)
+
+  let signalCount = 0
+  if (titleSignal) signalCount += 1
+  if (authorSignal) signalCount += 1
+  if (yearSignal) signalCount += 1
+  if (venueSignal) signalCount += 1
+
+  const accepted = newDoiSignal ? signalCount >= 1 : signalCount >= 2
+  if (!accepted) return null
+  return mergedItem
+}
+
+function snapshotDiffCounts(currentItems: CiteShelfItem[], baselineItems: CiteShelfItem[]): { added: number; removed: number } {
+  const current = new Set(currentItems.map((item) => shelfPaperIdentity(item)))
+  const baseline = new Set(baselineItems.map((item) => shelfPaperIdentity(item)))
+  let added = 0
+  let removed = 0
+  for (const id of current) {
+    if (!baseline.has(id)) added += 1
+  }
+  for (const id of baseline) {
+    if (!current.has(id)) removed += 1
+  }
+  return { added, removed }
+}
+
+export function MessageList({ activeConvId, messages, refs, generationPartial, generationStage, jumpTarget }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [popoverDetail, setPopoverDetail] = useState<CiteDetail | null>(null)
   const [popoverPos, setPopoverPos] = useState<{ x: number; y: number } | null>(null)
@@ -416,6 +654,9 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
   const [shelfSummaryLoadingKey, setShelfSummaryLoadingKey] = useState('')
+  const [shelfRepairLoadingKey, setShelfRepairLoadingKey] = useState('')
+  const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
+  const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
   const activeStorageKeyRef = useRef(shelfStorageKey(activeConvId))
@@ -436,7 +677,32 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   }, [activeConvId, generationPartial])
 
   useEffect(() => {
+    if (!jumpTarget || !Number.isFinite(jumpTarget.messageId)) return
+    const el = scrollRef.current
+    if (!el) return
+    const target = el.querySelector<HTMLElement>(`[data-msg-id="${jumpTarget.messageId}"]`)
+    if (!target) return
+    const targetRect = target.getBoundingClientRect()
+    const containerRect = el.getBoundingClientRect()
+    const top = targetRect.top - containerRect.top + el.scrollTop - 12
+    el.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+    try {
+      target.animate(
+        [
+          { boxShadow: '0 0 0 0 rgba(24,144,255,0.0)', backgroundColor: 'rgba(24,144,255,0.0)' },
+          { boxShadow: '0 0 0 3px rgba(24,144,255,0.24)', backgroundColor: 'rgba(24,144,255,0.10)' },
+          { boxShadow: '0 0 0 0 rgba(24,144,255,0.0)', backgroundColor: 'rgba(24,144,255,0.0)' },
+        ],
+        { duration: 900, easing: 'ease-out' },
+      )
+    } catch {
+      // no-op: Web Animations may not be available in all envs.
+    }
+  }, [jumpTarget, messages])
+
+  useEffect(() => {
     const nextStorageKey = shelfStorageKey(activeConvId)
+    const nextSavedStorageKey = shelfSavedStorageKey(activeConvId)
     const prevStorageKey = activeStorageKeyRef.current
     if (persistShelfTimerRef.current !== null) {
       window.clearTimeout(persistShelfTimerRef.current)
@@ -455,6 +721,12 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     // Switching conversation changes storage key; skip one persist cycle to avoid
     // writing previous conversation shelf state into the new key before hydration.
     skipShelfPersistOnceRef.current = true
+    const savedSnapshots = readSavedShelfSnapshots(nextSavedStorageKey)
+    setSavedShelfSnapshots(savedSnapshots)
+    setSelectedSavedSnapshotId((current) => {
+      if (current && savedSnapshots.some((item) => item.id === current)) return current
+      return savedSnapshots[0]?.id || ''
+    })
     const snapshot = readShelfSnapshot(nextStorageKey)
     if (!snapshot) {
       shelfRevisionByKeyRef.current[nextStorageKey] = 0
@@ -473,7 +745,23 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
 
   useEffect(() => {
     const storageKey = shelfStorageKey(activeConvId)
+    const savedStorageKey = shelfSavedStorageKey(activeConvId)
     const onStorage = (event: StorageEvent) => {
+      if (event.key === savedStorageKey) {
+        if (event.newValue === null) {
+          shelfSavedSnapshotMemory.delete(savedStorageKey)
+          setSavedShelfSnapshots([])
+          setSelectedSavedSnapshotId('')
+          return
+        }
+        const snapshots = readSavedShelfSnapshots(savedStorageKey, event.newValue)
+        setSavedShelfSnapshots(snapshots)
+        setSelectedSavedSnapshotId((current) => {
+          if (current && snapshots.some((item) => item.id === current)) return current
+          return snapshots[0]?.id || ''
+        })
+        return
+      }
       if (event.key !== storageKey) return
       if (event.newValue === null) {
         shelfSnapshotMemory.delete(storageKey)
@@ -501,6 +789,13 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   useEffect(() => {
     latestShelfStateRef.current = { convId: activeConvId, open: shelfOpen, items: shelfItems }
   }, [activeConvId, shelfItems, shelfOpen])
+
+  useEffect(() => {
+    setSelectedSavedSnapshotId((current) => {
+      if (current && savedShelfSnapshots.some((item) => item.id === current)) return current
+      return savedShelfSnapshots[0]?.id || ''
+    })
+  }, [savedShelfSnapshots])
 
   useEffect(() => {
     return () => {
@@ -568,19 +863,44 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     return out
   }, [messages, refs])
 
+  const assistantTraceByMsgId = useMemo(() => {
+    const out = new Map<number, { answerOrder: number; userMsgId: number }>()
+    let answerOrder = 0
+    let lastUserMsgId = 0
+    for (const message of messages) {
+      if (message.role === 'user') {
+        lastUserMsgId = message.id
+        continue
+      }
+      if (message.role !== 'assistant') continue
+      answerOrder += 1
+      out.set(message.id, { answerOrder, userMsgId: lastUserMsgId })
+    }
+    return out
+  }, [messages])
+
   const liveCiteMap = useMemo(() => {
     const map = new Map<string, CiteShelfItem>()
+    const convTraceId = String(activeConvId || '')
     for (const message of messages) {
       if (message.role !== 'assistant' || !Array.isArray(message.cite_details)) continue
+      const trace = assistantTraceByMsgId.get(message.id)
       for (const rawDetail of message.cite_details) {
         const detail = normalizeCiteDetail(rawDetail)
         if (!detail) continue
-        const item = toShelfItem(detail)
+        const tracedDetail: CiteDetail = {
+          ...detail,
+          traceConvId: convTraceId,
+          traceAssistantMsgId: message.id,
+          traceAssistantOrder: Number(trace?.answerOrder || 0),
+          traceUserMsgId: Number(trace?.userMsgId || 0),
+        }
+        const item = toShelfItem(tracedDetail)
         map.set(item.key, item)
       }
     }
     return map
-  }, [messages])
+  }, [activeConvId, assistantTraceByMsgId, messages])
 
   useEffect(() => {
     setShelfItems((current) => {
@@ -612,11 +932,57 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
         setShelfItems((current) => current.map((entry) => {
           if (entry.key !== item.key) return entry
           const merged = mergeCiteMeta(entry, meta)
-          return { ...toShelfItem(merged), key: entry.key }
+          return {
+            ...toShelfItem(merged),
+            key: entry.key,
+            tags: normalizeShelfTags(entry.tags),
+            note: normalizeShelfNote(entry.note),
+          }
         }))
       })
       .finally(() => {
         setShelfSummaryLoadingKey((current) => (current === item.key ? '' : current))
+      })
+  }
+
+  const repairShelfItemMeta = (item: CiteShelfItem) => {
+    if (shelfRepairLoadingKey === item.key) return
+    setShelfRepairLoadingKey(item.key)
+    const basePayload = item as unknown as Record<string, unknown>
+    const strictTitlePayload: Record<string, unknown> = {
+      ...basePayload,
+      raw: '',
+      cite_fmt: '',
+      citeFmt: '',
+    }
+    Promise.all([
+      referencesApi.bibliometrics(basePayload).catch(() => ({})),
+      referencesApi.bibliometrics(strictTitlePayload).catch(() => ({})),
+    ])
+      .then((metas) => {
+        const candidates = metas.filter((meta) => meta && Object.keys(meta).length > 0)
+        let didUpdate = false
+        setShelfItems((current) => current.map((entry) => {
+          if (entry.key !== item.key) return entry
+          for (const meta of candidates) {
+            const accepted = strictRepairMerge(entry, meta)
+            if (!accepted) continue
+            if (!sameShelfItem(accepted, entry)) {
+              didUpdate = true
+              return accepted
+            }
+            return entry
+          }
+          return entry
+        }))
+        if (didUpdate) message.success('已按严格规则修复元数据')
+        else message.info('未通过严格匹配校验，已保留原信息')
+      })
+      .catch(() => {
+        message.error('修复失败，请稍后重试')
+      })
+      .finally(() => {
+        setShelfRepairLoadingKey((current) => (current === item.key ? '' : current))
       })
   }
 
@@ -667,7 +1033,11 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
               merged = mergeCiteMeta(merged, meta)
             }
           }
-          return toShelfItem(merged)
+          return {
+            ...toShelfItem(merged),
+            tags: normalizeShelfTags(item.tags),
+            note: normalizeShelfNote(item.note),
+          }
         }))
       })
       .finally(() => setPopoverLoading(false))
@@ -677,7 +1047,16 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     const item = toShelfItem(detail)
     setShelfItems((current) => {
       const identity = shelfPaperIdentity(item)
-      const next = [item, ...current.filter((entry) => entry.key !== item.key && shelfPaperIdentity(entry) !== identity)]
+      const existing = current.find((entry) => entry.key === item.key || shelfPaperIdentity(entry) === identity)
+      const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
+      const next = [
+        {
+          ...mergedIncoming,
+          tags: normalizeShelfTags(existing?.tags || mergedIncoming.tags),
+          note: normalizeShelfNote(existing?.note || mergedIncoming.note),
+        },
+        ...current.filter((entry) => entry.key !== item.key && shelfPaperIdentity(entry) !== identity),
+      ]
       const deduped = dedupeShelfItems(next)
       if (deduped.length > SHELF_MAX_ITEMS) return deduped.slice(0, SHELF_MAX_ITEMS)
       if (deduped.length === next.length) return deduped.slice(0, SHELF_MAX_ITEMS)
@@ -688,9 +1067,67 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     fetchShelfSummaryForItem(item)
   }
 
+  const selectedSavedSnapshot = useMemo(
+    () => savedShelfSnapshots.find((item) => item.id === selectedSavedSnapshotId) || null,
+    [savedShelfSnapshots, selectedSavedSnapshotId],
+  )
+
+  const selectedSnapshotDiff = useMemo(() => {
+    if (!selectedSavedSnapshot) return ''
+    const diff = snapshotDiffCounts(shelfItems, selectedSavedSnapshot.items)
+    if (diff.added <= 0 && diff.removed <= 0) return '与当前文献篮一致'
+    return `对比当前：新增 ${diff.added} 条 · 移除 ${diff.removed} 条`
+  }, [selectedSavedSnapshot, shelfItems])
+
+  const saveShelfSnapshot = () => {
+    const currentItems = dedupeShelfItems(shelfItems).slice(0, SHELF_MAX_ITEMS)
+    if (currentItems.length <= 0) {
+      message.info('文献篮为空，暂不能保存快照')
+      return
+    }
+    const now = Date.now()
+    const d = new Date(now)
+    const pad = (value: number) => String(value).padStart(2, '0')
+    const entry: ShelfSavedSnapshot = {
+      id: `s_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+      name: `快照 ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      createdAt: now,
+      items: currentItems.map((item) => ({ ...item })),
+    }
+    setSavedShelfSnapshots((current) => {
+      const next = [entry, ...current].slice(0, SHELF_SAVED_MAX_ITEMS)
+      persistSavedShelfSnapshots(shelfSavedStorageKey(activeConvId), next)
+      return next
+    })
+    setSelectedSavedSnapshotId(entry.id)
+    message.success('已保存文献篮快照')
+  }
+
+  const loadShelfSnapshot = () => {
+    if (!selectedSavedSnapshot) return
+    const restored = dedupeShelfItems(selectedSavedSnapshot.items).slice(0, SHELF_MAX_ITEMS).map((item) => ({ ...item }))
+    setShelfItems(restored)
+    setFocusedShelfKey('')
+    setShelfSummaryLoadingKey('')
+    setShelfRepairLoadingKey('')
+    message.success(`已载入快照：${selectedSavedSnapshot.name}`)
+  }
+
+  const deleteShelfSnapshot = () => {
+    if (!selectedSavedSnapshot) return
+    const removedName = selectedSavedSnapshot.name
+    setSavedShelfSnapshots((current) => {
+      const next = current.filter((item) => item.id !== selectedSavedSnapshot.id)
+      persistSavedShelfSnapshots(shelfSavedStorageKey(activeConvId), next)
+      return next
+    })
+    setSelectedSavedSnapshotId((current) => (current === selectedSavedSnapshot.id ? '' : current))
+    message.success(`已删除快照：${removedName}`)
+  }
+
   return (
     <>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-6 kb-main-scroll">
+      <div ref={scrollRef} className="h-full min-h-0 overflow-y-auto px-4 py-6 kb-main-scroll">
         <div className="mx-auto flex max-w-7xl flex-col gap-4">
           {rows.map((row, index) => {
             if (row.kind === 'refs') {
@@ -706,8 +1143,18 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
 
             const message = row.message
             const isUser = message.role === 'user'
+            const trace = assistantTraceByMsgId.get(message.id)
             const citeDetails = Array.isArray(message.cite_details)
-              ? message.cite_details.map(normalizeCiteDetail).filter((detail): detail is CiteDetail => Boolean(detail))
+              ? message.cite_details
+                .map(normalizeCiteDetail)
+                .filter((detail): detail is CiteDetail => Boolean(detail))
+                .map((detail) => ({
+                  ...detail,
+                  traceConvId: String(activeConvId || ''),
+                  traceAssistantMsgId: message.id,
+                  traceAssistantOrder: Number(trace?.answerOrder || 0),
+                  traceUserMsgId: Number(trace?.userMsgId || 0),
+                }))
               : []
             const imageAttachments = imageAttachmentsOf(message)
             const showUserText = !(isUser && imageAttachments.length > 0 && isImageOnlyPlaceholder(message.content))
@@ -721,6 +1168,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
             return (
               <div
                 key={message.id}
+                data-msg-id={message.id}
                 className={`flex gap-3 ${isUser ? 'justify-end' : ''}`}
               >
                 {!isUser ? <AssistantAvatar /> : null}
@@ -847,6 +1295,10 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
         items={shelfItems}
         focusedKey={focusedShelfKey}
         summaryLoadingKey={shelfSummaryLoadingKey}
+        repairLoadingKey={shelfRepairLoadingKey}
+        snapshots={savedShelfSnapshots}
+        selectedSnapshotId={selectedSavedSnapshotId}
+        snapshotDiff={selectedSnapshotDiff}
         onToggle={() => setShelfOpen((value) => !value)}
         onSelect={(item) => {
           setFocusedShelfKey(item.key)
@@ -856,12 +1308,33 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
           setShelfItems((current) => current.filter((item) => item.key !== key))
           if (focusedShelfKey === key) setFocusedShelfKey('')
           if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
+          if (shelfRepairLoadingKey === key) setShelfRepairLoadingKey('')
         }}
         onClear={() => {
           setShelfItems([])
           setFocusedShelfKey('')
           setShelfSummaryLoadingKey('')
+          setShelfRepairLoadingKey('')
         }}
+        onUpdateTags={(key, tags) => {
+          const nextTags = normalizeShelfTags(tags)
+          setShelfItems((current) => current.map((item) => (
+            item.key === key ? { ...item, tags: nextTags } : item
+          )))
+        }}
+        onUpdateNote={(key, note) => {
+          const nextNote = normalizeShelfNote(note)
+          setShelfItems((current) => current.map((item) => (
+            item.key === key ? { ...item, note: nextNote } : item
+          )))
+        }}
+        onRepair={(item) => {
+          repairShelfItemMeta(item)
+        }}
+        onSelectSnapshot={setSelectedSavedSnapshotId}
+        onSaveSnapshot={saveShelfSnapshot}
+        onLoadSnapshot={loadShelfSnapshot}
+        onDeleteSnapshot={deleteShelfSnapshot}
       />
     </>
   )

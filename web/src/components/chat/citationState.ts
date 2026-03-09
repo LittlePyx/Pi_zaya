@@ -3,6 +3,10 @@ export interface CiteDetail {
   anchor: string
   sourceName: string
   sourcePath: string
+  traceConvId: string
+  traceAssistantMsgId: number
+  traceAssistantOrder: number
+  traceUserMsgId: number
   raw: string
   citeFmt: string
   title: string
@@ -36,6 +40,8 @@ export interface CiteDetail {
 export interface CiteShelfItem extends CiteDetail {
   key: string
   main: string
+  tags: string[]
+  note: string
 }
 
 function asText(value: unknown): string {
@@ -46,6 +52,33 @@ function asText(value: unknown): string {
 
 function asNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+export function normalizeShelfTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of value) {
+    const txt = String(raw || '').trim().replace(/\s+/g, ' ')
+    if (!txt) continue
+    const key = txt.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(txt.slice(0, 24))
+    if (out.length >= 8) break
+  }
+  return out
+}
+
+export function normalizeShelfNote(value: unknown): string {
+  const text = String(value || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  if (!text) return ''
+  return text.slice(0, 1200)
 }
 
 function normalizeDoiLike(value: unknown): string {
@@ -97,6 +130,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     anchor,
     sourceName: pickText(rec, 'source_name', 'sourceName'),
     sourcePath: pickText(rec, 'source_path', 'sourcePath'),
+    traceConvId: pickText(rec, 'trace_conv_id', 'traceConvId'),
+    traceAssistantMsgId: pickNumber(rec, 'trace_assistant_msg_id', 'traceAssistantMsgId'),
+    traceAssistantOrder: pickNumber(rec, 'trace_assistant_order', 'traceAssistantOrder'),
+    traceUserMsgId: pickNumber(rec, 'trace_user_msg_id', 'traceUserMsgId'),
     raw: pickText(rec, 'raw'),
     citeFmt: pickText(rec, 'cite_fmt', 'citeFmt'),
     title: pickText(rec, 'title'),
@@ -148,6 +185,8 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
     ...detail,
     key: baseKey,
     main,
+    tags: [],
+    note: '',
   }
 }
 
@@ -245,7 +284,6 @@ export function citeMetricSummary(detail: CiteDetail): string[] {
   }
   if (detail.journalIf) items.push(`IF ${detail.journalIf}`)
   if (detail.journalQuartile) items.push(`JCR ${detail.journalQuartile}`)
-  if (detail.journalIfSource) items.push(`IF来源 ${detail.journalIfSource}`)
   return items
 }
 
@@ -301,25 +339,43 @@ function trimLabel(value: string, maxLen = 18): string {
   return `${s.slice(0, Math.max(1, maxLen - 3)).trimEnd()}...`
 }
 
-function compactSourceChipLabel(sourceName: string, sourcePath: string): string {
+interface InlineCitationLabelOptions {
+  includeSource?: boolean
+  includeYear?: boolean
+  sourceMaxLen?: number
+}
+
+function compactSourceChipLabel(
+  sourceName: string,
+  sourcePath: string,
+  options?: Pick<InlineCitationLabelOptions, 'includeYear' | 'sourceMaxLen'>,
+): string {
+  const includeYear = Boolean(options?.includeYear)
+  const maxLen = Number(options?.sourceMaxLen || 18)
   const raw = stripKnownExt(sourceName || baseName(sourcePath))
   if (!raw) return ''
   const normalized = raw.replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
   const byYear = normalized.match(/^(.+?)[-_ ]((?:19|20)\d{2})(?:[-_ ].*)?$/)
   if (byYear) {
-    const venue = trimLabel(String(byYear[1] || '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim())
+    const venue = trimLabel(String(byYear[1] || '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim(), maxLen)
     const year = String(byYear[2] || '').trim()
-    return [venue, year].filter(Boolean).join(' ')
+    if (!venue) return includeYear ? year : ''
+    return includeYear ? [venue, year].filter(Boolean).join(' ') : venue
   }
-  const short = trimLabel(normalized)
+  const short = trimLabel(
+    normalized.replace(/(?:^|[\s\-_])((?:19|20)\d{2})(?=$|[\s\-_])/g, '').replace(/\s+/g, ' ').trim(),
+    maxLen,
+  )
   return short
 }
 
-export function citationInlineLabel(detail: CiteDetail): string {
+export function citationInlineLabel(detail: CiteDetail, options?: InlineCitationLabelOptions): string {
+  const includeSource = options?.includeSource ?? true
   const n = detail.num > 0 ? String(detail.num) : '?'
-  const sourceTag = compactSourceChipLabel(detail.sourceName, detail.sourcePath)
+  if (!includeSource) return n
+  const sourceTag = compactSourceChipLabel(detail.sourceName, detail.sourcePath, options)
   if (!sourceTag) return n
-  return `${sourceTag} #${n}`
+  return `${sourceTag}#${n}`
 }
 
 export function citationDisplay(detail: CiteDetail) {
@@ -371,7 +427,7 @@ export function buildCiteDetailFromMeta(
   return normalizeCiteDetail(rec)
 }
 
-export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: string } {
+export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: string; ris: string } {
   const title = asText(detail.title) || citationMain(detail)
   const authors = asText(detail.authors) || '[Unknown Authors]'
   const venue =
@@ -384,6 +440,7 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   const issue = asText(detail.issue)
   const pages = asText(detail.pages)
   const doi = asText(detail.doi)
+  const doiUrl = asText(detail.doiUrl)
   const entryType = detail.venueKind === 'conference' ? 'inproceedings' : 'article'
   const gbtKind = detail.venueKind === 'conference' ? '[C]' : '[J]'
 
@@ -402,7 +459,49 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   year={${year}},${volume ? `\n  volume={${volume}},` : ''}${issue ? `\n  number={${issue}},` : ''}${pages ? `\n  pages={${pages}},` : ''}${doi ? `\n  doi={${doi}},` : ''}
 }`
 
-  return { gbt, bibtex }
+  const risType = detail.venueKind === 'conference' ? 'CPAPER' : 'JOUR'
+  const risAuthors = (() => {
+    const raw = authors.trim()
+    if (!raw) return ['Unknown Authors']
+    const bySep = raw
+      .split(/[；;]+/g)
+      .map((part) => part.trim())
+      .filter(Boolean)
+    if (bySep.length > 0) return bySep
+    const byAnd = raw
+      .split(/\s+(?:and|&)\s+/i)
+      .map((part) => part.trim())
+      .filter(Boolean)
+    return byAnd.length > 0 ? byAnd : [raw]
+  })()
+  const risLines: string[] = [
+    `TY  - ${risType}`,
+    `TI  - ${title}`,
+  ]
+  for (const author of risAuthors) {
+    risLines.push(`AU  - ${author}`)
+  }
+  risLines.push(`${detail.venueKind === 'conference' ? 'T2' : 'JO'}  - ${venue}`)
+  if (/^\d{4}$/.test(year)) {
+    risLines.push(`PY  - ${year}`)
+  }
+  if (volume) risLines.push(`VL  - ${volume}`)
+  if (issue) risLines.push(`IS  - ${issue}`)
+  if (pages) {
+    const pageMatch = pages.match(/^\s*([A-Za-z0-9]+)\s*[-–]\s*([A-Za-z0-9]+)\s*$/)
+    if (pageMatch) {
+      risLines.push(`SP  - ${pageMatch[1]}`)
+      risLines.push(`EP  - ${pageMatch[2]}`)
+    } else {
+      risLines.push(`SP  - ${pages}`)
+    }
+  }
+  if (doi) risLines.push(`DO  - ${doi}`)
+  if (doiUrl || doi) risLines.push(`UR  - ${doiUrl || `https://doi.org/${doi}`}`)
+  risLines.push('ER  -')
+  const ris = risLines.join('\n')
+
+  return { gbt, bibtex, ris }
 }
 
 export function summarySourceLabel(source: string): string {

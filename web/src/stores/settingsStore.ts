@@ -3,6 +3,21 @@ import { settingsApi, type SettingsPatch } from '../api/settings'
 
 const MAX_TOKENS_MIN = 512
 const MAX_TOKENS_MAX = 3072
+const THEME_STORAGE_KEY = 'kb_theme_mode'
+
+function readInitialTheme(): 'light' | 'dark' {
+  try {
+    const raw = window.localStorage.getItem(THEME_STORAGE_KEY)
+    if (raw === 'light' || raw === 'dark') return raw
+  } catch { /* ignore */ }
+  return 'dark'
+}
+
+function persistTheme(theme: 'light' | 'dark') {
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
+  } catch { /* ignore */ }
+}
 
 function clampMaxTokens(value: unknown): number {
   const n = Number(value)
@@ -41,7 +56,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   answerModeHint: '',
   pdfDir: '',
   mdDir: '',
-  theme: 'dark',
+  theme: readInitialTheme(),
   model: '',
   hasApiKey: false,
   loaded: false,
@@ -50,6 +65,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const data = await settingsApi.get()
       const p = data.prefs || {}
+      const nextTheme = (p.theme as 'light' | 'dark') || 'dark'
+      persistTheme(nextTheme)
       set({
         model: data.model,
         hasApiKey: data.has_api_key,
@@ -63,7 +80,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         answerModeHint: String(p.answer_mode_hint || ''),
         pdfDir: String(p.pdf_dir || ''),
         mdDir: String(p.md_dir || ''),
-        theme: (p.theme as 'light' | 'dark') || 'dark',
+        theme: nextTheme,
         loaded: true,
       })
     } catch { /* ignore */ }
@@ -84,7 +101,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (patch.answerContractV1 !== undefined) localPatch.answerContractV1 = patch.answerContractV1
     if (patch.answerDepthAuto !== undefined) localPatch.answerDepthAuto = patch.answerDepthAuto
     if (patch.answerModeHint !== undefined) localPatch.answerModeHint = patch.answerModeHint
-    if (patch.theme !== undefined) localPatch.theme = patch.theme
+    if (patch.theme !== undefined) {
+      localPatch.theme = patch.theme
+      persistTheme(patch.theme)
+    }
     if (patch.pdfDir !== undefined) localPatch.pdfDir = patch.pdfDir
     if (patch.mdDir !== undefined) localPatch.mdDir = patch.mdDir
     set(localPatch)
@@ -93,6 +113,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   toggleTheme: () => {
     const next = get().theme === 'dark' ? 'light' : 'dark'
+    persistTheme(next)
     set({ theme: next })
     settingsApi.update({ theme: next }).catch(() => {})
   },

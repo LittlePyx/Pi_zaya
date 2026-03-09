@@ -9,6 +9,7 @@ import threading
 import time
 import json
 import html as html_lib
+import unicodedata
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
@@ -1088,6 +1089,28 @@ def run_pdf_to_md(
         out_dir = out_root / pdf_path.stem
         ensure_dir(out_dir)
         md_path = out_dir / f"{pdf_path.stem}.en.md"
+        fallback_chars = 0
+        fallback_controls = 0
+
+        def _count_control_chars(text: str) -> int:
+            n = 0
+            for ch in text:
+                if ch in "\n\r\t":
+                    continue
+                oc = ord(ch)
+                if (oc < 32) or (oc == 127) or (0x80 <= oc <= 0x9F):
+                    n += 1
+                    continue
+                # Guard against rare non-printing categories outside ASCII control range.
+                if unicodedata.category(ch) in {"Cc", "Cf", "Cs"}:
+                    n += 1
+            return n
+
+        def _is_corrupted_text_layer(total_chars: int, control_chars: int) -> bool:
+            if total_chars < 120:
+                return False
+            ratio = float(control_chars) / float(max(1, total_chars))
+            return (control_chars >= 64) or (ratio >= 0.01)
 
         try:
             doc = fitz.open(str(pdf_path))
@@ -1111,6 +1134,8 @@ def run_pdf_to_md(
                     txt = ""
                 if txt:
                     parts.append(txt)
+                    fallback_chars += len(txt)
+                    fallback_controls += _count_control_chars(txt)
                 if progress_cb is not None:
                     try:
                         progress_cb(i + 1, total_pages, f"fallback page {i+1}/{total_pages}")
@@ -1123,13 +1148,27 @@ def run_pdf_to_md(
                 pass
 
         body = "\n\n---\n\n".join(parts).strip()
-        if not body:
+        if body and _is_corrupted_text_layer(fallback_chars, fallback_controls):
+            body = (
+                "[PDF extraction warning]\n\n"
+                "Fallback text extraction detected a corrupted PDF text layer "
+                "(likely missing Unicode font mapping). "
+                "This output is intentionally replaced to avoid ingesting garbled symbols.\n\n"
+                f"stats: chars={fallback_chars}, control_chars={fallback_controls}"
+            )
+        elif not body:
             body = "（未能从 PDF 提取到可检索的文本：可能是扫描版，或文本被嵌入为图片。）"
 
         try:
             md_path.write_text(body, encoding="utf-8")
             if keep_debug:
-                (out_dir / "_converter.txt").write_text("fallback=pymupdf_text\n", encoding="utf-8")
+                debug_lines = [
+                    "fallback=pymupdf_text",
+                    f"fallback_chars={fallback_chars}",
+                    f"fallback_control_chars={fallback_controls}",
+                    f"fallback_text_layer_corrupted={int(_is_corrupted_text_layer(fallback_chars, fallback_controls))}",
+                ]
+                (out_dir / "_converter.txt").write_text("\n".join(debug_lines) + "\n", encoding="utf-8")
         except Exception as e:
             return False, f"write md failed: {e}"
 

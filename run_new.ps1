@@ -109,7 +109,7 @@ Remove-Item $fastapiOut, $fastapiErr, $viteOut, $viteErr -ErrorAction SilentlyCo
 Write-Info "Starting backend (uvicorn) on http://$BackendHost`:$BackendPort ..."
 $backendProc = Start-Process `
   -FilePath $pythonExe `
-  -ArgumentList @('-m', 'uvicorn', 'api.main:app', '--host', $BackendHost, '--port', "$BackendPort") `
+  -ArgumentList @('-m', 'uvicorn', 'api.main:app', '--host', $BackendHost, '--port', "$BackendPort", '--reload') `
   -WorkingDirectory $here `
   -PassThru `
   -RedirectStandardOutput $fastapiOut `

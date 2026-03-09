@@ -1,24 +1,70 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
 import type { CiteShelfItem } from './citationState'
-import { citationDisplay, citationFormats, citeMetricSummary, summarySourceLabel } from './citationState'
+import { citationDisplay, citationFormats, citeMetricSummary, normalizeShelfTags, summarySourceLabel } from './citationState'
 
 interface Props {
   open: boolean
   items: CiteShelfItem[]
+  snapshots: Array<{ id: string; name: string; createdAt: number }>
+  selectedSnapshotId: string
+  snapshotDiff: string
   focusedKey: string
   summaryLoadingKey: string
+  repairLoadingKey: string
   onToggle: () => void
   onClear: () => void
   onSelect: (item: CiteShelfItem) => void
   onRemove: (key: string) => void
+  onUpdateTags: (key: string, tags: string[]) => void
+  onUpdateNote: (key: string, note: string) => void
+  onRepair: (item: CiteShelfItem) => void
+  onSelectSnapshot: (id: string) => void
+  onSaveSnapshot: () => void
+  onLoadSnapshot: () => void
+  onDeleteSnapshot: () => void
 }
 
-export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle, onClear, onSelect, onRemove }: Props) {
+const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
+
+type GroupMode = 'none' | 'tag' | 'source'
+
+const GROUP_MODE_LABEL: Record<GroupMode, string> = {
+  none: '不分组',
+  tag: '按标签',
+  source: '按来源',
+}
+
+export function CiteShelf({
+  open,
+  items,
+  snapshots,
+  selectedSnapshotId,
+  snapshotDiff,
+  focusedKey,
+  summaryLoadingKey,
+  repairLoadingKey,
+  onToggle,
+  onClear,
+  onSelect,
+  onRemove,
+  onUpdateTags,
+  onUpdateNote,
+  onRepair,
+  onSelectSnapshot,
+  onSaveSnapshot,
+  onLoadSnapshot,
+  onDeleteSnapshot,
+}: Props) {
   const [expandedSummaryKeys, setExpandedSummaryKeys] = useState<Record<string, boolean>>({})
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({})
   const [searchText, setSearchText] = useState('')
   const [sortKey, setSortKey] = useState<'recent' | 'cited' | 'year' | 'impact'>('recent')
+  const [groupMode, setGroupMode] = useState<GroupMode>('none')
+  const [tagFilter, setTagFilter] = useState<string>('all')
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
+  const [batchTagInput, setBatchTagInput] = useState('')
+  const [editingNoteKeys, setEditingNoteKeys] = useState<Record<string, boolean>>({})
   const [copyState, setCopyState] = useState<'idle' | 'gbt' | 'bibtex' | 'error'>('idle')
   const copyStateTimerRef = useRef<number | null>(null)
 
@@ -86,12 +132,57 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
     return ifScore * 10 + quartileScore + coreScore + ccfScore
   }
 
-  const sourceTraceLabel = (item: CiteShelfItem): { label: string; debugTitle: string } => {
+  const sourceTraceLabel = (item: CiteShelfItem): { labels: string[]; debugTitle: string } => {
+    const labels: string[] = []
+    const answerOrder = Number(item.traceAssistantOrder || 0)
+    if (Number.isFinite(answerOrder) && answerOrder > 0) {
+      labels.push(`回答 ${answerOrder}`)
+    }
     const num = Number(item.num || 0)
-    const label = Number.isFinite(num) && num > 0 ? `参考 #${num}` : ''
+    if (Number.isFinite(num) && num > 0) labels.push(`引用 #${num}`)
     const anchor = String(item.anchor || '').trim()
     const debugTitle = anchor ? `锚点: ${anchor}` : ''
-    return { label, debugTitle }
+    return { labels, debugTitle }
+  }
+
+  const qualityHints = (item: CiteShelfItem): { chips: string[]; tip: string; needsRepair: boolean } => {
+    const chips: string[] = []
+    const title = String(item.title || item.main || '').trim()
+    const hasWeakTitle = (
+      !title
+      || title.length < 10
+      || /\.\s*[A-Za-z]{2,8}$/.test(title)
+      || /\bet\s+al\.?$/i.test(title)
+    )
+    const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
+    const hasAuthors = Boolean(String(item.authors || '').trim())
+    const hasVenue = Boolean(String(item.venue || '').trim())
+    const hasJournalSignal = Boolean(String(item.journalIf || item.journalQuartile || item.journalIfSource || '').trim())
+    const hasConfSignal = Boolean(
+      String(item.conferenceTier || item.conferenceCcf || item.conferenceName || item.conferenceAcronym || '').trim(),
+    )
+    const venueKind = String(item.venueKind || '').trim().toLowerCase()
+    const hasMetaConflict = (
+      (venueKind === 'conference' && hasJournalSignal)
+      || (venueKind === 'journal' && hasConfSignal)
+      || (hasJournalSignal && hasConfSignal)
+    )
+    const unresolved = !item.bibliometricsChecked && (!hasDoi || hasWeakTitle)
+
+    if (!hasDoi) chips.push('缺 DOI')
+    if (!hasAuthors) chips.push('缺作者')
+    if (!hasVenue) chips.push('缺期刊/会议')
+    if (hasWeakTitle) chips.push('标题疑似不完整')
+    if (hasMetaConflict) chips.push('元数据冲突')
+    if (unresolved && chips.length <= 1) chips.push('待校验')
+
+    if (!chips.length) return { chips: [], tip: '', needsRepair: false }
+
+    let tip = '建议点击尝试修复重新匹配元数据。'
+    if (!hasDoi) tip = '当前缺少 DOI，建议先尝试自动修复；失败时可手工补 DOI。'
+    else if (hasMetaConflict) tip = '检测到期刊/会议指标冲突，建议重新匹配后复核。'
+    else if (hasWeakTitle) tip = '标题可能被截断，建议重新匹配并核对原文。'
+    return { chips: chips.slice(0, 3), tip, needsRepair: true }
   }
 
   const duplicateCountByIdentity = useMemo(() => {
@@ -103,9 +194,25 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
     return counter
   }, [items])
 
+  const allTags = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const item of items) {
+      for (const tag of normalizeShelfTags(item.tags)) {
+        const key = tag.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(tag)
+      }
+    }
+    return out.sort((a, b) => a.localeCompare(b, 'en'))
+  }, [items])
+
   const visibleItems = useMemo(() => {
     const keyword = searchText.trim().toLowerCase()
     const matched = items.filter((item) => {
+      const tags = normalizeShelfTags(item.tags)
+      if (tagFilter !== 'all' && !tags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())) return false
       if (!keyword) return true
       const text = [
         item.title,
@@ -115,6 +222,9 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
         item.doi,
         item.doiUrl,
         item.sourceName,
+        item.note,
+        item.traceAssistantOrder ? `回答 ${item.traceAssistantOrder}` : '',
+        ...tags,
       ]
         .map((part) => String(part || '').toLowerCase())
         .join(' ')
@@ -129,12 +239,59 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
       sorted.sort((a, b) => impactScore(b) - impactScore(a))
     }
     return sorted
-  }, [impactScore, items, searchText, sortKey])
+  }, [impactScore, items, searchText, sortKey, tagFilter])
+
+  const groupedVisibleItems = useMemo(() => {
+    if (groupMode === 'none') {
+      return [{ key: 'all', label: '全部条目', items: visibleItems }]
+    }
+    const groups = new Map<string, { label: string; items: CiteShelfItem[] }>()
+    for (const item of visibleItems) {
+      let groupKey = ''
+      let groupLabel = ''
+      if (groupMode === 'tag') {
+        const tags = normalizeShelfTags(item.tags)
+        const primaryTag = tags[0] || '未标记'
+        groupKey = `tag:${primaryTag.toLowerCase()}`
+        groupLabel = `标签 · ${primaryTag}`
+      } else {
+        const src = String(item.sourceName || item.sourcePath || '').trim() || '未知来源'
+        groupKey = `source:${src}`
+        groupLabel = `来源 · ${src}`
+      }
+      const existing = groups.get(groupKey)
+      if (existing) {
+        existing.items.push(item)
+      } else {
+        groups.set(groupKey, { label: groupLabel, items: [item] })
+      }
+    }
+    return Array.from(groups.entries()).map(([k, v]) => ({ key: k, label: v.label, items: v.items }))
+  }, [groupMode, visibleItems])
 
   const selectedCount = Object.values(selectedKeys).filter(Boolean).length
   const selectedItems = useMemo(
     () => items.filter((item) => Boolean(selectedKeys[item.key])),
     [items, selectedKeys],
+  )
+  const visibleKeySet = useMemo(() => new Set(visibleItems.map((item) => item.key)), [visibleItems])
+  const visibleSelectedCount = useMemo(
+    () => visibleItems.reduce((acc, item) => acc + (selectedKeys[item.key] ? 1 : 0), 0),
+    [selectedKeys, visibleItems],
+  )
+  const advancedFilterActive = (groupMode !== 'none') || (tagFilter !== 'all')
+  const snapshotOptions = useMemo(
+    () => snapshots.map((item) => {
+      const created = Number(item.createdAt || 0)
+      const labelTime = Number.isFinite(created) && created > 0
+        ? new Date(created).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : ''
+      return {
+        value: item.id,
+        label: labelTime ? `${item.name} · ${labelTime}` : item.name,
+      }
+    }),
+    [snapshots],
   )
 
   const setTransientCopyState = (next: 'gbt' | 'bibtex' | 'error') => {
@@ -204,7 +361,7 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
     return `"${text.replace(/"/g, '""')}"`
   }
 
-  const exportSelectedAs = (kind: 'bib' | 'csv') => {
+  const exportSelectedAs = (kind: 'bib' | 'csv' | 'ris') => {
     if (selectedItems.length <= 0) return
     try {
       const base = `cite_shelf_selected_${nowStamp()}`
@@ -213,6 +370,13 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
         if (!bib) return
         downloadTextFile(`${base}.bib`, bib, 'application/x-bibtex;charset=utf-8')
         message.success(`已导出 BibTeX（${selectedItems.length} 条）`)
+        return
+      }
+      if (kind === 'ris') {
+        const ris = selectedItems.map((item) => citationFormats(item).ris).join('\n\n').trim()
+        if (!ris) return
+        downloadTextFile(`${base}.ris`, ris, 'application/x-research-info-systems;charset=utf-8')
+        message.success(`已导出 RIS（${selectedItems.length} 条）`)
         return
       }
       const headers = [
@@ -267,6 +431,46 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
     setSelectedKeys({})
   }
   const clearSelected = () => setSelectedKeys({})
+  const addVisibleToSelection = () => {
+    if (visibleItems.length <= 0) return
+    setSelectedKeys((prev) => {
+      const next = { ...prev }
+      for (const item of visibleItems) {
+        next[item.key] = true
+      }
+      return next
+    })
+  }
+  const removeVisibleFromSelection = () => {
+    if (visibleItems.length <= 0) return
+    setSelectedKeys((prev) => {
+      const next = { ...prev }
+      for (const key of visibleKeySet) {
+        delete next[key]
+      }
+      return next
+    })
+  }
+
+  const applyTagToSelected = (tagInput: string) => {
+    const clean = normalizeShelfTags([tagInput])[0]
+    if (!clean) return
+    for (const item of selectedItems) {
+      const nextTags = normalizeShelfTags([...(item.tags || []), clean])
+      onUpdateTags(item.key, nextTags)
+    }
+    setBatchTagInput('')
+  }
+
+  const removeTagFromSelected = (tagInput: string) => {
+    const clean = normalizeShelfTags([tagInput])[0]
+    if (!clean) return
+    const key = clean.toLowerCase()
+    for (const item of selectedItems) {
+      const nextTags = normalizeShelfTags((item.tags || []).filter((tag) => tag.toLowerCase() !== key))
+      onUpdateTags(item.key, nextTags)
+    }
+  }
 
   useEffect(() => {
     const validKeys = new Set(items.map((item) => item.key))
@@ -292,7 +496,24 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
       if (!changed && Object.keys(next).length !== Object.keys(prev).length) changed = true
       return changed ? next : prev
     })
+    setEditingNoteKeys((prev) => {
+      const next: Record<string, boolean> = {}
+      let changed = false
+      for (const [key, editing] of Object.entries(prev)) {
+        if (!editing) continue
+        if (validKeys.has(key)) next[key] = true
+        else changed = true
+      }
+      if (!changed && Object.keys(next).length !== Object.keys(prev).length) changed = true
+      return changed ? next : prev
+    })
   }, [items])
+
+  useEffect(() => {
+    if (tagFilter === 'all') return
+    if (allTags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())) return
+    setTagFilter('all')
+  }, [allTags, tagFilter])
 
   useEffect(() => {
     return () => {
@@ -306,17 +527,17 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
   return (
     <>
       <button
-        className={`fixed right-4 top-1/2 z-30 -translate-y-1/2 rounded-full border border-[var(--border)] bg-[var(--panel)] px-4 py-3 text-sm shadow-[0_10px_30px_rgba(15,23,42,0.12)] transition ${open ? 'pointer-events-none opacity-0' : ''}`}
+        className={`fixed right-4 top-1/2 z-30 -translate-y-1/2 rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs shadow-[0_10px_30px_rgba(15,23,42,0.12)] transition ${open ? 'pointer-events-none opacity-0' : ''}`}
         onClick={onToggle}
         type="button"
       >
         文献篮
       </button>
       <aside
-        className={`fixed right-0 top-0 z-40 h-full w-[380px] max-w-[92vw] border-l border-[var(--border)] bg-[var(--panel)] shadow-[0_24px_64px_rgba(15,23,42,0.18)] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
+        className={`fixed right-0 top-0 z-40 h-full w-[360px] max-w-[90vw] border-l border-[var(--border)] bg-[var(--panel)] shadow-[0_24px_64px_rgba(15,23,42,0.18)] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
       >
         <div className="flex h-full flex-col">
-          <div className="kb-shelf-head border-b border-[var(--border)] px-4 py-4">
+          <div className="kb-shelf-head border-b border-[var(--border)] px-3 py-3">
             <div className="kb-shelf-head-top">
               <div className="kb-shelf-head-meta">
                 <div className="kb-shelf-title">文献篮</div>
@@ -333,9 +554,31 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
                 </Button>
               </div>
             </div>
+            <div className="kb-shelf-snapshot-row" onClick={(event) => event.stopPropagation()}>
+              <Button size="small" onClick={onSaveSnapshot} disabled={items.length === 0}>
+                保存快照
+              </Button>
+              <Select
+                size="small"
+                value={selectedSnapshotId || undefined}
+                placeholder={snapshotOptions.length > 0 ? '选择快照' : '暂无快照'}
+                className="kb-shelf-snapshot-select"
+                options={snapshotOptions}
+                onChange={(value) => onSelectSnapshot(String(value || ''))}
+              />
+              <Button size="small" onClick={onLoadSnapshot} disabled={!selectedSnapshotId}>
+                载入
+              </Button>
+              <Button size="small" onClick={onDeleteSnapshot} disabled={!selectedSnapshotId}>
+                删除
+              </Button>
+            </div>
+            {snapshotDiff ? (
+              <div className="kb-shelf-snapshot-diff">{snapshotDiff}</div>
+            ) : null}
             {selectedCount > 0 ? (
               <div className="kb-shelf-batch-row">
-                <span className="kb-shelf-batch-count">已勾选 {selectedCount} 条</span>
+                <span className="kb-shelf-batch-count">导出队列 {selectedCount} 条</span>
                 <Button size="small" onClick={removeSelected}>
                   批量移除
                 </Button>
@@ -348,19 +591,49 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
                 <Button size="small" onClick={() => exportSelectedAs('bib')}>
                   导出 BibTeX
                 </Button>
+                <Button size="small" onClick={() => exportSelectedAs('ris')}>
+                  导出 RIS
+                </Button>
                 <Button size="small" onClick={() => exportSelectedAs('csv')}>
                   导出 CSV
                 </Button>
+                <div className="flex min-w-[170px] items-center gap-1" onClick={(event) => event.stopPropagation()}>
+                  <Select
+                    size="small"
+                    value={batchTagInput || undefined}
+                    placeholder="批量加标签"
+                    style={{ minWidth: 124 }}
+                    showSearch
+                    onChange={(value) => {
+                      setBatchTagInput(value)
+                      applyTagToSelected(value)
+                    }}
+                    options={[...TAG_PRESETS, ...allTags]
+                      .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
+                      .map((tag) => ({ value: tag, label: tag }))}
+                  />
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      if (!batchTagInput.trim()) return
+                      removeTagFromSelected(batchTagInput)
+                      setBatchTagInput('')
+                    }}
+                  >
+                    去标签
+                  </Button>
+                </div>
                 <button type="button" className="kb-shelf-clear-select" onClick={clearSelected}>
                   清除勾选
                 </button>
               </div>
             ) : null}
           </div>
-          <div className="kb-shelf-scroll flex-1 overflow-y-auto px-4 py-4">
+          <div className="kb-shelf-scroll flex-1 overflow-y-auto px-3 py-3">
             {items.length > 0 ? (
-              <>
+              <div className="kb-shelf-toolbar-wrap">
                 <div className="kb-shelf-toolbar">
+                  <div className="kb-shelf-toolbar-main">
                   <Input
                     allowClear
                     placeholder="搜索标题 / 作者 / DOI"
@@ -379,150 +652,313 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
                       { value: 'impact', label: 'IF/评级' },
                     ]}
                   />
+                  <button
+                    type="button"
+                    className={`kb-shelf-advanced-toggle ${advancedFiltersOpen ? 'is-open' : ''} ${advancedFilterActive ? 'is-active' : ''}`}
+                    onClick={() => setAdvancedFiltersOpen((prev) => !prev)}
+                  >
+                    {advancedFiltersOpen ? '收起筛选' : '高级筛选'}
+                  </button>
+                  <Button size="small" onClick={addVisibleToSelection} disabled={visibleItems.length <= 0}>
+                    当前筛选入队
+                  </Button>
+                  <Button size="small" onClick={removeVisibleFromSelection} disabled={visibleSelectedCount <= 0}>
+                    取消当前筛选
+                  </Button>
+                  </div>
+                  {advancedFiltersOpen ? (
+                    <div className="kb-shelf-filters">
+                  <Select
+                    value={groupMode}
+                    onChange={(value) => setGroupMode(value as GroupMode)}
+                    className="kb-shelf-sort"
+                    options={[
+                      { value: 'none', label: '不分组' },
+                      { value: 'tag', label: '按标签' },
+                      { value: 'source', label: '按来源' },
+                    ]}
+                  />
+                  <Select
+                    allowClear
+                    value={tagFilter === 'all' ? undefined : tagFilter}
+                    onChange={(value) => setTagFilter(value || 'all')}
+                    className="kb-shelf-sort"
+                    placeholder="标签筛选"
+                    options={allTags.map((tag) => ({ value: tag, label: tag }))}
+                  />
+                    </div>
+                  ) : null}
+                  {!advancedFiltersOpen && advancedFilterActive ? (
+                    <div className="kb-shelf-filter-pills">
+                      {groupMode !== 'none' ? (
+                        <button
+                          type="button"
+                          className="kb-shelf-filter-pill"
+                          onClick={() => setGroupMode('none')}
+                        >
+                          分组: {GROUP_MODE_LABEL[groupMode]} · 清除
+                        </button>
+                      ) : null}
+                      {tagFilter !== 'all' ? (
+                        <button
+                          type="button"
+                          className="kb-shelf-filter-pill"
+                          onClick={() => setTagFilter('all')}
+                        >
+                          标签: {tagFilter} · 清除
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 {copyState === 'error' ? (
                   <div className="kb-shelf-copy-hint">复制失败，请检查剪贴板权限</div>
                 ) : null}
-              </>
+              </div>
             ) : null}
             {items.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-5 text-sm text-black/45 dark:text-white/45">
-                从文内参考弹窗点击“加入文献篮”，这里会保存标题、作者、来源、DOI 与文献指标。
+                从文内参考弹窗点击“加入文献篮”，这里会保存标题、作者、来源、DOI 和相关指标。
               </div>
-                ) : (
-              <div className="space-y-3">
-                {visibleItems.map((item) => {
-                  const display = citationDisplay(item)
-                  const subtitle = display.source
-                  const duplicateCount = duplicateCountByIdentity[paperIdentity(item)] || 0
-                  const trace = sourceTraceLabel(item)
+            ) : (
+              <div className="kb-shelf-list space-y-2">
+                {groupedVisibleItems.map((group) => (
+                  <div key={group.key} className="space-y-2">
+                    {groupMode !== 'none' ? (
+                      <div className="kb-shelf-group-title">
+                        {group.label} · {group.items.length}
+                      </div>
+                    ) : null}
+                    {group.items.map((item) => {
+                      const display = citationDisplay(item)
+                      const subtitle = display.source
+                      const duplicateCount = duplicateCountByIdentity[paperIdentity(item)] || 0
+                      const trace = sourceTraceLabel(item)
+                      const itemTags = normalizeShelfTags(item.tags)
+                      const quality = qualityHints(item)
+                      const noteText = String(item.note || '').trim()
+                      const isFocused = item.key === focusedKey
+                      const metrics = citeMetricSummary(item)
+                      const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
+                      const tagOptions = [...TAG_PRESETS, ...allTags]
+                        .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
+                        .map((tag) => ({ value: tag, label: tag }))
 
-                  return (
-                    <div
-                      key={item.key}
-                      className={`rounded-2xl border px-4 py-3 transition ${
-                        item.key === focusedKey
-                          ? 'border-[var(--accent)] bg-[var(--msg-user-bg)]'
-                          : 'border-[var(--border)] bg-[var(--panel)]'
-                      }`}
-                      onClick={() => onSelect(item)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault()
-                          onSelect(item)
-                        }
-                      }}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <input
-                          aria-label={`select-${item.key}`}
-                          type="checkbox"
-                          className="kb-shelf-check"
-                          checked={Boolean(selectedKeys[item.key])}
-                          onChange={(event) => {
-                            event.stopPropagation()
-                            toggleSelect(item.key, event.target.checked)
+                      return (
+                        <div
+                          key={item.key}
+                          className={`kb-shelf-item ${
+                            isFocused
+                              ? 'kb-shelf-item-active'
+                              : ''
+                          }`}
+                          onClick={() => onSelect(item)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              onSelect(item)
+                            }
                           }}
-                          onClick={(event) => event.stopPropagation()}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium leading-6">{display.main}</div>
-                          {display.authors ? (
-                            <div className="mt-1 text-xs text-black/50 dark:text-white/50">{display.authors}</div>
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <div className="kb-shelf-item-head">
+                            <input
+                              aria-label={`select-${item.key}`}
+                              type="checkbox"
+                              className="kb-shelf-check"
+                              checked={Boolean(selectedKeys[item.key])}
+                              onChange={(event) => {
+                                event.stopPropagation()
+                                toggleSelect(item.key, event.target.checked)
+                              }}
+                              onClick={(event) => event.stopPropagation()}
+                            />
+                            <div className="kb-shelf-item-main">
+                              <div className="kb-shelf-item-title">{display.main}</div>
+                              {display.authors ? (
+                                <div className="kb-shelf-item-authors">{display.authors}</div>
+                              ) : null}
+                            </div>
+                            <button
+                              type="button"
+                              className="kb-shelf-item-remove"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                onRemove(item.key)
+                              }}
+                            >
+                              移除
+                            </button>
+                          </div>
+                          {subtitle ? (
+                            <div className="kb-shelf-item-source">{subtitle}</div>
+                          ) : null}
+                          {quality.chips.length > 0 ? (
+                            <div className="kb-shelf-quality">
+                              <div className="kb-shelf-quality-chips">
+                                {quality.chips.map((chip) => (
+                                  <span key={`${item.key}-q-${chip}`} className="kb-shelf-quality-chip">
+                                    {chip}
+                                  </span>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                className="kb-shelf-repair-btn"
+                                disabled={repairLoadingKey === item.key}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  onRepair(item)
+                                }}
+                              >
+                                {repairLoadingKey === item.key ? '修复中...' : '尝试修复'}
+                              </button>
+                            </div>
+                          ) : null}
+                          {quality.tip ? (
+                            <div className="kb-shelf-quality-tip">{quality.tip}</div>
+                          ) : null}
+                          <div className="kb-shelf-meta-row">
+                            <div className="kb-shelf-meta-badges">
+                              {trace.labels.map((label, idx) => (
+                                <span key={`${item.key}-trace-${idx}-${label}`} className="kb-shelf-origin" title={trace.debugTitle || undefined}>
+                                  {label}
+                                </span>
+                              ))}
+                              {duplicateCount > 1 ? (
+                                <span className="kb-shelf-dup">可能重复 ×{duplicateCount}</span>
+                              ) : null}
+                              {itemTags.map((tag) => (
+                                <span key={`${item.key}-tag-${tag}`} className="kb-shelf-tag">
+                                  #{tag}
+                                </span>
+                              ))}
+                            </div>
+                            <div className="kb-shelf-tag-editor kb-shelf-tag-editor-inline" onClick={(event) => event.stopPropagation()}>
+                              <Select
+                                mode="tags"
+                                size="small"
+                                maxTagCount={1}
+                                maxTagTextLength={14}
+                                className="w-full"
+                                placeholder="+标签"
+                                value={itemTags}
+                                options={tagOptions}
+                                onChange={(value) => onUpdateTags(item.key, normalizeShelfTags(value))}
+                              />
+                            </div>
+                          </div>
+                          {(isFocused || noteText) ? (
+                            <div
+                              className={`kb-shelf-note ${noteEditing ? '' : 'kb-shelf-note-compact'}`}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              {noteEditing ? (
+                                <>
+                                  <div className="kb-shelf-note-head">备注</div>
+                                  <Input.TextArea
+                                    className="kb-shelf-note-editor"
+                                    autoSize={{ minRows: 2, maxRows: 4 }}
+                                    maxLength={1200}
+                                    placeholder="记录这篇文献对你有用的点..."
+                                    value={item.note || ''}
+                                    onChange={(event) => onUpdateNote(item.key, event.target.value)}
+                                  />
+                                  <div className="kb-shelf-note-actions">
+                                    <button
+                                      type="button"
+                                      className="kb-shelf-note-link"
+                                      onClick={() => setEditingNoteKeys((prev) => ({ ...prev, [item.key]: false }))}
+                                    >
+                                      完成
+                                    </button>
+                                  </div>
+                                </>
+                              ) : (
+                                <div className="kb-shelf-note-inline">
+                                  <div className="kb-shelf-note-preview">
+                                    {noteText || '暂无备注'}
+                                  </div>
+                                  {isFocused ? (
+                                    <button
+                                      type="button"
+                                      className="kb-shelf-note-link"
+                                      onClick={() => setEditingNoteKeys((prev) => ({ ...prev, [item.key]: true }))}
+                                    >
+                                      {noteText ? '编辑备注' : '添加备注'}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              )}
+                            </div>
+                          ) : null}
+                          {metrics.length > 0 ? (
+                            <div className="kb-shelf-metrics">
+                              {metrics.map((metric) => (
+                                <span key={metric} className="kb-shelf-metric">
+                                  {metric}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="kb-shelf-doi">
+                            {item.doiUrl ? (
+                              <a className="kb-shelf-doi-link" href={item.doiUrl} rel="noreferrer" target="_blank">
+                                {item.doi || item.doiUrl}
+                              </a>
+                            ) : (
+                              <span className="kb-shelf-doi-empty">暂无 DOI 链接</span>
+                            )}
+                          </div>
+                          {isFocused ? (
+                            <div className="kb-shelf-summary">
+                              {summaryLoadingKey === item.key ? (
+                                <div className="kb-shelf-summary-text">正在生成学术概括...</div>
+                              ) : item.summaryLine ? (
+                                <>
+                                  <div className="kb-shelf-summary-meta">
+                                    <span className="kb-shelf-summary-head">学术概括</span>
+                                    <span className="kb-shelf-summary-source">{summarySourceLabel(item.summarySource)}</span>
+                                  </div>
+                                  {(() => {
+                                    const lines = splitSummary(item.summaryLine)
+                                    const expanded = Boolean(expandedSummaryKeys[item.key])
+                                    const visibleLines = expanded ? lines : lines.slice(0, 2)
+                                    const canExpand = lines.length > 2
+                                    return (
+                                      <>
+                                        <ol className="kb-shelf-summary-list">
+                                          {visibleLines.map((line) => (
+                                            <li key={line} className="kb-shelf-summary-text">{line}</li>
+                                          ))}
+                                        </ol>
+                                        {canExpand ? (
+                                          <button
+                                            type="button"
+                                            className="kb-shelf-summary-toggle"
+                                            onClick={(event) => {
+                                              event.stopPropagation()
+                                              setExpandedSummaryKeys((prev) => ({ ...prev, [item.key]: !expanded }))
+                                            }}
+                                          >
+                                            {expanded ? '收起概括' : `展开剩余 ${lines.length - visibleLines.length} 条`}
+                                          </button>
+                                        ) : null}
+                                      </>
+                                    )
+                                  })()}
+                                </>
+                              ) : (
+                                <div className="kb-shelf-summary-empty">暂无可用学术概括</div>
+                              )}
+                            </div>
                           ) : null}
                         </div>
-                        <button
-                          type="button"
-                          className="text-xs text-black/35 transition hover:text-black/70 dark:text-white/35 dark:hover:text-white/70"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            onRemove(item.key)
-                          }}
-                        >
-                          移除
-                        </button>
-                      </div>
-                      {subtitle ? (
-                        <div className="mt-2 text-xs text-black/45 dark:text-white/45">{subtitle}</div>
-                      ) : null}
-                      {trace.label ? (
-                        <div className="mt-2">
-                          <span className="kb-shelf-origin" title={trace.debugTitle || undefined}>
-                            {trace.label}
-                          </span>
-                        </div>
-                      ) : null}
-                      {duplicateCount > 1 ? (
-                        <div className="mt-2">
-                          <span className="kb-shelf-dup">可能重复 ×{duplicateCount}</span>
-                        </div>
-                      ) : null}
-                      {citeMetricSummary(item).length > 0 ? (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {citeMetricSummary(item).map((metric) => (
-                            <span key={metric} className="kb-shelf-metric">
-                              {metric}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      <div className="mt-2 text-xs">
-                        {item.doiUrl ? (
-                          <a className="text-[var(--accent)]" href={item.doiUrl} rel="noreferrer" target="_blank">
-                            {item.doi || item.doiUrl}
-                          </a>
-                        ) : (
-                          <span className="text-black/35 dark:text-white/35">暂无 DOI 链接</span>
-                        )}
-                      </div>
-                      {item.key === focusedKey ? (
-                        <div className="kb-shelf-summary">
-                          {summaryLoadingKey === item.key ? (
-                            <div className="kb-shelf-summary-text">正在生成学术概括...</div>
-                          ) : item.summaryLine ? (
-                            <>
-                              <div className="kb-shelf-summary-meta">
-                                <span className="kb-shelf-summary-head">学术概括</span>
-                                <span className="kb-shelf-summary-source">{summarySourceLabel(item.summarySource)}</span>
-                              </div>
-                              {(() => {
-                                const lines = splitSummary(item.summaryLine)
-                                const expanded = Boolean(expandedSummaryKeys[item.key])
-                                const visibleLines = expanded ? lines : lines.slice(0, 2)
-                                const canExpand = lines.length > 2
-                                return (
-                                  <>
-                                    <ol className="kb-shelf-summary-list">
-                                      {visibleLines.map((line) => (
-                                        <li key={line} className="kb-shelf-summary-text">{line}</li>
-                                      ))}
-                                    </ol>
-                                    {canExpand ? (
-                                      <button
-                                        type="button"
-                                        className="kb-shelf-summary-toggle"
-                                        onClick={(event) => {
-                                          event.stopPropagation()
-                                          setExpandedSummaryKeys((prev) => ({ ...prev, [item.key]: !expanded }))
-                                        }}
-                                      >
-                                        {expanded ? '收起概括' : `展开剩余 ${lines.length - visibleLines.length} 条`}
-                                      </button>
-                                    ) : null}
-                                  </>
-                                )
-                              })()}
-                            </>
-                          ) : (
-                            <div className="kb-shelf-summary-empty">暂无可用学术概括</div>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  )
-                })}
+                      )
+                    })}
+                  </div>
+                ))}
                 {visibleItems.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--border)] px-3 py-4 text-xs text-black/45 dark:text-white/45">
                     未匹配到文献，请调整搜索词或排序方式。
@@ -536,3 +972,4 @@ export function CiteShelf({ open, items, focusedKey, summaryLoadingKey, onToggle
     </>
   )
 }
+

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import threading
 import time
 import unicodedata
@@ -26,6 +27,20 @@ OpenAI = None  # type: ignore[assignment]
 pdfplumber = None  # type: ignore[assignment]
 _PROGRESS_PRINT_LOCK = threading.Lock()
 ASSET_REV_TAG = "r2"
+
+
+def _configure_stdio_error_policy() -> None:
+    """
+    Avoid hard crashes when Windows console encoding cannot represent a path character.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except Exception:
+            pass
+
+
+_configure_stdio_error_policy()
 
 
 def _progress_log(msg: str) -> None:

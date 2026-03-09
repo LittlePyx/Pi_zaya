@@ -6,6 +6,8 @@ export interface Conversation {
   created_at: number
   updated_at: number
   project_id?: string | null
+  archived?: number | boolean
+  archived_at?: number | null
 }
 
 export interface Project {
@@ -67,9 +69,11 @@ export const chatApi = {
     api.patch(`/api/projects/${projectId}`, { name }),
   deleteProject: (projectId: string) =>
     api.delete(`/api/projects/${projectId}`),
-  listConversations: (limit = 50, projectId?: string | null) =>
+  listConversations: (limit = 80, projectId?: string | null, includeArchived = false) =>
     api.get<Conversation[]>(
-      `/api/conversations?limit=${limit}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ''}`,
+      `/api/conversations?limit=${limit}`
+      + `${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ''}`
+      + `${includeArchived ? '&include_archived=1' : ''}`,
     ),
   getConversation: (convId: string) =>
     api.get<Conversation>(`/api/conversations/${convId}`),

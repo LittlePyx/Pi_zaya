@@ -31,9 +31,9 @@
 
 ### 未开始（下一步）
 
-1. Week2 D4：手工回归（引用弹窗、文献篮、流式展示稳定性）。
+1. Week2 D4：补齐交互式手工回归（当前仅完成自动检查，`--non-interactive`）。
    - 清单：`docs/ANSWER_MANUAL_REGRESSION_CHECKLIST.md`
-2. Week2 D5：灰度复盘，形成全量发布策略与回滚预案。
+2. 灰度阶段按发布预案执行并记录时延波动样本，形成最终全量窗口判断。
 
 ### 2026-03-07 增量更新（引用链路相关）
 
@@ -47,6 +47,14 @@
 8. 质量汇总已补充深度与失败维度（`failed_rate`、`by_depth`、`fail_reasons`），可直接判断是结构缺失还是证据缺失导致未达标。
 9. 质量汇总接口支持筛选（`intent/depth/only_failed`），设置面板已提供对应筛选项；同时将质量面板从 `SettingsDrawer` 中拆分为独立组件，降低主组件复杂度。
 10. D4 手工回归已补“可执行脚本”入口：`tools/manual_regression/run_answer_manual_regression.py`（自动检查 + 交互打分 + 报告落盘），并同步到清单文档使用说明。
+
+### 2026-03-09 增量更新（D5 灰度复盘）
+
+1. 新增灰度发布与回滚预案文档：`docs/ANSWER_ROLLOUT_PLAYBOOK_20260309.md`（含闸门阈值、升量节奏、回滚触发条件与执行动作）。
+2. 完成一轮自动回归检查：`test_results/manual_regression/answer_manual_regression_20260309_162419.md`（`health`/`quality_summary`/`generation_stream` 全 PASS）。
+3. 完成一轮快速评测（8 条）：`test_results/answer_eval/20260309_162427/summary.json`，质量指标维持 `minimum_ok_rate=100%`、`evidence_ok_rate=100%`、`error=0`。
+4. 运行时质量汇总（`/api/generate/quality/summary?limit=50`）显示近 41 条样本 `failed_rate=0`，结构与证据覆盖均为 `100%`。
+5. 风险结论更新：质量可发布，但相对 2026-03-06 基线存在时延抬升，发布策略调整为 `go_with_guardrail`（必须带时延闸门）。
 
 ## 1. 目标与边界
 

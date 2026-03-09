@@ -43,6 +43,7 @@ interface DebugWindow extends Window {
 }
 const switchPerfLog: SwitchPerfEvent[] = []
 const SWITCH_PERF_LIMIT = 240
+const SIDEBAR_CONVERSATION_LIMIT = 80
 
 function nowMs() {
   try {
@@ -334,10 +335,10 @@ interface ChatState {
 }
 
 async function loadGroupedConversations(projects: Project[]) {
-  const rootConversations = await chatApi.listConversations(200, null)
+  const rootConversations = await chatApi.listConversations(SIDEBAR_CONVERSATION_LIMIT, null)
   const groupedEntries = await Promise.all(
     projects.map(async (project) => {
-      const conversations = await chatApi.listConversations(100, project.id)
+      const conversations = await chatApi.listConversations(SIDEBAR_CONVERSATION_LIMIT, project.id)
       return [project.id, conversations] as const
     }),
   )

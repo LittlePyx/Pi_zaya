@@ -3,7 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from functools import lru_cache
+import hashlib
 import html
+import math
 import os
 from pathlib import Path
 from urllib.parse import quote
@@ -57,6 +59,19 @@ def _clamp_ui_score(score: float) -> float:
     return max(0.0, min(10.0, v))
 
 
+def _stable_score_micro_jitter(source_path: str) -> float:
+    """Small deterministic jitter to avoid repeated identical decimals (e.g. *.76)."""
+    s = str(source_path or "").strip()
+    if not s:
+        return 0.0
+    try:
+        h = hashlib.sha1(s.encode("utf-8", "ignore")).digest()
+        u = int.from_bytes(h[:2], "big") / 65535.0  # 0..1
+    except Exception:
+        return 0.0
+    return (u - 0.5) * 0.08  # about [-0.04, +0.04]
+
+
 def _calibrated_ui_score(meta: dict, rank: dict) -> float | None:
     try:
         llm_score = float(rank.get("llm", 0.0) or 0.0)
@@ -82,9 +97,21 @@ def _calibrated_ui_score(meta: dict, rank: dict) -> float | None:
     except Exception:
         semantic_score = 0.0
 
-    ui = llm_score / 10.0
+    llm_ui = llm_score / 10.0
+
+    # Build an evidence-driven UI component from retrieval signals.
+    # Use smooth transforms to keep score spread continuous and avoid repeated
+    # fixed decimal tails from a single signal source.
+    evidence_ui = 5.0
+    evidence_ui += 1.8 * math.tanh((bm25 - 2.5) / 3.0)
+    evidence_ui += 1.2 * math.tanh((deep - 1.5) / 4.0)
+    evidence_ui += 0.9 * math.tanh(term_bonus / 1.8)
     if semantic_score > 0:
-        ui = min(ui, semantic_score)
+        evidence_ui = (0.82 * evidence_ui) + (0.18 * _clamp_ui_score(semantic_score))
+    evidence_ui = _clamp_ui_score(evidence_ui)
+
+    # Blend LLM relevance with retrieval evidence.
+    ui = (0.64 * llm_ui) + (0.36 * evidence_ui)
 
     if term_bonus < 0:
         ui += 0.60 * term_bonus
@@ -113,6 +140,20 @@ def _calibrated_ui_score(meta: dict, rank: dict) -> float | None:
         ui -= 0.70
     elif loc_quality != "high":
         ui -= 0.25
+
+    # Add continuous spread from evidence.
+    try:
+        bm25_spread = max(-1.0, min(1.0, math.tanh((bm25 - 3.0) / 4.0)))
+    except Exception:
+        bm25_spread = 0.0
+    try:
+        deep_spread = max(-1.0, min(1.0, math.tanh((deep - 2.0) / 6.0)))
+    except Exception:
+        deep_spread = 0.0
+    ui += (0.14 * bm25_spread) + (0.12 * deep_spread)
+
+    # Deterministic micro-jitter by source to break exact ties.
+    ui += _stable_score_micro_jitter(str(meta.get("source_path") or ""))
 
     # Do not allow weak lexical evidence to surface as "high relevance"
     # just because the LLM was optimistic.

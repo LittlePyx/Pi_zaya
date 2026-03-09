@@ -760,11 +760,16 @@ def delete_project(project_id: str):
 
 
 @router.get("/conversations")
-def list_conversations(limit: int = 50, project_id: str | None = None):
+def list_conversations(limit: int = 80, project_id: str | None = None, include_archived: bool = False):
     pid = project_id
     if isinstance(pid, str):
         pid = pid.strip() or None
-    return get_chat_store().list_conversations(project_id=pid, limit=limit)
+    lim = max(1, min(300, int(limit or 80)))
+    return get_chat_store().list_conversations(
+        project_id=pid,
+        limit=lim,
+        include_archived=bool(include_archived),
+    )
 
 
 @router.post("/conversations")

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, message, Typography } from 'antd'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
-import type { ChatUploadItem } from '../api/chat'
+import type { ChatUploadItem, Message } from '../api/chat'
 import { S } from '../i18n/zh'
 
 const { Text } = Typography
@@ -19,6 +19,25 @@ function uploadItemKey(item: ChatUploadItem) {
     return `pdf-job:${item.ingest_job_id}`
   }
   return [item.kind, item.sha1 || '', item.path || '', item.name].join(':')
+}
+
+function compactTimelineText(content: string, maxLen = 68) {
+  const raw = String(content || '').replace(/\s+/g, ' ').trim()
+  if (!raw) return '空白提问'
+  const imgOnly = raw.match(/^\[Image attachment x(\d+)\]$/i)
+  if (imgOnly) {
+    return `图片提问 x${imgOnly[1] || '1'}`
+  }
+  if (raw.length <= maxLen) return raw
+  return `${raw.slice(0, Math.max(8, maxLen - 1)).trimEnd()}...`
+}
+
+interface TimelineItem {
+  order: number
+  userMsgId: number
+  targetMsgId: number
+  questionPreview: string
+  hasAnswer: boolean
 }
 
 export default function ChatPage() {
@@ -38,11 +57,17 @@ export default function ChatPage() {
   const cancelGen = useChatStore((s) => s.cancelGeneration)
   const settings = useSettingsStore()
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
+  const [timelineOpen, setTimelineOpen] = useState(true)
+  const [timelineJump, setTimelineJump] = useState<{ messageId: number; token: number } | null>(null)
+  const [activeTimelineUserMsgId, setActiveTimelineUserMsgId] = useState<number | null>(null)
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
 
   useEffect(() => {
     setVisibleCount(HISTORY_PAGE_SIZE)
+    setTimelineOpen(true)
+    setTimelineJump(null)
+    setActiveTimelineUserMsgId(null)
   }, [activeConvId])
 
   useEffect(() => () => {
@@ -143,6 +168,64 @@ export default function ChatPage() {
     : Math.min(messages.length, visibleCount)
   const visibleMessages = effectiveVisible > 0 ? messages.slice(-effectiveVisible) : messages
   const hiddenCount = Math.max(0, messages.length - visibleMessages.length)
+  const messageIndexById = useMemo(() => {
+    const map = new Map<number, number>()
+    messages.forEach((msg, idx) => {
+      map.set(msg.id, idx)
+    })
+    return map
+  }, [messages])
+  const timelineItems = useMemo(() => {
+    const out: TimelineItem[] = []
+    let pendingUser: Message | null = null
+    let order = 0
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        pendingUser = msg
+        continue
+      }
+      if (msg.role !== 'assistant' || !pendingUser) continue
+      order += 1
+      out.push({
+        order,
+        userMsgId: pendingUser.id,
+        targetMsgId: msg.id,
+        questionPreview: compactTimelineText(pendingUser.content),
+        hasAnswer: true,
+      })
+      pendingUser = null
+    }
+    if (pendingUser) {
+      order += 1
+      out.push({
+        order,
+        userMsgId: pendingUser.id,
+        targetMsgId: pendingUser.id,
+        questionPreview: compactTimelineText(pendingUser.content),
+        hasAnswer: false,
+      })
+    }
+    return out
+  }, [messages])
+
+  const jumpToTimelineItem = (item: TimelineItem) => {
+    if (liveRunning) {
+      message.info('当前正在生成回答，完成后再使用时间线跳转。')
+      return
+    }
+    const idx = messageIndexById.get(item.targetMsgId)
+    if (idx == null) return
+    const requiredVisible = messages.length - idx
+    if (requiredVisible > visibleCount) {
+      setVisibleCount(requiredVisible)
+    }
+    setActiveTimelineUserMsgId(item.userMsgId)
+    const token = Date.now() + Math.floor(Math.random() * 1000)
+    const delayMs = requiredVisible > effectiveVisible ? 120 : 0
+    window.setTimeout(() => {
+      setTimelineJump({ messageId: item.targetMsgId, token })
+    }, delayMs)
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -201,13 +284,94 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          <MessageList
-            activeConvId={activeConvId}
-            messages={visibleMessages}
-            refs={refs}
-            generationPartial={generation?.partial}
-            generationStage={generation?.stage}
-          />
+          {timelineItems.length > 0 ? (
+            <div className="border-b border-[var(--border)] bg-[var(--panel)]/30 px-4 py-2">
+              <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+                <Text type="secondary" className="text-xs">
+                  会话时间线：{timelineItems.length} 个提问节点
+                </Text>
+                <Button size="small" onClick={() => setTimelineOpen((v) => !v)}>
+                  {timelineOpen ? '收起时间线' : '打开时间线'}
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
+          {timelineOpen && timelineItems.length > 0 ? (
+            <div className="border-b border-[var(--border)] bg-[var(--panel)]/20 px-3 py-2 lg:hidden">
+              <div className="flex gap-2 overflow-x-auto">
+                {timelineItems.map((item) => (
+                  <button
+                    key={`m-timeline-mobile-${item.userMsgId}-${item.order}`}
+                    type="button"
+                    className={`shrink-0 rounded-full border px-3 py-1 text-xs ${
+                      activeTimelineUserMsgId === item.userMsgId
+                        ? 'border-[var(--accent)] bg-[var(--accent)]/10 text-[var(--accent)]'
+                        : 'border-[var(--border)] bg-[var(--panel)] text-black/70 dark:text-white/70'
+                    }`}
+                    onClick={() => jumpToTimelineItem(item)}
+                  >
+                    Q{item.order}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="flex min-h-0 flex-1">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <MessageList
+                activeConvId={activeConvId}
+                messages={visibleMessages}
+                refs={refs}
+                generationPartial={generation?.partial}
+                generationStage={generation?.stage}
+                jumpTarget={timelineJump}
+              />
+            </div>
+            {timelineOpen && timelineItems.length > 0 ? (
+              <aside className="hidden h-full w-[300px] shrink-0 border-l border-[var(--border)] bg-[var(--panel)]/55 lg:flex">
+                <div className="flex h-full min-h-0 w-full flex-col">
+                  <div className="border-b border-[var(--border)] px-3 py-3">
+                    <div className="text-sm font-medium">会话时间线</div>
+                    <div className="mt-1 text-xs text-black/50 dark:text-white/50">点击可跳到对应问答</div>
+                  </div>
+                  <div className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
+                    {timelineItems.map((item) => (
+                      <button
+                        key={`m-timeline-${item.userMsgId}-${item.order}`}
+                        type="button"
+                        className={`w-full rounded-xl border px-3 py-2 text-left transition ${
+                          activeTimelineUserMsgId === item.userMsgId
+                            ? 'border-[var(--accent)] bg-[var(--accent)]/10'
+                            : 'border-[var(--border)] bg-[var(--panel)] hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
+                        }`}
+                        onClick={() => jumpToTimelineItem(item)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-[var(--accent)]">Q{item.order}</span>
+                          <span className="text-[11px] text-black/45 dark:text-white/45">
+                            {item.hasAnswer ? '已回答' : '待回答'}
+                          </span>
+                        </div>
+                        <div
+                          className="mt-1 text-xs text-black/75 dark:text-white/75"
+                          style={{
+                            display: '-webkit-box',
+                            WebkitLineClamp: 2,
+                            WebkitBoxOrient: 'vertical',
+                            overflow: 'hidden',
+                          }}
+                        >
+                          {item.questionPreview}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </aside>
+            ) : null}
+          </div>
         </>
       )}
       <ChatInput

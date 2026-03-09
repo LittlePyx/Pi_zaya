@@ -200,3 +200,71 @@ def test_build_hit_ui_meta_adds_doc_semantic_badge_without_anchor():
     assert len(badges) == 1
     assert str(badges[0].get("text") or "") == "文档语义直连"
     assert float(badges[0].get("score") or 0.0) == 7.1
+
+
+def test_effective_ui_score_uses_evidence_spread_for_same_llm_value():
+    hit_strong = {
+        "meta": {
+            "source_path": r"db\A\A.en.md",
+            "ref_pack_state": "ready",
+            "ref_rank": {
+                "llm": 97.6,
+                "bm25": 9.8,
+                "deep": 4.4,
+                "term_bonus": 2.6,
+                "semantic_score": 9.7,
+            },
+            "ref_section": "Method",
+            "ref_loc_quality": "high",
+        }
+    }
+    hit_weak = {
+        "meta": {
+            "source_path": r"db\B\B.en.md",
+            "ref_pack_state": "ready",
+            "ref_rank": {
+                "llm": 97.6,
+                "bm25": 1.1,
+                "deep": 0.0,
+                "term_bonus": 0.0,
+                "semantic_score": 7.0,
+            },
+            "ref_section": "",
+            "ref_loc_quality": "low",
+        }
+    }
+
+    strong, pending_strong = _effective_ui_score(hit_strong)
+    weak, pending_weak = _effective_ui_score(hit_weak)
+
+    assert pending_strong is False
+    assert pending_weak is False
+    assert strong is not None and weak is not None
+    assert strong > weak
+    assert (strong - weak) >= 0.6
+
+
+def test_effective_ui_score_breaks_identical_decimal_tails_with_stable_jitter():
+    base_meta = {
+        "ref_pack_state": "ready",
+        "ref_rank": {
+            "llm": 87.6,
+            "bm25": 5.0,
+            "deep": 2.0,
+            "term_bonus": 1.0,
+            "semantic_score": 8.6,
+        },
+        "ref_section": "Results",
+        "ref_loc_quality": "high",
+    }
+    hit_a = {"meta": dict(base_meta, source_path=r"db\X\doc_x.en.md")}
+    hit_b = {"meta": dict(base_meta, source_path=r"db\Y\doc_y.en.md")}
+
+    score_a, pending_a = _effective_ui_score(hit_a)
+    score_b, pending_b = _effective_ui_score(hit_b)
+
+    assert pending_a is False
+    assert pending_b is False
+    assert score_a is not None and score_b is not None
+    assert abs(score_a - score_b) >= 0.005
+    assert abs(score_a - score_b) <= 0.09

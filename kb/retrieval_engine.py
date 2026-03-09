@@ -2272,6 +2272,68 @@ def _pick_specific_terms(cands: list[str], *, max_n: int = 3) -> list[str]:
     return out
 
 
+def _calibrate_refs_pack_score(
+    *,
+    raw_score: float,
+    meta: dict | None,
+    section: str,
+) -> float:
+    """Calibrate LLM score with retrieval evidence to avoid score collapse."""
+    m = meta if isinstance(meta, dict) else {}
+    rank = m.get("ref_rank") if isinstance(m.get("ref_rank"), dict) else {}
+
+    def _to_float(v, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return float(default)
+
+    def _clamp(v: float, lo: float, hi: float) -> float:
+        return max(float(lo), min(float(hi), float(v)))
+
+    raw = _clamp(_to_float(raw_score, 0.0), 0.0, 100.0)
+    bm25 = max(0.0, _to_float(rank.get("bm25"), 0.0))
+    deep = max(0.0, _to_float(rank.get("deep"), 0.0))
+    term_bonus = _to_float(rank.get("term_bonus"), 0.0)
+    sem = max(0.0, _to_float(rank.get("semantic_score"), 0.0))
+    explicit_doc = max(0.0, _to_float(m.get("explicit_doc_match_score"), 0.0))
+    anchor_kind = str(m.get("anchor_target_kind") or "").strip().lower()
+    anchor_match = max(0.0, _to_float(m.get("anchor_match_score"), 0.0))
+    has_anchor = bool(anchor_kind) and anchor_match > 0.0
+
+    bm25_n = _clamp((bm25 - 0.5) / 6.0, 0.0, 1.0)
+    deep_n = _clamp(deep / 4.0, 0.0, 1.0)
+    term_n = _clamp((term_bonus + 1.0) / 5.0, 0.0, 1.0)
+    sem_n = _clamp(sem / 10.0, 0.0, 1.0)
+    explicit_n = _clamp(explicit_doc / 10.0, 0.0, 1.0)
+    evidence = (
+        (0.34 * bm25_n)
+        + (0.18 * deep_n)
+        + (0.16 * term_n)
+        + (0.22 * sem_n)
+        + (0.10 * explicit_n)
+    )
+    calibrated = ((0.70 * (raw / 100.0)) + (0.30 * evidence)) * 100.0
+
+    if str(section or "").strip():
+        calibrated += 2.0
+    else:
+        calibrated -= 4.0
+
+    if term_bonus < 0.0:
+        calibrated += max(-12.0, 3.0 * term_bonus)
+
+    if (not has_anchor) and term_bonus <= 0.0 and bm25 < 1.0:
+        calibrated = min(calibrated, 60.0)
+    elif (not has_anchor) and term_bonus <= 0.0 and bm25 < 2.0:
+        calibrated = min(calibrated, 68.0)
+
+    if has_anchor:
+        calibrated = max(calibrated, min(98.0, 82.0 + min(14.0, 0.8 * anchor_match)))
+
+    return _clamp(calibrated, 0.0, 100.0)
+
+
 def _postprocess_refs_pack(result: dict[int, dict], docs: list[dict], *, question: str) -> dict[int, dict]:
     if not isinstance(result, dict):
         return {}
@@ -2415,6 +2477,11 @@ def _postprocess_refs_pack(result: dict[int, dict], docs: list[dict], *, questio
         raw_find = it.get("find") if isinstance(it.get("find"), list) else []
         find = [str(x or "").strip() for x in (raw_find or []) if str(x or "").strip()]
         find = [x for x in find if not _looks_generic_guidance_text(x)][:4]
+        score_cal = _calibrate_refs_pack_score(
+            raw_score=float(it.get("score", 0.0) or 0.0),
+            meta=meta_i,
+            section=sec,
+        )
 
         has_anchor_hit = bool(str(meta_i.get("anchor_target_kind") or "").strip()) and float(meta_i.get("anchor_match_score", 0.0) or 0.0) > 0.0
         if has_anchor_hit and (_anchor_conflict_text(why) or (not why)):
@@ -2422,6 +2489,7 @@ def _postprocess_refs_pack(result: dict[int, dict], docs: list[dict], *, questio
         if has_anchor_hit and _anchor_conflict_text(gain):
             gain = ""
 
+        it["score"] = float(score_cal)
         it["what"] = what
         it["why"] = why
         it["gain"] = gain
@@ -2484,6 +2552,8 @@ def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict], 
         "Return JSON ONLY with keys: score, what, why, section.\n"
         "Rules:\n"
         "- score: 0..100 (how relevant this paper is to the question).\n"
+        "- Use broad score distribution; do not repeat fixed constants across many docs.\n"
+        "- Strong direct evidence: 80-95; partial relevance: 45-75; weak/noisy relation: <=40.\n"
         "- what: 1-2 fluent sentences summarizing the paper itself (goal/method/evidence), independent of the question.\n"
         "- why: 1-2 fluent sentences explaining relevance to the question, with concrete snippet/location evidence.\n"
         "- section: choose from provided headings if possible; else empty string.\n"
@@ -2715,6 +2785,8 @@ def _llm_refs_pack_batch(
         "{\"items\":[{\"i\":int,\"score\":number,\"why\":string,\"what\":string,\"start\":string,\"gain\":string,\"find\":[string],\"section\":string}]}.\n"
         "Rules:\n"
         "- score: 0..100, based on how directly snippets answer the question.\n"
+        "- Use broad score distribution; avoid repeated fixed constants (e.g., 97.6 for many docs).\n"
+        "- Strong direct evidence: 80-95; partial relevance: 45-75; weak/noisy relation: <=40.\n"
         "- Penalize false-friend term mismatch (e.g., single-shot vs single-pixel).\n"
         "- Use ONLY snippets/headings; DO NOT use filenames.\n"
         "- If target_anchor is provided and snippets/anchors directly contain that numbered figure/equation/theorem, do NOT claim the item is missing, not directly given, or unverifiable.\n"
@@ -2837,7 +2909,7 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
     items, source_by_i = _build_llm_refs_pack_items(q, docs)
 
     try:
-        sig_parts = ["refs_pack_v10", q]
+        sig_parts = ["refs_pack_v11", q]
         for d in docs:
             src = str((d.get("meta", {}) or {}).get("source_path") or "")
             try:

@@ -1220,6 +1220,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         used_translation = False
         hits: list[dict] = []
         grouped_docs: list[dict] = []
+        answer_grouped_docs: list[dict] = []
         refs_async_will_run = False
         refs_async_seed_docs: list[dict] = []
         if prompt and (not bypass_kb):
@@ -1255,6 +1256,54 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     _perf_log("gen.refs_seed", elapsed=time.perf_counter() - t_seed0, docs=len(grouped_docs))
                 except Exception:
                     grouped_docs = []
+            answer_grouped_docs = list(grouped_docs or [])
+            answer_hit_limit = max(1, min(int(top_k), 4))
+            answer_doc_cap = max(answer_hit_limit, min(int(top_k), 6))
+            if hits_raw:
+                try:
+                    t_answer_seed0 = time.perf_counter()
+                    rebuilt_for_answer = _group_hits_by_doc_for_refs(
+                        hits_raw,
+                        prompt_text=retrieval_prompt,
+                        top_k_docs=answer_doc_cap,
+                        deep_query=(used_query or retrieval_prompt or prompt or ""),
+                        deep_read=True,
+                        llm_rerank=False,
+                        settings=settings_obj,
+                    )
+                    if rebuilt_for_answer:
+                        answer_grouped_docs = rebuilt_for_answer
+                    _perf_log(
+                        "gen.answer_refs_seed",
+                        elapsed=time.perf_counter() - t_answer_seed0,
+                        docs=len(answer_grouped_docs),
+                    )
+                except Exception:
+                    pass
+            if (
+                llm_rerank
+                and prompt
+                and answer_grouped_docs
+                and settings_obj
+                and getattr(settings_obj, "api_key", None)
+            ):
+                try:
+                    t_answer_pack0 = time.perf_counter()
+                    enriched_for_answer = _enrich_grouped_refs_with_llm_pack(
+                        list(answer_grouped_docs),
+                        question=(prompt or used_query or retrieval_prompt or ""),
+                        settings=settings_obj,
+                        top_k_docs=answer_doc_cap,
+                    )
+                    if enriched_for_answer:
+                        answer_grouped_docs = enriched_for_answer
+                    _perf_log(
+                        "gen.answer_refs_enrich",
+                        elapsed=time.perf_counter() - t_answer_pack0,
+                        docs=len(answer_grouped_docs),
+                    )
+                except Exception:
+                    pass
 
             refs_async_will_run = bool(
                 llm_rerank
@@ -1440,11 +1489,21 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         ctx_parts: list[str] = []
         doc_first_idx: dict[str, int] = {}
         # Keep prompt compact for fast first-token latency.
-        prefer_grouped_docs = _should_prefer_grouped_docs_for_answer(grouped_docs)
-        answer_seed = grouped_docs if prefer_grouped_docs else (hits or grouped_docs)
-        answer_hits = list((answer_seed or [])[: max(1, min(int(top_k), 4))])
+        answer_hit_limit = max(1, min(int(top_k), 4))
+        answer_seed = answer_grouped_docs or grouped_docs or hits
+        answer_hits = _build_answer_hits_for_generation(
+            grouped_docs=list(answer_seed or []),
+            heading_hits=list(hits or []),
+            top_n=answer_hit_limit,
+        )
         anchor_grounded_answer = _has_anchor_grounded_answer_hits(answer_hits)
-        locked_citation_source = _pick_locked_citation_source(answer_hits)
+        locked_citation_source = _pick_locked_citation_source(list(answer_seed or answer_hits))
+        answer_hits = _ensure_locked_source_in_answer_hits(
+            answer_hits,
+            source_rec=locked_citation_source,
+            seed_docs=list(answer_seed or []),
+            top_n=answer_hit_limit,
+        )
         for i, h in enumerate(answer_hits, start=1):
             meta = h.get("meta", {}) or {}
             src = (meta.get("source_path", "") or "").strip()
@@ -1571,8 +1630,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             system += (
                 "\nCitation source lock:\n"
                 f"- This answer is primarily grounded in [SID:{locked_sid}] {locked_name}.\n"
-                f"- Prefer citations from [SID:{locked_sid}] whenever possible.\n"
-                "- If a reference number cannot be verified in that source, do not guess or switch to another SID casually.\n"
+                f"- Include at least one valid [[CITE:{locked_sid}:<ref_num>]] when the answer uses retrieved evidence.\n"
+                "- Only switch to another SID when the same reference number cannot be verified in the locked source.\n"
             )
         if image_first_prompt:
             system += (
@@ -1962,6 +2021,84 @@ def _group_hits_by_top_heading(hits: list[dict], top_k: int) -> list[dict]:
         if len(grouped) >= max(1, int(top_k)):
             break
     return grouped
+
+
+def _hit_source_path(hit: dict) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    meta = hit.get("meta", {}) or {}
+    return str(meta.get("source_path") or "").strip()
+
+
+def _build_answer_hits_for_generation(
+    *,
+    grouped_docs: list[dict],
+    heading_hits: list[dict],
+    top_n: int,
+) -> list[dict]:
+    try:
+        limit = max(1, int(top_n))
+    except Exception:
+        limit = 1
+    out: list[dict] = []
+    seen_src: set[str] = set()
+
+    def _push(pool: list[dict]) -> None:
+        nonlocal out
+        for h in pool or []:
+            if not isinstance(h, dict):
+                continue
+            src = _hit_source_path(h)
+            if src and (src in seen_src):
+                continue
+            out.append(h)
+            if src:
+                seen_src.add(src)
+            if len(out) >= limit:
+                return
+
+    _push(grouped_docs)
+    if len(out) < limit:
+        _push(heading_hits)
+    if out:
+        return out[:limit]
+    return list((grouped_docs or heading_hits or [])[:limit])
+
+
+def _ensure_locked_source_in_answer_hits(
+    answer_hits: list[dict],
+    *,
+    source_rec: dict | None,
+    seed_docs: list[dict],
+    top_n: int,
+) -> list[dict]:
+    try:
+        limit = max(1, int(top_n))
+    except Exception:
+        limit = 1
+    out = list(answer_hits or [])[:limit]
+    if not source_rec:
+        return out
+    locked_src = str((source_rec or {}).get("source_path") or "").strip()
+    if not locked_src:
+        return out
+    if any(_hit_source_path(h) == locked_src for h in out):
+        return out
+    locked_hit = None
+    for cand in seed_docs or []:
+        if _hit_source_path(cand) == locked_src:
+            locked_hit = cand
+            break
+    if not isinstance(locked_hit, dict):
+        return out
+    out2 = [locked_hit]
+    for h in out:
+        if _hit_source_path(h) == locked_src:
+            continue
+        out2.append(h)
+        if len(out2) >= limit:
+            break
+    return out2[:limit]
 
 
 def _should_prefer_grouped_docs_for_answer(grouped_docs: list[dict]) -> bool:

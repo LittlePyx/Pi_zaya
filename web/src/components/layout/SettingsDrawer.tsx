@@ -1,7 +1,6 @@
 import { Drawer, Slider, Button, Switch, Select, message, Typography } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { settingsApi } from '../../api/settings'
-import { AnswerQualityPanel } from './AnswerQualityPanel'
 import { S } from '../../i18n/zh'
 
 const { Text } = Typography
@@ -66,8 +65,6 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             ]}
           />
         </div>
-
-        <AnswerQualityPanel open={open} />
 
         <Button onClick={testLlm}>测试 LLM 连接</Button>
       </div>

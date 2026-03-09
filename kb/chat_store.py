@@ -6,6 +6,8 @@ import uuid
 import json
 from pathlib import Path
 
+DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
+
 
 class ChatStore:
     """
@@ -90,7 +92,19 @@ class ChatStore:
                 conn.execute("ALTER TABLE conversations ADD COLUMN project_id TEXT;")
             except sqlite3.OperationalError:
                 pass
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN archived_at REAL;")
+            except sqlite3.OperationalError:
+                pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversations_scope_archived_updated "
+                "ON conversations(project_id, archived, updated_at DESC);"
+            )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversation_sources (
@@ -105,6 +119,57 @@ class ChatStore:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_sources_conv_id ON conversation_sources(conv_id);")
+
+    def _archive_excess_conversations(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        project_id: str | None,
+        active_limit: int = DEFAULT_ACTIVE_CONVERSATION_LIMIT,
+    ) -> int:
+        keep_n = max(1, int(active_limit))
+        if project_id is None:
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM conversations
+                WHERE project_id IS NULL AND COALESCE(archived, 0) = 0
+                ORDER BY updated_at DESC, created_at DESC, id DESC
+                LIMIT -1 OFFSET ?
+                """,
+                (keep_n,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM conversations
+                WHERE project_id = ? AND COALESCE(archived, 0) = 0
+                ORDER BY updated_at DESC, created_at DESC, id DESC
+                LIMIT -1 OFFSET ?
+                """,
+                (project_id, keep_n),
+            ).fetchall()
+        ids = [str(r["id"] or "").strip() for r in rows if str(r["id"] or "").strip()]
+        if not ids:
+            return 0
+        now = time.time()
+        conn.executemany(
+            "UPDATE conversations SET archived = 1, archived_at = ? WHERE id = ?",
+            [(now, cid) for cid in ids],
+        )
+        return len(ids)
+
+    def _touch_conversation_active(self, conn: sqlite3.Connection, conv_id: str, now: float) -> str | None:
+        row = conn.execute("SELECT project_id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+        if not row:
+            return None
+        project_id = row["project_id"]
+        conn.execute(
+            "UPDATE conversations SET updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
+            (now, conv_id),
+        )
+        return str(project_id).strip() if isinstance(project_id, str) and project_id.strip() else None
 
     def create_project(self, name: str) -> str:
         pid = uuid.uuid4().hex
@@ -160,21 +225,41 @@ class ChatStore:
         now = time.time()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO conversations (id, title, created_at, updated_at, project_id) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO conversations (id, title, created_at, updated_at, project_id, archived, archived_at) "
+                "VALUES (?, ?, ?, ?, ?, 0, NULL)",
                 (conv_id, title.strip() or "新对话", now, now, project_id),
             )
+            self._archive_excess_conversations(conn, project_id=project_id)
         return conv_id
 
-    def list_conversations(self, project_id: str | None = None, limit: int = 50) -> list[dict]:
+    def list_conversations(
+        self,
+        project_id: str | None = None,
+        limit: int = 50,
+        *,
+        include_archived: bool = False,
+    ) -> list[dict]:
         with self._connect() as conn:
+            if not bool(include_archived):
+                self._archive_excess_conversations(conn, project_id=project_id)
             if project_id is None:
                 rows = conn.execute(
-                    "SELECT id, title, created_at, updated_at, project_id FROM conversations WHERE project_id IS NULL ORDER BY updated_at DESC LIMIT ?",
+                    "SELECT id, title, created_at, updated_at, project_id, "
+                    "COALESCE(archived, 0) AS archived, archived_at "
+                    "FROM conversations "
+                    "WHERE project_id IS NULL "
+                    + ("" if include_archived else "AND COALESCE(archived, 0) = 0 ")
+                    + "ORDER BY updated_at DESC LIMIT ?",
                     (int(limit),),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, title, created_at, updated_at, project_id FROM conversations WHERE project_id = ? ORDER BY updated_at DESC LIMIT ?",
+                    "SELECT id, title, created_at, updated_at, project_id, "
+                    "COALESCE(archived, 0) AS archived, archived_at "
+                    "FROM conversations "
+                    "WHERE project_id = ? "
+                    + ("" if include_archived else "AND COALESCE(archived, 0) = 0 ")
+                    + "ORDER BY updated_at DESC LIMIT ?",
                     (project_id, int(limit)),
                 ).fetchall()
         return [dict(r) for r in rows]
@@ -185,7 +270,9 @@ class ChatStore:
             return None
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id, title, created_at, updated_at, project_id FROM conversations WHERE id = ?",
+                "SELECT id, title, created_at, updated_at, project_id, "
+                "COALESCE(archived, 0) AS archived, archived_at "
+                "FROM conversations WHERE id = ?",
                 (conv_id,),
             ).fetchone()
         return dict(row) if row else None
@@ -196,10 +283,18 @@ class ChatStore:
             return False
         now = time.time()
         with self._connect() as conn:
+            old = conn.execute("SELECT project_id FROM conversations WHERE id = ?", (conv_id,)).fetchone()
+            if not old:
+                return False
+            old_project_id = old["project_id"]
             cur = conn.execute(
-                "UPDATE conversations SET project_id = ?, updated_at = ? WHERE id = ?",
+                "UPDATE conversations SET project_id = ?, updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
                 (project_id, now, conv_id),
             )
+            old_pid = str(old_project_id).strip() if isinstance(old_project_id, str) and old_project_id.strip() else None
+            self._archive_excess_conversations(conn, project_id=project_id)
+            if old_pid != project_id:
+                self._archive_excess_conversations(conn, project_id=old_pid)
         return cur.rowcount > 0
 
     def delete_conversation(self, conv_id: str) -> None:
@@ -226,7 +321,8 @@ class ChatStore:
                 """,
                 (cid, src, name, now, now),
             )
-            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
+            project_id = self._touch_conversation_active(conn, cid, now)
+            self._archive_excess_conversations(conn, project_id=project_id)
         return True
 
     def list_conversation_sources(self, conv_id: str, limit: int = 8) -> list[dict]:
@@ -317,7 +413,8 @@ class ChatStore:
                 "INSERT INTO messages (conv_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?)",
                 (conv_id, role, content, attachments_json, now),
             )
-            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, conv_id))
+            project_id = self._touch_conversation_active(conn, conv_id, now)
+            self._archive_excess_conversations(conn, project_id=project_id)
             try:
                 return int(cur.lastrowid or 0)
             except Exception:
@@ -334,7 +431,8 @@ class ChatStore:
             if not row:
                 return False
             conn.execute("UPDATE messages SET content = ? WHERE id = ?", (text, mid))
-            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, row["conv_id"]))
+            project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
+            self._archive_excess_conversations(conn, project_id=project_id)
         return True
 
     def delete_message(self, message_id: int) -> bool:
@@ -348,7 +446,8 @@ class ChatStore:
                 return False
             conn.execute("DELETE FROM message_refs WHERE user_msg_id = ?", (mid,))
             conn.execute("DELETE FROM messages WHERE id = ?", (mid,))
-            conn.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, row["conv_id"]))
+            project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
+            self._archive_excess_conversations(conn, project_id=project_id)
         return True
 
     def upsert_message_refs(
@@ -486,6 +585,8 @@ class ChatStore:
                 return
             now = time.time()
             conn.execute(
-                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                "UPDATE conversations SET title = ?, updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
                 (new_title, now, conv_id),
             )
+            project_id = self._touch_conversation_active(conn, conv_id, now)
+            self._archive_excess_conversations(conn, project_id=project_id)

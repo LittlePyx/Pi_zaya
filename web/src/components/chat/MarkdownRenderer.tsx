@@ -1,4 +1,4 @@
-import { Children, isValidElement, type MouseEvent, type ReactNode } from 'react'
+import { Children, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -7,8 +7,47 @@ import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
 import { citationInlineLabel, type CiteDetail } from './citationState'
 
+const TABLE_SEPARATOR_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/
+const TABLE_ROW_RE = /^\s*\|?.+\|.+\|?\s*$/
+
+function normalizeTableSegment(segment: string): string {
+  let s = String(segment || '').trim()
+  if (!s) return ''
+  if (!s.startsWith('|')) s = `| ${s}`
+  if (!s.endsWith('|')) s = `${s} |`
+  return s
+}
+
+function repairCollapsedGfmTables(text: string): string {
+  if (!text || !text.includes('||')) return text
+  const out: string[] = []
+  for (const rawLine of text.split('\n')) {
+    const line = String(rawLine || '')
+    if (!(line.includes('||') && line.includes('|'))) {
+      out.push(line)
+      continue
+    }
+    const segments = line
+      .split(/\s*\|\|\s*/g)
+      .map((part) => normalizeTableSegment(part))
+      .filter(Boolean)
+    if (segments.length < 2) {
+      out.push(line)
+      continue
+    }
+    const hasSeparator = segments.some((seg) => TABLE_SEPARATOR_RE.test(seg))
+    const rowLikeCount = segments.filter((seg) => TABLE_ROW_RE.test(seg)).length
+    if (hasSeparator && rowLikeCount >= 2) {
+      out.push(...segments)
+      continue
+    }
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 function normalize(text: string) {
-  return text
+  return repairCollapsedGfmTables(text)
     .replace(/\\\(/g, '$').replace(/\\\)/g, '$')
     .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$')
 }
@@ -17,6 +56,56 @@ interface Props {
   content: string
   citeDetails?: CiteDetail[]
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
+}
+
+type CiteChipTone = {
+  fg: string
+  fgHover: string
+}
+
+function sourceKey(detail: CiteDetail): string {
+  const key = String(detail.sourcePath || detail.sourceName || '').trim().toLowerCase()
+  return key || String(detail.anchor || '').trim().toLowerCase()
+}
+
+function toneFromIndex(index: number): CiteChipTone {
+  const palette: CiteChipTone[] = [
+    { fg: '#1f63c6', fgHover: '#134c9d' },
+    { fg: '#0f7d6f', fgHover: '#0b6258' },
+    { fg: '#8654d6', fgHover: '#6b40b7' },
+    { fg: '#bd5b00', fgHover: '#9a4a00' },
+    { fg: '#bf3c79', fgHover: '#9f305f' },
+    { fg: '#4f6cda', fgHover: '#3f57ba' },
+    { fg: '#00799f', fgHover: '#006281' },
+    { fg: '#8a6121', fgHover: '#6f4d1a' },
+    { fg: '#1a72b1', fgHover: '#135b8d' },
+    { fg: '#7a56bf', fgHover: '#62469d' },
+    { fg: '#0c857f', fgHover: '#086763' },
+    { fg: '#9a4ec2', fgHover: '#7c3ea0' },
+    { fg: '#3d77d9', fgHover: '#2f60b5' },
+    { fg: '#a95a12', fgHover: '#87480e' },
+    { fg: '#b4436e', fgHover: '#943657' },
+    { fg: '#1276a3', fgHover: '#0e5e82' },
+    { fg: '#3d66c8', fgHover: '#3152a4' },
+  ]
+  if (index < palette.length) return palette[index]
+  const hue = Math.round((index * 137.508) % 360)
+  return {
+    fg: `hsl(${hue} 72% 44%)`,
+    fgHover: `hsl(${hue} 78% 34%)`,
+  }
+}
+
+function buildToneMap(citeDetails: CiteDetail[]): Map<string, CiteChipTone> {
+  const out = new Map<string, CiteChipTone>()
+  let next = 0
+  for (const detail of citeDetails) {
+    const key = sourceKey(detail)
+    if (!key || out.has(key)) continue
+    out.set(key, toneFromIndex(next))
+    next += 1
+  }
+  return out
 }
 
 type AnswerSectionKey = 'conclusion' | 'evidence' | 'limits' | 'next_steps'
@@ -119,6 +208,7 @@ function parseAnswerContract(text: string): { preamble: string; sections: Parsed
 function buildMarkdownComponents(
   byAnchor: Map<string, CiteDetail>,
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
+  toneBySource?: Map<string, CiteChipTone>,
 ) {
   return {
     pre: ({ children }: { children?: ReactNode }) => {
@@ -150,17 +240,25 @@ function buildMarkdownComponents(
       const key = typeof href === 'string' && href.startsWith('#') ? href.slice(1) : ''
       const detail = key ? byAnchor.get(key) : undefined
       if (detail) {
+        const tone = toneBySource?.get(sourceKey(detail))
+        const toneStyle: CSSProperties | undefined = tone
+          ? ({
+              ['--kb-cite-fg' as string]: tone.fg,
+              ['--kb-cite-fg-hover' as string]: tone.fgHover,
+            } as CSSProperties)
+          : undefined
         return (
           <button
             type="button"
             className="kb-cite-chip"
+            style={toneStyle}
             title={detail.sourceName || detail.sourcePath || undefined}
             onClick={(event) => {
               event.preventDefault()
               onCitationClick?.(detail, event)
             }}
           >
-            {citationInlineLabel(detail)}
+            {citationInlineLabel(detail, { includeSource: false })}
           </button>
         )
       }
@@ -190,7 +288,8 @@ function buildMarkdownComponents(
 export function MarkdownRenderer({ content, citeDetails = [], onCitationClick }: Props) {
   const normalizedContent = normalize(content)
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
-  const components = buildMarkdownComponents(byAnchor, onCitationClick)
+  const toneBySource = useMemo(() => buildToneMap(citeDetails), [citeDetails])
+  const components = buildMarkdownComponents(byAnchor, onCitationClick, toneBySource)
   const parsedContract = parseAnswerContract(normalizedContent)
 
   return (

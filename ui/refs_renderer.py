@@ -2890,6 +2890,133 @@ def _strip_reference_lead_label(text: str) -> str:
     return t
 
 
+_VENUE_SPLIT_ABBR_CONTINUATIONS: dict[str, set[str]] = {
+    # Common optics/journal abbreviations that are often split at ". " boundary.
+    "opt": {"express", "lett", "letters"},
+    "biomed": {"optics", "express"},
+    "nat": {"commun", "communications"},
+    "appl": {"optics", "phys"},
+}
+
+_VENUE_TOKEN_HINTS: set[str] = {
+    "ieee",
+    "acm",
+    "journal",
+    "transactions",
+    "trans",
+    "proceedings",
+    "proc",
+    "conference",
+    "symposium",
+    "workshop",
+    "letters",
+    "lett",
+    "express",
+    "communications",
+    "commun",
+    "review",
+    "rev",
+    "opt",
+    "optics",
+    "phys",
+    "physics",
+    "medical",
+    "med",
+    "imaging",
+    "pattern",
+    "analysis",
+    "intelligence",
+    "biomed",
+    "appl",
+    "applied",
+    "nature",
+    "science",
+    "photonics",
+}
+
+
+def _looks_like_venue_phrase(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    low = s.lower()
+    if len(re.findall(r"[A-Za-z\u4e00-\u9fff]{2,}", low)) < 2:
+        return False
+    if re.search(r"\b(cvpr|iccv|eccv|neurips|icml|iclr|aaai|ijcai|kdd|siggraph)\b", low):
+        return True
+    hint_hits = 0
+    for tok in _VENUE_TOKEN_HINTS:
+        if re.search(rf"\b{re.escape(tok)}\b", low):
+            hint_hits += 1
+            if hint_hits >= 1:
+                break
+    if hint_hits <= 0:
+        return False
+    # Keep this conservative; extremely long phrases are more likely title fragments.
+    if len(low.split()) > 18:
+        return False
+    return True
+
+
+def _merge_venue_head(tail: str, venue: str) -> str:
+    tail_s = str(tail or "").strip(" .;,:")
+    venue_s = str(venue or "").strip()
+    if not tail_s:
+        return venue_s
+    if not venue_s:
+        return tail_s
+    tail_tokens = re.findall(r"[A-Za-z]{1,16}", tail_s)
+    last_tok = str(tail_tokens[-1] or "").lower() if tail_tokens else ""
+    if last_tok in {"opt", "nat", "appl", "biomed", "trans", "rev", "lett", "commun", "proc"}:
+        if not tail_s.endswith("."):
+            tail_s += "."
+    return f"{tail_s} {venue_s}".strip()
+
+
+def _repair_split_title_venue(title: str, venue: str) -> tuple[str, str]:
+    t0 = str(title or "").strip()
+    v0 = str(venue or "").strip()
+    if (not t0) or (not v0):
+        return t0, v0
+
+    # First, try strict abbreviation continuations.
+    m_tail = re.match(r"^(?P<base>.+?)\.\s*(?P<abbr>[A-Za-z]{2,10})$", t0)
+    m_head = re.match(r"^(?P<head>[A-Za-z]{2,24})\b", v0) if m_tail else None
+    if m_tail and m_head:
+        abbr = str(m_tail.group("abbr") or "").strip()
+        head = str(m_head.group("head") or "").strip()
+        base = str(m_tail.group("base") or "").strip(" .;,:")
+        if abbr and head and base:
+            if head.lower() in _VENUE_SPLIT_ABBR_CONTINUATIONS.get(abbr.lower(), set()):
+                return base, f"{abbr}. {v0}"
+
+    # Generic repair for other venues:
+    # "... <title>. IEEE Trans" + "Med. Imaging ..."
+    # "... <title>. Nat" + "Commun ..."
+    # "... <title>. J" + "Biomed. Opt. ..."
+    m_tail2 = re.match(r"^(?P<base>.+?)\.\s*(?P<trail>[A-Za-z][A-Za-z.\- ]{0,42})$", t0)
+    if not m_tail2:
+        return t0, v0
+    base2 = str(m_tail2.group("base") or "").strip(" .;,:")
+    tail2 = str(m_tail2.group("trail") or "").strip(" .;,:")
+    if not base2 or not tail2:
+        return t0, v0
+    base_words = [w for w in re.split(r"\s+", base2) if w]
+    if len(base_words) < 3:
+        return t0, v0
+
+    tail_tokens = re.findall(r"[A-Za-z]{1,16}", tail2)
+    if (not tail_tokens) or (len(tail_tokens) > 3):
+        return t0, v0
+    if not all((len(tok) <= 10) or (tok.lower() in _VENUE_TOKEN_HINTS) for tok in tail_tokens):
+        return t0, v0
+
+    merged_v = _merge_venue_head(tail2, v0)
+    if _looks_like_venue_phrase(merged_v):
+        return base2, merged_v
+    return t0, v0
+
+
 def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
     """Best-effort local parse of authors/title/venue from raw numbered references.
 
@@ -2989,6 +3116,16 @@ def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
                 best = {"title": t2}
 
     tail_core = str(tail or "").strip().strip(" .;,:")
+    if tail_core and str(best.get("title") or "").strip():
+        try:
+            title_fixed, tail_fixed = _repair_split_title_venue(str(best.get("title") or ""), tail_core)
+        except Exception:
+            title_fixed, tail_fixed = str(best.get("title") or "").strip(), tail_core
+        if title_fixed and (title_fixed != str(best.get("title") or "").strip()):
+            best["title"] = title_fixed
+        if tail_fixed:
+            tail_core = tail_fixed
+
     if tail_core:
         year_m = re.search(r"\((?:[^()]*,\s*)?(?P<year>(?:19|20)\d{2})\)\s*$", tail_core)
         if year_m:
@@ -3136,6 +3273,15 @@ def _normalize_reference_for_popup(ref_rec: dict) -> dict:
     out["pages"] = pages
     out["doi"] = doi
     out["raw"] = raw
+    if title and venue:
+        try:
+            title_fix, venue_fix = _repair_split_title_venue(title, venue)
+        except Exception:
+            title_fix, venue_fix = title, venue
+        if title_fix:
+            out["title"] = title_fix
+        if venue_fix:
+            out["venue"] = venue_fix
     out["cite_fmt"] = _format_reference_cite_line(out)
     return out
 
