@@ -134,7 +134,14 @@ function ConversationRow({
     >
       <MessageOutlined className="shrink-0 opacity-60" />
       <div className="kb-conv-meta min-w-0 flex-1">
-        <span className="kb-conv-title truncate">{conversation.title}</span>
+        <span className="kb-conv-title truncate">
+          {conversation.title}
+          {conversation.mode === 'paper_guide' ? (
+            <span className="ml-1 inline-block rounded-md border border-[var(--border)] px-1 py-[1px] text-[10px] align-middle text-[var(--accent)]">
+              阅读指导
+            </span>
+          ) : null}
+        </span>
         <span className="kb-conv-time">{formatRelativeTime(conversation.updated_at) || ' '}</span>
       </div>
       <Button

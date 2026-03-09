@@ -67,6 +67,16 @@ def _library_store() -> LibraryStore:
     return LibraryStore(get_settings().library_db_path)
 
 
+def _strip_known_source_ext(name: str) -> str:
+    s = str(name or "").strip()
+    if not s:
+        return ""
+    s = re.sub(r"\.en\.md$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\.md$", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\.pdf$", "", s, flags=re.IGNORECASE)
+    return s.strip()
+
+
 def _ingest_py_path() -> Path:
     return Path(__file__).resolve().parent.parent.parent / "ingest.py"
 
@@ -1283,6 +1293,10 @@ class DeleteLibraryFileBody(BaseModel):
     remove_queued: bool = True
 
 
+class GuideSourceBody(BaseModel):
+    pdf_name: str
+
+
 @router.post("/file/delete")
 def delete_library_file(body: DeleteLibraryFileBody):
     pdf_name = str(body.pdf_name or "").strip()
@@ -1342,6 +1356,34 @@ def delete_library_file(body: DeleteLibraryFileBody):
         "removed_queued": int(removed_queued),
         "warnings": warnings,
         "needs_reindex": bool(pdf_ok),
+    }
+
+
+@router.post("/file/guide_source")
+def resolve_library_guide_source(body: GuideSourceBody):
+    pdf_name = str(body.pdf_name or "").strip()
+    if (not pdf_name) or (Path(pdf_name).name != pdf_name):
+        raise HTTPException(400, "invalid pdf_name")
+    pdf_d = _pdf_dir()
+    md_d = _md_dir()
+    pdf_path = (pdf_d / pdf_name).expanduser()
+    if (not _path_exists(pdf_path)) or (not _path_is_file(pdf_path)):
+        raise HTTPException(404, "pdf not found")
+
+    _md_folder, md_main, md_exists = _resolve_md_output_paths(md_d, pdf_path)
+    if (not md_exists) or (not _path_is_file(md_main)):
+        raise HTTPException(400, "markdown not ready")
+
+    source_name = _strip_known_source_ext(pdf_name) or pdf_name
+    return {
+        "ok": True,
+        "pdf_name": pdf_name,
+        "pdf_path": str(pdf_path),
+        "md_path": str(md_main),
+        "md_exists": True,
+        # Bind to PDF path; runtime maps to latest markdown on disk.
+        "source_path": str(pdf_path),
+        "source_name": source_name,
     }
 
 

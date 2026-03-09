@@ -298,12 +298,19 @@ interface GenerationState {
   done: boolean
 }
 
+interface GuideBinding {
+  sourcePath: string
+  sourceName: string
+}
+
 interface ChatState {
   projects: Project[]
   activeProjectId: string | null
   projectConversations: Record<string, Conversation[]>
   rootConversations: Conversation[]
   activeConvId: string | null
+  activeConversation: Conversation | null
+  guideBindings: Record<string, GuideBinding>
   messages: Message[]
   refs: Record<string, unknown>
   uploadItems: ChatUploadItem[]
@@ -319,6 +326,12 @@ interface ChatState {
   deleteProject: (id: string) => Promise<void>
   selectConversation: (id: string) => Promise<void>
   createConversation: () => Promise<string>
+  createPaperGuideConversation: (opts: {
+    sourcePath: string
+    sourceName?: string
+    title?: string
+    projectId?: string | null
+  }) => Promise<string>
   renameConversation: (id: string, title: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
   moveConversation: (convId: string, projectId: string | null) => Promise<void>
@@ -360,12 +373,30 @@ function findConversationInState(state: ChatState, convId: string): Conversation
   return null
 }
 
+function findConversationInLists(
+  rootConversations: Conversation[],
+  projectConversations: Record<string, Conversation[]>,
+  convId: string,
+): Conversation | null {
+  for (const item of rootConversations) {
+    if (item.id === convId) return item
+  }
+  for (const items of Object.values(projectConversations)) {
+    for (const item of items) {
+      if (item.id === convId) return item
+    }
+  }
+  return null
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   projects: [],
   activeProjectId: null,
   projectConversations: {},
   rootConversations: [],
   activeConvId: null,
+  activeConversation: null,
+  guideBindings: {},
   messages: [],
   refs: {},
   uploadItems: [],
@@ -378,6 +409,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const projects = await chatApi.listProjects()
     const grouped = await loadGroupedConversations(projects)
     set((state) => ({
+      guideBindings: (() => {
+        const next = { ...(state.guideBindings || {}) }
+        const absorb = (conv: Conversation) => {
+          const cid = String(conv?.id || '').trim()
+          const sourcePath = String(conv?.bound_source_path || '').trim()
+          if (!cid || !sourcePath) return
+          const sourceName = String(conv?.bound_source_name || '').trim()
+          next[cid] = { sourcePath, sourceName }
+        }
+        for (const conv of grouped.rootConversations) absorb(conv)
+        for (const list of Object.values(grouped.projectConversations || {})) {
+          for (const conv of list) absorb(conv)
+        }
+        return next
+      })(),
+      activeConversation: state.activeConvId
+        ? findConversationInLists(grouped.rootConversations, grouped.projectConversations, state.activeConvId)
+        : null,
       projects,
       projectConversations: grouped.projectConversations,
       rootConversations: grouped.rootConversations,
@@ -442,18 +491,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return
     }
     const myToken = ++conversationSwitchToken
+    const cachedConv = findConversationInState(current, convId)
     stopRefsPolling()
     stopUploadPolling()
     set({
       activeConvId: convId,
+      activeConversation: cachedConv || null,
       generation: null,
       refs: {},
       uploadItems: [],
       pendingImages: [],
     })
-    const cachedConv = findConversationInState(current, convId)
     if (cachedConv) {
-      set({ activeProjectId: cachedConv.project_id ?? null })
+      set({ activeProjectId: cachedConv.project_id ?? null, activeConversation: cachedConv })
     }
     try {
       const [conv, msgs] = await Promise.all([
@@ -475,8 +525,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
       set({
         activeProjectId: conv?.project_id ?? null,
+        activeConversation: conv || cachedConv || null,
         messages: msgs,
       })
+      const active = conv || cachedConv || null
+      const sourcePath = String(active?.bound_source_path || '').trim()
+      if (sourcePath) {
+        const sourceName = String(active?.bound_source_name || '').trim()
+        set((state) => ({
+          guideBindings: {
+            ...(state.guideBindings || {}),
+            [convId]: { sourcePath, sourceName },
+          },
+        }))
+      }
       void loadRefsForConversation(convId, set, () => get().activeConvId)
       pushSwitchPerf({
         ts: Date.now(),
@@ -502,7 +564,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         return
       }
-      set({ messages: [], refs: {} })
+      set({ messages: [], refs: {}, activeConversation: cachedConv || null })
       pushSwitchPerf({
         ts: Date.now(),
         convId,
@@ -521,7 +583,56 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { id } = await chatApi.createConversation('新对话', projectId)
     await get().loadSidebarData()
     stopUploadPolling()
-    set({ activeConvId: id, messages: [], refs: {}, generation: null, uploadItems: [], pendingImages: [] })
+    set({ generation: null, uploadItems: [], pendingImages: [] })
+    await get().selectConversation(id)
+    return id
+  },
+
+  createPaperGuideConversation: async (opts) => {
+    const sourcePath = String(opts.sourcePath || '').trim()
+    if (!sourcePath) throw new Error('sourcePath required')
+    const sourceName = String(opts.sourceName || '').trim() || sourcePath.split(/[\\/]/).pop() || '文献'
+    const projectId = opts.projectId ?? get().activeProjectId
+    const titleBase = String(opts.title || '').trim() || `阅读指导 · ${sourceName}`
+    const { id } = await chatApi.createConversation(titleBase, projectId, {
+      mode: 'paper_guide',
+      bound_source_path: sourcePath,
+      bound_source_name: sourceName,
+      bound_source_ready: true,
+    })
+    try {
+      await chatApi.updateConversationGuide(id, {
+        mode: 'paper_guide',
+        bound_source_path: sourcePath,
+        bound_source_name: sourceName,
+        bound_source_ready: true,
+      })
+    } catch {
+      // Backward compatible: old backend may not expose /guide.
+    }
+    await get().loadSidebarData()
+    stopUploadPolling()
+    set((state) => ({
+      generation: null,
+      uploadItems: [],
+      pendingImages: [],
+      guideBindings: {
+        ...(state.guideBindings || {}),
+        [id]: { sourcePath, sourceName },
+      },
+    }))
+    await get().selectConversation(id)
+    set((state) => ({
+      activeConversation: state.activeConversation && state.activeConversation.id === id
+        ? {
+            ...state.activeConversation,
+            mode: 'paper_guide',
+            bound_source_path: sourcePath,
+            bound_source_name: sourceName,
+            bound_source_ready: true,
+          }
+        : state.activeConversation,
+    }))
     return id
   },
 
@@ -537,9 +648,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
     stopUploadPolling()
     await chatApi.deleteConversation(id)
     const state = get()
-    if (state.activeConvId === id) {
-      set({ activeConvId: null, messages: [], refs: {}, generation: null, uploadItems: [], pendingImages: [] })
-    }
+    set((cur) => {
+      const nextBindings = { ...(cur.guideBindings || {}) }
+      delete nextBindings[id]
+      if (state.activeConvId === id) {
+        return {
+          activeConvId: null,
+          activeConversation: null,
+          messages: [],
+          refs: {},
+          generation: null,
+          uploadItems: [],
+          pendingImages: [],
+          guideBindings: nextBindings,
+        }
+      }
+      return { guideBindings: nextBindings }
+    })
     await get().loadSidebarData()
   },
 
@@ -547,7 +672,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     await chatApi.updateConversationProject(convId, projectId)
     await get().loadSidebarData()
     if (get().activeConvId === convId) {
-      set({ activeProjectId: projectId })
+      set((state) => ({
+        activeProjectId: projectId,
+        activeConversation: state.activeConversation ? { ...state.activeConversation, project_id: projectId } : state.activeConversation,
+      }))
     }
   },
 
@@ -650,12 +778,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       convId = await get().createConversation()
     }
 
-    const pendingImages = get().pendingImages
-    const preferredSources = get().uploadItems
+    const stateNow = get()
+    const pendingImages = stateNow.pendingImages
+    const localGuide = (convId ? stateNow.guideBindings?.[convId] : undefined)
+    const boundSourcePath = String(stateNow.activeConversation?.bound_source_path || localGuide?.sourcePath || '').trim()
+    const boundSourceName = String(stateNow.activeConversation?.bound_source_name || localGuide?.sourceName || '').trim()
+    const preferredSources = stateNow.uploadItems
       .filter((item) => item.kind === 'pdf' && (item.status === 'duplicate' || item.ingest_status === 'ready'))
       .flatMap((item) => [String(item.path || '').trim(), String(item.name || '').trim()])
       .filter(Boolean)
-      .slice(0, 4)
+    for (const hint of [boundSourcePath, boundSourceName]) {
+      const v = String(hint || '').trim()
+      if (!v) continue
+      if (!preferredSources.includes(v)) preferredSources.unshift(v)
+    }
+    const preferredSourcesFinal = preferredSources.slice(0, 4)
     const trimmedPrompt = prompt.trim()
     const userStoreText = trimmedPrompt || `[Image attachment x${pendingImages.length}]`
 
@@ -668,7 +805,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       conv_id: convId,
       prompt: trimmedPrompt,
       image_attachments: pendingImages,
-      preferred_sources: preferredSources,
+      preferred_sources: preferredSourcesFinal,
+      source_lock_path: boundSourcePath,
+      source_lock_name: boundSourceName,
       top_k: opts.topK,
       temperature: opts.temperature,
       max_tokens: opts.maxTokens,

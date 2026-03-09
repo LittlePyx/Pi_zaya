@@ -4,6 +4,7 @@ import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
+import { PaperGuideReaderDrawer, type ReaderOpenPayload } from '../components/chat/PaperGuideReaderDrawer'
 import type { ChatUploadItem, Message } from '../api/chat'
 import { S } from '../i18n/zh'
 
@@ -32,6 +33,14 @@ function compactTimelineText(content: string, maxLen = 68) {
   return `${raw.slice(0, Math.max(8, maxLen - 1)).trimEnd()}...`
 }
 
+function stripSourceExt(name: string) {
+  return String(name || '')
+    .replace(/\.en\.md$/i, '')
+    .replace(/\.md$/i, '')
+    .replace(/\.pdf$/i, '')
+    .trim()
+}
+
 interface TimelineItem {
   order: number
   userMsgId: number
@@ -45,6 +54,7 @@ export default function ChatPage() {
   const generation = useChatStore((s) => s.generation)
   const refs = useChatStore((s) => s.refs)
   const activeConvId = useChatStore((s) => s.activeConvId)
+  const activeConversation = useChatStore((s) => s.activeConversation)
   const uploadItems = useChatStore((s) => s.uploadItems)
   const pendingImages = useChatStore((s) => s.pendingImages)
   const uploading = useChatStore((s) => s.uploading)
@@ -54,12 +64,16 @@ export default function ChatPage() {
   const removePendingImage = useChatStore((s) => s.removePendingImage)
   const dismissUploadItem = useChatStore((s) => s.dismissUploadItem)
   const sendMessage = useChatStore((s) => s.sendMessage)
+  const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const cancelGen = useChatStore((s) => s.cancelGeneration)
   const settings = useSettingsStore()
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE)
   const [timelineOpen, setTimelineOpen] = useState(true)
   const [timelineJump, setTimelineJump] = useState<{ messageId: number; token: number } | null>(null)
   const [activeTimelineUserMsgId, setActiveTimelineUserMsgId] = useState<number | null>(null)
+  const [readerOpen, setReaderOpen] = useState(false)
+  const [readerPayload, setReaderPayload] = useState<ReaderOpenPayload | null>(null)
+  const [appendSignal, setAppendSignal] = useState<{ token: number; text: string } | null>(null)
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
 
@@ -68,6 +82,9 @@ export default function ChatPage() {
     setTimelineOpen(true)
     setTimelineJump(null)
     setActiveTimelineUserMsgId(null)
+    setReaderOpen(false)
+    setReaderPayload(null)
+    setAppendSignal(null)
   }, [activeConvId])
 
   useEffect(() => () => {
@@ -162,6 +179,28 @@ export default function ChatPage() {
     }
   }
 
+  const onStartGuideFromUpload = async (item: ChatUploadItem) => {
+    const sourcePath = String(item.md_path || '').trim()
+    if (!sourcePath) {
+      message.info('PDF 尚未完成转换，请等待入库完成后再开始阅读指导。')
+      return
+    }
+    const sourceName = stripSourceExt(item.name) || item.name
+    const hide = message.loading('正在创建阅读指导会话...', 0)
+    try {
+      await createPaperGuideConversation({
+        sourcePath,
+        sourceName,
+        title: `阅读指导 · ${sourceName}`,
+      })
+      hide()
+      message.success('已进入阅读指导会话')
+    } catch (err) {
+      hide()
+      message.error(err instanceof Error ? err.message : '创建阅读指导会话失败')
+    }
+  }
+
   const liveRunning = Boolean(generation)
   const effectiveVisible = liveRunning
     ? Math.min(messages.length, LIVE_WINDOW)
@@ -225,6 +264,30 @@ export default function ChatPage() {
     window.setTimeout(() => {
       setTimelineJump({ messageId: item.targetMsgId, token })
     }, delayMs)
+  }
+
+  const openReader = (payload: ReaderOpenPayload) => {
+    const sourcePath = String(payload?.sourcePath || '').trim()
+    if (!sourcePath) {
+      message.info('当前引用缺少可绑定的文献路径')
+      return
+    }
+    setReaderPayload({
+      sourcePath,
+      sourceName: String(payload.sourceName || '').trim(),
+      headingPath: String(payload.headingPath || '').trim(),
+      snippet: String(payload.snippet || '').trim(),
+    })
+    setReaderOpen(true)
+  }
+
+  const appendReaderSelection = (text: string) => {
+    const raw = String(text || '')
+    if (!raw.trim()) return
+    setAppendSignal({
+      token: Date.now() + Math.floor(Math.random() * 1000),
+      text: raw,
+    })
   }
 
   return (
@@ -318,6 +381,22 @@ export default function ChatPage() {
             </div>
           ) : null}
 
+          {activeConversation?.mode === 'paper_guide' ? (
+            <div className="border-b border-[var(--border)] bg-[var(--panel)]/40 px-4 py-2">
+              <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
+                <Text className="text-xs">
+                  阅读指导模式：
+                  <span className="ml-1 font-medium">
+                    {String(activeConversation.bound_source_name || '').trim() || String(activeConversation.bound_source_path || '').trim() || '未绑定文献'}
+                  </span>
+                </Text>
+                <Text type="secondary" className="text-xs">
+                  {Boolean(activeConversation.bound_source_ready) ? '已入库可检索' : '待入库'}
+                </Text>
+              </div>
+            </div>
+          ) : null}
+
           <div className="flex min-h-0 flex-1">
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <MessageList
@@ -327,6 +406,9 @@ export default function ChatPage() {
                 generationPartial={generation?.partial}
                 generationStage={generation?.stage}
                 jumpTarget={timelineJump}
+                onOpenReader={openReader}
+                paperGuideSourcePath={String(activeConversation?.bound_source_path || '').trim()}
+                paperGuideSourceName={String(activeConversation?.bound_source_name || '').trim()}
               />
             </div>
             {timelineOpen && timelineItems.length > 0 ? (
@@ -382,10 +464,18 @@ export default function ChatPage() {
         onCancelUploadItem={onCancelUpload}
         onRemoveImage={removePendingImage}
         onDismissUploadItem={dismissUploadItem}
+        onStartGuideFromUpload={onStartGuideFromUpload}
         uploadItems={uploadItems}
         pendingImages={pendingImages}
         uploading={uploading}
         generating={!!generation}
+        appendSignal={appendSignal}
+      />
+      <PaperGuideReaderDrawer
+        open={readerOpen}
+        payload={readerPayload}
+        onClose={() => setReaderOpen(false)}
+        onAppendSelection={appendReaderSelection}
       />
     </div>
   )

@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Button, Collapse, Modal, Tabs, Typography, message } from 'antd'
+import { useNavigate } from 'react-router-dom'
 import { S } from '../../i18n/zh'
 import { referencesApi } from '../../api/references'
+import { useChatStore } from '../../stores/chatStore'
+import type { ReaderOpenPayload } from '../chat/PaperGuideReaderDrawer'
 import {
   buildCiteDetailFromMeta,
   citationDisplay,
@@ -47,6 +50,7 @@ interface RefEntry {
 interface Props {
   refs: Record<string, unknown>
   msgId: number
+  onOpenReader?: (payload: ReaderOpenPayload) => void
 }
 
 function hasResolvedCitationMeta(meta: Record<string, unknown> | null | undefined) {
@@ -66,13 +70,16 @@ function positiveNumber(input: unknown): number {
   return Number.isFinite(value) && value > 0 ? value : 0
 }
 
-export function RefsPanel({ refs, msgId }: Props) {
+export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
+  const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
+  const nav = useNavigate()
   const entry = refs[String(msgId)] as RefEntry | undefined
   const hits = Array.isArray(entry?.hits) ? entry.hits : []
   const pendingCount = hits.filter((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending').length
   const hasPending = pendingCount > 0
   const [citeIndex, setCiteIndex] = useState<number | null>(null)
   const [loadingIndex, setLoadingIndex] = useState<number | null>(null)
+  const [guideLoadingIndex, setGuideLoadingIndex] = useState<number | null>(null)
   const [remoteMeta, setRemoteMeta] = useState<Record<number, Record<string, unknown>>>({})
 
   const fetchCitationMeta = async (index: number, ui: RefUiMeta) => {
@@ -100,6 +107,47 @@ export function RefsPanel({ refs, msgId }: Props) {
       anchor: `ref-source-${msgId}-${citeIndex}`,
     })
   }, [citeIndex, hits, msgId, remoteMeta])
+
+  const startPaperGuideFromHit = async (index: number, ui: RefUiMeta) => {
+    const sourcePath = String(ui.source_path || '').trim()
+    if (!sourcePath) {
+      message.info('当前引用缺少可绑定的文献路径')
+      return
+    }
+    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || '文献'
+    setGuideLoadingIndex(index)
+    try {
+      await createPaperGuideConversation({
+        sourcePath,
+        sourceName,
+        title: `阅读指导 · ${sourceName}`,
+      })
+      nav('/')
+      message.success('已进入阅读指导会话')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '创建阅读指导会话失败')
+    } finally {
+      setGuideLoadingIndex((current) => (current === index ? null : current))
+    }
+  }
+
+  const openReaderFromHit = (ui: RefUiMeta) => {
+    if (!onOpenReader) return
+    const sourcePath = String(ui.source_path || '').trim()
+    if (!sourcePath) {
+      message.info('当前引用缺少可绑定的文献路径')
+      return
+    }
+    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || '文献'
+    const headingPath = String(ui.heading_path || ui.section_label || ui.subsection_label || '').trim()
+    const snippet = String(ui.summary_line || ui.why_line || '').trim()
+    onOpenReader({
+      sourcePath,
+      sourceName,
+      headingPath,
+      snippet,
+    })
+  }
 
   if (!entry || (!hasPending && hits.length === 0)) return null
 
@@ -175,6 +223,13 @@ export function RefsPanel({ refs, msgId }: Props) {
                             <div className="flex shrink-0 gap-2">
                               <Button
                                 className="kb-ref-action"
+                                disabled={!canFetchMeta || !onOpenReader}
+                                onClick={() => openReaderFromHit(ui)}
+                              >
+                                定位
+                              </Button>
+                              <Button
+                                className="kb-ref-action"
                                 disabled={!ui.can_open || !ui.source_path}
                                 onClick={async () => {
                                   if (!ui.source_path) return
@@ -183,7 +238,7 @@ export function RefsPanel({ refs, msgId }: Props) {
                                     .catch((err: Error) => message.error(err.message || '打开失败'))
                                 }}
                               >
-                                Open
+                                PDF
                               </Button>
                               <Button
                                 className="kb-ref-action"
@@ -198,6 +253,14 @@ export function RefsPanel({ refs, msgId }: Props) {
                                 }}
                               >
                                 Cite
+                              </Button>
+                              <Button
+                                className="kb-ref-action"
+                                loading={guideLoadingIndex === index}
+                                disabled={!canFetchMeta}
+                                onClick={() => { void startPaperGuideFromHit(index, ui) }}
+                              >
+                                阅读
                               </Button>
                             </div>
                           </div>

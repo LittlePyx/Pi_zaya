@@ -56,6 +56,17 @@
 4. 运行时质量汇总（`/api/generate/quality/summary?limit=50`）显示近 41 条样本 `failed_rate=0`，结构与证据覆盖均为 `100%`。
 5. 风险结论更新：质量可发布，但相对 2026-03-06 基线存在时延抬升，发布策略调整为 `go_with_guardrail`（必须带时延闸门）。
 
+### 2026-03-09 增量更新（Refs 时延根因复盘）
+
+1. 现网慢点已定位：`refs` 相关耗时主要集中在 `gen.refs_enrich / gen.answer_refs_enrich`，样本日志常见 `28-35s`，极端可到 `50s+`；`retrieve` 常见 `0-5s`，`refs_seed/answer_refs_seed` 常见 `<0.5s`。
+2. 影响判断：当前“慢”不是 BM25 检索本身，而是引用包（LLM refs pack）补全链路导致；用户体感为每轮都出现较长 `refs` 阶段。
+3. 运行一致性风险已确认：日志出现 `POST /api/library/file/guide_source -> 404` 与 `PATCH /api/conversations/{id}/guide -> 404`，说明运行中的后端版本与当前代码不一致（典型是服务未重启到最新代码）。
+4. 新增提速目标（最小改造）：先保证“答案先出，引用后补”，将 refs 富化严格放入异步后处理，不阻塞 `done` 返回。
+5. 新增闸门指标（沿用最小验证）：`health + quality_summary + 小样本点测`，并补充两项时延观测：
+   - `T_answer_done`（从发问到 `status=done`）
+   - `T_refs_enrich_done`（refs 异步补全完成）
+6. 发布策略更新：在 `go_with_guardrail` 基础上增加 refs 时延闸门，若 `T_answer_done` 超阈值则不放量、优先回退 refs 富化策略。
+
 ## 1. 目标与边界
 
 ### 1.1 目标
@@ -223,6 +234,11 @@
 2. D3：灰度发布（先本地/测试环境，优先科研高频问法）。
 3. D4：手工回归（问答质量 + 引用可追溯 + 流式体验）。
 4. D5：复盘与阈值调整，决定是否全量。
+
+补充（2026-03-09）：
+1. D5.1：refs 链路时延拆分复盘（`retrieve / refs_seed / answer_refs_seed / refs_enrich / answer`）。
+2. D5.2：确认“答案链路与 refs 富化链路”解耦生效（`refs` 不再阻塞 `status=done`）。
+3. D5.3：将 refs 提速闸门写入发布清单并执行小样本点测。
 
 交付：
 

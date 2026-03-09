@@ -96,4 +96,14 @@ export const referencesApi = {
         meta,
       }),
     ),
+  readerDoc: (sourcePath: string) =>
+    api.post<{
+      ok: boolean
+      source_path: string
+      source_name: string
+      md_path: string
+      markdown: string
+    }>('/api/references/reader/doc', {
+      source_path: sourcePath,
+    }),
 }

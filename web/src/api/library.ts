@@ -107,6 +107,16 @@ export interface UploadCommitResponse {
   task_id: string
 }
 
+export interface GuideSourceResponse {
+  ok: boolean
+  pdf_name: string
+  pdf_path: string
+  md_path: string
+  md_exists: boolean
+  source_path: string
+  source_name: string
+}
+
 export interface LibraryReindexResponse {
   ok: boolean
   stdout: string
@@ -178,6 +188,8 @@ export const libraryApi = {
         also_md: alsoMd,
       },
     ),
+  resolveGuideSource: (pdfName: string) =>
+    api.post<GuideSourceResponse>('/api/library/file/guide_source', { pdf_name: pdfName }),
   listRenameSuggestions: (scope = '30', useLlm = true) =>
     api.get<RenameSuggestionsResponse>(
       `/api/library/rename/suggestions?scope=${encodeURIComponent(scope)}&use_llm=${String(useLlm)}`,

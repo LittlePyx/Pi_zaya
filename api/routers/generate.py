@@ -28,6 +28,8 @@ class GenerateBody(BaseModel):
     deep_read: bool = False
     image_attachments: list[dict] = Field(default_factory=list)
     preferred_sources: list[str] = Field(default_factory=list)
+    source_lock_path: str = ""
+    source_lock_name: str = ""
 
 
 @router.post("")
@@ -49,6 +51,29 @@ def start_generation(body: GenerateBody):
         body.conv_id, "assistant", _live_assistant_text(task_id)
     )
     chat_store.set_title_if_default(body.conv_id, user_store_text[:60])
+    conv_meta = chat_store.get_conversation(body.conv_id) or {}
+    conv_mode = str(conv_meta.get("mode") or "normal").strip().lower()
+    bound_source_path = str(conv_meta.get("bound_source_path") or "").strip()
+    bound_source_name = str(conv_meta.get("bound_source_name") or "").strip()
+    try:
+        bound_source_ready = bool(int(conv_meta.get("bound_source_ready") or 0))
+    except Exception:
+        bound_source_ready = False
+    source_lock_path = str(body.source_lock_path or "").strip()
+    source_lock_name = str(body.source_lock_name or "").strip()
+    if source_lock_path:
+        conv_mode = "paper_guide"
+        bound_source_path = source_lock_path
+        if source_lock_name:
+            bound_source_name = source_lock_name
+        bound_source_ready = True
+    preferred_sources = [str(x or "").strip() for x in list(body.preferred_sources or []) if str(x or "").strip()]
+    if conv_mode == "paper_guide":
+        for hint in (bound_source_path, bound_source_name):
+            if (not hint) or (hint in preferred_sources):
+                continue
+            preferred_sources.insert(0, hint)
+    preferred_sources = preferred_sources[:4]
 
     task = {
         "id": task_id,
@@ -57,7 +82,11 @@ def start_generation(body: GenerateBody):
         "prompt": prompt,
         "prompt_sig": hashlib.sha1(prompt.encode("utf-8", "ignore")).hexdigest()[:12] if prompt else "",
         "image_attachments": image_attachments,
-        "preferred_sources": [str(x or "").strip() for x in list(body.preferred_sources or []) if str(x or "").strip()][:4],
+        "preferred_sources": preferred_sources,
+        "paper_guide_mode": conv_mode == "paper_guide",
+        "paper_guide_bound_source_path": bound_source_path,
+        "paper_guide_bound_source_name": bound_source_name,
+        "paper_guide_bound_source_ready": bool(bound_source_ready and bound_source_path),
         "chat_db": str(settings.chat_db_path),
         "db_dir": str(settings.db_dir),
         "top_k": body.top_k,

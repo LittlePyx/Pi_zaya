@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { Button, Input, Tag, Typography, message } from 'antd'
-import { CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
+import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
 import type { ChatImageAttachment, ChatUploadItem } from '../../api/chat'
 import { S } from '../../i18n/zh'
 
@@ -23,10 +23,12 @@ interface Props {
   onCancelUploadItem: (key: string) => Promise<void>
   onRemoveImage: (key: string) => void
   onDismissUploadItem: (key: string) => void
+  onStartGuideFromUpload: (item: ChatUploadItem) => void
   uploadItems: ChatUploadItem[]
   pendingImages: ChatImageAttachment[]
   uploading: boolean
   generating: boolean
+  appendSignal?: { token: number; text: string } | null
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
@@ -146,10 +148,12 @@ export function ChatInput({
   onCancelUploadItem,
   onRemoveImage,
   onDismissUploadItem,
+  onStartGuideFromUpload,
   uploadItems,
   pendingImages,
   uploading,
   generating,
+  appendSignal,
 }: Props) {
   const [text, setText] = useState('')
   const [dragActive, setDragActive] = useState(false)
@@ -161,6 +165,21 @@ export function ChatInput({
   useEffect(() => {
     if (!generating) ref.current?.focus()
   }, [generating])
+
+  useEffect(() => {
+    if (!appendSignal) return
+    const incoming = String(appendSignal.text || '')
+    if (!incoming.trim()) return
+    setText((current) => {
+      const cur = String(current || '')
+      if (!cur.trim()) return incoming
+      const needsBreak = !cur.endsWith('\n')
+      return `${cur}${needsBreak ? '\n\n' : ''}${incoming}`
+    })
+    window.setTimeout(() => {
+      ref.current?.focus()
+    }, 0)
+  }, [appendSignal?.token])
 
   const uploadSelectedFiles = async (files: File[]) => {
     const { accepted, rejected } = collectAcceptedFiles(files)
@@ -257,6 +276,12 @@ export function ChatInput({
                   || item.quality_status === 'error'
                 )
               )
+              const canStartGuide = (
+                item.kind === 'pdf'
+                && item.ready === true
+                && String(item.ingest_status || '') === 'ready'
+                && Boolean(String(item.md_path || '').trim())
+              )
               return (
                 <Tag
                   key={uploadItemKey(item)}
@@ -286,6 +311,16 @@ export function ChatInput({
                       title={item.quality_status === 'error' ? '重试后台精修' : '重试入库'}
                     >
                       <RedoOutlined />
+                    </button>
+                  ) : null}
+                  {canStartGuide ? (
+                    <button
+                      type="button"
+                      className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border-0 bg-transparent px-1 opacity-75 transition hover:opacity-100"
+                      onClick={() => onStartGuideFromUpload(item)}
+                      title="围绕本文进入阅读指导"
+                    >
+                      <BookOutlined />
                     </button>
                   ) : null}
                   <button

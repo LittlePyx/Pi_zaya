@@ -56,6 +56,10 @@ interface Props {
   content: string
   citeDetails?: CiteDetail[]
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
+  onLocateSnippet?: (snippet: string) => void
+  locateLabelResolver?: (snippet: string) => string
+  locateTitleResolver?: (snippet: string) => string
+  variant?: 'chat' | 'reader'
 }
 
 type CiteChipTone = {
@@ -164,6 +168,44 @@ function extractCode(node: ReactNode): { text: string; language: string } {
   return { text: String(node || ''), language: '' }
 }
 
+function plainText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map((item) => plainText(item)).join(' ')
+  if (isValidElement(node)) {
+    const props = node.props as { children?: ReactNode }
+    return plainText(props.children)
+  }
+  return ''
+}
+
+function hasMathSignalInline(text: string): boolean {
+  const src = String(text || '')
+  if (!src) return false
+  if (/[=^_]/.test(src)) return true
+  if (/\\[a-zA-Z]{2,}/.test(src)) return true
+  if (/\$[^$]{1,120}\$/.test(src) || /\$\$[^]{1,260}\$\$/.test(src)) return true
+  return false
+}
+
+function toLocateSnippet(node: ReactNode): string {
+  const text = plainText(node).replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  if (hasMathSignalInline(text)) {
+    return text.length <= 480 ? text : `${text.slice(0, 480).trimEnd()}...`
+  }
+  if (text.length <= 420) return text
+  const sentences = text
+    .split(/(?<=[\u3002\uff01\uff1f.!;:\uff1b\uff1a])\s+/)
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+  const merged = sentences.slice(0, 3).join(' ').trim()
+  if (merged.length >= 40) {
+    return merged.length <= 480 ? merged : `${merged.slice(0, 480).trimEnd()}...`
+  }
+  return `${text.slice(0, 480).trimEnd()}...`
+}
+
 function parseAnswerContract(text: string): { preamble: string; sections: ParsedAnswerSection[] } | null {
   const src = String(text || '')
   if (!src) return null
@@ -209,10 +251,43 @@ function buildMarkdownComponents(
   byAnchor: Map<string, CiteDetail>,
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   toneBySource?: Map<string, CiteChipTone>,
+  onLocateSnippet?: (snippet: string) => void,
+  locateLabelResolver?: (snippet: string) => string,
+  locateTitleResolver?: (snippet: string) => string,
+  variant: 'chat' | 'reader' = 'chat',
 ) {
+  const renderLocateButton = (children: ReactNode) => {
+    if (!onLocateSnippet) return null
+    const snippet = toLocateSnippet(children)
+    if (!snippet) return null
+    const label = String(locateLabelResolver?.(snippet) || '').trim() || '定位原文'
+    const title = String(locateTitleResolver?.(snippet) || '').trim()
+    return (
+      <button
+        type="button"
+        className="kb-md-locate-btn"
+        title={title || label}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onLocateSnippet(snippet)
+        }}
+      >
+        {label}
+      </button>
+    )
+  }
+
   return {
     pre: ({ children }: { children?: ReactNode }) => {
       const { text, language } = extractCode(children)
+      if (variant === 'reader') {
+        return (
+          <pre>
+            <code>{text}</code>
+          </pre>
+        )
+      }
       return (
         <div className="kb-code-block">
           <div className="kb-code-head">
@@ -282,18 +357,54 @@ function buildMarkdownComponents(
         </a>
       )
     },
+    p: ({ children }: { children?: ReactNode }) => {
+      const btn = renderLocateButton(children)
+      if (!btn) return <p>{children}</p>
+      return (
+        <div className="kb-md-loc-block">
+          <p>{children}</p>
+          {btn}
+        </div>
+      )
+    },
+    li: ({ children }: { children?: ReactNode }) => {
+      const btn = renderLocateButton(children)
+      if (!btn) return <li>{children}</li>
+      return (
+        <li className="kb-md-loc-li">
+          {children}
+          {btn}
+        </li>
+      )
+    },
   }
 }
 
-export function MarkdownRenderer({ content, citeDetails = [], onCitationClick }: Props) {
+export function MarkdownRenderer({
+  content,
+  citeDetails = [],
+  onCitationClick,
+  onLocateSnippet,
+  locateLabelResolver,
+  locateTitleResolver,
+  variant = 'chat',
+}: Props) {
   const normalizedContent = normalize(content)
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
   const toneBySource = useMemo(() => buildToneMap(citeDetails), [citeDetails])
-  const components = buildMarkdownComponents(byAnchor, onCitationClick, toneBySource)
+  const components = buildMarkdownComponents(
+    byAnchor,
+    onCitationClick,
+    toneBySource,
+    onLocateSnippet,
+    locateLabelResolver,
+    locateTitleResolver,
+    variant,
+  )
   const parsedContract = parseAnswerContract(normalizedContent)
 
   return (
-    <div className="kb-markdown prose dark:prose-invert max-w-none text-sm">
+    <div className={`kb-markdown prose dark:prose-invert max-w-none text-sm ${variant === 'reader' ? 'kb-markdown-reader' : 'kb-markdown-chat'}`}>
       {parsedContract ? (
         <div className="kb-answer-contract">
           {parsedContract.preamble ? (

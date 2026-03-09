@@ -114,6 +114,55 @@ body,
 }
 
 /* markdown code blocks */
+.kb-markdown {
+  color: color-mix(in srgb, var(--text-main) 96%, transparent);
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.kb-markdown :where(h1, h2, h3, h4, h5, h6) {
+  margin: 1.45em 0 0.55em;
+  line-height: 1.35;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.kb-markdown :where(h1) {
+  font-size: 1.7em;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  padding-bottom: 0.2em;
+}
+
+.kb-markdown :where(h2) {
+  font-size: 1.38em;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  padding-bottom: 0.16em;
+}
+
+.kb-markdown :where(h3) {
+  font-size: 1.2em;
+}
+
+.kb-markdown :where(p, ul, ol, blockquote, pre, table) {
+  margin: 0.76em 0;
+}
+
+.kb-markdown :where(blockquote) {
+  margin-inline: 0;
+  padding: 0.45em 0.9em;
+  border-left: 4px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--msg-user-bg) 45%, var(--panel));
+  border-radius: 0 10px 10px 0;
+}
+
+.kb-markdown :where(code):not(pre code) {
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 90%, var(--bg));
+  padding: 0.1em 0.35em;
+  font-size: 0.92em;
+}
+
 .kb-markdown pre {
   border-radius: 8px;
   overflow-x: auto;
@@ -278,6 +327,84 @@ body,
 
 .dark .kb-markdown .kb-cite-chip:hover {
   color: color-mix(in srgb, var(--kb-cite-fg-hover, var(--kb-cite-fg, var(--accent))) 78%, #dbeafe 22%);
+}
+
+.kb-markdown .kb-md-loc-block,
+.kb-markdown .kb-md-loc-li {
+  position: relative;
+}
+
+.kb-markdown .kb-md-loc-block {
+  padding-right: 68px;
+}
+
+.kb-markdown .kb-md-loc-block > p {
+  margin: 0;
+}
+
+.kb-markdown .kb-md-loc-li {
+  padding-right: 68px;
+}
+
+.kb-markdown .kb-md-locate-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 24px;
+  max-width: 136px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  color: color-mix(in srgb, var(--text-main) 72%, transparent);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.kb-markdown .kb-md-loc-block:hover .kb-md-locate-btn,
+.kb-markdown .kb-md-loc-block:focus-within .kb-md-locate-btn,
+.kb-markdown .kb-md-loc-li:hover > .kb-md-locate-btn,
+.kb-markdown .kb-md-loc-li:focus-within > .kb-md-locate-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.kb-markdown .kb-md-locate-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
+  color: var(--accent);
+}
+
+.kb-markdown.kb-markdown-reader {
+  font-family: "Palatino Linotype", "Times New Roman", "Source Han Serif SC", "Noto Serif SC", serif;
+  font-size: 16px;
+  line-height: 1.82;
+  letter-spacing: 0.005em;
+}
+
+.kb-markdown.kb-markdown-reader :where(h1, h2, h3, h4, h5, h6) {
+  font-weight: 650;
+}
+
+.kb-markdown.kb-markdown-reader :where(p, ul, ol, blockquote, pre, table) {
+  margin: 0.92em 0;
+}
+
+.kb-markdown.kb-markdown-reader pre {
+  padding: 0.9em 1em;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 93%, var(--bg));
+}
+
+.kb-markdown.kb-markdown-reader code {
+  font-family: "Consolas", "SFMono-Regular", "Menlo", "Monaco", monospace;
 }
 
 .kb-cite-pop {
@@ -1143,6 +1270,12 @@ body,
   border-color: var(--border);
 }
 
+.kb-cite-pop-open-shelf:disabled,
+.kb-cite-pop-add:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .kb-cite-pop-close {
   width: 34px;
   height: 34px;
@@ -1153,6 +1286,17 @@ body,
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
+}
+
+.kb-reader-content {
+  scroll-behavior: smooth;
+}
+
+.kb-reader-content .kb-reader-focus {
+  border-radius: 8px;
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  transition: background-color 0.2s ease, outline-color 0.2s ease;
 }
 
 .kb-markdown hr {

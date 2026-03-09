@@ -6,6 +6,10 @@ export interface Conversation {
   created_at: number
   updated_at: number
   project_id?: string | null
+  mode?: 'normal' | 'paper_guide'
+  bound_source_path?: string
+  bound_source_name?: string
+  bound_source_ready?: number | boolean
   archived?: number | boolean
   archived_at?: number | null
 }
@@ -77,8 +81,24 @@ export const chatApi = {
     ),
   getConversation: (convId: string) =>
     api.get<Conversation>(`/api/conversations/${convId}`),
-  createConversation: (title = '新对话', projectId?: string | null) =>
-    api.post<{ id: string }>('/api/conversations', { title, project_id: projectId ?? null }),
+  createConversation: (
+    title = '新对话',
+    projectId?: string | null,
+    guide?: {
+      mode?: 'normal' | 'paper_guide'
+      bound_source_path?: string
+      bound_source_name?: string
+      bound_source_ready?: boolean
+    },
+  ) =>
+    api.post<{ id: string }>('/api/conversations', {
+      title,
+      project_id: projectId ?? null,
+      mode: guide?.mode ?? 'normal',
+      bound_source_path: guide?.bound_source_path ?? '',
+      bound_source_name: guide?.bound_source_name ?? '',
+      bound_source_ready: Boolean(guide?.bound_source_ready),
+    }),
   deleteConversation: (id: string) =>
     api.delete(`/api/conversations/${id}`),
   getMessages: (convId: string) =>
@@ -109,4 +129,19 @@ export const chatApi = {
     api.patch(`/api/conversations/${convId}/title`, { title }),
   updateConversationProject: (convId: string, projectId?: string | null) =>
     api.patch(`/api/conversations/${convId}/project`, { project_id: projectId ?? null }),
+  updateConversationGuide: (
+    convId: string,
+    guide: {
+      mode?: 'normal' | 'paper_guide'
+      bound_source_path?: string
+      bound_source_name?: string
+      bound_source_ready?: boolean
+    },
+  ) =>
+    api.patch(`/api/conversations/${convId}/guide`, {
+      mode: guide.mode,
+      bound_source_path: guide.bound_source_path,
+      bound_source_name: guide.bound_source_name,
+      bound_source_ready: guide.bound_source_ready,
+    }),
 }

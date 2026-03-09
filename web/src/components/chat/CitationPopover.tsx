@@ -6,17 +6,31 @@ interface Props {
   detail: CiteDetail | null
   position: { x: number; y: number } | null
   loading: boolean
+  guideLoading: boolean
   inShelf: boolean
   onClose: () => void
   onAddToShelf: (detail: CiteDetail) => void
   onOpenShelf: () => void
+  onOpenReader: (detail: CiteDetail) => void
+  onStartGuide: (detail: CiteDetail) => void
 }
 
 function compact(value: string) {
   return String(value || '').trim()
 }
 
-export function CitationPopover({ detail, position, loading, inShelf, onClose, onAddToShelf, onOpenShelf }: Props) {
+export function CitationPopover({
+  detail,
+  position,
+  loading,
+  guideLoading,
+  inShelf,
+  onClose,
+  onAddToShelf,
+  onOpenShelf,
+  onOpenReader,
+  onStartGuide,
+}: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [style, setStyle] = useState<{ left: number; top: number } | null>(null)
 
@@ -60,6 +74,7 @@ export function CitationPopover({ detail, position, loading, inShelf, onClose, o
   const doiLabel = compact(detail.doi) || compact(detail.doiUrl)
   const metrics = citeMetricSummary(detail)
   const inlineLabel = citationInlineLabel(detail)
+  const canOpenReader = Boolean(compact(detail.sourcePath))
 
   return (
     <div
@@ -94,6 +109,22 @@ export function CitationPopover({ detail, position, loading, inShelf, onClose, o
       <div className="kb-cite-pop-actions">
         <button className="kb-cite-pop-open-shelf" type="button" onClick={onOpenShelf}>
           打开文献篮
+        </button>
+        <button
+          className="kb-cite-pop-open-shelf"
+          type="button"
+          disabled={!canOpenReader}
+          onClick={() => onOpenReader(detail)}
+        >
+          阅读定位
+        </button>
+        <button
+          className="kb-cite-pop-open-shelf"
+          type="button"
+          onClick={() => onStartGuide(detail)}
+          disabled={guideLoading}
+        >
+          {guideLoading ? '进入中...' : '围绕此文阅读'}
         </button>
         <button
           className={`kb-cite-pop-add ${inShelf ? 'kb-added' : ''}`}

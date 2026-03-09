@@ -5,6 +5,7 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
+import type { ReaderOpenPayload } from './PaperGuideReaderDrawer'
 import {
   mergeCiteMeta,
   normalizeCiteDetail,
@@ -18,6 +19,7 @@ import {
 import { RefsPanel } from '../refs/RefsPanel'
 import type { ChatImageAttachment, Message } from '../../api/chat'
 import { referencesApi } from '../../api/references'
+import { useChatStore } from '../../stores/chatStore'
 
 const { Text } = Typography
 const SHELF_MAX_ITEMS = 120
@@ -33,6 +35,163 @@ interface Props {
   generationPartial?: string
   generationStage?: string
   jumpTarget?: { messageId: number; token: number } | null
+  onOpenReader?: (payload: ReaderOpenPayload) => void
+  paperGuideSourcePath?: string
+  paperGuideSourceName?: string
+}
+
+interface RefUiMetaLite {
+  display_name?: string
+  heading_path?: string
+  section_label?: string
+  subsection_label?: string
+  summary_line?: string
+  why_line?: string
+  source_path?: string
+  anchor_target_kind?: string
+  anchor_target_number?: number
+}
+
+interface RefMetaLite {
+  source_path?: string
+  heading_path?: string
+  ref_best_heading_path?: string
+  ref_headings?: unknown
+  ref_locs?: unknown
+  ref_show_snippets?: unknown
+  ref_overview_snippets?: unknown
+  ref_snippets?: unknown
+}
+
+interface RefHitLite {
+  ui_meta?: RefUiMetaLite
+  meta?: RefMetaLite
+}
+
+interface RefEntryLite {
+  hits?: RefHitLite[]
+}
+
+interface LocateCandidate {
+  sourcePath: string
+  sourceName: string
+  headingPath: string
+  focusSnippet: string
+  matchText: string
+  sourceType: 'guide' | 'refs'
+}
+
+const GUIDE_LOCATE_CANDIDATE_LIMIT = 1600
+const REF_LOCATE_CANDIDATE_LIMIT = 900
+
+function stripMarkdownInline(input: string): string {
+  return String(input || '')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function buildGuideLocateCandidates(
+  markdown: string,
+  sourcePath: string,
+  sourceName: string,
+  sourceType: 'guide' | 'refs' = 'guide',
+): LocateCandidate[] {
+  const out: LocateCandidate[] = []
+  const seen = new Set<string>()
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const headingStack: Array<{ level: number; text: string }> = []
+  let bucket: string[] = []
+
+  const pushCandidate = (headingPathRaw: string, snippetRaw: string) => {
+    const headingPath = stripMarkdownInline(headingPathRaw)
+    const text = stripMarkdownInline(snippetRaw)
+    if (text.length < 24) return
+    const key = `${normalizeLocateText(sourcePath)}::${normalizeLocateText(headingPath)}::${normalizeLocateText(text).slice(0, 260)}`
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push({
+      sourcePath,
+      sourceName,
+      headingPath,
+      focusSnippet: text,
+      matchText: [headingPath, text].filter(Boolean).join('\n'),
+      sourceType,
+    })
+  }
+
+  const pushSentenceCandidates = (headingPath: string, text: string) => {
+    const src = stripMarkdownInline(text)
+    if (src.length < 24) return
+    const sentenceList = src
+      .split(/(?<=[\u3002\uff01\uff1f.!;:\uff1b\uff1a])\s+/)
+      .map((item) => item.trim())
+      .filter((item) => item.length >= 16)
+      .slice(0, 14)
+    for (let i = 0; i < sentenceList.length; i += 1) {
+      const sentence = sentenceList[i]
+      if (sentence.length >= 24) pushCandidate(headingPath, sentence)
+      const pair = [sentence, sentenceList[i + 1] || ''].filter(Boolean).join(' ').trim()
+      if (pair.length >= 30 && pair.length <= 260) {
+        pushCandidate(headingPath, pair)
+      }
+    }
+  }
+
+  const flush = () => {
+    if (bucket.length <= 0) return
+    const text = stripMarkdownInline(bucket.join(' ').trim())
+    bucket = []
+    if (text.length < 24) return
+    const headingPath = headingStack.map((item) => item.text).filter(Boolean).join(' / ')
+    pushCandidate(headingPath, text)
+    pushSentenceCandidates(headingPath, text)
+  }
+
+  for (const raw of lines) {
+    const line = String(raw || '')
+    const heading = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/)
+    if (heading) {
+      flush()
+      const level = heading[1].length
+      const text = stripMarkdownInline(heading[2] || '')
+      if (text) {
+        while (headingStack.length > 0 && headingStack[headingStack.length - 1].level >= level) {
+          headingStack.pop()
+        }
+        headingStack.push({ level, text })
+      }
+      continue
+    }
+    if (/^\s*([-*_]\s*){3,}\s*$/.test(line) || /^\s*```/.test(line) || /^\s*~~~/.test(line)) {
+      flush()
+      continue
+    }
+    if (!line.trim()) {
+      flush()
+      continue
+    }
+    if (/^\s*\|/.test(line) || /^\s*>/.test(line)) {
+      flush()
+      const text = stripMarkdownInline(line.replace(/^\s*[>|]+\s*/, ''))
+      if (text.length >= 24) {
+        const headingPath = headingStack.map((item) => item.text).filter(Boolean).join(' / ')
+        pushCandidate(headingPath, text)
+      }
+      continue
+    }
+    bucket.push(line)
+  }
+  flush()
+  if (out.length <= 0) return out
+  // Keep a practical upper bound for runtime matching cost.
+  return out.slice(0, GUIDE_LOCATE_CANDIDATE_LIMIT)
 }
 
 function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
@@ -41,6 +200,182 @@ function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
   const hits = Array.isArray(entry.hits) ? entry.hits : []
   if (hits.length > 0) return true
   return hits.some((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending')
+}
+
+function normalizeLocateText(input: string): string {
+  return String(input || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function tokenizeLocateText(input: string): string[] {
+  const src = normalizeLocateText(input)
+  if (!src) return []
+  const out: string[] = []
+  const latin = src.match(/[a-z0-9]{2,}/g) || []
+  out.push(...latin)
+  const cjkSeq = src.match(/[\u4e00-\u9fff]{1,}/g) || []
+  for (const seq of cjkSeq) {
+    if (seq.length <= 2) {
+      out.push(seq)
+      continue
+    }
+    for (let i = 0; i < seq.length - 1; i += 1) {
+      out.push(seq.slice(i, i + 2))
+    }
+  }
+  return out
+}
+
+function overlapScore(a: string, b: string): number {
+  const ta = tokenizeLocateText(a)
+  const tb = tokenizeLocateText(b)
+  if (ta.length === 0 || tb.length === 0) return 0
+  const sa = new Set(ta)
+  const sb = new Set(tb)
+  let overlap = 0
+  for (const token of sa) {
+    if (sb.has(token)) overlap += 1
+  }
+  const denom = Math.sqrt(Math.max(1, sa.size) * Math.max(1, sb.size))
+  return overlap / denom
+}
+
+function coerceStringArray(input: unknown, maxItems = 8, maxChars = 2200): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (value: unknown) => {
+    if (out.length >= maxItems) return
+    const text = String(value || '').replace(/\s+/g, ' ').trim()
+    if (!text) return
+    const normalized = normalizeLocateText(text)
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    out.push(text.length > maxChars ? `${text.slice(0, maxChars).trimEnd()}...` : text)
+  }
+  if (Array.isArray(input)) {
+    for (const value of input) {
+      if (out.length >= maxItems) break
+      push(value)
+    }
+    return out
+  }
+  push(input)
+  return out
+}
+
+function pickFirstRefText(loc: Record<string, unknown>): string {
+  const keys = ['snippet', 'text', 'quote', 'content', 'summary', 'why']
+  for (const key of keys) {
+    const value = String(loc[key] || '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function formulaTokens(text: string): string[] {
+  const src = String(text || '')
+  if (!src) return []
+  const out: string[] = []
+  const texCmds = src.match(/\\[a-zA-Z]{2,}/g) || []
+  out.push(...texCmds.map((item) => item.toLowerCase()))
+  const symbols = src.match(/[A-Za-z](?:_[A-Za-z0-9]+)?(?:\^[A-Za-z0-9]+)?/g) || []
+  out.push(...symbols.map((item) => item.toLowerCase()))
+  const numbers = src.match(/\b\d{1,4}\b/g) || []
+  out.push(...numbers)
+  return out
+}
+
+function hasFormulaSignal(text: string): boolean {
+  const src = String(text || '')
+  if (!src) return false
+  if (/[=^_]/.test(src)) return true
+  if (/\\[a-zA-Z]{2,}/.test(src)) return true
+  if (/\$[^$]{1,80}\$/.test(src) || /\$\$[^]{1,200}\$\$/.test(src)) return true
+  return false
+}
+
+function formulaOverlapScore(a: string, b: string): number {
+  const ta = new Set(formulaTokens(a))
+  const tb = new Set(formulaTokens(b))
+  if (ta.size <= 0 || tb.size <= 0) return 0
+  let overlap = 0
+  for (const token of ta) {
+    if (tb.has(token)) overlap += 1
+  }
+  return overlap / Math.sqrt(ta.size * tb.size)
+}
+
+function scoreLocateCandidate(snippet: string, cand: LocateCandidate): number {
+  const query = String(snippet || '').trim()
+  if (!query) return 0
+  const qNorm = normalizeLocateText(query)
+  const focusText = String(cand.focusSnippet || '').trim()
+  const matchText = String(cand.matchText || focusText).trim()
+  if (!matchText) return 0
+  const mNorm = normalizeLocateText(matchText)
+  const fNorm = normalizeLocateText(focusText)
+
+  let score = Math.max(
+    overlapScore(query, matchText),
+    overlapScore(query, focusText) * 1.08,
+  )
+
+  if (qNorm && mNorm) {
+    if (mNorm.includes(qNorm)) score += 0.7
+    const qHead = qNorm.slice(0, Math.min(64, qNorm.length))
+    if (qHead.length >= 18 && mNorm.includes(qHead)) score += 0.26
+    const mHead = mNorm.slice(0, Math.min(64, mNorm.length))
+    if (mHead.length >= 18 && qNorm.includes(mHead)) score += 0.18
+  }
+  if (qNorm && fNorm) {
+    if (fNorm.includes(qNorm)) score += 0.2
+    const qHead = qNorm.slice(0, Math.min(48, qNorm.length))
+    if (qHead.length >= 16 && fNorm.includes(qHead)) score += 0.14
+  }
+
+  const tokenSet = new Set(tokenizeLocateText(matchText))
+  const keyTokens = Array.from(new Set(tokenizeLocateText(query))).filter((token) => token.length >= 3)
+  let hitCount = 0
+  for (const token of keyTokens) {
+    if (tokenSet.has(token)) hitCount += 1
+  }
+  if (hitCount > 0) {
+    score += Math.min(0.36, 0.03 * hitCount)
+  }
+  if (query.length >= 80 && focusText.length >= 80) {
+    score += 0.05
+  }
+  if (hasFormulaSignal(query) || hasFormulaSignal(matchText)) {
+    score += 0.72 * formulaOverlapScore(query, matchText)
+  }
+  if (cand.sourceType === 'guide') {
+    score += 0.07
+  }
+  return score
+}
+
+function shortHeadingLabel(input: string, maxLen = 18): string {
+  const text = String(input || '').replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  if (text.length <= maxLen) return text
+  return `${text.slice(0, Math.max(6, maxLen - 1)).trimEnd()}...`
+}
+
+function pickLocateCandidate(snippet: string, candidates: LocateCandidate[]): LocateCandidate | null {
+  const query = String(snippet || '').trim()
+  if (!query || candidates.length <= 0) return null
+  let best: LocateCandidate | null = null
+  let bestScore = 0
+  for (const cand of candidates) {
+    const score = scoreLocateCandidate(query, cand)
+    if (score > bestScore) {
+      bestScore = score
+      best = cand
+    }
+  }
+  return bestScore >= 0.11 ? best : null
 }
 
 function isImageOnlyPlaceholder(content: string) {
@@ -299,7 +634,7 @@ function readSavedShelfSnapshots(storageKey: string, rawOverride?: string): Shel
       if (!id || seen.has(id)) continue
       const createdAt0 = Number(rec.createdAt || 0)
       const createdAt = Number.isFinite(createdAt0) && createdAt0 > 0 ? Math.floor(createdAt0) : Date.now()
-      const name = String(rec.name || '').trim() || '未命名快照'
+      const name = String(rec.name || '').trim() || 'Untitled snapshot'
       const itemsRaw: unknown[] = Array.isArray(rec.items) ? rec.items : []
       snapshots.push({
         id,
@@ -332,7 +667,7 @@ function persistSavedShelfSnapshots(storageKey: string, snapshots: ShelfSavedSna
     .slice(0, SHELF_SAVED_MAX_ITEMS)
     .map((entry) => ({
       id: String(entry.id || '').trim(),
-      name: String(entry.name || '').trim() || '未命名快照',
+      name: String(entry.name || '').trim() || 'Untitled snapshot',
       createdAt: Number(entry.createdAt || 0) > 0 ? Number(entry.createdAt) : Date.now(),
       items: dedupeShelfItems(entry.items || []).slice(0, SHELF_MAX_ITEMS).map((item) => ({ ...item })),
     }))
@@ -571,7 +906,7 @@ function normalizeTextLite(value: string): string {
 
 function firstAuthorToken(value: string): string {
   const firstChunk = String(value || '')
-    .split(/[;,，；]/)[0]
+    .split(/[;,锛岋紱]/)[0]
     ?.trim()
     || ''
   const tokens = firstChunk.match(/[A-Za-z\u4e00-\u9fff]+/g) || []
@@ -645,11 +980,23 @@ function snapshotDiffCounts(currentItems: CiteShelfItem[], baselineItems: CiteSh
   return { added, removed }
 }
 
-export function MessageList({ activeConvId, messages, refs, generationPartial, generationStage, jumpTarget }: Props) {
+export function MessageList({
+  activeConvId,
+  messages,
+  refs,
+  generationPartial,
+  generationStage,
+  jumpTarget,
+  onOpenReader,
+  paperGuideSourcePath,
+  paperGuideSourceName,
+}: Props) {
+  const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const scrollRef = useRef<HTMLDivElement>(null)
   const [popoverDetail, setPopoverDetail] = useState<CiteDetail | null>(null)
   const [popoverPos, setPopoverPos] = useState<{ x: number; y: number } | null>(null)
   const [popoverLoading, setPopoverLoading] = useState(false)
+  const [popoverGuideLoading, setPopoverGuideLoading] = useState(false)
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
@@ -657,6 +1004,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const [shelfRepairLoadingKey, setShelfRepairLoadingKey] = useState('')
   const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
   const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
+  const [guideDocCandidates, setGuideDocCandidates] = useState<LocateCandidate[]>([])
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
   const activeStorageKeyRef = useRef(shelfStorageKey(activeConvId))
@@ -666,6 +1014,33 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     open: false,
     items: [],
   })
+
+  useEffect(() => {
+    const sourcePath = String(paperGuideSourcePath || '').trim()
+    const sourceName = String(paperGuideSourceName || '').trim()
+    if (!sourcePath) {
+      setGuideDocCandidates([])
+      return
+    }
+    let cancelled = false
+    referencesApi.readerDoc(sourcePath)
+      .then((res) => {
+        if (cancelled) return
+        const markdown = String(res.markdown || '')
+        if (!markdown.trim()) {
+          setGuideDocCandidates([])
+          return
+        }
+        const resolvedName = String(res.source_name || sourceName || '').trim()
+        setGuideDocCandidates(buildGuideLocateCandidates(markdown, sourcePath, resolvedName || sourceName || sourcePath))
+      })
+      .catch(() => {
+        if (!cancelled) setGuideDocCandidates([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [paperGuideSourcePath, paperGuideSourceName])
 
   useLayoutEffect(() => {
     const el = scrollRef.current
@@ -975,11 +1350,11 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
           }
           return entry
         }))
-        if (didUpdate) message.success('已按严格规则修复元数据')
-        else message.info('未通过严格匹配校验，已保留原信息')
+        if (didUpdate) message.success('Metadata repaired with strict rules')
+        else message.info('Strict match did not pass; original metadata kept')
       })
       .catch(() => {
-        message.error('修复失败，请稍后重试')
+        message.error('淇澶辫触锛岃绋嶅悗閲嶈瘯')
       })
       .finally(() => {
         setShelfRepairLoadingKey((current) => (current === item.key ? '' : current))
@@ -989,6 +1364,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const openCitation = (detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
     setPopoverDetail(detail)
     setPopoverPos({ x: event.clientX, y: event.clientY })
+    setPopoverGuideLoading(false)
     const sourcePath = String(detail.sourcePath || '').trim()
     const isInPaperReference = Number(detail.num || 0) > 0
     const shouldFetchCitationMeta = Boolean(sourcePath) && !isInPaperReference
@@ -1067,6 +1443,51 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     fetchShelfSummaryForItem(item)
   }
 
+  const startPaperGuideFromDetail = async (detail: CiteDetail) => {
+    const isInPaperReference = Number(detail.num || 0) > 0
+    if (isInPaperReference) {
+      message.info('This item is an in-answer citation. Upload the PDF in Library first, then start paper guide.')
+      return
+    }
+    const sourcePath = String(detail.sourcePath || '').trim()
+    if (!sourcePath) {
+      message.info('褰撳墠寮曠敤缂哄皯鍙粦瀹氱殑鏂囩尞璺緞')
+      return
+    }
+    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || '鏂囩尞'
+    setPopoverGuideLoading(true)
+    try {
+      await createPaperGuideConversation({
+        sourcePath,
+        sourceName,
+        title: `闃呰鎸囧 路 ${sourceName}`,
+      })
+      message.success('Entered paper guide conversation')
+      setPopoverDetail(null)
+      setPopoverPos(null)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '鍒涘缓闃呰鎸囧浼氳瘽澶辫触')
+    } finally {
+      setPopoverGuideLoading(false)
+    }
+  }
+
+  const openReaderFromDetail = (detail: CiteDetail) => {
+    if (!onOpenReader) return
+    const sourcePath = String(detail.sourcePath || '').trim()
+    if (!sourcePath) {
+      message.info('褰撳墠寮曠敤缂哄皯鍙粦瀹氱殑鏂囩尞璺緞')
+      return
+    }
+    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || '鏂囩尞'
+    const snippet = String(detail.summaryLine || detail.title || detail.raw || '').trim()
+    onOpenReader({
+      sourcePath,
+      sourceName,
+      snippet,
+    })
+  }
+
   const selectedSavedSnapshot = useMemo(
     () => savedShelfSnapshots.find((item) => item.id === selectedSavedSnapshotId) || null,
     [savedShelfSnapshots, selectedSavedSnapshotId],
@@ -1075,14 +1496,14 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
   const selectedSnapshotDiff = useMemo(() => {
     if (!selectedSavedSnapshot) return ''
     const diff = snapshotDiffCounts(shelfItems, selectedSavedSnapshot.items)
-    if (diff.added <= 0 && diff.removed <= 0) return '与当前文献篮一致'
-    return `对比当前：新增 ${diff.added} 条 · 移除 ${diff.removed} 条`
+    if (diff.added <= 0 && diff.removed <= 0) return 'No diff from current shelf'
+    return `Compared with current: +${diff.added} / -${diff.removed}`
   }, [selectedSavedSnapshot, shelfItems])
 
   const saveShelfSnapshot = () => {
     const currentItems = dedupeShelfItems(shelfItems).slice(0, SHELF_MAX_ITEMS)
     if (currentItems.length <= 0) {
-      message.info('文献篮为空，暂不能保存快照')
+      message.info('Shelf is empty; cannot save snapshot')
       return
     }
     const now = Date.now()
@@ -1090,7 +1511,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     const pad = (value: number) => String(value).padStart(2, '0')
     const entry: ShelfSavedSnapshot = {
       id: `s_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-      name: `快照 ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      name: `蹇収 ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
       createdAt: now,
       items: currentItems.map((item) => ({ ...item })),
     }
@@ -1100,7 +1521,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
       return next
     })
     setSelectedSavedSnapshotId(entry.id)
-    message.success('已保存文献篮快照')
+    message.success('宸蹭繚瀛樻枃鐚蹇収')
   }
 
   const loadShelfSnapshot = () => {
@@ -1110,7 +1531,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     setFocusedShelfKey('')
     setShelfSummaryLoadingKey('')
     setShelfRepairLoadingKey('')
-    message.success(`已载入快照：${selectedSavedSnapshot.name}`)
+    message.success(`宸茶浇鍏ュ揩鐓э細${selectedSavedSnapshot.name}`)
   }
 
   const deleteShelfSnapshot = () => {
@@ -1122,7 +1543,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
       return next
     })
     setSelectedSavedSnapshotId((current) => (current === selectedSavedSnapshot.id ? '' : current))
-    message.success(`已删除快照：${removedName}`)
+    message.success(`宸插垹闄ゅ揩鐓э細${removedName}`)
   }
 
   return (
@@ -1135,7 +1556,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
                 <div key={`refs-${row.userMsgId}-${index}`} className="flex gap-3">
                   <div className="mt-1 h-7 w-7 shrink-0" />
                   <div className="max-w-[88%] flex-1">
-                    <RefsPanel refs={refs} msgId={row.userMsgId} />
+                    <RefsPanel refs={refs} msgId={row.userMsgId} onOpenReader={onOpenReader} />
                   </div>
                 </div>
               )
@@ -1160,6 +1581,181 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
             const showUserText = !(isUser && imageAttachments.length > 0 && isImageOnlyPlaceholder(message.content))
             const isImageOnlyUserMessage = isUser && imageAttachments.length > 0 && !showUserText
             const bodyContent = message.rendered_body || message.rendered_content || message.content
+            const refsUserMsgId = Number(message.refs_user_msg_id || trace?.userMsgId || 0)
+            const refEntry = refsUserMsgId > 0 ? (refs[String(refsUserMsgId)] as RefEntryLite | undefined) : undefined
+            const refHits = Array.isArray(refEntry?.hits) ? refEntry.hits : []
+            const uniqueSourcePaths = Array.from(
+              new Set(
+                citeDetails
+                  .map((detail) => String(detail.sourcePath || '').trim())
+                  .filter(Boolean),
+              ),
+            )
+            const guideSourcePath = String(paperGuideSourcePath || '').trim()
+            const locateSourcePath = guideSourcePath || (
+              uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : ''
+            )
+            const locateSourceName = String(paperGuideSourceName || '').trim() || (
+              citeDetails.find((detail) => String(detail.sourcePath || '').trim() === locateSourcePath)?.sourceName || ''
+            )
+            const refsLocateCandidatesAll: LocateCandidate[] = (() => {
+              const out: LocateCandidate[] = []
+              const seen = new Set<string>()
+              const push = (candidate: LocateCandidate | null) => {
+                if (!candidate) return
+                if (out.length >= REF_LOCATE_CANDIDATE_LIMIT) return
+                const sourcePath = String(candidate.sourcePath || '').trim()
+                const matchText = String(candidate.matchText || '').trim()
+                if (!sourcePath || !matchText) return
+                const key = `${normalizeLocateText(sourcePath)}::${normalizeLocateText(candidate.headingPath || '')}::${normalizeLocateText(matchText).slice(0, 220)}`
+                if (seen.has(key)) return
+                seen.add(key)
+                out.push(candidate)
+              }
+
+              for (const hit of refHits) {
+                const ui = hit?.ui_meta || {}
+                const meta = hit?.meta || {}
+                const sourcePath = String(ui.source_path || meta.source_path || '').trim()
+                if (!sourcePath) continue
+                const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || '文献'
+
+                const headingCandidates = new Set<string>([
+                  String(ui.heading_path || '').trim(),
+                  String(ui.section_label || '').trim(),
+                  String(ui.subsection_label || '').trim(),
+                  String(meta.ref_best_heading_path || '').trim(),
+                  String(meta.heading_path || '').trim(),
+                ].filter(Boolean))
+                const anchorKind = String(ui.anchor_target_kind || '').trim().toLowerCase()
+                const anchorNum = Number(ui.anchor_target_number || 0)
+                for (const heading of coerceStringArray(meta.ref_headings, 8, 160)) {
+                  headingCandidates.add(String(heading || '').trim())
+                }
+
+                const refLocs = Array.isArray(meta.ref_locs) ? meta.ref_locs : []
+                for (const loc0 of refLocs.slice(0, 10)) {
+                  const loc = (loc0 || {}) as Record<string, unknown>
+                  const headingPath = String(loc.heading_path || loc.heading || '').trim()
+                  if (headingPath) headingCandidates.add(headingPath)
+                  const locText = pickFirstRefText(loc)
+                  if (locText) {
+                    push({
+                      sourcePath,
+                      sourceName,
+                      headingPath: headingPath || String(ui.heading_path || '').trim(),
+                      focusSnippet: locText,
+                      matchText: [headingPath, locText].filter(Boolean).join('\n'),
+                      sourceType: 'refs',
+                    })
+                  }
+                }
+
+                const snippetSeeds = [
+                  ...coerceStringArray(ui.summary_line, 1, 360),
+                  ...coerceStringArray(ui.why_line, 1, 360),
+                  ...coerceStringArray(meta.ref_show_snippets, 4, 2600),
+                  ...coerceStringArray(meta.ref_snippets, 4, 2600),
+                  ...coerceStringArray(meta.ref_overview_snippets, 2, 2600),
+                ]
+                if (anchorKind === 'equation' && Number.isFinite(anchorNum) && anchorNum > 0) {
+                  snippetSeeds.push(
+                    `equation ${anchorNum}`,
+                    `eq ${anchorNum}`,
+                    `公式${anchorNum}`,
+                    `(${anchorNum})`,
+                  )
+                }
+                const headingFallback = Array.from(headingCandidates).find(Boolean) || ''
+                for (const seed of snippetSeeds) {
+                  const pieces = buildGuideLocateCandidates(seed, sourcePath, sourceName, 'refs')
+                  if (pieces.length > 0) {
+                    for (const piece of pieces.slice(0, 40)) push(piece)
+                    continue
+                  }
+                  push({
+                    sourcePath,
+                    sourceName,
+                    headingPath: headingFallback,
+                    focusSnippet: seed,
+                    matchText: [headingFallback, seed].filter(Boolean).join('\n'),
+                    sourceType: 'refs',
+                  })
+                }
+
+                for (const headingPath of headingCandidates) {
+                  push({
+                    sourcePath,
+                    sourceName,
+                    headingPath,
+                    focusSnippet: headingPath,
+                    matchText: headingPath,
+                    sourceType: 'refs',
+                  })
+                }
+              }
+              return out
+            })()
+            const guideLocateCandidates = guideSourcePath
+              ? guideDocCandidates.filter((item) => item.sourcePath === guideSourcePath)
+              : []
+            const refsScopedCandidates = guideSourcePath
+              ? refsLocateCandidatesAll.filter((item) => item.sourcePath === guideSourcePath)
+              : refsLocateCandidatesAll
+            const locateCandidates = (() => {
+              if (guideLocateCandidates.length > 0) return [...guideLocateCandidates, ...refsScopedCandidates]
+              if (refsScopedCandidates.length > 0) return refsScopedCandidates
+              if (guideSourcePath) return guideDocCandidates
+              return refsLocateCandidatesAll
+            })()
+            const resolveCache = new Map<string, LocateCandidate | null>()
+            const usedCount = new Map<string, number>()
+            const resolveLocateCandidate = (snippet: string) => {
+              const key = String(snippet || '').trim()
+              if (!key) return null
+              if (resolveCache.has(key)) return resolveCache.get(key) || null
+
+              const rankIn = (cands: LocateCandidate[]) => {
+                let best: LocateCandidate | null = null
+                let bestScore = 0
+                for (const cand of cands) {
+                  const base = scoreLocateCandidate(key, cand)
+                  const candKey = `${cand.sourcePath}::${cand.headingPath}::${cand.focusSnippet.slice(0, 96)}`
+                  const penalty = 0.03 * Number(usedCount.get(candKey) || 0)
+                  const score = base - penalty
+                  if (score > bestScore) {
+                    best = cand
+                    bestScore = score
+                  }
+                }
+                return { best, bestScore }
+              }
+
+              let picked: LocateCandidate | null = null
+              const guideOnly = locateCandidates.filter((item) => item.sourceType === 'guide')
+              if (guideOnly.length > 0) {
+                const guideRank = rankIn(guideOnly)
+                if (guideRank.best && guideRank.bestScore >= 0.11) {
+                  picked = guideRank.best
+                }
+              }
+              if (!picked) {
+                const rankAll = rankIn(locateCandidates)
+                if (rankAll.best && rankAll.bestScore >= 0.12) {
+                  picked = rankAll.best
+                }
+              }
+              if (!picked) {
+                picked = pickLocateCandidate(key, locateCandidates)
+              }
+              const finalPick = picked || null
+              if (finalPick) {
+                const pickKey = `${finalPick.sourcePath}::${finalPick.headingPath}::${finalPick.focusSnippet.slice(0, 96)}`
+                usedCount.set(pickKey, Number(usedCount.get(pickKey) || 0) + 1)
+              }
+              resolveCache.set(key, finalPick || null)
+              return finalPick
+            }
             const bubbleClass = isUser
               ? (isImageOnlyUserMessage ? 'w-fit max-w-[22rem]' : 'w-fit max-w-[88%]')
               : 'w-full max-w-[88%]'
@@ -1234,6 +1830,37 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
                         content={bodyContent}
                         citeDetails={citeDetails}
                         onCitationClick={openCitation}
+                        onLocateSnippet={onOpenReader
+                          ? (snippet) => {
+                            const picked = resolveLocateCandidate(snippet)
+                            if (!picked) {
+                              return
+                            }
+                            onOpenReader({
+                              sourcePath: picked.sourcePath,
+                              sourceName: picked.sourceName,
+                              headingPath: picked.headingPath,
+                              snippet: picked.focusSnippet || snippet,
+                            })
+                          }
+                          : undefined}
+                        locateLabelResolver={(snippet) => {
+                          const picked = resolveLocateCandidate(snippet)
+                          if (!picked) {
+                            const fallbackName = shortHeadingLabel(locateSourceName || locateSourcePath, 16)
+                            return fallbackName ? `依据 · ${fallbackName}` : '定位原文'
+                          }
+                          const hint = shortHeadingLabel(picked.headingPath || picked.sourceName, 16)
+                          return hint ? `依据 · ${hint}` : '定位原文'
+                        }}
+                        locateTitleResolver={(snippet) => {
+                          const picked = resolveLocateCandidate(snippet)
+                          if (!picked) return ''
+                          const heading = String(picked.headingPath || '').trim()
+                          if (heading) return `依据段落：${heading}`
+                          const name = String(picked.sourceName || '').trim()
+                          return name ? `依据来源：${name}` : '定位原文'
+                        }}
                       />
                       <CopyBar
                         text={message.copy_text || message.content}
@@ -1281,14 +1908,18 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
         detail={popoverDetail}
         position={popoverPos}
         loading={popoverLoading}
+        guideLoading={popoverGuideLoading}
         inShelf={Boolean(popoverDetail && shelfItems.some((item) => item.key === toShelfItem(popoverDetail).key))}
         onClose={() => {
           setPopoverDetail(null)
           setPopoverPos(null)
           setPopoverLoading(false)
+          setPopoverGuideLoading(false)
         }}
         onAddToShelf={addToShelf}
         onOpenShelf={() => setShelfOpen(true)}
+        onOpenReader={openReaderFromDetail}
+        onStartGuide={startPaperGuideFromDetail}
       />
       <CiteShelf
         open={shelfOpen}
@@ -1339,3 +1970,7 @@ export function MessageList({ activeConvId, messages, refs, generationPartial, g
     </>
   )
 }
+
+
+
+

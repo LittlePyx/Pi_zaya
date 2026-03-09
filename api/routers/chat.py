@@ -13,8 +13,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from api.chat_render import enrich_messages_with_reference_render
-from api.deps import get_chat_store
+from api.deps import get_chat_store, get_settings
 from api.routers.library import (
+    _md_dir,
     auto_rename_saved_pdf_in_library,
     quick_ingest_pdf,
     refine_pdf_with_full_llm_replace,
@@ -22,6 +23,7 @@ from api.routers.library import (
 )
 from kb.file_ops import _path_exists
 from kb.pdf_tools import ensure_dir
+from kb.task_runtime import kickoff_paper_guide_prefetch
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -29,6 +31,10 @@ router = APIRouter(prefix="/api", tags=["chat"])
 class CreateConvBody(BaseModel):
     title: str = "新对话"
     project_id: str | None = None
+    mode: str = "normal"
+    bound_source_path: str = ""
+    bound_source_name: str = ""
+    bound_source_ready: bool = False
 
 
 class CreateProjectBody(BaseModel):
@@ -50,6 +56,13 @@ class UpdateTitleBody(BaseModel):
 
 class UpdateProjectBody(BaseModel):
     project_id: str | None = None
+
+
+class UpdateConversationGuideBody(BaseModel):
+    mode: str | None = None
+    bound_source_path: str | None = None
+    bound_source_name: str | None = None
+    bound_source_ready: bool | None = None
 
 
 class RenameProjectBody(BaseModel):
@@ -138,6 +151,46 @@ def _bind_pdf_source_to_conversation(*, conv_id: str, source_path: str, source_n
         store.bind_conversation_source(cid, src, source_name)
     except Exception:
         return
+
+
+def _kickoff_paper_guide_prefetch_if_needed(
+    *,
+    mode: str,
+    source_path: str,
+    source_name: str,
+    source_ready: bool,
+) -> None:
+    mode_norm = str(mode or "").strip().lower()
+    src = str(source_path or "").strip()
+    if mode_norm != "paper_guide":
+        return
+    if (not src) or (not bool(source_ready)):
+        return
+    try:
+        settings = get_settings()
+    except Exception:
+        settings = None
+    try:
+        md_root = _md_dir()
+    except Exception:
+        md_root = None
+    try:
+        kickoff_paper_guide_prefetch(
+            source_path=src,
+            source_name=str(source_name or "").strip(),
+            db_dir=(getattr(settings, "db_dir", None) if settings is not None else None),
+            md_root=md_root,
+            library_db_path=(getattr(settings, "library_db_path", None) if settings is not None else None),
+        )
+    except Exception:
+        return
+
+
+def _coerce_bool_flag(value: object) -> bool:
+    try:
+        return bool(int(value or 0))
+    except Exception:
+        return bool(value)
 
 
 def _chat_pdf_ingest_status_payload(job_id: str, record: dict) -> dict:
@@ -777,7 +830,24 @@ def create_conversation(body: CreateConvBody):
     project_id = body.project_id
     if isinstance(project_id, str):
         project_id = project_id.strip() or None
-    conv_id = get_chat_store().create_conversation(body.title, project_id=project_id)
+    mode = str(body.mode or "").strip() or "normal"
+    bound_source_path = str(body.bound_source_path or "").strip()
+    bound_source_name = str(body.bound_source_name or "").strip()
+    source_ready = bool(body.bound_source_ready)
+    conv_id = get_chat_store().create_conversation(
+        body.title,
+        project_id=project_id,
+        mode=mode,
+        bound_source_path=bound_source_path,
+        bound_source_name=bound_source_name,
+        bound_source_ready=source_ready,
+    )
+    _kickoff_paper_guide_prefetch_if_needed(
+        mode=mode,
+        source_path=bound_source_path,
+        source_name=bound_source_name,
+        source_ready=source_ready,
+    )
     return {"id": conv_id}
 
 
@@ -786,6 +856,12 @@ def get_conversation(conv_id: str):
     conv = get_chat_store().get_conversation(conv_id)
     if conv is None:
         raise HTTPException(404, "conversation not found")
+    _kickoff_paper_guide_prefetch_if_needed(
+        mode=str(conv.get("mode") or ""),
+        source_path=str(conv.get("bound_source_path") or ""),
+        source_name=str(conv.get("bound_source_name") or ""),
+        source_ready=_coerce_bool_flag(conv.get("bound_source_ready")),
+    )
     return conv
 
 
@@ -844,4 +920,26 @@ def update_conversation_project(conv_id: str, body: UpdateProjectBody):
     ok = get_chat_store().set_conversation_project(conv_id, project_id)
     if not ok:
         raise HTTPException(404, "conversation not found")
+    return {"ok": True}
+
+
+@router.patch("/conversations/{conv_id}/guide")
+def update_conversation_guide(conv_id: str, body: UpdateConversationGuideBody):
+    store = get_chat_store()
+    ok = store.set_conversation_guide(
+        conv_id,
+        mode=body.mode,
+        bound_source_path=body.bound_source_path,
+        bound_source_name=body.bound_source_name,
+        bound_source_ready=body.bound_source_ready,
+    )
+    if not ok:
+        raise HTTPException(404, "conversation not found")
+    conv = store.get_conversation(conv_id) or {}
+    _kickoff_paper_guide_prefetch_if_needed(
+        mode=str(conv.get("mode") or ""),
+        source_path=str(conv.get("bound_source_path") or ""),
+        source_name=str(conv.get("bound_source_name") or ""),
+        source_ready=_coerce_bool_flag(conv.get("bound_source_ready")),
+    )
     return {"ok": True}

@@ -9,6 +9,13 @@ from pathlib import Path
 DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
 
 
+def _normalize_conversation_mode(mode: str) -> str:
+    m = str(mode or "").strip().lower()
+    if m in {"paper_guide", "normal"}:
+        return m
+    return "normal"
+
+
 class ChatStore:
     """
     A tiny local chat persistence layer.
@@ -98,6 +105,22 @@ class ChatStore:
                 pass
             try:
                 conn.execute("ALTER TABLE conversations ADD COLUMN archived_at REAL;")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'normal';")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN bound_source_path TEXT NOT NULL DEFAULT '';")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN bound_source_name TEXT NOT NULL DEFAULT '';")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE conversations ADD COLUMN bound_source_ready INTEGER NOT NULL DEFAULT 0;")
             except sqlite3.OperationalError:
                 pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);")
@@ -220,15 +243,50 @@ class ChatStore:
             conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
-    def create_conversation(self, title: str = "新对话", project_id: str | None = None) -> str:
+    def create_conversation(
+        self,
+        title: str = "新对话",
+        project_id: str | None = None,
+        *,
+        mode: str = "normal",
+        bound_source_path: str = "",
+        bound_source_name: str = "",
+        bound_source_ready: bool = False,
+    ) -> str:
         conv_id = uuid.uuid4().hex
         now = time.time()
+        mode_norm = _normalize_conversation_mode(mode)
+        source_path = str(bound_source_path or "").strip()
+        source_name = str(bound_source_name or "").strip()
+        source_ready = 1 if bool(bound_source_ready and source_path) else 0
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO conversations (id, title, created_at, updated_at, project_id, archived, archived_at) "
-                "VALUES (?, ?, ?, ?, ?, 0, NULL)",
-                (conv_id, title.strip() or "新对话", now, now, project_id),
+                "INSERT INTO conversations ("
+                "id, title, created_at, updated_at, project_id, archived, archived_at, "
+                "mode, bound_source_path, bound_source_name, bound_source_ready"
+                ") VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)",
+                (
+                    conv_id,
+                    title.strip() or "新对话",
+                    now,
+                    now,
+                    project_id,
+                    mode_norm,
+                    source_path,
+                    source_name,
+                    source_ready,
+                ),
             )
+            if source_path:
+                conn.execute(
+                    """
+                    INSERT INTO conversation_sources (conv_id, source_path, source_name, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(conv_id, source_path)
+                    DO UPDATE SET source_name = excluded.source_name, updated_at = excluded.updated_at
+                    """,
+                    (conv_id, source_path, source_name or Path(source_path).name, now, now),
+                )
             self._archive_excess_conversations(conn, project_id=project_id)
         return conv_id
 
@@ -245,7 +303,11 @@ class ChatStore:
             if project_id is None:
                 rows = conn.execute(
                     "SELECT id, title, created_at, updated_at, project_id, "
-                    "COALESCE(archived, 0) AS archived, archived_at "
+                    "COALESCE(archived, 0) AS archived, archived_at, "
+                    "COALESCE(mode, 'normal') AS mode, "
+                    "COALESCE(bound_source_path, '') AS bound_source_path, "
+                    "COALESCE(bound_source_name, '') AS bound_source_name, "
+                    "COALESCE(bound_source_ready, 0) AS bound_source_ready "
                     "FROM conversations "
                     "WHERE project_id IS NULL "
                     + ("" if include_archived else "AND COALESCE(archived, 0) = 0 ")
@@ -255,7 +317,11 @@ class ChatStore:
             else:
                 rows = conn.execute(
                     "SELECT id, title, created_at, updated_at, project_id, "
-                    "COALESCE(archived, 0) AS archived, archived_at "
+                    "COALESCE(archived, 0) AS archived, archived_at, "
+                    "COALESCE(mode, 'normal') AS mode, "
+                    "COALESCE(bound_source_path, '') AS bound_source_path, "
+                    "COALESCE(bound_source_name, '') AS bound_source_name, "
+                    "COALESCE(bound_source_ready, 0) AS bound_source_ready "
                     "FROM conversations "
                     "WHERE project_id = ? "
                     + ("" if include_archived else "AND COALESCE(archived, 0) = 0 ")
@@ -271,11 +337,77 @@ class ChatStore:
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT id, title, created_at, updated_at, project_id, "
-                "COALESCE(archived, 0) AS archived, archived_at "
+                "COALESCE(archived, 0) AS archived, archived_at, "
+                "COALESCE(mode, 'normal') AS mode, "
+                "COALESCE(bound_source_path, '') AS bound_source_path, "
+                "COALESCE(bound_source_name, '') AS bound_source_name, "
+                "COALESCE(bound_source_ready, 0) AS bound_source_ready "
                 "FROM conversations WHERE id = ?",
                 (conv_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def set_conversation_guide(
+        self,
+        conv_id: str,
+        *,
+        mode: str | None = None,
+        bound_source_path: str | None = None,
+        bound_source_name: str | None = None,
+        bound_source_ready: bool | None = None,
+    ) -> bool:
+        cid = str(conv_id or "").strip()
+        if not cid:
+            return False
+        now = time.time()
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT mode, bound_source_path, bound_source_name, bound_source_ready, project_id "
+                "FROM conversations WHERE id = ?",
+                (cid,),
+            ).fetchone()
+            if not row:
+                return False
+            mode_cur = _normalize_conversation_mode(str(row["mode"] or "normal"))
+            path_cur = str(row["bound_source_path"] or "").strip()
+            name_cur = str(row["bound_source_name"] or "").strip()
+            ready_cur = bool(int(row["bound_source_ready"] or 0))
+            mode_next = mode_cur if mode is None else _normalize_conversation_mode(mode)
+            path_next = path_cur if bound_source_path is None else str(bound_source_path or "").strip()
+            name_next = name_cur if bound_source_name is None else str(bound_source_name or "").strip()
+            if bound_source_ready is None:
+                ready_next = ready_cur
+            else:
+                ready_next = bool(bound_source_ready and path_next)
+            if not path_next:
+                ready_next = False
+            conn.execute(
+                "UPDATE conversations "
+                "SET mode = ?, bound_source_path = ?, bound_source_name = ?, bound_source_ready = ?, "
+                "updated_at = ?, archived = 0, archived_at = NULL "
+                "WHERE id = ?",
+                (
+                    mode_next,
+                    path_next,
+                    name_next,
+                    1 if ready_next else 0,
+                    now,
+                    cid,
+                ),
+            )
+            if path_next:
+                conn.execute(
+                    """
+                    INSERT INTO conversation_sources (conv_id, source_path, source_name, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(conv_id, source_path)
+                    DO UPDATE SET source_name = excluded.source_name, updated_at = excluded.updated_at
+                    """,
+                    (cid, path_next, name_next or Path(path_next).name, now, now),
+                )
+            project_id = str(row["project_id"] or "").strip() or None
+            self._archive_excess_conversations(conn, project_id=project_id)
+        return True
 
     def set_conversation_project(self, conv_id: str, project_id: str | None) -> bool:
         conv_id = (conv_id or "").strip()

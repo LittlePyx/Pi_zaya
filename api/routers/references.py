@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 from pathlib import Path
+from urllib.parse import quote
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from api.deps import get_chat_store, get_settings, load_prefs
 from api.reference_ui import enrich_citation_detail_meta, enrich_refs_payload, ensure_source_citation_meta, open_reference_source
+from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
 from api.sse import sse_generator, sse_response
 from kb.reference_sync import (
@@ -93,7 +96,12 @@ class BibliometricsBody(BaseModel):
     meta: dict
 
 
+class ReaderDocBody(BaseModel):
+    source_path: str
+
+
 _ASSET_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 
 @router.post("/open")
@@ -121,6 +129,112 @@ def get_reference_citation_meta(body: CitationMetaBody):
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     return enrich_citation_detail_meta(body.meta or {})
+
+
+def _resolve_reader_md_path(source_path: str) -> Path | None:
+    raw = str(source_path or "").strip()
+    if not raw:
+        return None
+    src = Path(raw).expanduser()
+    if src.suffix.lower().endswith(".md"):
+        try:
+            if src.exists() and src.is_file():
+                return src.resolve(strict=False)
+        except Exception:
+            return None
+        return None
+
+    pdf_root = _pdf_dir()
+    md_root = _md_dir()
+
+    pdf_candidate = src
+    try:
+        if (not pdf_candidate.is_absolute()) and (Path(pdf_candidate).name == str(pdf_candidate)):
+            pdf_candidate = pdf_root / pdf_candidate
+    except Exception:
+        pass
+
+    try:
+        if not (pdf_candidate.exists() and pdf_candidate.is_file()):
+            return None
+    except Exception:
+        return None
+
+    try:
+        _md_folder, md_main, md_exists = _resolve_md_output_paths(md_root, pdf_candidate)
+    except Exception:
+        return None
+    if (not md_exists) or (not md_main.exists()) or (not md_main.is_file()):
+        return None
+    try:
+        return md_main.resolve(strict=False)
+    except Exception:
+        return md_main
+
+
+def _rewrite_md_asset_links(md_text: str, *, md_path: Path, md_root: Path) -> str:
+    text = str(md_text or "")
+    if not text:
+        return text
+
+    def _replace(m: re.Match[str]) -> str:
+        alt = str(m.group(1) or "")
+        raw = str(m.group(2) or "").strip()
+        if not raw:
+            return m.group(0)
+        url = raw.strip().strip("<>").split()[0].strip()
+        low = url.lower()
+        if low.startswith(("http://", "https://", "data:", "#", "/api/")):
+            return m.group(0)
+        try:
+            cand = Path(url).expanduser()
+            if not cand.is_absolute():
+                cand = (md_path.parent / cand).resolve(strict=False)
+            else:
+                cand = cand.resolve(strict=False)
+            if (not cand.exists()) or (not cand.is_file()):
+                return m.group(0)
+            try:
+                cand.relative_to(md_root.resolve())
+            except Exception:
+                return m.group(0)
+            asset_url = f"/api/references/asset?path={quote(str(cand), safe='')}"
+            return f"![{alt}]({asset_url})"
+        except Exception:
+            return m.group(0)
+
+    return _MD_IMAGE_RE.sub(_replace, text)
+
+
+@router.post("/reader/doc")
+def get_reader_doc(body: ReaderDocBody):
+    source_path = str(body.source_path or "").strip()
+    if not source_path:
+        raise HTTPException(400, "source_path required")
+    md_path = _resolve_reader_md_path(source_path)
+    if md_path is None:
+        raise HTTPException(404, "markdown not found for source")
+    try:
+        md_text = md_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        raise HTTPException(500, "failed to read markdown")
+
+    md_root = _md_dir()
+    md_render = _rewrite_md_asset_links(md_text, md_path=md_path, md_root=md_root)
+    source_name = md_path.name
+    low = source_name.lower()
+    if low.endswith(".en.md"):
+        source_name = source_name[:-6] + ".pdf"
+    elif low.endswith(".md"):
+        source_name = source_name[:-3] + ".pdf"
+
+    return {
+        "ok": True,
+        "source_path": source_path,
+        "source_name": source_name,
+        "md_path": str(md_path),
+        "markdown": md_render,
+    }
 
 
 @router.get("/asset")

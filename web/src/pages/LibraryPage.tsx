@@ -40,10 +40,12 @@ import {
 } from '@ant-design/icons'
 import type { LibraryFileItem, RenameSuggestionItem } from '../api/library'
 import { libraryApi } from '../api/library'
+import { useChatStore } from '../stores/chatStore'
 import { settingsApi } from '../api/settings'
 import { useLibraryStore } from '../stores/libraryStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import VirtualList from 'rc-virtual-list'
+import { useNavigate } from 'react-router-dom'
 
 const { Text } = Typography
 const { Dragger } = Upload
@@ -112,6 +114,14 @@ function matchesKeyword(name: string, keyword: string) {
   return name.toLowerCase().includes(keyword)
 }
 
+function stripKnownSourceExt(name: string) {
+  return String(name || '')
+    .replace(/\.en\.md$/i, '')
+    .replace(/\.md$/i, '')
+    .replace(/\.pdf$/i, '')
+    .trim()
+}
+
 function isDuplicateFailure(note: string) {
   const t = String(note || '').toLowerCase()
   return t.includes('重复') || t.includes('duplicate') || t.includes('already exists') || t.includes('已存在')
@@ -128,6 +138,8 @@ function classifyFailedReason(note: string) {
 
 export default function LibraryPage() {
   const store = useLibraryStore()
+  const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
+  const nav = useNavigate()
 
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const settingsPdfDir = useSettingsStore((s) => s.pdfDir)
@@ -628,6 +640,45 @@ export default function LibraryPage() {
     }
   }
 
+  const handleStartPaperGuide = async (item: LibraryFileItem) => {
+    if (!item.md_exists || !item.md_path) {
+      message.info('该文献尚未完成入库转换，请先转换后再进入阅读指导。')
+      return
+    }
+    const hide = message.loading('正在创建阅读指导会话...', 0)
+    try {
+      let sourcePath = ''
+      let sourceName = stripKnownSourceExt(item.name) || item.name
+      let resolvedMdPath = ''
+      try {
+        const resolved = await libraryApi.resolveGuideSource(item.name)
+        sourcePath = String(resolved.source_path || '').trim()
+        sourceName = String(resolved.source_name || '').trim() || sourceName
+        resolvedMdPath = String(resolved.md_path || '').trim()
+      } catch {
+        // Backward-compatible fallback when backend route is not available yet.
+        sourcePath = String(item.md_path || '').trim()
+        message.warning('阅读指导源解析失败，已回退到当前文献源。建议重启后端后再试。')
+      }
+      const convTitle = `阅读指导 · ${sourceName}`
+      if (!sourcePath) throw new Error('source path not ready')
+      await createPaperGuideConversation({
+        sourcePath,
+        sourceName,
+        title: convTitle,
+      })
+      if (resolvedMdPath && resolvedMdPath !== String(item.md_path || '').trim()) {
+        void store.loadFiles(scope)
+      }
+      hide()
+      nav('/')
+      message.success('已进入阅读指导会话')
+    } catch (err) {
+      hide()
+      message.error(err instanceof Error ? err.message : '创建阅读指导会话失败')
+    }
+  }
+
   const selectAllUploadDrafts = () => {
     setUploadDrafts((cur) => cur.map((item) => ({ ...item, selected: true })))
   }
@@ -679,6 +730,14 @@ export default function LibraryPage() {
           <Text type="secondary" className="text-xs">{item.md_exists ? '已存在 Markdown' : '暂无 Markdown'}</Text>
         </div>
         <Space className="kb-lib-file-actions">
+          <Button
+            className="kb-lib-file-action-main"
+            size="small"
+            disabled={!item.md_exists || !item.md_path}
+            onClick={() => { void handleStartPaperGuide(item) }}
+          >
+            阅读指导
+          </Button>
           <Button
             className="kb-lib-file-action-main"
             size="small"

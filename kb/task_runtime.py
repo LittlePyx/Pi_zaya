@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
@@ -30,8 +31,10 @@ from kb.llm import DeepSeekChat
 from kb.pdf_tools import run_pdf_to_md
 from kb.reference_index import load_reference_index, resolve_reference_entry
 from kb.retrieval_engine import (
+    _collect_doc_overview_snippets,
     _deep_read_md_for_context,
     _enrich_grouped_refs_with_llm_pack,
+    _extract_md_headings,
     _group_hits_by_doc_for_refs,
     _search_hits_with_fallback,
     _top_heading,
@@ -162,6 +165,200 @@ def _warm_refs_citation_meta_background(source_paths: list[str], *, library_db_p
         threading.Thread(target=_run, daemon=True, name="kb_refs_meta_warm").start()
     except Exception:
         pass
+
+
+_PAPER_GUIDE_PREFETCH_LOCK = threading.Lock()
+_PAPER_GUIDE_PREFETCH_RECENT: dict[str, float] = {}
+_PAPER_GUIDE_PREFETCH_TTL_S = 20.0 * 60.0
+
+
+def _normalize_fs_path_for_match(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        p = Path(raw).expanduser().resolve(strict=False)
+    except Exception:
+        p = Path(raw).expanduser()
+    return str(p).replace("\\", "/").strip().lower()
+
+
+def _source_basename_identity(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    name = Path(raw).name or raw
+    low = str(name).strip().lower()
+    low = re.sub(r"\.en\.md$", "", low, flags=re.IGNORECASE)
+    low = re.sub(r"\.md$", "", low, flags=re.IGNORECASE)
+    low = re.sub(r"\.pdf$", "", low, flags=re.IGNORECASE)
+    low = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", low)
+    return re.sub(r"\s+", " ", low).strip()
+
+
+def _resolve_paper_guide_md_path(
+    source_path: str,
+    *,
+    md_root: Path | str | None = None,
+    db_dir: Path | str | None = None,
+) -> Path | None:
+    raw = str(source_path or "").strip()
+    if not raw:
+        return None
+    src = Path(raw).expanduser()
+    try:
+        if src.is_file() and src.suffix.lower().endswith(".md"):
+            return src.resolve(strict=False)
+    except Exception:
+        pass
+
+    if src.suffix.lower() != ".pdf":
+        return None
+
+    roots: list[Path] = []
+    if md_root:
+        try:
+            roots.append(Path(md_root).expanduser())
+        except Exception:
+            pass
+    if db_dir:
+        try:
+            roots.append(Path(db_dir).expanduser().parent / "md_output")
+        except Exception:
+            pass
+    try:
+        roots.append(src.parent)
+    except Exception:
+        pass
+
+    uniq_roots: list[Path] = []
+    seen_roots: set[str] = set()
+    for root in roots:
+        key = _normalize_fs_path_for_match(str(root))
+        if (not key) or (key in seen_roots):
+            continue
+        seen_roots.add(key)
+        uniq_roots.append(root)
+
+    for root in uniq_roots:
+        try:
+            _md_dir, md_main, md_exists = _resolve_md_output_paths(root, src)
+        except Exception:
+            continue
+        if not md_exists:
+            continue
+        try:
+            if md_main.is_file():
+                return md_main.resolve(strict=False)
+        except Exception:
+            continue
+
+    return None
+
+
+def kickoff_paper_guide_prefetch(
+    *,
+    source_path: str,
+    source_name: str = "",
+    db_dir: Path | str | None = None,
+    md_root: Path | str | None = None,
+    library_db_path: Path | str | None = None,
+) -> bool:
+    raw_source = str(source_path or "").strip()
+    if not raw_source:
+        return False
+    md_path = _resolve_paper_guide_md_path(raw_source, md_root=md_root, db_dir=db_dir)
+    key = _normalize_fs_path_for_match(str(md_path) if md_path is not None else raw_source)
+    if not key:
+        return False
+
+    now = time.time()
+    with _PAPER_GUIDE_PREFETCH_LOCK:
+        prev = float(_PAPER_GUIDE_PREFETCH_RECENT.get(key) or 0.0)
+        if (now - prev) < _PAPER_GUIDE_PREFETCH_TTL_S:
+            return False
+        _PAPER_GUIDE_PREFETCH_RECENT[key] = now
+        if len(_PAPER_GUIDE_PREFETCH_RECENT) > 240:
+            old_items = sorted(_PAPER_GUIDE_PREFETCH_RECENT.items(), key=lambda item: float(item[1] or 0.0))
+            drop_n = len(_PAPER_GUIDE_PREFETCH_RECENT) - 200
+            for k_old, _ in old_items[: max(0, drop_n)]:
+                _PAPER_GUIDE_PREFETCH_RECENT.pop(k_old, None)
+
+    seed_name = str(source_name or "").strip() or Path(raw_source).name or Path(raw_source).stem
+
+    def _run() -> None:
+        t0 = time.perf_counter()
+        deep_jobs = 0
+        try:
+            if md_path is not None:
+                _extract_md_headings(md_path, max_n=96)
+                _collect_doc_overview_snippets(md_path, max_n=4, snippet_chars=420)
+
+                deep_queries: list[str] = []
+                for q in (
+                    f"{seed_name} contribution method experiment limitation",
+                    f"{seed_name} abstract introduction method",
+                    f"{seed_name} experiment setup results",
+                    f"{seed_name} limitation failure future work",
+                ):
+                    qt = str(q or "").strip()
+                    if qt and (qt not in deep_queries):
+                        deep_queries.append(qt)
+                    if len(deep_queries) >= 4:
+                        break
+                if deep_queries:
+                    max_workers = max(1, min(3, len(deep_queries)))
+                    try:
+                        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                            futs = [
+                                ex.submit(
+                                    _deep_read_md_for_context,
+                                    md_path,
+                                    q,
+                                    max_snippets=3,
+                                    snippet_chars=1200,
+                                )
+                                for q in deep_queries
+                            ]
+                            for fu in as_completed(futs):
+                                try:
+                                    fu.result()
+                                except Exception:
+                                    continue
+                                deep_jobs += 1
+                    except Exception:
+                        for q in deep_queries:
+                            try:
+                                _deep_read_md_for_context(md_path, q, max_snippets=3, snippet_chars=1200)
+                                deep_jobs += 1
+                            except Exception:
+                                continue
+
+            warm_paths = [raw_source]
+            if md_path is not None:
+                warm_paths.insert(0, str(md_path))
+            _warm_refs_citation_meta_background(warm_paths, library_db_path=library_db_path)
+            _perf_log(
+                "paper_guide.prefetch",
+                elapsed=time.perf_counter() - t0,
+                source=raw_source,
+                md=str(md_path or ""),
+                deep_jobs=deep_jobs,
+            )
+        except Exception as exc:
+            _perf_log(
+                "paper_guide.prefetch",
+                elapsed=time.perf_counter() - t0,
+                source=raw_source,
+                md=str(md_path or ""),
+                error=str(exc)[:120],
+            )
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="kb_paper_guide_prefetch").start()
+    except Exception:
+        return False
+    return True
 
 
 def _split_kb_miss_notice(text: str) -> tuple[str, str]:
@@ -302,6 +499,114 @@ def _pick_recent_bound_source_hints(*, conv_id: str, chat_store: ChatStore, limi
         out.append(cand)
         if len(out) >= max(1, int(limit)):
             break
+    return out
+
+
+def _source_stem_identity(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        p = Path(raw)
+        name = str(p.name or raw).strip()
+    except Exception:
+        name = raw
+    return _source_basename_identity(name)
+
+
+def _is_hit_from_bound_source(
+    hit: dict,
+    *,
+    bound_source_path: str,
+    bound_source_name: str,
+) -> bool:
+    meta = (hit or {}).get("meta", {}) or {}
+    hit_source = str(meta.get("source_path") or "").strip()
+    if not hit_source:
+        return False
+    hit_path_norm = _normalize_fs_path_for_match(hit_source)
+    if not hit_path_norm:
+        return False
+
+    target_path_norm = _normalize_fs_path_for_match(bound_source_path)
+    if target_path_norm:
+        if hit_path_norm == target_path_norm:
+            return True
+        # Allow strict stem-equality fallback only for pdf<->md path variants.
+        hit_stem = _source_stem_identity(hit_source)
+        target_stem = _source_stem_identity(bound_source_path)
+        if target_stem and hit_stem and (hit_stem == target_stem) and (len(target_stem) >= 8):
+            return True
+        return False
+
+    target_name = _source_basename_identity(bound_source_name)
+    if not target_name:
+        return False
+    hit_stem = _source_stem_identity(hit_source)
+    return bool(hit_stem and (hit_stem == target_name))
+
+
+def _filter_hits_for_paper_guide(
+    hits_raw: list[dict],
+    *,
+    bound_source_path: str,
+    bound_source_name: str,
+) -> list[dict]:
+    out: list[dict] = []
+    for hit in hits_raw or []:
+        if not isinstance(hit, dict):
+            continue
+        if _is_hit_from_bound_source(
+            hit,
+            bound_source_path=bound_source_path,
+            bound_source_name=bound_source_name,
+        ):
+            out.append(hit)
+    return out
+
+
+def _paper_guide_fallback_deepread_hits(
+    *,
+    bound_source_path: str,
+    bound_source_name: str,
+    query: str,
+    top_k: int,
+    db_dir: Path | str | None = None,
+) -> list[dict]:
+    md_path = _resolve_paper_guide_md_path(
+        bound_source_path,
+        db_dir=db_dir,
+    )
+    if md_path is None:
+        return []
+
+    q = str(query or "").strip()
+    if not q:
+        q = f"{bound_source_name or md_path.stem} contribution method experiment limitation"
+    deep_hits = _deep_read_md_for_context(
+        md_path,
+        q,
+        max_snippets=max(2, min(int(top_k or 4), 4)),
+        snippet_chars=1200,
+    )
+    out: list[dict] = []
+    for idx, h in enumerate(deep_hits, start=1):
+        if not isinstance(h, dict):
+            continue
+        rec = dict(h)
+        meta = rec.get("meta", {}) or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        meta["source_path"] = str(md_path)
+        meta["paper_guide_fallback"] = True
+        rec["meta"] = meta
+        try:
+            score0 = float(rec.get("score") or 0.0)
+        except Exception:
+            score0 = 0.0
+        if score0 <= 0.0:
+            rec["score"] = max(0.01, 1.0 - (idx - 1) * 0.1)
+        out.append(rec)
     return out
 
 
@@ -1118,6 +1423,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         settings_obj = task.get("settings_obj")
         chat_store = ChatStore(chat_db)
         preferred_sources_raw = task.get("preferred_sources") or []
+        paper_guide_mode = bool(task.get("paper_guide_mode"))
+        paper_guide_bound_source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
+        paper_guide_bound_source_name = str(task.get("paper_guide_bound_source_name") or "").strip()
+        paper_guide_bound_source_ready = bool(task.get("paper_guide_bound_source_ready"))
 
         image_attachments: list[dict] = []
         if isinstance(raw_image_atts, list):
@@ -1147,6 +1456,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             raise RuntimeError("invalid task")
         if _gen_should_cancel(session_id, task_id):
             raise RuntimeError("canceled")
+        if paper_guide_mode and paper_guide_bound_source_ready and paper_guide_bound_source_path:
+            try:
+                kickoff_paper_guide_prefetch(
+                    source_path=paper_guide_bound_source_path,
+                    source_name=paper_guide_bound_source_name,
+                    db_dir=db_dir,
+                    library_db_path=getattr(settings_obj, "library_db_path", None),
+                )
+            except Exception:
+                pass
 
         quick_answer = _quick_answer_for_prompt(prompt) if prompt else None
         image_first_prompt = bool(image_attachments) and _should_prioritize_attached_image(prompt)
@@ -1191,6 +1510,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 preferred_source_hints.append(cand)
                 if len(preferred_source_hints) >= 3:
                     break
+        if paper_guide_mode:
+            for cand in (paper_guide_bound_source_path, paper_guide_bound_source_name):
+                cand_norm = str(cand or "").strip()
+                if (not cand_norm) or (cand_norm in preferred_source_hints):
+                    continue
+                preferred_source_hints.insert(0, cand_norm)
+            if len(preferred_source_hints) > 3:
+                preferred_source_hints = preferred_source_hints[:3]
         inferred_source_hint = ""
         if retrieval_prompt and _needs_conversational_source_hint(retrieval_prompt):
             inferred_source_hint = _pick_recent_source_hint(
@@ -1232,6 +1559,35 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 top_k=top_k,
                 settings=settings_obj,
             )
+            if paper_guide_mode and paper_guide_bound_source_ready and (paper_guide_bound_source_path or paper_guide_bound_source_name):
+                scoped_hits = _filter_hits_for_paper_guide(
+                    hits_raw,
+                    bound_source_path=paper_guide_bound_source_path,
+                    bound_source_name=paper_guide_bound_source_name,
+                )
+                if (not scoped_hits) and paper_guide_bound_source_path:
+                    scoped_hits = _paper_guide_fallback_deepread_hits(
+                        bound_source_path=paper_guide_bound_source_path,
+                        bound_source_name=paper_guide_bound_source_name,
+                        query=(retrieval_prompt or prompt or ""),
+                        top_k=max(2, min(int(top_k or 4), 4)),
+                        db_dir=db_dir,
+                    )
+                    if scoped_hits:
+                        _perf_log(
+                            "gen.paper_guide_scope_fallback",
+                            docs=len(scoped_hits),
+                            source=paper_guide_bound_source_name or paper_guide_bound_source_path,
+                        )
+                if len(scoped_hits) != len(hits_raw):
+                    _perf_log(
+                        "gen.paper_guide_scope",
+                        before=len(hits_raw),
+                        after=len(scoped_hits),
+                        source=paper_guide_bound_source_name or paper_guide_bound_source_path,
+                    )
+                hits_raw = scoped_hits
+                scores_raw = [float(h.get("score", 0.0) or 0.0) for h in hits_raw]
             _perf_log(
                 "gen.retrieve",
                 elapsed=time.perf_counter() - t_ret0,
@@ -1258,8 +1614,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     grouped_docs = []
             answer_grouped_docs = list(grouped_docs or [])
             answer_hit_limit = max(1, min(int(top_k), 4))
-            answer_doc_cap = max(answer_hit_limit, min(int(top_k), 6))
-            if hits_raw:
+            guide_strict_mode = bool(paper_guide_mode and paper_guide_bound_source_ready)
+            answer_doc_cap = max(answer_hit_limit, min(int(top_k), 4 if guide_strict_mode else 3))
+            should_sync_deep_seed = bool(hits_raw) and (
+                guide_strict_mode
+                or _needs_bound_source_hint(prompt or retrieval_prompt or "")
+            )
+            if should_sync_deep_seed:
                 try:
                     t_answer_seed0 = time.perf_counter()
                     rebuilt_for_answer = _group_hits_by_doc_for_refs(
@@ -1280,33 +1641,25 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     )
                 except Exception:
                     pass
-            if (
-                llm_rerank
-                and prompt
-                and answer_grouped_docs
-                and settings_obj
-                and getattr(settings_obj, "api_key", None)
-            ):
-                try:
-                    t_answer_pack0 = time.perf_counter()
-                    enriched_for_answer = _enrich_grouped_refs_with_llm_pack(
-                        list(answer_grouped_docs),
-                        question=(prompt or used_query or retrieval_prompt or ""),
-                        settings=settings_obj,
-                        top_k_docs=answer_doc_cap,
-                    )
-                    if enriched_for_answer:
-                        answer_grouped_docs = enriched_for_answer
-                    _perf_log(
-                        "gen.answer_refs_enrich",
-                        elapsed=time.perf_counter() - t_answer_pack0,
-                        docs=len(answer_grouped_docs),
-                    )
-                except Exception:
-                    pass
+            else:
+                _perf_log("gen.answer_refs_seed", elapsed=0.0, docs=len(answer_grouped_docs), mode="fast_only")
+            # Keep answer path focused on evidence readiness. LLM ref-pack enrichment is
+            # deferred to async so it does not block first answer latency.
+            _perf_log("gen.answer_refs_enrich", elapsed=0.0, docs=len(answer_grouped_docs), mode="async_only")
+
+            try:
+                refs_async_enabled = bool(int(str(os.environ.get("KB_REFS_ASYNC_ENRICH", "1") or "1")))
+            except Exception:
+                refs_async_enabled = True
+            try:
+                refs_async_in_paper_guide = bool(int(str(os.environ.get("KB_REFS_ASYNC_ENRICH_IN_PAPER_GUIDE", "0") or "0")))
+            except Exception:
+                refs_async_in_paper_guide = False
+            allow_refs_async = bool(refs_async_enabled and ((not paper_guide_mode) or refs_async_in_paper_guide))
 
             refs_async_will_run = bool(
-                llm_rerank
+                allow_refs_async
+                and llm_rerank
                 and prompt
                 and grouped_docs
                 and settings_obj
@@ -1379,6 +1732,34 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _gen_update_task(session_id, task_id, refs_async_pending=True, refs_async_state="running")
 
             def _bg_enrich_refs() -> None:
+                try:
+                    refs_async_top_k_docs = int(str(os.environ.get("KB_REFS_ASYNC_TOP_K", "3") or "3"))
+                except Exception:
+                    refs_async_top_k_docs = 3
+                refs_async_top_k_docs = max(1, min(max(1, int(top_k or 1)), refs_async_top_k_docs))
+
+                try:
+                    refs_async_timeout_s = float(str(os.environ.get("KB_REFS_ASYNC_TIMEOUT_S", "12") or "12"))
+                except Exception:
+                    refs_async_timeout_s = 12.0
+                refs_async_timeout_s = max(4.0, min(30.0, refs_async_timeout_s))
+
+                try:
+                    refs_async_max_retries = int(str(os.environ.get("KB_REFS_ASYNC_MAX_RETRIES", "0") or "0"))
+                except Exception:
+                    refs_async_max_retries = 0
+                refs_async_max_retries = max(0, min(1, refs_async_max_retries))
+
+                settings_for_refs = settings_obj
+                try:
+                    settings_for_refs = replace(
+                        settings_obj,
+                        timeout_s=min(float(getattr(settings_obj, "timeout_s", refs_async_timeout_s) or refs_async_timeout_s), refs_async_timeout_s),
+                        max_retries=refs_async_max_retries,
+                    )
+                except Exception:
+                    settings_for_refs = settings_obj
+
                 def _push_partial(partial_docs: list[dict]) -> None:
                     try:
                         cs = ChatStore(chat_db)
@@ -1395,14 +1776,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     except Exception:
                         pass
 
-                seed_docs = list(refs_async_seed_docs)
+                seed_docs = list(refs_async_seed_docs)[:refs_async_top_k_docs]
                 try:
                     if hits_raw:
                         t_rebuild0 = time.perf_counter()
                         rebuilt_docs = _group_hits_by_doc_for_refs(
                             hits_raw,
                             prompt_text=retrieval_prompt,
-                            top_k_docs=top_k,
+                            top_k_docs=refs_async_top_k_docs,
                             deep_query=(used_query or retrieval_prompt or prompt or ""),
                             deep_read=True,
                             llm_rerank=False,
@@ -1428,11 +1809,18 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     enriched = _enrich_grouped_refs_with_llm_pack(
                         list(seed_docs),
                         question=(prompt or used_query or ""),
-                        settings=settings_obj,
-                        top_k_docs=top_k,
+                        settings=settings_for_refs,
+                        top_k_docs=refs_async_top_k_docs,
                         progress_cb=_push_partial,
                     )
-                    _perf_log("gen.refs_enrich", elapsed=time.perf_counter() - t_pack0, docs=len(enriched))
+                    _perf_log(
+                        "gen.refs_enrich",
+                        elapsed=time.perf_counter() - t_pack0,
+                        docs=len(enriched),
+                        top_k=refs_async_top_k_docs,
+                        timeout=refs_async_timeout_s,
+                        retries=refs_async_max_retries,
+                    )
                 except Exception:
                     enriched = []
                 snap0 = _gen_get_task(session_id) or {}
