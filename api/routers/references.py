@@ -13,6 +13,7 @@ from api.deps import get_chat_store, get_settings, load_prefs
 from api.reference_ui import enrich_citation_detail_meta, enrich_refs_payload, ensure_source_citation_meta, open_reference_source
 from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
+from kb.source_blocks import load_source_blocks, source_blocks_to_reader_anchors
 from api.sse import sse_generator, sse_response
 from kb.reference_sync import (
     start_reference_sync,
@@ -102,6 +103,14 @@ class ReaderDocBody(BaseModel):
 
 _ASSET_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_MD_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
+_MD_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*)$")
+_MD_BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
+_MD_TABLE_RE = re.compile(r"^\s*\|.*\|\s*$")
+_MD_FENCE_RE = re.compile(r"^\s*(```+|~~~+)\s*")
+_EQ_NUMBER_RE = re.compile(r"(?:\b(?:eq|equation|公式)\s*[#(（]?\s*|[\(（])(\d{1,4})(?:\s*[)）])", re.IGNORECASE)
+_INLINE_EQ_RE = re.compile(r"\$[^$]{1,280}\$")
+_TEX_CMD_RE = re.compile(r"\\[a-zA-Z]{2,}")
 
 
 @router.post("/open")
@@ -206,6 +215,71 @@ def _rewrite_md_asset_links(md_text: str, *, md_path: Path, md_root: Path) -> st
     return _MD_IMAGE_RE.sub(_replace, text)
 
 
+def _strip_md_inline_for_anchor(input_text: str) -> str:
+    text = str(input_text or "")
+    if not text:
+        return ""
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"~~([^~]+)~~", r"\1", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _has_equation_signal(text: str) -> bool:
+    src = str(text or "")
+    if not src:
+        return False
+    if "$$" in src:
+        return True
+    low = src.lower()
+    if "\\begin{equation" in low or "\\[" in src:
+        return True
+    if _INLINE_EQ_RE.search(src):
+        return True
+    if _TEX_CMD_RE.search(src) and re.search(r"[=^_]", src):
+        return True
+    return False
+
+
+def _extract_equation_number(text: str) -> int:
+    src = str(text or "")
+    if not src:
+        return 0
+    m = _EQ_NUMBER_RE.search(src)
+    if not m:
+        return 0
+    try:
+        v = int(str(m.group(1) or "0"))
+    except Exception:
+        return 0
+    return v if v > 0 else 0
+
+
+def _anchor_id(kind: str, index: int) -> str:
+    prefix_map = {
+        "heading": "hd",
+        "paragraph": "p",
+        "equation": "eq",
+        "list_item": "li",
+        "blockquote": "bq",
+        "code": "cd",
+        "table": "tb",
+    }
+    prefix = prefix_map.get(str(kind or "").strip().lower(), "a")
+    return f"{prefix}_{int(max(1, index)):05d}"
+
+
+def _build_reader_anchors(md_text: str, *, md_path: Path) -> tuple[list[dict], list[dict]]:
+    blocks = load_source_blocks(md_path, md_text=md_text)
+    anchors = source_blocks_to_reader_anchors(blocks)
+    return anchors, blocks
+
+
 @router.post("/reader/doc")
 def get_reader_doc(body: ReaderDocBody):
     source_path = str(body.source_path or "").strip()
@@ -221,6 +295,7 @@ def get_reader_doc(body: ReaderDocBody):
 
     md_root = _md_dir()
     md_render = _rewrite_md_asset_links(md_text, md_path=md_path, md_root=md_root)
+    anchors, blocks = _build_reader_anchors(md_text, md_path=md_path)
     source_name = md_path.name
     low = source_name.lower()
     if low.endswith(".en.md"):
@@ -234,6 +309,8 @@ def get_reader_doc(body: ReaderDocBody):
         "source_name": source_name,
         "md_path": str(md_path),
         "markdown": md_render,
+        "anchors": anchors,
+        "blocks": blocks,
     }
 
 

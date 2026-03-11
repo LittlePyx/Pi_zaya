@@ -57,6 +57,7 @@ class ChatStore:
                   role TEXT NOT NULL,
                   content TEXT NOT NULL,
                   attachments_json TEXT NOT NULL DEFAULT '[]',
+                  meta_json TEXT NOT NULL DEFAULT '{}',
                   created_at REAL NOT NULL,
                   FOREIGN KEY(conv_id) REFERENCES conversations(id)
                 );
@@ -65,6 +66,10 @@ class ChatStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv_id ON messages(conv_id);")
             try:
                 conn.execute("ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE messages ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
             except sqlite3.OperationalError:
                 pass
             conn.execute(
@@ -483,7 +488,7 @@ class ChatStore:
         ]
 
     def get_messages(self, conv_id: str, limit: int | None = None) -> list[dict]:
-        sql = "SELECT id, role, content, attachments_json, created_at FROM messages WHERE conv_id = ? ORDER BY id ASC"
+        sql = "SELECT id, role, content, attachments_json, meta_json, created_at FROM messages WHERE conv_id = ? ORDER BY id ASC"
         params: tuple = (conv_id,)
         if limit is not None:
             sql += " LIMIT ?"
@@ -500,8 +505,18 @@ class ChatStore:
                 attachments = []
             if not isinstance(attachments, list):
                 attachments = []
+            try:
+                meta = json.loads(rec.get("meta_json") or "{}")
+            except Exception:
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
             rec["attachments"] = attachments
+            rec["meta"] = meta
+            if isinstance(meta.get("provenance"), dict):
+                rec["provenance"] = dict(meta.get("provenance") or {})
             rec.pop("attachments_json", None)
+            rec.pop("meta_json", None)
             out.append(rec)
         return out
 
@@ -509,7 +524,7 @@ class ChatStore:
         mid = int(max_id or 0)
         if mid <= 0:
             return self.get_messages(conv_id, limit=limit)
-        sql = "SELECT id, role, content, attachments_json, created_at FROM messages WHERE conv_id = ? AND id <= ? ORDER BY id ASC"
+        sql = "SELECT id, role, content, attachments_json, meta_json, created_at FROM messages WHERE conv_id = ? AND id <= ? ORDER BY id ASC"
         params: tuple = (conv_id, mid)
         if limit is not None:
             sql += " LIMIT ?"
@@ -525,12 +540,29 @@ class ChatStore:
                 attachments = []
             if not isinstance(attachments, list):
                 attachments = []
+            try:
+                meta = json.loads(rec.get("meta_json") or "{}")
+            except Exception:
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
             rec["attachments"] = attachments
+            rec["meta"] = meta
+            if isinstance(meta.get("provenance"), dict):
+                rec["provenance"] = dict(meta.get("provenance") or {})
             rec.pop("attachments_json", None)
+            rec.pop("meta_json", None)
             out.append(rec)
         return out
 
-    def append_message(self, conv_id: str, role: str, content: str, attachments: list[dict] | None = None) -> int:
+    def append_message(
+        self,
+        conv_id: str,
+        role: str,
+        content: str,
+        attachments: list[dict] | None = None,
+        meta: dict | None = None,
+    ) -> int:
         role = (role or "").strip()
         if role not in ("user", "assistant", "system"):
             role = "user"
@@ -539,11 +571,15 @@ class ChatStore:
             attachments_json = json.dumps(list(attachments or []), ensure_ascii=False, default=str)
         except Exception:
             attachments_json = "[]"
+        try:
+            meta_json = json.dumps(dict(meta or {}), ensure_ascii=False, default=str)
+        except Exception:
+            meta_json = "{}"
         now = time.time()
         with self._connect() as conn:
             cur = conn.execute(
-                "INSERT INTO messages (conv_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (conv_id, role, content, attachments_json, now),
+                "INSERT INTO messages (conv_id, role, content, attachments_json, meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (conv_id, role, content, attachments_json, meta_json, now),
             )
             project_id = self._touch_conversation_active(conn, conv_id, now)
             self._archive_excess_conversations(conn, project_id=project_id)
@@ -563,6 +599,50 @@ class ChatStore:
             if not row:
                 return False
             conn.execute("UPDATE messages SET content = ? WHERE id = ?", (text, mid))
+            project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
+            self._archive_excess_conversations(conn, project_id=project_id)
+        return True
+
+    def update_message_meta(self, message_id: int, meta: dict) -> bool:
+        mid = int(message_id or 0)
+        if mid <= 0:
+            return False
+        try:
+            meta_json = json.dumps(dict(meta or {}), ensure_ascii=False, default=str)
+        except Exception:
+            meta_json = "{}"
+        now = time.time()
+        with self._connect() as conn:
+            row = conn.execute("SELECT conv_id FROM messages WHERE id = ?", (mid,)).fetchone()
+            if not row:
+                return False
+            conn.execute("UPDATE messages SET meta_json = ? WHERE id = ?", (meta_json, mid))
+            project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
+            self._archive_excess_conversations(conn, project_id=project_id)
+        return True
+
+    def merge_message_meta(self, message_id: int, patch: dict) -> bool:
+        mid = int(message_id or 0)
+        if mid <= 0:
+            return False
+        patch_dict = dict(patch or {})
+        now = time.time()
+        with self._connect() as conn:
+            row = conn.execute("SELECT conv_id, meta_json FROM messages WHERE id = ?", (mid,)).fetchone()
+            if not row:
+                return False
+            try:
+                current = json.loads(row["meta_json"] or "{}")
+            except Exception:
+                current = {}
+            if not isinstance(current, dict):
+                current = {}
+            current.update(patch_dict)
+            try:
+                meta_json = json.dumps(current, ensure_ascii=False, default=str)
+            except Exception:
+                meta_json = "{}"
+            conn.execute("UPDATE messages SET meta_json = ? WHERE id = ?", (meta_json, mid))
             project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
             self._archive_excess_conversations(conn, project_id=project_id)
         return True

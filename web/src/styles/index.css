@@ -329,56 +329,78 @@ body,
   color: color-mix(in srgb, var(--kb-cite-fg-hover, var(--kb-cite-fg, var(--accent))) 78%, #dbeafe 22%);
 }
 
-.kb-markdown .kb-md-loc-block,
-.kb-markdown .kb-md-loc-li {
-  position: relative;
+.kb-markdown .kb-md-loc-inline {
+  white-space: normal;
 }
 
-.kb-markdown .kb-md-loc-block {
-  padding-right: 68px;
-}
-
-.kb-markdown .kb-md-loc-block > p {
-  margin: 0;
-}
-
-.kb-markdown .kb-md-loc-li {
-  padding-right: 68px;
-}
-
-.kb-markdown .kb-md-locate-btn {
-  position: absolute;
-  top: 0;
-  right: 0;
-  height: 24px;
-  max-width: 136px;
-  padding: 0 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+.kb-markdown .kb-md-locate-inline-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  min-height: 18px;
+  margin-left: 6px;
+  padding: 0 1px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  color: color-mix(in srgb, var(--text-main) 72%, transparent);
-  font-size: 11px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: color-mix(in srgb, var(--accent) 68%, var(--text-main));
+  opacity: 0.96;
+  cursor: pointer;
+  vertical-align: baseline;
+  transform: translateY(-0.02em);
+  transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.kb-markdown .kb-md-locate-inline-glyph {
+  display: inline-block;
+  font-size: 15px;
+  font-weight: 650;
   line-height: 1;
+}
+
+.kb-markdown .kb-md-locate-inline-btn:hover,
+.kb-markdown .kb-md-locate-inline-btn:focus-visible {
+  color: var(--accent);
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  transform: translateY(-0.02em) scale(1.02);
+}
+
+.kb-prov-locate-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  color: var(--text-main);
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.kb-prov-locate-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  color: var(--accent);
+}
+
+.kb-prov-locate-chip-num {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-main) 58%, transparent);
   white-space: nowrap;
+}
+
+.kb-prov-locate-chip-text {
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0;
-  pointer-events: none;
-  cursor: pointer;
-  transition: opacity 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
-
-.kb-markdown .kb-md-loc-block:hover .kb-md-locate-btn,
-.kb-markdown .kb-md-loc-block:focus-within .kb-md-locate-btn,
-.kb-markdown .kb-md-loc-li:hover > .kb-md-locate-btn,
-.kb-markdown .kb-md-loc-li:focus-within > .kb-md-locate-btn {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.kb-markdown .kb-md-locate-btn:hover {
-  border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
-  color: var(--accent);
+  white-space: nowrap;
+  min-width: 0;
+  max-width: min(42ch, 70vw);
 }
 
 .kb-markdown.kb-markdown-reader {

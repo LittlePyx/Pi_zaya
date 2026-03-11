@@ -24,6 +24,17 @@ function Test-PortListening([int]$Port) {
   }
 }
 
+function Wait-PortListening([int]$Port, [int]$TimeoutSeconds = 20, [int]$IntervalMs = 500) {
+  $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+  while ((Get-Date) -lt $deadline) {
+    if (Test-PortListening -Port $Port) {
+      return $true
+    }
+    Start-Sleep -Milliseconds ([Math]::Max(100, $IntervalMs))
+  }
+  return (Test-PortListening -Port $Port)
+}
+
 function Get-PortPids([int[]]$Ports) {
   $out = @()
   foreach ($p in $Ports) {
@@ -109,7 +120,7 @@ Remove-Item $fastapiOut, $fastapiErr, $viteOut, $viteErr -ErrorAction SilentlyCo
 Write-Info "Starting backend (uvicorn) on http://$BackendHost`:$BackendPort ..."
 $backendProc = Start-Process `
   -FilePath $pythonExe `
-  -ArgumentList @('-m', 'uvicorn', 'api.main:app', '--host', $BackendHost, '--port', "$BackendPort", '--reload') `
+  -ArgumentList @('-m', 'uvicorn', 'api.main:app', '--host', $BackendHost, '--port', "$BackendPort") `
   -WorkingDirectory $here `
   -PassThru `
   -RedirectStandardOutput $fastapiOut `
@@ -124,10 +135,8 @@ $frontendProc = Start-Process `
   -RedirectStandardOutput $viteOut `
   -RedirectStandardError $viteErr
 
-Start-Sleep -Seconds 6
-
-$backendOk = Test-PortListening -Port $BackendPort
-$frontendOk = Test-PortListening -Port $FrontendPort
+$backendOk = Wait-PortListening -Port $BackendPort -TimeoutSeconds 25 -IntervalMs 500
+$frontendOk = Wait-PortListening -Port $FrontendPort -TimeoutSeconds 25 -IntervalMs 500
 
 Write-Host ""
 Write-Info "Backend PID:  $($backendProc.Id)  (port ${BackendPort}: $(if ($backendOk) { 'UP' } else { 'DOWN' }))"

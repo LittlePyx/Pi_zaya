@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -11,6 +12,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
+from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.parse import quote
 
@@ -47,6 +49,15 @@ from kb.retrieval_heuristics import (
 )
 from kb.store import load_all_chunks
 from kb.retriever import BM25Retriever
+from kb.source_blocks import (
+    extract_equation_number,
+    has_equation_signal,
+    load_source_blocks,
+    match_source_blocks,
+    normalize_inline_markdown,
+    normalize_match_text,
+    split_answer_segments,
+)
 from ui.chat_widgets import _normalize_math_markdown
 from ui.strings import S
 
@@ -86,6 +97,106 @@ _FIG_NUMBER_PATTERNS = (
     re.compile(r"图\s*([0-9]{1,3})\b"),
     re.compile(r"第\s*([0-9]{1,3})\s*张图"),
     re.compile(r"(?:^|[_\-/])fig(?:ure)?[_\-]?(\d{1,3})(?:\D|$)", flags=re.IGNORECASE),
+)
+_DISPLAY_EQ_SEG_RE = re.compile(r"\$\$[\s\S]{1,6000}\$\$")
+_EQ_ENV_SEG_RE = re.compile(r"\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\}", re.IGNORECASE)
+_LATIN_WORD_RE = re.compile(r"[A-Za-z]{3,}")
+_CJK_WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+_FORMULA_TOKEN_RE = re.compile(r"(\\[a-zA-Z]{2,}|[=^_]|\\sum|\\int|\\frac|\\mathcal|\\mathbf)")
+_FORMULA_CMD_RE = re.compile(r"\\[a-zA-Z]{2,}")
+_SEG_SENT_SPLIT_RE = re.compile(r"(?<=[\u3002\uff01\uff1f.!;:\uff1b\uff1a])\s+")
+_CLAIM_EXPERIMENT_HINT_RE = re.compile(
+    r"(\bexperiment(?:al)?\b|\bsetup\b|\bresult(?:s)?\b|\bablation\b|\bbaseline\b|\bcomparison\b|"
+    r"\bground[ -]?truth\b|\bpose\b|\bcamera\b|\btrain(?:ing)?\b|\bevaluation\b|\bdataset\b|"
+    r"\bmetric\b|\bsota\b|实验|对比|基线|位姿|真值|训练|数据集|指标)"
+    ,
+    re.IGNORECASE,
+)
+_CLAIM_METHOD_HINT_RE = re.compile(
+    r"(\bmethod\b|\bapproach\b|\bpipeline\b|\bframework\b|\barchitecture\b|\bmodule\b|\bnetwork\b|"
+    r"\binput\b|\boutput\b|\brender(?:ing)?\b|\breconstruct(?:ion)?\b|\bprior\b|方法|流程|框架|输入|输出|重建|渲染)"
+    ,
+    re.IGNORECASE,
+)
+_GENERIC_HEADING_HINTS = (
+    "abstract",
+    "introduction",
+    "background",
+    "related work",
+    "preliminar",
+    "conclusion",
+    "discussion",
+    "reference",
+)
+_EXPERIMENT_HEADING_HINTS = (
+    "experiment",
+    "experimental",
+    "setup",
+    "results",
+    "ablation",
+    "evaluation",
+    "dataset",
+    "implementation",
+    "baseline",
+    "comparison",
+)
+_METHOD_HEADING_HINTS = (
+    "method",
+    "approach",
+    "pipeline",
+    "framework",
+    "architecture",
+    "model",
+    "overview",
+    "algorithm",
+)
+_QUOTE_PATTERNS = (
+    re.compile(r'["\u201c\u201d]\s*([^"\u201c\u201d]{6,320}?)\s*["\u201c\u201d]'),
+    re.compile(r"[\u2018\u2019']\s*([^\u2018\u2019']{6,260}?)\s*[\u2018\u2019']"),
+    re.compile(r"[\u300c\u300d\u300e\u300f\u300a\u300b]\s*([^\u300c\u300d\u300e\u300f\u300a\u300b]{6,320}?)\s*[\u300d\u300f\u300b]"),
+)
+_SHELL_ONLY_RE = re.compile(
+    r"^(?:"
+    r"\u8bf4\u660e|\u8868\u660e|\u53ef\u89c1|\u56e0\u6b64|\u6240\u4ee5|\u603b\u4e4b|\u7efc\u4e0a|"
+    r"\u7531\u6b64\u53ef\u89c1|\u8fdb\u4e00\u6b65\u8bf4\u660e|\u8fdb\u4e00\u6b65\u8868\u660e|\u8fdb\u4e00\u6b65\u8bc1\u5b9e|"
+    r"\u63d0\u793a|\u6ce8\u610f|\u4e0b\u4e00\u6b65|\u5efa\u8bae"
+    r")\s*[:\uFF1A]?$",
+    re.IGNORECASE,
+)
+_SHELL_PREFIX_RE = re.compile(
+    r"^(?:"
+    r"\u6587\u4e2d\u63d0\u5230|\u6587\u4e2d\u6307\u51fa|\u4f5c\u8005\u6307\u51fa|"
+    r"\u8868\u683c\u6807\u9898\u4e0e\u65b9\u6cd5\u547d\u540d\u660e\u786e\u4e3a|"
+    r"\u76f4\u63a5\u8bc1\u636e(?:\uff08[^)\uff09]{0,48}[\)\uff09])?|"
+    r"\u95f4\u63a5\u8bc1\u636e(?:\uff08[^)\uff09]{0,48}[\)\uff09])?|"
+    r"\u5ef6\u4f38\u601d\u8003\u9898|\u9ad8\u4ef7\u503c\u95ee\u9898"
+    r").{0,220}(?:"
+    r"\u8bf4\u660e|\u8868\u660e|\u610f\u5473\u7740|\u63d0\u793a|\u53ef\u89c1|\u8bc1\u5b9e"
+    r")?\s*[:\uFF1A]$",
+    re.IGNORECASE,
+)
+_CRITICAL_FACT_HINT_RE = re.compile(
+    r"("
+    r"\b(?:ground[ -]?truth|pose|camera|pipeline|baseline|training|input|output|dataset|metric|ablation|"
+    r"equation|formula|table|figure|fig|hardware|dmd|compression|snapshot|rendering)\b|"
+    r"\b(?:nerf|scinerf|pnp|ffdnet|gap-tv)\b|"
+    r"(?:\u4f4d\u59ff|\u76f8\u673a|\u8bad\u7ec3|\u8f93\u5165|\u8f93\u51fa|\u6d41\u7a0b|\u516c\u5f0f|\u53d8\u91cf|"
+    r"\u8868|\u56fe|\u786c\u4ef6|\u538b\u7f29\u6bd4|\u771f\u503c|\u57fa\u7ebf|\u5bf9\u6bd4|\u5b9e\u9a8c)"
+    r")",
+    re.IGNORECASE,
+)
+_QUOTE_HEADING_LIKE_RE = re.compile(
+    r"^(?:"
+    r"abstract|introduction|background|related work|preliminar(?:y|ies)?|method(?:ology)?|"
+    r"experiment(?:al)?(?: setup)?|result(?:s)?|discussion|conclusion|"
+    r"baseline(?: methods?)?|evaluation metrics?|implementation details?|"
+    r"references?|appendix|supplement(?:ary)?"
+    r")$",
+    re.IGNORECASE,
+)
+_FIGURE_CLAIM_RE = re.compile(
+    r"(\bfig(?:ure)?\.?\s*\d{1,3}\b|(?:^|[^\w])figure\s*#?\s*\d{1,3}\b|图\s*\d{1,3}\b|第\s*\d{1,3}\s*张图)",
+    re.IGNORECASE,
 )
 
 
@@ -222,6 +333,10 @@ def _resolve_paper_guide_md_path(
         except Exception:
             pass
     if db_dir:
+        try:
+            roots.append(Path(db_dir).expanduser())
+        except Exception:
+            pass
         try:
             roots.append(Path(db_dir).expanduser().parent / "md_output")
         except Exception:
@@ -798,6 +913,7 @@ def _build_answer_contract_system_rules(*, intent: str, depth: str, has_hits: bo
         "- Use this section order when possible: Conclusion, Evidence, Limits, Next Steps.",
         "- Keep the answer in the same language as the user's query.",
         "- Conclusion should answer the user's core question directly in 1-3 sentences.",
+        "- Avoid redundancy; keep total bullet/action lines concise (usually <= 8).",
     ]
     if has_hits:
         lines.append("- Evidence should be grounded in retrieved snippets and include citations when available.")
@@ -1396,6 +1512,1324 @@ def _gen_store_partial(task: dict, partial: str) -> None:
     except Exception:
         pass
 
+
+def _is_display_formula_segment(text: str, *, segment_kind: str = "") -> bool:
+    src = str(text or "").strip()
+    if not src:
+        return False
+    low = src.lower()
+    if _DISPLAY_EQ_SEG_RE.search(src):
+        return True
+    if _EQ_ENV_SEG_RE.search(src):
+        return True
+    if "\\[" in src and "\\]" in src:
+        return True
+
+    # Allow numbered equation mentions to trigger equation-mode mapping.
+    n0 = extract_equation_number(src)
+    if n0 > 0 and has_equation_signal(src):
+        return True
+
+    if not has_equation_signal(src):
+        return False
+
+    # Inline-math explanatory bullets should stay as paragraph mapping.
+    clean = normalize_inline_markdown(src)
+    if not clean:
+        return False
+    latin_words = len(_LATIN_WORD_RE.findall(clean))
+    cjk_words = len(_CJK_WORD_RE.findall(clean))
+    formula_tokens = len(_FORMULA_TOKEN_RE.findall(src))
+    non_empty_lines = [line for line in src.splitlines() if str(line).strip()]
+    kind = str(segment_kind or "").strip().lower()
+
+    if formula_tokens >= 8 and (latin_words + cjk_words) <= 12 and len(non_empty_lines) <= 3:
+        return True
+    if kind == "paragraph" and formula_tokens >= 10 and (latin_words + cjk_words) <= 14:
+        return True
+    return False
+
+
+def _formula_token_overlap_score(a: str, b: str) -> float:
+    ta = set(_FORMULA_CMD_RE.findall(str(a or "")))
+    tb = set(_FORMULA_CMD_RE.findall(str(b or "")))
+    if not ta or not tb:
+        return 0.0
+    overlap = sum(1 for token in ta if token in tb)
+    return float(overlap) / (max(1.0, (len(ta) * len(tb)) ** 0.5))
+
+
+def _text_token_overlap_score(a: str, b: str) -> float:
+    x = normalize_match_text(a)
+    y = normalize_match_text(b)
+    if (not x) or (not y):
+        return 0.0
+    ta = set(re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]{1,2}", x))
+    tb = set(re.findall(r"[a-z0-9]{2,}|[\u4e00-\u9fff]{1,2}", y))
+    if not ta or not tb:
+        return 0.0
+    overlap = sum(1 for token in ta if token in tb)
+    return float(overlap) / (max(1.0, (len(ta) * len(tb)) ** 0.5))
+
+
+def _normalize_formula_compare_text(text: str) -> str:
+    src = str(text or "")
+    if not src:
+        return ""
+    s = src.lower()
+    s = re.sub(r"\$+", "", s)
+    s = re.sub(r"\\tag\{\s*\d{1,4}\s*\}", "", s)
+    s = re.sub(r"\s+", "", s)
+    return s[:2000]
+
+
+def _formula_char_similarity(a: str, b: str) -> float:
+    x = _normalize_formula_compare_text(a)
+    y = _normalize_formula_compare_text(b)
+    if (not x) or (not y):
+        return 0.0
+    try:
+        return float(SequenceMatcher(None, x, y).ratio())
+    except Exception:
+        return 0.0
+
+
+def _segment_snippet_aliases(text: str) -> list[str]:
+    src = normalize_inline_markdown(str(text or ""))
+    if not src:
+        return []
+    aliases: list[str] = []
+    seen: set[str] = set()
+
+    def _push(raw: str) -> None:
+        key = normalize_match_text(str(raw or ""))
+        if (not key) or (key in seen):
+            return
+        seen.add(key)
+        aliases.append(key[:360])
+
+    _push(src)
+    if len(src) > 200:
+        _push(src[:200])
+
+    sent_list = [s.strip() for s in _SEG_SENT_SPLIT_RE.split(src) if str(s).strip()]
+    if sent_list:
+        first = sent_list[0]
+        if len(first) >= 14:
+            _push(first)
+        if len(sent_list) >= 2:
+            pair = f"{sent_list[0]} {sent_list[1]}".strip()
+            if len(pair) >= 18:
+                _push(pair)
+
+    return aliases[:6]
+
+
+def _strip_provenance_noise_text(text: str) -> str:
+    src = normalize_inline_markdown(str(text or ""))
+    if not src:
+        return ""
+    src = re.sub(r"\[\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\]", " ", src)
+    src = re.sub(r"\(\s*\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\s*\)", " ", src)
+    src = re.sub(r"(?:see|\u53c2\u89c1)\s*\[\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\]", " ", src, flags=re.IGNORECASE)
+    src = re.sub(r"\s+", " ", src)
+    return src.strip()
+
+
+def _extract_quoted_spans(text: str, *, min_len: int = 10) -> list[str]:
+    src = _strip_provenance_noise_text(text)
+    if not src:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for pattern in _QUOTE_PATTERNS:
+        for m in pattern.finditer(src):
+            item = str(m.group(1) or "").strip()
+            if len(item) < max(1, int(min_len)):
+                continue
+            key = normalize_match_text(item)
+            if (not key) or (key in seen):
+                continue
+            seen.add(key)
+            out.append(item[:360])
+            if len(out) >= 6:
+                return out
+    return out
+
+
+def _longest_quoted_span(text: str, *, min_len: int = 10) -> str:
+    spans = _extract_quoted_spans(text, min_len=min_len)
+    if not spans:
+        return ""
+    spans.sort(key=lambda item: len(str(item or "")), reverse=True)
+    return str(spans[0] or "").strip()
+
+
+def _is_heading_like_quote_span(text: str) -> bool:
+    raw = _strip_provenance_noise_text(text)
+    if not raw:
+        return True
+    compact = re.sub(r"\s+", " ", raw).strip(" :;,.!?()[]{}\"'“”‘’")
+    if not compact:
+        return True
+    if _QUOTE_HEADING_LIKE_RE.fullmatch(compact):
+        return True
+    if re.search(r"[。！？!?;；:：]", compact):
+        return False
+    latin_words = _LATIN_WORD_RE.findall(compact)
+    if 0 < len(latin_words) <= 8 and len(compact) <= 80:
+        verb_like = re.search(
+            r"\b(?:is|are|was|were|be|being|been|can|cannot|could|should|would|will|use|used|"
+            r"using|estimate|estimated|show|shown|train|training|feed|feeding|make|making|"
+            r"exploit|exploits|provide|providing|compare|comparison)\b",
+            compact,
+            re.IGNORECASE,
+        )
+        if not verb_like:
+            return True
+    if len(compact) <= 28 and not re.search(r"\d", compact):
+        return True
+    return False
+
+
+def _is_rhetorical_shell_sentence(text: str) -> bool:
+    raw = _strip_provenance_noise_text(text)
+    if not raw:
+        return True
+    if _SHELL_ONLY_RE.match(raw):
+        return True
+    if _SHELL_PREFIX_RE.match(raw):
+        return True
+    if raw.endswith(":") or raw.endswith("："):
+        informative_tail = re.sub(r"[:：]\s*$", "", raw).strip()
+        if len(informative_tail) <= 32:
+            return True
+        if re.search(r"(?:\u8bf4\u660e|\u8868\u660e|\u610f\u5473\u7740|\u63d0\u793a|\u53ef\u89c1|\u8bc1\u5b9e)\s*$", informative_tail):
+            return True
+    return False
+
+
+def _critical_fact_score(text: str) -> float:
+    raw = _strip_provenance_noise_text(text)
+    if not raw:
+        return 0.0
+    score = 0.0
+    if len(raw) >= 18:
+        score += 0.12
+    if len(raw) >= 32:
+        score += 0.12
+    if len(raw) >= 56:
+        score += 0.08
+    if re.search(r"\d", raw):
+        score += 0.08
+    if re.search(r"[A-Z][A-Za-z0-9+-]{1,}", raw):
+        score += 0.08
+    if has_equation_signal(raw):
+        score += 0.14
+    if extract_equation_number(raw) > 0:
+        score += 0.12
+    if _FIGURE_CLAIM_RE.search(raw):
+        score += 0.12
+    if _CLAIM_EXPERIMENT_HINT_RE.search(raw):
+        score += 0.10
+    if _CLAIM_METHOD_HINT_RE.search(raw):
+        score += 0.08
+    if _CRITICAL_FACT_HINT_RE.search(raw):
+        score += 0.14
+    return float(score)
+
+
+def _formula_anchor_text(raw_markdown: str, segment_text: str, primary_block: dict | None) -> str:
+    raw = str(raw_markdown or "").strip()
+    seg = str(segment_text or "").strip()
+    if raw:
+        m = _DISPLAY_EQ_SEG_RE.search(raw)
+        if m:
+            return str(m.group(0) or "").strip()[:900]
+        if _EQ_ENV_SEG_RE.search(raw):
+            return raw[:900]
+    if isinstance(primary_block, dict):
+        block_text = str(primary_block.get("raw_text") or primary_block.get("text") or "").strip()
+        if block_text:
+            return block_text[:900]
+    return seg[:900]
+
+
+def _segment_claim_meta(
+    *,
+    segment_text: str,
+    raw_markdown: str,
+    segment_kind: str,
+    evidence_mode: str,
+    primary_block: dict | None,
+    evidence_quote: str,
+    mapping_quality: float,
+) -> dict[str, object]:
+    seg_text = _strip_provenance_noise_text(segment_text)
+    raw_md = str(raw_markdown or "").strip()
+    kind = str(segment_kind or "").strip().lower()
+    mode = str(evidence_mode or "").strip().lower()
+    quote_spans = _extract_quoted_spans(raw_md or seg_text, min_len=10)
+    quote_anchor = _longest_quoted_span(raw_md or seg_text, min_len=10)
+    heading_like_quote = bool(quote_anchor) and _is_heading_like_quote_span(quote_anchor)
+    anchor_text = ""
+    anchor_kind = ""
+    claim_type = "critical_fact_claim"
+    eq_number = extract_equation_number(raw_md or seg_text) if has_equation_signal(raw_md or seg_text) else 0
+    figure_number = _extract_figure_number(raw_md or seg_text) if _FIGURE_CLAIM_RE.search(raw_md or seg_text) else 0
+    primary_kind = str((primary_block or {}).get("kind") or "").strip().lower()
+
+    if _is_display_formula_segment(raw_md or seg_text, segment_kind=kind):
+        claim_type = "formula_claim"
+        anchor_kind = "equation"
+        anchor_text = _formula_anchor_text(raw_md, seg_text, primary_block)
+    elif primary_kind == "figure" or figure_number > 0:
+        claim_type = "figure_claim"
+        anchor_kind = "figure"
+        figure_anchor = str(evidence_quote or seg_text or raw_md).strip()
+        if figure_number > 0 and not re.search(
+            rf"(?:\bfig(?:ure)?\.?\s*{int(figure_number)}\b|图\s*{int(figure_number)}\b|第\s*{int(figure_number)}\s*张图)",
+            figure_anchor,
+            re.IGNORECASE,
+        ):
+            figure_anchor = f"Figure {int(figure_number)}. {figure_anchor}".strip()
+        anchor_text = figure_anchor[:480]
+    elif kind == "blockquote":
+        claim_type = "blockquote_claim"
+        anchor_kind = "blockquote"
+        anchor_text = str(evidence_quote or seg_text).strip()[:600]
+    elif quote_spans and (not heading_like_quote):
+        claim_type = "quote_claim"
+        anchor_kind = "quote"
+        anchor_text = quote_anchor[:600]
+    elif heading_like_quote:
+        claim_type = "shell_sentence"
+        anchor_kind = ""
+        anchor_text = ""
+    elif _is_rhetorical_shell_sentence(seg_text):
+        claim_type = "shell_sentence"
+        anchor_kind = ""
+        anchor_text = ""
+    else:
+        claim_type = "critical_fact_claim"
+        anchor_kind = "sentence"
+        anchor_text = str(evidence_quote or seg_text).strip()[:320]
+
+    has_identity = bool(str((primary_block or {}).get("block_id") or "").strip()) or bool(str(evidence_quote or "").strip()) or float(mapping_quality or 0.0) >= 0.24
+    must_locate = bool(
+        mode == "direct"
+        and has_identity
+        and (
+            claim_type in {"quote_claim", "blockquote_claim", "formula_claim", "figure_claim"}
+            or (
+                claim_type == "critical_fact_claim"
+                and _critical_fact_score(anchor_text or seg_text) >= 0.34
+                and (len(str(anchor_text or "").strip()) >= 14)
+            )
+        )
+    )
+    if claim_type == "shell_sentence":
+        must_locate = False
+    if claim_type == "formula_claim" and eq_number <= 0:
+        try:
+            eq_number = int((primary_block or {}).get("number") or 0)
+        except Exception:
+            eq_number = 0
+    return {
+        "claim_type": claim_type,
+        "must_locate": bool(must_locate),
+        "anchor_kind": anchor_kind,
+        "anchor_text": str(anchor_text or "").strip(),
+        "equation_number": int(eq_number or 0),
+        "quote_spans": quote_spans,
+    }
+
+
+def _segment_type_from_text(text: str, *, segment_kind: str = "") -> str:
+    src = normalize_inline_markdown(str(text or ""))
+    if not src:
+        return "other"
+    head = src[:48]
+    kind = str(segment_kind or "").strip().lower()
+    if _is_display_formula_segment(src, segment_kind=kind):
+        return "equation_explanation"
+    if head.startswith("结论") or head.startswith("核心结论"):
+        return "claim"
+    if head.startswith("依据") or head.startswith("证据") or head.startswith("原文"):
+        return "evidence"
+    if head.startswith("下一步") or head.startswith("建议") or head.startswith("行动"):
+        return "next_step"
+    if kind == "list_item":
+        return "bullet"
+    return "prose"
+
+
+def _segment_focus_tags(text: str) -> set[str]:
+    src = normalize_inline_markdown(str(text or ""))
+    if not src:
+        return set()
+    tags: set[str] = set()
+    if _CLAIM_EXPERIMENT_HINT_RE.search(src):
+        tags.add("experiment")
+    if _CLAIM_METHOD_HINT_RE.search(src):
+        tags.add("method")
+    if has_equation_signal(src):
+        tags.add("formula")
+    return tags
+
+
+def _heading_focus_adjustment(segment_text: str, heading_path: str) -> float:
+    heading = normalize_match_text(heading_path)
+    if not heading:
+        return 0.0
+    tags = _segment_focus_tags(segment_text)
+    generic = any(token in heading for token in _GENERIC_HEADING_HINTS)
+    experiment = any(token in heading for token in _EXPERIMENT_HEADING_HINTS)
+    method = any(token in heading for token in _METHOD_HEADING_HINTS)
+    score = 0.0
+    if generic:
+        score -= 0.18
+        if "abstract" in heading:
+            score -= 0.08
+        if "related work" in heading or "reference" in heading:
+            score -= 0.12
+    if "experiment" in tags:
+        if experiment:
+            score += 0.26
+        elif generic:
+            score -= 0.14
+    if "method" in tags:
+        if method:
+            score += 0.18
+        elif generic and ("experiment" not in tags):
+            score -= 0.06
+    return score
+
+
+def _is_generic_heading_path(heading_path: str) -> bool:
+    heading = normalize_match_text(heading_path)
+    if not heading:
+        return False
+    return any(token in heading for token in _GENERIC_HEADING_HINTS)
+
+
+def _best_evidence_quote_match(segment_text: str, block: dict | None) -> tuple[str, float]:
+    if not isinstance(block, dict):
+        return "", 0.0
+    block_text_raw = str(block.get("raw_text") or block.get("text") or "").strip()
+    if not block_text_raw:
+        return "", 0.0
+    block_text = normalize_inline_markdown(block_text_raw)
+    if not block_text:
+        return "", 0.0
+    if has_equation_signal(segment_text) or str(block.get("kind") or "").strip().lower() == "equation":
+        snippet = block_text[:320]
+        score = _text_token_overlap_score(segment_text, snippet)
+        if snippet:
+            try:
+                score += 0.22 * float(SequenceMatcher(None, normalize_match_text(segment_text)[:420], normalize_match_text(snippet)[:420]).ratio())
+            except Exception:
+                pass
+        return snippet, score
+
+    segment_key = normalize_match_text(segment_text)
+    best = ""
+    best_score = -1.0
+    sentences = [s.strip() for s in _SEG_SENT_SPLIT_RE.split(block_text) if str(s).strip()]
+    if not sentences:
+        sentences = [block_text]
+    for sent in sentences[:16]:
+        sent_norm = normalize_match_text(sent)
+        if not sent_norm:
+            continue
+        score = 0.0
+        if sent_norm == segment_key:
+            score += 1.2
+        elif segment_key and (segment_key in sent_norm or sent_norm in segment_key):
+            score += 0.82
+        score += _text_token_overlap_score(segment_text, sent)
+        try:
+            score += 0.28 * float(SequenceMatcher(None, segment_key[:420], sent_norm[:420]).ratio())
+        except Exception:
+            pass
+        if has_equation_signal(sent):
+            score += 0.22 * _formula_token_overlap_score(segment_text, sent)
+            score += 0.12 * _formula_char_similarity(segment_text, sent)
+        if score > best_score:
+            best = sent
+            best_score = score
+    if best and best_score >= 0.16:
+        return best[:320], max(0.0, best_score)
+    fallback = block_text[:220]
+    fallback_score = _text_token_overlap_score(segment_text, fallback)
+    try:
+        fallback_score += 0.18 * float(
+            SequenceMatcher(None, normalize_match_text(segment_text)[:420], normalize_match_text(fallback)[:420]).ratio()
+        )
+    except Exception:
+        pass
+    return fallback, max(0.0, fallback_score)
+
+
+def _best_evidence_quote(segment_text: str, block: dict | None) -> str:
+    return _best_evidence_quote_match(segment_text, block)[0]
+
+
+def _block_support_metrics(segment_text: str, block: dict | None) -> dict[str, float | str | bool]:
+    if not isinstance(block, dict):
+        return {
+            "quote": "",
+            "quote_score": 0.0,
+            "support_score": 0.0,
+            "heading_adjust": 0.0,
+            "generic_heading": False,
+        }
+    block_text = normalize_inline_markdown(str(block.get("raw_text") or block.get("text") or ""))
+    if not block_text:
+        return {
+            "quote": "",
+            "quote_score": 0.0,
+            "support_score": 0.0,
+            "heading_adjust": 0.0,
+            "generic_heading": False,
+        }
+    heading_path = str(block.get("heading_path") or "").strip()
+    quote, quote_score = _best_evidence_quote_match(segment_text, block)
+    block_overlap = _text_token_overlap_score(segment_text, block_text)
+    block_ratio = 0.0
+    try:
+        block_ratio = float(
+            SequenceMatcher(
+                None,
+                normalize_match_text(segment_text)[:420],
+                normalize_match_text(block_text)[:420],
+            ).ratio()
+        )
+    except Exception:
+        block_ratio = 0.0
+    support_score = max(quote_score, block_overlap + (0.22 * block_ratio))
+    heading_adjust = _heading_focus_adjustment(segment_text, heading_path)
+    return {
+        "quote": quote,
+        "quote_score": float(max(0.0, quote_score)),
+        "support_score": float(max(0.0, support_score)),
+        "heading_adjust": float(heading_adjust),
+        "generic_heading": bool(_is_generic_heading_path(heading_path)),
+    }
+
+
+def _extract_json_object_text(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    m = re.search(r"\{[\s\S]*\}", text)
+    return str(m.group(0) or "").strip() if m else ""
+
+
+def _pick_blocks_with_llm(
+    *,
+    ds: DeepSeekChat | None,
+    segment_text: str,
+    segment_kind: str,
+    is_formula_segment: bool,
+    candidate_rows: list[dict],
+    max_pick: int = 2,
+) -> list[str]:
+    if ds is None:
+        return []
+    rows = [row for row in list(candidate_rows or []) if isinstance(row, dict)]
+    if len(rows) < 2:
+        return []
+
+    cand_rows = rows[: min(6, len(rows))]
+    allowed_ids: set[str] = set()
+    cand_lines: list[str] = []
+    for idx, row in enumerate(cand_rows, start=1):
+        block = row.get("block")
+        if not isinstance(block, dict):
+            continue
+        block_id = str(block.get("block_id") or "").strip()
+        if not block_id:
+            continue
+        allowed_ids.add(block_id)
+        score = float(row.get("score") or 0.0)
+        kind = str(block.get("kind") or "").strip()
+        heading = str(block.get("heading_path") or "").strip()
+        number = int(block.get("number") or 0)
+        block_text_raw = str(block.get("raw_text") or block.get("text") or "")
+        text = normalize_inline_markdown(block_text_raw)[:420]
+        cand_lines.append(
+            f"{idx}. block_id={block_id} kind={kind} number={number} score={score:.3f}\n"
+            f"   heading={heading}\n"
+            f"   text={text}"
+        )
+    if len(cand_lines) < 2:
+        return []
+
+    sys_msg = (
+        "You are a strict evidence mapper. Choose source blocks that directly support the answer segment. "
+        "If no candidate clearly supports, return empty ids."
+    )
+    formula_rule = (
+        "- For formula segments, prioritize same equation number; if absent, allow mathematically equivalent form with different symbols.\n"
+        if is_formula_segment else
+        "- For non-formula segments, choose directly supporting original statements, not broad topic neighbors.\n"
+    )
+    user_msg = (
+        "Task: choose at most "
+        f"{max(1, int(max_pick))} block_id values.\n"
+        "Rules:\n"
+        "- Prefer exact semantic grounding over loose topic similarity.\n"
+        + formula_rule +
+        "- Do NOT guess.\n"
+        "Return JSON only: {\"ids\": [\"block_id\", ...]}.\n\n"
+        f"segment_kind={segment_kind}\n"
+        f"is_formula_segment={int(bool(is_formula_segment))}\n"
+        f"segment_text={segment_text[:520]}\n\n"
+        "candidates:\n"
+        + "\n".join(cand_lines)
+    )
+    try:
+        out = ds.chat(
+            messages=[
+                {"role": "system", "content": sys_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            temperature=0.0,
+            max_tokens=220,
+        )
+    except Exception:
+        return []
+
+    obj_text = _extract_json_object_text(out)
+    if not obj_text:
+        return []
+    try:
+        obj = json.loads(obj_text)
+    except Exception:
+        return []
+    ids_raw = obj.get("ids") if isinstance(obj, dict) else []
+    if not isinstance(ids_raw, list):
+        return []
+    picked: list[str] = []
+    seen: set[str] = set()
+    for it in ids_raw:
+        bid = str(it or "").strip()
+        if (not bid) or (bid in seen) or (bid not in allowed_ids):
+            continue
+        seen.add(bid)
+        picked.append(bid)
+        if len(picked) >= max(1, int(max_pick)):
+            break
+    return picked
+
+
+def _ensure_provenance_block_entry(block_map: dict[str, dict], block: dict) -> None:
+    block_id = str(block.get("block_id") or "").strip()
+    if (not block_id) or (block_id in block_map):
+        return
+    block_map[block_id] = {
+        "block_id": block_id,
+        "anchor_id": str(block.get("anchor_id") or "").strip(),
+        "kind": str(block.get("kind") or "").strip(),
+        "heading_path": str(block.get("heading_path") or "").strip(),
+        "text": str(block.get("text") or ""),
+        "line_start": int(block.get("line_start") or 0),
+        "line_end": int(block.get("line_end") or 0),
+        "number": int(block.get("number") or 0),
+    }
+
+
+def _collect_paper_guide_block_pool(
+    *,
+    blocks: list[dict],
+    answer_hits: list[dict],
+    bound_source_path: str,
+    bound_source_name: str,
+) -> list[dict]:
+    best_by_block: dict[str, dict] = {}
+
+    def _block_formula_seed_score(block: dict) -> float:
+        kind = str(block.get("kind") or "").strip().lower()
+        text = str(block.get("text") or "")
+        score = 0.0
+        if kind == "equation":
+            score += 0.34
+        if "$$" in text or "\\begin{equation" in text.lower():
+            score += 0.38
+        if has_equation_signal(text):
+            score += 0.22
+        try:
+            if int(block.get("number") or 0) > 0:
+                score += 0.18
+        except Exception:
+            pass
+        return score
+
+    for hit in answer_hits or []:
+        if not isinstance(hit, dict):
+            continue
+        if not _is_hit_from_bound_source(
+            hit,
+            bound_source_path=bound_source_path,
+            bound_source_name=bound_source_name,
+        ):
+            continue
+        meta = hit.get("meta", {}) or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        heading_hints: list[str] = []
+        for value in (
+            meta.get("ref_best_heading_path"),
+            meta.get("heading_path"),
+            meta.get("top_heading"),
+        ):
+            text = normalize_inline_markdown(str(value or ""))
+            if text and text not in heading_hints:
+                heading_hints.append(text)
+        raw_locs = meta.get("ref_locs")
+        if isinstance(raw_locs, list):
+            for loc in raw_locs[:4]:
+                if not isinstance(loc, dict):
+                    continue
+                hp = normalize_inline_markdown(str(loc.get("heading_path") or loc.get("heading") or ""))
+                if hp and hp not in heading_hints:
+                    heading_hints.append(hp)
+        snippet_hints: list[str] = []
+        raw_snips = meta.get("ref_show_snippets")
+        if isinstance(raw_snips, list):
+            for item in raw_snips[:4]:
+                text = normalize_inline_markdown(str(item or ""))
+                if text and text not in snippet_hints:
+                    snippet_hints.append(text)
+        hit_text = normalize_inline_markdown(str(hit.get("text") or ""))
+        if hit_text and hit_text not in snippet_hints:
+            snippet_hints.append(hit_text)
+        prefer_kind = str(meta.get("anchor_target_kind") or "").strip().lower()
+        try:
+            target_number = int(meta.get("anchor_target_number") or 0)
+        except Exception:
+            target_number = 0
+
+        match_jobs: list[tuple[str, str]] = []
+        if snippet_hints:
+            for snippet in snippet_hints[:3]:
+                for heading in heading_hints[:2] or [""]:
+                    match_jobs.append((snippet, heading))
+        elif heading_hints:
+            for heading in heading_hints[:2]:
+                match_jobs.append(("", heading))
+        elif target_number > 0:
+            match_jobs.append(("", ""))
+
+        for snippet, heading in match_jobs[:8]:
+            rows = match_source_blocks(
+                blocks,
+                snippet=snippet,
+                heading_path=heading,
+                prefer_kind=prefer_kind,
+                target_number=target_number,
+                limit=3,
+            )
+            for row in rows:
+                block = row.get("block")
+                if not isinstance(block, dict):
+                    continue
+                block_id = str(block.get("block_id") or "").strip()
+                if not block_id:
+                    continue
+                score = float(row.get("score") or 0.0)
+                prev = best_by_block.get(block_id)
+                if prev is None or score > float(prev.get("score") or 0.0):
+                    best_by_block[block_id] = {
+                        "score": score,
+                        "block": block,
+                    }
+
+    # Always keep a small set of formula-capable blocks in pool.
+    # This avoids missing equation grounding when refs snippets are paragraph-heavy.
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        block_id = str(block.get("block_id") or "").strip()
+        if not block_id:
+            continue
+        seed_score = _block_formula_seed_score(block)
+        if seed_score <= 0.0:
+            continue
+        prev = best_by_block.get(block_id)
+        if prev is None or seed_score > float(prev.get("score") or 0.0):
+            best_by_block[block_id] = {
+                "score": seed_score,
+                "block": block,
+            }
+
+    ranked = sorted(best_by_block.values(), key=lambda item: float(item.get("score") or 0.0), reverse=True)
+    return ranked[:24]
+
+
+def _build_paper_guide_answer_provenance(
+    *,
+    answer: str,
+    answer_hits: list[dict],
+    bound_source_path: str,
+    bound_source_name: str,
+    db_dir: Path | str | None,
+    settings_obj: object | None = None,
+    llm_rerank: bool = False,
+) -> dict | None:
+    source_path = str(bound_source_path or "").strip()
+    if not source_path:
+        return None
+    md_path = _resolve_paper_guide_md_path(source_path, db_dir=db_dir)
+    if md_path is None:
+        return None
+    try:
+        blocks = load_source_blocks(md_path)
+    except Exception:
+        return None
+    if not blocks:
+        return None
+    block_lookup = {
+        str(block.get("block_id") or "").strip(): dict(block)
+        for block in blocks
+        if isinstance(block, dict) and str(block.get("block_id") or "").strip()
+    }
+
+    evidence_pool = _collect_paper_guide_block_pool(
+        blocks=blocks,
+        answer_hits=answer_hits,
+        bound_source_path=bound_source_path,
+        bound_source_name=bound_source_name,
+    )
+    mapping_mode = "fast"
+
+    if not evidence_pool:
+        return {
+            "version": 1,
+            "source_path": source_path,
+            "source_name": str(bound_source_name or Path(source_path).name or "").strip(),
+            "md_path": str(md_path),
+            "doc_id": str(blocks[0].get("doc_id") or ""),
+            "segments": [],
+            "block_map": {},
+            "status": "no_evidence_pool",
+            "mapping_mode": mapping_mode,
+            "llm_rerank_enabled": bool(llm_rerank),
+            "llm_rerank_calls": 0,
+        }
+
+    candidate_blocks = [dict(item.get("block") or {}) for item in evidence_pool if isinstance(item.get("block"), dict)]
+    block_map: dict[str, dict] = {}
+    segments_out: list[dict] = []
+    segments = split_answer_segments(answer)
+    llm_picker: DeepSeekChat | None = None
+    llm_calls_used = 0
+    try:
+        llm_max_calls = int(os.environ.get("KB_PROVENANCE_LLM_MAX_CALLS", "3") or 3)
+    except Exception:
+        llm_max_calls = 3
+    llm_max_calls = max(0, min(6, llm_max_calls))
+    if bool(llm_rerank) and (llm_max_calls > 0):
+        try:
+            llm_picker = DeepSeekChat(settings_obj) if settings_obj is not None else None
+        except Exception:
+            llm_picker = None
+    def _is_formula_block(block: dict) -> bool:
+        kind = str(block.get("kind") or "").strip().lower()
+        text = str(block.get("text") or "")
+        if kind == "equation":
+            return True
+        if "$$" in text or "\\begin{equation" in text.lower():
+            return True
+        if has_equation_signal(text) and ("=" in text or "\\tag{" in text.lower()):
+            return True
+        return False
+
+    global_formula_blocks = [dict(block) for block in (blocks or []) if isinstance(block, dict) and _is_formula_block(block)]
+    if not global_formula_blocks:
+        global_formula_blocks = [dict(block) for block in candidate_blocks if isinstance(block, dict) and _is_formula_block(block)]
+
+    for idx, segment in enumerate(segments, start=1):
+        seg_text = normalize_inline_markdown(str(segment.get("text") or ""))
+        if len(seg_text) < 10:
+            continue
+        seg_kind = str(segment.get("kind") or "paragraph")
+        raw_markdown = str(segment.get("raw_markdown") or segment.get("raw_text") or seg_text).strip()
+        word_count = len(_LATIN_WORD_RE.findall(seg_text)) + len(_CJK_WORD_RE.findall(seg_text))
+        is_formula = _is_display_formula_segment(seg_text, segment_kind=seg_kind)
+        eq_number = extract_equation_number(seg_text) if has_equation_signal(seg_text) else 0
+        quoted_spans = _extract_quoted_spans(raw_markdown or seg_text, min_len=12)
+        quote_anchor = _longest_quoted_span(raw_markdown or seg_text, min_len=12)
+        probe_text = str(quote_anchor or seg_text).strip()
+        prefer_kind = "equation" if is_formula else ""
+        base_blocks = candidate_blocks
+        if (not is_formula) and (str(seg_kind).strip().lower() == "blockquote" or bool(quote_anchor)):
+            base_blocks = blocks
+        if is_formula and global_formula_blocks:
+            base_blocks = global_formula_blocks
+        ranked = match_source_blocks(
+            base_blocks,
+            snippet=probe_text,
+            prefer_kind=prefer_kind,
+            target_number=eq_number,
+            limit=(10 if is_formula else (8 if quote_anchor else 5)),
+        )
+        if (not ranked) and (not is_formula) and quote_anchor and base_blocks is not candidate_blocks:
+            ranked = match_source_blocks(
+                candidate_blocks,
+                snippet=probe_text,
+                prefer_kind="",
+                target_number=0,
+                limit=6,
+            )
+        if is_formula and (not ranked):
+            ranked = match_source_blocks(
+                candidate_blocks,
+                snippet=seg_text,
+                prefer_kind="equation",
+                target_number=eq_number,
+                limit=10,
+            )
+        if is_formula:
+            ranked_formula = []
+            ranked_other = []
+            for row in ranked:
+                block0 = row.get("block")
+                if isinstance(block0, dict) and _is_formula_block(block0):
+                    score = float(row.get("score") or 0.0)
+                    formula_text = str(block0.get("text") or "")
+                    formula_tok = _formula_token_overlap_score(seg_text, formula_text)
+                    formula_char = _formula_char_similarity(seg_text, formula_text)
+                    score += (0.92 * formula_tok) + (0.65 * formula_char)
+                    if eq_number > 0:
+                        try:
+                            if int(block0.get("number") or 0) == int(eq_number):
+                                score += 1.15
+                        except Exception:
+                            pass
+                    ranked_formula.append(
+                        {
+                            "score": score,
+                            "block": block0,
+                            "formula_tok": formula_tok,
+                            "formula_char": formula_char,
+                        }
+                    )
+                else:
+                    ranked_other.append(row)
+            ranked_formula.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+            if eq_number <= 0 and ranked_formula:
+                top_tok = float(ranked_formula[0].get("formula_tok") or 0.0)
+                top_char = float(ranked_formula[0].get("formula_char") or 0.0)
+                # Keep mathematically-related equations; only drop clearly unrelated noise.
+                if top_tok < 0.24 and top_char < 0.42:
+                    ranked_formula = []
+            # Formula segment: keep equation blocks first. Non-equation rows are only a late fallback.
+            ranked = ranked_formula + ([] if ranked_formula else ranked_other)
+        else:
+            ranked_text = []
+            ranked_formula = []
+            for row in ranked:
+                block0 = row.get("block")
+                if isinstance(block0, dict) and _is_formula_block(block0):
+                    ranked_formula.append(row)
+                else:
+                    ranked_text.append(row)
+            # Non-formula segments should prefer prose blocks first.
+            ranked = ranked_text + ranked_formula
+
+        segment_mapping_source = "fast"
+        chosen_ids: list[str] = []
+        best_score = float(ranked[0].get("score") or 0.0) if ranked else 0.0
+        second_score = float(ranked[1].get("score") or 0.0) if len(ranked) > 1 else 0.0
+        score_gap = best_score - second_score
+
+        formula_needs_llm = bool(
+            is_formula and (
+                (eq_number > 0 and score_gap < 0.18)
+                or (eq_number <= 0 and ((best_score < 1.55) or (score_gap < 0.26)))
+            )
+        )
+        if (
+            llm_picker is not None
+            and llm_calls_used < llm_max_calls
+            and len(ranked) >= 2
+            and (
+                formula_needs_llm
+                or ((best_score < 0.98) and (score_gap < 0.14))
+            )
+        ):
+            llm_ids = _pick_blocks_with_llm(
+                ds=llm_picker,
+                segment_text=probe_text,
+                segment_kind=seg_kind,
+                is_formula_segment=is_formula,
+                candidate_rows=ranked[:6],
+                max_pick=(2 if is_formula else 1),
+            )
+            llm_calls_used += 1
+            if llm_ids:
+                by_id = {
+                    str((row.get("block") or {}).get("block_id") or "").strip(): row
+                    for row in ranked
+                    if isinstance(row.get("block"), dict)
+                }
+                boosted: list[dict] = []
+                consumed: set[str] = set()
+                for bid in llm_ids:
+                    row = by_id.get(bid)
+                    if not isinstance(row, dict):
+                        continue
+                    block0 = row.get("block")
+                    if not isinstance(block0, dict):
+                        continue
+                    consumed.add(bid)
+                    boosted.append({
+                        "score": float(row.get("score") or 0.0) + 1.25,
+                        "block": block0,
+                    })
+                for row in ranked:
+                    block0 = row.get("block")
+                    if not isinstance(block0, dict):
+                        continue
+                    bid = str(block0.get("block_id") or "").strip()
+                    if bid in consumed:
+                        continue
+                    boosted.append(row)
+                ranked = boosted
+                best_score = float(ranked[0].get("score") or 0.0) if ranked else best_score
+                segment_mapping_source = "llm_refined"
+
+        primary_support_metrics: dict[str, float | str | bool] = {
+            "quote": "",
+            "quote_score": 0.0,
+            "support_score": 0.0,
+            "heading_adjust": 0.0,
+            "generic_heading": False,
+        }
+        if (not is_formula) and ranked:
+            rescored: list[dict] = []
+            for row in ranked:
+                block0 = row.get("block")
+                if not isinstance(block0, dict):
+                    continue
+                metrics = _block_support_metrics(probe_text, block0)
+                capped_base = min(float(row.get("score") or 0.0), 1.32)
+                final_score = capped_base
+                final_score += 0.96 * float(metrics.get("support_score") or 0.0)
+                final_score += float(metrics.get("heading_adjust") or 0.0)
+                rescored.append(
+                    {
+                        "score": final_score,
+                        "block": block0,
+                        "support_score": float(metrics.get("support_score") or 0.0),
+                        "quote_score": float(metrics.get("quote_score") or 0.0),
+                        "support_quote": str(metrics.get("quote") or ""),
+                        "heading_adjust": float(metrics.get("heading_adjust") or 0.0),
+                        "generic_heading": bool(metrics.get("generic_heading")),
+                    }
+                )
+            rescored.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+            ranked = rescored
+            best_score = float(ranked[0].get("score") or 0.0) if ranked else 0.0
+            second_score = float(ranked[1].get("score") or 0.0) if len(ranked) > 1 else 0.0
+            score_gap = best_score - second_score
+
+        min_score = 0.44 if is_formula else 0.63
+        dynamic_floor = max(min_score, best_score - (0.14 if is_formula else 0.10))
+        keep_limit = 2 if is_formula else 2
+        for row in ranked:
+            score = float(row.get("score") or 0.0)
+            block = row.get("block")
+            if not isinstance(block, dict):
+                continue
+            block_id = str(block.get("block_id") or "").strip()
+            if not block_id:
+                continue
+            block_is_formula = _is_formula_block(block)
+            if not is_formula and block_is_formula and score < (dynamic_floor + 0.12):
+                continue
+            if not is_formula:
+                support_score = float(row.get("support_score") or 0.0)
+                quote_score = float(row.get("quote_score") or 0.0)
+                heading_adjust = float(row.get("heading_adjust") or 0.0)
+                generic_heading = bool(row.get("generic_heading"))
+                if support_score < 0.24:
+                    continue
+                if generic_heading and support_score < 0.42:
+                    continue
+                if quote_score < 0.18 and heading_adjust < -0.10:
+                    continue
+            if score < dynamic_floor:
+                continue
+            if block_id in chosen_ids:
+                continue
+            chosen_ids.append(block_id)
+            _ensure_provenance_block_entry(block_map, block)
+            if len(chosen_ids) == 1:
+                primary_support_metrics = {
+                    "quote": str(row.get("support_quote") or ""),
+                    "quote_score": float(row.get("quote_score") or 0.0),
+                    "support_score": float(row.get("support_score") or 0.0),
+                    "heading_adjust": float(row.get("heading_adjust") or 0.0),
+                    "generic_heading": bool(row.get("generic_heading")),
+                }
+            if len(chosen_ids) >= keep_limit:
+                break
+
+        if is_formula and not chosen_ids:
+            eq_ranked = match_source_blocks(
+                global_formula_blocks or blocks,
+                snippet=seg_text,
+                prefer_kind="equation",
+                target_number=eq_number,
+                limit=8,
+            )
+            eq_ranked2: list[dict] = []
+            for row in eq_ranked:
+                block = row.get("block")
+                if not isinstance(block, dict):
+                    continue
+                if not _is_formula_block(block):
+                    continue
+                formula_text = str(block.get("text") or "")
+                formula_tok = _formula_token_overlap_score(seg_text, formula_text)
+                formula_char = _formula_char_similarity(seg_text, formula_text)
+                score = float(row.get("score") or 0.0)
+                score += (0.88 * formula_tok) + (0.62 * formula_char)
+                if eq_number > 0:
+                    try:
+                        if int(block.get("number") or 0) == int(eq_number):
+                            score += 1.1
+                    except Exception:
+                        pass
+                eq_ranked2.append(
+                    {
+                        "score": score,
+                        "block": block,
+                        "formula_tok": formula_tok,
+                        "formula_char": formula_char,
+                    }
+                )
+            eq_ranked2.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
+            if eq_number <= 0 and eq_ranked2:
+                top_tok = float(eq_ranked2[0].get("formula_tok") or 0.0)
+                top_char = float(eq_ranked2[0].get("formula_char") or 0.0)
+                if top_tok < 0.24 and top_char < 0.42:
+                    eq_ranked2 = []
+            eq_best = float(eq_ranked2[0].get("score") or 0.0) if eq_ranked2 else 0.0
+            eq_floor = max(0.24, eq_best - 0.26)
+            for row in eq_ranked2:
+                score = float(row.get("score") or 0.0)
+                block = row.get("block")
+                if not isinstance(block, dict):
+                    continue
+                block_id = str(block.get("block_id") or "").strip()
+                if (not block_id) or (score < eq_floor) or (block_id in chosen_ids):
+                    continue
+                chosen_ids.append(block_id)
+                _ensure_provenance_block_entry(block_map, block)
+                if len(chosen_ids) >= 2:
+                    break
+            if chosen_ids:
+                best_score = max(best_score, eq_best)
+        if is_formula and (not chosen_ids) and word_count >= 10:
+            # Mixed "formula + explanation" segments can still be mapped to prose evidence.
+            prose_ranked = match_source_blocks(
+                blocks,
+                snippet=seg_text,
+                prefer_kind="",
+                target_number=0,
+                limit=6,
+            )
+            prose_floor = 0.5
+            for row in prose_ranked:
+                score = float(row.get("score") or 0.0)
+                block = row.get("block")
+                if not isinstance(block, dict):
+                    continue
+                if _is_formula_block(block):
+                    continue
+                block_id = str(block.get("block_id") or "").strip()
+                if (not block_id) or (score < prose_floor):
+                    continue
+                chosen_ids.append(block_id)
+                _ensure_provenance_block_entry(block_map, block)
+                if len(chosen_ids) >= 2:
+                    break
+            if chosen_ids:
+                best_score = max(best_score, float(prose_ranked[0].get("score") or 0.0))
+
+        evidence_mode = "direct" if chosen_ids else "synthesis"
+        snippet_aliases = _segment_snippet_aliases(seg_text)
+        for quote_span in quoted_spans:
+            key = normalize_match_text(quote_span)
+            if (not key) or (key in snippet_aliases):
+                continue
+            snippet_aliases.append(key[:360])
+            if len(snippet_aliases) >= 8:
+                break
+        primary_block_id = str(chosen_ids[0] or "").strip() if chosen_ids else ""
+        support_block_ids = [str(item or "").strip() for item in chosen_ids[1:] if str(item or "").strip()]
+        primary_block = block_lookup.get(primary_block_id) if primary_block_id else None
+        if primary_block and (not is_formula):
+            support_score = float(primary_support_metrics.get("support_score") or 0.0)
+            generic_heading = bool(primary_support_metrics.get("generic_heading"))
+            if support_score < 0.24 or (generic_heading and support_score < 0.42):
+                chosen_ids = []
+                primary_block_id = ""
+                support_block_ids = []
+                primary_block = None
+                evidence_mode = "synthesis"
+                primary_support_metrics = {
+                    "quote": "",
+                    "quote_score": 0.0,
+                    "support_score": 0.0,
+                    "heading_adjust": 0.0,
+                    "generic_heading": False,
+                }
+        primary_anchor_id = str((primary_block or {}).get("anchor_id") or "").strip()
+        primary_heading_path = str((primary_block or {}).get("heading_path") or "").strip()
+        evidence_quote = str(primary_support_metrics.get("quote") or "")
+        if (not evidence_quote) and primary_block:
+            evidence_quote = _best_evidence_quote(probe_text, primary_block)
+        evidence_confidence = round(best_score, 4) if chosen_ids else 0.0
+        mapping_quality = round(float(primary_support_metrics.get("support_score") or 0.0), 4) if chosen_ids else 0.0
+        claim_meta = _segment_claim_meta(
+            segment_text=seg_text,
+            raw_markdown=raw_markdown,
+            segment_kind=seg_kind,
+            evidence_mode=evidence_mode,
+            primary_block=primary_block,
+            evidence_quote=evidence_quote,
+            mapping_quality=mapping_quality,
+        )
+        segments_out.append(
+            {
+                "segment_id": f"seg_{idx:03d}",
+                "segment_index": idx,
+                "kind": seg_kind,
+                "segment_type": _segment_type_from_text(seg_text, segment_kind=seg_kind),
+                "text": seg_text,
+                "raw_markdown": raw_markdown[:4000],
+                "snippet_key": str(segment.get("snippet_key") or normalize_match_text(seg_text[:360])),
+                "snippet_aliases": snippet_aliases,
+                "evidence_mode": evidence_mode,
+                "evidence_block_ids": chosen_ids,
+                "primary_block_id": primary_block_id,
+                "primary_anchor_id": primary_anchor_id,
+                "primary_heading_path": primary_heading_path,
+                "support_block_ids": support_block_ids,
+                "evidence_quote": evidence_quote,
+                "evidence_confidence": evidence_confidence,
+                "mapping_quality": mapping_quality,
+                "mapping_source": segment_mapping_source,
+                "claim_type": str(claim_meta.get("claim_type") or "").strip(),
+                "must_locate": bool(claim_meta.get("must_locate")),
+                "anchor_kind": str(claim_meta.get("anchor_kind") or "").strip(),
+                "anchor_text": str(claim_meta.get("anchor_text") or "").strip()[:900],
+                "equation_number": int(claim_meta.get("equation_number") or 0),
+            }
+        )
+
+    if llm_calls_used > 0:
+        mapping_mode = "llm_refined"
+
+    return {
+        "version": 1,
+        "source_path": source_path,
+        "source_name": str(bound_source_name or Path(source_path).name or "").strip(),
+        "md_path": str(md_path),
+        "doc_id": str(blocks[0].get("doc_id") or ""),
+        "segments": segments_out,
+        "block_map": block_map,
+        "status": "ready",
+        "candidate_block_count": len(candidate_blocks),
+        "mapping_mode": mapping_mode,
+        "llm_rerank_enabled": bool(llm_rerank),
+        "llm_rerank_calls": int(llm_calls_used),
+    }
+
+
+def _gen_store_answer_provenance(task: dict, *, answer: str, answer_hits: list[dict]) -> None:
+    if not bool(task.get("paper_guide_mode")):
+        return
+    source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
+    if not source_path:
+        return
+    chat_db = Path(str(task.get("chat_db") or "")).expanduser()
+    chat_store = ChatStore(chat_db)
+    try:
+        amid = int(task.get("assistant_msg_id") or 0)
+    except Exception:
+        amid = 0
+    if amid <= 0:
+        return
+    provenance = _build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=list(answer_hits or []),
+        bound_source_path=source_path,
+        bound_source_name=str(task.get("paper_guide_bound_source_name") or "").strip(),
+        db_dir=task.get("db_dir"),
+        settings_obj=task.get("settings_obj"),
+        llm_rerank=bool(task.get("llm_rerank", True)),
+    )
+    if not isinstance(provenance, dict):
+        return
+    try:
+        chat_store.merge_message_meta(amid, {"provenance": provenance})
+    except Exception:
+        pass
+
+
+def _gen_store_answer_provenance_fast(task: dict, *, answer: str, answer_hits: list[dict]) -> None:
+    """Build/store paper-guide provenance with deterministic fast heuristics only."""
+    task_copy = dict(task or {})
+    task_copy["llm_rerank"] = False
+    _gen_store_answer_provenance(task_copy, answer=answer, answer_hits=answer_hits)
+
+
+def _should_run_provenance_async_refine(task: dict) -> bool:
+    if not bool((task or {}).get("paper_guide_mode")):
+        return False
+    source_path = str((task or {}).get("paper_guide_bound_source_path") or "").strip()
+    if not source_path:
+        return False
+    try:
+        enabled = bool(int(str(os.environ.get("KB_PROVENANCE_ASYNC_LLM", "1") or "1")))
+    except Exception:
+        enabled = True
+    if not enabled:
+        return False
+    if not bool((task or {}).get("llm_rerank", True)):
+        return False
+    settings_obj = (task or {}).get("settings_obj")
+    if settings_obj is None:
+        return False
+    return bool(getattr(settings_obj, "api_key", None))
+
+
+def _gen_store_answer_provenance_async(task: dict, *, answer: str, answer_hits: list[dict]) -> None:
+    task_copy = dict(task or {})
+    # Keep post-answer latency low: run optional LLM rerank only in background.
+    task_copy["llm_rerank"] = True
+
+    def _run() -> None:
+        t0 = time.perf_counter()
+        try:
+            _gen_store_answer_provenance(task_copy, answer=answer, answer_hits=answer_hits)
+            _perf_log("gen.provenance_async", elapsed=time.perf_counter() - t0, ok=1)
+        except Exception as exc:
+            _perf_log("gen.provenance_async", elapsed=time.perf_counter() - t0, ok=0, err=str(exc)[:120])
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="kb_gen_provenance_async").start()
+    except Exception:
+        pass
+
 def _gen_worker(session_id: str, task_id: str) -> None:
     task = _gen_get_task(session_id) or {}
     if str(task.get("id") or "") != str(task_id or ""):
@@ -1427,6 +2861,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_bound_source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
         paper_guide_bound_source_name = str(task.get("paper_guide_bound_source_name") or "").strip()
         paper_guide_bound_source_ready = bool(task.get("paper_guide_bound_source_ready"))
+        if paper_guide_mode:
+            # Paper-guide answers should stay concise and structured by default.
+            answer_contract_v1 = True
 
         image_attachments: list[dict] = []
         if isinstance(raw_image_atts, list):
@@ -1490,6 +2927,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 except Exception:
                     pass
             _gen_store_answer(task, quick_answer)
+            try:
+                _gen_store_answer_provenance_fast(task, answer=quick_answer, answer_hits=[])
+            except Exception as exc:
+                _perf_log("gen.provenance_inline_fast", ok=0, err=str(exc)[:120])
             _perf_log("gen.quick_answer", total=time.perf_counter() - worker_t0, conv_id=conv_id)
             _gen_update_task(session_id, task_id, status="done", stage="done", answer=quick_answer, partial=quick_answer, char_count=len(quick_answer), finished_at=time.time())
             return
@@ -2042,6 +3483,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 depth=answer_depth,
                 has_hits=bool(answer_hits),
             )
+        if paper_guide_mode and paper_guide_bound_source_ready:
+            system += (
+                "\nPaper-guide formula grounding:\n"
+                "- When the question asks about a formula/model, quote the equation from retrieved context as-is, including equation tag/number when available.\n"
+                "- If exact equation text is not present in retrieved context, say it is not explicitly available; do not invent a generic replacement formula.\n"
+                "- Keep the answer compact: 3-4 sections, avoid repetitive paragraphs.\n"
+                "- Only keep claims with direct support under Evidence; move unsupported general knowledge to Limits.\n"
+            )
         prompt_for_user = prompt or "[Image attachment only request]"
         user = (
             f"Question:\\n{prompt_for_user}\\n\\n"
@@ -2162,14 +3611,24 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             depth=answer_depth,
         )
         _gen_store_answer(task, answer)
-        _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))
-        _perf_log("gen.total", elapsed=time.perf_counter() - worker_t0, conv_id=conv_id)
         _gen_record_answer_quality(
             session_id=session_id,
             task_id=task_id,
             conv_id=conv_id,
             answer_quality=answer_quality,
         )
+        t_prov0 = time.perf_counter()
+        try:
+            _gen_store_answer_provenance_fast(task, answer=answer, answer_hits=answer_hits)
+            _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=1)
+        except Exception as exc:
+            _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=0, err=str(exc)[:120])
+        if _should_run_provenance_async_refine(task):
+            try:
+                _gen_store_answer_provenance_async(task, answer=answer, answer_hits=answer_hits)
+                _perf_log("gen.provenance_async_schedule", ok=1)
+            except Exception as exc:
+                _perf_log("gen.provenance_async_schedule", ok=0, err=str(exc)[:120])
         _gen_update_task(
             session_id,
             task_id,
@@ -2178,10 +3637,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer=answer,
             partial=answer,
             char_count=len(answer),
+            answer_ready=True,
             answer_quality=answer_quality,
             citation_validation=citation_validation,
             finished_at=time.time(),
         )
+        _perf_log("gen.answer", elapsed=time.perf_counter() - t_answer0, chars=len(answer))
+        _perf_log("gen.total", elapsed=time.perf_counter() - worker_t0, conv_id=conv_id)
 
     except Exception as e:
         if str(e) == "canceled":

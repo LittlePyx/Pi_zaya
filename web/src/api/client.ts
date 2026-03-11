@@ -1,8 +1,22 @@
 const BASE = ''
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + url, init)
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  let res: Response
+  try {
+    res = await fetch(BASE + url, init)
+  } catch {
+    throw new Error('无法连接后端，请确认 8000 服务已启动')
+  }
+  if (!res.ok) {
+    let detail = ''
+    try {
+      const text = (await res.text()).trim()
+      detail = text ? `: ${text}` : ''
+    } catch {
+      detail = ''
+    }
+    throw new Error(`${res.status} ${res.statusText}${detail}`)
+  }
   return res.json()
 }
 

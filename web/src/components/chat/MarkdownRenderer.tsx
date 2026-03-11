@@ -1,4 +1,4 @@
-import { Children, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+﻿import { Children, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -6,6 +6,7 @@ import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
 import { citationInlineLabel, type CiteDetail } from './citationState'
+import type { ReaderDocAnchor, ReaderDocBlock } from '../../api/references'
 
 const TABLE_SEPARATOR_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/
 const TABLE_ROW_RE = /^\s*\|?.+\|.+\|?\s*$/
@@ -56,10 +57,31 @@ interface Props {
   content: string
   citeDetails?: CiteDetail[]
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
-  onLocateSnippet?: (snippet: string) => void
-  locateLabelResolver?: (snippet: string) => string
+  onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void
+  canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean
   locateTitleResolver?: (snippet: string) => string
   variant?: 'chat' | 'reader'
+  readerAnchors?: ReaderDocAnchor[]
+  readerBlocks?: ReaderDocBlock[]
+}
+
+interface LocateRenderMeta {
+  kind: 'paragraph' | 'list_item' | 'blockquote' | 'equation' | 'figure'
+  order: number
+}
+
+interface ReaderAnchorToken {
+  anchorId: string
+  blockId?: string
+  kind: string
+}
+
+interface ReaderAnchorAllocator {
+  take: (kinds: string[]) => ReaderAnchorToken | null
+}
+
+interface ReaderBlockResolver {
+  pick: (node: unknown, kinds: string[]) => ReaderAnchorToken | null
 }
 
 type CiteChipTone = {
@@ -117,12 +139,12 @@ type AnswerSectionKey = 'conclusion' | 'evidence' | 'limits' | 'next_steps'
 const ANSWER_SECTION_LABEL: Record<AnswerSectionKey, string> = {
   conclusion: '结论',
   evidence: '依据',
-  limits: '边界',
+  limits: '限制',
   next_steps: '下一步',
 }
 
 const ANSWER_SECTION_HEAD_RE =
-  /^\s*(?:#{1,6}\s*)?(Conclusion|Evidence|Limits|Next\s*Steps|结论|依据|证据|边界|限制|局限|下一步建议|下一步)(?:\s*[:：]\s*(.*))?$/i
+  /^\s*(?:#{1,6}\s*)?(Conclusion|Evidence|Limits|Next\s*Steps|结论|依据|证据|限制|边界|建议|下一步建议|下一步)(?:\s*[:：]\s*(.*))?$/i
 
 interface ParsedAnswerSection {
   key: AnswerSectionKey
@@ -134,7 +156,7 @@ function toSectionKey(raw: string): AnswerSectionKey | '' {
   const t = String(raw || '').replace(/\s+/g, '').toLowerCase()
   if (t === 'conclusion' || t === '结论') return 'conclusion'
   if (t === 'evidence' || t === '依据' || t === '证据') return 'evidence'
-  if (t === 'limits' || t === '边界' || t === '限制' || t === '局限') return 'limits'
+  if (t === 'limits' || t === '限制' || t === '边界') return 'limits'
   if (t === 'nextsteps' || t === '下一步' || t === '下一步建议') return 'next_steps'
   return ''
 }
@@ -168,15 +190,52 @@ function extractCode(node: ReactNode): { text: string; language: string } {
   return { text: String(node || ''), language: '' }
 }
 
+function findElementTextByType(node: ReactNode, targetType: string): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const text = findElementTextByType(item, targetType)
+      if (text) return text
+    }
+    return ''
+  }
+  if (!isValidElement(node)) return ''
+  const nodeType = typeof node.type === 'string' ? node.type.toLowerCase() : ''
+  const props = node.props as { children?: ReactNode }
+  if (nodeType === targetType) return plainText(props.children)
+  return findElementTextByType(props.children, targetType)
+}
+
 function plainText(node: ReactNode): string {
   if (node === null || node === undefined || typeof node === 'boolean') return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map((item) => plainText(item)).join(' ')
   if (isValidElement(node)) {
-    const props = node.props as { children?: ReactNode }
+    const props = node.props as { className?: string; children?: ReactNode }
+    const className = String(props.className || '')
+    if (/\bkb-cite-chip\b/.test(className)) return ''
+    if (/\bkatex-html\b/.test(className)) return ''
+    if (/\bkatex-mathml\b/.test(className)) {
+      const annotation = findElementTextByType(props.children, 'annotation')
+      return annotation || plainText(props.children)
+    }
+    if (/\bkatex\b/.test(className)) {
+      const annotation = findElementTextByType(props.children, 'annotation')
+      return annotation || plainText(props.children)
+    }
     return plainText(props.children)
   }
   return ''
+}
+
+function rawNodeText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map((item) => rawNodeText(item)).join(' ')
+  if (!isValidElement(node)) return ''
+  const props = node.props as { children?: ReactNode }
+  return rawNodeText(props.children)
 }
 
 function hasMathSignalInline(text: string): boolean {
@@ -188,22 +247,222 @@ function hasMathSignalInline(text: string): boolean {
   return false
 }
 
+function isDisplayMathClass(className: string): boolean {
+  const cls = String(className || '').trim()
+  if (!cls) return false
+  if (/\bkatex-display\b/.test(cls)) return true
+  if (/\bmath-display\b/.test(cls)) return true
+  if (/\bmath\b/.test(cls) && /\bdisplay\b/.test(cls)) return true
+  return false
+}
+
 function toLocateSnippet(node: ReactNode): string {
-  const text = plainText(node).replace(/\s+/g, ' ').trim()
+  let text = plainText(node).replace(/\s+/g, ' ').trim()
+  if (!text) {
+    text = rawNodeText(node).replace(/\s+/g, ' ').trim()
+  }
   if (!text) return ''
   if (hasMathSignalInline(text)) {
-    return text.length <= 480 ? text : `${text.slice(0, 480).trimEnd()}...`
+    return text.length <= 320 ? text : `${text.slice(0, 320).trimEnd()}...`
   }
-  if (text.length <= 420) return text
+  if (text.length <= 220) return text
   const sentences = text
     .split(/(?<=[\u3002\uff01\uff1f.!;:\uff1b\uff1a])\s+/)
     .map((item) => String(item || '').trim())
     .filter(Boolean)
-  const merged = sentences.slice(0, 3).join(' ').trim()
-  if (merged.length >= 40) {
-    return merged.length <= 480 ? merged : `${merged.slice(0, 480).trimEnd()}...`
+  if (sentences.length > 0) {
+    const first = sentences[0] || ''
+    if (first.length >= 18) {
+      return first.length <= 260 ? first : `${first.slice(0, 260).trimEnd()}...`
+    }
+    const pair = sentences.slice(0, 2).join(' ').trim()
+    if (pair.length >= 20) {
+      return pair.length <= 260 ? pair : `${pair.slice(0, 260).trimEnd()}...`
+    }
   }
-  return `${text.slice(0, 480).trimEnd()}...`
+  return `${text.slice(0, 260).trimEnd()}...`
+}
+
+function normalizeReaderAnchorKind(input: string): string {
+  const raw = String(input || '').trim().toLowerCase()
+  if (!raw) return 'paragraph'
+  if (raw === 'equation') return 'equation'
+  if (raw === 'list_item' || raw === 'list-item' || raw === 'li') return 'list_item'
+  if (raw === 'blockquote' || raw === 'quote') return 'blockquote'
+  if (raw === 'code' || raw === 'pre') return 'code'
+  if (raw === 'table') return 'table'
+  if (raw === 'heading' || /^h[1-6]$/.test(raw)) return 'heading'
+  if (raw === 'paragraph' || raw === 'p') return 'paragraph'
+  return raw
+}
+
+function createReaderAnchorAllocator(
+  readerAnchors: ReaderDocAnchor[] | undefined,
+  readerBlocks: ReaderDocBlock[] | undefined,
+): ReaderAnchorAllocator | null {
+  const blockList = Array.isArray(readerBlocks) ? readerBlocks : []
+  const anchorList = Array.isArray(readerAnchors) ? readerAnchors : []
+  const list = blockList.length > 0
+    ? blockList.map((item) => ({
+      anchor_id: item.anchor_id,
+      block_id: item.block_id,
+      kind: item.kind,
+    }))
+    : anchorList
+  if (list.length <= 0) return null
+  const all: ReaderAnchorToken[] = []
+  const buckets = new Map<string, ReaderAnchorToken[]>()
+  const seen = new Set<string>()
+  for (const item of list) {
+    const anchorId = String(item?.anchor_id || '').trim()
+    const blockId = String((item as { block_id?: string } | null)?.block_id || '').trim()
+    const dedupeId = blockId || anchorId
+    if (!dedupeId || seen.has(dedupeId)) continue
+    seen.add(dedupeId)
+    const kind = normalizeReaderAnchorKind(String(item?.kind || 'paragraph'))
+    const token: ReaderAnchorToken = { anchorId, blockId: blockId || undefined, kind }
+    all.push(token)
+    const arr = buckets.get(kind) || []
+    arr.push(token)
+    buckets.set(kind, arr)
+  }
+  if (all.length <= 0) return null
+
+  const used = new Set<string>()
+  const kindCursor = new Map<string, number>()
+  let allCursor = 0
+
+  const takeFromKind = (kindRaw: string): ReaderAnchorToken | null => {
+    const kind = normalizeReaderAnchorKind(kindRaw)
+    const arr = buckets.get(kind) || []
+    if (arr.length <= 0) return null
+    let cursor = Number(kindCursor.get(kind) || 0)
+    while (cursor < arr.length) {
+      const token = arr[cursor]
+      cursor += 1
+      if (used.has(token.anchorId)) continue
+      kindCursor.set(kind, cursor)
+      used.add(token.anchorId)
+      return token
+    }
+    kindCursor.set(kind, cursor)
+    return null
+  }
+
+  const takeAny = (): ReaderAnchorToken | null => {
+    while (allCursor < all.length) {
+      const token = all[allCursor]
+      allCursor += 1
+      if (used.has(token.anchorId)) continue
+      used.add(token.anchorId)
+      return token
+    }
+    return null
+  }
+
+  return {
+    take: (kinds: string[]) => {
+      for (const kind of kinds || []) {
+        const token = takeFromKind(kind)
+        if (token) return token
+      }
+      return takeAny()
+    },
+  }
+}
+
+function _nodeLineRange(node: unknown): { start: number; end: number } | null {
+  const rec = (node || {}) as {
+    position?: {
+      start?: { line?: number }
+      end?: { line?: number }
+    }
+  }
+  const start = Number(rec.position?.start?.line || 0)
+  const endRaw = Number(rec.position?.end?.line || 0)
+  if (!Number.isFinite(start) || start <= 0) return null
+  const end = Number.isFinite(endRaw) && endRaw > 0 ? Math.max(start, endRaw) : start
+  return { start: Math.floor(start), end: Math.floor(end) }
+}
+
+function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): ReaderBlockResolver | null {
+  const rows = Array.isArray(readerBlocks) ? readerBlocks : []
+  if (rows.length <= 0) return null
+  const list = rows
+    .map((row) => {
+      const anchorId = String(row?.anchor_id || '').trim()
+      const blockId = String(row?.block_id || '').trim()
+      const kind = normalizeReaderAnchorKind(String(row?.kind || 'paragraph'))
+      const lineStart = Number(row?.line_start || 0)
+      const lineEndRaw = Number(row?.line_end || 0)
+      const lineEnd = Number.isFinite(lineEndRaw) && lineEndRaw > 0 ? Math.max(lineStart, lineEndRaw) : lineStart
+      if ((!anchorId && !blockId) || !Number.isFinite(lineStart) || lineStart <= 0) return null
+      return {
+        token: {
+          anchorId,
+          blockId: blockId || undefined,
+          kind,
+        },
+        kind,
+        lineStart: Math.floor(lineStart),
+        lineEnd: Math.floor(lineEnd),
+        span: Math.max(1, Math.floor(lineEnd - lineStart + 1)),
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+  if (list.length <= 0) return null
+
+  return {
+    pick: (node: unknown, kinds: string[]) => {
+      const range = _nodeLineRange(node)
+      if (!range) return null
+      const preferred = new Set((kinds || []).map((k) => normalizeReaderAnchorKind(k)))
+      let best: (typeof list)[number] | null = null
+      let bestScore = Number.NEGATIVE_INFINITY
+
+      for (const item of list) {
+        const overlap = Math.max(
+          0,
+          Math.min(range.end, item.lineEnd) - Math.max(range.start, item.lineStart) + 1,
+        )
+        if (overlap <= 0) continue
+        let score = (3.2 * overlap) - (0.02 * item.span)
+        if (preferred.has(item.kind)) score += 2.8
+        if (item.kind === 'equation' && preferred.has('equation')) score += 0.6
+        if (score > bestScore) {
+          best = item
+          bestScore = score
+        }
+      }
+
+      if (best) return best.token
+
+      for (const item of list) {
+        const dist = Math.min(
+          Math.abs(range.start - item.lineStart),
+          Math.abs(range.end - item.lineEnd),
+        )
+        if (dist > 2) continue
+        let score = 1.0 - (0.22 * dist)
+        if (preferred.has(item.kind)) score += 0.8
+        if (score > bestScore) {
+          best = item
+          bestScore = score
+        }
+      }
+      return best ? best.token : null
+    },
+  }
+}
+
+function readerAnchorAttrs(anchor: ReaderAnchorToken | null): Record<string, string> | undefined {
+  if (!anchor) return undefined
+  const attrs: Record<string, string> = {
+    'data-kb-anchor-id': anchor.anchorId,
+    'data-kb-anchor-kind': anchor.kind,
+  }
+  if (anchor.blockId) attrs['data-kb-block-id'] = anchor.blockId
+  return attrs
 }
 
 function parseAnswerContract(text: string): { preamble: string; sections: ParsedAnswerSection[] } | null {
@@ -251,39 +510,74 @@ function buildMarkdownComponents(
   byAnchor: Map<string, CiteDetail>,
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   toneBySource?: Map<string, CiteChipTone>,
-  onLocateSnippet?: (snippet: string) => void,
-  locateLabelResolver?: (snippet: string) => string,
+  onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void,
+  canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean,
   locateTitleResolver?: (snippet: string) => string,
   variant: 'chat' | 'reader' = 'chat',
+  readerAnchorAllocator?: ReaderAnchorAllocator | null,
+  readerBlockResolver?: ReaderBlockResolver | null,
 ) {
-  const renderLocateButton = (children: ReactNode) => {
+  let locateRenderOrder = 0
+  const pickReaderAnchor = (node: unknown, kinds: string[]) => {
+    if (variant !== 'reader') return null
+    const byBlock = readerBlockResolver?.pick(node, kinds)
+    if (byBlock) return byBlock
+    return readerAnchorAllocator?.take(kinds) || null
+  }
+
+  const nextLocateRenderOrder = (): number => {
+    locateRenderOrder += 1
+    return locateRenderOrder
+  }
+
+  const renderLocateButton = (
+    children: ReactNode,
+    opts?: { force?: boolean; meta?: LocateRenderMeta },
+  ) => {
     if (!onLocateSnippet) return null
-    const snippet = toLocateSnippet(children)
+    const force = Boolean(opts?.force)
+    const meta = opts?.meta
+    let snippet = toLocateSnippet(children)
+    if (!snippet && force) {
+      const raw = rawNodeText(children).replace(/\s+/g, ' ').trim()
+      if (raw) {
+        snippet = raw.length <= 480 ? raw : `${raw.slice(0, 480).trimEnd()}...`
+      }
+    }
     if (!snippet) return null
-    const label = String(locateLabelResolver?.(snippet) || '').trim() || '定位原文'
-    const title = String(locateTitleResolver?.(snippet) || '').trim()
+    if (canLocateSnippet && !canLocateSnippet(snippet, meta)) {
+      return null
+    }
+    if (!force && !canLocateSnippet) {
+      const raw = String(snippet || '').trim()
+      if (!(hasMathSignalInline(raw) || raw.length >= 18)) return null
+    }
+    const label = '定位到原文证据'
+    const title = String(locateTitleResolver?.(snippet) || '').trim() || '定位到原文证据'
     return (
       <button
         type="button"
-        className="kb-md-locate-btn"
+        className="kb-md-locate-inline-btn"
+        aria-label={label}
         title={title || label}
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
-          onLocateSnippet(snippet)
+          onLocateSnippet(snippet, meta)
         }}
       >
-        {label}
+        <span className="kb-md-locate-inline-glyph" aria-hidden="true">❞</span>
       </button>
     )
   }
 
   return {
-    pre: ({ children }: { children?: ReactNode }) => {
+    pre: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
       const { text, language } = extractCode(children)
       if (variant === 'reader') {
+        const attrs = readerAnchorAttrs(pickReaderAnchor(node, ['code']))
         return (
-          <pre>
+          <pre {...attrs}>
             <code>{text}</code>
           </pre>
         )
@@ -306,11 +600,63 @@ function buildMarkdownComponents(
         </div>
       )
     },
-    table: ({ children }: { children?: ReactNode }) => (
-      <div className="kb-table-wrap">
-        <table>{children}</table>
-      </div>
-    ),
+    table: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['table']))
+        : undefined
+      return (
+        <div className="kb-table-wrap">
+          <table {...attrs}>{children}</table>
+        </div>
+      )
+    },
+    blockquote: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['blockquote']))
+        : undefined
+      if (variant === 'reader') return <blockquote {...attrs}>{children}</blockquote>
+      const btn = renderLocateButton(children, {
+        meta: { kind: 'blockquote', order: nextLocateRenderOrder() },
+      })
+      if (!btn) return <blockquote {...attrs}>{children}</blockquote>
+      return <blockquote {...attrs} className="kb-md-loc-inline">{children}{btn}</blockquote>
+    },
+    h1: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['heading']))
+        : undefined
+      return <h1 {...attrs}>{children}</h1>
+    },
+    h2: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['heading']))
+        : undefined
+      return <h2 {...attrs}>{children}</h2>
+    },
+    h3: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['heading']))
+        : undefined
+      return <h3 {...attrs}>{children}</h3>
+    },
+    h4: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['heading']))
+        : undefined
+      return <h4 {...attrs}>{children}</h4>
+    },
+    h5: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['heading']))
+        : undefined
+      return <h5 {...attrs}>{children}</h5>
+    },
+    h6: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['heading']))
+        : undefined
+      return <h6 {...attrs}>{children}</h6>
+    },
     a: ({ href, children }: { href?: string; children?: ReactNode }) => {
       const key = typeof href === 'string' && href.startsWith('#') ? href.slice(1) : ''
       const detail = key ? byAnchor.get(key) : undefined
@@ -346,36 +692,82 @@ function buildMarkdownComponents(
     img: ({ src, alt }: { src?: string; alt?: string }) => {
       const resolvedSrc = String(src || '').trim()
       if (!resolvedSrc) return null
+      const figureSnippet = String(alt || resolvedSrc.split('/').pop() || 'figure').trim()
+      const btn = variant === 'chat'
+        ? renderLocateButton(figureSnippet, {
+          force: true,
+          meta: { kind: 'figure', order: nextLocateRenderOrder() },
+        })
+        : null
       return (
-        <a href={resolvedSrc} target="_blank" rel="noreferrer" className="kb-md-image-link">
-          <img
-            src={resolvedSrc}
-            alt={String(alt || 'figure')}
-            className="kb-md-image"
-            loading="lazy"
-          />
-        </a>
+        <span className={btn ? 'kb-md-loc-inline' : undefined}>
+          <a href={resolvedSrc} target="_blank" rel="noreferrer" className="kb-md-image-link">
+            <img
+              src={resolvedSrc}
+              alt={String(alt || 'figure')}
+              className="kb-md-image"
+              loading="lazy"
+            />
+          </a>
+          {btn}
+        </span>
       )
     },
-    p: ({ children }: { children?: ReactNode }) => {
-      const btn = renderLocateButton(children)
-      if (!btn) return <p>{children}</p>
-      return (
-        <div className="kb-md-loc-block">
-          <p>{children}</p>
-          {btn}
-        </div>
-      )
+    p: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['equation', 'paragraph']))
+        : undefined
+      const btn = renderLocateButton(children, {
+        meta: { kind: 'paragraph', order: nextLocateRenderOrder() },
+      })
+      if (!btn) return <p {...attrs}>{children}</p>
+      return <p {...attrs} className="kb-md-loc-inline">{children}{btn}</p>
     },
-    li: ({ children }: { children?: ReactNode }) => {
-      const btn = renderLocateButton(children)
-      if (!btn) return <li>{children}</li>
-      return (
-        <li className="kb-md-loc-li">
-          {children}
-          {btn}
-        </li>
-      )
+    li: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['list_item']))
+        : undefined
+      const btn = renderLocateButton(children, {
+        meta: { kind: 'list_item', order: nextLocateRenderOrder() },
+      })
+      if (!btn) return <li {...attrs}>{children}</li>
+      return <li {...attrs} className="kb-md-loc-inline">{children}{btn}</li>
+    },
+    div: (props: any) => {
+      const { node, className, children, ...rest } = props || {}
+      const cls = String(className || '').trim()
+      const displayMath = isDisplayMathClass(cls)
+      const attrs = variant === 'reader' && displayMath
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['equation']))
+        : undefined
+      if (!displayMath) return <div className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</div>
+      if (variant === 'reader') {
+        return <div className={cls || undefined} {...(rest as Record<string, unknown>)} {...attrs}>{children}</div>
+      }
+      const btn = renderLocateButton(children, {
+        force: true,
+        meta: { kind: 'equation', order: nextLocateRenderOrder() },
+      })
+      if (!btn) return <div className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</div>
+      return <div className={`${cls || ''} kb-md-loc-inline`.trim()} {...(rest as Record<string, unknown>)}>{children}{btn}</div>
+    },
+    span: (props: any) => {
+      const { node, className, children, ...rest } = props || {}
+      const cls = String(className || '').trim()
+      const displayMath = isDisplayMathClass(cls)
+      const attrs = variant === 'reader' && displayMath
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['equation']))
+        : undefined
+      if (!displayMath) return <span className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</span>
+      if (variant === 'reader') {
+        return <span className={cls || undefined} {...(rest as Record<string, unknown>)} {...attrs}>{children}</span>
+      }
+      const btn = renderLocateButton(children, {
+        force: true,
+        meta: { kind: 'equation', order: nextLocateRenderOrder() },
+      })
+      if (!btn) return <span className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</span>
+      return <span className={`${cls || ''} kb-md-loc-inline`.trim()} {...(rest as Record<string, unknown>)}>{children}{btn}</span>
     },
   }
 }
@@ -385,21 +777,33 @@ export function MarkdownRenderer({
   citeDetails = [],
   onCitationClick,
   onLocateSnippet,
-  locateLabelResolver,
+  canLocateSnippet,
   locateTitleResolver,
   variant = 'chat',
+  readerAnchors,
+  readerBlocks,
 }: Props) {
   const normalizedContent = normalize(content)
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
   const toneBySource = useMemo(() => buildToneMap(citeDetails), [citeDetails])
+  const readerBlockResolver = useMemo(
+    () => (variant === 'reader' ? createReaderBlockResolver(readerBlocks) : null),
+    [variant, readerBlocks],
+  )
+  const readerAnchorAllocator = useMemo(
+    () => (variant === 'reader' ? createReaderAnchorAllocator(readerAnchors, readerBlocks) : null),
+    [variant, readerAnchors, readerBlocks],
+  )
   const components = buildMarkdownComponents(
     byAnchor,
     onCitationClick,
     toneBySource,
     onLocateSnippet,
-    locateLabelResolver,
+    canLocateSnippet,
     locateTitleResolver,
     variant,
+    readerAnchorAllocator,
+    readerBlockResolver,
   )
   const parsedContract = parseAnswerContract(normalizedContent)
 

@@ -3,6 +3,31 @@ import { api } from './client'
 const citationMetaCache = new Map<string, Promise<Record<string, unknown>>>()
 const bibliometricsCache = new Map<string, Promise<Record<string, unknown>>>()
 
+export interface ReaderDocAnchor {
+  anchor_id: string
+  block_id?: string
+  kind: string
+  heading_path?: string
+  text?: string
+  line_start?: number
+  line_end?: number
+  number?: number
+}
+
+export interface ReaderDocBlock {
+  doc_id: string
+  block_id: string
+  anchor_id: string
+  kind: string
+  heading_path?: string
+  order_index?: number
+  line_start?: number
+  line_end?: number
+  text?: string
+  raw_text?: string
+  number?: number
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value !== 'object') return JSON.stringify(value)
@@ -57,7 +82,7 @@ export const referencesApi = {
             try {
               const data = JSON.parse(line.slice(6)) as Record<string, unknown>
               onData(data)
-              if (Boolean(data.done)) { onDone(); return }
+              if (data.done === true) { onDone(); return }
             } catch { /* skip bad JSON */ }
           }
         }
@@ -103,6 +128,8 @@ export const referencesApi = {
       source_name: string
       md_path: string
       markdown: string
+      anchors?: ReaderDocAnchor[]
+      blocks?: ReaderDocBlock[]
     }>('/api/references/reader/doc', {
       source_path: sourcePath,
     }),

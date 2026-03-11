@@ -27,6 +27,8 @@ export interface Message {
   content: string
   created_at: number
   attachments?: ChatImageAttachment[]
+  meta?: Record<string, unknown>
+  provenance?: MessageProvenance
   rendered_content?: string
   rendered_body?: string
   notice?: string
@@ -35,6 +37,60 @@ export interface Message {
   copy_markdown?: string
   refs_user_msg_id?: number
   render_cache_key?: string
+}
+
+export interface MessageProvenanceBlock {
+  block_id: string
+  anchor_id?: string
+  kind?: string
+  heading_path?: string
+  text?: string
+  line_start?: number
+  line_end?: number
+  number?: number
+}
+
+export interface MessageProvenanceSegment {
+  segment_id: string
+  segment_index?: number
+  kind?: string
+  segment_type?: string
+  claim_type?: 'quote_claim' | 'blockquote_claim' | 'formula_claim' | 'figure_claim' | 'critical_fact_claim' | 'shell_sentence' | string
+  must_locate?: boolean
+  text: string
+  raw_markdown?: string
+  display_markdown?: string
+  cite_details?: Array<Record<string, unknown>>
+  snippet_key?: string
+  snippet_aliases?: string[]
+  evidence_mode?: 'direct' | 'synthesis' | 'none' | string
+  evidence_block_ids?: string[]
+  primary_block_id?: string
+  primary_anchor_id?: string
+  primary_heading_path?: string
+  support_block_ids?: string[]
+  evidence_quote?: string
+  evidence_confidence?: number
+  mapping_quality?: number
+  mapping_source?: 'fast' | 'llm_refined' | string
+  anchor_kind?: 'quote' | 'blockquote' | 'equation' | 'figure' | 'sentence' | string
+  anchor_text?: string
+  equation_number?: number
+}
+
+export interface MessageProvenance {
+  version?: number
+  status?: string
+  mapping_mode?: 'fast' | 'llm_refined' | string
+  llm_rerank_enabled?: boolean
+  llm_rerank_calls?: number
+  source_path?: string
+  source_name?: string
+  md_path?: string
+  doc_id?: string
+  candidate_block_count?: number
+  block_map?: Record<string, MessageProvenanceBlock>
+  segments?: MessageProvenanceSegment[]
 }
 
 export interface ChatImageAttachment {

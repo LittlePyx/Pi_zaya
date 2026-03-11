@@ -142,6 +142,51 @@ def _build_render_texts(*, rendered_full: str, rendered_body: str, notice: str, 
     return rendered_content, body_norm, copy_markdown, copy_text
 
 
+def _enrich_provenance_segments_for_display(
+    provenance: dict | None,
+    hits: list[dict],
+    *,
+    anchor_ns: str,
+) -> dict | None:
+    if not isinstance(provenance, dict):
+        return provenance
+    segments_raw = provenance.get("segments")
+    if not isinstance(segments_raw, list):
+        return provenance
+    segments_out: list[dict] = []
+    for idx, seg0 in enumerate(segments_raw, start=1):
+        if not isinstance(seg0, dict):
+            continue
+        seg = dict(seg0)
+        raw_markdown = str(seg.get("raw_markdown") or seg.get("raw_text") or seg.get("text") or "").strip()
+        rendered_segment = raw_markdown
+        cite_details: list[dict] = []
+        if rendered_segment:
+            rendered_segment = _annotate_equation_tags_with_sources(rendered_segment, hits)
+            rendered_segment = _normalize_equation_source_notes(rendered_segment)
+            rendered_segment, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                rendered_segment,
+                hits,
+                anchor_ns=f"{anchor_ns}:seg:{idx}",
+            )
+            if _should_retry_structured_cite_fallback(
+                raw_body=raw_markdown,
+                rendered_body=rendered_segment,
+                cite_details=cite_details,
+            ):
+                rendered_segment, cite_details = _fallback_render_structured_citations(
+                    raw_markdown,
+                    hits,
+                    anchor_ns=f"{anchor_ns}:seg:{idx}",
+                )
+        seg["display_markdown"] = _normalize_chat_markdown_for_display(rendered_segment or raw_markdown or str(seg.get("text") or ""))
+        seg["cite_details"] = cite_details
+        segments_out.append(seg)
+    out = dict(provenance)
+    out["segments"] = segments_out
+    return out
+
+
 def _source_name_from_path(source_path: str) -> str:
     name = Path(str(source_path or "")).name or str(source_path or "")
     low = name.lower()
@@ -353,6 +398,13 @@ def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: di
         rec["notice"] = notice
         rec["rendered_body"] = rendered_body_norm
         rec["refs_user_msg_id"] = int(last_user_msg_id or 0)
+        enriched_provenance = _enrich_provenance_segments_for_display(
+            rec.get("provenance") if isinstance(rec.get("provenance"), dict) else None,
+            hits,
+            anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+        )
+        if isinstance(enriched_provenance, dict):
+            rec["provenance"] = enriched_provenance
         rec["render_cache_key"] = hashlib.sha1(
             f"{conv_id}|{msg_id}|{last_user_msg_id}|{content}".encode("utf-8", "ignore")
         ).hexdigest()[:12]

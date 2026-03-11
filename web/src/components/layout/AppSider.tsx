@@ -9,6 +9,7 @@ import {
   Input,
   Empty,
   Tooltip,
+  message,
 } from 'antd'
 import { Dropdown } from 'antd'
 import {
@@ -330,7 +331,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
-    void loadSidebarData()
+    void loadSidebarData().catch((err: unknown) => {
+      message.error(err instanceof Error ? err.message : '加载历史会话失败')
+    })
   }, [loadSidebarData])
 
   const menuKey = loc.pathname === '/library' ? 'library' : 'chat'

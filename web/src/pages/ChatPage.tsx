@@ -55,6 +55,7 @@ export default function ChatPage() {
   const refs = useChatStore((s) => s.refs)
   const activeConvId = useChatStore((s) => s.activeConvId)
   const activeConversation = useChatStore((s) => s.activeConversation)
+  const guideBindings = useChatStore((s) => s.guideBindings)
   const uploadItems = useChatStore((s) => s.uploadItems)
   const pendingImages = useChatStore((s) => s.pendingImages)
   const uploading = useChatStore((s) => s.uploading)
@@ -76,6 +77,12 @@ export default function ChatPage() {
   const [appendSignal, setAppendSignal] = useState<{ token: number; text: string } | null>(null)
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
+  const timelineJumpTokenRef = useRef(1)
+
+  const nextEventToken = () => {
+    timelineJumpTokenRef.current += 1
+    return timelineJumpTokenRef.current
+  }
 
   useEffect(() => {
     setVisibleCount(HISTORY_PAGE_SIZE)
@@ -246,6 +253,13 @@ export default function ChatPage() {
     }
     return out
   }, [messages])
+  const effectiveGuide = useMemo(() => {
+    const convId = String(activeConvId || '').trim()
+    const localGuide = convId ? guideBindings?.[convId] : undefined
+    const sourcePath = String(activeConversation?.bound_source_path || localGuide?.sourcePath || '').trim()
+    const sourceName = String(activeConversation?.bound_source_name || localGuide?.sourceName || '').trim()
+    return { sourcePath, sourceName }
+  }, [activeConvId, activeConversation?.bound_source_name, activeConversation?.bound_source_path, guideBindings])
 
   const jumpToTimelineItem = (item: TimelineItem) => {
     if (liveRunning) {
@@ -259,7 +273,7 @@ export default function ChatPage() {
       setVisibleCount(requiredVisible)
     }
     setActiveTimelineUserMsgId(item.userMsgId)
-    const token = Date.now() + Math.floor(Math.random() * 1000)
+    const token = nextEventToken()
     const delayMs = requiredVisible > effectiveVisible ? 120 : 0
     window.setTimeout(() => {
       setTimelineJump({ messageId: item.targetMsgId, token })
@@ -277,6 +291,19 @@ export default function ChatPage() {
       sourceName: String(payload.sourceName || '').trim(),
       headingPath: String(payload.headingPath || '').trim(),
       snippet: String(payload.snippet || '').trim(),
+      blockId: String(payload.blockId || '').trim() || undefined,
+      anchorId: String(payload.anchorId || '').trim() || undefined,
+      alternatives: Array.isArray(payload.alternatives)
+        ? payload.alternatives.map((item) => ({
+          headingPath: String(item?.headingPath || '').trim(),
+          snippet: String(item?.snippet || '').trim(),
+          blockId: String(item?.blockId || '').trim() || undefined,
+          anchorId: String(item?.anchorId || '').trim() || undefined,
+        }))
+        : undefined,
+      initialAltIndex: Number.isFinite(Number(payload.initialAltIndex))
+        ? Number(payload.initialAltIndex)
+        : undefined,
     })
     setReaderOpen(true)
   }
@@ -285,7 +312,7 @@ export default function ChatPage() {
     const raw = String(text || '')
     if (!raw.trim()) return
     setAppendSignal({
-      token: Date.now() + Math.floor(Math.random() * 1000),
+      token: nextEventToken(),
       text: raw,
     })
   }
@@ -391,7 +418,7 @@ export default function ChatPage() {
                   </span>
                 </Text>
                 <Text type="secondary" className="text-xs">
-                  {Boolean(activeConversation.bound_source_ready) ? '已入库可检索' : '待入库'}
+                  {activeConversation.bound_source_ready ? '已入库可检索' : '待入库'}
                 </Text>
               </div>
             </div>
@@ -407,8 +434,8 @@ export default function ChatPage() {
                 generationStage={generation?.stage}
                 jumpTarget={timelineJump}
                 onOpenReader={openReader}
-                paperGuideSourcePath={String(activeConversation?.bound_source_path || '').trim()}
-                paperGuideSourceName={String(activeConversation?.bound_source_name || '').trim()}
+                paperGuideSourcePath={effectiveGuide.sourcePath}
+                paperGuideSourceName={effectiveGuide.sourceName}
               />
             </div>
             {timelineOpen && timelineItems.length > 0 ? (

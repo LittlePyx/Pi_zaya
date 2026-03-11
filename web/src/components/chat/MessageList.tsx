@@ -18,7 +18,7 @@ import {
 } from './citationState'
 import { RefsPanel } from '../refs/RefsPanel'
 import type { ChatImageAttachment, Message } from '../../api/chat'
-import { referencesApi } from '../../api/references'
+import { referencesApi, type ReaderDocAnchor } from '../../api/references'
 import { useChatStore } from '../../stores/chatStore'
 
 const { Text } = Typography
@@ -79,6 +79,69 @@ interface LocateCandidate {
   focusSnippet: string
   matchText: string
   sourceType: 'guide' | 'refs'
+  blockId?: string
+  anchorId?: string
+  anchorKind?: string
+  anchorNumber?: number
+}
+
+interface ProvenanceLocateEntry {
+  segmentId: string
+  label: string
+  segmentText: string
+  evidenceQuote: string
+  claimType?: string
+  mustLocate?: boolean
+  anchorKind?: string
+  anchorText?: string
+  equationNumber?: number
+  snippetKey: string
+  snippetAliases: string[]
+  primary: LocateCandidate
+  alternatives: LocateCandidate[]
+  sourceSegmentId?: string
+  groupLeadText?: string
+  groupDistance?: number
+}
+
+type StructuredLocateKind = 'paragraph' | 'list_item' | 'blockquote' | 'equation' | 'figure'
+
+interface StructuredRenderSegment {
+  order: number
+  kind: StructuredLocateKind
+  text: string
+  snippetKey: string
+}
+
+interface StructuredProvenanceSegment {
+  index: number
+  segmentId: string
+  kind: string
+  segmentType: string
+  evidenceMode: string
+  claimType: string
+  mustLocate: boolean
+  anchorKind: string
+  anchorText: string
+  equationNumber: number
+  text: string
+  snippetKey: string
+  snippetAliases: string[]
+}
+
+interface StructuredRenderLocateSlot {
+  order: number
+  kind: StructuredLocateKind
+  renderText: string
+  renderSnippetKey: string
+  entry: ProvenanceLocateEntry
+  provenanceIndex: number
+  score: number
+}
+
+interface LocateRenderMetaLite {
+  kind?: string
+  order?: number
 }
 
 const GUIDE_LOCATE_CANDIDATE_LIMIT = 1600
@@ -102,18 +165,24 @@ function buildGuideLocateCandidates(
   sourcePath: string,
   sourceName: string,
   sourceType: 'guide' | 'refs' = 'guide',
+  readerAnchors?: ReaderDocAnchor[],
 ): LocateCandidate[] {
   const out: LocateCandidate[] = []
   const seen = new Set<string>()
-  const lines = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-  const headingStack: Array<{ level: number; text: string }> = []
-  let bucket: string[] = []
-
-  const pushCandidate = (headingPathRaw: string, snippetRaw: string) => {
+  const pushCandidate = (
+    headingPathRaw: string,
+    snippetRaw: string,
+    extra?: { anchorId?: string; anchorKind?: string; anchorNumber?: number },
+  ) => {
     const headingPath = stripMarkdownInline(headingPathRaw)
     const text = stripMarkdownInline(snippetRaw)
-    if (text.length < 24) return
-    const key = `${normalizeLocateText(sourcePath)}::${normalizeLocateText(headingPath)}::${normalizeLocateText(text).slice(0, 260)}`
+    const formulaLike = hasFormulaSignal(text)
+    if (text.length < 24 && !formulaLike) return
+    if (formulaLike && text.length < 6) return
+    const anchorId = String(extra?.anchorId || '').trim()
+    const anchorKind = String(extra?.anchorKind || '').trim().toLowerCase()
+    const anchorNumber = Number(extra?.anchorNumber || 0)
+    const key = `${normalizeLocateText(sourcePath)}::${anchorId.toLowerCase()}::${normalizeLocateText(headingPath)}::${normalizeLocateText(text).slice(0, 260)}`
     if (seen.has(key)) return
     seen.add(key)
     out.push({
@@ -123,12 +192,19 @@ function buildGuideLocateCandidates(
       focusSnippet: text,
       matchText: [headingPath, text].filter(Boolean).join('\n'),
       sourceType,
+      anchorId: anchorId || undefined,
+      anchorKind: anchorKind || undefined,
+      anchorNumber: Number.isFinite(anchorNumber) && anchorNumber > 0 ? Math.floor(anchorNumber) : undefined,
     })
   }
 
-  const pushSentenceCandidates = (headingPath: string, text: string) => {
+  const pushSentenceCandidates = (
+    headingPath: string,
+    text: string,
+    extra?: { anchorId?: string; anchorKind?: string; anchorNumber?: number },
+  ) => {
     const src = stripMarkdownInline(text)
-    if (src.length < 24) return
+    if (src.length < 24 && !hasFormulaSignal(src)) return
     const sentenceList = src
       .split(/(?<=[\u3002\uff01\uff1f.!;:\uff1b\uff1a])\s+/)
       .map((item) => item.trim())
@@ -136,13 +212,40 @@ function buildGuideLocateCandidates(
       .slice(0, 14)
     for (let i = 0; i < sentenceList.length; i += 1) {
       const sentence = sentenceList[i]
-      if (sentence.length >= 24) pushCandidate(headingPath, sentence)
+      if (sentence.length >= 24) pushCandidate(headingPath, sentence, extra)
       const pair = [sentence, sentenceList[i + 1] || ''].filter(Boolean).join(' ').trim()
       if (pair.length >= 30 && pair.length <= 260) {
-        pushCandidate(headingPath, pair)
+        pushCandidate(headingPath, pair, extra)
       }
     }
   }
+
+  const anchorList = Array.isArray(readerAnchors) ? readerAnchors : []
+  if (anchorList.length > 0) {
+    for (const item of anchorList) {
+      const anchorId = String(item?.anchor_id || '').trim()
+      const headingPath = String(item?.heading_path || '').trim()
+      const kind = String(item?.kind || '').trim().toLowerCase()
+      const number = Number(item?.number || 0)
+      const text = String(item?.text || '').trim()
+      if (!text) continue
+      pushCandidate(headingPath, text, {
+        anchorId,
+        anchorKind: kind,
+        anchorNumber: number,
+      })
+      pushSentenceCandidates(headingPath, text, {
+        anchorId,
+        anchorKind: kind,
+        anchorNumber: number,
+      })
+    }
+    return out.slice(0, GUIDE_LOCATE_CANDIDATE_LIMIT)
+  }
+
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const headingStack: Array<{ level: number; text: string }> = []
+  let bucket: string[] = []
 
   const flush = () => {
     if (bucket.length <= 0) return
@@ -207,6 +310,241 @@ function normalizeLocateText(input: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase()
+}
+
+function stripProvenanceNoise(input: string): string {
+  return String(input || '')
+    .replace(/\[\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\]/g, ' ')
+    .replace(/\(\s*\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\s*\)/g, ' ')
+    .replace(/(?:see|\u53C2\u89C1)\s*\[\d{1,3}(?:\s*[-,\u2013\u2014]\s*\d{1,3})*\]/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isLikelyRhetoricalLocateShell(input: string): boolean {
+  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
+    .replace(/^\s{0,3}#{1,6}\s+/g, ' ')
+    .replace(/^[^\u4e00-\u9fffA-Za-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!raw) return true
+  const normalized = normalizeLocateText(raw)
+  if (!normalized) return true
+  if (/^(?:直接证据|间接证据|唯一且明确|延伸思考题|高价值问题|研究问题|讨论题|思考题)(?:\s*[(:：\uff08][^)\uff09:：]{0,48}[)\uff09]?)?\s*[:\uFF1A]?$/.test(raw)) {
+    return true
+  }
+  if (/^(?:\u8bf4\u660e|\u8868\u660e|\u53ef\u89c1|\u56e0\u6b64|\u6240\u4ee5|\u603b\u4e4b|\u7efc\u4e0a|\u7531\u6b64\u53ef\u89c1|\u8fdb\u4e00\u6b65\u8bf4\u660e|\u8fdb\u4e00\u6b65\u8868\u660e|\u8fdb\u4e00\u6b65\u8bc1\u5b9e|\u63d0\u793a)\s*[:\uFF1A]?$/.test(raw)) {
+    return true
+  }
+  if (/^(?:\u6587\u4e2d\u63d0\u5230|\u6587\u4e2d\u6307\u51fa|\u4f5c\u8005\u6307\u51fa|\u5b9e\u9a8c\u7ed3\u679c\u663e\u793a|\u7ed3\u679c\u663e\u793a|\u8868\u683c\u6807\u9898\u4e0e\u65b9\u6cd5\u547d\u540d\u660e\u786e\u4e3a).{0,160}(?:\u8bf4\u660e|\u8868\u660e|\u610f\u5473\u7740|\u63d0\u793a|\u53ef\u89c1|\u8bc1\u5b9e)\s*[:\uFF1A]$/.test(raw)) {
+    return true
+  }
+  if (/[:\uFF1A]$/.test(raw)) {
+    const informativeTail = raw
+      .replace(/[:\uFF1A]\s*$/, '')
+      .replace(/["'\u201c\u201d\u2018\u2019\u300a\u300b\u3008\u3009\u300c\u300d\u300e\u300f]/g, ' ')
+      .replace(/\b(?:we|our|method|paper|table|figure|fig)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (informativeTail.length <= 32) return true
+    if (/(?:\u8bf4\u660e|\u8868\u660e|\u610f\u5473\u7740|\u63d0\u793a|\u53ef\u89c1|\u8bc1\u5b9e)\s*$/.test(informativeTail)) return true
+  }
+  return false
+}
+
+function scoreLocateContentCore(
+  input: string,
+  opts?: {
+    kind?: string
+    segmentType?: string
+    evidenceMode?: string
+  },
+): number {
+  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!raw) return 0
+  if (isLikelyRhetoricalLocateShell(raw)) return 0.04
+  let score = 0.18
+  const length = raw.length
+  if (length >= 18) score += 0.12
+  if (length >= 28) score += 0.12
+  if (length >= 46) score += 0.08
+  if (/[“"'`]/.test(raw)) score += 0.12
+  if (/[()（）=]/.test(raw)) score += 0.08
+  if (/\d/.test(raw)) score += 0.08
+  if (/[A-Z][A-Za-z0-9+-]{1,}/.test(raw)) score += 0.08
+  if (/\b(?:gt|ground[ -]?truth|pose|camera|train|training|input|output|pipeline|rendering|volume)\b/i.test(raw)) score += 0.08
+  if (/(?:使用|采用|输入|输出|恢复|重建|估计|固定|训练|生成|表征|渲染|约束|对比|利用|先用|再将|来自|对应)/.test(raw)) score += 0.12
+
+  const kind = String(opts?.kind || '').trim().toLowerCase()
+  const segmentType = String(opts?.segmentType || '').trim().toLowerCase()
+  const evidenceMode = String(opts?.evidenceMode || '').trim().toLowerCase()
+  if (kind === 'list_item') score += 0.08
+  if (segmentType === 'bullet' || segmentType === 'evidence' || segmentType === 'equation_explanation') score += 0.08
+  if (evidenceMode === 'direct') score += 0.06
+  if (/[:\uFF1A]$/.test(raw)) score -= 0.18
+  return Math.max(0, Math.min(1.2, score))
+}
+
+function isLikelyClaimGroupLead(
+  input: string,
+  opts?: {
+    kind?: string
+    segmentType?: string
+  },
+): boolean {
+  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!raw) return false
+  if (isLikelyRhetoricalLocateShell(raw)) return true
+  if (/[:\uFF1A]$/.test(raw)) return true
+  const kind = String(opts?.kind || '').trim().toLowerCase()
+  const segmentType = String(opts?.segmentType || '').trim().toLowerCase()
+  if ((kind === 'list_item' || segmentType === 'bullet') && /(?:如下|包括|分为|步骤|流程|表明|说明|可见|因此)$/.test(raw)) {
+    return true
+  }
+  return false
+}
+
+function isLikelySectionBoundarySegment(segment: StructuredProvenanceSegment | null): boolean {
+  if (!segment) return true
+  const segmentType = String(segment.segmentType || '').trim().toLowerCase()
+  if (segmentType === 'claim' || segmentType === 'next_step') return true
+  const text = stripProvenanceNoise(stripMarkdownInline(String(segment.text || '')))
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return true
+  return /^(?:\u7ed3\u8bba|\u6838\u5fc3\u7ed3\u8bba|\u4f9d\u636e|\u8bc1\u636e|\u539f\u6587|\u4e0b\u4e00\u6b65|\u5efa\u8bae|\u98ce\u9669|\u9650\u5236)\s*[:\uFF1A]?/.test(text)
+}
+
+function mergeStructuredSnippetAliases(...groups: Array<string[] | null | undefined>): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue
+    for (const item of group) {
+      const norm = normalizeStructuredLocateSnippet(String(item || ''))
+      if (!norm || seen.has(norm)) continue
+      seen.add(norm)
+      out.push(norm)
+      if (out.length >= 10) return out
+    }
+  }
+  return out
+}
+
+function pickClaimGroupTargetSegment(
+  segments: StructuredProvenanceSegment[],
+  startIndex: number,
+): { segment: StructuredProvenanceSegment; distance: number } | null {
+  const current = segments[startIndex] || null
+  if (!current) return null
+  const currentScore = scoreLocateContentCore(current.text, {
+    kind: current.kind,
+    segmentType: current.segmentType,
+    evidenceMode: current.evidenceMode,
+  })
+  const promote = isLikelyClaimGroupLead(current.text, {
+    kind: current.kind,
+    segmentType: current.segmentType,
+  }) || currentScore < 0.42
+  if (!promote && currentScore >= 0.5) {
+    return { segment: current, distance: 0 }
+  }
+
+  let best: { segment: StructuredProvenanceSegment; distance: number; score: number } | null = null
+  for (let idx = startIndex + 1; idx < segments.length && idx <= startIndex + 4; idx += 1) {
+    const candidate = segments[idx]
+    if (!candidate) continue
+    if (idx > startIndex + 1 && isLikelySectionBoundarySegment(candidate)) break
+    if (String(candidate.segmentType || '').trim().toLowerCase() === 'next_step') break
+    const candidateText = String(candidate.text || '').trim()
+    if (!candidateText || isLikelyRhetoricalLocateShell(candidateText)) continue
+    const candidateScore = scoreLocateContentCore(candidateText, {
+      kind: candidate.kind,
+      segmentType: candidate.segmentType,
+      evidenceMode: candidate.evidenceMode,
+    })
+    if (candidateScore < 0.46) continue
+    const distance = idx - startIndex
+    let total = candidateScore - Math.max(0, distance - 1) * 0.12
+    if (String(candidate.kind || '').trim().toLowerCase() === 'list_item') total += 0.06
+    if (String(candidate.evidenceMode || '').trim().toLowerCase() === 'direct') total += 0.04
+    if (String(candidate.segmentType || '').trim().toLowerCase() === 'bullet') total += 0.04
+    if (!best || total > best.score) {
+      best = { segment: candidate, distance, score: total }
+    }
+  }
+
+  if (best) return { segment: best.segment, distance: best.distance }
+  if (currentScore >= 0.5 && !isLikelyClaimGroupLead(current.text, { kind: current.kind, segmentType: current.segmentType })) {
+    return { segment: current, distance: 0 }
+  }
+  return null
+}
+
+function extractQuotedSpans(input: string, minLen = 10): string[] {
+  const src = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
+  if (!src) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (raw: string) => {
+    const text = String(raw || '').replace(/\s+/g, ' ').trim()
+    if (!text || text.length < minLen) return
+    const key = normalizeLocateText(text)
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    out.push(text)
+  }
+  const patterns = [
+    /["\u201C\u201D]\s*([^"\u201C\u201D]{6,260}?)\s*["\u201C\u201D]/g,
+    /[\u2018\u2019']\s*([^\u2018\u2019']{6,220}?)\s*[\u2018\u2019']/g,
+    /[\u300C\u300D\u300E\u300F\u300A\u300B]\s*([^\u300C\u300D\u300E\u300F\u300A\u300B]{6,260}?)\s*[\u300D\u300F\u300B]/g,
+  ]
+  for (const re of patterns) {
+    for (const m of src.matchAll(re)) {
+      push(String(m[1] || ''))
+      if (out.length >= 6) return out
+    }
+  }
+  return out
+}
+
+function quoteMatchStats(quoteSpans: string[], ...texts: string[]): { hits: number; score: number } {
+  if (!Array.isArray(quoteSpans) || quoteSpans.length <= 0) return { hits: 0, score: 0 }
+  const normTexts = texts
+    .map((text) => normalizeLocateText(stripProvenanceNoise(String(text || ''))))
+    .filter(Boolean)
+  if (normTexts.length <= 0) return { hits: 0, score: 0 }
+  let hits = 0
+  let score = 0
+  for (const q of quoteSpans) {
+    const qNorm = normalizeLocateText(q)
+    if (!qNorm) continue
+    let exact = false
+    let bestOverlap = 0
+    for (const t of normTexts) {
+      if (t.includes(qNorm) || (qNorm.length >= 16 && qNorm.includes(t))) {
+        exact = true
+        break
+      }
+      bestOverlap = Math.max(bestOverlap, overlapScore(qNorm, t))
+    }
+    if (exact) {
+      hits += 1
+      score += 1.0
+      continue
+    }
+    if (bestOverlap >= 0.66) {
+      hits += 1
+      score += 0.72
+      continue
+    }
+    score += 0.45 * bestOverlap
+  }
+  return { hits, score }
 }
 
 function tokenizeLocateText(input: string): string[] {
@@ -307,6 +645,698 @@ function formulaOverlapScore(a: string, b: string): number {
   return overlap / Math.sqrt(ta.size * tb.size)
 }
 
+function hasDisplayFormulaSignal(text: string): boolean {
+  const src = String(text || '')
+  if (!src) return false
+  if (/\$\$[^]{1,400}\$\$/.test(src)) return true
+  if (/\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\}/i.test(src)) return true
+  const hasMathCore = /=/.test(src) || /\\tag\{\s*\d{1,4}\s*\}/.test(src)
+  const hasMathToken = /\\[a-zA-Z]{2,}/.test(src) || /\$[^$]{1,220}\$/.test(src)
+  return Boolean(hasMathCore && hasMathToken)
+}
+
+function isEquationLocateCandidate(cand: LocateCandidate | null): boolean {
+  if (!cand) return false
+  const kind = String(cand.anchorKind || '').trim().toLowerCase()
+  if (kind === 'equation') return true
+  return hasDisplayFormulaSignal(String(cand.focusSnippet || cand.matchText || ''))
+}
+
+function shortSegmentLabel(input: string, maxLen = 84): string {
+  const text = stripMarkdownInline(String(input || '')).replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  if (text.length <= maxLen) return text
+  return `${text.slice(0, Math.max(18, maxLen - 3)).trimEnd()}...`
+}
+
+function normalizeSourcePathForMatch(input: string): string {
+  return String(input || '').trim().replace(/\\/g, '/').toLowerCase()
+}
+
+function buildStructuredProvenanceLocateEntries(
+  messageProvenance: Record<string, unknown> | null,
+  opts: {
+    guideSourcePath: string
+    fallbackSourceName: string
+    maxEntries?: number
+    minConfidence?: number
+  },
+): ProvenanceLocateEntry[] {
+  const guideSourcePath = String(opts?.guideSourcePath || '').trim()
+  const fallbackSourceName = String(opts?.fallbackSourceName || '').trim()
+  const maxEntriesRaw = Number(opts?.maxEntries || 3)
+  const maxEntries = Number.isFinite(maxEntriesRaw) && maxEntriesRaw > 0 ? Math.floor(maxEntriesRaw) : 3
+  const minConfidenceRaw = Number(
+    opts?.minConfidence === undefined
+      ? 0.62
+      : opts?.minConfidence,
+  )
+  const minConfidence = Number.isFinite(minConfidenceRaw) ? Math.max(0, minConfidenceRaw) : 0.62
+  if (!messageProvenance || typeof messageProvenance !== 'object') return []
+  const sourcePath = String(messageProvenance.source_path || '').trim()
+  if (!sourcePath) return []
+  if (guideSourcePath) {
+    const guideNorm = normalizeSourcePathForMatch(guideSourcePath)
+    const sourceNorm = normalizeSourcePathForMatch(sourcePath)
+    if (guideNorm && sourceNorm && guideNorm !== sourceNorm) return []
+  }
+  const sourceName = String(messageProvenance.source_name || '').trim()
+    || String(fallbackSourceName || '').trim()
+    || sourcePath.split(/[\\/]/).pop()
+    || 'paper'
+  const blockMap = (messageProvenance.block_map && typeof messageProvenance.block_map === 'object')
+    ? messageProvenance.block_map as Record<string, Record<string, unknown>>
+    : {}
+  const segmentsRaw = Array.isArray(messageProvenance.segments) ? messageProvenance.segments : []
+  const segmentsAll = listStructuredProvenanceSegments(messageProvenance)
+  if (segmentsRaw.length <= 0 || segmentsAll.length <= 0) return []
+
+  const scoredEntries: Array<{
+    entry: ProvenanceLocateEntry
+    score: number
+    idx: number
+  }> = []
+  const seenSegment = new Set<string>()
+  const seenContent = new Set<string>()
+  for (let idx = 0; idx < segmentsAll.length; idx += 1) {
+    const segment = segmentsRaw[idx] as Record<string, unknown> | null
+    if (!segment || typeof segment !== 'object') continue
+    const currentSegment = segmentsAll[idx] || null
+    if (!currentSegment) continue
+    const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
+    const primaryBlockId = String(segment.primary_block_id || '').trim()
+    const supportBlockIdsRaw = Array.isArray(segment.support_block_ids) ? segment.support_block_ids : []
+    const evidenceBlockIdsRaw = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
+    const claimType = String(segment.claim_type || currentSegment.claimType || '').trim().toLowerCase()
+    const mustLocate = Boolean(segment.must_locate ?? currentSegment.mustLocate)
+    const segmentAnchorKind = String(segment.anchor_kind || currentSegment.anchorKind || '').trim().toLowerCase()
+    const segmentAnchorText = stripMarkdownInline(
+      String(segment.anchor_text || currentSegment.anchorText || ''),
+    ).replace(/\s+/g, ' ').trim()
+    const segmentEquationNumber = Number.isFinite(Number(segment.equation_number || currentSegment.equationNumber || 0))
+      ? Math.max(0, Math.floor(Number(segment.equation_number || currentSegment.equationNumber || 0)))
+      : 0
+    const blockIdsRaw = [
+      ...[primaryBlockId].filter(Boolean),
+      ...supportBlockIdsRaw.map((item) => String(item || '').trim()).filter(Boolean),
+      ...evidenceBlockIdsRaw.map((item) => String(item || '').trim()).filter(Boolean),
+    ]
+    if (evidenceMode !== 'direct' || blockIdsRaw.length <= 0) continue
+    if (claimType === 'shell_sentence' && !mustLocate) continue
+
+    const sourceSegmentId = String(segment.segment_id || '').trim() || `seg_${idx + 1}`
+    const evidenceQuote = stripMarkdownInline(String(segment.evidence_quote || segmentAnchorText || '')).trim()
+    const headingLikeQuote = claimType === 'quote_claim' && isHeadingLikeQuotedAnchor(segmentAnchorText || evidenceQuote || currentSegment.text)
+    if (headingLikeQuote) continue
+    const effectiveMustLocate = mustLocate && !headingLikeQuote
+    const keepSelfTarget = effectiveMustLocate || ['quote_claim', 'blockquote_claim', 'formula_claim', 'figure_claim'].includes(claimType)
+    const target = keepSelfTarget
+      ? { segment: currentSegment, distance: 0 }
+      : pickClaimGroupTargetSegment(segmentsAll, idx)
+    if (!target) continue
+    const targetSegment = target.segment
+    const segmentId = String(targetSegment.segmentId || sourceSegmentId).trim() || sourceSegmentId
+    if (seenSegment.has(segmentId)) continue
+
+    const sourceSegmentText = stripMarkdownInline(String(segment.text || '')).trim()
+    const segmentText = stripMarkdownInline(
+      String(
+        (keepSelfTarget && segmentAnchorText)
+        || targetSegment.anchorText
+        || targetSegment.text
+        || sourceSegmentText
+        || '',
+      ),
+    ).trim()
+    if (!segmentText) continue
+    const mappingQualityRaw = Number(segment.mapping_quality || 0)
+    const mappingQuality = Number.isFinite(mappingQualityRaw) ? mappingQualityRaw : 0
+    const hasStrictIdentity = Boolean(primaryBlockId) || evidenceQuote.length >= 12 || segmentAnchorText.length >= 12 || mappingQuality >= 0.24
+    if (!hasStrictIdentity) continue
+    const targetSnippetAliases = Array.isArray(targetSegment.snippetAliases) ? targetSegment.snippetAliases : []
+    const sourceSnippetAliases = Array.isArray(segment.snippet_aliases)
+      ? segment.snippet_aliases.map((item) => String(item || ''))
+      : []
+    const snippetKey = normalizeStructuredLocateSnippet(
+      String(targetSegment.snippetKey || segment.snippet_key || segmentText).trim(),
+    )
+    const snippetAliases = mergeStructuredSnippetAliases(
+      targetSnippetAliases,
+      sourceSnippetAliases,
+      [segmentAnchorText],
+      [segmentText],
+    )
+    const candidates: LocateCandidate[] = []
+    const seenBlock = new Set<string>()
+    for (const blockIdRaw of blockIdsRaw.slice(0, 5)) {
+      const blockId = String(blockIdRaw || '').trim()
+      if (!blockId || seenBlock.has(blockId)) continue
+      const block = blockMap[blockId]
+      if (!block || typeof block !== 'object') continue
+      seenBlock.add(blockId)
+      const blockText = stripMarkdownInline(String(block.text || '')).trim()
+      const headingPath = String(block.heading_path || '').trim()
+      const anchorId = String(block.anchor_id || '').trim()
+      const anchorKind = String(segmentAnchorKind || block.kind || '').trim().toLowerCase()
+      const anchorNumberRaw = Number(segmentEquationNumber || block.number || 0)
+      const focusSnippet = segmentAnchorText || evidenceQuote || blockText || segmentText || headingPath
+      if (!focusSnippet) continue
+      candidates.push({
+        sourcePath,
+        sourceName,
+        headingPath,
+        focusSnippet,
+        matchText: [headingPath, segmentAnchorText || evidenceQuote || '', blockText || segmentText].filter(Boolean).join('\n'),
+        sourceType: 'guide',
+        blockId,
+        anchorId: anchorId || undefined,
+        anchorKind: anchorKind || undefined,
+        anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
+          ? Math.floor(anchorNumberRaw)
+          : undefined,
+      })
+    }
+    if (candidates.length <= 0) continue
+
+    const primary = candidates[0]
+    const alternatives = [
+      primary,
+      ...candidates.filter((cand) => cand !== primary),
+    ]
+    const entry: ProvenanceLocateEntry = {
+      segmentId,
+      label: shortSegmentLabel(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet),
+      segmentText,
+      evidenceQuote,
+      claimType,
+      mustLocate: effectiveMustLocate,
+      anchorKind: segmentAnchorKind || primary.anchorKind || '',
+      anchorText: segmentAnchorText || evidenceQuote || '',
+      equationNumber: segmentEquationNumber || primary.anchorNumber || 0,
+      snippetKey,
+      snippetAliases,
+      primary,
+      alternatives,
+      sourceSegmentId,
+      groupLeadText: sourceSegmentText && sourceSegmentText !== segmentText ? sourceSegmentText : undefined,
+      groupDistance: target.distance,
+    }
+    const contentKey = normalizeLocateText(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet).slice(0, 220)
+    if (contentKey && seenContent.has(contentKey)) continue
+    if (contentKey) seenContent.add(contentKey)
+    const evidenceConfidenceRaw = Number(segment.evidence_confidence || 0)
+    const evidenceConfidence = Number.isFinite(evidenceConfidenceRaw) ? evidenceConfidenceRaw : 0
+    const segmentFormula = hasFormulaSignal(segmentText)
+    const contentCoreScore = scoreLocateContentCore(segmentText, {
+      kind: targetSegment.kind,
+      segmentType: targetSegment.segmentType,
+      evidenceMode: targetSegment.evidenceMode,
+    })
+    const score = evidenceConfidence
+      + (segmentFormula ? 0.03 : 0)
+      + Math.min(0.18, contentCoreScore * 0.16)
+      - Math.min(0.16, target.distance * 0.06)
+      + (effectiveMustLocate ? 0.42 : 0)
+      + (claimType === 'formula_claim' ? 0.18 : 0)
+      + (claimType === 'figure_claim' ? 0.16 : 0)
+      + ((claimType === 'quote_claim' || claimType === 'blockquote_claim') ? 0.14 : 0)
+      + ((segmentAnchorText || evidenceQuote).length >= 18 ? 0.05 : 0)
+    scoredEntries.push({ entry, score, idx })
+    seenSegment.add(segmentId)
+  }
+  if (scoredEntries.length <= 0) return []
+  let ranked = scoredEntries
+    .filter((item) => item.score >= minConfidence)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      return a.idx - b.idx
+    })
+  if (ranked.length <= 0) {
+    ranked = [...scoredEntries].sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score
+      return a.idx - b.idx
+    })
+  }
+  const mustLocateEntries = ranked.filter((item) => item.entry.mustLocate)
+  const optionalEntries = ranked.filter((item) => !item.entry.mustLocate)
+  const limited = [
+    ...mustLocateEntries,
+    ...optionalEntries.slice(0, Math.max(0, maxEntries - mustLocateEntries.length)),
+  ]
+  return limited
+    .sort((a, b) => a.idx - b.idx)
+    .map((item) => item.entry)
+}
+
+function normalizeStructuredLocateKind(input: string): StructuredLocateKind | '' {
+  const raw = String(input || '').trim().toLowerCase()
+  if (!raw) return ''
+  if (raw === 'equation' || raw === 'math') return 'equation'
+  if (raw === 'figure' || raw === 'fig' || raw === 'image' || raw === 'img') return 'figure'
+  if (raw === 'list_item' || raw === 'list-item' || raw === 'li') return 'list_item'
+  if (raw === 'blockquote' || raw === 'bq') return 'blockquote'
+  if (raw === 'paragraph' || raw === 'p') return 'paragraph'
+  return ''
+}
+
+function isHeadingLikeQuotedAnchor(text: string): boolean {
+  const raw = stripProvenanceNoise(stripMarkdownInline(String(text || '')))
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!raw) return true
+  if (/[。！？!?;；:：]/.test(raw)) return false
+  const latin = raw.match(/[A-Za-z]{3,}/g) || []
+  if (latin.length > 0 && latin.length <= 8 && raw.length <= 80) {
+    const verbLike = /\b(?:is|are|was|were|be|been|being|can|cannot|could|should|would|will|use|used|using|estimate|estimated|show|shown|train|training|feed|feeding|make|making|exploit|provide|compare)\b/i
+    if (!verbLike.test(raw)) return true
+  }
+  return raw.length <= 28 && !/\d/.test(raw)
+}
+
+function scoreStructuredAnchorCompatibility(
+  renderKindInput: string,
+  entry: Pick<ProvenanceLocateEntry, 'anchorKind' | 'claimType' | 'mustLocate'> | null | undefined,
+): number {
+  const renderKind = normalizeStructuredLocateKind(renderKindInput)
+  const anchorKind = String(entry?.anchorKind || '').trim().toLowerCase()
+  const claimType = String(entry?.claimType || '').trim().toLowerCase()
+  if (!renderKind) return 0
+  if (anchorKind === 'blockquote' || claimType === 'blockquote_claim') {
+    return renderKind === 'blockquote' ? 0.72 : -1.2
+  }
+  if (anchorKind === 'equation' || claimType === 'formula_claim') {
+    return renderKind === 'equation' ? 0.86 : -1.35
+  }
+  if (anchorKind === 'figure' || claimType === 'figure_claim') {
+    if (renderKind === 'figure') return 0.8
+    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.08
+    return -0.92
+  }
+  if (anchorKind === 'quote' || claimType === 'quote_claim') {
+    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.28
+    return -0.5
+  }
+  return 0
+}
+
+function splitAnswerRenderSegments(answerMarkdown: string): StructuredRenderSegment[] {
+  const lines = String(answerMarkdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const segments: StructuredRenderSegment[] = []
+  let buf: string[] = []
+  let inFence = false
+  let inDisplayMath = false
+  let mathBuf: string[] = []
+  let order = 0
+
+  const push = (kind: StructuredLocateKind, rawText: string) => {
+    const text = stripMarkdownInline(String(rawText || '')).replace(/\s+/g, ' ').trim()
+    if (text.length < 10) return
+    order += 1
+    segments.push({
+      order,
+      kind,
+      text: text.slice(0, 1600),
+      snippetKey: normalizeLocateText(text.slice(0, 360)),
+    })
+  }
+
+  const flushParagraph = () => {
+    if (buf.length <= 0) return
+    push('paragraph', buf.join('\n'))
+    buf = []
+  }
+
+  const flushDisplayMath = () => {
+    if (mathBuf.length <= 0) return
+    push('equation', mathBuf.join('\n'))
+    mathBuf = []
+  }
+
+  for (const raw of lines) {
+    const line = String(raw || '')
+    if (/^\s*(```+|~~~+)\s*$/.test(line)) {
+      if (inFence) {
+        inFence = false
+        flushParagraph()
+        flushDisplayMath()
+      } else {
+        flushParagraph()
+        inFence = true
+      }
+      continue
+    }
+    if (inFence) continue
+    const trimmed = line.trim()
+    const imageMatch = trimmed.match(/^!\[([^\]]*)\]\([^)]+\)\s*$/)
+    if (imageMatch) {
+      flushParagraph()
+      flushDisplayMath()
+      push('figure', String(imageMatch[1] || '').trim() || trimmed)
+      continue
+    }
+    const eqStart = /^\s*(?:\$\$|\\\[|\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\})/.test(line)
+    const eqEnd = /(?:\$\$|\\\]|\\end\{(?:equation|align|gather|multline|eqnarray)\*?\})\s*$/.test(line)
+    if (inDisplayMath) {
+      mathBuf.push(line)
+      if (eqEnd) {
+        inDisplayMath = false
+        flushDisplayMath()
+      }
+      continue
+    }
+    if (eqStart) {
+      flushParagraph()
+      mathBuf = [line]
+      if (eqEnd && !/^\s*(?:\$\$|\\\[)\s*$/.test(line)) {
+        flushDisplayMath()
+      } else {
+        inDisplayMath = true
+      }
+      continue
+    }
+    if (!line.trim()) {
+      flushParagraph()
+      flushDisplayMath()
+      continue
+    }
+    if (/^\s{0,3}#{1,6}\s+/.test(line)) {
+      flushParagraph()
+      flushDisplayMath()
+      continue
+    }
+    const listMatch = line.match(/^\s*(?:[-*+]|\d+[.)])\s+(.*)$/)
+    if (listMatch) {
+      flushParagraph()
+      flushDisplayMath()
+      push('list_item', String(listMatch[1] || ''))
+      continue
+    }
+    if (/^\s*\|.*\|\s*$/.test(line)) {
+      flushParagraph()
+      flushDisplayMath()
+      continue
+    }
+    const quoteMatch = line.match(/^\s*>\s?(.*)$/)
+    if (quoteMatch) {
+      flushParagraph()
+      flushDisplayMath()
+      push('blockquote', String(quoteMatch[1] || ''))
+      continue
+    }
+    buf.push(line)
+  }
+  flushParagraph()
+  flushDisplayMath()
+  return segments
+}
+
+function listStructuredProvenanceSegments(
+  messageProvenance: Record<string, unknown> | null,
+): StructuredProvenanceSegment[] {
+  if (!messageProvenance || typeof messageProvenance !== 'object') return []
+  const segmentsRaw = Array.isArray(messageProvenance.segments) ? messageProvenance.segments : []
+  const out: StructuredProvenanceSegment[] = []
+  for (let idx = 0; idx < segmentsRaw.length; idx += 1) {
+    const segment = segmentsRaw[idx] as Record<string, unknown> | null
+    if (!segment || typeof segment !== 'object') continue
+    const segmentId = String(segment.segment_id || '').trim() || `seg_${idx + 1}`
+    const text = stripMarkdownInline(String(segment.text || '')).replace(/\s+/g, ' ').trim()
+    const snippetKeyRaw = String(segment.snippet_key || '').trim()
+    const snippetAliases = Array.isArray(segment.snippet_aliases)
+      ? segment.snippet_aliases
+        .map((item) => normalizeStructuredLocateSnippet(String(item || '').trim()))
+        .filter(Boolean)
+        .slice(0, 8)
+      : []
+    out.push({
+      index: idx,
+      segmentId,
+      kind: String(segment.kind || '').trim().toLowerCase(),
+      segmentType: String(segment.segment_type || '').trim().toLowerCase(),
+      evidenceMode: String(segment.evidence_mode || '').trim().toLowerCase(),
+      claimType: String(segment.claim_type || '').trim().toLowerCase(),
+      mustLocate: Boolean(segment.must_locate),
+      anchorKind: String(segment.anchor_kind || '').trim().toLowerCase(),
+      anchorText: stripMarkdownInline(String(segment.anchor_text || '')).replace(/\s+/g, ' ').trim(),
+      equationNumber: Number.isFinite(Number(segment.equation_number || 0))
+        ? Math.max(0, Math.floor(Number(segment.equation_number || 0)))
+        : 0,
+      text,
+      snippetKey: normalizeStructuredLocateSnippet(snippetKeyRaw || text.slice(0, 360)),
+      snippetAliases,
+    })
+  }
+  return out
+}
+
+function scoreStructuredRenderBinding(
+  renderSegment: StructuredRenderSegment,
+  entry: ProvenanceLocateEntry,
+  provenanceSegment: StructuredProvenanceSegment | null,
+  targetOrder: number,
+): number {
+  const segText = String(provenanceSegment?.text || entry.segmentText || '').trim()
+  const segKey = String(provenanceSegment?.snippetKey || entry.snippetKey || '').trim()
+  let score = Math.max(
+    scoreProvenanceSegment(renderSegment.text, segText, segKey),
+    overlapScore(renderSegment.text, segText),
+  )
+  if (segKey && renderSegment.snippetKey === normalizeLocateText(segKey)) {
+    score += 0.42
+  }
+  if (Array.isArray(entry.snippetAliases) && entry.snippetAliases.length > 0) {
+    const aliasScore = entry.snippetAliases.reduce((acc, alias) => {
+      return Math.max(acc, overlapScore(renderSegment.text, String(alias || '')))
+    }, 0)
+    score += 0.22 * aliasScore
+  }
+  if (Array.isArray(provenanceSegment?.snippetAliases) && provenanceSegment.snippetAliases.length > 0) {
+    const aliasScore = provenanceSegment.snippetAliases.reduce((acc, alias) => {
+      return Math.max(acc, overlapScore(renderSegment.text, String(alias || '')))
+    }, 0)
+    score += 0.14 * aliasScore
+  }
+  const renderKind = normalizeStructuredLocateKind(renderSegment.kind)
+  const segKind = normalizeStructuredLocateKind(String(provenanceSegment?.kind || ''))
+  const anchorCompat = scoreStructuredAnchorCompatibility(renderKind, entry)
+  if (anchorCompat <= -0.9) return anchorCompat
+  score += anchorCompat
+  if (renderKind && segKind && renderKind === segKind) {
+    score += 0.18
+  }
+  if (targetOrder > 0) {
+    const distance = Math.abs(renderSegment.order - targetOrder)
+    if (distance === 0) score += 0.26
+    else score -= Math.min(0.48, distance * 0.1)
+    if (distance <= 1) score += 0.05
+  }
+  return score
+}
+
+function buildStructuredRenderLocateSlotMap(
+  answerMarkdown: string,
+  messageProvenance: Record<string, unknown> | null,
+  provenanceLocateEntries: ProvenanceLocateEntry[],
+): Map<number, StructuredRenderLocateSlot> {
+  const renderSegments = splitAnswerRenderSegments(answerMarkdown)
+  const provenanceSegments = listStructuredProvenanceSegments(messageProvenance)
+  if (renderSegments.length <= 0 || provenanceSegments.length <= 0 || provenanceLocateEntries.length <= 0) {
+    return new Map()
+  }
+
+  const provenanceById = new Map(provenanceSegments.map((segment) => [segment.segmentId, segment]))
+  const renderableOrdinalBySegmentId = new Map<string, number>()
+  let renderableOrdinal = 0
+  for (const segment of provenanceSegments) {
+    if (normalizeStructuredLocateKind(segment.kind)) {
+      renderableOrdinal += 1
+      renderableOrdinalBySegmentId.set(segment.segmentId, renderableOrdinal)
+    }
+  }
+
+  const slotMap = new Map<number, StructuredRenderLocateSlot>()
+  const assignedOrders = new Set<number>()
+  const orderedEntries = provenanceLocateEntries
+    .map((entry, entryIndex) => ({
+      entry,
+      provenanceSegment: provenanceById.get(entry.segmentId) || null,
+      entryIndex,
+    }))
+    .sort((a, b) => {
+      const aIndex = a.provenanceSegment?.index ?? a.entryIndex
+      const bIndex = b.provenanceSegment?.index ?? b.entryIndex
+      return aIndex - bIndex
+    })
+
+  for (const item of orderedEntries) {
+    const { entry, provenanceSegment } = item
+    const targetOrder = Number(renderableOrdinalBySegmentId.get(entry.segmentId) || 0)
+    const formulaQuery = hasFormulaSignal(entry.segmentText || provenanceSegment?.text || '')
+    const figureQuery = String(entry.anchorKind || '').trim().toLowerCase() === 'figure'
+      || String(entry.claimType || '').trim().toLowerCase() === 'figure_claim'
+    let bestSegment: StructuredRenderSegment | null = null
+    let bestScore = Number.NEGATIVE_INFINITY
+    for (const renderSegment of renderSegments) {
+      if (assignedOrders.has(renderSegment.order)) continue
+      const score = scoreStructuredRenderBinding(renderSegment, entry, provenanceSegment, targetOrder)
+      if (score > bestScore) {
+        bestScore = score
+        bestSegment = renderSegment
+      }
+    }
+    if (!bestSegment) continue
+    const distance = targetOrder > 0 ? Math.abs(bestSegment.order - targetOrder) : 0
+    let floor = formulaQuery ? 0.3 : (figureQuery ? 0.26 : 0.44)
+    if (targetOrder > 0 && distance === 0) floor -= 0.14
+    else if (targetOrder > 0 && distance <= 1) floor -= 0.08
+    if (bestScore < floor) continue
+    assignedOrders.add(bestSegment.order)
+    slotMap.set(bestSegment.order, {
+      order: bestSegment.order,
+      kind: bestSegment.kind,
+      renderText: bestSegment.text,
+      renderSnippetKey: bestSegment.snippetKey,
+      entry,
+      provenanceIndex: provenanceSegment?.index ?? item.entryIndex,
+      score: bestScore,
+    })
+  }
+  return slotMap
+}
+
+function resolveStructuredRenderLocateSlot(
+  snippet: string,
+  meta: LocateRenderMetaLite | undefined,
+  slotMap: Map<number, StructuredRenderLocateSlot>,
+): StructuredRenderLocateSlot | null {
+  if (!(slotMap instanceof Map) || slotMap.size <= 0) return null
+  const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
+  const targetOrderRaw = Number(meta?.order || 0)
+  const targetOrder = Number.isFinite(targetOrderRaw) && targetOrderRaw > 0 ? Math.floor(targetOrderRaw) : 0
+  const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
+
+  const scoreSlot = (slot: StructuredRenderLocateSlot): number => {
+    const compat = scoreStructuredAnchorCompatibility(targetKind || slot.kind, slot.entry)
+    if (targetKind && compat <= -0.9) return Number.NEGATIVE_INFINITY
+    let score = 0
+    if (raw) {
+      score = Math.max(
+        scoreProvenanceSegment(raw, slot.renderText, slot.renderSnippetKey),
+        scoreProvenanceSegment(raw, slot.entry.segmentText, slot.entry.snippetKey),
+        overlapScore(raw, slot.renderText),
+      )
+      if (Array.isArray(slot.entry.snippetAliases) && slot.entry.snippetAliases.length > 0) {
+        const aliasScore = slot.entry.snippetAliases.reduce((acc, alias) => {
+          return Math.max(acc, overlapScore(raw, String(alias || '')))
+        }, 0)
+        score += 0.18 * aliasScore
+      }
+    }
+    if (targetKind && slot.kind === targetKind) score += 0.12
+    score += Math.max(-0.6, compat)
+    if (targetOrder > 0) {
+      const distance = Math.abs(slot.order - targetOrder)
+      if (distance === 0) score += 0.5
+      else score -= Math.min(0.44, distance * 0.18)
+    }
+    return score
+  }
+
+  if (targetOrder > 0) {
+    const direct = slotMap.get(targetOrder)
+    if (direct) {
+      const directScore = scoreSlot(direct)
+      const directFloor = raw ? (hasFormulaSignal(raw) ? 0.16 : 0.1) : -1
+      if ((!targetKind || direct.kind === targetKind) && directScore >= directFloor) {
+        return direct
+      }
+    }
+  }
+
+  let best: StructuredRenderLocateSlot | null = null
+  let bestScore = Number.NEGATIVE_INFINITY
+  for (const slot of slotMap.values()) {
+    const score = scoreSlot(slot)
+    if (score > bestScore) {
+      best = slot
+      bestScore = score
+    }
+  }
+  if (!best) return null
+  if (targetKind) {
+    const compat = scoreStructuredAnchorCompatibility(targetKind, best.entry)
+    if (compat <= -0.9) return null
+  }
+  const floor = raw ? (hasFormulaSignal(raw) ? 0.34 : 0.48) : 0.22
+  return bestScore >= floor ? best : null
+}
+
+function normalizeStructuredLocateSnippet(input: string): string {
+  const raw = stripProvenanceNoise(stripMarkdownInline(String(input || '')))
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!raw) return ''
+  const trimmed = raw
+    .replace(/\.{3,}\s*$/, '')
+    .replace(/\u2026+\s*$/, '')
+    .trim()
+  return normalizeLocateText(trimmed)
+}
+
+function scoreProvenanceSegment(snippet: string, segmentText: string, segmentKey: string): number {
+  const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || '')))
+  const query = normalizeLocateText(raw)
+  const segNorm = normalizeLocateText(stripProvenanceNoise(String(segmentText || '')))
+  const keyNorm = normalizeLocateText(stripProvenanceNoise(String(segmentKey || '')))
+  if (!query || (!segNorm && !keyNorm)) return 0
+
+  let score = 0
+  if (keyNorm) {
+    if (keyNorm === query) score += 1.2
+    if (keyNorm.includes(query)) score += 0.92
+    if (query.includes(keyNorm) && keyNorm.length >= 20) score += 0.78
+  }
+  if (segNorm) {
+    if (segNorm === query) score += 1.15
+    if (segNorm.includes(query)) score += 0.86
+    const segHead = segNorm.slice(0, Math.min(220, segNorm.length))
+    if (query.includes(segHead) && segHead.length >= 20) score += 0.72
+  }
+
+  score += 0.82 * Math.max(
+    overlapScore(raw, segmentText),
+    overlapScore(query, segNorm),
+    overlapScore(query, keyNorm),
+  )
+
+  if (hasFormulaSignal(raw) || hasFormulaSignal(segmentText)) {
+    score += 0.72 * formulaOverlapScore(raw, segmentText)
+  }
+  return score
+}
+
+function extractEquationNumbersFromText(text: string): number[] {
+  const src = String(text || '')
+  if (!src) return []
+  const out: number[] = []
+  const seen = new Set<number>()
+  const push = (raw: string) => {
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) return
+    const k = Math.floor(n)
+    if (seen.has(k)) return
+    seen.add(k)
+    out.push(k)
+  }
+  for (const m of src.matchAll(/\b(?:eq|equation|\u516C\u5F0F)\s*[#(\uFF08]?\s*(\d{1,4})\s*[)\uFF09]?/gi)) {
+    push(String(m[1] || ''))
+  }
+  for (const m of src.matchAll(/\((\d{1,4})\)/g)) {
+    push(String(m[1] || ''))
+  }
+  return out
+}
+
 function scoreLocateCandidate(snippet: string, cand: LocateCandidate): number {
   const query = String(snippet || '').trim()
   if (!query) return 0
@@ -350,32 +1380,23 @@ function scoreLocateCandidate(snippet: string, cand: LocateCandidate): number {
   if (hasFormulaSignal(query) || hasFormulaSignal(matchText)) {
     score += 0.72 * formulaOverlapScore(query, matchText)
   }
+  const qEqNumbers = extractEquationNumbersFromText(query)
+  const candEqNo = Number(cand.anchorNumber || 0)
+  const candKind = String(cand.anchorKind || '').trim().toLowerCase()
+  if (qEqNumbers.length > 0) {
+    if (candEqNo > 0 && qEqNumbers.includes(candEqNo)) score += 1.05
+    if (candKind === 'equation') score += 0.18
+  }
+  if (hasFormulaSignal(query) && candKind === 'equation') {
+    score += 0.22
+  }
+  if (cand.anchorId) {
+    score += 0.04
+  }
   if (cand.sourceType === 'guide') {
     score += 0.07
   }
   return score
-}
-
-function shortHeadingLabel(input: string, maxLen = 18): string {
-  const text = String(input || '').replace(/\s+/g, ' ').trim()
-  if (!text) return ''
-  if (text.length <= maxLen) return text
-  return `${text.slice(0, Math.max(6, maxLen - 1)).trimEnd()}...`
-}
-
-function pickLocateCandidate(snippet: string, candidates: LocateCandidate[]): LocateCandidate | null {
-  const query = String(snippet || '').trim()
-  if (!query || candidates.length <= 0) return null
-  let best: LocateCandidate | null = null
-  let bestScore = 0
-  for (const cand of candidates) {
-    const score = scoreLocateCandidate(query, cand)
-    if (score > bestScore) {
-      bestScore = score
-      best = cand
-    }
-  }
-  return bestScore >= 0.11 ? best : null
 }
 
 function isImageOnlyPlaceholder(content: string) {
@@ -906,7 +1927,7 @@ function normalizeTextLite(value: string): string {
 
 function firstAuthorToken(value: string): string {
   const firstChunk = String(value || '')
-    .split(/[;,锛岋紱]/)[0]
+    .split(/[;,\uFF0C\uFF1B]/)[0]
     ?.trim()
     || ''
   const tokens = firstChunk.match(/[A-Za-z\u4e00-\u9fff]+/g) || []
@@ -1032,7 +2053,16 @@ export function MessageList({
           return
         }
         const resolvedName = String(res.source_name || sourceName || '').trim()
-        setGuideDocCandidates(buildGuideLocateCandidates(markdown, sourcePath, resolvedName || sourceName || sourcePath))
+        const anchors = Array.isArray(res.anchors) ? res.anchors : []
+        setGuideDocCandidates(
+          buildGuideLocateCandidates(
+            markdown,
+            sourcePath,
+            resolvedName || sourceName || sourcePath,
+            'guide',
+            anchors,
+          ),
+        )
       })
       .catch(() => {
         if (!cancelled) setGuideDocCandidates([])
@@ -1354,7 +2384,7 @@ export function MessageList({
         else message.info('Strict match did not pass; original metadata kept')
       })
       .catch(() => {
-        message.error('淇澶辫触锛岃绋嶅悗閲嶈瘯')
+        message.error('Repair failed, please retry.')
       })
       .finally(() => {
         setShelfRepairLoadingKey((current) => (current === item.key ? '' : current))
@@ -1451,22 +2481,22 @@ export function MessageList({
     }
     const sourcePath = String(detail.sourcePath || '').trim()
     if (!sourcePath) {
-      message.info('褰撳墠寮曠敤缂哄皯鍙粦瀹氱殑鏂囩尞璺緞')
+      message.info('Current citation has no bindable source path')
       return
     }
-    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || '鏂囩尞'
+    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
     setPopoverGuideLoading(true)
     try {
       await createPaperGuideConversation({
         sourcePath,
         sourceName,
-        title: `闃呰鎸囧 路 ${sourceName}`,
+        title: `Paper Guide 闂?${sourceName}`,
       })
       message.success('Entered paper guide conversation')
       setPopoverDetail(null)
       setPopoverPos(null)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '鍒涘缓闃呰鎸囧浼氳瘽澶辫触')
+      message.error(err instanceof Error ? err.message : 'Failed to create paper guide conversation')
     } finally {
       setPopoverGuideLoading(false)
     }
@@ -1476,10 +2506,10 @@ export function MessageList({
     if (!onOpenReader) return
     const sourcePath = String(detail.sourcePath || '').trim()
     if (!sourcePath) {
-      message.info('褰撳墠寮曠敤缂哄皯鍙粦瀹氱殑鏂囩尞璺緞')
+      message.info('Current citation has no bindable source path')
       return
     }
-    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || '鏂囩尞'
+    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
     const snippet = String(detail.summaryLine || detail.title || detail.raw || '').trim()
     onOpenReader({
       sourcePath,
@@ -1511,7 +2541,7 @@ export function MessageList({
     const pad = (value: number) => String(value).padStart(2, '0')
     const entry: ShelfSavedSnapshot = {
       id: `s_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-      name: `蹇収 ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      name: `Snapshot ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
       createdAt: now,
       items: currentItems.map((item) => ({ ...item })),
     }
@@ -1521,7 +2551,7 @@ export function MessageList({
       return next
     })
     setSelectedSavedSnapshotId(entry.id)
-    message.success('宸蹭繚瀛樻枃鐚蹇収')
+    message.success('Shelf snapshot saved')
   }
 
   const loadShelfSnapshot = () => {
@@ -1531,7 +2561,7 @@ export function MessageList({
     setFocusedShelfKey('')
     setShelfSummaryLoadingKey('')
     setShelfRepairLoadingKey('')
-    message.success(`宸茶浇鍏ュ揩鐓э細${selectedSavedSnapshot.name}`)
+    message.success(`Loaded snapshot: ${selectedSavedSnapshot.name}`)
   }
 
   const deleteShelfSnapshot = () => {
@@ -1543,7 +2573,7 @@ export function MessageList({
       return next
     })
     setSelectedSavedSnapshotId((current) => (current === selectedSavedSnapshot.id ? '' : current))
-    message.success(`宸插垹闄ゅ揩鐓э細${removedName}`)
+    message.success(`Deleted snapshot: ${removedName}`)
   }
 
   return (
@@ -1592,11 +2622,19 @@ export function MessageList({
               ),
             )
             const guideSourcePath = String(paperGuideSourcePath || '').trim()
-            const locateSourcePath = guideSourcePath || (
-              uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : ''
+            const guideDocAvailable = Boolean(
+              guideSourcePath
+              && guideDocCandidates.some((item) => String(item.sourcePath || '').trim() === guideSourcePath),
             )
-            const locateSourceName = String(paperGuideSourceName || '').trim() || (
-              citeDetails.find((detail) => String(detail.sourcePath || '').trim() === locateSourcePath)?.sourceName || ''
+            const locateSourcePath = (
+              guideSourcePath && guideDocAvailable
+                ? guideSourcePath
+                : (uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : guideSourcePath)
+            )
+            const locateSourceName = (
+              (guideSourcePath && guideDocAvailable ? String(paperGuideSourceName || '').trim() : '')
+              || (citeDetails.find((detail) => String(detail.sourcePath || '').trim() === locateSourcePath)?.sourceName || '')
+              || String(paperGuideSourceName || '').trim()
             )
             const refsLocateCandidatesAll: LocateCandidate[] = (() => {
               const out: LocateCandidate[] = []
@@ -1618,7 +2656,7 @@ export function MessageList({
                 const meta = hit?.meta || {}
                 const sourcePath = String(ui.source_path || meta.source_path || '').trim()
                 if (!sourcePath) continue
-                const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || '文献'
+                const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
 
                 const headingCandidates = new Set<string>([
                   String(ui.heading_path || '').trim(),
@@ -1639,6 +2677,9 @@ export function MessageList({
                   const headingPath = String(loc.heading_path || loc.heading || '').trim()
                   if (headingPath) headingCandidates.add(headingPath)
                   const locText = pickFirstRefText(loc)
+                  const locAnchorId = String(loc.anchor_id || loc.anchorId || '').trim()
+                  const locAnchorKind = String(loc.anchor_kind || loc.kind || anchorKind || '').trim().toLowerCase()
+                  const locAnchorNumber = Number(loc.anchor_number || loc.number || anchorNum || 0)
                   if (locText) {
                     push({
                       sourcePath,
@@ -1647,6 +2688,9 @@ export function MessageList({
                       focusSnippet: locText,
                       matchText: [headingPath, locText].filter(Boolean).join('\n'),
                       sourceType: 'refs',
+                      anchorId: locAnchorId || undefined,
+                      anchorKind: locAnchorKind || undefined,
+                      anchorNumber: Number.isFinite(locAnchorNumber) && locAnchorNumber > 0 ? Math.floor(locAnchorNumber) : undefined,
                     })
                   }
                 }
@@ -1662,7 +2706,7 @@ export function MessageList({
                   snippetSeeds.push(
                     `equation ${anchorNum}`,
                     `eq ${anchorNum}`,
-                    `公式${anchorNum}`,
+                    `闂傚倸鍊搁崐鐑芥嚄閸洍鈧箓宕煎婵堟嚀椤繄鎹勯搹璇℃Ф婵犵數鍋涘Λ娆撳垂閸洩缍?{anchorNum}`,
                     `(${anchorNum})`,
                   )
                 }
@@ -1680,6 +2724,8 @@ export function MessageList({
                     focusSnippet: seed,
                     matchText: [headingFallback, seed].filter(Boolean).join('\n'),
                     sourceType: 'refs',
+                    anchorKind: anchorKind || undefined,
+                    anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
                   })
                 }
 
@@ -1691,6 +2737,8 @@ export function MessageList({
                     focusSnippet: headingPath,
                     matchText: headingPath,
                     sourceType: 'refs',
+                    anchorKind: anchorKind || undefined,
+                    anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
                   })
                 }
               }
@@ -1702,59 +2750,417 @@ export function MessageList({
             const refsScopedCandidates = guideSourcePath
               ? refsLocateCandidatesAll.filter((item) => item.sourcePath === guideSourcePath)
               : refsLocateCandidatesAll
+            const messageProvenance = (message.provenance && typeof message.provenance === 'object')
+              ? message.provenance
+              : null
+            const provenanceSourcePath = String(messageProvenance?.source_path || '').trim()
+            const provenanceSourceName = String(messageProvenance?.source_name || '').trim()
+            const provenanceBlockMap = (messageProvenance?.block_map && typeof messageProvenance.block_map === 'object')
+              ? messageProvenance.block_map
+              : {}
+            const provenanceDirectSegments = Array.isArray(messageProvenance?.segments)
+              ? messageProvenance.segments.filter((segment) => {
+                if (!segment || typeof segment !== 'object') return false
+                const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
+                const evidenceIds = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
+                return evidenceMode === 'direct' && evidenceIds.length > 0
+              })
+              : []
+            const hasDirectProvenance = Boolean(provenanceSourcePath) && provenanceDirectSegments.length > 0
+            const hasStructuredProvenance = Boolean(
+              provenanceSourcePath
+              && Array.isArray(messageProvenance?.segments),
+            )
+            const effectiveGuideSourcePath = String(
+              guideSourcePath
+              || provenanceSourcePath
+              || locateSourcePath
+              || '',
+            ).trim()
+            const strictProvenanceLocate = Boolean(effectiveGuideSourcePath)
+            const structuredLocateButtonCap = 5
+            const provenanceLocateEntries = buildStructuredProvenanceLocateEntries(
+              (messageProvenance && typeof messageProvenance === 'object')
+                ? messageProvenance as Record<string, unknown>
+                : null,
+              {
+                guideSourcePath: effectiveGuideSourcePath,
+                fallbackSourceName: locateSourceName,
+                maxEntries: structuredLocateButtonCap,
+                minConfidence: 0.62,
+              },
+            )
+            const strictStructuredLocateOnly = Boolean(
+              strictProvenanceLocate
+              && hasStructuredProvenance
+              && provenanceLocateEntries.length > 0,
+            )
+            const strictStructuredInlineLocate = Boolean(
+              strictStructuredLocateOnly,
+            )
+            const provenanceMappingMode = String(messageProvenance?.mapping_mode || '').trim().toLowerCase()
+            const provenanceLlmCallsRaw = Number(messageProvenance?.llm_rerank_calls || 0)
+            const provenanceLlmCalls = Number.isFinite(provenanceLlmCallsRaw) && provenanceLlmCallsRaw > 0
+              ? Math.floor(provenanceLlmCallsRaw)
+              : 0
+            const provenanceModeLabel = (() => {
+              if (!strictStructuredLocateOnly) return ''
+              if (provenanceMappingMode === 'llm_refined') {
+                if (provenanceLlmCalls > 0) return `\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee\uff08${provenanceLlmCalls} \u6b21\uff09`
+                return '\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee'
+              }
+              if (provenanceMappingMode === 'fast') return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u5feb\u901f\u6620\u5c04'
+              if (hasStructuredProvenance) return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u7ed3\u6784\u5316\u6620\u5c04'
+              return ''
+            })()
+            const structuredRenderSlotMap = buildStructuredRenderLocateSlotMap(
+              String(bodyContent || ''),
+              (messageProvenance && typeof messageProvenance === 'object')
+                ? messageProvenance as Record<string, unknown>
+                : null,
+              provenanceLocateEntries,
+            )
+            const allowedStructuredRenderOrders = (() => {
+              const ordered = Array.from(structuredRenderSlotMap.values())
+                .sort((a, b) => a.order - b.order)
+              const allowed = new Set<number>()
+              let optionalCount = 0
+              for (const slot of ordered) {
+                if (slot.entry.mustLocate) {
+                  allowed.add(slot.order)
+                  continue
+                }
+                if (optionalCount >= structuredLocateButtonCap) continue
+                allowed.add(slot.order)
+                optionalCount += 1
+              }
+              return allowed
+            })()
+            const resolveStructuredInlineSlot = (
+              snippet: string,
+              meta?: LocateRenderMetaLite,
+            ): StructuredRenderLocateSlot | null => {
+              if (!strictStructuredInlineLocate) return null
+              return resolveStructuredRenderLocateSlot(snippet, meta, structuredRenderSlotMap)
+            }
+            const resolveProvenanceLocateCandidates = (snippet: string, limit = 4): LocateCandidate[] => {
+              const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || '')))
+              const key = normalizeLocateText(raw).slice(0, 360)
+              if (!key || !provenanceSourcePath) return []
+              const formulaQuery = hasFormulaSignal(raw)
+              const quoteSpans = formulaQuery ? [] : extractQuotedSpans(raw, 12)
+              const rankedSegments: Array<{ segment: NonNullable<typeof provenanceDirectSegments[number]>; score: number }> = []
+              for (const segment of provenanceDirectSegments) {
+                const segmentText = String(segment.text || '')
+                if (isLikelyRhetoricalLocateShell(segmentText)) continue
+                const segmentKey = String(segment.snippet_key || '')
+                const segmentConf = Number(segment.evidence_confidence || 0)
+                const confFloor = formulaQuery ? 0.5 : 0.62
+                if (segmentConf > 0 && segmentConf < confFloor) continue
+                let score = scoreProvenanceSegment(raw, segmentText, segmentKey)
+                if (quoteSpans.length > 0) {
+                  const qSeg = quoteMatchStats(quoteSpans, segmentText, segmentKey)
+                  if (qSeg.hits <= 0 && qSeg.score < 0.55) continue
+                  score += 0.38 * qSeg.score + (qSeg.hits > 0 ? 0.22 : 0)
+                }
+                if (score > 0) rankedSegments.push({ segment, score })
+              }
+              rankedSegments.sort((a, b) => b.score - a.score)
+              const scoreFloor = formulaQuery ? 0.45 : 0.5
+              let matchedSegments = rankedSegments
+                .filter((row) => row.score >= scoreFloor)
+                .slice(0, 1)
+              if (formulaQuery && matchedSegments.length <= 0) {
+                matchedSegments = rankedSegments
+                  .filter((row) => row.score >= 0.42)
+                  .slice(0, 1)
+              }
+              const out: LocateCandidate[] = []
+              const seen = new Set<string>()
+              for (const row of matchedSegments) {
+                const segment = row.segment
+                const evidenceIds = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
+                for (const blockIdRaw of evidenceIds.slice(0, formulaQuery ? 2 : 1)) {
+                  const blockId = String(blockIdRaw || '').trim()
+                  if (!blockId) continue
+                  const block = provenanceBlockMap[blockId]
+                  if (!block) continue
+                  const blockKind = String(block.kind || '').trim().toLowerCase()
+                  if (formulaQuery && blockKind && blockKind !== 'equation') continue
+                  if (!formulaQuery && blockKind === 'equation' && evidenceIds.length > 1) continue
+                  const blockText = String(block.text || '').trim()
+                  if (quoteSpans.length > 0) {
+                    const qBlock = quoteMatchStats(quoteSpans, blockText, segment.text || '', block.heading_path || '')
+                    if (qBlock.hits <= 0 && qBlock.score < 0.85) continue
+                  }
+                  const key0 = `${provenanceSourcePath}::${blockId}`
+                  if (seen.has(key0)) continue
+                  seen.add(key0)
+                  const segmentFocus = String(segment.text || '').trim()
+                  const blockFocus = blockText
+                  const focusSnippet = (formulaQuery ? (blockFocus || segmentFocus) : (segmentFocus || blockFocus))
+                  if (!focusSnippet) continue
+                  out.push({
+                    sourcePath: provenanceSourcePath,
+                    sourceName: provenanceSourceName || locateSourceName || provenanceSourcePath.split(/[\\/]/).pop() || 'paper',
+                    headingPath: String(block.heading_path || '').trim(),
+                    focusSnippet,
+                    matchText: [String(block.heading_path || '').trim(), String(block.text || segment.text || '').trim()].filter(Boolean).join('\n'),
+                    sourceType: 'guide',
+                    blockId,
+                    anchorId: String(block.anchor_id || '').trim() || undefined,
+                    anchorKind: String(block.kind || '').trim().toLowerCase() || undefined,
+                    anchorNumber: Number(block.number || 0) > 0 ? Math.floor(Number(block.number || 0)) : undefined,
+                  })
+                  if (out.length >= Math.max(1, limit)) return out
+                }
+              }
+              return out
+            }
             const locateCandidates = (() => {
               if (guideLocateCandidates.length > 0) return [...guideLocateCandidates, ...refsScopedCandidates]
               if (refsScopedCandidates.length > 0) return refsScopedCandidates
+              if (refsLocateCandidatesAll.length > 0) return refsLocateCandidatesAll
               if (guideSourcePath) return guideDocCandidates
-              return refsLocateCandidatesAll
+              return []
             })()
-            const resolveCache = new Map<string, LocateCandidate | null>()
+            const resolveCache = new Map<string, LocateCandidate[]>()
             const usedCount = new Map<string, number>()
-            const resolveLocateCandidate = (snippet: string) => {
+            const resolveLocateCandidates = (snippet: string, limit = 4) => {
               const key = String(snippet || '').trim()
-              if (!key) return null
-              if (resolveCache.has(key)) return resolveCache.get(key) || null
+              if (!key) return []
+              if (resolveCache.has(key)) return (resolveCache.get(key) || []).slice(0, Math.max(1, limit))
+              const formulaQuery = hasFormulaSignal(key)
+              const guideOnly = locateCandidates.filter((item) => item.sourceType === 'guide')
+              const strictDirectMode = hasDirectProvenance && !formulaQuery && guideOnly.length > 0
+              const provenancePicked = resolveProvenanceLocateCandidates(key, limit)
+              if (provenancePicked.length > 0) {
+                const picked = formulaQuery
+                  ? (() => {
+                    const eqProv = provenancePicked.filter((cand) => isEquationLocateCandidate(cand))
+                    return eqProv.length > 0 ? eqProv : provenancePicked
+                  })()
+                  : provenancePicked
+                resolveCache.set(key, picked)
+                return picked.slice(0, Math.max(1, limit))
+              }
+              if (strictProvenanceLocate && hasStructuredProvenance) {
+                // Paper-guide mode should not fall back to fuzzy locate if this
+                // message already has structured provenance but no direct evidence.
+                resolveCache.set(key, [])
+                return []
+              }
+              const quoteSpans = formulaQuery ? [] : extractQuotedSpans(key, 12)
+              if (!formulaQuery && quoteSpans.length > 0) {
+                const quotePool = guideOnly.length > 0 ? guideOnly : locateCandidates
+                const quoteRank = quotePool
+                  .map((cand) => {
+                    const q = quoteMatchStats(quoteSpans, cand.matchText, cand.focusSnippet, cand.headingPath)
+                    let score = q.score + (0.35 * scoreLocateCandidate(key, cand))
+                    if (q.hits > 0) score += 0.35
+                    if (cand.sourceType === 'guide') score += 0.08
+                    if (cand.anchorId || cand.blockId) score += 0.1
+                    return { cand, score, hits: q.hits }
+                  })
+                  .sort((a, b) => b.score - a.score)
+                const bestQuote = quoteRank[0]
+                if (bestQuote && bestQuote.hits > 0 && bestQuote.score >= 1.05) {
+                  resolveCache.set(key, [bestQuote.cand])
+                  return [bestQuote.cand]
+                }
+              }
 
               const rankIn = (cands: LocateCandidate[]) => {
-                let best: LocateCandidate | null = null
-                let bestScore = 0
+                const scored: Array<{ cand: LocateCandidate; score: number }> = []
                 for (const cand of cands) {
                   const base = scoreLocateCandidate(key, cand)
-                  const candKey = `${cand.sourcePath}::${cand.headingPath}::${cand.focusSnippet.slice(0, 96)}`
+                  const candKey = `${cand.sourcePath}::${cand.anchorId || ''}::${cand.headingPath}::${cand.focusSnippet.slice(0, 96)}`
                   const penalty = 0.03 * Number(usedCount.get(candKey) || 0)
                   const score = base - penalty
-                  if (score > bestScore) {
-                    best = cand
-                    bestScore = score
-                  }
+                  scored.push({ cand, score })
                 }
-                return { best, bestScore }
+                scored.sort((a, b) => b.score - a.score)
+                return scored
               }
 
-              let picked: LocateCandidate | null = null
-              const guideOnly = locateCandidates.filter((item) => item.sourceType === 'guide')
+              const picked: LocateCandidate[] = []
+              const pickedKeySet = new Set<string>()
+              const pickedHeadingSet = new Set<string>()
+              const addPicked = (cand: LocateCandidate, preferNewHeading = false) => {
+                const candKey = `${cand.sourcePath}::${cand.anchorId || ''}::${cand.headingPath}::${cand.focusSnippet.slice(0, 96)}`
+                if (pickedKeySet.has(candKey)) return false
+                const headingRaw = String(cand.headingPath || '').trim()
+                const headingKey = headingRaw
+                  ? normalizeLocateText(headingRaw)
+                  : normalizeLocateText(String(cand.focusSnippet || '').slice(0, 56))
+                if (preferNewHeading && headingKey && pickedHeadingSet.has(headingKey)) return false
+                picked.push(cand)
+                pickedKeySet.add(candKey)
+                if (headingKey) pickedHeadingSet.add(headingKey)
+                return true
+              }
+              const ingestRank = (
+                rankRows: Array<{ cand: LocateCandidate; score: number }>,
+                floor: number,
+                preferNewHeading: boolean,
+              ) => {
+                for (const row of rankRows) {
+                  if (row.score < floor) break
+                  addPicked(row.cand, preferNewHeading)
+                  if (picked.length >= limit) break
+                }
+              }
+
+              if (hasDirectProvenance && formulaQuery) {
+                const eqNums = extractEquationNumbersFromText(key)
+                const eqGuide = guideOnly.filter((cand) => isEquationLocateCandidate(cand))
+                if (eqGuide.length > 0) {
+                  let bestEq: LocateCandidate | null = null
+                  let bestEqScore = -1
+                  for (const cand of eqGuide) {
+                    let s = scoreLocateCandidate(key, cand)
+                    if (eqNums.length > 0 && Number(cand.anchorNumber || 0) > 0 && eqNums.includes(Math.floor(Number(cand.anchorNumber || 0)))) {
+                      s += 0.45
+                    }
+                    if (cand.anchorId) s += 0.2
+                    if (s > bestEqScore) {
+                      bestEq = cand
+                      bestEqScore = s
+                    }
+                  }
+                  if (bestEq && bestEqScore >= 0.58) {
+                    resolveCache.set(key, [bestEq])
+                    return [bestEq]
+                  }
+                }
+              }
               if (guideOnly.length > 0) {
                 const guideRank = rankIn(guideOnly)
-                if (guideRank.best && guideRank.bestScore >= 0.11) {
-                  picked = guideRank.best
+                const guideFloor = strictDirectMode
+                  ? 0.34
+                  : (hasFormulaSignal(key) ? 0.32 : 0.2)
+                ingestRank(guideRank, guideFloor, true)
+                if (picked.length < limit) ingestRank(guideRank, guideFloor, false)
+              }
+              if (picked.length < limit) {
+                const strictPool = strictDirectMode
+                  ? locateCandidates.filter((item) => String(item.sourcePath || '').trim() === provenanceSourcePath)
+                  : []
+                const rankBase = (strictDirectMode && strictPool.length > 0) ? strictPool : locateCandidates
+                const rankAll = rankIn(rankBase)
+                const allFloor = strictDirectMode
+                  ? (hasFormulaSignal(key) ? 0.34 : 0.24)
+                  : (hasFormulaSignal(key) ? 0.3 : 0.2)
+                ingestRank(rankAll, allFloor, true)
+                if (picked.length < limit) ingestRank(rankAll, allFloor, false)
+                if (picked.length <= 0 && rankAll.length > 0) {
+                  const best = rankAll[0]
+                  const preferAnchor = Boolean(best?.cand?.anchorId)
+                  const bestFloor = preferAnchor
+                    ? (hasFormulaSignal(key) ? 0.3 : 0.24)
+                    : (hasFormulaSignal(key) ? 0.38 : 0.3)
+                  if ((best?.score || 0) >= bestFloor) {
+                    addPicked(best.cand, false)
+                  }
                 }
               }
-              if (!picked) {
-                const rankAll = rankIn(locateCandidates)
-                if (rankAll.best && rankAll.bestScore >= 0.12) {
-                  picked = rankAll.best
+              if (picked.length <= 0 && hasFormulaSignal(key) && guideOnly.length > 0) {
+                const eqNums = extractEquationNumbersFromText(key)
+                const eqCandidates = guideOnly.filter((cand) => isEquationLocateCandidate(cand))
+                if (eqCandidates.length > 0) {
+                  const preferByNum = eqNums.length > 0
+                    ? eqCandidates.filter((cand) => {
+                      const n = Number(cand.anchorNumber || 0)
+                      return Number.isFinite(n) && n > 0 && eqNums.includes(Math.floor(n))
+                    })
+                    : []
+                  const pool = preferByNum.length > 0 ? preferByNum : eqCandidates
+                  let bestEq: LocateCandidate | null = null
+                  let bestEqScore = -1
+                  for (const cand of pool) {
+                    let s = scoreLocateCandidate(key, cand)
+                    if (eqNums.length > 0 && Number(cand.anchorNumber || 0) > 0) s += 0.4
+                    if (cand.anchorId) s += 0.2
+                    if (s > bestEqScore) {
+                      bestEq = cand
+                      bestEqScore = s
+                    }
+                  }
+                  if (bestEq && bestEqScore >= 0.34) addPicked(bestEq, false)
                 }
               }
-              if (!picked) {
-                picked = pickLocateCandidate(key, locateCandidates)
+              const unique: LocateCandidate[] = []
+              const seen = new Set<string>()
+              for (const cand of picked) {
+                const candKey = `${cand.sourcePath}::${cand.anchorId || ''}::${cand.headingPath}::${cand.focusSnippet.slice(0, 96)}`
+                if (seen.has(candKey)) continue
+                seen.add(candKey)
+                unique.push(cand)
+                if (unique.length >= limit) break
               }
-              const finalPick = picked || null
-              if (finalPick) {
-                const pickKey = `${finalPick.sourcePath}::${finalPick.headingPath}::${finalPick.focusSnippet.slice(0, 96)}`
+              if (unique.length <= 0 && guideOnly.length > 0) {
+                const relaxed = rankIn(guideOnly)
+                const best = relaxed[0]
+                if (best && (best.score || 0) >= 0.08) {
+                  unique.push(best.cand)
+                }
+              }
+              const first = unique[0]
+              if (first) {
+                const pickKey = `${first.sourcePath}::${first.anchorId || ''}::${first.headingPath}::${first.focusSnippet.slice(0, 96)}`
                 usedCount.set(pickKey, Number(usedCount.get(pickKey) || 0) + 1)
               }
-              resolveCache.set(key, finalPick || null)
-              return finalPick
+              resolveCache.set(key, unique)
+              return unique.slice(0, Math.max(1, limit))
+            }
+            const locateButtonShownKeys = new Set<string>()
+            const locateButtonCap = 5
+            const locateCandidateKey = (cand: LocateCandidate | null) => {
+              if (!cand) return ''
+              if (cand.blockId) return `${cand.sourcePath}::block::${cand.blockId}`
+              if (cand.anchorId) return `${cand.sourcePath}::anchor::${cand.anchorId}`
+              const headingKey = normalizeLocateText(String(cand.headingPath || ''))
+              const focusKey = normalizeLocateText(String(cand.focusSnippet || '')).slice(0, 64)
+              return `${cand.sourcePath}::${headingKey}::${focusKey}`
+            }
+            const openReaderByCandidates = (
+              pickedList: LocateCandidate[],
+              snippet: string,
+              opts?: { strictLocate?: boolean; highlightSnippet?: string },
+            ) => {
+              if (!onOpenReader) return
+              const picked = pickedList[0] || null
+              if (!picked) return
+              const highlightSnippet = String(opts?.highlightSnippet || snippet).trim()
+              onOpenReader({
+                sourcePath: picked.sourcePath,
+                sourceName: picked.sourceName,
+                headingPath: picked.headingPath,
+                snippet: picked.focusSnippet || snippet,
+                highlightSnippet: highlightSnippet || picked.focusSnippet || snippet,
+                blockId: picked.blockId,
+                anchorId: picked.anchorId,
+                strictLocate: Boolean(opts?.strictLocate),
+                alternatives: pickedList.map((item) => ({
+                  headingPath: item.headingPath,
+                  snippet: item.focusSnippet || snippet,
+                  highlightSnippet: highlightSnippet || item.focusSnippet || snippet,
+                  blockId: item.blockId,
+                  anchorId: item.anchorId,
+                })),
+                initialAltIndex: 0,
+              })
+            }
+            const openReaderByStructuredEntry = (entry: ProvenanceLocateEntry, snippet: string) => {
+              const queryRaw = stripProvenanceNoise(
+                stripMarkdownInline(String(entry.evidenceQuote || snippet || entry.segmentText || entry.label || '')),
+              ).trim()
+              const ranked = (entry.alternatives || []).filter(Boolean)
+              if (ranked.length <= 0) return
+              openReaderByCandidates(ranked, queryRaw || snippet, {
+                strictLocate: true,
+                highlightSnippet: queryRaw || snippet,
+              })
             }
             const bubbleClass = isUser
               ? (isImageOnlyUserMessage ? 'w-fit max-w-[22rem]' : 'w-fit max-w-[88%]')
@@ -1826,40 +3232,80 @@ export function MessageList({
                           {message.notice}
                         </div>
                       ) : null}
+                      {provenanceModeLabel ? (
+                        <div className="mb-2">
+                          <Text type="secondary" className="text-xs">{provenanceModeLabel}</Text>
+                        </div>
+                      ) : null}
                       <MarkdownRenderer
                         content={bodyContent}
                         citeDetails={citeDetails}
                         onCitationClick={openCitation}
+                        canLocateSnippet={(snippet, meta) => {
+                          if (strictStructuredLocateOnly) {
+                            if (!strictStructuredInlineLocate) return false
+                            const slot = resolveStructuredInlineSlot(snippet, meta)
+                            const entry = slot?.entry || null
+                            if (!entry) return false
+                            return allowedStructuredRenderOrders.has(Number(slot?.order || 0))
+                          }
+                          if (locateButtonShownKeys.size >= locateButtonCap) return false
+                          const raw = String(snippet || '').trim()
+                          const formulaSnippet = hasFormulaSignal(raw)
+                          if (!formulaSnippet && raw.length < 18) return false
+                          const pickedList = resolveLocateCandidates(snippet, 1)
+                          const picked = formulaSnippet
+                            ? (pickedList.find((item) => isEquationLocateCandidate(item)) || pickedList[0] || null)
+                            : (pickedList[0] || null)
+                          if (!picked) return false
+                          const keyBase = locateCandidateKey(picked)
+                          const key = keyBase || normalizeLocateText(raw).slice(0, 72)
+                          if (!key) return false
+                          if (locateButtonShownKeys.has(key)) return false
+                          locateButtonShownKeys.add(key)
+                          return true
+                        }}
                         onLocateSnippet={onOpenReader
-                          ? (snippet) => {
-                            const picked = resolveLocateCandidate(snippet)
-                            if (!picked) {
+                          ? (snippet, meta) => {
+                            if (strictStructuredLocateOnly) {
+                              if (!strictStructuredInlineLocate) return
+                              const slot = resolveStructuredInlineSlot(snippet, meta)
+                              const entry = slot?.entry || null
+                              if (!entry) return
+                              if (!allowedStructuredRenderOrders.has(Number(slot?.order || 0))) return
+                              openReaderByStructuredEntry(entry, snippet)
                               return
                             }
-                            onOpenReader({
-                              sourcePath: picked.sourcePath,
-                              sourceName: picked.sourceName,
-                              headingPath: picked.headingPath,
-                              snippet: picked.focusSnippet || snippet,
-                            })
+                            const raw = String(snippet || '').trim()
+                            const formulaSnippet = hasFormulaSignal(raw)
+                            const pickedListRaw = resolveLocateCandidates(snippet, 6)
+                            const pickedList = formulaSnippet
+                              ? [
+                                ...pickedListRaw.filter((item) => isEquationLocateCandidate(item)),
+                                ...pickedListRaw.filter((item) => !isEquationLocateCandidate(item)),
+                              ]
+                              : pickedListRaw
+                            if (pickedList.length <= 0) return
+                            openReaderByCandidates(pickedList, snippet)
                           }
                           : undefined}
-                        locateLabelResolver={(snippet) => {
-                          const picked = resolveLocateCandidate(snippet)
-                          if (!picked) {
-                            const fallbackName = shortHeadingLabel(locateSourceName || locateSourcePath, 16)
-                            return fallbackName ? `依据 · ${fallbackName}` : '定位原文'
-                          }
-                          const hint = shortHeadingLabel(picked.headingPath || picked.sourceName, 16)
-                          return hint ? `依据 · ${hint}` : '定位原文'
-                        }}
                         locateTitleResolver={(snippet) => {
-                          const picked = resolveLocateCandidate(snippet)
-                          if (!picked) return ''
+                          if (strictStructuredLocateOnly) {
+                            const slot = resolveStructuredInlineSlot(snippet)
+                            const entry = slot?.entry || null
+                            if (entry) {
+                              const heading = String(entry.primary.headingPath || '').trim()
+                              return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e'
+                            }
+                          }
+                          const formulaSnippet = hasFormulaSignal(String(snippet || ''))
+                          const pickedList = resolveLocateCandidates(snippet, formulaSnippet ? 2 : 1)
+                          const picked = formulaSnippet
+                            ? (pickedList.find((item) => isEquationLocateCandidate(item)) || pickedList[0] || null)
+                            : (pickedList[0] || null)
+                          if (!picked) return '\u5b9a\u4f4d\u5230\u539f\u6587'
                           const heading = String(picked.headingPath || '').trim()
-                          if (heading) return `依据段落：${heading}`
-                          const name = String(picked.sourceName || '').trim()
-                          return name ? `依据来源：${name}` : '定位原文'
+                          return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587'
                         }}
                       />
                       <CopyBar
@@ -1970,7 +3416,4 @@ export function MessageList({
     </>
   )
 }
-
-
-
 
