@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests._paper_guide_fixtures import build_scinerf_like_fixture
+
 
 def test_resolve_paper_guide_md_path_accepts_db_dir_as_md_root(tmp_path: Path):
     from kb import task_runtime
@@ -1094,30 +1096,13 @@ def test_gen_store_answer_provenance_async_enables_llm_rerank(monkeypatch):
     assert task_in.get("llm_rerank") is False
 
 
-def test_apply_provenance_required_coverage_contract_rebinds_excerpted_quote_to_true_source_block():
+def test_apply_provenance_required_coverage_contract_rebinds_excerpted_quote_to_true_source_block(tmp_path: Path):
     from kb import task_runtime
 
-    repo_root = Path(__file__).resolve().parents[2]
-    md_main = (
-        repo_root
-        / "db"
-        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
-        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
-    )
-    blocks = task_runtime.load_source_blocks(md_main)
-    block_lookup = {
-        str(block.get("block_id") or "").strip(): dict(block)
-        for block in blocks
-        if isinstance(block, dict) and str(block.get("block_id") or "").strip()
-    }
-    conclusion_block = next(
-        block for block in blocks
-        if "scinerf exploits neural radiance fields as its underlying scene representation" in str(block.get("text") or "").lower()
-    )
-    wrong_method_block = next(
-        block for block in blocks
-        if "render $x_i$ to synthesize the compressed image $y$" in str(block.get("text") or "").lower()
-    )
+    fixture = build_scinerf_like_fixture(tmp_path)
+    block_lookup = fixture["block_lookup"]
+    conclusion_block = fixture["conclusion_block"]
+    wrong_method_block = fixture["wrong_method_block"]
 
     segments = task_runtime._apply_provenance_required_coverage_contract(
         [
@@ -1161,26 +1146,12 @@ def test_apply_provenance_required_coverage_contract_rebinds_excerpted_quote_to_
     assert "scinerf exploits neural radiance fields as its underlying scene representation" in str(seg.get("anchor_text") or "").lower()
 
 
-def test_apply_provenance_required_coverage_contract_hides_non_exact_display_formula_summary():
+def test_apply_provenance_required_coverage_contract_hides_non_exact_display_formula_summary(tmp_path: Path):
     from kb import task_runtime
 
-    repo_root = Path(__file__).resolve().parents[2]
-    md_main = (
-        repo_root
-        / "db"
-        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
-        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
-    )
-    blocks = task_runtime.load_source_blocks(md_main)
-    block_lookup = {
-        str(block.get("block_id") or "").strip(): dict(block)
-        for block in blocks
-        if isinstance(block, dict) and str(block.get("block_id") or "").strip()
-    }
-    eq3_block = next(
-        block for block in blocks
-        if str(block.get("kind") or "") == "equation" and int(block.get("number") or 0) == 3
-    )
+    fixture = build_scinerf_like_fixture(tmp_path)
+    block_lookup = fixture["block_lookup"]
+    eq3_block = fixture["eq3_block"]
 
     generated_segment = {
         "segment_id": "seg_006",

@@ -5,6 +5,7 @@ from api.chat_render import (
     _normalize_equation_source_notes,
     enrich_messages_with_reference_render,
 )
+from tests._paper_guide_fixtures import build_scinerf_like_fixture
 
 
 def test_equation_source_note_does_not_reference_removed_refs_ui():
@@ -201,29 +202,15 @@ def test_structured_cite_fallback_recovers_links_when_primary_strips_tokens(monk
     assert len(msg.get("cite_details") or []) == 1
 
 
-def test_enrich_provenance_segments_for_display_loads_md_blocks_for_quote_rebind():
-    from kb import task_runtime
-
-    repo_root = Path(__file__).resolve().parents[2]
-    md_main = (
-        repo_root
-        / "db"
-        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
-        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
-    )
-    blocks = task_runtime.load_source_blocks(md_main)
-    wrong_method_block = next(
-        block for block in blocks
-        if "render $x_i$ to synthesize the compressed image $y$" in str(block.get("text") or "").lower()
-    )
-    conclusion_block = next(
-        block for block in blocks
-        if "scinerf exploits neural radiance fields as its underlying scene representation" in str(block.get("text") or "").lower()
-    )
+def test_enrich_provenance_segments_for_display_loads_md_blocks_for_quote_rebind(tmp_path: Path):
+    fixture = build_scinerf_like_fixture(tmp_path)
+    md_main = fixture["md_main"]
+    wrong_method_block = fixture["wrong_method_block"]
+    conclusion_block = fixture["conclusion_block"]
 
     provenance = {
         "md_path": str(md_main),
-        "source_path": str(repo_root / "dummy.pdf"),
+        "source_path": str(tmp_path / "dummy.pdf"),
         "source_name": "SCINeRF.pdf",
         "block_map": {
             str(wrong_method_block.get("block_id") or ""): dict(wrong_method_block),
