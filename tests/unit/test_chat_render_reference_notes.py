@@ -1,9 +1,15 @@
-from api.chat_render import enrich_messages_with_reference_render
+from pathlib import Path
+
+from api.chat_render import (
+    _enrich_provenance_segments_for_display,
+    _normalize_equation_source_notes,
+    enrich_messages_with_reference_render,
+)
 
 
 def test_equation_source_note_does_not_reference_removed_refs_ui():
     messages = [
-        {"id": 1, "role": "user", "content": "NatPhoton 公式8是什么"},
+        {"id": 1, "role": "user", "content": "NatPhoton 公式 8 是什么？"},
         {
             "id": 2,
             "role": "assistant",
@@ -27,13 +33,14 @@ def test_equation_source_note_does_not_reference_removed_refs_ui():
     body = str(rendered[-1].get("rendered_body") or "")
 
     assert "Open/Page" not in body
-    assert "参考定位" not in body
+    assert "鍙傝€冨畾浣" not in body
     assert "库内文献" in body
+    assert "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf" in body
 
 
 def test_equation_source_note_is_not_added_without_hits():
     messages = [
-        {"id": 1, "role": "user", "content": "NatPhoton 公式8是什么"},
+        {"id": 1, "role": "user", "content": "NatPhoton 公式 8 是什么？"},
         {
             "id": 2,
             "role": "assistant",
@@ -47,9 +54,22 @@ def test_equation_source_note_is_not_added_without_hits():
     assert "库内文献" not in body
 
 
+def test_normalize_equation_source_notes_strips_mojibake_prefix_from_pdf_label():
+    raw = (
+        "*（式(1) 对应命中的库内文献："
+        "`1) 鏉ヨ嚜鍙傝€冨畾浣?#1锛歚CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*"
+    )
+
+    out = _normalize_equation_source_notes(raw)
+
+    assert "鍙傝€冨畾浣" not in out
+    assert "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf" in out
+    assert "`1) " not in out
+
+
 def test_copy_outputs_and_rendered_content_are_consistent():
     messages = [
-        {"id": 1, "role": "user", "content": "请解释这个结论"},
+        {"id": 1, "role": "user", "content": "请解释这个结论？"},
         {
             "id": 2,
             "role": "assistant",
@@ -84,11 +104,11 @@ def test_rendered_body_falls_back_to_content_when_no_notice():
 
 def test_sid_markers_are_removed_from_rendered_outputs():
     messages = [
-        {"id": 1, "role": "user", "content": "解释单像素成像"},
+        {"id": 1, "role": "user", "content": "解释单像素成像？"},
         {
             "id": 2,
             "role": "assistant",
-            "content": "[SID:s50f9c165] 这是内部标签，不应该展示给用户。",
+            "content": "[SID:s50f9c165] 这是内部标记，不应该展示给用户。",
         },
     ]
 
@@ -179,3 +199,72 @@ def test_structured_cite_fallback_recovers_links_when_primary_strips_tokens(monk
     msg = rendered[-1]
     assert "[1](#kb-cite-demo-1)" in str(msg.get("rendered_body") or "")
     assert len(msg.get("cite_details") or []) == 1
+
+
+def test_enrich_provenance_segments_for_display_loads_md_blocks_for_quote_rebind():
+    from kb import task_runtime
+
+    repo_root = Path(__file__).resolve().parents[2]
+    md_main = (
+        repo_root
+        / "db"
+        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
+        / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+    )
+    blocks = task_runtime.load_source_blocks(md_main)
+    wrong_method_block = next(
+        block for block in blocks
+        if "render $x_i$ to synthesize the compressed image $y$" in str(block.get("text") or "").lower()
+    )
+    conclusion_block = next(
+        block for block in blocks
+        if "scinerf exploits neural radiance fields as its underlying scene representation" in str(block.get("text") or "").lower()
+    )
+
+    provenance = {
+        "md_path": str(md_main),
+        "source_path": str(repo_root / "dummy.pdf"),
+        "source_name": "SCINeRF.pdf",
+        "block_map": {
+            str(wrong_method_block.get("block_id") or ""): dict(wrong_method_block),
+        },
+        "segments": [
+            {
+                "segment_id": "seg_004",
+                "segment_index": 4,
+                "kind": "blockquote",
+                "segment_type": "evidence",
+                "text": (
+                    "SCINeRF exploits neural radiance fields as its underlying scene representation [...] "
+                    "Physical image formation process of an SCI image is exploited to formulate the training objective "
+                    "for jointly NeRF training and camera poses optimization."
+                ),
+                "raw_markdown": (
+                    '*"SCINeRF exploits neural radiance fields as its underlying scene representation [...] '
+                    "Physical image formation process of an SCI image is exploited to formulate the training objective "
+                    'for jointly NeRF training and camera poses optimization."*'
+                ),
+                "evidence_mode": "direct",
+                "claim_type": "blockquote_claim",
+                "must_locate": True,
+                "anchor_kind": "blockquote",
+                "primary_block_id": str(wrong_method_block.get("block_id") or ""),
+                "primary_anchor_id": str(wrong_method_block.get("anchor_id") or ""),
+                "primary_heading_path": str(wrong_method_block.get("heading_path") or ""),
+                "evidence_block_ids": [str(wrong_method_block.get("block_id") or "")],
+                "support_block_ids": [],
+                "anchor_text": str(wrong_method_block.get("text") or ""),
+                "evidence_quote": str(wrong_method_block.get("text") or ""),
+            }
+        ],
+    }
+
+    enriched = _enrich_provenance_segments_for_display(provenance, hits=[], anchor_ns="conv:test")
+
+    assert isinstance(enriched, dict)
+    segments = enriched.get("segments") or []
+    assert len(segments) == 1
+    seg = segments[0]
+    assert str(seg.get("primary_block_id") or "") == str(conclusion_block.get("block_id") or "")
+    block_map = enriched.get("block_map") or {}
+    assert str(conclusion_block.get("block_id") or "") in block_map

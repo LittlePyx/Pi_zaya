@@ -55,8 +55,13 @@ export interface MessageProvenanceSegment {
   segment_index?: number
   kind?: string
   segment_type?: string
-  claim_type?: 'quote_claim' | 'blockquote_claim' | 'formula_claim' | 'figure_claim' | 'critical_fact_claim' | 'shell_sentence' | string
+  claim_type?: 'quote_claim' | 'blockquote_claim' | 'formula_claim' | 'equation_explanation_claim' | 'figure_claim' | 'critical_fact_claim' | 'shell_sentence' | string
   must_locate?: boolean
+  locate_policy?: 'required' | 'optional' | 'hidden' | string
+  locate_surface_policy?: 'primary' | 'secondary' | 'hidden' | string
+  claim_group_id?: string
+  claim_group_kind?: 'formula_bundle' | 'quote_bundle' | string
+  formula_origin?: 'source' | 'explanation' | 'derived' | string
   text: string
   raw_markdown?: string
   display_markdown?: string
@@ -69,6 +74,7 @@ export interface MessageProvenanceSegment {
   primary_anchor_id?: string
   primary_heading_path?: string
   support_block_ids?: string[]
+  related_block_ids?: string[]
   evidence_quote?: string
   evidence_confidence?: number
   mapping_quality?: number
@@ -76,14 +82,22 @@ export interface MessageProvenanceSegment {
   anchor_kind?: 'quote' | 'blockquote' | 'equation' | 'figure' | 'sentence' | string
   anchor_text?: string
   equation_number?: number
+  strict_identity_missing_reasons?: string[]
 }
 
 export interface MessageProvenance {
   version?: number
+  provenance_schema_version?: number
   status?: string
   mapping_mode?: 'fast' | 'llm_refined' | string
   llm_rerank_enabled?: boolean
   llm_rerank_calls?: number
+  strict_identity_ready?: boolean
+  must_locate_candidate_count?: number
+  must_locate_count?: number
+  strict_identity_count?: number
+  identity_missing_reasons?: Record<string, number>
+  identity_missing_segments?: Array<Record<string, unknown>>
   source_path?: string
   source_name?: string
   md_path?: string

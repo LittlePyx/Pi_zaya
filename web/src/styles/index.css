@@ -1318,7 +1318,40 @@ body,
   border-radius: 8px;
   outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  transition: background-color 0.2s ease, outline-color 0.2s ease;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+  transition: background-color 0.2s ease, outline-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.kb-reader-content .kb-reader-focus-secondary {
+  border-radius: 8px;
+  outline: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.kb-reader-content [data-kb-anchor-kind="figure"].kb-reader-focus {
+  display: inline-block;
+  padding: 8px;
+  border-radius: 16px;
+}
+
+.kb-reader-content [data-kb-anchor-kind="figure"].kb-reader-focus-secondary {
+  display: inline-block;
+  padding: 8px;
+  border-radius: 16px;
+}
+
+.kb-reader-content [data-kb-anchor-kind="figure"].kb-reader-focus .kb-md-image-link {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+.kb-reader-content .kb-reader-inline-hit {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: inherit;
+  padding: 0 2px;
 }
 
 .kb-markdown hr {

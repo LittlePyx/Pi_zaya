@@ -139,6 +139,76 @@ def test_group_hits_by_doc_for_refs_supports_latex_tagged_equation_anchor(tmp_pa
     assert meta.get("anchor_target_number") == 8
 
 
+def test_group_hits_by_doc_for_refs_does_not_mistake_reference_index_for_equation_anchor(tmp_path: Path, monkeypatch):
+    md = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                "",
+                "## 3. Method",
+                "### 3.1. Background on NeRF",
+                "The whole process can be formally defined via the following equation:",
+                "$$",
+                r"C(\mathbf{r}) = \int_{t_n}^{t_f} T(t)\sigma(\mathbf{r}(t))\mathbf{c}(\mathbf{r}(t),\mathbf{d})dt, \tag{1}",
+                "$$",
+                "where t_n and t_f are near and far bounds for volumetric rendering respectively.",
+                "",
+                "## References",
+                "[1] Ben Mildenhall et al. NeRF: Representing scenes as neural radiance fields for view synthesis.",
+                "[5] Yoonwoo Jeong et al. Self-calibrating neural radiance fields. In Proceedings of ICCV, 2021.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(retrieval_engine, "_is_temp_source_path", lambda _src: False)
+
+    hits_raw = [
+        {
+            "score": 8.1,
+            "id": "h1",
+            "text": "3.1. Background on NeRF",
+            "meta": {
+                "source_path": str(md),
+                "heading_path": "3. Method / 3.1. Background on NeRF",
+            },
+        },
+        {
+            "score": 7.4,
+            "id": "h2",
+            "text": "[1] Ben Mildenhall et al. NeRF: Representing scenes as neural radiance fields for view synthesis.",
+            "meta": {
+                "source_path": str(md),
+                "heading_path": "References",
+            },
+        },
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits_raw,
+        prompt_text=f"{md} SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image SCINeRF 的 NeRF 体渲染公式是哪条？请解释公式(1)以及后面的 where 句",
+        top_k_docs=3,
+        deep_query=f"{md} SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image SCINeRF 的 NeRF 体渲染公式是哪条？请解释公式(1)以及后面的 where 句",
+        deep_read=True,
+        llm_rerank=False,
+        settings=None,
+    )
+
+    assert len(docs) == 1
+    doc = docs[0]
+    text = str(doc.get("text") or "")
+    meta = doc.get("meta", {}) or {}
+    assert "\\tag{1}" in text
+    assert "where t_n and t_f" in text
+    assert "[1] Ben Mildenhall" not in text
+    assert meta.get("anchor_target_kind") == "equation"
+    assert meta.get("anchor_target_number") == 1
+    show_snips = [str(x or "") for x in (meta.get("ref_show_snippets") or [])]
+    assert show_snips
+    assert any("\\tag{1}" in item for item in show_snips)
+    assert all("[1] Ben Mildenhall" not in item for item in show_snips)
+
+
 def test_postprocess_refs_pack_overrides_conflicting_why_when_anchor_hit():
     docs = [
         {

@@ -1,4 +1,4 @@
-﻿import { Children, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+﻿import { Children, cloneElement, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -69,7 +69,13 @@ interface LocateRenderMeta {
   kind: 'paragraph' | 'list_item' | 'blockquote' | 'equation' | 'figure'
   order: number
 }
-
+type InlineLocateTokenKind = 'quote' | 'figure_ref'
+interface InlineLocateToken {
+  start: number
+  end: number
+  text: string
+  kind: InlineLocateTokenKind
+}
 interface ReaderAnchorToken {
   anchorId: string
   blockId?: string
@@ -256,6 +262,17 @@ function isDisplayMathClass(className: string): boolean {
   return false
 }
 
+function isInlineMathClass(className: string): boolean {
+  const cls = String(className || '').trim()
+  if (!cls || isDisplayMathClass(cls)) return false
+  if (/\bkatex-html\b/.test(cls)) return false
+  if (/\bkatex-mathml\b/.test(cls)) return false
+  if (/\bkatex\b/.test(cls)) return true
+  if (/\bmath-inline\b/.test(cls)) return true
+  if (/\bmath\b/.test(cls) && /\binline\b/.test(cls)) return true
+  return false
+}
+
 function toLocateSnippet(node: ReactNode): string {
   let text = plainText(node).replace(/\s+/g, ' ').trim()
   if (!text) {
@@ -281,6 +298,57 @@ function toLocateSnippet(node: ReactNode): string {
     }
   }
   return `${text.slice(0, 260).trimEnd()}...`
+}
+
+function preferredBlockquoteLocateSnippet(node: ReactNode): string {
+  const raw = plainText(node).replace(/\s+/g, ' ').trim() || rawNodeText(node).replace(/\s+/g, ' ').trim()
+  if (!raw) return ''
+  const quoteTokens = collectInlineLocateTokens(raw)
+    .filter((token) => token.kind === 'quote')
+    .sort((a, b) => b.text.length - a.text.length)
+  const preferred = String(quoteTokens[0]?.text || '').trim()
+  if (preferred.length >= 18) return preferred
+  return toLocateSnippet(node)
+}
+
+function collectInlineLocateTokens(text: string): InlineLocateToken[] {
+  const src = String(text || '')
+  if (!src) return []
+  const raw: InlineLocateToken[] = []
+  const push = (start: number, end: number, text0: string, kind: InlineLocateTokenKind) => {
+    const text = String(text0 || '').replace(/\s+/g, ' ').trim()
+    if (!text) return
+    if (kind === 'quote' && text.length < 18) return
+    raw.push({ start, end, text, kind })
+  }
+  for (const m of src.matchAll(/\b(?:fig(?:ure)?\.?\s*#?\s*\d{1,4}|图\s*\d{1,4})\b/gi)) {
+    const text0 = String(m[0] || '')
+    const start0 = Number(m.index || 0)
+    push(start0, start0 + text0.length, text0, 'figure_ref')
+  }
+  for (const pattern of [
+    /["\u201C\u201D]\s*([^"\u201C\u201D]{8,360}?)\s*["\u201C\u201D]/g,
+    /[\u2018\u2019']\s*([^\u2018\u2019']{8,320}?)\s*[\u2018\u2019']/g,
+    /[\u300C\u300D\u300E\u300F\u300A\u300B]([^\u300C\u300D\u300E\u300F\u300A\u300B]{8,360}?)[\u300D\u300F\u300B]/g,
+  ]) {
+    for (const m of src.matchAll(pattern)) {
+      const full = String(m[0] || '')
+      const start0 = Number(m.index || 0)
+      push(start0, start0 + full.length, full, 'quote')
+    }
+  }
+  raw.sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start
+    return (b.end - b.start) - (a.end - a.start)
+  })
+  const out: InlineLocateToken[] = []
+  let cursor = -1
+  for (const item of raw) {
+    if (item.start < cursor) continue
+    out.push(item)
+    cursor = item.end
+  }
+  return out
 }
 
 function normalizeReaderAnchorKind(input: string): string {
@@ -531,14 +599,19 @@ function buildMarkdownComponents(
   }
 
   const renderLocateButton = (
-    children: ReactNode,
-    opts?: { force?: boolean; meta?: LocateRenderMeta },
+    children: ReactNode | string,
+    opts?: { force?: boolean; meta?: LocateRenderMeta; snippetOverride?: string },
   ) => {
     if (!onLocateSnippet) return null
     const force = Boolean(opts?.force)
     const meta = opts?.meta
-    let snippet = toLocateSnippet(children)
-    if (!snippet && force) {
+    let snippet = String(opts?.snippetOverride || '').trim()
+    if (!snippet) {
+      snippet = typeof children === 'string'
+        ? String(children || '').replace(/\s+/g, ' ').trim()
+        : toLocateSnippet(children)
+    }
+    if (!snippet && force && typeof children !== 'string') {
       const raw = rawNodeText(children).replace(/\s+/g, ' ').trim()
       if (raw) {
         snippet = raw.length <= 480 ? raw : `${raw.slice(0, 480).trimEnd()}...`
@@ -571,6 +644,94 @@ function buildMarkdownComponents(
     )
   }
 
+  const decorateInlineLocateAnchors = (
+    children: ReactNode,
+    meta: LocateRenderMeta,
+  ): { content: ReactNode; count: number } => {
+    const metaForToken = (kind: InlineLocateTokenKind): LocateRenderMeta => {
+      if (kind === 'figure_ref') {
+        return { ...meta, kind: 'figure' }
+      }
+      return meta
+    }
+    const renderStringNode = (text0: string, keyBase: string): { content: ReactNode; count: number } => {
+      const tokens = collectInlineLocateTokens(text0)
+      if (tokens.length <= 0) return { content: text0, count: 0 }
+      const parts: ReactNode[] = []
+      let last = 0
+      let count = 0
+      tokens.forEach((token, idx) => {
+        if (token.start > last) {
+          parts.push(text0.slice(last, token.start))
+        }
+        const raw = text0.slice(token.start, token.end)
+        const btn = renderLocateButton(raw, {
+          force: true,
+          meta: metaForToken(token.kind),
+          snippetOverride: token.text,
+        })
+        if (btn) {
+          parts.push(
+            <span key={`${keyBase}:${idx}:${token.start}`} className="kb-md-loc-inline">
+              {raw}
+              {btn}
+            </span>,
+          )
+          count += 1
+        } else {
+          parts.push(raw)
+        }
+        last = token.end
+      })
+      if (last < text0.length) {
+        parts.push(text0.slice(last))
+      }
+      return { content: parts, count }
+    }
+
+    const visit = (node: ReactNode, keyBase: string): { content: ReactNode; count: number } => {
+      if (node === null || node === undefined || typeof node === 'boolean') {
+        return { content: node, count: 0 }
+      }
+      if (typeof node === 'string' || typeof node === 'number') {
+        return renderStringNode(String(node), keyBase)
+      }
+      if (Array.isArray(node)) {
+        let count = 0
+        const content = node.map((item, idx) => {
+          const rendered = visit(item, `${keyBase}:${idx}`)
+          count += rendered.count
+          return rendered.content
+        })
+        return { content, count }
+      }
+      if (!isValidElement(node)) {
+        return { content: node, count: 0 }
+      }
+      const nodeType = typeof node.type === 'string' ? node.type.toLowerCase() : ''
+      const props = node.props as { children?: ReactNode; className?: string }
+      const className = String(props.className || '')
+      if (isInlineMathClass(className)) {
+        // Inline KaTeX variables create noisy duplicate entrances; keep entrances
+        // only on numbered equation refs / block formulas.
+        return { content: node, count: 0 }
+      }
+      if (['a', 'button', 'img', 'code', 'pre', 'script', 'style'].includes(nodeType)) {
+        return { content: node, count: 0 }
+      }
+      if (/\bkb-cite-chip\b/.test(className) || /\bkb-md-locate-inline-btn\b/.test(className)) {
+        return { content: node, count: 0 }
+      }
+      const rendered = visit(props.children, `${keyBase}:child`)
+      if (rendered.count <= 0) return { content: node, count: 0 }
+      return {
+        content: cloneElement(node, undefined, rendered.content),
+        count: rendered.count,
+      }
+    }
+
+    return visit(children, `loc-${meta.order}-${meta.kind}`)
+  }
   return {
     pre: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
       const { text, language } = extractCode(children)
@@ -617,6 +778,7 @@ function buildMarkdownComponents(
       if (variant === 'reader') return <blockquote {...attrs}>{children}</blockquote>
       const btn = renderLocateButton(children, {
         meta: { kind: 'blockquote', order: nextLocateRenderOrder() },
+        snippetOverride: preferredBlockquoteLocateSnippet(children),
       })
       if (!btn) return <blockquote {...attrs}>{children}</blockquote>
       return <blockquote {...attrs} className="kb-md-loc-inline">{children}{btn}</blockquote>
@@ -689,7 +851,7 @@ function buildMarkdownComponents(
         </a>
       )
     },
-    img: ({ src, alt }: { src?: string; alt?: string }) => {
+    img: ({ node, src, alt }: { node?: unknown; src?: string; alt?: string }) => {
       const resolvedSrc = String(src || '').trim()
       if (!resolvedSrc) return null
       const figureSnippet = String(alt || resolvedSrc.split('/').pop() || 'figure').trim()
@@ -699,8 +861,11 @@ function buildMarkdownComponents(
           meta: { kind: 'figure', order: nextLocateRenderOrder() },
         })
         : null
+      const attrs = variant === 'reader'
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['figure']))
+        : undefined
       return (
-        <span className={btn ? 'kb-md-loc-inline' : undefined}>
+        <span className={btn ? 'kb-md-loc-inline' : undefined} {...attrs}>
           <a href={resolvedSrc} target="_blank" rel="noreferrer" className="kb-md-image-link">
             <img
               src={resolvedSrc}
@@ -715,11 +880,13 @@ function buildMarkdownComponents(
     },
     p: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
       const attrs = variant === 'reader'
-        ? readerAnchorAttrs(pickReaderAnchor(node, ['equation', 'paragraph']))
+        ? readerAnchorAttrs(pickReaderAnchor(node, ['paragraph']))
         : undefined
-      const btn = renderLocateButton(children, {
-        meta: { kind: 'paragraph', order: nextLocateRenderOrder() },
-      })
+      const renderOrder = nextLocateRenderOrder()
+      const meta = { kind: 'paragraph' as const, order: renderOrder }
+      const inline = variant === 'chat' ? decorateInlineLocateAnchors(children, meta) : { content: children, count: 0 }
+      if (inline.count > 0) return <p {...attrs}>{inline.content}</p>
+      const btn = renderLocateButton(children, { meta })
       if (!btn) return <p {...attrs}>{children}</p>
       return <p {...attrs} className="kb-md-loc-inline">{children}{btn}</p>
     },
@@ -727,9 +894,11 @@ function buildMarkdownComponents(
       const attrs = variant === 'reader'
         ? readerAnchorAttrs(pickReaderAnchor(node, ['list_item']))
         : undefined
-      const btn = renderLocateButton(children, {
-        meta: { kind: 'list_item', order: nextLocateRenderOrder() },
-      })
+      const renderOrder = nextLocateRenderOrder()
+      const meta = { kind: 'list_item' as const, order: renderOrder }
+      const inline = variant === 'chat' ? decorateInlineLocateAnchors(children, meta) : { content: children, count: 0 }
+      if (inline.count > 0) return <li {...attrs}>{inline.content}</li>
+      const btn = renderLocateButton(children, { meta })
       if (!btn) return <li {...attrs}>{children}</li>
       return <li {...attrs} className="kb-md-loc-inline">{children}{btn}</li>
     },
@@ -737,12 +906,12 @@ function buildMarkdownComponents(
       const { node, className, children, ...rest } = props || {}
       const cls = String(className || '').trim()
       const displayMath = isDisplayMathClass(cls)
-      const attrs = variant === 'reader' && displayMath
-        ? readerAnchorAttrs(pickReaderAnchor(node, ['equation']))
-        : undefined
       if (!displayMath) return <div className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</div>
       if (variant === 'reader') {
-        return <div className={cls || undefined} {...(rest as Record<string, unknown>)} {...attrs}>{children}</div>
+        // Display equations are bound at runtime to visible .katex-display nodes.
+        // Static line-based binding is too unstable here and can mis-assign them
+        // to neighboring paragraph blocks in the browser render path.
+        return <div className={cls || undefined} data-kb-display-equation="1" {...(rest as Record<string, unknown>)}>{children}</div>
       }
       const btn = renderLocateButton(children, {
         force: true,
@@ -755,12 +924,9 @@ function buildMarkdownComponents(
       const { node, className, children, ...rest } = props || {}
       const cls = String(className || '').trim()
       const displayMath = isDisplayMathClass(cls)
-      const attrs = variant === 'reader' && displayMath
-        ? readerAnchorAttrs(pickReaderAnchor(node, ['equation']))
-        : undefined
       if (!displayMath) return <span className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</span>
       if (variant === 'reader') {
-        return <span className={cls || undefined} {...(rest as Record<string, unknown>)} {...attrs}>{children}</span>
+        return <span className={cls || undefined} data-kb-display-equation="1" {...(rest as Record<string, unknown>)}>{children}</span>
       }
       const btn = renderLocateButton(children, {
         force: true,
@@ -845,3 +1011,4 @@ export function MarkdownRenderer({
     </div>
   )
 }
+

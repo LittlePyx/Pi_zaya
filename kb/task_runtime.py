@@ -185,6 +185,55 @@ _CRITICAL_FACT_HINT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_SUMMARY_NOVELTY_HINT_RE = re.compile(
+    r"("
+    r"\b(?:first(?:\s+to)?|novel|novelty|innovation|innovative|contribution(?:s)?|"
+    r"we\s+propose|introduc(?:e|es|ed|ing)|camera\s+pose\s+stamps?|"
+    r"transformation\s+network)\b|"
+    r"(?:首次|首个|首创|创新点|创新|贡献|提出)"
+    r")",
+    re.IGNORECASE,
+)
+_SUMMARY_RESULT_HINT_RE = re.compile(
+    r"("
+    r"\b(?:extensive\s+experiments?|experiments?\s+demonstrate|high[- ]quality|novel[- ]view|"
+    r"outperform(?:s|ed|ing)?|surpass(?:es|ed|ing)?|superior|static(?:\s+and)?\s+dynamic|"
+    r"dynamic\s+scenes?|static\s+scenes?|multi-view\s+consisten(?:t|cy))\b|"
+    r"(?:实验表明|高质量|新视角|优于|静态|动态|多视角一致)"
+    r")",
+    re.IGNORECASE,
+)
+_CONTRIBUTION_BLOCK_HINT_RE = re.compile(
+    r"("
+    r"\b(?:first(?:\s+to)?|novel|we\s+propose|introduc(?:e|es|ed|ing)|"
+    r"main\s+contribution(?:s)?|camera\s+pose\s+stamps?|transformation\s+network)\b|"
+    r"(?:首次|首个|创新|贡献|提出)"
+    r")",
+    re.IGNORECASE,
+)
+_RESULT_BLOCK_HINT_RE = re.compile(
+    r"("
+    r"\b(?:extensive\s+experiments?|experiments?\s+demonstrate|high[- ]quality|novel[- ]view|"
+    r"outperform(?:s|ed|ing)?|surpass(?:es|ed|ing)?|superior|static(?:\s+and)?\s+dynamic|"
+    r"dynamic\s+scenes?|static\s+scenes?)\b|"
+    r"(?:实验表明|高质量|新视角|优于|静态|动态)"
+    r")",
+    re.IGNORECASE,
+)
+_CONTRIBUTION_LEADIN_HINT_RE = re.compile(
+    r"\b(?:our\s+main\s+contributions?\s+can\s+be\s+summarized\s+as\s+follows|"
+    r"main\s+contributions?\s+are\s+as\s+follows|contributions?\s+are\s+summarized\s+as\s+follows)\b",
+    re.IGNORECASE,
+)
+_DEFINITION_LIKE_BLOCK_HINT_RE = re.compile(
+    r"("
+    r"\bis\s+defined\s+as\b|\bdefined\s+as:?\b|\bparameterized\s+as\b|\bcan\s+be\s+calculated\s+by\b|"
+    r"\balpha\s+blending\b|\bjacobian\b|"
+    r"\bwhere\b.{0,48}\b(?:denotes?|represents?|stands?\s+for)\b|"
+    r"(?:定义为|表示为|记为|其中.{0,16}(?:表示|代表|对应))"
+    r")",
+    re.IGNORECASE,
+)
 _QUOTE_HEADING_LIKE_RE = re.compile(
     r"^(?:"
     r"abstract|introduction|background|related work|preliminar(?:y|ies)?|method(?:ology)?|"
@@ -938,6 +987,36 @@ def _build_answer_contract_system_rules(*, intent: str, depth: str, has_hits: bo
     return "\n" + "\n".join(lines) + "\n"
 
 
+def _answer_contract_enabled(task: dict | None) -> bool:
+    return bool((task or {}).get("answer_contract_v1", False))
+
+
+def _build_paper_guide_grounding_rules(*, answer_contract_v1: bool) -> str:
+    lines = [
+        "Paper-guide formula grounding:",
+        "- When the question asks about a formula/model, quote the equation from retrieved context as-is, including equation tag/number when available.",
+        "- If exact equation text is not present in retrieved context, say it is not explicitly available; do not invent a generic replacement formula.",
+        "- When quoting a retrieved long equation or numbered equation, render the equation itself as display math and keep the explanation sentence separate.",
+        "- Do not compress a retrieved long equation plus its explanation into one mixed prose sentence if that would blur the locate target.",
+        "- Do not introduce display-math formulas for figure explanations, mechanism summaries, or optimization sketches unless that exact display formula was retrieved from the paper.",
+    ]
+    if answer_contract_v1:
+        lines.extend(
+            [
+                "- Keep the answer compact: 3-4 sections, avoid repetitive paragraphs.",
+                "- Only keep claims with direct support under Evidence; move unsupported general knowledge to Limits.",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "- Keep the answer compact and direct, but do not force a fixed section template.",
+                "- Distinguish retrieved evidence from supplemental general knowledge in prose; do not present unsupported context as direct paper evidence.",
+            ]
+        )
+    return "\n" + "\n".join(lines) + "\n"
+
+
 def _extract_cited_sentences(text: str, *, limit: int = 2) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -1137,7 +1216,14 @@ def _apply_answer_contract_v1(
     return contracted
 
 
-def _enhance_kb_miss_fallback(answer: str, *, has_hits: bool, intent: str, depth: str) -> str:
+def _enhance_kb_miss_fallback(
+    answer: str,
+    *,
+    has_hits: bool,
+    intent: str,
+    depth: str,
+    contract_enabled: bool,
+) -> str:
     src = str(answer or "").strip()
     if (not src) or has_hits:
         return src
@@ -1147,6 +1233,8 @@ def _enhance_kb_miss_fallback(answer: str, *, has_hits: bool, intent: str, depth
     body = str(body0 or "").strip()
     if not body:
         body = "当前没有检索到可直接引用的库内片段，先给你一个可执行的通用路径。"
+    if not contract_enabled:
+        return f"{notice}\n\n{body}".strip()
     if _ANSWER_NEXT_STEPS_HEADER_RE.search(body):
         return f"{notice}\n\n{body}".strip()
     if _ANSWER_ORDERED_LIST_RE.search(body):
@@ -1709,6 +1797,68 @@ def _is_rhetorical_shell_sentence(text: str) -> bool:
     return False
 
 
+_NON_SOURCE_SEGMENT_HINTS = (
+    "通用知识",
+    "非检索片段内容",
+    "非检索内容",
+    "外部常识补充",
+    "未出现在本文检索片段中",
+    "未出现在当前检索片段中",
+    "未出现在检索片段中",
+    "generic knowledge",
+    "non-retrieved",
+    "not present in retrieved context",
+    "not in retrieved context",
+    "not explicitly available in retrieved context",
+)
+
+
+def _is_explicit_non_source_segment(text: str) -> bool:
+    raw = _strip_provenance_noise_text(text)
+    if not raw:
+        return False
+    low = raw.lower()
+    if "补充说明" in raw and ("检索片段" in raw or "retrieved context" in low):
+        return True
+    for hint in _NON_SOURCE_SEGMENT_HINTS:
+        if hint and ((hint in raw) or (hint in low)):
+            return True
+    return False
+
+
+def _opens_non_source_scope(text: str) -> bool:
+    raw = str(text or "").strip()
+    clean = _strip_provenance_noise_text(raw)
+    if (not clean) or (not _is_explicit_non_source_segment(raw)):
+        return False
+    head = clean[:48].lower()
+    if clean.endswith(":") or clean.endswith("："):
+        return True
+    return ("supplement" in head) or ("补充说明" in clean[:24]) or ("说明" in clean[:16])
+
+
+def _is_non_source_scope_boundary(text: str) -> bool:
+    raw = str(text or "").strip()
+    if not raw:
+        return False
+    clean = _strip_provenance_noise_text(raw)
+    if not clean:
+        return False
+    if _is_explicit_non_source_segment(raw):
+        return False
+    if raw.startswith("---"):
+        return True
+    if re.match(r"^\s{0,3}#{1,6}\s+", raw):
+        return True
+    return bool(
+        re.match(
+            r"^\s*(?:结论|依据|边界|限制|下一步|note|notes|boundary|limitations?|conclusion|next steps?)\s*[:：]",
+            clean,
+            re.IGNORECASE,
+        )
+    )
+
+
 def _critical_fact_score(text: str) -> float:
     raw = _strip_provenance_noise_text(text)
     if not raw:
@@ -1755,6 +1905,18 @@ def _formula_anchor_text(raw_markdown: str, segment_text: str, primary_block: di
     return seg[:900]
 
 
+def _dedupe_str_items(items: list[object] | tuple[object, ...] | None) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in list(items or []):
+        text = str(item or "").strip()
+        if (not text) or (text in seen):
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 def _segment_claim_meta(
     *,
     segment_text: str,
@@ -1775,11 +1937,16 @@ def _segment_claim_meta(
     anchor_text = ""
     anchor_kind = ""
     claim_type = "critical_fact_claim"
+    explicit_non_source = _is_explicit_non_source_segment(raw_md or seg_text)
     eq_number = extract_equation_number(raw_md or seg_text) if has_equation_signal(raw_md or seg_text) else 0
     figure_number = _extract_figure_number(raw_md or seg_text) if _FIGURE_CLAIM_RE.search(raw_md or seg_text) else 0
     primary_kind = str((primary_block or {}).get("kind") or "").strip().lower()
 
-    if _is_display_formula_segment(raw_md or seg_text, segment_kind=kind):
+    if explicit_non_source:
+        claim_type = "shell_sentence"
+        anchor_kind = ""
+        anchor_text = ""
+    elif _is_display_formula_segment(raw_md or seg_text, segment_kind=kind):
         claim_type = "formula_claim"
         anchor_kind = "equation"
         anchor_text = _formula_anchor_text(raw_md, seg_text, primary_block)
@@ -1815,7 +1982,9 @@ def _segment_claim_meta(
         anchor_kind = "sentence"
         anchor_text = str(evidence_quote or seg_text).strip()[:320]
 
-    has_identity = bool(str((primary_block or {}).get("block_id") or "").strip()) or bool(str(evidence_quote or "").strip()) or float(mapping_quality or 0.0) >= 0.24
+    has_identity = bool(str((primary_block or {}).get("block_id") or "").strip()) and bool(
+        str(anchor_kind or "").strip()
+    ) and bool(str(anchor_text or evidence_quote or "").strip())
     must_locate = bool(
         mode == "direct"
         and has_identity
@@ -1842,6 +2011,841 @@ def _segment_claim_meta(
         "anchor_text": str(anchor_text or "").strip(),
         "equation_number": int(eq_number or 0),
         "quote_spans": quote_spans,
+    }
+
+
+_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION = 4
+
+
+_EQUATION_EXPLANATION_PREFIX_RE = re.compile(
+    r"^\s*(?:where|wherein|here|with|in which|式中|其中|其中，|其中,|其中：|其中:|其中各项|其中变量)\b",
+    re.IGNORECASE,
+)
+_EQUATION_EXPLANATION_HINT_RE = re.compile(
+    r"(?:\bwhere\b|\bdenotes?\b|\brepresents?\b|\bstands?\s+for\b|\bis\s+the\b|\bare\s+the\b|"
+    r"\bcorresponds?\s+to\b|表示|记为|定义为|代表|对应|指代|表示为)",
+    re.IGNORECASE,
+)
+
+
+def _equation_explanation_score(
+    *,
+    segment_text: str,
+    raw_markdown: str,
+    formula_text: str,
+    equation_number: int = 0,
+    source_distance: int = 0,
+) -> float:
+    raw = _strip_provenance_noise_text(raw_markdown or segment_text)
+    if not raw:
+        return 0.0
+    if _is_rhetorical_shell_sentence(raw):
+        return 0.0
+    score = 0.0
+    if _EQUATION_EXPLANATION_PREFIX_RE.search(raw):
+        score += 0.6
+    if _EQUATION_EXPLANATION_HINT_RE.search(raw):
+        score += 0.42
+    if has_equation_signal(raw) and not _is_display_formula_segment(raw):
+        score += 0.22
+    if int(equation_number or 0) > 0:
+        raw_eq = extract_equation_number(raw)
+        if raw_eq > 0 and raw_eq == int(equation_number):
+            score += 0.5
+    score += 0.58 * _formula_token_overlap_score(raw, formula_text)
+    score += 0.24 * _formula_char_similarity(raw, formula_text)
+    score += 0.16 * _text_token_overlap_score(raw, formula_text)
+    if int(source_distance or 0) == 1:
+        score += 0.14
+    elif int(source_distance or 0) == 2:
+        score += 0.06
+    return float(score)
+
+
+def _figure_block_number(block: dict | None) -> int:
+    if not isinstance(block, dict):
+        return 0
+    try:
+        n = int(block.get("number") or 0)
+    except Exception:
+        n = 0
+    if n > 0:
+        return int(n)
+    return _extract_figure_number(str(block.get("raw_text") or block.get("text") or ""))
+
+
+def _select_figure_claim_binding(
+    segment: dict | None,
+    block_lookup: dict[str, dict] | None = None,
+) -> tuple[dict | None, dict | None]:
+    if not isinstance(segment, dict):
+        return None, None
+    lookup = block_lookup or {}
+    blocks = [block for block in lookup.values() if isinstance(block, dict)]
+    if not blocks:
+        return None, None
+
+    raw = " ".join(
+        [
+            str(segment.get("anchor_text") or ""),
+            str(segment.get("evidence_quote") or ""),
+            str(segment.get("raw_markdown") or segment.get("text") or ""),
+        ]
+    ).strip()
+    figure_number = _extract_figure_number(raw)
+    if figure_number <= 0:
+        current_primary = lookup.get(str(segment.get("primary_block_id") or "").strip()) or {}
+        figure_number = _figure_block_number(current_primary)
+    if figure_number <= 0:
+        return None, None
+
+    def _order_of(block: dict | None) -> int:
+        if not isinstance(block, dict):
+            return 0
+        try:
+            order = int(block.get("order_index") or 0)
+        except Exception:
+            order = 0
+        if order > 0:
+            return order
+        try:
+            line_start = int(block.get("line_start") or 0)
+        except Exception:
+            line_start = 0
+        return max(0, line_start)
+
+    def _caption_score(block: dict | None, figure_order: int) -> float:
+        if not isinstance(block, dict):
+            return -1.0
+        text = str(block.get("raw_text") or block.get("text") or "").strip()
+        if _extract_figure_number(text) != figure_number:
+            return -1.0
+        score = 0.0
+        if re.match(rf"^\s*(?:fig(?:ure)?\.?\s*{figure_number}\b|图\s*{figure_number}\b)", text, re.IGNORECASE):
+            score += 1.3
+        if "single snapshot compressed image" in text.lower():
+            score += 0.22
+        order = _order_of(block)
+        if figure_order > 0 and order > 0:
+            dist = abs(order - figure_order)
+            if dist == 1:
+                score += 0.42
+            elif dist == 0:
+                score += 0.28
+            else:
+                score += max(0.0, 0.18 - (0.04 * float(dist)))
+        return score
+
+    figure_blocks = [
+        block for block in blocks
+        if str(block.get("kind") or "").strip().lower() == "figure"
+        and _figure_block_number(block) == figure_number
+    ]
+    current_primary_id = str(segment.get("primary_block_id") or "").strip()
+    current_primary = lookup.get(current_primary_id) or {}
+
+    figure_block: dict | None = None
+    if figure_blocks:
+        figure_blocks.sort(
+            key=lambda block: (
+                0 if str(block.get("block_id") or "").strip() == current_primary_id else 1,
+                _order_of(block) if _order_of(block) > 0 else 10**9,
+                str(block.get("block_id") or ""),
+            )
+        )
+        figure_block = figure_blocks[0]
+
+    figure_order = _order_of(figure_block or current_primary)
+    caption_candidates = [
+        block for block in blocks
+        if str(block.get("kind") or "").strip().lower() in {"paragraph", "list_item", "blockquote"}
+        and _extract_figure_number(str(block.get("raw_text") or block.get("text") or "")) == figure_number
+    ]
+    caption_block: dict | None = None
+    if caption_candidates:
+        caption_candidates.sort(
+            key=lambda block: (
+                -_caption_score(block, figure_order),
+                _order_of(block) if _order_of(block) > 0 else 10**9,
+                str(block.get("block_id") or ""),
+            )
+        )
+        caption_block = caption_candidates[0]
+        if _caption_score(caption_block, figure_order) < 0.18:
+            caption_block = None
+
+    return figure_block, caption_block
+
+
+_QUOTE_ELLIPSIS_RE = re.compile(r"(?:\[\s*(?:\.{3,}|…)\s*\]|\.{3,}|…)")
+
+
+def _quote_excerpt_fragments(text: str) -> list[str]:
+    raw = _strip_provenance_noise_text(text)
+    if not raw:
+        return []
+    normalized = _QUOTE_ELLIPSIS_RE.sub(" … ", raw)
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"\s+…\s+", normalized):
+        clean = normalize_inline_markdown(part).strip(" \"'`*[](){}")
+        if len(clean) < 14:
+            continue
+        key = normalize_match_text(clean)
+        if (not key) or (key in seen):
+            continue
+        seen.add(key)
+        out.append(clean[:360])
+        if len(out) >= 4:
+            break
+    return out
+
+
+def _ordered_fragment_match_score(needle: str, haystack: str) -> tuple[float, int]:
+    fragments = _quote_excerpt_fragments(needle)
+    if len(fragments) < 2:
+        return 0.0, 0
+    haystack_norm = normalize_match_text(haystack)
+    if not haystack_norm:
+        return 0.0, 0
+    matched = 0
+    cursor = 0
+    for fragment in fragments:
+        fragment_norm = normalize_match_text(fragment)
+        if not fragment_norm:
+            continue
+        idx = haystack_norm.find(fragment_norm, cursor)
+        if idx < 0:
+            break
+        matched += 1
+        cursor = idx + len(fragment_norm)
+    if matched <= 0:
+        return 0.0, 0
+    score = 0.26 * float(matched)
+    if matched >= 2:
+        score += 0.84
+    if matched >= len(fragments):
+        score += 0.24
+    return float(score), int(matched)
+
+
+def _quote_binding_score(needle: str, block: dict | None) -> tuple[float, str, int]:
+    if not isinstance(block, dict):
+        return -1.0, "", 0
+    block_text_raw = str(block.get("raw_text") or block.get("text") or "").strip()
+    block_text = normalize_inline_markdown(block_text_raw)
+    probe = normalize_inline_markdown(needle)
+    if not block_text or not probe:
+        return -1.0, "", 0
+    block_norm = normalize_match_text(block_text)
+    probe_norm = normalize_match_text(probe)
+
+    score = 0.0
+    if probe_norm and probe_norm in block_norm:
+        score += 1.54
+
+    ordered_score, matched_fragments = _ordered_fragment_match_score(probe, block_text)
+    score += ordered_score
+
+    support_quote, quote_score = _best_evidence_quote_match(probe, block)
+    score += 0.92 * float(quote_score)
+    score += 0.52 * _text_token_overlap_score(probe, block_text)
+    try:
+        score += 0.34 * float(SequenceMatcher(None, probe_norm[:520], block_norm[:520]).ratio())
+    except Exception:
+        pass
+
+    heading_path = str(block.get("heading_path") or "").strip()
+    score += 0.08 * _text_token_overlap_score(probe, heading_path)
+    if str(block.get("kind") or "").strip().lower() in {"paragraph", "blockquote"}:
+        score += 0.05
+
+    return float(score), str(support_quote or "").strip(), int(matched_fragments)
+
+
+def _select_quote_claim_binding(
+    segment: dict | None,
+    block_lookup: dict[str, dict] | None = None,
+) -> tuple[dict | None, str]:
+    if not isinstance(segment, dict):
+        return None, ""
+    lookup = block_lookup or {}
+    blocks = [
+        block
+        for block in lookup.values()
+        if isinstance(block, dict)
+        and str(block.get("kind") or "").strip().lower() in {"paragraph", "list_item", "blockquote"}
+    ]
+    if not blocks:
+        return None, ""
+
+    raw_markdown = str(segment.get("raw_markdown") or segment.get("text") or "").strip()
+    quoted_spans = _extract_quoted_spans(raw_markdown, min_len=12)
+    seeds = _dedupe_str_items(
+        quoted_spans
+        + [
+            str(segment.get("anchor_text") or "").strip(),
+            str(segment.get("evidence_quote") or "").strip(),
+        ]
+    )
+    if not seeds and str(segment.get("kind") or "").strip().lower() == "blockquote":
+        seeds = [normalize_inline_markdown(raw_markdown or str(segment.get("text") or ""))[:600]]
+    if not seeds:
+        return None, ""
+
+    current_primary_id = str(segment.get("primary_block_id") or "").strip()
+    current_primary = lookup.get(current_primary_id) if current_primary_id else None
+    current_best = max((_quote_binding_score(seed, current_primary)[0] for seed in seeds), default=-1.0)
+
+    best_block: dict | None = None
+    best_quote = ""
+    best_score = -1.0
+    best_fragment_hits = 0
+    for block in blocks:
+        block_best_score = -1.0
+        block_best_quote = ""
+        block_best_hits = 0
+        for seed in seeds:
+            score, support_quote, matched_fragments = _quote_binding_score(seed, block)
+            if score > block_best_score:
+                block_best_score = score
+                block_best_quote = support_quote
+                block_best_hits = matched_fragments
+        if block_best_score > best_score:
+            best_block = block
+            best_quote = block_best_quote
+            best_score = block_best_score
+            best_fragment_hits = block_best_hits
+
+    if not isinstance(best_block, dict):
+        return None, ""
+    if best_score < 0.96:
+        return None, ""
+    if current_primary_id and str(best_block.get("block_id") or "").strip() == current_primary_id:
+        return best_block, best_quote
+    if current_best > 0 and best_score < (current_best + 0.12):
+        return None, ""
+
+    if best_fragment_hits >= 2:
+        block_text = str(best_block.get("raw_text") or best_block.get("text") or "").strip()
+        if block_text:
+            best_quote = normalize_inline_markdown(block_text)[:900]
+    elif not best_quote:
+        best_quote = _best_evidence_quote(seeds[0], best_block)
+
+    return best_block, str(best_quote or "").strip()
+
+
+def _extract_display_formula_snippet(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    m = _DISPLAY_EQ_SEG_RE.search(raw)
+    if m:
+        return str(m.group(0) or "").strip()[:1200]
+    if _EQ_ENV_SEG_RE.search(raw):
+        return raw[:1200]
+    if "\\[" in raw and "\\]" in raw:
+        return raw[:1200]
+    return ""
+
+
+def _is_formula_claim_source_grounded(segment: dict | None, primary_block: dict | None) -> bool:
+    if not isinstance(segment, dict):
+        return False
+    formula_src = _extract_display_formula_snippet(str(segment.get("raw_markdown") or segment.get("text") or ""))
+    if not formula_src:
+        return True
+    support_formula = (
+        _extract_display_formula_snippet(str((primary_block or {}).get("raw_text") or (primary_block or {}).get("text") or ""))
+        or _extract_display_formula_snippet(str(segment.get("evidence_quote") or ""))
+        or str(segment.get("evidence_quote") or "").strip()
+    )
+    if not support_formula or not has_equation_signal(support_formula):
+        return False
+    if normalize_match_text(formula_src) == normalize_match_text(support_formula):
+        return True
+    formula_tok = _formula_token_overlap_score(formula_src, support_formula)
+    formula_char = _formula_char_similarity(formula_src, support_formula)
+    formula_text = _text_token_overlap_score(formula_src, support_formula)
+    if formula_tok >= 0.84 and formula_char >= 0.78:
+        return True
+    if formula_char >= 0.88 and formula_text >= 0.76:
+        return True
+    return False
+
+
+def _formula_claim_alignment_score(segment: dict | None, primary_block: dict | None) -> float:
+    if not isinstance(segment, dict) or not isinstance(primary_block, dict):
+        return 0.0
+    formula_src = _extract_display_formula_snippet(str(segment.get("raw_markdown") or segment.get("text") or ""))
+    support_formula = _extract_display_formula_snippet(
+        str(primary_block.get("raw_text") or primary_block.get("text") or "")
+    )
+    if (not formula_src) or (not support_formula):
+        return 0.0
+    score = 0.0
+    if normalize_match_text(formula_src) == normalize_match_text(support_formula):
+        score += 0.9
+    score += 0.94 * _formula_token_overlap_score(formula_src, support_formula)
+    score += 0.78 * _formula_char_similarity(formula_src, support_formula)
+    score += 0.18 * _text_token_overlap_score(formula_src, support_formula)
+    try:
+        seg_eq = int(segment.get("equation_number") or 0)
+    except Exception:
+        seg_eq = 0
+    try:
+        block_eq = int(primary_block.get("number") or 0)
+    except Exception:
+        block_eq = 0
+    if seg_eq > 0 and block_eq > 0 and seg_eq == block_eq:
+        score += 0.72
+    return float(score)
+
+
+def _apply_provenance_required_coverage_contract(
+    segments: list[dict] | None,
+    *,
+    block_lookup: dict[str, dict] | None = None,
+) -> list[dict]:
+    out: list[dict] = []
+    lookup = block_lookup or {}
+    block_order = {
+        str(block_id): int((block or {}).get("order_index") or 0)
+        for block_id, block in lookup.items()
+        if str(block_id or "").strip()
+    }
+    formula_bundles: list[dict[str, object]] = []
+    non_source_scope_active = False
+
+    for seg0 in list(segments or []):
+        if not isinstance(seg0, dict):
+            continue
+        seg = dict(seg0)
+        claim_type = str(seg.get("claim_type") or "").strip().lower()
+        evidence_mode = str(seg.get("evidence_mode") or "").strip().lower()
+        segment_id = str(seg.get("segment_id") or "").strip()
+        primary_block_id = str(seg.get("primary_block_id") or "").strip()
+        raw_markdown = str(seg.get("raw_markdown") or seg.get("text") or "").strip()
+        explicit_non_source = _is_explicit_non_source_segment(raw_markdown)
+        seg["related_block_ids"] = _dedupe_str_items(seg.get("related_block_ids") or [])
+        if claim_type in {"quote_claim", "blockquote_claim"} and evidence_mode == "direct":
+            quote_block, quote_support = _select_quote_claim_binding(seg, lookup)
+            if isinstance(quote_block, dict):
+                quote_anchor = _longest_quoted_span(raw_markdown or str(seg.get("text") or ""), min_len=12)
+                primary_block_id = str(quote_block.get("block_id") or "").strip()
+                primary_anchor_id = str(quote_block.get("anchor_id") or "").strip()
+                primary_heading_path = str(quote_block.get("heading_path") or "").strip()
+                old_primary_block_id = str(seg.get("primary_block_id") or "").strip()
+                evidence_block_ids = _dedupe_str_items(
+                    [primary_block_id]
+                    + list(seg.get("evidence_block_ids") or [])
+                )
+                support_block_ids = _dedupe_str_items(
+                    ([old_primary_block_id] if old_primary_block_id and old_primary_block_id != primary_block_id else [])
+                    + list(seg.get("support_block_ids") or [])
+                )
+                seg["primary_block_id"] = primary_block_id
+                seg["primary_anchor_id"] = primary_anchor_id
+                seg["primary_heading_path"] = primary_heading_path
+                seg["evidence_block_ids"] = evidence_block_ids
+                seg["support_block_ids"] = support_block_ids
+                if quote_support:
+                    seg["evidence_quote"] = quote_support[:900]
+                seg["anchor_text"] = str(quote_anchor or quote_support or seg.get("text") or "").strip()[:600]
+        primary_block = lookup.get(primary_block_id) if primary_block_id else None
+        if claim_type == "formula_claim" and evidence_mode == "direct":
+            if not _is_formula_claim_source_grounded(seg, primary_block):
+                seg["must_locate"] = False
+                seg["locate_policy"] = "hidden"
+                seg["locate_surface_policy"] = "hidden"
+                seg["formula_origin"] = "derived"
+                seg["claim_group_id"] = ""
+                seg["claim_group_kind"] = ""
+                out.append(seg)
+                if explicit_non_source and _opens_non_source_scope(raw_markdown):
+                    non_source_scope_active = True
+                continue
+        if claim_type == "figure_claim" and evidence_mode == "direct":
+            figure_block, caption_block = _select_figure_claim_binding(seg, lookup)
+            if figure_block or caption_block:
+                primary_block = figure_block or caption_block or {}
+                primary_block_id = str(primary_block.get("block_id") or "").strip()
+                primary_anchor_id = str(primary_block.get("anchor_id") or "").strip()
+                primary_heading_path = str(primary_block.get("heading_path") or "").strip()
+                old_primary_block_id = str(seg.get("primary_block_id") or "").strip()
+                evidence_block_ids = _dedupe_str_items(
+                    [primary_block_id]
+                    + ([str(caption_block.get("block_id") or "").strip()] if isinstance(caption_block, dict) else [])
+                    + list(seg.get("evidence_block_ids") or [])
+                )
+                support_block_ids = _dedupe_str_items(
+                    ([old_primary_block_id] if old_primary_block_id and old_primary_block_id != primary_block_id else [])
+                    + list(seg.get("support_block_ids") or [])
+                )
+                seg["primary_block_id"] = primary_block_id
+                seg["primary_anchor_id"] = primary_anchor_id
+                seg["primary_heading_path"] = primary_heading_path
+                seg["evidence_block_ids"] = evidence_block_ids
+                seg["support_block_ids"] = support_block_ids
+                if isinstance(caption_block, dict):
+                    caption_text = str(caption_block.get("raw_text") or caption_block.get("text") or "").strip()
+                    if caption_text:
+                        seg["anchor_text"] = caption_text[:480]
+                        seg["evidence_quote"] = caption_text[:900]
+        if non_source_scope_active and _is_non_source_scope_boundary(raw_markdown):
+            non_source_scope_active = False
+        non_source_scoped = bool(explicit_non_source or non_source_scope_active)
+        locate_policy = "hidden"
+        locate_surface_policy = "hidden"
+        claim_group_id = ""
+        claim_group_kind = ""
+        formula_origin = str(seg.get("formula_origin") or "").strip().lower()
+
+        if non_source_scoped:
+            locate_policy = "hidden"
+            locate_surface_policy = "hidden"
+            seg["must_locate"] = False
+        elif claim_type in {"quote_claim", "blockquote_claim"} and evidence_mode == "direct":
+            locate_policy = "required"
+            locate_surface_policy = "primary"
+            claim_group_kind = "quote_bundle"
+            claim_group_id = f"quote_bundle:{primary_block_id or segment_id or uuid.uuid4().hex[:8]}"
+        elif claim_type == "formula_claim" and evidence_mode == "direct":
+            locate_policy = "required"
+            locate_surface_policy = "primary"
+            formula_origin = "source"
+        elif claim_type == "figure_claim" and evidence_mode == "direct":
+            locate_policy = "required"
+            locate_surface_policy = "primary"
+        elif claim_type == "shell_sentence":
+            locate_policy = "hidden"
+        elif bool(seg.get("must_locate")):
+            locate_policy = "required"
+            locate_surface_policy = "primary"
+        elif evidence_mode == "direct":
+            locate_policy = "optional"
+            locate_surface_policy = "hidden"
+
+        if claim_type == "formula_claim" and evidence_mode == "direct" and not non_source_scoped:
+            bundle_key = primary_block_id or segment_id or uuid.uuid4().hex[:8]
+            claim_group_id = f"formula_bundle:{bundle_key}"
+            claim_group_kind = "formula_bundle"
+            formula_bundles.append(
+                {
+                    "segment_id": segment_id,
+                    "segment_index": int(seg.get("segment_index") or 0),
+                    "primary_block_id": primary_block_id,
+                    "primary_anchor_id": str(seg.get("primary_anchor_id") or "").strip(),
+                    "primary_heading_path": str(seg.get("primary_heading_path") or "").strip(),
+                    "equation_number": int(seg.get("equation_number") or 0),
+                    "anchor_text": str(seg.get("anchor_text") or "").strip(),
+                    "evidence_quote": str(seg.get("evidence_quote") or "").strip(),
+                    "claim_group_id": claim_group_id,
+                    "claim_group_kind": claim_group_kind,
+                    "source_block_order": int(block_order.get(primary_block_id) or 0),
+                    "alignment_score": _formula_claim_alignment_score(seg, primary_block),
+                }
+            )
+
+        seg["locate_policy"] = locate_policy
+        seg["locate_surface_policy"] = locate_surface_policy
+        seg["claim_group_id"] = claim_group_id
+        seg["claim_group_kind"] = claim_group_kind
+        seg["formula_origin"] = formula_origin
+        out.append(seg)
+        if explicit_non_source and _opens_non_source_scope(raw_markdown):
+            non_source_scope_active = True
+
+    if not out or not formula_bundles:
+        quote_groups: dict[str, list[dict]] = {}
+        for seg in out:
+            if not isinstance(seg, dict):
+                continue
+            if str(seg.get("claim_group_kind") or "").strip().lower() != "quote_bundle":
+                continue
+            quote_groups.setdefault(str(seg.get("claim_group_id") or "").strip(), []).append(seg)
+        for items in quote_groups.values():
+            dedupe_by_key: dict[str, list[dict]] = {}
+            for seg in items:
+                key = " :: ".join(
+                    [
+                        str(seg.get("primary_block_id") or "").strip(),
+                        normalize_match_text(
+                            str(seg.get("anchor_text") or seg.get("evidence_quote") or seg.get("text") or "")
+                        )[:420],
+                    ]
+                ).strip()
+                if not key:
+                    continue
+                dedupe_by_key.setdefault(key, []).append(seg)
+            for dup_items in dedupe_by_key.values():
+                if len(dup_items) <= 1:
+                    continue
+                dup_items.sort(
+                    key=lambda seg: (
+                        -len(str(seg.get("anchor_text") or seg.get("evidence_quote") or "")),
+                        int(seg.get("segment_index") or 0),
+                    )
+                )
+                keep = dup_items[0]
+                keep["locate_surface_policy"] = "primary"
+                for seg in dup_items[1:]:
+                    seg["must_locate"] = False
+                    seg["locate_policy"] = "hidden"
+                    seg["locate_surface_policy"] = "hidden"
+        return out
+
+    bundle_items_by_id: dict[str, list[dict[str, object]]] = {}
+    for bundle in formula_bundles:
+        bundle_id = str(bundle.get("claim_group_id") or "").strip()
+        if not bundle_id:
+            continue
+        bundle_items_by_id.setdefault(bundle_id, []).append(bundle)
+
+    bundle_formula_segment_ids: set[str] = set()
+    representative_bundles: list[dict[str, object]] = []
+    for bundle_id, items in bundle_items_by_id.items():
+        ranked_items = sorted(
+            items,
+            key=lambda item: (
+                -float(item.get("alignment_score") or 0.0),
+                -(1 if int(item.get("equation_number") or 0) > 0 else 0),
+                -len(str(item.get("anchor_text") or item.get("evidence_quote") or "")),
+                int(item.get("segment_index") or 0),
+            ),
+        )
+        if not ranked_items:
+            continue
+        primary_item = ranked_items[0]
+        representative_bundles.append(primary_item)
+        primary_segment_id = str(primary_item.get("segment_id") or "").strip()
+        for seg in out:
+            if str(seg.get("claim_group_id") or "").strip() != bundle_id:
+                continue
+            if str(seg.get("claim_type") or "").strip().lower() != "formula_claim":
+                continue
+            segment_id = str(seg.get("segment_id") or "").strip()
+            if not segment_id:
+                continue
+            bundle_formula_segment_ids.add(segment_id)
+            if segment_id == primary_segment_id:
+                seg["must_locate"] = True
+                seg["locate_policy"] = "required"
+                seg["locate_surface_policy"] = "primary"
+                seg["formula_origin"] = "source"
+                continue
+            seg["must_locate"] = False
+            seg["locate_policy"] = "hidden"
+            seg["locate_surface_policy"] = "hidden"
+            seg["formula_origin"] = "derived"
+
+    used_segment_ids: set[str] = set(bundle_formula_segment_ids)
+    for bundle in representative_bundles:
+        formula_segment_id = str(bundle.get("segment_id") or "").strip()
+        if formula_segment_id:
+            used_segment_ids.add(formula_segment_id)
+        formula_block_id = str(bundle.get("primary_block_id") or "").strip()
+        formula_anchor_id = str(bundle.get("primary_anchor_id") or "").strip()
+        formula_heading_path = str(bundle.get("primary_heading_path") or "").strip()
+        formula_number = int(bundle.get("equation_number") or 0)
+        formula_text = str(bundle.get("anchor_text") or bundle.get("evidence_quote") or "").strip()
+        formula_order = int(bundle.get("source_block_order") or 0)
+        claim_group_id = str(bundle.get("claim_group_id") or "").strip()
+        claim_group_kind = str(bundle.get("claim_group_kind") or "").strip()
+        formula_seg_index = int(bundle.get("segment_index") or 0)
+        if not formula_block_id:
+            continue
+
+        for seg in out:
+            segment_id = str(seg.get("segment_id") or "").strip()
+            if (not segment_id) or (segment_id in used_segment_ids):
+                continue
+            evidence_mode = str(seg.get("evidence_mode") or "").strip().lower()
+            if evidence_mode != "direct":
+                continue
+            claim_type = str(seg.get("claim_type") or "").strip().lower()
+            if claim_type in {"formula_claim", "quote_claim", "blockquote_claim", "figure_claim"}:
+                continue
+            raw_markdown = str(seg.get("raw_markdown") or seg.get("text") or "").strip()
+            segment_text = str(seg.get("text") or "").strip()
+            if not segment_text:
+                continue
+            source_primary_block_id = str(seg.get("primary_block_id") or "").strip()
+            source_order = int(block_order.get(source_primary_block_id) or 0)
+            source_distance = 0
+            if formula_order > 0 and source_order > 0:
+                source_distance = abs(source_order - formula_order)
+            else:
+                source_distance = abs(int(seg.get("segment_index") or 0) - formula_seg_index)
+            if source_distance <= 0 or source_distance > 2:
+                continue
+            score = _equation_explanation_score(
+                segment_text=segment_text,
+                raw_markdown=raw_markdown,
+                formula_text=formula_text,
+                equation_number=formula_number,
+                source_distance=source_distance,
+            )
+            if score < 0.58:
+                continue
+            explanation_block = lookup.get(source_primary_block_id) if source_primary_block_id else None
+            explanation_block_id = str((explanation_block or {}).get("block_id") or source_primary_block_id).strip()
+            explanation_anchor_id = str((explanation_block or {}).get("anchor_id") or seg.get("primary_anchor_id") or "").strip()
+            explanation_heading_path = str((explanation_block or {}).get("heading_path") or seg.get("primary_heading_path") or "").strip()
+            explanation_anchor_kind = str(seg.get("anchor_kind") or "").strip().lower() or "sentence"
+            if explanation_anchor_kind in {"equation", "figure", "quote"}:
+                explanation_anchor_kind = "sentence"
+            related_block_ids = _dedupe_str_items([formula_block_id] + list(seg.get("related_block_ids") or []))
+            if (not explanation_block_id) or explanation_block_id == formula_block_id:
+                seg["claim_type"] = "equation_explanation_claim"
+                seg["must_locate"] = False
+                seg["locate_policy"] = "hidden"
+                seg["locate_surface_policy"] = "hidden"
+                seg["formula_origin"] = "explanation"
+                seg["claim_group_id"] = claim_group_id
+                seg["claim_group_kind"] = claim_group_kind
+                seg["related_block_ids"] = related_block_ids
+                used_segment_ids.add(segment_id)
+                continue
+            evidence_block_ids = _dedupe_str_items(
+                [explanation_block_id, formula_block_id]
+                + list(seg.get("evidence_block_ids") or [])
+            )
+            support_block_ids = _dedupe_str_items(
+                ([formula_block_id] if formula_block_id and formula_block_id != explanation_block_id else [])
+                + ([source_primary_block_id] if source_primary_block_id and source_primary_block_id not in {formula_block_id, explanation_block_id} else [])
+                + list(seg.get("support_block_ids") or [])
+            )
+            seg["claim_type"] = "equation_explanation_claim"
+            seg["must_locate"] = True
+            seg["anchor_kind"] = explanation_anchor_kind
+            seg["equation_number"] = int(formula_number or 0)
+            seg["primary_block_id"] = explanation_block_id
+            seg["primary_anchor_id"] = explanation_anchor_id
+            seg["primary_heading_path"] = explanation_heading_path or formula_heading_path
+            seg["evidence_block_ids"] = evidence_block_ids
+            seg["support_block_ids"] = support_block_ids
+            seg["locate_policy"] = "required"
+            seg["locate_surface_policy"] = "secondary"
+            seg["claim_group_id"] = claim_group_id
+            seg["claim_group_kind"] = claim_group_kind
+            seg["formula_origin"] = "explanation"
+            seg["related_block_ids"] = related_block_ids
+            anchor_text = str(seg.get("anchor_text") or "").strip()
+            if not anchor_text:
+                seg["anchor_text"] = str(segment_text or raw_markdown)[:900]
+            used_segment_ids.add(segment_id)
+
+    quote_groups: dict[str, list[dict]] = {}
+    for seg in out:
+        if not isinstance(seg, dict):
+            continue
+        if str(seg.get("claim_group_kind") or "").strip().lower() != "quote_bundle":
+            continue
+        quote_groups.setdefault(str(seg.get("claim_group_id") or "").strip(), []).append(seg)
+    for items in quote_groups.values():
+        dedupe_by_key: dict[str, list[dict]] = {}
+        for seg in items:
+            key = " :: ".join(
+                [
+                    str(seg.get("primary_block_id") or "").strip(),
+                    normalize_match_text(
+                        str(seg.get("anchor_text") or seg.get("evidence_quote") or seg.get("text") or "")
+                    )[:420],
+                ]
+            ).strip()
+            if not key:
+                continue
+            dedupe_by_key.setdefault(key, []).append(seg)
+        for dup_items in dedupe_by_key.values():
+            if len(dup_items) <= 1:
+                continue
+            dup_items.sort(
+                key=lambda seg: (
+                    -len(str(seg.get("anchor_text") or seg.get("evidence_quote") or "")),
+                    int(seg.get("segment_index") or 0),
+                )
+            )
+            keep = dup_items[0]
+            keep["locate_surface_policy"] = "primary"
+            for seg in dup_items[1:]:
+                seg["must_locate"] = False
+                seg["locate_policy"] = "hidden"
+                seg["locate_surface_policy"] = "hidden"
+
+    return out
+
+
+def _strict_identity_missing_reasons(segment: dict | None) -> list[str]:
+    if not isinstance(segment, dict):
+        return ["invalid_segment"]
+    reasons: list[str] = []
+    primary_block_id = str(segment.get("primary_block_id") or "").strip()
+    evidence_block_ids = [
+        str(item or "").strip()
+        for item in list(segment.get("evidence_block_ids") or [])
+        if str(item or "").strip()
+    ]
+    anchor_kind = str(segment.get("anchor_kind") or "").strip().lower()
+    anchor_text = str(segment.get("anchor_text") or "").strip()
+    evidence_quote = str(segment.get("evidence_quote") or "").strip()
+    if not primary_block_id:
+        reasons.append("missing_primary_block_id")
+    if not evidence_block_ids:
+        reasons.append("missing_evidence_block_ids")
+    if not anchor_kind:
+        reasons.append("missing_anchor_kind")
+    if not (anchor_text or evidence_quote):
+        reasons.append("missing_anchor_text_or_evidence_quote")
+    return reasons
+
+
+def _apply_provenance_strict_identity_contract(
+    segments: list[dict] | None,
+) -> tuple[list[dict], dict[str, object]]:
+    hardened: list[dict] = []
+    must_locate_candidate_count = 0
+    strict_identity_count = 0
+    identity_missing_reasons: dict[str, int] = {}
+    identity_missing_segments: list[dict[str, object]] = []
+
+    for seg0 in list(segments or []):
+        if not isinstance(seg0, dict):
+            continue
+        seg = dict(seg0)
+        missing_reasons: list[str] = []
+        if bool(seg.get("must_locate")):
+            must_locate_candidate_count += 1
+            missing_reasons = _strict_identity_missing_reasons(seg)
+            if missing_reasons:
+                seg["must_locate"] = False
+                for reason in missing_reasons:
+                    identity_missing_reasons[reason] = int(identity_missing_reasons.get(reason) or 0) + 1
+                identity_missing_segments.append(
+                    {
+                        "segment_id": str(seg.get("segment_id") or "").strip(),
+                        "claim_type": str(seg.get("claim_type") or "").strip(),
+                        "reasons": missing_reasons,
+                    }
+                )
+            else:
+                strict_identity_count += 1
+        seg["strict_identity_missing_reasons"] = missing_reasons
+        hardened.append(seg)
+
+    must_locate_count = sum(1 for seg in hardened if bool(seg.get("must_locate")))
+    strict_identity_ready = bool(must_locate_candidate_count == strict_identity_count)
+    if must_locate_candidate_count <= 0:
+        strict_identity_ready = True
+    return hardened, {
+        "provenance_schema_version": int(_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION),
+        "must_locate_candidate_count": int(must_locate_candidate_count),
+        "must_locate_count": int(must_locate_count),
+        "strict_identity_count": int(strict_identity_count),
+        "strict_identity_ready": bool(strict_identity_ready),
+        "identity_missing_reasons": identity_missing_reasons,
+        "identity_missing_segments": identity_missing_segments,
     }
 
 
@@ -1876,6 +2880,71 @@ def _segment_focus_tags(text: str) -> set[str]:
     if has_equation_signal(src):
         tags.add("formula")
     return tags
+
+
+def _summary_segment_tags(text: str) -> set[str]:
+    src = normalize_inline_markdown(str(text or ""))
+    if not src:
+        return set()
+    tags: set[str] = set()
+    if _SUMMARY_NOVELTY_HINT_RE.search(src):
+        tags.add("novelty")
+    if _SUMMARY_RESULT_HINT_RE.search(src):
+        tags.add("result")
+    return tags
+
+
+def _summary_block_adjustment(segment_text: str, block: dict | None) -> float:
+    if not isinstance(block, dict):
+        return 0.0
+    tags = _summary_segment_tags(segment_text)
+    if not tags:
+        return 0.0
+    block_text = normalize_inline_markdown(str(block.get("raw_text") or block.get("text") or ""))
+    if not block_text:
+        return 0.0
+    heading = normalize_match_text(str(block.get("heading_path") or ""))
+    kind = str(block.get("kind") or "").strip().lower()
+    score = 0.0
+    text_has_contribution = bool(_CONTRIBUTION_BLOCK_HINT_RE.search(block_text))
+    text_has_result = bool(_RESULT_BLOCK_HINT_RE.search(block_text))
+    definition_like = bool(_DEFINITION_LIKE_BLOCK_HINT_RE.search(block_text))
+    leadin_only = bool(_CONTRIBUTION_LEADIN_HINT_RE.search(block_text))
+
+    if kind == "heading":
+        score -= 0.22
+    if kind == "equation":
+        score -= 0.36
+
+    if "novelty" in tags:
+        if text_has_contribution:
+            score += 0.72
+            if kind == "list_item":
+                score += 0.18
+            if "abstract" in heading:
+                score += 0.18
+            elif "introduction" in heading:
+                score += 0.10
+        if definition_like:
+            score -= 0.88
+        if leadin_only:
+            score -= 0.14
+
+    if "result" in tags:
+        if text_has_result:
+            score += 0.58
+            if kind == "list_item":
+                score += 0.12
+            if any(token in heading for token in _EXPERIMENT_HEADING_HINTS):
+                score += 0.16
+            elif "abstract" in heading:
+                score += 0.08
+        if definition_like:
+            score -= 0.46
+        if leadin_only:
+            score -= 0.10
+
+    return float(score)
 
 
 def _heading_focus_adjustment(segment_text: str, heading_path: str) -> float:
@@ -1973,6 +3042,45 @@ def _best_evidence_quote_match(segment_text: str, block: dict | None) -> tuple[s
 
 def _best_evidence_quote(segment_text: str, block: dict | None) -> str:
     return _best_evidence_quote_match(segment_text, block)[0]
+
+
+def _expand_match_snippet_hints(text: str, *, max_items: int = 6) -> list[str]:
+    raw = str(text or "")
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push(item: str) -> None:
+        clean = normalize_inline_markdown(item)
+        if len(clean) < 14:
+            return
+        key = normalize_match_text(clean)
+        if (not key) or (key in seen):
+            return
+        seen.add(key)
+        out.append(clean[:360])
+
+    for line in raw.splitlines():
+        stripped = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", str(line or "")).strip()
+        if not stripped:
+            continue
+        clean = normalize_inline_markdown(stripped)
+        if len(clean) >= 24:
+            _push(stripped)
+            if len(out) >= max_items:
+                return out
+
+    clean_raw = normalize_inline_markdown(raw)
+    if clean_raw:
+        for sent in [s.strip() for s in _SEG_SENT_SPLIT_RE.split(clean_raw) if str(s).strip()]:
+            if len(sent) < 22:
+                continue
+            _push(sent)
+            if len(out) >= max_items:
+                return out
+        _push(clean_raw)
+    return out[:max_items]
 
 
 def _block_support_metrics(segment_text: str, block: dict | None) -> dict[str, float | str | bool]:
@@ -2201,12 +3309,13 @@ def _collect_paper_guide_block_pool(
         raw_snips = meta.get("ref_show_snippets")
         if isinstance(raw_snips, list):
             for item in raw_snips[:4]:
-                text = normalize_inline_markdown(str(item or ""))
-                if text and text not in snippet_hints:
-                    snippet_hints.append(text)
+                for text in _expand_match_snippet_hints(str(item or ""), max_items=4):
+                    if text and text not in snippet_hints:
+                        snippet_hints.append(text)
         hit_text = normalize_inline_markdown(str(hit.get("text") or ""))
-        if hit_text and hit_text not in snippet_hints:
-            snippet_hints.append(hit_text)
+        for text in _expand_match_snippet_hints(str(hit.get("text") or ""), max_items=6):
+            if text and text not in snippet_hints:
+                snippet_hints.append(text)
         prefer_kind = str(meta.get("anchor_target_kind") or "").strip().lower()
         try:
             target_number = int(meta.get("anchor_target_number") or 0)
@@ -2215,7 +3324,7 @@ def _collect_paper_guide_block_pool(
 
         match_jobs: list[tuple[str, str]] = []
         if snippet_hints:
-            for snippet in snippet_hints[:3]:
+            for snippet in snippet_hints[:4]:
                 for heading in heading_hints[:2] or [""]:
                     match_jobs.append((snippet, heading))
         elif heading_hints:
@@ -2305,10 +3414,19 @@ def _build_paper_guide_answer_provenance(
         bound_source_name=bound_source_name,
     )
     mapping_mode = "fast"
+    empty_contract_meta = {
+        "provenance_schema_version": int(_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION),
+        "must_locate_candidate_count": 0,
+        "must_locate_count": 0,
+        "strict_identity_count": 0,
+        "strict_identity_ready": True,
+        "identity_missing_reasons": {},
+        "identity_missing_segments": [],
+    }
 
     if not evidence_pool:
         return {
-            "version": 1,
+            "version": int(_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION),
             "source_path": source_path,
             "source_name": str(bound_source_name or Path(source_path).name or "").strip(),
             "md_path": str(md_path),
@@ -2319,6 +3437,7 @@ def _build_paper_guide_answer_provenance(
             "mapping_mode": mapping_mode,
             "llm_rerank_enabled": bool(llm_rerank),
             "llm_rerank_calls": 0,
+            **empty_contract_meta,
         }
 
     candidate_blocks = [dict(item.get("block") or {}) for item in evidence_pool if isinstance(item.get("block"), dict)]
@@ -2364,18 +3483,26 @@ def _build_paper_guide_answer_provenance(
         quoted_spans = _extract_quoted_spans(raw_markdown or seg_text, min_len=12)
         quote_anchor = _longest_quoted_span(raw_markdown or seg_text, min_len=12)
         probe_text = str(quote_anchor or seg_text).strip()
+        summary_tags = _summary_segment_tags(seg_text) if not is_formula else set()
         prefer_kind = "equation" if is_formula else ""
         base_blocks = candidate_blocks
         if (not is_formula) and (str(seg_kind).strip().lower() == "blockquote" or bool(quote_anchor)):
             base_blocks = blocks
         if is_formula and global_formula_blocks:
             base_blocks = global_formula_blocks
+        if is_formula:
+            rank_limit = 10
+        elif summary_tags:
+            rank_limit = max(12, min(24, len(base_blocks or [])))
+        else:
+            rank_limit = 8 if quote_anchor else 5
         ranked = match_source_blocks(
             base_blocks,
             snippet=probe_text,
             prefer_kind=prefer_kind,
             target_number=eq_number,
-            limit=(10 if is_formula else (8 if quote_anchor else 5)),
+            limit=rank_limit,
+            score_floor=(0.12 if summary_tags else None),
         )
         if (not ranked) and (not is_formula) and quote_anchor and base_blocks is not candidate_blocks:
             ranked = match_source_blocks(
@@ -2509,6 +3636,7 @@ def _build_paper_guide_answer_provenance(
             "support_score": 0.0,
             "heading_adjust": 0.0,
             "generic_heading": False,
+            "summary_adjust": 0.0,
         }
         if (not is_formula) and ranked:
             rescored: list[dict] = []
@@ -2517,10 +3645,12 @@ def _build_paper_guide_answer_provenance(
                 if not isinstance(block0, dict):
                     continue
                 metrics = _block_support_metrics(probe_text, block0)
+                summary_adjust = _summary_block_adjustment(seg_text, block0)
                 capped_base = min(float(row.get("score") or 0.0), 1.32)
                 final_score = capped_base
                 final_score += 0.96 * float(metrics.get("support_score") or 0.0)
                 final_score += float(metrics.get("heading_adjust") or 0.0)
+                final_score += summary_adjust
                 rescored.append(
                     {
                         "score": final_score,
@@ -2530,6 +3660,7 @@ def _build_paper_guide_answer_provenance(
                         "support_quote": str(metrics.get("quote") or ""),
                         "heading_adjust": float(metrics.get("heading_adjust") or 0.0),
                         "generic_heading": bool(metrics.get("generic_heading")),
+                        "summary_adjust": float(summary_adjust),
                     }
                 )
             rescored.sort(key=lambda item: float(item.get("score") or 0.0), reverse=True)
@@ -2557,11 +3688,20 @@ def _build_paper_guide_answer_provenance(
                 quote_score = float(row.get("quote_score") or 0.0)
                 heading_adjust = float(row.get("heading_adjust") or 0.0)
                 generic_heading = bool(row.get("generic_heading"))
-                if support_score < 0.24:
-                    continue
-                if generic_heading and support_score < 0.42:
-                    continue
+                summary_adjust = float(row.get("summary_adjust") or 0.0)
+                if summary_tags:
+                    if support_score < 0.18 and summary_adjust < 0.60:
+                        continue
+                    if generic_heading and support_score < 0.42 and summary_adjust < 0.60:
+                        continue
+                else:
+                    if support_score < 0.24:
+                        continue
+                    if generic_heading and support_score < 0.42:
+                        continue
                 if quote_score < 0.18 and heading_adjust < -0.10:
+                    continue
+                if summary_tags and summary_adjust <= -0.48 and support_score < 0.58:
                     continue
             if score < dynamic_floor:
                 continue
@@ -2576,6 +3716,7 @@ def _build_paper_guide_answer_provenance(
                     "support_score": float(row.get("support_score") or 0.0),
                     "heading_adjust": float(row.get("heading_adjust") or 0.0),
                     "generic_heading": bool(row.get("generic_heading")),
+                    "summary_adjust": float(row.get("summary_adjust") or 0.0),
                 }
             if len(chosen_ids) >= keep_limit:
                 break
@@ -2678,7 +3819,16 @@ def _build_paper_guide_answer_provenance(
         if primary_block and (not is_formula):
             support_score = float(primary_support_metrics.get("support_score") or 0.0)
             generic_heading = bool(primary_support_metrics.get("generic_heading"))
-            if support_score < 0.24 or (generic_heading and support_score < 0.42):
+            summary_adjust = float(primary_support_metrics.get("summary_adjust") or 0.0)
+            reject_primary = False
+            if summary_tags:
+                if support_score < 0.18 and summary_adjust < 0.60:
+                    reject_primary = True
+                if generic_heading and support_score < 0.42 and summary_adjust < 0.60:
+                    reject_primary = True
+            elif support_score < 0.24 or (generic_heading and support_score < 0.42):
+                reject_primary = True
+            if reject_primary:
                 chosen_ids = []
                 primary_block_id = ""
                 support_block_ids = []
@@ -2690,6 +3840,7 @@ def _build_paper_guide_answer_provenance(
                     "support_score": 0.0,
                     "heading_adjust": 0.0,
                     "generic_heading": False,
+                    "summary_adjust": 0.0,
                 }
         primary_anchor_id = str((primary_block or {}).get("anchor_id") or "").strip()
         primary_heading_path = str((primary_block or {}).get("heading_path") or "").strip()
@@ -2737,20 +3888,26 @@ def _build_paper_guide_answer_provenance(
 
     if llm_calls_used > 0:
         mapping_mode = "llm_refined"
+    segments_with_policy = _apply_provenance_required_coverage_contract(
+        segments_out,
+        block_lookup=block_lookup,
+    )
+    segments_hardened, contract_meta = _apply_provenance_strict_identity_contract(segments_with_policy)
 
     return {
-        "version": 1,
+        "version": int(_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION),
         "source_path": source_path,
         "source_name": str(bound_source_name or Path(source_path).name or "").strip(),
         "md_path": str(md_path),
         "doc_id": str(blocks[0].get("doc_id") or ""),
-        "segments": segments_out,
+        "segments": segments_hardened,
         "block_map": block_map,
         "status": "ready",
         "candidate_block_count": len(candidate_blocks),
         "mapping_mode": mapping_mode,
         "llm_rerank_enabled": bool(llm_rerank),
         "llm_rerank_calls": int(llm_calls_used),
+        **contract_meta,
     }
 
 
@@ -2848,7 +4005,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         temperature = float(task.get("temperature") or 0.15)
         max_tokens = int(task.get("max_tokens") or 1200)
         deep_read = bool(task.get("deep_read"))
-        answer_contract_v1 = bool(task.get("answer_contract_v1", False))
+        answer_contract_v1 = _answer_contract_enabled(task)
         answer_depth_auto = bool(task.get("answer_depth_auto", True))
         answer_mode_hint = str(task.get("answer_mode_hint") or "").strip()
         answer_intent = _detect_answer_intent(prompt, answer_mode_hint=answer_mode_hint)
@@ -2861,9 +4018,6 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_bound_source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
         paper_guide_bound_source_name = str(task.get("paper_guide_bound_source_name") or "").strip()
         paper_guide_bound_source_ready = bool(task.get("paper_guide_bound_source_ready"))
-        if paper_guide_mode:
-            # Paper-guide answers should stay concise and structured by default.
-            answer_contract_v1 = True
 
         image_attachments: list[dict] = []
         if isinstance(raw_image_atts, list):
@@ -3439,6 +4593,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "3) 不要编造不存在的论文、公式、数据或结论。\n"
             "4) 不要输出‘参考定位/Top-K/引用列表’之类的额外段落（我会在页面里单独展示）。\n"
             "5) 数学公式输出格式：短的变量/符号用 $...$（行内）；较长的等式/推导用 $$...$$（行间）。不要用反引号包裹公式。\n"
+            "   - 只要在解释“公式(n)/Eq. (n)”或公式中出现 \\frac / \\sum / \\int / \\mathcal / \\mathbf 等复杂结构，就优先改成行间公式。\n"
+            "   - 长公式尽量单独成行；不要把整条长公式塞进一句话中间。\n"
+            "   - 公式后的 where 句、变量定义句、解释句尽量另起一句或另起一条，不要和长公式挤在同一行。\n"
             "6) 先直接回答用户最核心的问题，再补充必要依据、步骤或限制条件。\n"
             "7) 如果上下文不足以支撑某个细节，要明确说明该部分是基于通用知识的补充，而不是检索片段直接给出的结论。\n"
             "8) 如果用户请求代码、伪代码、步骤或公式推导，要给出可直接使用的结果，不要只讲概念。\n"
@@ -3484,13 +4641,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 has_hits=bool(answer_hits),
             )
         if paper_guide_mode and paper_guide_bound_source_ready:
-            system += (
-                "\nPaper-guide formula grounding:\n"
-                "- When the question asks about a formula/model, quote the equation from retrieved context as-is, including equation tag/number when available.\n"
-                "- If exact equation text is not present in retrieved context, say it is not explicitly available; do not invent a generic replacement formula.\n"
-                "- Keep the answer compact: 3-4 sections, avoid repetitive paragraphs.\n"
-                "- Only keep claims with direct support under Evidence; move unsupported general knowledge to Limits.\n"
-            )
+            system += _build_paper_guide_grounding_rules(answer_contract_v1=bool(answer_contract_v1))
         prompt_for_user = prompt or "[Image attachment only request]"
         user = (
             f"Question:\\n{prompt_for_user}\\n\\n"
@@ -3595,6 +4746,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             has_hits=bool(answer_hits),
             intent=answer_intent,
             depth=answer_depth,
+            contract_enabled=bool(answer_contract_v1),
         )
         answer = _maybe_append_library_figure_markdown(answer, prompt=prompt, answer_hits=answer_hits)
         answer, citation_validation = _validate_structured_citations(

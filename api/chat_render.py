@@ -5,6 +5,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from kb import task_runtime
 from kb.citation_meta import extract_first_doi
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
@@ -62,9 +63,20 @@ def _split_kb_miss_notice(text: str) -> tuple[str, str]:
 
 
 def _normalize_equation_source_notes(md: str) -> str:
+    def _clean_label(raw: str) -> str:
+        text = str(raw or "").strip().replace("\\", "/")
+        if not text:
+            return ""
+        if "/" in text:
+            text = text.rsplit("/", 1)[-1].strip()
+        pdf_names = re.findall(r"([A-Za-z][A-Za-z0-9 _().,+:-]{3,220}\.pdf)", text, re.IGNORECASE)
+        if pdf_names:
+            return str(pdf_names[-1] or "").strip()
+        return text.strip("`*#：:;；，,()（）[] ")
+
     def _replace(m: re.Match[str]) -> str:
         eq_num = str(m.group(1) or "").strip()
-        label = str(m.group(2) or "").strip()
+        label = _clean_label(str(m.group(2) or ""))
         if not eq_num or not label:
             return m.group(0)
         return f"*（式({eq_num}) 对应命中的库内文献：`{label}`）*"
@@ -82,14 +94,16 @@ def _normalize_equation_source_notes(md: str) -> str:
         ll = l.lower()
         if l.lstrip().startswith("*"):
             m_eq = re.search(r"\((\d{1,4})\)", l)
-            m_label = re.search(r"([A-Za-z0-9][^\n`]{0,220}\.pdf)", l)
+            m_label = re.search(r"([^\n`]{0,260}\.pdf)", l, re.IGNORECASE)
             if m_eq and m_label and (
                 ("open/page" in ll)
                 or ("参考定位" in l)
                 or ("鍙傝€冨畾浣" in l)
                 or ("#1" in l)
             ):
-                l = f"*（式({m_eq.group(1)}) 对应命中的库内文献：`{m_label.group(1).strip()}`）*"
+                label = _clean_label(m_label.group(1))
+                if label:
+                    l = f"*（式({m_eq.group(1)}) 对应命中的库内文献：`{label}`）*"
         lines.append(l)
     return "\n".join(lines).replace("Open/Page", "")
 
@@ -150,6 +164,55 @@ def _enrich_provenance_segments_for_display(
 ) -> dict | None:
     if not isinstance(provenance, dict):
         return provenance
+    block_map_raw = provenance.get("block_map")
+    block_map = dict(block_map_raw) if isinstance(block_map_raw, dict) else {}
+    lookup: dict[str, dict] = {
+        str(block_id): dict(block)
+        for block_id, block in block_map.items()
+        if str(block_id or "").strip() and isinstance(block, dict)
+    }
+    md_path_raw = str(provenance.get("md_path") or "").strip()
+    if md_path_raw:
+        try:
+            for block in task_runtime.load_source_blocks(Path(md_path_raw)):
+                if not isinstance(block, dict):
+                    continue
+                block_id = str(block.get("block_id") or "").strip()
+                if not block_id:
+                    continue
+                lookup[block_id] = dict(block)
+        except Exception:
+            pass
+    if lookup:
+        try:
+            hardened_segments = task_runtime._apply_provenance_required_coverage_contract(
+                provenance.get("segments"),
+                block_lookup=lookup,
+            )
+            hardened_segments, contract_meta = task_runtime._apply_provenance_strict_identity_contract(hardened_segments)
+            provenance = dict(provenance)
+            provenance["segments"] = hardened_segments
+            referenced_block_ids: set[str] = set()
+            for seg in hardened_segments:
+                if not isinstance(seg, dict):
+                    continue
+                primary_block_id = str(seg.get("primary_block_id") or "").strip()
+                if primary_block_id:
+                    referenced_block_ids.add(primary_block_id)
+                for block_id_raw in list(seg.get("support_block_ids") or []) + list(seg.get("evidence_block_ids") or []):
+                    block_id = str(block_id_raw or "").strip()
+                    if block_id:
+                        referenced_block_ids.add(block_id)
+            merged_block_map = dict(block_map)
+            for block_id in referenced_block_ids:
+                block = lookup.get(block_id)
+                if isinstance(block, dict):
+                    merged_block_map[block_id] = dict(block)
+            provenance["block_map"] = merged_block_map
+            for key, value in dict(contract_meta or {}).items():
+                provenance[key] = value
+        except Exception:
+            provenance = dict(provenance)
     segments_raw = provenance.get("segments")
     if not isinstance(segments_raw, list):
         return provenance
@@ -405,6 +468,9 @@ def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: di
         )
         if isinstance(enriched_provenance, dict):
             rec["provenance"] = enriched_provenance
+            if isinstance(rec.get("meta"), dict):
+                rec["meta"] = dict(rec.get("meta") or {})
+                rec["meta"]["provenance"] = enriched_provenance
         rec["render_cache_key"] = hashlib.sha1(
             f"{conv_id}|{msg_id}|{last_user_msg_id}|{content}".encode("utf-8", "ignore")
         ).hexdigest()[:12]

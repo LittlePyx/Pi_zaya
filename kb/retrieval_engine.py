@@ -560,7 +560,7 @@ def _anchor_text_bonus(text: str, anchor_hint: dict[str, object]) -> float:
     patterns_by_kind = {
         "figure": rf"(?:fig(?:ure)?\.?\s*{num}\b|图\s*{num}\b|图{num}\b|第\s*{num}\s*张图)",
         "table": rf"(?:table\.?\s*{num}\b|表\s*{num}\b|表{num}\b|第\s*{num}\s*表)",
-        "equation": rf"(?:eq(?:uation)?\.?\s*{num}\b|formula\s*{num}\b|公式\s*{num}\b|公式{num}\b|式\s*{num}\b|式{num}\b|[\(\[（]\s*{num}\s*[\)\]）]|\\tag\{{\s*{num}\s*\}})",
+        "equation": rf"(?:eq(?:uation)?\.?\s*{num}\b|formula\s*{num}\b|公式\s*{num}\b|公式{num}\b|式\s*{num}\b|式{num}\b|[\(（]\s*{num}\s*[\)）]|\\tag\{{\s*{num}\s*\}})",
         "theorem": rf"(?:theorem\.?\s*{num}\b|定理\s*{num}\b|定理{num}\b)",
         "lemma": rf"(?:lemma\.?\s*{num}\b|引理\s*{num}\b|引理{num}\b)",
         "definition": rf"(?:definition\.?\s*{num}\b|定义\s*{num}\b|定义{num}\b)",
@@ -606,7 +606,7 @@ def _anchor_regexes(anchor_hint: dict[str, object]) -> list[re.Pattern[str]]:
             rf"formula\s*{num}\b",
             rf"(?:公式|式)\s*{num}\b",
             rf"(?:公式|式){num}\b",
-            rf"[\(\[（]\s*{num}\s*[\)\]）]",
+            rf"[\(（]\s*{num}\s*[\)）]",
             rf"\\tag\{{\s*{num}\s*\}}",
         ],
         "theorem": [rf"theorem\.?\s*{num}\b", rf"定理\s*{num}\b", rf"定理{num}\b"],
@@ -1194,6 +1194,14 @@ def _group_hits_by_doc_for_refs(
                     )
             t = (h.get("text") or "").strip()
             if t:
+                if _should_skip_reference_like_snippet(
+                    t,
+                    heading_path=str(meta.get("heading_path") or top or ""),
+                    question=nav_question,
+                    source_path=src,
+                ):
+                    t = ""
+            if t:
                 if force_anchor_focus and anchor_bonus > 0.0:
                     snippet_anchor_bonus[t] = max(float(snippet_anchor_bonus.get(t, 0.0) or 0.0), float(anchor_bonus))
                 if t not in snippets:
@@ -1276,6 +1284,14 @@ def _group_hits_by_doc_for_refs(
                             }
                         )
                 tx = (ex.get("text") or "").strip()
+                if tx:
+                    if _should_skip_reference_like_snippet(
+                        tx,
+                        heading_path=hp2 or hp2_raw,
+                        question=nav_question,
+                        source_path=src,
+                    ):
+                        tx = ""
                 if tx:
                     if force_anchor_focus and anchor_bonus_ex > 0.0:
                         snippet_anchor_bonus[tx] = max(float(snippet_anchor_bonus.get(tx, 0.0) or 0.0), float(anchor_bonus_ex))
@@ -1784,6 +1800,38 @@ def _deep_read_md_for_context(md_path: Path, query: str, *, max_snippets: int = 
         out.append({"score": float(s), "id": f"deep:{hashlib.sha1((str(md_path)+'|'+str(rank)).encode('utf-8','ignore')).hexdigest()[:12]}", "text": body, "meta": meta})
     _cache_set("deep_read", cache_key, out, max_items=320)
     return out
+
+
+def _looks_like_reference_list_snippet(text: str) -> bool:
+    s = " ".join(str(text or "").strip().split())
+    if not s:
+        return False
+    if _REF_HEADING_RE.search(s[:160]):
+        return True
+    if len(re.findall(r"\[\d{1,3}\]", s)) >= 2:
+        return True
+    if re.match(r"^\[\d{1,3}\]\s+[A-Z][A-Za-z][^.!?]{8,}", s):
+        low = s.lower()
+        if (
+            re.search(r"\b(?:19|20)\d{2}\b", s)
+            or "proceedings" in low
+            or "conference" in low
+            or "arxiv" in low
+            or "ieee" in low
+            or "springer" in low
+        ):
+            return True
+    return False
+
+
+def _should_skip_reference_like_snippet(text: str, *, heading_path: str, question: str, source_path: str = "") -> bool:
+    if _wants_reference_navigation(question):
+        return False
+    hp = _normalize_heading_path_for_display(str(heading_path or "").strip())
+    top_h = _top_heading(hp or heading_path)
+    if top_h and _is_reference_heading_like(top_h):
+        return True
+    return _looks_like_reference_list_snippet(text)
 
 
 _OVERVIEW_HEADING_GOOD_RE = re.compile(

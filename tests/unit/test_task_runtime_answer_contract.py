@@ -54,6 +54,26 @@ def test_apply_answer_contract_with_hits():
     assert "[1]" in out or "[2]" in out
 
 
+def test_answer_contract_enabled_respects_paper_guide_toggle():
+    from kb import task_runtime
+
+    assert task_runtime._answer_contract_enabled({"paper_guide_mode": True, "answer_contract_v1": False}) is False
+    assert task_runtime._answer_contract_enabled({"paper_guide_mode": True, "answer_contract_v1": True}) is True
+
+
+def test_build_paper_guide_grounding_rules_respects_contract_toggle():
+    from kb import task_runtime
+
+    structured = task_runtime._build_paper_guide_grounding_rules(answer_contract_v1=True)
+    plain = task_runtime._build_paper_guide_grounding_rules(answer_contract_v1=False)
+
+    assert "3-4 sections" in structured
+    assert "under Evidence" in structured
+    assert "3-4 sections" not in plain
+    assert "under Evidence" not in plain
+    assert "do not force a fixed section template" in plain
+
+
 def test_apply_answer_contract_without_hits_adds_limits():
     from kb import task_runtime
 
@@ -180,6 +200,7 @@ def test_enhance_kb_miss_fallback_appends_next_steps():
         has_hits=False,
         intent="reading",
         depth="L2",
+        contract_enabled=True,
     )
     assert "未命中知识库片段" in out
     assert "下一步建议" in out
@@ -195,8 +216,23 @@ def test_enhance_kb_miss_fallback_does_not_duplicate_next_steps():
         has_hits=False,
         intent="reading",
         depth="L2",
+        contract_enabled=True,
     )
     assert out.count("Next Steps:") == 1
+
+
+def test_enhance_kb_miss_fallback_respects_contract_disabled():
+    from kb import task_runtime
+
+    raw = "Missed library snippets.\n\nHere is a general answer."
+    out = task_runtime._enhance_kb_miss_fallback(
+        raw,
+        has_hits=False,
+        intent="reading",
+        depth="L2",
+        contract_enabled=False,
+    )
+    assert out == raw
 
 
 def test_sanitize_structured_tokens_removes_sid_markers():

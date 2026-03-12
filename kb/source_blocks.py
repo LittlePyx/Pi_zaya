@@ -32,6 +32,7 @@ _EQ_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 _EQ_TAG_RE = re.compile(r"\\tag\{\s*(\d{1,4})\s*\}", re.IGNORECASE)
+_FIG_NUMBER_RE = re.compile(r"(?:\bfig(?:ure)?\.?\s*#?\s*|图\s*|第\s*)(\d{1,4})(?:\s*张图)?", re.IGNORECASE)
 _INLINE_EQ_RE = re.compile(r"\$[^$]{1,280}\$")
 _DISPLAY_EQ_RE = re.compile(r"\$\$[\s\S]{1,6000}\$\$")
 _EQ_ENV_RE = re.compile(r"\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\}", re.IGNORECASE)
@@ -54,6 +55,7 @@ def _anchor_id(kind: str, index: int) -> str:
         "heading": "hd",
         "paragraph": "p",
         "equation": "eq",
+        "figure": "fg",
         "list_item": "li",
         "blockquote": "bq",
         "code": "cd",
@@ -178,6 +180,20 @@ def extract_equation_number(text: str) -> int:
     return number if number > 0 else 0
 
 
+def extract_figure_number(text: str) -> int:
+    src = str(text or "")
+    if not src:
+        return 0
+    m = _FIG_NUMBER_RE.search(src)
+    if not m:
+        return 0
+    try:
+        number = int(str(m.group(1) or "0"))
+    except Exception:
+        return 0
+    return number if number > 0 else 0
+
+
 def _formula_tokens(text: str) -> list[str]:
     src = str(text or "")
     if not src:
@@ -267,7 +283,7 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
     def push(kind: str, raw_text: str, *, line_start: int, line_end: int, number: int = 0) -> None:
         nonlocal order_index
         clean = normalize_inline_markdown(raw_text)
-        if kind != "heading" and len(clean) < 4:
+        if kind not in {"heading", "figure"} and len(clean) < 4:
             return
         counters[kind] = int(counters.get(kind, 0) or 0) + 1
         order_index += 1
@@ -363,6 +379,21 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
             continue
         flush_table(max(1, line_no - 1))
 
+        image_match = _MD_IMAGE_RE.search(line)
+        if image_match:
+            flush_paragraph(max(1, line_no - 1))
+            alt_text = str(image_match.group(1) or "").strip()
+            figure_text = alt_text or str(line or "").strip()
+            if figure_text:
+                push(
+                    "figure",
+                    figure_text,
+                    line_start=line_no,
+                    line_end=line_no,
+                    number=extract_figure_number(figure_text),
+                )
+            continue
+
         if not line.strip():
             flush_paragraph(max(1, line_no - 1))
             continue
@@ -423,6 +454,7 @@ def match_source_blocks(
     prefer_kind: str = "",
     target_number: int = 0,
     limit: int = 3,
+    score_floor: float | None = None,
 ) -> list[dict]:
     query = normalize_inline_markdown(snippet)
     heading = normalize_inline_markdown(heading_path)
@@ -471,6 +503,11 @@ def match_source_blocks(
         floor = 0.22
     else:
         floor = 0.42
+    if score_floor is not None:
+        try:
+            floor = max(0.0, float(score_floor))
+        except Exception:
+            pass
 
     out: list[dict] = []
     seen: set[str] = set()

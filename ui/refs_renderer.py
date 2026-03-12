@@ -3963,7 +3963,7 @@ def _best_eq_source_for_tag(
 def _annotate_equation_tags_with_sources(md: str, hits: list[dict]) -> str:
     """
     Add a small note under display equations with \\tag{n}:
-    '寮?n) 鏉ヨ嚜鍙傝€冨畾浣?#k: filename'
+    '（式(n) 对应命中的库内文献：filename.pdf）'
     """
     s = (md or "").replace("\r\n", "\n").replace("\r", "\n")
     if "$$" not in s or "\\tag{" not in s:
@@ -4009,8 +4009,10 @@ def _annotate_equation_tags_with_sources(md: str, hits: list[dict]) -> str:
         tag_n, inner = block_by_start[i]
         picked = _best_eq_source_for_tag(inner, tag_n, hits or [])
         if picked:
-            ref_rank, label = picked
-            out.append(f"*锛堝紡({int(tag_n)}) 鏉ヨ嚜鍙傝€冨畾浣?#{int(ref_rank)}锛歚{label}`锛屽彲鍦ㄤ笅鏂瑰弬鑰冨畾浣嶇偣 Open/Page锛?")
+            _ref_rank, label = picked
+            safe_label = str(label or "").strip()
+            if safe_label:
+                out.append(f"*（式({int(tag_n)}) 对应命中的库内文献：`{safe_label}`）*")
         out.append("")
         i = j + 1
 

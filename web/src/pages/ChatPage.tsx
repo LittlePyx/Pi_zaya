@@ -78,10 +78,16 @@ export default function ChatPage() {
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
   const timelineJumpTokenRef = useRef(1)
+  const readerLocateRequestRef = useRef(1)
 
   const nextEventToken = () => {
     timelineJumpTokenRef.current += 1
     return timelineJumpTokenRef.current
+  }
+
+  const nextReaderLocateRequestId = () => {
+    readerLocateRequestRef.current += 1
+    return readerLocateRequestRef.current
   }
 
   useEffect(() => {
@@ -286,19 +292,35 @@ export default function ChatPage() {
       message.info('当前引用缺少可绑定的文献路径')
       return
     }
+    const locateRequestId = nextReaderLocateRequestId()
     setReaderPayload({
       sourcePath,
       sourceName: String(payload.sourceName || '').trim(),
       headingPath: String(payload.headingPath || '').trim(),
       snippet: String(payload.snippet || '').trim(),
+      highlightSnippet: String(payload.highlightSnippet || '').trim(),
       blockId: String(payload.blockId || '').trim() || undefined,
       anchorId: String(payload.anchorId || '').trim() || undefined,
+      relatedBlockIds: Array.isArray(payload.relatedBlockIds)
+        ? payload.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
+        : undefined,
+      anchorKind: String(payload.anchorKind || '').trim() || undefined,
+      anchorNumber: Number.isFinite(Number(payload.anchorNumber))
+        ? Number(payload.anchorNumber)
+        : undefined,
+      strictLocate: Boolean(payload.strictLocate),
+      locateRequestId,
       alternatives: Array.isArray(payload.alternatives)
         ? payload.alternatives.map((item) => ({
           headingPath: String(item?.headingPath || '').trim(),
           snippet: String(item?.snippet || '').trim(),
+          highlightSnippet: String(item?.highlightSnippet || '').trim(),
           blockId: String(item?.blockId || '').trim() || undefined,
           anchorId: String(item?.anchorId || '').trim() || undefined,
+          anchorKind: String(item?.anchorKind || '').trim() || undefined,
+          anchorNumber: Number.isFinite(Number(item?.anchorNumber))
+            ? Number(item?.anchorNumber)
+            : undefined,
         }))
         : undefined,
       initialAltIndex: Number.isFinite(Number(payload.initialAltIndex))
