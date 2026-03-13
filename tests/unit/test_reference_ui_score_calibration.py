@@ -24,6 +24,94 @@ def test_effective_ui_score_penalizes_weak_evidence_high_llm_score():
     assert score < 6.0
 
 
+def test_enrich_refs_payload_filters_bound_source_by_guide_name_without_bound_path():
+    refs = {
+        5: {
+            "prompt": "Summarize Figure 1.",
+            "hits": [
+                {
+                    "text": "Figure 1 shows the SCI pipeline.",
+                    "meta": {
+                        "source_path": r"db\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {
+                            "llm": 88.0,
+                            "bm25": 5.8,
+                            "deep": 1.6,
+                            "term_bonus": 0.8,
+                            "semantic_score": 8.1,
+                        },
+                    },
+                }
+            ],
+        }
+    }
+
+    out = enrich_refs_payload(
+        refs,
+        pdf_root=None,
+        md_root=None,
+        lib_store=None,
+        guide_mode=True,
+        guide_source_path="",
+        guide_source_name="2024 IEEE-CVF Conference on Computer Vision and Pattern Recognition (CVPR)-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+    )
+
+    entry = out.get(5) or {}
+    assert list(entry.get("hits") or []) == []
+    guide_filter = entry.get("guide_filter", {}) or {}
+    assert guide_filter.get("active") is True
+    assert guide_filter.get("hidden_self_source") is True
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 1
+
+
+def test_enrich_refs_payload_keeps_external_hits_while_filtering_bound_source():
+    refs = {
+        6: {
+            "prompt": "What other papers are relevant?",
+            "hits": [
+                {
+                    "text": "SCINeRF paper hit.",
+                    "meta": {
+                        "source_path": r"db\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {"llm": 81.0, "bm25": 4.2, "deep": 1.0, "term_bonus": 0.4, "semantic_score": 7.4},
+                    },
+                },
+                {
+                    "text": "Another paper remains visible.",
+                    "meta": {
+                        "source_path": r"db\ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image\ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {"llm": 79.0, "bm25": 4.0, "deep": 1.2, "term_bonus": 0.6, "semantic_score": 7.1},
+                        "ref_section": "Related Work",
+                        "ref_loc_quality": "high",
+                    },
+                },
+            ],
+        }
+    }
+
+    out = enrich_refs_payload(
+        refs,
+        pdf_root=None,
+        md_root=None,
+        lib_store=None,
+        guide_mode=True,
+        guide_source_path=r"db\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+        guide_source_name="CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+    )
+
+    entry = out.get(6) or {}
+    hits = list(entry.get("hits") or [])
+    assert len(hits) == 1
+    kept_path = str(((hits[0].get("meta") or {}).get("source_path") or "")).strip()
+    assert "SCIGS" in kept_path
+    guide_filter = entry.get("guide_filter", {}) or {}
+    assert guide_filter.get("hidden_self_source") is True
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 1
+
+
 def test_effective_ui_score_keeps_high_score_for_strong_evidence():
     hit = {
         "meta": {

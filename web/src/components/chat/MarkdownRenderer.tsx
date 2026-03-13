@@ -98,6 +98,16 @@ interface ReaderBlockResolver {
 
 const BlockquoteLocateContext = createContext(false)
 
+function isCiteLikeElement(node: ReactNode): boolean {
+  if (!isValidElement(node)) return false
+  const props = node.props as { className?: string; href?: string }
+  const className = String(props.className || '')
+  const href = String(props.href || '').trim()
+  if (/\bkb-cite-chip\b/.test(className)) return true
+  if (/^#kb-cite-/i.test(href)) return true
+  return false
+}
+
 function isEmptyReactNode(node: ReactNode): boolean {
   if (node === null || node === undefined || typeof node === 'boolean') return true
   if (typeof node === 'string') return node.trim().length <= 0
@@ -111,7 +121,7 @@ function isTailBoundaryElement(node: ReactNode): boolean {
   const props = node.props as { className?: string }
   const className = String(props.className || '')
   if (['a', 'button', 'img', 'code', 'pre'].includes(nodeType)) return true
-  if (/\bkb-cite-chip\b/.test(className) || /\bkb-md-locate-inline-btn\b/.test(className)) return true
+  if (isCiteLikeElement(node) || /\bkb-md-locate-inline-btn\b/.test(className)) return true
   return false
 }
 
@@ -324,7 +334,8 @@ function plainText(node: ReactNode): string {
   if (isValidElement(node)) {
     const props = node.props as { className?: string; children?: ReactNode }
     const className = String(props.className || '')
-    if (/\bkb-cite-chip\b/.test(className)) return ''
+    if (isCiteLikeElement(node)) return ''
+    if (/\bkb-md-locate-inline-btn\b/.test(className)) return ''
     if (/\bkatex-html\b/.test(className)) return ''
     if (/\bkatex-mathml\b/.test(className)) {
       const annotation = findElementTextByType(props.children, 'annotation')
@@ -413,6 +424,48 @@ function preferredBlockquoteLocateSnippet(node: ReactNode): string {
   const preferred = String(quoteTokens[0]?.text || '').trim()
   if (preferred.length >= 18) return preferred
   return toLocateSnippet(node)
+}
+
+function isFigureShellElement(node: ReactNode): boolean {
+  if (!isValidElement(node)) return false
+  const nodeType = typeof node.type === 'string' ? node.type.toLowerCase() : ''
+  const props = node.props as { className?: string; children?: ReactNode }
+  const className = String(props.className || '')
+  if (nodeType === 'img') return true
+  if (nodeType === 'a') {
+    return countFigureShells(props.children) > 0
+  }
+  return /\bkb-md-figure-shell\b/.test(className)
+}
+
+function countFigureShells(node: ReactNode): number {
+  if (node === null || node === undefined || typeof node === 'boolean') return 0
+  if (typeof node === 'string' || typeof node === 'number') return 0
+  if (Array.isArray(node)) return node.reduce((acc, item) => acc + countFigureShells(item), 0)
+  if (!isValidElement(node)) return 0
+  if (isFigureShellElement(node)) return 1
+  const props = node.props as { children?: ReactNode }
+  return countFigureShells(props.children)
+}
+
+function isFigureHostParagraph(node: ReactNode): boolean {
+  const figureCount = countFigureShells(node)
+  if (figureCount !== 1) return false
+  const text = plainText(node).replace(/\s+/g, ' ').trim()
+  return text.length <= 0
+}
+
+function preferredFigureCaptionSnippet(node: ReactNode): string {
+  const raw = plainText(node).replace(/\s+/g, ' ').trim() || rawNodeText(node).replace(/\s+/g, ' ').trim()
+  if (!raw) return ''
+  const tokens = collectInlineLocateTokens(raw, { quote: false, figure_ref: true })
+    .filter((token) => token.kind === 'figure_ref')
+    .sort((a, b) => {
+      if (b.text.length !== a.text.length) return b.text.length - a.text.length
+      return a.start - b.start
+    })
+  const preferred = String(tokens[0]?.text || '').trim()
+  return preferred
 }
 
 function looksLikeDirectQuoteToken(text: string): boolean {
@@ -1032,7 +1085,7 @@ function buildMarkdownComponents(
         ? readerAnchorAttrs(pickReaderAnchor(node, ['figure']))
         : undefined
       return (
-        <span className={btn ? 'kb-md-loc-inline' : undefined} {...attrs}>
+        <span className={btn ? 'kb-md-figure-shell' : undefined} {...attrs}>
           <a href={resolvedSrc} target="_blank" rel="noreferrer" className="kb-md-image-link">
             <img
               src={resolvedSrc}
@@ -1041,7 +1094,7 @@ function buildMarkdownComponents(
               loading="lazy"
             />
           </a>
-          {btn}
+          {btn ? <span className="kb-md-figure-tail">{btn}</span> : null}
         </span>
       )
     },
@@ -1055,7 +1108,26 @@ function buildMarkdownComponents(
       const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
         ? decorateInlineLocateAnchors(children, meta)
         : { content: children, count: 0 }
-      return <p {...attrs}>{inline.count > 0 ? inline.content : children}</p>
+      const content = inline.count > 0 ? inline.content : children
+      if (variant !== 'chat') {
+        return <p {...attrs}>{content}</p>
+      }
+      if (isFigureHostParagraph(content)) {
+        return <p {...attrs} className="kb-md-figure-host">{content}</p>
+      }
+      const figureCaptionSnippet = preferredFigureCaptionSnippet(content)
+      if (figureCaptionSnippet) {
+        const figureBtn = renderLocateButton(figureCaptionSnippet, {
+          force: true,
+          meta: { kind: 'figure', order: renderOrder },
+          snippetOverride: figureCaptionSnippet,
+        })
+        if (figureBtn) {
+          const tailed = appendTailButtonToContent(content, figureBtn, `figure-caption-${renderOrder}`)
+          return <p {...attrs} className="kb-md-figure-caption">{tailed}</p>
+        }
+      }
+      return <p {...attrs}>{content}</p>
     },
     li: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
       const insideBlockquote = useContext(BlockquoteLocateContext)
@@ -1089,7 +1161,7 @@ function buildMarkdownComponents(
         <div className={`${cls || ''} kb-md-equation-block`.trim()} {...(rest as Record<string, unknown>)}>
           <span className="kb-md-equation-inline">
             {children}
-            <span className="kb-md-loc-tail kb-md-equation-tail">{btn}</span>
+            <span className="kb-md-equation-tail">{btn}</span>
           </span>
         </div>
       )
@@ -1111,7 +1183,7 @@ function buildMarkdownComponents(
         <span className={`${cls || ''} kb-md-equation-block`.trim()} {...(rest as Record<string, unknown>)}>
           <span className="kb-md-equation-inline">
             {children}
-            <span className="kb-md-loc-tail kb-md-equation-tail">{btn}</span>
+            <span className="kb-md-equation-tail">{btn}</span>
           </span>
         </span>
       )

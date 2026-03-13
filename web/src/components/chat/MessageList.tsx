@@ -386,8 +386,7 @@ function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
   } | undefined
   if (!entry) return false
   const hits = Array.isArray(entry.hits) ? entry.hits : []
-  if (hits.length > 0) return true
-  return hits.some((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending')
+  return hits.length > 0
 }
 
 function normalizeLocateText(input: string): string {

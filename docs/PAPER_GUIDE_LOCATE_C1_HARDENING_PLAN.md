@@ -1638,6 +1638,33 @@ Verified:
 1. `pytest tests/unit/test_task_runtime_provenance.py -q`
 2. `pytest tests/unit -q`
 
+### 11.40 Landed: D4 hotfix restores blockquote tail entrances after cite-chip rendering
+
+After the first D4 visual pass, quote entrances appeared to vanish. The actual failure mode was structural: the blockquote tail button was being appended inside the rendered cite-chip subtree, creating nested button markup that browsers collapsed away.
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - added `isCiteLikeElement(...)` to recognize:
+     - rendered `.kb-cite-chip` nodes
+     - pre-render cite anchors with `href="#kb-cite-..."`
+   - updated tail-boundary detection so blockquote tail placement stops at cite-like nodes instead of descending into them
+   - updated plaintext extraction to ignore cite-like nodes, keeping quote snippets clean
+2. this makes quote-tail rendering stable across both raw and enriched render paths
+
+Impact:
+
+1. quote entrances now render after the citation marker instead of being swallowed inside it
+2. the fix generalizes across other paper-guide answers because it targets render-structure, not a single message
+3. quote snippet extraction no longer picks up trailing citation digits
+
+Verified:
+
+1. `npm run build` in `web/`
+2. SSR replay of real message `1420` using API-rendered `rendered_body`
+   - `blockquote-btn count = 3`
+   - each quote renders as `... [1] <原文>`
+
 ### 11.41 Landed: D1 visual polish attaches locate entrances to quote/equation tails
 
 This frontend-only slice improves the surface presentation of paper-guide locate entrances without widening eligibility.
@@ -1733,6 +1760,93 @@ Verified:
 
 1. `pytest tests/unit/test_task_runtime_answer_contract.py -q`
 2. `pytest tests/unit -q`
+
+### 11.43 Landed: D3 third slice hardens paper-guide self-reference suppression
+
+This D3 slice closes the remaining `paper_guide` reference-product gaps around self-source suppression.
+
+Implemented:
+
+1. `api/reference_ui.py`
+   - guide-mode suppression now activates when either:
+     - `guide_source_path` exists
+     - or only `guide_source_name` survives in older conversations
+   - adds title/filename identity fallback matching in addition to strict source-path identity
+   - this keeps the bound guide paper filtered even when old conversation data only carries display-name variants
+2. `web/src/components/chat/MessageList.tsx`
+   - refs rows now stay strictly tied to surviving hits
+   - empty guide-filter payloads no longer count as renderable refs state
+3. `tests/unit/test_reference_ui_score_calibration.py`
+   - adds regression coverage for:
+     - `guide_source_name`-only self-source suppression
+     - mixed hit sets where the bound paper is filtered and external hits remain
+
+Impact:
+
+1. bound-paper suppression is now stable across new and legacy guide conversations
+2. the current guide paper no longer leaks back into refs cards through filename/title variants
+3. frontend refs rendering is simpler because backend suppression now produces a clean empty state
+
+Verified:
+
+1. `pytest tests/unit/test_reference_ui_score_calibration.py -q`
+2. `pytest tests/unit -q`
+3. `npm run build` in `web/`
+
+### 11.44 Landed: D4 first slice moves figure/equation entrances closer to their visual anchors
+
+This D4 slice continues the frontend visual close-out without changing locate eligibility.
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - figure entrances now render through a dedicated shell and attach to the image corner when no caption surface exists
+   - display-equation entrances now render through a dedicated equation-side wrapper instead of the generic inline-tail wrapper
+2. `web/src/styles/index.css`
+   - adds figure-corner placement styles
+   - repositions display-equation entrances toward the equation-side / equation-number visual area
+
+Impact:
+
+1. figure entrances now look attached to the image itself
+2. equation entrances now sit closer to the expected right-side formula anchor
+
+### 11.45 Landed: D4 second slice prefers caption-tail figure entrances with image-corner fallback
+
+This D4 follow-up completes the intended figure entrance rule:
+
+1. if the answer contains a figure caption/source paragraph, the visible `图` entrance now belongs at the caption tail
+2. if there is no caption paragraph, the entrance remains at the image corner
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - added `preferredFigureCaptionSnippet(...)` so caption paragraphs can emit a strict figure entrance without reopening generic text-token locate
+   - caption-tail rendering uses explicit `Figure n / Fig. n / 图n` tokens only
+   - plaintext extraction now ignores rendered locate buttons as well as cite chips
+2. `web/src/styles/index.css`
+   - added `kb-md-figure-caption`
+   - added structural CSS that hides the image-corner entrance when the next paragraph is a caption paragraph
+   - preserves the original corner placement when no caption is present
+
+Impact:
+
+1. screenshot answers now feel more natural because the visible figure entrance follows the caption/source sentence the user is reading
+2. image-only answers still keep an obvious figure entrance
+3. no generic text-based figure entrances are reintroduced
+
+Verified:
+
+1. `npm run build` in `web/`
+2. SSR replay of real message `1432`
+   - figure shell renders
+   - following source/caption paragraph renders `kb-md-figure-caption`
+   - final UX rule is `caption-tail preferred, image-corner fallback`
+3. the remaining visual gap between logical anchor and rendered badge is reduced
+
+Verified:
+
+1. `npm run build` in `web/`
 
 ### 11.40 Landed: D2 fourth slice replaces dynamic provenance wrappers with static task_runtime aliases
 

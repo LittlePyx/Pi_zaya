@@ -336,12 +336,55 @@ body,
 .kb-markdown .kb-md-loc-tail {
   display: inline-flex;
   align-items: center;
-  margin-left: 5px;
-  vertical-align: super;
+  margin-left: 6px;
+  vertical-align: baseline;
 }
 
 .kb-markdown .kb-md-blockquote-tail > :last-child {
   margin-bottom: 0;
+}
+
+.kb-markdown .kb-md-figure-shell {
+  position: relative;
+  display: inline-block;
+  max-width: min(100%, 520px);
+}
+
+.kb-markdown .kb-md-figure-host {
+  margin-bottom: 0.3em;
+}
+
+.kb-markdown .kb-md-figure-caption {
+  margin-top: -0.06em;
+}
+
+.kb-markdown p:has(.kb-md-figure-shell) {
+  margin-bottom: 0.3em;
+}
+
+.kb-markdown .kb-md-figure-host:has(+ .kb-md-figure-caption) .kb-md-figure-tail {
+  display: none;
+}
+
+.kb-markdown p:has(.kb-md-figure-shell):has(+ .kb-md-figure-caption) .kb-md-figure-tail {
+  display: none;
+}
+
+.kb-markdown .kb-md-figure-tail {
+  position: absolute;
+  top: 16px;
+  right: 12px;
+  z-index: 1;
+}
+
+.kb-markdown .kb-md-figure-tail .kb-md-locate-inline-btn {
+  vertical-align: baseline;
+  transform: none;
+}
+
+.kb-markdown .kb-md-figure-tail .kb-md-locate-inline-btn:hover,
+.kb-markdown .kb-md-figure-tail .kb-md-locate-inline-btn:focus-visible {
+  transform: scale(1.02);
 }
 
 .kb-markdown .kb-md-equation-block {
@@ -349,11 +392,10 @@ body,
 }
 
 .kb-markdown .kb-md-equation-inline {
-  display: inline-flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 8px;
+  position: relative;
+  display: inline-block;
   max-width: 100%;
+  padding-right: 2.8rem;
 }
 
 .kb-markdown .kb-md-equation-inline :where(.katex-display) {
@@ -361,9 +403,20 @@ body,
 }
 
 .kb-markdown .kb-md-equation-tail {
-  flex: 0 0 auto;
-  margin-left: 0;
-  margin-bottom: 0.28em;
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.kb-markdown .kb-md-equation-tail .kb-md-locate-inline-btn {
+  vertical-align: baseline;
+  transform: none;
+}
+
+.kb-markdown .kb-md-equation-tail .kb-md-locate-inline-btn:hover,
+.kb-markdown .kb-md-equation-tail .kb-md-locate-inline-btn:focus-visible {
+  transform: scale(1.02);
 }
 
 .kb-markdown .kb-md-locate-inline-btn {
@@ -380,8 +433,8 @@ body,
   color: color-mix(in srgb, var(--accent) 78%, var(--text-main));
   opacity: 0.98;
   cursor: pointer;
-  vertical-align: super;
-  transform: translateY(-0.06em);
+  vertical-align: baseline;
+  transform: translateY(-0.1em);
   transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
 }
 
@@ -393,6 +446,21 @@ body,
   letter-spacing: 0.02em;
 }
 
+.kb-markdown .kb-md-locate-inline-btn-blockquote {
+  padding: 0.08em 0.52em;
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+  color: color-mix(in srgb, var(--accent) 92%, var(--text-main));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--panel) 68%, transparent);
+  transform: translateY(-0.14em);
+}
+
+.kb-markdown .kb-md-locate-inline-btn-blockquote .kb-md-locate-inline-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
 .kb-markdown .kb-md-locate-inline-btn:hover,
 .kb-markdown .kb-md-locate-inline-btn:focus-visible {
   color: var(--accent);
@@ -400,6 +468,11 @@ body,
   border-color: color-mix(in srgb, var(--accent) 52%, transparent);
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   transform: translateY(-0.1em) scale(1.02);
+}
+
+.kb-markdown .kb-md-locate-inline-btn-blockquote:hover,
+.kb-markdown .kb-md-locate-inline-btn-blockquote:focus-visible {
+  transform: translateY(-0.16em) scale(1.02);
 }
 
 .kb-prov-locate-chip {

@@ -84,6 +84,114 @@ def _same_source_identity(source_path: str, bound_source_path: str) -> bool:
     return bool(left.intersection(right))
 
 
+def _normalize_title_identity(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    low = raw.lower()
+    if low.endswith(".en.md"):
+        raw = raw[:-6]
+    elif low.endswith(".md") or low.endswith(".pdf"):
+        raw = raw[:-3] if low.endswith(".md") else raw[:-4]
+    raw = re.sub(r"(19\d{2}|20\d{2})\s*-\s*", r"\1 - ", raw)
+    raw = re.sub(r"[_/\\]+", " ", raw)
+    raw = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip().lower()
+    return raw
+
+
+def _title_identity_keys(source_like: str) -> set[str]:
+    raw = str(source_like or "").strip()
+    if not raw:
+        return set()
+    out: set[str] = set()
+
+    def _push(value: str):
+        norm = _normalize_title_identity(value)
+        if norm:
+            out.add(norm)
+
+    _push(raw)
+    name = _source_filename(raw)
+    if name:
+        _push(name)
+    _venue, _year, parsed_title = _parse_filename_meta(raw)
+    if parsed_title:
+        _push(parsed_title)
+    base = name or raw
+    m = re.search(r"(?:19\d{2}|20\d{2})\s*-\s*(.+)$", base)
+    if m:
+        _push(str(m.group(1) or "").strip())
+    return {item for item in out if item}
+
+
+def _same_source_title_identity(left_source: str, right_source: str) -> bool:
+    left = _title_identity_keys(left_source)
+    right = _title_identity_keys(right_source)
+    if not left or not right:
+        return False
+
+    def _first_identity_token(value: str) -> str:
+        stop = {
+            "the", "and", "for", "with", "from", "into", "using", "based", "towards",
+            "conference", "symposium", "workshop", "journal", "transactions", "letters",
+            "ieee", "cvpr", "iccv", "eccv", "neurips", "iclr", "icml",
+        }
+        tokens = [tok for tok in str(value or "").split() if tok]
+        for tok in tokens:
+            if re.fullmatch(r"(19\d{2}|20\d{2})", tok):
+                continue
+            if tok in stop:
+                continue
+            if len(tok) < 3:
+                continue
+            return tok
+        return tokens[0] if tokens else ""
+
+    if left.intersection(right):
+        return True
+    for a in left:
+        for b in right:
+            if min(len(a), len(b)) < 20:
+                continue
+            if (a in b) or (b in a):
+                return True
+            a_tokens = set(a.split())
+            b_tokens = set(b.split())
+            if len(a_tokens) < 4 or len(b_tokens) < 4:
+                continue
+            overlap = len(a_tokens.intersection(b_tokens))
+            smaller = min(len(a_tokens), len(b_tokens))
+            if smaller <= 0:
+                continue
+            if (overlap / float(smaller)) >= 0.75 and _first_identity_token(a) == _first_identity_token(b):
+                return True
+    return False
+
+
+def _hit_matches_guide_source(meta: dict, *, guide_source_path: str, guide_source_name: str) -> bool:
+    if not isinstance(meta, dict):
+        return False
+    candidates = [
+        str(meta.get("source_path") or "").strip(),
+        str(meta.get("source_name") or "").strip(),
+        str(meta.get("display_name") or "").strip(),
+    ]
+    candidates = [item for item in candidates if item]
+    if not candidates:
+        return False
+    guide_path = str(guide_source_path or "").strip()
+    guide_name = str(guide_source_name or "").strip()
+    for candidate in candidates:
+        if guide_path and _same_source_identity(candidate, guide_path):
+            return True
+        if guide_name and _same_source_title_identity(candidate, guide_name):
+            return True
+        if guide_path and _same_source_title_identity(candidate, guide_path):
+            return True
+    return False
+
+
 def _clamp_ui_score(score: float) -> float:
     try:
         v = float(score)
@@ -563,7 +671,7 @@ def enrich_refs_payload(
     out: dict[int, dict] = {}
     guide_source_path_norm = str(guide_source_path or "").strip()
     guide_source_name_norm = str(guide_source_name or "").strip()
-    guide_active = bool(guide_mode and guide_source_path_norm)
+    guide_active = bool(guide_mode and (guide_source_path_norm or guide_source_name_norm))
     for user_msg_id, pack in (refs_by_user or {}).items():
         if not isinstance(pack, dict):
             continue
@@ -578,7 +686,11 @@ def enrich_refs_payload(
             source_path = str((meta or {}).get("source_path") or "").strip()
             if is_excluded_source_path(source_path):
                 continue
-            if guide_active and _same_source_identity(source_path, guide_source_path_norm):
+            if guide_active and _hit_matches_guide_source(
+                meta,
+                guide_source_path=guide_source_path_norm,
+                guide_source_name=guide_source_name_norm,
+            ):
                 filtered_self_hits += 1
                 continue
             raw_hits.append(dict(hit))
