@@ -80,8 +80,20 @@ async def sync_status():
 
 @router.get("/conversation/{conv_id}")
 def get_conversation_refs(conv_id: str):
+    conversation = get_chat_store().get_conversation(conv_id) or {}
+    guide_mode = str(conversation.get("mode") or "").strip().lower() == "paper_guide"
+    guide_source_path = str(conversation.get("bound_source_path") or "").strip()
+    guide_source_name = str(conversation.get("bound_source_name") or "").strip()
     refs = get_chat_store().list_message_refs(conv_id)
-    return enrich_refs_payload(refs, pdf_root=_pdf_dir(), md_root=_md_dir(), lib_store=_lib_store())
+    return enrich_refs_payload(
+        refs,
+        pdf_root=_pdf_dir(),
+        md_root=_md_dir(),
+        lib_store=_lib_store(),
+        guide_mode=guide_mode,
+        guide_source_path=guide_source_path,
+        guide_source_name=guide_source_name,
+    )
 
 
 class OpenReferenceBody(BaseModel):

@@ -873,6 +873,310 @@ def test_build_paper_guide_answer_provenance_groups_formula_explanation_as_requi
     assert list(explanation_seg.get("related_block_ids") or []) == [str(formula_block.get("block_id") or "")]
 
 
+def test_apply_provenance_required_coverage_contract_rebinds_display_formula_to_source_inline_formula(tmp_path: Path):
+    from kb import task_runtime
+
+    md_dir = tmp_path / "NeRFInline"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "NeRFInline.en.md"
+    eq1 = "$$ C(r) = \\int_{t_n}^{t_f} T(t) \\sigma(r(t)) c(r(t), d) \\, dt \\tag{1}$$"
+    explanation = (
+        "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, "
+        "$r(t)$ is the sampled 3D point along the camera ray, "
+        "$T(t)$ is the accumulated transmittance and is defined as "
+        "$\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, and $d$ is the viewing direction."
+    )
+    md_main.write_text(
+        (
+            "# Background on NeRF\n\n"
+            f"{eq1}\n\n"
+            f"{explanation}\n"
+        ),
+        encoding="utf-8",
+    )
+    blocks = task_runtime.load_source_blocks(md_main)
+    block_lookup = {
+        str(block.get("block_id") or "").strip(): dict(block)
+        for block in blocks
+        if isinstance(block, dict) and str(block.get("block_id") or "").strip()
+    }
+    eq1_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "") == "equation"
+        and int(block.get("number") or 0) == 1
+    )
+    explanation_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "") == "paragraph"
+        and "accumulated transmittance" in str(block.get("text") or "").lower()
+    )
+
+    segments = task_runtime._apply_provenance_required_coverage_contract(
+        [
+            {
+                "segment_id": "seg_010",
+                "segment_index": 10,
+                "kind": "paragraph",
+                "segment_type": "equation_explanation",
+                "text": "$$ T(t) = \\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds) $$",
+                "raw_markdown": "$$ T(t) = \\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds) $$",
+                "evidence_mode": "direct",
+                "claim_type": "formula_claim",
+                "must_locate": True,
+                "anchor_kind": "equation",
+                "equation_number": 1,
+                "primary_block_id": str(eq1_block.get("block_id") or ""),
+                "primary_anchor_id": str(eq1_block.get("anchor_id") or ""),
+                "primary_heading_path": str(eq1_block.get("heading_path") or ""),
+                "evidence_block_ids": [str(eq1_block.get("block_id") or "")],
+                "support_block_ids": [],
+                "anchor_text": "$$ T(t) = \\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds) $$",
+                "evidence_quote": str(eq1_block.get("raw_text") or eq1_block.get("text") or ""),
+            }
+        ],
+        block_lookup=block_lookup,
+    )
+
+    assert len(segments) == 1
+    seg = segments[0]
+    assert str(seg.get("claim_type") or "") == "inline_formula_claim"
+    assert bool(seg.get("must_locate")) is True
+    assert str(seg.get("locate_policy") or "") == "required"
+    assert str(seg.get("locate_surface_policy") or "") == "secondary"
+    assert str(seg.get("formula_origin") or "") == "explanation"
+    assert str(seg.get("claim_group_kind") or "") == "formula_bundle"
+    assert str(seg.get("claim_group_id") or "") == f"formula_bundle:{str(eq1_block.get('block_id') or '')}"
+    assert str(seg.get("anchor_kind") or "") == "inline_formula"
+    assert str(seg.get("primary_block_id") or "") == str(explanation_block.get("block_id") or "")
+    assert str(seg.get("primary_anchor_id") or "") == str(explanation_block.get("anchor_id") or "")
+    assert "\\exp(" in str(seg.get("anchor_text") or "")
+    assert str(eq1_block.get("block_id") or "") in list(seg.get("related_block_ids") or [])
+    evidence_ids = list(seg.get("evidence_block_ids") or [])
+    assert str(eq1_block.get("block_id") or "") in evidence_ids
+    assert str(explanation_block.get("block_id") or "") in evidence_ids
+
+
+def test_apply_provenance_required_coverage_contract_hides_corrected_formula_when_only_source_inline_typo_exists(tmp_path: Path):
+    from kb import task_runtime
+
+    md_dir = tmp_path / "NeRFInlineMismatch"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "NeRFInlineMismatch.en.md"
+    eq1 = "$$ C(r) = \\int_{t_n}^{t_f} T(t) \\sigma(r(t)) c(r(t), d) \\, dt \\tag{1}$$"
+    explanation = (
+        "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, "
+        "$r(t)$ is the sampled 3D point along the camera ray, "
+        "$T(t)$ is the accumulated transmittance and is defined as "
+        "$\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, and $d$ is the viewing direction."
+    )
+    md_main.write_text(
+        (
+            "# Background on NeRF\n\n"
+            f"{eq1}\n\n"
+            f"{explanation}\n"
+        ),
+        encoding="utf-8",
+    )
+    blocks = task_runtime.load_source_blocks(md_main)
+    block_lookup = {
+        str(block.get("block_id") or "").strip(): dict(block)
+        for block in blocks
+        if isinstance(block, dict) and str(block.get("block_id") or "").strip()
+    }
+    eq1_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "") == "equation"
+        and int(block.get("number") or 0) == 1
+    )
+
+    segments = task_runtime._apply_provenance_required_coverage_contract(
+        [
+            {
+                "segment_id": "seg_011",
+                "segment_index": 11,
+                "kind": "paragraph",
+                "segment_type": "equation_explanation",
+                "text": "$$ T(t) = \\exp(-\\int_{t_n}^{t} \\sigma(\\mathbf{r}(s)) \\, ds) $$",
+                "raw_markdown": "$$ T(t) = \\exp(-\\int_{t_n}^{t} \\sigma(\\mathbf{r}(s)) \\, ds) $$",
+                "evidence_mode": "direct",
+                "claim_type": "formula_claim",
+                "must_locate": True,
+                "anchor_kind": "equation",
+                "equation_number": 1,
+                "primary_block_id": str(eq1_block.get("block_id") or ""),
+                "primary_anchor_id": str(eq1_block.get("anchor_id") or ""),
+                "primary_heading_path": str(eq1_block.get("heading_path") or ""),
+                "evidence_block_ids": [str(eq1_block.get("block_id") or "")],
+                "support_block_ids": [],
+                "anchor_text": "$$ T(t) = \\exp(-\\int_{t_n}^{t} \\sigma(\\mathbf{r}(s)) \\, ds) $$",
+                "evidence_quote": str(eq1_block.get("raw_text") or eq1_block.get("text") or ""),
+            }
+        ],
+        block_lookup=block_lookup,
+    )
+
+    assert len(segments) == 1
+    seg = segments[0]
+    assert str(seg.get("claim_type") or "") == "formula_claim"
+    assert bool(seg.get("must_locate")) is False
+    assert str(seg.get("locate_policy") or "") == "hidden"
+    assert str(seg.get("locate_surface_policy") or "") == "hidden"
+    assert str(seg.get("formula_origin") or "") == "derived"
+
+
+def test_apply_provenance_required_coverage_contract_rebinds_legacy_inline_formula_claim_misclassified_as_formula(tmp_path: Path):
+    from kb import task_runtime
+
+    md_dir = tmp_path / "NeRFInlineLegacy"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "NeRFInlineLegacy.en.md"
+    eq1 = "$$ C(r) = \\int_{t_n}^{t_f} T(t) \\sigma(r(t)) c(r(t), d) \\, dt \\tag{1}$$"
+    explanation = (
+        "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, "
+        "$r(t)$ is the sampled 3D point along the camera ray, "
+        "$T(t)$ is the accumulated transmittance and is defined as "
+        "$\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, and $d$ is the viewing direction."
+    )
+    md_main.write_text(
+        (
+            "# Background on NeRF\n\n"
+            f"{eq1}\n\n"
+            f"{explanation}\n"
+        ),
+        encoding="utf-8",
+    )
+    blocks = task_runtime.load_source_blocks(md_main)
+    block_lookup = {
+        str(block.get("block_id") or "").strip(): dict(block)
+        for block in blocks
+        if isinstance(block, dict) and str(block.get("block_id") or "").strip()
+    }
+    eq1_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "") == "equation"
+        and int(block.get("number") or 0) == 1
+    )
+    explanation_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "") == "paragraph"
+        and "accumulated transmittance" in str(block.get("text") or "").lower()
+    )
+
+    segments = task_runtime._apply_provenance_required_coverage_contract(
+        [
+            {
+                "segment_id": "seg_007",
+                "segment_index": 7,
+                "kind": "blockquote",
+                "segment_type": "evidence",
+                "text": "$T(t) = \\exp\\left(-\\int_{t_n}^{t} T(s)\\sigma(\\mathbf{r}(s)) \\, ds\\right)$",
+                "raw_markdown": "> $T(t) = \\exp\\left(-\\int_{t_n}^{t} T(s)\\sigma(\\mathbf{r}(s)) \\, ds\\right)$",
+                "evidence_mode": "direct",
+                "claim_type": "formula_claim",
+                "must_locate": True,
+                "anchor_kind": "equation",
+                "equation_number": 1,
+                "primary_block_id": str(eq1_block.get("block_id") or ""),
+                "primary_anchor_id": str(eq1_block.get("anchor_id") or ""),
+                "primary_heading_path": str(eq1_block.get("heading_path") or ""),
+                "evidence_block_ids": [str(eq1_block.get("block_id") or "")],
+                "support_block_ids": [],
+                "anchor_text": str(eq1_block.get("raw_text") or eq1_block.get("text") or ""),
+                "evidence_quote": str(eq1_block.get("raw_text") or eq1_block.get("text") or ""),
+            }
+        ],
+        block_lookup=block_lookup,
+    )
+
+    assert len(segments) == 1
+    seg = segments[0]
+    assert str(seg.get("claim_type") or "") == "inline_formula_claim"
+    assert bool(seg.get("must_locate")) is True
+    assert str(seg.get("locate_policy") or "") == "required"
+    assert str(seg.get("locate_surface_policy") or "") == "secondary"
+    assert str(seg.get("primary_block_id") or "") == str(explanation_block.get("block_id") or "")
+    assert str(seg.get("primary_anchor_id") or "") == str(explanation_block.get("anchor_id") or "")
+    assert str(eq1_block.get("block_id") or "") in list(seg.get("related_block_ids") or [])
+
+
+def test_apply_provenance_required_coverage_contract_hides_duplicate_inline_formula_surface_in_same_bundle():
+    from kb import task_runtime
+
+    segments = task_runtime._apply_provenance_required_coverage_contract(
+        [
+            {
+                "segment_id": "seg_004",
+                "segment_index": 4,
+                "kind": "blockquote",
+                "segment_type": "evidence",
+                "text": "$T(t)=\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$",
+                "raw_markdown": "> $T(t)=\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$",
+                "evidence_mode": "direct",
+                "claim_type": "inline_formula_claim",
+                "must_locate": True,
+                "anchor_kind": "inline_formula",
+                "primary_block_id": "blk_quote",
+                "primary_anchor_id": "p_00015",
+                "primary_heading_path": "Background on NeRF",
+                "evidence_block_ids": ["blk_quote", "blk_eq1"],
+                "support_block_ids": ["blk_eq1"],
+                "related_block_ids": ["blk_eq1"],
+                "anchor_text": "\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)",
+                "evidence_quote": "where ... $T(t)$ is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$ ...",
+            },
+            {
+                "segment_id": "seg_005",
+                "segment_index": 5,
+                "kind": "paragraph",
+                "segment_type": "equation_explanation",
+                "text": "$$ T(t)=\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds) $$",
+                "raw_markdown": "$$ T(t)=\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds) $$",
+                "evidence_mode": "direct",
+                "claim_type": "inline_formula_claim",
+                "must_locate": True,
+                "anchor_kind": "inline_formula",
+                "primary_block_id": "blk_quote",
+                "primary_anchor_id": "p_00015",
+                "primary_heading_path": "Background on NeRF",
+                "evidence_block_ids": ["blk_quote", "blk_eq1"],
+                "support_block_ids": ["blk_eq1"],
+                "related_block_ids": ["blk_eq1"],
+                "anchor_text": "\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)",
+                "evidence_quote": "where ... $T(t)$ is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$ ...",
+            },
+        ],
+        block_lookup={
+            "blk_eq1": {
+                "block_id": "blk_eq1",
+                "anchor_id": "eq_00001",
+                "kind": "equation",
+                "number": 1,
+                "order_index": 24,
+                "text": "$$ C(r)=\\int T(t)\\sigma(r(t))c(r(t),d)dt $$",
+                "raw_text": "$$ C(r)=\\int T(t)\\sigma(r(t))c(r(t),d)dt $$",
+            },
+            "blk_quote": {
+                "block_id": "blk_quote",
+                "anchor_id": "p_00015",
+                "kind": "paragraph",
+                "order_index": 25,
+                "text": "where ... $T(t)$ is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$ ...",
+                "raw_text": "where ... $T(t)$ is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$ ...",
+            },
+        },
+    )
+
+    assert len(segments) == 2
+    keep = next(seg for seg in segments if str(seg.get("segment_id") or "") == "seg_004")
+    hidden = next(seg for seg in segments if str(seg.get("segment_id") or "") == "seg_005")
+    assert bool(keep.get("must_locate")) is True
+    assert str(keep.get("locate_policy") or "") == "required"
+    assert str(keep.get("locate_surface_policy") or "") == "secondary"
+    assert bool(hidden.get("must_locate")) is False
+    assert str(hidden.get("locate_policy") or "") == "hidden"
+    assert str(hidden.get("locate_surface_policy") or "") == "hidden"
+
+
 def test_split_answer_segments_preserves_raw_markdown():
     from kb.source_blocks import split_answer_segments
 

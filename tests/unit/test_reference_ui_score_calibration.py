@@ -202,6 +202,78 @@ def test_build_hit_ui_meta_adds_doc_semantic_badge_without_anchor():
     assert float(badges[0].get("score") or 0.0) == 7.1
 
 
+def test_build_hit_ui_meta_falls_back_to_snippet_summary_when_ref_pack_missing(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    hit = {
+        "meta": {
+            "source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "ref_best_heading_path": "3. Method / 3.1. Background on NeRF",
+            "ref_section": "3. Method",
+            "ref_subsection": "3.1. Background on NeRF",
+            "ref_show_snippets": [
+                "In this paper, we present SCINeRF, a novel approach for 3D scene representation learning from a single snapshot compressed image."
+            ],
+            "ref_overview_snippets": [],
+            "ref_rank": {
+                "llm": 0.0,
+                "bm25": 6.0,
+                "deep": 0.0,
+                "term_bonus": 0.0,
+                "semantic_score": 0.0,
+            },
+        }
+    }
+
+    ui_meta = build_hit_ui_meta(
+        hit,
+        prompt="SCINeRF 是什么？",
+        pdf_root=None,
+        lib_store=None,
+    )
+
+    assert "SCINeRF" in str(ui_meta.get("summary_line") or "")
+    assert str(ui_meta.get("why_line") or "").strip()
+
+
+def test_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_pack_missing(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    hit = {
+        "meta": {
+            "source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "ref_best_heading_path": "3. Method / 3.1. Background on NeRF",
+            "ref_section": "3. Method",
+            "ref_subsection": "3.1. Background on NeRF",
+            "ref_show_snippets": [],
+            "ref_overview_snippets": [],
+            "ref_rank": {
+                "llm": 0.0,
+                "bm25": 4.2,
+                "deep": 0.0,
+                "term_bonus": 0.0,
+                "semantic_score": 0.0,
+            },
+        }
+    }
+
+    ui_meta = build_hit_ui_meta(
+        hit,
+        prompt="这个方法和当前问题有什么关系？",
+        pdf_root=None,
+        lib_store=None,
+        preloaded_citation_meta={
+            r"db\SCINeRF\SCINeRF.en.md": {
+                "title": "SCINeRF",
+                "summary_line": "当前仅检索到文献元数据：该工作发表于 2024。由于缺少可用摘要文本，暂无法可靠提炼其方法细节与实验结论，建议通过 DOI 查看原文摘要与正文。",
+            }
+        },
+    )
+
+    assert "当前仅检索到文献元数据" in str(ui_meta.get("summary_line") or "")
+    assert str(ui_meta.get("why_line") or "").strip()
+
+
 def test_effective_ui_score_uses_evidence_spread_for_same_llm_value():
     hit_strong = {
         "meta": {
@@ -268,3 +340,89 @@ def test_effective_ui_score_breaks_identical_decimal_tails_with_stable_jitter():
     assert score_a is not None and score_b is not None
     assert abs(score_a - score_b) >= 0.005
     assert abs(score_a - score_b) <= 0.09
+
+
+def test_enrich_refs_payload_hides_bound_paper_for_paper_guide_mode():
+    refs = {
+        21: {
+            "prompt": "Explain the bound paper only.",
+            "hits": [
+                {
+                    "text": "Bound paper evidence.",
+                    "meta": {
+                        "source_path": r"db\SCINeRF\SCINeRF.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {
+                            "llm": 88.0,
+                            "bm25": 6.0,
+                            "deep": 2.0,
+                            "term_bonus": 1.0,
+                            "semantic_score": 8.6,
+                        },
+                        "ref_section": "Method",
+                        "ref_loc_quality": "high",
+                    },
+                }
+            ],
+        }
+    }
+
+    out = enrich_refs_payload(
+        refs,
+        pdf_root=None,
+        md_root=None,
+        lib_store=None,
+        guide_mode=True,
+        guide_source_path=r"F:\papers\SCINeRF.pdf",
+        guide_source_name="SCINeRF.pdf",
+    )
+
+    entry = out.get(21) or {}
+    assert list(entry.get("hits") or []) == []
+    guide_filter = entry.get("guide_filter") or {}
+    assert guide_filter.get("hidden_self_source") is True
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 1
+    assert str(guide_filter.get("guide_source_name") or "") == "SCINeRF.pdf"
+
+
+def test_enrich_refs_payload_keeps_non_bound_paper_hits_in_paper_guide_mode():
+    refs = {
+        22: {
+            "prompt": "Find related external papers.",
+            "hits": [
+                {
+                    "text": "External evidence.",
+                    "meta": {
+                        "source_path": r"db\SCIGS\SCIGS.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {
+                            "llm": 84.0,
+                            "bm25": 5.8,
+                            "deep": 1.9,
+                            "term_bonus": 0.8,
+                            "semantic_score": 8.1,
+                        },
+                        "ref_section": "Results",
+                        "ref_loc_quality": "high",
+                    },
+                }
+            ],
+        }
+    }
+
+    out = enrich_refs_payload(
+        refs,
+        pdf_root=None,
+        md_root=None,
+        lib_store=None,
+        guide_mode=True,
+        guide_source_path=r"F:\papers\SCINeRF.pdf",
+        guide_source_name="SCINeRF.pdf",
+    )
+
+    entry = out.get(22) or {}
+    hits = list(entry.get("hits") or [])
+    assert len(hits) == 1
+    guide_filter = entry.get("guide_filter") or {}
+    assert guide_filter.get("hidden_self_source") is False
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 0

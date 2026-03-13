@@ -1,4 +1,5 @@
 ﻿import { Children, cloneElement, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
+import { createContext, useContext } from 'react'
 import { message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -60,13 +61,18 @@ interface Props {
   onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void
   canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean
   locateTitleResolver?: (snippet: string) => string
+  inlineLocateTokenPolicy?: Partial<Record<InlineLocateTokenKind, boolean>>
+  inlineTextLocateEnabled?: boolean
+  locateSurfacePolicy?: Partial<Record<LocateSurfaceKind, boolean>>
   variant?: 'chat' | 'reader'
   readerAnchors?: ReaderDocAnchor[]
   readerBlocks?: ReaderDocBlock[]
 }
 
+type LocateSurfaceKind = 'paragraph' | 'list_item' | 'blockquote' | 'equation' | 'figure'
+
 interface LocateRenderMeta {
-  kind: 'paragraph' | 'list_item' | 'blockquote' | 'equation' | 'figure'
+  kind: LocateSurfaceKind
   order: number
 }
 type InlineLocateTokenKind = 'quote' | 'figure_ref'
@@ -88,6 +94,104 @@ interface ReaderAnchorAllocator {
 
 interface ReaderBlockResolver {
   pick: (node: unknown, kinds: string[]) => ReaderAnchorToken | null
+}
+
+const BlockquoteLocateContext = createContext(false)
+
+function isEmptyReactNode(node: ReactNode): boolean {
+  if (node === null || node === undefined || typeof node === 'boolean') return true
+  if (typeof node === 'string') return node.trim().length <= 0
+  if (Array.isArray(node)) return node.every((item) => isEmptyReactNode(item))
+  return false
+}
+
+function isTailBoundaryElement(node: ReactNode): boolean {
+  if (!isValidElement(node)) return false
+  const nodeType = typeof node.type === 'string' ? node.type.toLowerCase() : ''
+  const props = node.props as { className?: string }
+  const className = String(props.className || '')
+  if (['a', 'button', 'img', 'code', 'pre'].includes(nodeType)) return true
+  if (/\bkb-cite-chip\b/.test(className) || /\bkb-md-locate-inline-btn\b/.test(className)) return true
+  return false
+}
+
+function appendTailButtonToContent(children: ReactNode, btn: ReactNode, keyBase = 'tail'): ReactNode {
+  const tail = (
+    <span key={`${keyBase}:btn`} className="kb-md-loc-tail">
+      {btn}
+    </span>
+  )
+
+  const append = (node: ReactNode, keyPath: string): ReactNode => {
+    if (node === null || node === undefined || typeof node === 'boolean') return node
+    if (typeof node === 'string' || typeof node === 'number') {
+      return (
+        <>
+          {node}
+          {tail}
+        </>
+      )
+    }
+    if (Array.isArray(node)) {
+      const items = [...node]
+      for (let idx = items.length - 1; idx >= 0; idx -= 1) {
+        if (isEmptyReactNode(items[idx])) continue
+        items[idx] = append(items[idx], `${keyPath}:${idx}`)
+        return items
+      }
+      return [...items, tail]
+    }
+    if (!isValidElement(node)) {
+      return (
+        <>
+          {node}
+          {tail}
+        </>
+      )
+    }
+    if (isTailBoundaryElement(node)) {
+      return (
+        <>
+          {node}
+          {tail}
+        </>
+      )
+    }
+
+    const props = node.props as { children?: ReactNode }
+    if (props.children !== undefined) {
+      return cloneElement(node, undefined, append(props.children, `${keyPath}:child`))
+    }
+    return (
+      <>
+        {node}
+        {tail}
+      </>
+    )
+  }
+
+  return append(children, keyBase)
+}
+
+function normalizeInlineLocateTokenPolicy(
+  policy?: Partial<Record<InlineLocateTokenKind, boolean>>,
+): Record<InlineLocateTokenKind, boolean> {
+  return {
+    quote: policy?.quote !== false,
+    figure_ref: policy?.figure_ref !== false,
+  }
+}
+
+function normalizeLocateSurfacePolicy(
+  policy?: Partial<Record<LocateSurfaceKind, boolean>>,
+): Record<LocateSurfaceKind, boolean> {
+  return {
+    paragraph: policy?.paragraph !== false,
+    list_item: policy?.list_item !== false,
+    blockquote: policy?.blockquote !== false,
+    equation: policy?.equation !== false,
+    figure: policy?.figure !== false,
+  }
 }
 
 type CiteChipTone = {
@@ -303,7 +407,7 @@ function toLocateSnippet(node: ReactNode): string {
 function preferredBlockquoteLocateSnippet(node: ReactNode): string {
   const raw = plainText(node).replace(/\s+/g, ' ').trim() || rawNodeText(node).replace(/\s+/g, ' ').trim()
   if (!raw) return ''
-  const quoteTokens = collectInlineLocateTokens(raw)
+  const quoteTokens = collectInlineLocateTokens(raw, { quote: true, figure_ref: false })
     .filter((token) => token.kind === 'quote')
     .sort((a, b) => b.text.length - a.text.length)
   const preferred = String(quoteTokens[0]?.text || '').trim()
@@ -311,30 +415,68 @@ function preferredBlockquoteLocateSnippet(node: ReactNode): string {
   return toLocateSnippet(node)
 }
 
-function collectInlineLocateTokens(text: string): InlineLocateToken[] {
+function looksLikeDirectQuoteToken(text: string): boolean {
+  const inner = String(text || '')
+    .replace(/^["'\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\u300A\u300B]+|["'\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\u300A\u300B]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!inner) return false
+  if (hasMathSignalInline(inner)) return true
+  if (/[。！？.!?；;：:]/.test(inner)) return true
+  const cjkCount = (inner.match(/[\u4e00-\u9fff]/g) || []).length
+  if (cjkCount >= 24) return true
+  const latinWords = inner.match(/[A-Za-z]{2,}/g) || []
+  if (latinWords.length >= 8) return true
+  return inner.length >= 48
+}
+
+function collectInlineLocateTokens(
+  text: string,
+  policy?: Partial<Record<InlineLocateTokenKind, boolean>>,
+): InlineLocateToken[] {
   const src = String(text || '')
   if (!src) return []
+  const effectivePolicy = normalizeInlineLocateTokenPolicy(policy)
   const raw: InlineLocateToken[] = []
+  const isHeadingLikeQuotedToken = (start: number, text0: string): boolean => {
+    const inner = String(text0 || '').replace(/^["'\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\u300A\u300B]+|["'\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\u300A\u300B]+$/g, '').trim()
+    if (!inner || inner.length > 64) return false
+    const prefix = src.slice(Math.max(0, start - 24), start)
+    if (/(?:第\s*\d+\s*节|section\s*\d+|chapter\s*\d+|appendix|附录|章节)/i.test(prefix)) return true
+    if (/^(?:introduction|method|methods|background|results?|discussion|conclusion|experiments?|experimental setup|implementation details?)$/i.test(inner)) {
+      return true
+    }
+    return false
+  }
   const push = (start: number, end: number, text0: string, kind: InlineLocateTokenKind) => {
     const text = String(text0 || '').replace(/\s+/g, ' ').trim()
     if (!text) return
-    if (kind === 'quote' && text.length < 18) return
+    if (kind === 'quote') {
+      if (text.length < 18) return
+      if (isHeadingLikeQuotedToken(start, text)) return
+      if (!looksLikeDirectQuoteToken(text)) return
+    }
     raw.push({ start, end, text, kind })
   }
-  for (const m of src.matchAll(/\b(?:fig(?:ure)?\.?\s*#?\s*\d{1,4}|图\s*\d{1,4})\b/gi)) {
-    const text0 = String(m[0] || '')
-    const start0 = Number(m.index || 0)
-    push(start0, start0 + text0.length, text0, 'figure_ref')
+  if (effectivePolicy.quote) {
+    for (const pattern of [
+      /["\u201C\u201D]\s*([^"\u201C\u201D]{8,360}?)\s*["\u201C\u201D]/g,
+      /[\u2018\u2019']\s*([^\u2018\u2019']{8,320}?)\s*[\u2018\u2019']/g,
+      /[\u300C\u300D\u300E\u300F\u300A\u300B]([^\u300C\u300D\u300E\u300F\u300A\u300B]{8,360}?)[\u300D\u300F\u300B]/g,
+    ]) {
+      for (const m of src.matchAll(pattern)) {
+        const full = String(m[0] || '')
+        const start0 = Number(m.index || 0)
+        push(start0, start0 + full.length, full, 'quote')
+      }
+    }
   }
-  for (const pattern of [
-    /["\u201C\u201D]\s*([^"\u201C\u201D]{8,360}?)\s*["\u201C\u201D]/g,
-    /[\u2018\u2019']\s*([^\u2018\u2019']{8,320}?)\s*[\u2018\u2019']/g,
-    /[\u300C\u300D\u300E\u300F\u300A\u300B]([^\u300C\u300D\u300E\u300F\u300A\u300B]{8,360}?)[\u300D\u300F\u300B]/g,
-  ]) {
-    for (const m of src.matchAll(pattern)) {
-      const full = String(m[0] || '')
+  if (effectivePolicy.figure_ref) {
+    for (const m of src.matchAll(/\b(?:fig(?:ure)?\.?\s*#?\s*\d{1,4}|图\s*\d{1,4})\b/gi)) {
+      const full = String(m[0] || '').trim()
+      if (!full) continue
       const start0 = Number(m.index || 0)
-      push(start0, start0 + full.length, full, 'quote')
+      push(start0, start0 + full.length, full, 'figure_ref')
     }
   }
   raw.sort((a, b) => {
@@ -581,10 +723,15 @@ function buildMarkdownComponents(
   onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void,
   canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean,
   locateTitleResolver?: (snippet: string) => string,
+  inlineLocateTokenPolicy?: Partial<Record<InlineLocateTokenKind, boolean>>,
+  inlineTextLocateEnabled: boolean = true,
+  locateSurfacePolicy?: Partial<Record<LocateSurfaceKind, boolean>>,
   variant: 'chat' | 'reader' = 'chat',
   readerAnchorAllocator?: ReaderAnchorAllocator | null,
   readerBlockResolver?: ReaderBlockResolver | null,
 ) {
+  const effectiveInlineLocateTokenPolicy = normalizeInlineLocateTokenPolicy(inlineLocateTokenPolicy)
+  const effectiveLocateSurfacePolicy = normalizeLocateSurfacePolicy(locateSurfacePolicy)
   let locateRenderOrder = 0
   const pickReaderAnchor = (node: unknown, kinds: string[]) => {
     if (variant !== 'reader') return null
@@ -605,6 +752,9 @@ function buildMarkdownComponents(
     if (!onLocateSnippet) return null
     const force = Boolean(opts?.force)
     const meta = opts?.meta
+    if (meta && !effectiveLocateSurfacePolicy[meta.kind]) {
+      return null
+    }
     let snippet = String(opts?.snippetOverride || '').trim()
     if (!snippet) {
       snippet = typeof children === 'string'
@@ -627,19 +777,26 @@ function buildMarkdownComponents(
     }
     const label = '定位到原文证据'
     const title = String(locateTitleResolver?.(snippet) || '').trim() || '定位到原文证据'
+    const kind = meta?.kind || 'paragraph'
+    const badgeText = kind === 'equation'
+      ? '式'
+      : kind === 'figure'
+        ? '图'
+        : '原文'
     return (
       <button
         type="button"
-        className="kb-md-locate-inline-btn"
+        className={`kb-md-locate-inline-btn kb-md-locate-inline-btn-${kind}`}
         aria-label={label}
         title={title || label}
+        data-locate-kind={kind}
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
           onLocateSnippet(snippet, meta)
         }}
       >
-        <span className="kb-md-locate-inline-glyph" aria-hidden="true">❞</span>
+        <span className="kb-md-locate-inline-label" aria-hidden="true">{badgeText}</span>
       </button>
     )
   }
@@ -649,13 +806,12 @@ function buildMarkdownComponents(
     meta: LocateRenderMeta,
   ): { content: ReactNode; count: number } => {
     const metaForToken = (kind: InlineLocateTokenKind): LocateRenderMeta => {
-      if (kind === 'figure_ref') {
-        return { ...meta, kind: 'figure' }
-      }
+      if (kind === 'quote') return { ...meta, kind: 'blockquote' }
+      if (kind === 'figure_ref') return { ...meta, kind: 'figure' }
       return meta
     }
     const renderStringNode = (text0: string, keyBase: string): { content: ReactNode; count: number } => {
-      const tokens = collectInlineLocateTokens(text0)
+      const tokens = collectInlineLocateTokens(text0, effectiveInlineLocateTokenPolicy)
       if (tokens.length <= 0) return { content: text0, count: 0 }
       const parts: ReactNode[] = []
       let last = 0
@@ -780,8 +936,19 @@ function buildMarkdownComponents(
         meta: { kind: 'blockquote', order: nextLocateRenderOrder() },
         snippetOverride: preferredBlockquoteLocateSnippet(children),
       })
-      if (!btn) return <blockquote {...attrs}>{children}</blockquote>
-      return <blockquote {...attrs} className="kb-md-loc-inline">{children}{btn}</blockquote>
+      if (!btn) {
+        return (
+          <BlockquoteLocateContext.Provider value>
+            <blockquote {...attrs}>{children}</blockquote>
+          </BlockquoteLocateContext.Provider>
+        )
+      }
+      const tailedChildren = appendTailButtonToContent(children, btn, `blockquote-${locateRenderOrder}`)
+      return (
+        <BlockquoteLocateContext.Provider value>
+          <blockquote {...attrs} className="kb-md-blockquote-tail">{tailedChildren}</blockquote>
+        </BlockquoteLocateContext.Provider>
+      )
     },
     h1: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
       const attrs = variant === 'reader'
@@ -879,28 +1046,28 @@ function buildMarkdownComponents(
       )
     },
     p: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const insideBlockquote = useContext(BlockquoteLocateContext)
       const attrs = variant === 'reader'
         ? readerAnchorAttrs(pickReaderAnchor(node, ['paragraph']))
         : undefined
       const renderOrder = nextLocateRenderOrder()
       const meta = { kind: 'paragraph' as const, order: renderOrder }
-      const inline = variant === 'chat' ? decorateInlineLocateAnchors(children, meta) : { content: children, count: 0 }
-      if (inline.count > 0) return <p {...attrs}>{inline.content}</p>
-      const btn = renderLocateButton(children, { meta })
-      if (!btn) return <p {...attrs}>{children}</p>
-      return <p {...attrs} className="kb-md-loc-inline">{children}{btn}</p>
+      const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
+        ? decorateInlineLocateAnchors(children, meta)
+        : { content: children, count: 0 }
+      return <p {...attrs}>{inline.count > 0 ? inline.content : children}</p>
     },
     li: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const insideBlockquote = useContext(BlockquoteLocateContext)
       const attrs = variant === 'reader'
         ? readerAnchorAttrs(pickReaderAnchor(node, ['list_item']))
         : undefined
       const renderOrder = nextLocateRenderOrder()
       const meta = { kind: 'list_item' as const, order: renderOrder }
-      const inline = variant === 'chat' ? decorateInlineLocateAnchors(children, meta) : { content: children, count: 0 }
-      if (inline.count > 0) return <li {...attrs}>{inline.content}</li>
-      const btn = renderLocateButton(children, { meta })
-      if (!btn) return <li {...attrs}>{children}</li>
-      return <li {...attrs} className="kb-md-loc-inline">{children}{btn}</li>
+      const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
+        ? decorateInlineLocateAnchors(children, meta)
+        : { content: children, count: 0 }
+      return <li {...attrs}>{inline.count > 0 ? inline.content : children}</li>
     },
     div: (props: any) => {
       const { node, className, children, ...rest } = props || {}
@@ -918,7 +1085,14 @@ function buildMarkdownComponents(
         meta: { kind: 'equation', order: nextLocateRenderOrder() },
       })
       if (!btn) return <div className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</div>
-      return <div className={`${cls || ''} kb-md-loc-inline`.trim()} {...(rest as Record<string, unknown>)}>{children}{btn}</div>
+      return (
+        <div className={`${cls || ''} kb-md-equation-block`.trim()} {...(rest as Record<string, unknown>)}>
+          <span className="kb-md-equation-inline">
+            {children}
+            <span className="kb-md-loc-tail kb-md-equation-tail">{btn}</span>
+          </span>
+        </div>
+      )
     },
     span: (props: any) => {
       const { node, className, children, ...rest } = props || {}
@@ -933,7 +1107,14 @@ function buildMarkdownComponents(
         meta: { kind: 'equation', order: nextLocateRenderOrder() },
       })
       if (!btn) return <span className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</span>
-      return <span className={`${cls || ''} kb-md-loc-inline`.trim()} {...(rest as Record<string, unknown>)}>{children}{btn}</span>
+      return (
+        <span className={`${cls || ''} kb-md-equation-block`.trim()} {...(rest as Record<string, unknown>)}>
+          <span className="kb-md-equation-inline">
+            {children}
+            <span className="kb-md-loc-tail kb-md-equation-tail">{btn}</span>
+          </span>
+        </span>
+      )
     },
   }
 }
@@ -945,6 +1126,9 @@ export function MarkdownRenderer({
   onLocateSnippet,
   canLocateSnippet,
   locateTitleResolver,
+  inlineLocateTokenPolicy,
+  inlineTextLocateEnabled = true,
+  locateSurfacePolicy,
   variant = 'chat',
   readerAnchors,
   readerBlocks,
@@ -967,6 +1151,9 @@ export function MarkdownRenderer({
     onLocateSnippet,
     canLocateSnippet,
     locateTitleResolver,
+    inlineLocateTokenPolicy,
+    inlineTextLocateEnabled,
+    locateSurfacePolicy,
     variant,
     readerAnchorAllocator,
     readerBlockResolver,

@@ -45,6 +45,12 @@ interface RefHit {
 
 interface RefEntry {
   hits?: RefHit[]
+  guide_filter?: {
+    active?: boolean
+    hidden_self_source?: boolean
+    filtered_hit_count?: number
+    guide_source_name?: string
+  }
 }
 
 interface Props {

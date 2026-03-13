@@ -1391,3 +1391,579 @@ Verified:
    - only one visible `formula_claim` for Eq. (1)
    - the repeated `where ...` quote bundle is collapsed to one primary entrance
    - the corrected `T(t)` display formula remains hidden instead of reusing the Eq. (1) entrance
+
+### 15.3 Progress landed (2026-03-12, source inline-formula targets for display-math answers)
+
+This phase addresses the remaining mismatch where an answer renders a display formula, but the source paper only contains the corresponding formula inline inside the explanation paragraph below the main equation.
+
+Implemented:
+
+1. `kb/paper_guide_provenance.py`
+   - added inline-formula matching helpers for source markdown blocks
+   - if a direct `formula_claim` is not truly grounded to the currently matched display equation, provenance now attempts a nearby inline-formula rebind instead of immediately downgrading to hidden
+   - successful rebind emits:
+     - `claim_type = inline_formula_claim`
+     - `anchor_kind = inline_formula`
+     - `formula_origin = explanation`
+     - `locate_surface_policy = secondary`
+   - the rebinding keeps the explanation block as `primary_block_id` and records the original equation block in `related_block_ids`
+2. `web/src/components/chat/MessageList.tsx`
+   - strict structured locate now recognizes `inline_formula_claim`
+   - display-math answer segments are allowed to bind to an inline-formula provenance target without reopening global inline-formula entrances
+3. `web/src/components/chat/PaperGuideReaderDrawer.tsx`
+   - after landing on the explanation block, reader now searches for the best matching inline `.katex` node inside that block
+   - scroll target becomes the inline formula itself while the surrounding explanation block remains highlighted
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_provenance.py -q`
+2. `pytest tests/unit/test_chat_render_reference_notes.py -q`
+3. `pytest tests/unit -q`
+4. `npm run build` in `web/`
+5. new regression test:
+   - a display-math answer `T(t)=exp(...)` is rebound to the source inline formula inside the `where ... defined as ...` paragraph, not to Eq. (1)
+
+### 15.4 Progress landed (2026-03-12, exact inline-formula rescue for live regression 1430)
+
+This follow-up tightens the first inline-formula implementation after a live regression showed two opposite failures:
+
+1. some legacy single-line inline formulas were still kept as `formula_claim -> Eq.(1)` because old stored provenance carried the wrong `anchor_text`
+2. some corrected / derived display formulas were rescued too aggressively and incorrectly rebound onto the source typo inline formula
+
+Implemented:
+
+1. `kb/paper_guide_provenance.py`
+   - inline-formula matching now prefers the segment's own raw formula surface before falling back to legacy stored `anchor_text/evidence_quote`
+   - formula comparison normalization now strips only layout-level TeX wrappers such as `\left`, `\right`, `\mathbf`, spacing commands, and braces
+   - rescue to `inline_formula_claim` now requires normalized formula equality/containment, not just loose similarity
+   - legacy `formula_claim` segments that actually contain only an inline formula surface are now converted during read-time hardening
+   - duplicate `inline_formula_claim` surfaces inside the same `formula_bundle` are collapsed so only one secondary entrance remains visible
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_provenance.py -q`
+2. real message replay via `api/chat_render._enrich_provenance_segments_for_display(...)`
+   - `1430` now resolves to:
+     - `seg_007 -> inline_formula_claim -> blk_29cad7662df5_00026 / p_00015`
+     - corrected ODE solution and other derived formulas stay hidden instead of being rebound to the typo formula
+
+### 15.5 Progress landed (2026-03-12, temporary entrance-surface reduction to direct evidence only)
+
+This phase applies a temporary UI-surface restriction after live messages started showing dense runs of low-value entrances on explanatory paragraphs and list items.
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - removed inline `figure_ref` locate tokens from normal text
+   - paragraph/list-item nodes no longer get generic fallback locate buttons
+   - heading-like quoted titles such as `“Implementation Details”` are ignored by inline quote tokenization
+   - if a blockquote already contains a rendered quote entrance, the outer blockquote container no longer adds a second duplicate entrance
+   - inline quote tokens still render, but they are surfaced as `blockquote`-kind strict evidence
+   - retained entrance surfaces are now limited to:
+     - direct quotes shown in the answer
+     - display-math formulas shown in the answer
+     - rendered images
+2. `web/src/components/chat/MessageList.tsx`
+   - strict structured locate now rejects any render target outside `blockquote / equation / figure`
+   - this prevents paragraph/list-item fallback surfaces from leaking back through structured resolution
+   - equation entrances are now restricted to `formula_claim + formula_origin=source + locate_surface_policy=primary`
+   - generated display-math rewrites and explanation-only formula targets no longer render equation entrances
+
+Verified:
+
+1. `npm run build` in `web/`
+2. manual code-path audit confirms:
+   - plain explanatory paragraphs no longer render locate buttons
+   - plain list items no longer render locate buttons
+   - blockquote/direct-quote entrances remain available
+   - display-math and image entrances remain available
+
+### 15.6 Progress landed (2026-03-12, reference locate summary/related fallback restore)
+
+This phase restores the `参考定位` side cards after live users reported that `摘要 / 相关` had become blank even when the reference hit itself was present.
+
+Root cause:
+
+1. answer-time refs storage now often saves only:
+   - `ref_show_snippets`
+   - `ref_overview_snippets`
+   but not `ref_pack` / `ref_pack_state=ready`
+2. `api/reference_ui.py` previously only surfaced `summary_line / why_line` from `ref_pack`
+3. when `ref_pack_state` was missing, UI cards were rendered with empty `summary_line` and `why_line` even though snippets and citation metadata were available
+
+Implemented:
+
+1. `api/reference_ui.py`
+   - added snippet/citation fallback for `summary_line`
+   - fallback priority is now:
+     - `ref_show_snippets`
+     - citation metadata `summary_line`
+     - `ref_overview_snippets`
+   - `why_line` now falls back to existing location-aware `_fallback_why_line_ui(...)` whenever LLM `ref_pack` does not provide one
+
+Verified:
+
+1. `pytest tests/unit/test_reference_ui_score_calibration.py -q`
+2. `pytest tests/unit/test_reference_metadata_guards.py -q`
+3. live API verification on `/api/references/conversation/{conv_id}`
+   - current SCINeRF conversation now returns non-empty `ui_meta.summary_line`
+   - current SCINeRF conversation now returns non-empty `ui_meta.why_line`
+
+### 15.7 Progress landed (2026-03-12, paper-guide refs hide bound source)
+
+This phase removes the currently bound guide paper from `参考定位` in `paper_guide` mode, so the side card only surfaces external/other-paper references.
+
+Root cause:
+
+1. `GET /api/references/conversation/{conv_id}` previously had no awareness of:
+   - conversation `mode`
+   - `bound_source_path`
+   - `bound_source_name`
+2. `enrich_refs_payload(...)` therefore treated the bound guide paper like any other ref hit
+3. users saw redundant self-source cards even though that paper was already open as the active guide document
+
+Implemented:
+
+1. `api/routers/references.py`
+   - now loads conversation metadata before enriching refs
+   - passes `guide_mode / guide_source_path / guide_source_name` into ref enrichment
+2. `api/reference_ui.py`
+   - added bound-source identity filtering inside `enrich_refs_payload(...)`
+   - filtered hits are not rendered as normal ref cards
+   - payload now carries a lightweight `guide_filter` marker when self-source hits were intentionally suppressed
+3. `web/src/components/refs/RefsPanel.tsx`
+   - when paper-guide mode filters out only the bound paper and no external refs remain, renders a compact muted notice instead of a full refs card
+4. `web/src/components/chat/MessageList.tsx`
+   - refs rows stay renderable for the compact suppression notice
+
+Verified:
+
+1. `pytest tests/unit/test_reference_ui_score_calibration.py -q`
+2. `npm run build` in `web/`
+
+### 15.8 Progress landed (2026-03-12, paper-guide self-ref suppression verified + blockquote double-entry root cause)
+
+This follow-up closes two live regressions reported after the initial paper-guide ref suppression landing.
+
+Observed:
+
+1. paper-guide conversations still appeared to show the bound paper in `参考定位`
+2. some direct quote blockquotes still rendered two locate entrances for one quote
+
+Root cause:
+
+1. self-ref suppression logic was correct in code, but the live backend process had not been restarted yet
+   - `/api/references/conversation/{conv_id}` was still returning payloads without the new `guide_filter` field
+2. blockquote double-entry was a render-timing bug in `MarkdownRenderer`
+   - parent `blockquote` checked only whether children already contained a rendered locate button
+   - at that point ReactMarkdown children were still unresolved `<p>` elements, so the parent could not see the future inline quote button
+   - result: one inline quote entrance + one extra blockquote entrance
+
+Implemented:
+
+1. restarted frontend/backend after verifying source-identity suppression logic against the real SCINeRF guide conversation
+2. `web/src/components/chat/MarkdownRenderer.tsx`
+   - blockquote now suppresses its outer locate button whenever the raw blockquote text already contains an inline quote locate candidate
+   - no longer depends on child buttons having already rendered
+
+Verified:
+
+1. live API replay on current SCINeRF guide conversation now returns:
+   - `hits = 0`
+   - `guide_filter.hidden_self_source = true`
+2. `pytest tests/unit/test_reference_ui_score_calibration.py -q`
+3. `npm run build` in `web/`
+
+### 15.9 Progress landed (2026-03-12, quote/figure entrance surface correction)
+
+This phase corrects three entrance-surface regressions seen in live paper-guide answers:
+
+1. short quoted Chinese phrases inside ordinary explanation paragraphs were still receiving unrelated locate buttons
+2. some quote blockquotes showed unstable exposure, causing one of several quote blocks to miss its entrance
+3. explicit `Figure 1 / Fig. 1 / 图1` text references no longer produced figure entrances because text figure refs had been disabled too aggressively
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - blockquote subtrees no longer render nested inline quote entrances
+   - each quoted blockquote now keeps a single outer blockquote entrance
+2. `web/src/components/chat/MarkdownRenderer.tsx`
+   - re-enabled explicit text figure-ref tokens for:
+     - `Figure n`
+     - `Fig. n`
+     - `图 n`
+3. `web/src/components/chat/MarkdownRenderer.tsx`
+   - tightened generic quote-token qualification so short Chinese emphasis phrases are no longer treated as direct quote evidence
+
+Verified:
+
+1. `npm run build` in `web/`
+
+### 15.10 Review-driven next phase (2026-03-12, surface ownership cleanup + inline-tail UI)
+
+This review phase does not land code. It updates the plan after a full frontend/backend audit of the now-mostly-stable `paper_guide` locate feature.
+
+Confirmed structural issues:
+
+1. locate entrance visibility still has two sources of truth
+   - `web/src/components/chat/MarkdownRenderer.tsx` still infers quote/figure entrance surfaces from rendered text tokens
+   - `web/src/components/chat/MessageList.tsx` separately re-checks strict provenance eligibility and surface policy
+   - result: backend provenance may be correct while frontend still over-renders, under-renders, or reintroduces regressions
+2. `kb/paper_guide_provenance.py` is extracted but not yet truly decoupled
+   - it still imports `kb.task_runtime as tr`
+   - `kb/task_runtime.py` still re-exports many provenance helpers back through wrappers
+   - result: contract changes remain harder to reason about than they should be
+3. paper-guide self-reference suppression is functionally correct in the API, but product semantics are still ambiguous
+   - current behavior keeps a compact muted notice when the bound paper was intentionally hidden
+   - if product direction is "do not show current paper in reference locate at all", the frontend should stop rendering this panel entirely in that case
+4. locate entrance visual form is still technically inline but not yet product-polished
+   - current buttons are appended as generic circular quote glyphs
+   - they can still feel like detached mini-controls instead of sentence/formula/image tail annotations
+5. Chinese regex/heuristic constants still contain mojibake in backend matching tables
+   - even when English paths work, this remains a correctness and maintenance risk for Chinese prompts and labels
+
+Planned next work:
+
+1. Phase D1: single-source-of-truth for locate surfaces
+   - backend provenance remains the only place that decides whether a visible surface exists
+   - allowed visible surface kinds stay limited to:
+     - `blockquote`
+     - `equation` (display/source only)
+     - `figure`
+   - `MessageList.tsx` becomes the sole consumer of surface eligibility
+   - `MarkdownRenderer.tsx` stops making business decisions about whether a snippet is a quote/figure claim; it only renders inline-tail slots handed to it
+2. Phase D2: finish provenance module boundary cleanup
+   - introduce a small shared module for regex/constants/path helpers used by both runtime and provenance
+   - remove `paper_guide_provenance -> task_runtime` back-dependency
+   - keep `task_runtime` as orchestration only, not provenance façade + helper registry
+3. Phase D3: settle paper-guide reference-locate product rule
+   - default rule: when all surviving hits are the bound guide paper, render nothing
+   - optional muted notice should be feature-flagged or explicitly product-approved, not the implicit default
+4. Phase D4: inline-tail entrance polish
+   - quote entrance attaches at sentence tail, ideally after the citation marker if one exists
+   - display equation entrance attaches to equation number/right edge of the same line, not as a detached extra row
+   - figure entrance attaches to caption tail; if there is no caption in the answer, attach to image corner
+   - visual language changes from generic floating circle to a compact superscript-style tail chip
+5. Phase D5: cleanup and performance follow-up
+   - fix mojibake Chinese heuristics in backend constants
+   - measure whether `MarkdownRenderer` and `MessageList` can reduce repeated resolve work after surface unification
+   - revisit frontend bundle split after behavior is stable
+
+Acceptance criteria for the next phase:
+
+1. one render surface -> at most one visible entrance
+2. no entrance can appear unless backed by strict provenance
+3. `MarkdownRenderer.tsx` no longer decides quote/figure business eligibility
+4. paper-guide reference locate never shows the currently bound paper as a normal reference card
+5. entrances remain inline with sentence/formula/image tails and do not force standalone rows
+
+### 15.11 Progress landed (2026-03-12, D1 first slice: quote surface narrowing + hidden self-ref panel)
+
+This first D1 slice narrows visible frontend surfaces before deeper refactoring.
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - added `inlineLocateTokenPolicy`
+   - `paper_guide` messages now disable inline quote-token entrances inside ordinary paragraphs/list items
+   - explicit text figure refs remain enabled
+   - blockquote locate still keeps its own quote-preference snippet selection path
+2. `web/src/components/chat/MessageList.tsx`
+   - guide messages now pass `inlineLocateTokenPolicy = { quote: false, figure_ref: true }`
+   - visible quote entrances therefore come from `blockquote` surfaces instead of paragraph-level quote token guesses
+3. `web/src/components/refs/RefsPanel.tsx`
+   - when the bound paper is suppressed and no external refs remain, the refs panel now renders nothing by default
+4. `web/src/components/chat/MessageList.tsx`
+   - refs rows are no longer kept alive solely because `guide_filter.hidden_self_source == true`
+
+Why this slice first:
+
+1. it reduces the highest-churn UI regressions without changing provenance schema again
+2. it moves paper-guide quote visibility closer to the intended surface model:
+   - `blockquote`
+   - `equation`
+   - `figure`
+3. it removes a product ambiguity where users still saw a refs panel even though the current bound paper had already been intentionally filtered
+
+Verified:
+
+1. `npm run build` in `web/`
+
+### 15.12 Progress landed (2026-03-12, D1 second slice: paper-guide text-token entrances disabled)
+
+This second D1 slice makes the paper-guide frontend stricter: ordinary text nodes no longer infer locate entrances at all.
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - added `inlineTextLocateEnabled`
+   - paragraph/list-item inline text token decoration can now be disabled per render call
+2. `web/src/components/chat/MessageList.tsx`
+   - `paper_guide` now passes `inlineTextLocateEnabled = false`
+   - visible entrances in guide answers therefore come only from structural surfaces:
+     - `blockquote`
+     - display `equation`
+     - actual `img` figure surfaces
+
+Effect on product behavior:
+
+1. ordinary paragraph/list-item text no longer grows quote/figure-ref entrances in guide mode
+2. this deliberately removes residual text-inferred figure entrances as part of the D1 tightening pass
+3. if figure text refs are reintroduced later, they should come back through explicit surface slots owned by `MessageList`, not through generic token scanning
+
+Verified:
+
+1. `npm run build` in `web/`
+
+### 15.13 Progress landed (2026-03-12, D1 third slice: structural surface policy made explicit)
+
+This D1 step moves one more piece of entrance ownership out of implicit renderer defaults and into explicit caller policy.
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - added `locateSurfacePolicy`
+   - renderer now normalizes per-surface visibility for:
+     - `paragraph`
+     - `list_item`
+     - `blockquote`
+     - `equation`
+     - `figure`
+   - `renderLocateButton(...)` now exits early when the current surface kind is disabled
+2. `web/src/components/chat/MessageList.tsx`
+   - guide messages now pass an explicit surface policy:
+     - `paragraph: false`
+     - `list_item: false`
+     - `blockquote: true`
+     - `equation: true`
+     - `figure: true`
+
+Why this matters:
+
+1. renderer defaults no longer implicitly decide that every supported structural node should try to expose an entrance
+2. guide-mode visible surfaces are now explicitly caller-owned instead of being inferred from generic markdown behavior
+3. this is the first concrete step toward making `MessageList.tsx` the single surface-policy consumer
+
+Verified:
+
+1. `npm run build` in `web/`
+
+### 15.14 Progress landed (2026-03-12, D2 first slice: provenance shared primitives extracted)
+
+This D2 slice removes the highest-risk backend reverse dependency in the current paper-guide provenance stack.
+
+Root problem before this change:
+
+1. `kb/paper_guide_provenance.py` imported `kb.task_runtime as tr`
+2. `kb/task_runtime.py` also lazy-imported `kb.paper_guide_provenance` through wrapper helpers
+3. the module was therefore split in files but not actually decoupled
+
+Implemented:
+
+1. added new lower-level module `kb/paper_guide_shared.py`
+   - exports provenance-facing low-level primitives:
+     - `DeepSeekChat`
+     - source-block matching helpers
+     - md path resolver
+     - regex/constants used by provenance heuristics
+2. `kb/paper_guide_provenance.py`
+   - no longer imports `kb.task_runtime`
+   - now imports shared primitives directly from `kb.paper_guide_shared`
+3. `kb/task_runtime.py`
+   - continues to expose compatibility wrappers, but is no longer required as the provenance module's dependency source
+
+Why this matters:
+
+1. provenance extraction no longer depends on the orchestration module that also lazy-loads it
+2. contract and heuristic work in provenance can now evolve with a smaller blast radius
+3. this creates a cleaner base for the later step where `task_runtime` stops acting as the provenance helper façade
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_provenance.py -q`
+2. `pytest tests/unit/test_chat_render_reference_notes.py -q`
+3. `pytest tests/unit -q`
+
+### 15.15 Progress landed (2026-03-12, D2 second slice: task_runtime runtime values now delegate to shared primitives)
+
+This D2 follow-up keeps the refactor low-risk: instead of deleting large legacy constant blocks immediately, `task_runtime.py` now delegates the runtime values it actually uses to `kb.paper_guide_shared`.
+
+Implemented:
+
+1. `kb/task_runtime.py`
+   - imports shared paper-guide primitives with explicit `_PG_...` aliases
+   - rebinds the runtime-facing provenance constants to the shared values:
+     - figure/equation tokenization regexes
+     - heading/summary/claim heuristics
+     - non-source/equation-explanation helpers
+     - quote ellipsis handling
+2. this means runtime behavior now follows the shared module even though the old literal blocks are still present temporarily in the file
+
+Why this step:
+
+1. it removes the "two live sources of truth" problem before the dead local literal blocks are fully deleted
+2. it avoids a large risky delete-only patch while preserving behavior
+3. it prepares the final D2 cleanup step where the old duplicated literal blocks can be removed safely
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_provenance.py -q`
+2. `pytest tests/unit -q`
+
+### 15.18 Progress landed (2026-03-12, D1 visual polish: attach locate entrances to sentence/equation tails)
+
+This frontend pass tightens how paper-guide locate entrances are visually attached to content, without reopening broader locate eligibility.
+
+Implemented:
+
+1. `web/src/components/chat/MarkdownRenderer.tsx`
+   - adds a tail-attachment helper so blockquote locate buttons are appended into the last visible quote line instead of being emitted as a separate block-level trailing button
+   - changes display-math rendering so the locate button is rendered inside a dedicated inline tail shell beside the equation content, rather than appended as a loose block child
+2. `web/src/styles/index.css`
+   - adds `kb-md-loc-tail`, `kb-md-blockquote-tail`, and equation-tail layout styles
+   - keeps the locate button visually attached to the end of the quote/equation instead of reading like a separate row control
+   - updates the entrance to a lighter superscript-style tail label:
+     - `原` for quote evidence
+     - `式` for source display equations
+     - `图` for figures
+   - fixes tail attachment so trailing whitespace or citation chips no longer push the entrance onto its own line
+   - strengthens the quote badge visibility after live feedback:
+     - quote badge text becomes `原文`
+     - contrast and border weight are increased so the entrance does not read as "missing"
+
+Why this matters:
+
+1. quote entrances now read like sentence-tail annotations rather than detached controls
+2. display-equation entrances now sit at the equation tail instead of dropping below the formula block
+3. this matches the intended paper-guide presentation: evidence markers should feel embedded in the answer surface
+
+Verified:
+
+1. `npm run build` in `web/`
+
+### 15.18 Progress landed (2026-03-12, D3 first slice: extract answer-contract helpers out of task_runtime)
+
+This D3 slice starts the next refactor phase by moving the answer-contract subsystem into its own backend module.
+
+Implemented:
+
+1. added `kb/answer_contract.py`
+   - owns:
+     - kb-miss notice parsing/reconciliation helpers
+     - answer intent/depth detection
+     - section/structure detection
+     - answer quality probe construction
+     - paper-guide grounding rules
+     - default next-step generation
+     - answer-contract repair and kb-miss enhancement logic
+2. `kb/task_runtime.py`
+   - now imports these helpers as static aliases
+   - removes the old in-file answer-contract implementation block
+   - keeps existing call sites and public helper names stable for tests and callers
+
+Why this matters:
+
+1. `task_runtime.py` no longer mixes answer-contract rules with task orchestration in the same file
+2. contract iteration can now happen inside a smaller module with clearer unit boundaries
+3. this opens the path for the next step where answer-quality telemetry can also be reconsidered separately from generation runtime
+
+Observed result:
+
+1. `kb/task_runtime.py` line count dropped further to `2664`
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_answer_contract.py -q`
+2. `pytest tests/unit -q`
+
+### 15.19 Progress landed (2026-03-12, D3 second slice: extract answer-quality telemetry out of task_runtime)
+
+This D3 follow-up separates answer-quality telemetry from the generation runtime orchestration file.
+
+Implemented:
+
+1. added `kb/answer_quality.py`
+   - owns:
+     - `_gen_record_answer_quality(...)`
+     - `_gen_answer_quality_summary(...)`
+   - continues to use shared `runtime_state` storage for `GEN_QUALITY_EVENTS`
+2. `kb/task_runtime.py`
+   - now imports these telemetry helpers as static aliases
+   - removes the old in-file telemetry implementation block
+   - keeps existing call sites and public helper names unchanged
+
+Why this matters:
+
+1. `task_runtime.py` becomes more focused on orchestration instead of metrics bookkeeping
+2. answer-quality telemetry can now evolve independently from generation flow refactors
+3. this keeps the refactor pattern consistent:
+   - behavior preserved
+   - ownership moved into smaller purpose-built modules
+
+Observed result:
+
+1. `kb/task_runtime.py` line count dropped further to `2458`
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_answer_contract.py -q`
+2. `pytest tests/unit -q`
+
+### 15.17 Progress landed (2026-03-12, D2 fourth slice: replace dynamic provenance wrappers with static task_runtime aliases)
+
+This D2 slice removes the remaining dynamic provenance forwarding layer from `kb/task_runtime.py`.
+
+Implemented:
+
+1. `kb/task_runtime.py`
+   - now imports the paper-guide provenance helpers directly from `kb.paper_guide_provenance`
+   - deletes the old `_paper_guide_provenance_runtime()` dispatcher and the large set of one-line wrapper functions that only forwarded calls into the provenance module
+   - deletes the leftover local `_NON_SOURCE_SEGMENT_HINTS` duplicate block that had survived the previous literal cleanup
+2. task-runtime-facing API names are still preserved:
+   - callers still use `task_runtime._build_paper_guide_answer_provenance(...)`
+   - but those names are now static aliases instead of dynamic wrapper functions
+
+Why this matters:
+
+1. `task_runtime.py` no longer spends hundreds of lines re-forwarding provenance helpers it does not own
+2. the module boundary is clearer:
+   - provenance implementation lives in `kb.paper_guide_provenance`
+   - orchestration stays in `kb.task_runtime`
+3. this materially shrinks the file and lowers the chance of future drift between wrapper stubs and provenance behavior
+
+Observed result:
+
+1. `kb/task_runtime.py` line count dropped further to `3157`
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_provenance.py -q`
+2. `pytest tests/unit -q`
+
+### 15.16 Progress landed (2026-03-12, D2 third slice: remove duplicated provenance literal blocks from task_runtime)
+
+This D2 cleanup step finishes the transition started in 15.15: the old paper-guide provenance literal blocks that still lived in `kb/task_runtime.py` have now been physically removed.
+
+Implemented:
+
+1. `kb/task_runtime.py`
+   - deleted the duplicated local literal definitions for:
+     - figure/equation tokenization regexes
+     - heading/summary/claim heuristic regexes
+     - quote-heading / figure-claim regexes
+     - equation-explanation and quote-ellipsis regexes
+   - kept only the shared-runtime rebinds to `kb.paper_guide_shared`
+2. the runtime contract is now simpler:
+   - provenance primitives are defined in one place
+   - `task_runtime.py` consumes those shared primitives instead of shadowing them locally
+
+Why this matters:
+
+1. the "shared module exists but task_runtime still contains an old copy" inconsistency is gone
+2. future paper-guide heuristic changes now have one backend source of truth instead of a live/shared split
+3. this reduces maintenance risk before the next refactor phase that will further shrink the `task_runtime` façade
+
+Verified:
+
+1. `pytest tests/unit/test_task_runtime_provenance.py -q`
+2. `pytest tests/unit -q`

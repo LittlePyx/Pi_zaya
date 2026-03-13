@@ -231,6 +231,7 @@ function formulaBundleRepresentativeScore(entry: ProvenanceLocateEntry): number 
   else if (formulaOrigin === 'explanation') score += 0.6
   else if (formulaOrigin === 'derived') score -= 2.4
   if (claimType === 'formula_claim') score += 4
+  else if (claimType === 'inline_formula_claim') score += 1.2
   else if (claimType === 'equation_explanation_claim') score += 2
   const anchorRaw = String(entry.anchorText || entry.evidenceQuote || entry.segmentText || '').trim()
   if (/\$\$[\s\S]{8,}\$\$/.test(anchorRaw)) score += 1.4
@@ -379,7 +380,10 @@ function buildGuideLocateCandidates(
 }
 
 function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
-  const entry = refs[String(msgId)] as { hits?: Array<{ meta?: Record<string, unknown> }> } | undefined
+  const entry = refs[String(msgId)] as {
+    hits?: Array<{ meta?: Record<string, unknown> }>
+    guide_filter?: { hidden_self_source?: boolean }
+  } | undefined
   if (!entry) return false
   const hits = Array.isArray(entry.hits) ? entry.hits : []
   if (hits.length > 0) return true
@@ -843,7 +847,7 @@ function buildStructuredProvenanceLocateEntries(
     if (claimGroupKind === 'formula_bundle' && (locateSurfacePolicy === 'hidden' || formulaOrigin === 'derived')) {
       continue
     }
-    const keepSelfTarget = effectiveMustLocate || ['quote_claim', 'blockquote_claim', 'formula_claim', 'equation_explanation_claim', 'figure_claim'].includes(claimType)
+    const keepSelfTarget = effectiveMustLocate || ['quote_claim', 'blockquote_claim', 'formula_claim', 'inline_formula_claim', 'equation_explanation_claim', 'figure_claim'].includes(claimType)
     const target = keepSelfTarget
       ? { segment: currentSegment, distance: 0 }
       : pickClaimGroupTargetSegment(segmentsAll, idx)
@@ -954,6 +958,7 @@ function buildStructuredProvenanceLocateEntries(
       - Math.min(0.16, target.distance * 0.06)
       + (effectiveMustLocate ? 0.42 : 0)
       + (claimType === 'formula_claim' ? 0.18 : 0)
+      + (claimType === 'inline_formula_claim' ? 0.17 : 0)
       + (claimType === 'equation_explanation_claim' ? 0.16 : 0)
       + (claimType === 'figure_claim' ? 0.16 : 0)
       + ((claimType === 'quote_claim' || claimType === 'blockquote_claim') ? 0.14 : 0)
@@ -1067,6 +1072,12 @@ function scoreStructuredAnchorCompatibility(
     if (renderKind === 'blockquote') return 0.18
     if (renderKind === 'equation') return 0.12
     return -0.4
+  }
+  if (claimType === 'inline_formula_claim' || anchorKind === 'inline_formula') {
+    if (renderKind === 'equation') return 0.74
+    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.58
+    if (renderKind === 'blockquote') return 0.2
+    return -0.28
   }
   if (anchorKind === 'blockquote' || claimType === 'blockquote_claim') {
     return renderKind === 'blockquote' ? 0.72 : -1.2
@@ -2848,7 +2859,11 @@ export function MessageList({
                 <div key={`refs-${row.userMsgId}-${index}`} className="flex gap-3">
                   <div className="mt-1 h-7 w-7 shrink-0" />
                   <div className="max-w-[88%] flex-1">
-                    <RefsPanel refs={refs} msgId={row.userMsgId} onOpenReader={onOpenReader} />
+                    <RefsPanel
+                      refs={refs}
+                      msgId={row.userMsgId}
+                      onOpenReader={onOpenReader}
+                    />
                   </div>
                 </div>
               )
@@ -3699,6 +3714,17 @@ export function MessageList({
                         content={bodyContent}
                         citeDetails={citeDetails}
                         onCitationClick={openCitation}
+                        inlineLocateTokenPolicy={guideSourcePath ? { quote: false, figure_ref: true } : undefined}
+                        inlineTextLocateEnabled={!guideSourcePath}
+                        locateSurfacePolicy={guideSourcePath
+                          ? {
+                            paragraph: false,
+                            list_item: false,
+                            blockquote: true,
+                            equation: true,
+                            figure: true,
+                          }
+                          : undefined}
                         canLocateSnippet={(snippet, meta) => {
                           if (strictStructuredLocateOnly) {
                             if (!strictStructuredInlineLocate) return false
@@ -3708,13 +3734,26 @@ export function MessageList({
                             const order = Number(resolved?.order || 0)
                             if (!resolved?.fallback && !allowedStructuredRenderOrders.has(order)) return false
                             const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
+                            if (!['blockquote', 'equation', 'figure'].includes(targetKind)) {
+                              return false
+                            }
                             const claimType = String(entry.claimType || '').trim().toLowerCase()
                             const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
+                            const formulaOrigin = String(entry.formulaOrigin || '').trim().toLowerCase()
+                            const locateSurfacePolicy = String(entry.locateSurfacePolicy || '').trim().toLowerCase()
                             if ((anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim') && targetKind !== 'blockquote') {
                               return false
                             }
                             if ((anchorKind === 'figure' || claimType === 'figure_claim') && targetKind !== 'figure') {
                               return false
+                            }
+                            if (targetKind === 'equation') {
+                              if (claimType !== 'formula_claim' || anchorKind !== 'equation') {
+                                return false
+                              }
+                              if (formulaOrigin !== 'source' || locateSurfacePolicy !== 'primary') {
+                                return false
+                              }
                             }
                             if (targetKind === 'figure') {
                               return isPreferredStrictFigureRefSnippet(snippet)

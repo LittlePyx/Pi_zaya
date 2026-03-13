@@ -55,7 +55,7 @@ export interface MessageProvenanceSegment {
   segment_index?: number
   kind?: string
   segment_type?: string
-  claim_type?: 'quote_claim' | 'blockquote_claim' | 'formula_claim' | 'equation_explanation_claim' | 'figure_claim' | 'critical_fact_claim' | 'shell_sentence' | string
+  claim_type?: 'quote_claim' | 'blockquote_claim' | 'formula_claim' | 'inline_formula_claim' | 'equation_explanation_claim' | 'figure_claim' | 'critical_fact_claim' | 'shell_sentence' | string
   must_locate?: boolean
   locate_policy?: 'required' | 'optional' | 'hidden' | string
   locate_surface_policy?: 'primary' | 'secondary' | 'hidden' | string
@@ -79,7 +79,7 @@ export interface MessageProvenanceSegment {
   evidence_confidence?: number
   mapping_quality?: number
   mapping_source?: 'fast' | 'llm_refined' | string
-  anchor_kind?: 'quote' | 'blockquote' | 'equation' | 'figure' | 'sentence' | string
+  anchor_kind?: 'quote' | 'blockquote' | 'equation' | 'inline_formula' | 'figure' | 'sentence' | string
   anchor_text?: string
   equation_number?: number
   strict_identity_missing_reasons?: string[]

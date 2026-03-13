@@ -636,6 +636,32 @@ function resolveVisibleEquationTarget(
   return null
 }
 
+function visibleInlineFormulaNodes(container: HTMLElement | null): HTMLElement[] {
+  if (!container) return []
+  return Array.from(container.querySelectorAll<HTMLElement>('.katex'))
+    .filter((node) => !node.closest('.katex-display'))
+}
+
+function resolveInlineFormulaTarget(container: HTMLElement | null, seed: string): HTMLElement | null {
+  const nodes = visibleInlineFormulaNodes(container)
+  if (nodes.length <= 0) return null
+  const probe = String(seed || '').trim()
+  if (!probe) return nodes[0] || null
+  let best: HTMLElement | null = null
+  let bestScore = 0
+  for (const node of nodes) {
+    const text = String(node.textContent || '').trim()
+    if (!text) continue
+    let score = 0.78 * formulaOverlapScore(probe, text)
+    score += 0.24 * snippetMatchScore(probe, text)
+    if (score > bestScore) {
+      best = node
+      bestScore = score
+    }
+  }
+  return bestScore >= 0.14 ? best : null
+}
+
 function resolveDirectTargetNode(
   root: HTMLElement,
   readerBlocks: ReaderDocBlock[],
@@ -905,6 +931,12 @@ export function PaperGuideReaderDrawer({ open, payload, onClose, onAppendSelecti
     if (!target) return
     const focusedBlock = closestReadableBlock(target) || target
     focusedBlock.classList.add('kb-reader-focus')
+    const inlineFormulaTarget = sticky.anchorKind === 'inline_formula'
+      ? resolveInlineFormulaTarget(focusedBlock, sticky.highlightSeed)
+      : null
+    if (inlineFormulaTarget && inlineFormulaTarget !== focusedBlock) {
+      inlineFormulaTarget.classList.add('kb-reader-focus-secondary')
+    }
     resolveRelatedTargetNodes(root, readerBlocks, sticky.relatedBlockIds || [], focusedBlock)
       .forEach((node) => node.classList.add('kb-reader-focus-secondary'))
     if (sticky.highlightQueries.length > 0 && !root.querySelector('.kb-reader-inline-hit')) {
@@ -1286,8 +1318,21 @@ export function PaperGuideReaderDrawer({ open, payload, onClose, onAppendSelecti
 
       let focusedBlock = closestReadableBlock(target) || target
       let exactHit: HTMLElement | null = null
+      let inlineFormulaHit: HTMLElement | null = null
       let usedNeighbor = false
-      if (anchorKindForLocate !== 'figure' && anchorKindForLocate !== 'equation' && highlightQueries.length > 0) {
+      if (anchorKindForLocate === 'inline_formula') {
+        inlineFormulaHit = resolveInlineFormulaTarget(focusedBlock, highlightSeed)
+        if (!inlineFormulaHit && strictLocate) {
+          for (const neighbor of nearbyReadableBlocks(root, focusedBlock, 1)) {
+            const candidate = resolveInlineFormulaTarget(neighbor, highlightSeed)
+            if (!candidate) continue
+            focusedBlock = closestReadableBlock(neighbor) || neighbor
+            inlineFormulaHit = candidate
+            usedNeighbor = true
+            break
+          }
+        }
+      } else if (anchorKindForLocate !== 'figure' && anchorKindForLocate !== 'equation' && highlightQueries.length > 0) {
         exactHit = tryExactHighlight(focusedBlock)
         if (!exactHit && strictLocate) {
           const maxDistance = anchorKindForLocate === 'equation' ? 1 : 2
@@ -1303,9 +1348,12 @@ export function PaperGuideReaderDrawer({ open, payload, onClose, onAppendSelecti
       }
 
       focusedBlock.classList.add('kb-reader-focus')
+      if (inlineFormulaHit && inlineFormulaHit !== focusedBlock) {
+        inlineFormulaHit.classList.add('kb-reader-focus-secondary')
+      }
       const relatedTargets = resolveRelatedTargetNodes(root, readerBlocks, relatedBlockIds, focusedBlock)
       relatedTargets.forEach((node) => node.classList.add('kb-reader-focus-secondary'))
-      const focusNode = exactHit || focusedBlock
+      const focusNode = exactHit || inlineFormulaHit || focusedBlock
       stickyLocateHighlightRef.current = {
         blockId: String(focusedBlock.getAttribute('data-kb-block-id') || target.getAttribute('data-kb-block-id') || activeBlockId || readerBlockHint?.block_id || '').trim(),
         anchorId: String(focusedBlock.getAttribute('data-kb-anchor-id') || target.getAttribute('data-kb-anchor-id') || activeAnchorId || readerBlockHint?.anchor_id || '').trim(),
@@ -1346,6 +1394,10 @@ export function PaperGuideReaderDrawer({ open, payload, onClose, onAppendSelecti
           } else {
             nextLocateHint = 'Exact source phrase match.'
           }
+        } else if (anchorKindForLocate === 'inline_formula') {
+          nextLocateHint = inlineFormulaHit
+            ? (usedNeighbor ? 'Neighbor inline formula match.' : 'Inline formula match.')
+            : 'Explanation block matched, but inline formula was not found.'
         } else if (anchorKindForLocate === 'figure') {
           nextLocateHint = 'Figure block matched.'
         } else if (anchorKindForLocate === 'equation') {

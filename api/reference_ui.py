@@ -51,6 +51,39 @@ def _source_filename(source_path: str) -> str:
     return str(parts[-1] or "").strip() if parts else s
 
 
+def _source_identity_keys(source_path: str) -> set[str]:
+    raw = str(source_path or "").strip()
+    if not raw:
+        return set()
+    out: set[str] = set()
+    norm = raw.replace("\\", "/").strip().lower()
+    if norm:
+        out.add(norm)
+
+    name = _source_filename(raw).strip().lower()
+    if name:
+        out.add(name)
+        if name.endswith(".en.md"):
+            pdf_name = name[:-6] + ".pdf"
+            stem_name = name[:-6]
+            out.add(pdf_name)
+            out.add(stem_name)
+        elif name.endswith(".md"):
+            pdf_name = name[:-3] + ".pdf"
+            stem_name = name[:-3]
+            out.add(pdf_name)
+            out.add(stem_name)
+    return {item for item in out if item}
+
+
+def _same_source_identity(source_path: str, bound_source_path: str) -> bool:
+    left = _source_identity_keys(source_path)
+    right = _source_identity_keys(bound_source_path)
+    if not left or not right:
+        return False
+    return bool(left.intersection(right))
+
+
 def _clamp_ui_score(score: float) -> float:
     try:
         v = float(score)
@@ -293,6 +326,59 @@ def _build_semantic_badges(
     return badges
 
 
+def _fallback_ref_ui_summary_line(
+    meta: dict,
+    *,
+    prompt: str,
+    citation_meta: dict | None = None,
+) -> str:
+    prompt_is_cjk = _has_cjk_text(prompt)
+    title = str((citation_meta or {}).get("title") or (meta or {}).get("title") or "").strip()
+
+    def _normalize_candidate(text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        cand = _summary_excerpt(raw, max_sentences=2, max_len=360)
+        if not cand:
+            cand = _first_summary_sentence(raw, max_len=220)
+        if not cand:
+            return ""
+        if _looks_like_title_echo(cand, title):
+            return ""
+        if prompt_is_cjk:
+            cand = _translate_summary_to_zh(cand)
+        cand = _summary_excerpt(cand, max_sentences=2, max_len=360)
+        if not cand:
+            return ""
+        if _looks_like_title_echo(cand, title):
+            return ""
+        return cand
+
+    for key in ("ref_show_snippets",):
+        raw_arr = meta.get(key)
+        if not isinstance(raw_arr, list):
+            continue
+        for item in raw_arr[:3]:
+            cand = _normalize_candidate(str(item or ""))
+            if cand:
+                return cand
+
+    citation_summary = _normalize_candidate(str((citation_meta or {}).get("summary_line") or ""))
+    if citation_summary:
+        return citation_summary
+
+    for key in ("ref_overview_snippets",):
+        raw_arr = meta.get(key)
+        if not isinstance(raw_arr, list):
+            continue
+        for item in raw_arr[:3]:
+            cand = _normalize_candidate(str(item or ""))
+            if cand:
+                return cand
+    return ""
+
+
 def build_hit_ui_meta(
     hit: dict,
     *,
@@ -343,18 +429,6 @@ def build_hit_ui_meta(
         anchor_match_score=anchor_match_score,
         explicit_doc_match_score=explicit_doc_match_score,
     )
-    nav = _build_ref_navigation(meta, prompt=prompt, heading_fallback=heading)
-    summary_line = str(nav.get("summary_line") or nav.get("what") or "").strip()
-    why_line = str(nav.get("why") or "").strip()
-    if summary_line and (not why_line):
-        why_line = _fallback_why_line_ui(
-            prompt=prompt,
-            heading_label=heading_path or heading,
-            section_label=section_label,
-            subsection_label=subsection_label,
-            find_terms=list(nav.get("find") or []),
-        )
-
     pdf_path = _resolve_pdf_for_source(pdf_root, source_path)
     display_name = _display_source_name(source_path, pdf_path, lib_store)
     citation_meta = {}
@@ -369,6 +443,20 @@ def build_hit_ui_meta(
         except Exception:
             if not citation_meta:
                 citation_meta = {}
+
+    nav = _build_ref_navigation(meta, prompt=prompt, heading_fallback=heading)
+    summary_line = str(nav.get("summary_line") or nav.get("what") or "").strip()
+    if not summary_line:
+        summary_line = _fallback_ref_ui_summary_line(meta, prompt=prompt, citation_meta=citation_meta)
+    why_line = str(nav.get("why") or "").strip()
+    if not why_line:
+        why_line = _fallback_why_line_ui(
+            prompt=prompt,
+            heading_label=heading_path or heading,
+            section_label=section_label,
+            subsection_label=subsection_label,
+            find_terms=list(nav.get("find") or []),
+        )
 
     return {
         "display_name": display_name,
@@ -468,20 +556,30 @@ def enrich_refs_payload(
     pdf_root: Path | None,
     md_root: Path | None,
     lib_store: LibraryStore | None,
+    guide_mode: bool = False,
+    guide_source_path: str = "",
+    guide_source_name: str = "",
 ) -> dict[int, dict]:
     out: dict[int, dict] = {}
+    guide_source_path_norm = str(guide_source_path or "").strip()
+    guide_source_name_norm = str(guide_source_name or "").strip()
+    guide_active = bool(guide_mode and guide_source_path_norm)
     for user_msg_id, pack in (refs_by_user or {}).items():
         if not isinstance(pack, dict):
             continue
         prompt = str(pack.get("prompt") or "").strip()
         raw_hits = []
         scored_ready: list[float] = []
+        filtered_self_hits = 0
         for hit in list(pack.get("hits") or []):
             if not isinstance(hit, dict):
                 continue
             meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
             source_path = str((meta or {}).get("source_path") or "").strip()
             if is_excluded_source_path(source_path):
+                continue
+            if guide_active and _same_source_identity(source_path, guide_source_path_norm):
+                filtered_self_hits += 1
                 continue
             raw_hits.append(dict(hit))
             score, score_pending = _effective_ui_score(hit)
@@ -529,6 +627,14 @@ def enrich_refs_payload(
             )
         pack2 = dict(pack)
         pack2["hits"] = hits
+        if guide_active:
+            pack2["guide_filter"] = {
+                "active": True,
+                "hidden_self_source": bool(filtered_self_hits > 0),
+                "filtered_hit_count": int(filtered_self_hits),
+                "guide_source_path": guide_source_path_norm,
+                "guide_source_name": guide_source_name_norm or _source_filename(guide_source_path_norm),
+            }
         out[int(user_msg_id)] = pack2
     return out
 

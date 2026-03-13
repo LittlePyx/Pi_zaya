@@ -333,39 +333,73 @@ body,
   white-space: normal;
 }
 
+.kb-markdown .kb-md-loc-tail {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 5px;
+  vertical-align: super;
+}
+
+.kb-markdown .kb-md-blockquote-tail > :last-child {
+  margin-bottom: 0;
+}
+
+.kb-markdown .kb-md-equation-block {
+  text-align: center;
+}
+
+.kb-markdown .kb-md-equation-inline {
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.kb-markdown .kb-md-equation-inline :where(.katex-display) {
+  margin: 0;
+}
+
+.kb-markdown .kb-md-equation-tail {
+  flex: 0 0 auto;
+  margin-left: 0;
+  margin-bottom: 0.28em;
+}
+
 .kb-markdown .kb-md-locate-inline-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  min-height: 18px;
-  margin-left: 6px;
-  padding: 0 1px;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  min-width: auto;
+  min-height: auto;
+  margin-left: 0;
+  padding: 0.06em 0.46em;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: color-mix(in srgb, var(--accent) 68%, var(--text-main));
-  opacity: 0.96;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-main));
+  opacity: 0.98;
   cursor: pointer;
-  vertical-align: baseline;
-  transform: translateY(-0.02em);
+  vertical-align: super;
+  transform: translateY(-0.06em);
   transition: color 0.15s ease, opacity 0.15s ease, transform 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
 }
 
-.kb-markdown .kb-md-locate-inline-glyph {
+.kb-markdown .kb-md-locate-inline-label {
   display: inline-block;
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
 }
 
 .kb-markdown .kb-md-locate-inline-btn:hover,
 .kb-markdown .kb-md-locate-inline-btn:focus-visible {
   color: var(--accent);
   opacity: 1;
-  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  transform: translateY(-0.02em) scale(1.02);
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  transform: translateY(-0.1em) scale(1.02);
 }
 
 .kb-prov-locate-chip {
