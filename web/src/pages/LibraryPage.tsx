@@ -18,7 +18,6 @@ import {
   Input,
   Card,
   Checkbox,
-  Collapse,
   Alert,
   Tooltip,
   Dropdown,
@@ -271,7 +270,7 @@ export default function LibraryPage() {
   const [scope, setScope] = useState('200')
   const [tabKey, setTabKey] = useState<FileTabKey>('pending')
   const [browseMode, setBrowseMode] = useState<LibraryBrowseMode>('list')
-  const [replaceMd, setReplaceMd] = useState(true)
+  const [replaceMd, setReplaceMd] = useState(false)
   const [onlyBusyFiles, setOnlyBusyFiles] = useState(false)
   const [fileKeyword, setFileKeyword] = useState('')
   const [paperCategoryFilter, setPaperCategoryFilter] = useState('')
@@ -307,6 +306,7 @@ export default function LibraryPage() {
   const [savingDirs, setSavingDirs] = useState(false)
   const [pickingDir, setPickingDir] = useState<'pdf' | 'md' | null>(null)
   const [dirTouched, setDirTouched] = useState(false)
+  const [dirEditorOpen, setDirEditorOpen] = useState(false)
 
   const [uploadDrafts, setUploadDrafts] = useState<UploadDraft[]>([])
   const [uploadUseLlm, setUploadUseLlm] = useState(true)
@@ -314,15 +314,16 @@ export default function LibraryPage() {
   const [uploadErrorReason, setUploadErrorReason] = useState<UploadErrorReason>('all')
   const [uploadInspecting, setUploadInspecting] = useState(false)
   const [uploadSaving, setUploadSaving] = useState(false)
+  const [uploadWorkbenchOpen, setUploadWorkbenchOpen] = useState(false)
 
   const [renameScope, setRenameScope] = useState('30')
-  const [renameUseLlm, setRenameUseLlm] = useState(false)
-  const [renameOnlyDiff, setRenameOnlyDiff] = useState(true)
   const [renameLoading, setRenameLoading] = useState(false)
   const [renameApplying, setRenameApplying] = useState(false)
   const [renameItems, setRenameItems] = useState<RenameSuggestionItem[]>([])
   const [renameSelected, setRenameSelected] = useState<Record<string, boolean>>({})
   const [renameOverrides, setRenameOverrides] = useState<Record<string, string>>({})
+  const [renameResultsOpen, setRenameResultsOpen] = useState(false)
+  const [processAdvancedOpen, setProcessAdvancedOpen] = useState(false)
   const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false)
 
   const uploadLocked = store.converting || Boolean(store.refSync?.running)
@@ -337,6 +338,7 @@ export default function LibraryPage() {
 
   const pendingFiles = useMemo(() => store.files.filter((x) => x.category === 'pending'), [store.files])
   const convertedFiles = useMemo(() => store.files.filter((x) => x.category === 'converted'), [store.files])
+  const renameOnlyDiff = true
   const renameVisible = useMemo(() => (renameOnlyDiff ? renameItems.filter((x) => x.diff) : renameItems), [renameOnlyDiff, renameItems])
   const selectedUploadCount = useMemo(() => uploadDrafts.filter((x) => x.selected).length, [uploadDrafts])
   const selectedRenameCount = useMemo(() => renameItems.filter((x) => renameSelected[x.name]).length, [renameItems, renameSelected])
@@ -661,6 +663,21 @@ export default function LibraryPage() {
   }, [settingsLoaded, settingsPdfDir, settingsMdDir, dirTouched])
 
   useEffect(() => {
+    if (!settingsLoaded) return
+    if (!String(settingsPdfDir || '').trim() || !String(settingsMdDir || '').trim()) {
+      setDirEditorOpen(true)
+    }
+  }, [settingsLoaded, settingsPdfDir, settingsMdDir])
+
+  useEffect(() => {
+    if (uploadDrafts.length === 0) {
+      setUploadWorkbenchOpen(false)
+      return
+    }
+    setUploadWorkbenchOpen(true)
+  }, [uploadDrafts.length])
+
+  useEffect(() => {
     const existing = new Set(store.files.map((item) => item.name))
     setSelectedLibraryNames((cur) => {
       let changed = false
@@ -686,6 +703,7 @@ export default function LibraryPage() {
     try {
       await updateSettings({ pdfDir: pdfDirDraft.trim(), mdDir: mdDirDraft.trim() })
       setDirTouched(false)
+      setDirEditorOpen(false)
       message.success('目录已保存')
       await store.loadFiles(scope)
       return true
@@ -851,7 +869,7 @@ export default function LibraryPage() {
   const scanRenameSuggestions = async () => {
     setRenameLoading(true)
     try {
-      const res = await libraryApi.listRenameSuggestions(renameScope, renameUseLlm)
+      const res = await libraryApi.listRenameSuggestions(renameScope, true)
       const items = Array.isArray(res.items) ? res.items : []
       setRenameItems(items)
       const selected: Record<string, boolean> = {}
@@ -862,6 +880,7 @@ export default function LibraryPage() {
       }
       setRenameSelected(selected)
       setRenameOverrides(overrides)
+      setRenameResultsOpen(items.some((item) => item.diff))
       message.success(`扫描完成：${res.changed}/${res.total_scanned} 需要改名`)
     } catch (err) {
       message.error(err instanceof Error ? err.message : '扫描改名建议失败')
@@ -917,7 +936,7 @@ export default function LibraryPage() {
     try {
       const overrides: Record<string, string> = {}
       for (const name of names) overrides[name] = String(renameOverrides[name] || '').trim()
-      const res = await libraryApi.applyRenameSuggestions(names, overrides, { useLlm: renameUseLlm, alsoMd: true })
+      const res = await libraryApi.applyRenameSuggestions(names, overrides, { useLlm: true, alsoMd: true })
       message[res.failed > 0 ? 'warning' : 'success'](`改名完成：成功 ${res.renamed}，跳过 ${res.skipped}，失败 ${res.failed}`)
       if (res.needs_reindex) message.info('改名后建议更新知识库')
       await store.loadFiles(scope)
@@ -1586,6 +1605,392 @@ export default function LibraryPage() {
     reconverting: 0,
   }
 
+  const directoriesConfigured = Boolean(pdfDirDraft.trim() && mdDirDraft.trim())
+  const showDirEditor = dirEditorOpen || !directoriesConfigured
+  const workbenchStats = [
+    { key: 'view', label: '当前视图', value: counts.total_view },
+    { key: 'pending', label: '待转换', value: counts.pending },
+    { key: 'converted', label: '已转换', value: counts.converted },
+    { key: 'queued', label: '排队中', value: counts.queued },
+    { key: 'running', label: '运行中', value: counts.running },
+  ]
+
+  const renameHasResults = renameItems.length > 0
+  const renameHasVisibleItems = renameVisible.length > 0
+  const hasRenameSelection = selectedRenameCount > 0
+  const showUploadWorkbench = uploadWorkbenchOpen && uploadDrafts.length > 0
+  const processAdvancedCount = Number(onlyBusyFiles) + Number(replaceMd)
+  const showTaxonomySelectAction = browseMode === 'list' && currentListItems.length > 0
+  const showTaxonomyRefreshAction = browseMode === 'list' && visibleAll.length > 0
+  const showTaxonomyClearAction = hasActiveTaxonomyFilters
+  const showTaxonomyTopActions = showTaxonomySelectAction || showTaxonomyRefreshAction || showTaxonomyClearAction
+
+  const renameWorkbenchSection = (
+    <section className="kb-lib-workbench-section kb-lib-workbench-section-rename">
+      <div className="kb-lib-section-head">
+        <div className="kb-lib-section-copy">
+          <Text className="kb-lib-section-title">文件名管理</Text>
+        </div>
+      </div>
+
+      <div className="kb-lib-rename-summary">
+        <div className="kb-lib-rename-summary-main">
+          <Select value={renameScope} onChange={setRenameScope} className="kb-lib-rename-scope" options={RENAME_SCOPE_OPTIONS} />
+          <Button size="small" className="kb-lib-action-tonal" loading={renameLoading} onClick={() => { void scanRenameSuggestions() }}>
+            {renameHasResults ? '重新检查' : '检查文件名'}
+          </Button>
+          {renameHasVisibleItems ? (
+            <Button className="kb-lib-action-quiet" size="small" onClick={() => setRenameResultsOpen((open) => !open)}>
+              {renameResultsOpen ? '收起结果' : '展开结果'}
+            </Button>
+          ) : null}
+          {renameHasVisibleItems ? (
+            <Button className="kb-lib-action-quiet" size="small" onClick={selectRenameDiffItems}>全选</Button>
+          ) : null}
+          {hasRenameSelection ? (
+            <Button className="kb-lib-action-quiet" size="small" onClick={clearRenameSelection}>清空</Button>
+          ) : null}
+          {hasRenameSelection ? (
+            <Button className="kb-lib-action-tonal" size="small" type="primary" loading={renameApplying} onClick={() => { void applyRenameSuggestions() }}>
+              应用改名
+            </Button>
+          ) : null}
+        </div>
+        {renameHasResults ? (
+          <div className="kb-lib-rename-summary-side">
+            <div className="kb-lib-rename-badges">
+              <span className="kb-lib-rename-meta">{selectedRenameCount} 已选 · {renameVisible.length}/{renameItems.length} 显示</span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {renameHasResults && renameHasVisibleItems && renameResultsOpen ? (
+        <List
+          className="kb-lib-rename-list"
+          size="small"
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下暂无改名项" /> }}
+          dataSource={renameVisible}
+          pagination={{ pageSize: 6, size: 'small', showSizeChanger: false }}
+          renderItem={(item) => (
+            <List.Item className="kb-lib-rename-list-item">
+              <div className="kb-lib-rename-item">
+                <div className="kb-lib-rename-item-head">
+                  <Checkbox
+                    checked={Boolean(renameSelected[item.name])}
+                    onChange={(e) => setRenameSelected((cur) => ({ ...cur, [item.name]: e.target.checked }))}
+                  />
+                  <Text className="kb-lib-rename-item-name">{item.name}</Text>
+                  <Tag color={item.diff ? 'warning' : 'default'}>{item.diff ? '建议改名' : '无需改名'}</Tag>
+                </div>
+                <Input
+                  value={renameOverrides[item.name] || ''}
+                  onChange={(e) => setRenameOverrides((cur) => ({ ...cur, [item.name]: e.target.value }))}
+                  className="kb-lib-rename-item-input"
+                />
+                <Text type="secondary" className="kb-lib-rename-item-source">
+                  {item.display_full_name}
+                </Text>
+              </div>
+            </List.Item>
+          )}
+        />
+      ) : null}
+      {renameHasResults && !renameHasVisibleItems ? (
+        <Text type="secondary" className="kb-lib-section-note">
+          当前范围内没有需要改名的文件。
+        </Text>
+      ) : null}
+    </section>
+  )
+
+  const preparationWorkbench = (
+    <Card size="small" className="kb-lib-card kb-lib-workbench-card" title="准备工作台">
+      <div className="kb-lib-workbench">
+        <div className="kb-lib-workbench-main">
+          <section className="kb-lib-workbench-section">
+            <div className="kb-lib-section-head">
+              <div className="kb-lib-section-copy">
+                <Text className="kb-lib-section-title">目录设置</Text>
+              </div>
+              {directoriesConfigured ? (
+                <Button className="kb-lib-action-quiet" onClick={() => setDirEditorOpen((open) => !open)}>
+                  {showDirEditor ? '收起编辑' : '编辑目录'}
+                </Button>
+              ) : null}
+            </div>
+
+            <div className="kb-lib-dir-summary">
+              <div className={`kb-lib-dir-summary-row${showDirEditor ? ' is-editing' : ''}`}>
+                <Text className="kb-lib-dir-summary-label">PDF</Text>
+                {showDirEditor ? (
+                  <Input
+                    value={pdfDirDraft}
+                    placeholder="选择 PDF 文献目录"
+                    onChange={(e) => {
+                      setDirTouched(true)
+                      setPdfDirDraft(e.target.value)
+                    }}
+                  />
+                ) : (
+                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: pdfDirDraft || '未设置 PDF 目录' }}>
+                    {pdfDirDraft || '未设置 PDF 目录'}
+                  </Text>
+                )}
+                {showDirEditor ? (
+                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'pdf'} onClick={() => { void pickDir('pdf') }}>选择目录</Button>
+                ) : null}
+                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!pdfDirDraft.trim()} onClick={() => { void openFolder('pdf_dir') }}>
+                  打开目录
+                </Button>
+              </div>
+              <div className={`kb-lib-dir-summary-row${showDirEditor ? ' is-editing' : ''}`}>
+                <Text className="kb-lib-dir-summary-label">MD</Text>
+                {showDirEditor ? (
+                  <Input
+                    value={mdDirDraft}
+                    placeholder="选择 Markdown 输出目录"
+                    onChange={(e) => {
+                      setDirTouched(true)
+                      setMdDirDraft(e.target.value)
+                    }}
+                  />
+                ) : (
+                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: mdDirDraft || '未设置 Markdown 目录' }}>
+                    {mdDirDraft || '未设置 Markdown 目录'}
+                  </Text>
+                )}
+                {showDirEditor ? (
+                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'md'} onClick={() => { void pickDir('md') }}>选择目录</Button>
+                ) : null}
+                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!mdDirDraft.trim()} onClick={() => { void openFolder('md_dir') }}>
+                  打开目录
+                </Button>
+              </div>
+            </div>
+
+            {showDirEditor ? (
+              <div className="kb-lib-section-actions">
+                <Button className="kb-lib-action-tonal" type="primary" icon={<SaveOutlined />} loading={savingDirs} disabled={!dirDirty} onClick={() => { void saveDirs() }}>
+                  保存目录设置
+                </Button>
+              </div>
+            ) : null}
+          </section>
+
+          {renameWorkbenchSection}
+        </div>
+
+        <div className="kb-lib-workbench-side">
+          <section className="kb-lib-workbench-section kb-lib-workbench-section-upload">
+            <div className="kb-lib-section-head">
+              <div className="kb-lib-section-copy">
+                <Text className="kb-lib-section-title">上传 PDF</Text>
+              </div>
+            </div>
+
+            <Dragger
+              multiple
+              accept=".pdf"
+              disabled={uploadLocked}
+              showUploadList={false}
+              className={`kb-lib-upload-dropzone${uploadLocked ? ' is-locked' : ''}`}
+              beforeUpload={(file) => {
+                addDrafts([file as File])
+                return false
+              }}
+            >
+              <div className="kb-lib-upload-dropzone-copy">
+                <UploadOutlined className="kb-lib-upload-dropzone-icon" />
+                <Text className="kb-lib-upload-dropzone-title">拖拽 PDF 到这里</Text>
+                <Text type="secondary" className="kb-lib-upload-dropzone-note">或点击选择文件</Text>
+              </div>
+            </Dragger>
+
+            {(uploadDrafts.length > 0 || uploadLocked) ? (
+              <div className="kb-lib-upload-meta">
+                {uploadDrafts.length > 0 ? (
+                  <div className="kb-lib-upload-meta-main">
+                    <span className="kb-lib-rename-meta">草稿 {uploadDrafts.length}</span>
+                    <Button className="kb-lib-action-quiet" onClick={() => setUploadWorkbenchOpen((open) => !open)}>
+                      {showUploadWorkbench ? '收起队列' : '查看队列'}
+                    </Button>
+                  </div>
+                ) : null}
+                {uploadLocked ? (
+                  <Text type="secondary" className="kb-lib-upload-inline-note">
+                    {store.converting ? '转换进行中，上传暂时锁定。' : '引用同步进行中，上传暂时锁定。'}
+                  </Text>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+
+          <section className="kb-lib-workbench-section kb-lib-workbench-section-process">
+            <div className="kb-lib-section-head">
+              <div className="kb-lib-section-copy">
+                <Text className="kb-lib-section-title">批量处理</Text>
+              </div>
+            </div>
+
+            <div className="kb-lib-process-toolbar">
+              <div className="kb-lib-process-toolbar-main">
+                <Select
+                  value={scope}
+                  onChange={(value) => { setScope(value); void store.loadFiles(value) }}
+                  className="kb-lib-process-scope"
+                  options={SCOPE_OPTIONS}
+                />
+                <Button className="kb-lib-action-tonal" type="primary" onClick={() => { void handleConvertPending() }}>转换待处理</Button>
+              </div>
+              <div className="kb-lib-process-toolbar-side">
+                <Button className="kb-lib-action-quiet kb-lib-process-refresh" icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>
+                  刷新
+                </Button>
+                {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>停止</Button> : null}
+                <Button className="kb-lib-action-quiet" onClick={() => setProcessAdvancedOpen((open) => !open)}>
+                  {processAdvancedOpen ? '收起高级' : processAdvancedCount > 0 ? `高级 ${processAdvancedCount}` : '高级'}
+                </Button>
+              </div>
+            </div>
+
+            {processAdvancedOpen ? (
+              <div className="kb-lib-process-advanced">
+                <Checkbox checked={onlyBusyFiles} onChange={(e) => setOnlyBusyFiles(e.target.checked)} className="kb-lib-process-check">
+                  只看排队 / 运行
+                </Checkbox>
+                <Checkbox checked={replaceMd} onChange={(e) => setReplaceMd(e.target.checked)} className="kb-lib-process-check">
+                  覆盖已有 Markdown
+                </Checkbox>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </div>
+    </Card>
+  )
+
+  const uploadWorkbenchCard = showUploadWorkbench ? (
+    <Card
+      size="small"
+      className="kb-lib-card kb-lib-upload-workbench-card"
+      title="上传工作台"
+      extra={(
+        <Space size={8}>
+          <Text type="secondary" className="text-xs">已选 {selectedUploadCount} 项</Text>
+          <Text type="secondary" className="text-xs">显示 {filteredUploadDrafts.length}/{uploadDrafts.length} 项</Text>
+          <Button size="small" onClick={() => setUploadWorkbenchOpen(false)}>收起</Button>
+        </Space>
+      )}
+    >
+      <div className="space-y-3">
+        <div className="kb-lib-upload-toolbar flex flex-wrap items-center gap-2">
+          <Switch checked={uploadUseLlm} onChange={setUploadUseLlm} />
+          <Text className="text-sm text-[var(--muted)]">使用 LLM 补全信息</Text>
+          <Select
+            value={uploadDraftFilter}
+            onChange={(value) => applyUploadFilter(value as UploadDraftFilter)}
+            options={uploadDraftFilterOptions}
+            className="kb-lib-upload-filter"
+          />
+          <Tooltip title="全选草稿"><Button icon={<CheckOutlined />} onClick={selectAllUploadDrafts}>全选</Button></Tooltip>
+          <Tooltip title="反选草稿"><Button icon={<ClearOutlined />} onClick={invertUploadDraftSelection}>反选</Button></Tooltip>
+          <Button loading={uploadInspecting} disabled={uploadLocked} onClick={() => { void inspectSelectedDrafts() }}>扫描已选</Button>
+          <Button loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(false) }}>保存已选</Button>
+          <Button type="primary" loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(true) }}>保存并转换</Button>
+          <Button disabled={uploadLocked} onClick={selectFailedDrafts}>选择失败项</Button>
+          <Button disabled={uploadLocked || duplicateFailedDrafts.length === 0} onClick={showDuplicateFailedDrafts}>仅看重复失败</Button>
+          <Button loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(false) }}>重试失败项</Button>
+          <Button type="primary" loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(true) }}>重试并转换</Button>
+          <Button disabled={uploadLocked} onClick={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}>清理已保存</Button>
+        </div>
+
+        {(uploadDraftFilter === 'error' || uploadDraftFilter === 'dup_error') && uploadErrorReason !== 'all' ? (
+          <div className="kb-lib-upload-meta flex flex-wrap items-center gap-3">
+            <Button size="small" onClick={() => setUploadErrorReason('all')}>
+              原因筛选：{activeErrorReasonText}（清除）
+            </Button>
+          </div>
+        ) : null}
+
+        {failedUploadDrafts.length > 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            message={`失败草稿：${failedUploadDrafts.length}`}
+            description={(
+              <div className="kb-lib-failed-summary">
+                <div className="kb-lib-failed-reasons">
+                  {failedReasonBuckets.map((bucket) => (
+                    <Button
+                      key={bucket.key}
+                      size="small"
+                      icon={FAILED_REASON_META[bucket.key].icon}
+                      className={`kb-lib-failed-reason-btn kb-lib-reason-tone is-${bucket.key}${uploadErrorReason === bucket.key ? ' is-active' : ''}`}
+                      onClick={() => {
+                        applyUploadFilter('error')
+                        setUploadErrorReason(bucket.key)
+                      }}
+                    >
+                      {bucket.label} ({bucket.count})
+                    </Button>
+                  ))}
+                </div>
+                <Text type="secondary" className="text-xs">
+                  {failedUploadNotes.length > 0 ? failedUploadNotes.join(' | ') : '请查看行内错误信息后重试。'}
+                </Text>
+              </div>
+            )}
+          />
+        ) : null}
+
+        <List
+          size="small"
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无上传草稿" /> }}
+          dataSource={filteredUploadDrafts}
+          pagination={{ pageSize: 8, size: 'small', showSizeChanger: false }}
+          renderItem={(x) => {
+            const reasonKey = x.status === 'error'
+              ? classifyFailedReason(x.note) as Exclude<UploadErrorReason, 'all'>
+              : null
+            return (
+              <List.Item>
+                <div className="w-full space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Checkbox checked={x.selected} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, selected: e.target.checked } : t)))} />
+                    <Text className="min-w-0 flex-1 truncate text-sm">{x.name}</Text>
+                    <Tag color={x.status === 'saved' ? 'success' : x.status === 'error' ? 'error' : (x.status === 'saving' || x.status === 'inspecting') ? 'processing' : 'default'}>
+                      {DRAFT_STATUS_TEXT[x.status]}
+                    </Tag>
+                    {reasonKey ? (
+                      <span className={`kb-lib-inline-reason-chip kb-lib-reason-tone is-${reasonKey}`}>
+                        {FAILED_REASON_META[reasonKey].icon}
+                        <span>{FAILED_REASON_META[reasonKey].label}</span>
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 pl-6">
+                    <Text type="secondary" className="text-xs">建议存储名</Text>
+                    <Input value={x.stem} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, stem: e.target.value } : t)))} className="w-[24rem] max-w-full" />
+                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { void inspectDraft(x.key) }}>扫描</Button>
+                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>保存</Button>
+                    <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>保存并转换</Button>
+                  </div>
+                  <Text type="secondary" className="block pl-6 text-xs">{x.displayName}</Text>
+                  {x.note ? (
+                    <Text type="secondary" className={`block pl-6 text-xs${reasonKey ? ' kb-lib-fail-note' : ''}`}>
+                      {x.note}
+                    </Text>
+                  ) : null}
+                </div>
+              </List.Item>
+            )
+          }}
+        />
+      </div>
+    </Card>
+  ) : null
+
   return (
     <div className="kb-library-page mx-auto w-full max-w-[1760px] space-y-4 p-5">
       <div className="kb-lib-head flex flex-wrap items-end justify-between gap-3">
@@ -1601,76 +2006,24 @@ export default function LibraryPage() {
         </Space>
       </div>
 
+      <div className="kb-lib-summary-strip">
+        {workbenchStats.map((item) => (
+          <div key={item.key} className="kb-lib-summary-chip">
+            <Text type="secondary" className="kb-lib-summary-label">{item.label}</Text>
+            <div className="kb-lib-summary-value">{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {preparationWorkbench}
+      {uploadWorkbenchCard}
+
       <div className="kb-lib-stats-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <Card size="small" className="kb-lib-stat"><Text type="secondary">当前视图</Text><div className="kb-lib-stat-value">{counts.total_view}</div></Card>
         <Card size="small" className="kb-lib-stat"><Text type="secondary">待转换</Text><div className="kb-lib-stat-value">{counts.pending}</div></Card>
         <Card size="small" className="kb-lib-stat"><Text type="secondary">已转换</Text><div className="kb-lib-stat-value">{counts.converted}</div></Card>
         <Card size="small" className="kb-lib-stat"><Text type="secondary">排队中</Text><div className="kb-lib-stat-value">{counts.queued}</div></Card>
         <Card size="small" className="kb-lib-stat"><Text type="secondary">运行中</Text><div className="kb-lib-stat-value">{counts.running}</div></Card>
-      </div>
-
-      <div className="kb-lib-ops-grid grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-        <Card size="small" className="kb-lib-card" title="目录设置">
-          <div className="space-y-3">
-            <div className="grid items-center gap-2 md:grid-cols-[56px_minmax(0,1fr)_auto_auto]">
-              <Text className="text-sm font-semibold">PDF</Text>
-              <Input
-                value={pdfDirDraft}
-                placeholder="选择 PDF 文献目录"
-                onChange={(e) => {
-                  setDirTouched(true)
-                  setPdfDirDraft(e.target.value)
-                }}
-              />
-              <Button loading={pickingDir === 'pdf'} onClick={() => { void pickDir('pdf') }}>选择目录</Button>
-              <Button icon={<FolderOpenOutlined />} onClick={() => { void openFolder('pdf_dir') }}>打开目录</Button>
-            </div>
-
-            <div className="grid items-center gap-2 md:grid-cols-[56px_minmax(0,1fr)_auto_auto]">
-              <Text className="text-sm font-semibold">MD</Text>
-              <Input
-                value={mdDirDraft}
-                placeholder="选择 Markdown 输出目录"
-                onChange={(e) => {
-                  setDirTouched(true)
-                  setMdDirDraft(e.target.value)
-                }}
-              />
-              <Button loading={pickingDir === 'md'} onClick={() => { void pickDir('md') }}>选择目录</Button>
-              <Button icon={<FolderOpenOutlined />} onClick={() => { void openFolder('md_dir') }}>打开目录</Button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="primary" icon={<SaveOutlined />} loading={savingDirs} disabled={!dirDirty} onClick={() => { void saveDirs() }}>
-                保存目录设置
-              </Button>
-              <Text type="secondary" className="text-xs">支持手动输入路径，也支持点击“选择目录”弹窗挑选。</Text>
-            </div>
-          </div>
-        </Card>
-
-        <Card size="small" className="kb-lib-card kb-lib-upload-card" title="上传 PDF">
-          <Dragger
-            className="kb-lib-upload-drop"
-            multiple
-            accept=".pdf"
-            disabled={uploadLocked}
-            showUploadList={false}
-            beforeUpload={(file) => {
-              addDrafts([file as File])
-              return false
-            }}
-          >
-            <p className="text-lg"><UploadOutlined /></p>
-            <p>上传 PDF（仅加入队列）</p>
-          </Dragger>
-
-          {uploadLocked ? (
-            <Text type="secondary" className="text-xs">
-              {store.converting ? '转换进行中，上传面板暂时锁定。' : '引用同步进行中，上传面板暂时锁定。'}
-            </Text>
-          ) : null}
-        </Card>
       </div>
 
       {showStickyStatus ? (
@@ -1717,127 +2070,7 @@ export default function LibraryPage() {
         </Card>
       ) : null}
 
-      <Collapse
-        className="kb-lib-collapse"
-        size="small"
-        items={[
-          {
-            key: 'upload-workbench',
-            label: `上传工作台（${uploadDrafts.length}）`,
-            children: (
-              <div className="space-y-3">
-                <div className="kb-lib-upload-toolbar flex flex-wrap items-center gap-2">
-                  <Switch checked={uploadUseLlm} onChange={setUploadUseLlm} />
-                  <Text className="text-sm text-[var(--muted)]">使用 LLM 补全信息</Text>
-                  <Select
-                    value={uploadDraftFilter}
-                    onChange={(value) => applyUploadFilter(value as UploadDraftFilter)}
-                    options={uploadDraftFilterOptions}
-                    className="kb-lib-upload-filter"
-                  />
-                  <Tooltip title="全选草稿"><Button icon={<CheckOutlined />} onClick={selectAllUploadDrafts}>全选</Button></Tooltip>
-                  <Tooltip title="反选草稿"><Button icon={<ClearOutlined />} onClick={invertUploadDraftSelection}>反选</Button></Tooltip>
-                  <Button loading={uploadInspecting} disabled={uploadLocked} onClick={() => { void inspectSelectedDrafts() }}>扫描已选</Button>
-                  <Button loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(false) }}>保存已选</Button>
-                  <Button type="primary" loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(true) }}>保存并转换</Button>
-                  <Button disabled={uploadLocked} onClick={selectFailedDrafts}>选择失败项</Button>
-                  <Button disabled={uploadLocked || duplicateFailedDrafts.length === 0} onClick={showDuplicateFailedDrafts}>仅看重复失败</Button>
-                  <Button loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(false) }}>重试失败项</Button>
-                  <Button type="primary" loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(true) }}>重试并转换</Button>
-                  <Button disabled={uploadLocked} onClick={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}>清理已保存</Button>
-                </div>
-
-                <div className="kb-lib-upload-meta flex flex-wrap items-center gap-3">
-                  <Text type="secondary" className="text-xs">已选 {selectedUploadCount} 项</Text>
-                  <Text type="secondary" className="text-xs">显示 {filteredUploadDrafts.length}/{uploadDrafts.length} 项</Text>
-                  {(uploadDraftFilter === 'error' || uploadDraftFilter === 'dup_error') && uploadErrorReason !== 'all' ? (
-                    <Button size="small" onClick={() => setUploadErrorReason('all')}>
-                      原因筛选：{activeErrorReasonText}（清除）
-                    </Button>
-                  ) : null}
-                </div>
-
-                {failedUploadDrafts.length > 0 ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message={`失败草稿：${failedUploadDrafts.length}`}
-                    description={(
-                      <div className="kb-lib-failed-summary">
-                        <div className="kb-lib-failed-reasons">
-                          {failedReasonBuckets.map((bucket) => (
-                            <Button
-                              key={bucket.key}
-                              size="small"
-                              icon={FAILED_REASON_META[bucket.key].icon}
-                              className={`kb-lib-failed-reason-btn kb-lib-reason-tone is-${bucket.key}${uploadErrorReason === bucket.key ? ' is-active' : ''}`}
-                              onClick={() => {
-                                applyUploadFilter('error')
-                                setUploadErrorReason(bucket.key)
-                              }}
-                            >
-                              {bucket.label} ({bucket.count})
-                            </Button>
-                          ))}
-                        </div>
-                        <Text type="secondary" className="text-xs">
-                          {failedUploadNotes.length > 0 ? failedUploadNotes.join(' | ') : '请查看行内错误信息后重试。'}
-                        </Text>
-                      </div>
-                    )}
-                  />
-                ) : null}
-
-                <List
-                  size="small"
-                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无上传草稿" /> }}
-                  dataSource={filteredUploadDrafts}
-                  pagination={{ pageSize: 8, size: 'small', showSizeChanger: false }}
-                  renderItem={(x) => {
-                    const reasonKey = x.status === 'error'
-                      ? classifyFailedReason(x.note) as Exclude<UploadErrorReason, 'all'>
-                      : null
-                    return (
-                      <List.Item>
-                        <div className="w-full space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Checkbox checked={x.selected} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, selected: e.target.checked } : t)))} />
-                            <Text className="min-w-0 flex-1 truncate text-sm">{x.name}</Text>
-                            <Tag color={x.status === 'saved' ? 'success' : x.status === 'error' ? 'error' : (x.status === 'saving' || x.status === 'inspecting') ? 'processing' : 'default'}>
-                              {DRAFT_STATUS_TEXT[x.status]}
-                            </Tag>
-                            {reasonKey ? (
-                              <span className={`kb-lib-inline-reason-chip kb-lib-reason-tone is-${reasonKey}`}>
-                                {FAILED_REASON_META[reasonKey].icon}
-                                <span>{FAILED_REASON_META[reasonKey].label}</span>
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="flex flex-wrap items-center gap-2 pl-6">
-                            <Text type="secondary" className="text-xs">建议存储名</Text>
-                            <Input value={x.stem} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, stem: e.target.value } : t)))} className="w-[24rem] max-w-full" />
-                            <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { void inspectDraft(x.key) }}>扫描</Button>
-                            <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>保存</Button>
-                            <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>保存并转换</Button>
-                          </div>
-                          <Text type="secondary" className="block pl-6 text-xs">{x.displayName}</Text>
-                          {x.note ? (
-                            <Text type="secondary" className={`block pl-6 text-xs${reasonKey ? ' kb-lib-fail-note' : ''}`}>
-                              {x.note}
-                            </Text>
-                          ) : null}
-                        </div>
-                      </List.Item>
-                    )
-                  }}
-                />
-              </div>
-            ),
-          },
-        ]}
-      />
-
-      <Card size="small" className="kb-lib-card" title="转换与列表筛选">
+      <Card size="small" className="kb-lib-card kb-lib-legacy-convert-card" title="转换与列表筛选">
         <div className="kb-lib-convert-shell">
           <div className="kb-lib-convert-row kb-lib-convert-row-top">
             <Select
@@ -1916,7 +2149,7 @@ export default function LibraryPage() {
         </div>
       </Card>
 
-      {store.refSync && !store.refSync.running ? (
+      {store.refSync && !store.refSync.running && (store.refSync.status === 'error' || Boolean(store.refSync.error)) ? (
         <Card size="small" className="kb-lib-card" title="引用同步">
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -1940,66 +2173,10 @@ export default function LibraryPage() {
         </Card>
       ) : null}
 
-      <Collapse
-        className="kb-lib-collapse"
-        size="small"
-        items={[
-          {
-            key: 'rename',
-            label: `文件名管理（${renameVisible.length}/${renameItems.length}）`,
-            children: (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Select value={renameScope} onChange={setRenameScope} className="w-40" options={RENAME_SCOPE_OPTIONS} />
-                  <Switch checked={renameUseLlm} onChange={setRenameUseLlm} />
-                  <Text className="text-sm text-[var(--muted)]">使用 LLM 补全信息</Text>
-                  <Switch checked={renameOnlyDiff} onChange={setRenameOnlyDiff} />
-                  <Text className="text-sm text-[var(--muted)]">仅显示需改名项</Text>
-                  <Button onClick={selectRenameDiffItems}>选择需改名项</Button>
-                  <Button onClick={clearRenameSelection}>清空选择</Button>
-                  <Button loading={renameLoading} onClick={() => { void scanRenameSuggestions() }}>扫描建议</Button>
-                  <Button type="primary" loading={renameApplying} disabled={renameItems.length === 0} onClick={() => { void applyRenameSuggestions() }}>应用已选改名</Button>
-                </div>
-
-                <Text type="secondary" className="text-xs">已选 {selectedRenameCount} 项</Text>
-
-                <List
-                  size="small"
-                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无扫描结果" /> }}
-                  dataSource={renameVisible}
-                  pagination={{ pageSize: 12, size: 'small', showSizeChanger: false }}
-                  renderItem={(item) => (
-                    <List.Item>
-                      <div className="w-full space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Checkbox checked={Boolean(renameSelected[item.name])} onChange={(e) => setRenameSelected((cur) => ({ ...cur, [item.name]: e.target.checked }))} />
-                          <Text className="min-w-0 flex-1 truncate text-sm">{item.name}</Text>
-                          <Tag color={item.diff ? 'warning' : 'default'}>{item.diff ? '建议改名' : '无需改名'}</Tag>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2 pl-6">
-                          <Input value={renameOverrides[item.name] || ''} onChange={(e) => setRenameOverrides((cur) => ({ ...cur, [item.name]: e.target.value }))} className="w-[26rem] max-w-full" />
-                        </div>
-                        <Text type="secondary" className="block pl-6 text-xs">{item.display_full_name}</Text>
-                      </div>
-                    </List.Item>
-                  )}
-                />
-              </div>
-            ),
-          },
-        ]}
-      />
-
       <Card size="small" className="kb-lib-card kb-lib-taxonomy-bar" title="文献分类与标签">
         <div className="kb-lib-taxonomy-shell">
           <div className="kb-lib-taxonomy-top">
             <div className="kb-lib-taxonomy-top-main">
-              <div className="kb-lib-taxonomy-top-copy">
-                <Text className="kb-lib-taxonomy-kicker">Library taxonomy</Text>
-                <Text type="secondary" className="kb-lib-taxonomy-note">
-                  先筛选范围，再确认建议或批量整理，列表会保留当前视图上下文。
-                </Text>
-              </div>
               <Segmented
                 className="kb-lib-browse-switch"
                 value={browseMode}
@@ -2010,20 +2187,40 @@ export default function LibraryPage() {
                   { label: '标签', value: 'tags' },
                 ]}
               />
-            </div>
-            <div className="kb-lib-taxonomy-top-side">
-              <Text type="secondary" className="kb-lib-taxonomy-result">
-                已显示 {visibleAll.length}/{store.files.length} 篇文献
-              </Text>
-              <div className="kb-lib-taxonomy-stat-row">
-                <span className="kb-lib-taxonomy-stat-chip">
-                  {browseMode === 'list' ? '工作列表' : browseMode === 'categories' ? '分类浏览' : '标签索引'}
-                </span>
-                <span className={`kb-lib-taxonomy-stat-chip${hasActiveTaxonomyFilters ? ' is-active' : ''}`}>
-                  {hasActiveTaxonomyFilters ? `${activeTaxonomyFilterCount} 个筛选中` : '未加筛选'}
-                </span>
+              <div className="kb-lib-taxonomy-summary">
+                <Text type="secondary" className="kb-lib-taxonomy-result">
+                  已显示 {visibleAll.length}/{store.files.length} 篇文献
+                </Text>
+                {hasActiveTaxonomyFilters ? (
+                  <span className="kb-lib-taxonomy-status-pill">
+                    筛选中 {activeTaxonomyFilterCount}
+                  </span>
+                ) : null}
               </div>
             </div>
+            {showTaxonomyTopActions ? (
+              <div className="kb-lib-taxonomy-top-actions">
+                {showTaxonomySelectAction ? (
+                  <Button className="kb-lib-action-quiet" onClick={selectCurrentListItems}>
+                    选中当前列表
+                  </Button>
+                ) : null}
+                {showTaxonomyRefreshAction ? (
+                  <Button
+                    className="kb-lib-action-tonal"
+                    loading={suggestionsRefreshing}
+                    onClick={() => { void regenerateSuggestionsForVisible() }}
+                  >
+                    刷新建议
+                  </Button>
+                ) : null}
+                {showTaxonomyClearAction ? (
+                  <Button className="kb-lib-action-quiet" onClick={clearTaxonomyFilters}>
+                    清空筛选
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="kb-lib-taxonomy-controls">
@@ -2065,36 +2262,39 @@ export default function LibraryPage() {
             </div>
 
             <div className="kb-lib-taxonomy-quick">
-              <Checkbox checked={onlyUnread} onChange={(event) => setOnlyUnread(event.target.checked)}>
-                只看未读
-              </Checkbox>
-              <Checkbox
-                checked={onlyUnclassified}
-                onChange={(event) => {
-                  const checked = event.target.checked
-                  setOnlyUnclassified(checked)
-                  if (checked) setPaperCategoryFilter('')
-                }}
-              >
-                只看未分类
-              </Checkbox>
-              <Checkbox checked={onlySuggested} onChange={(event) => setOnlySuggested(event.target.checked)}>
-                只看有建议
-              </Checkbox>
-              <div className="kb-lib-taxonomy-quick-actions">
-                <Button loading={suggestionsRefreshing} disabled={!visibleAll.length} onClick={() => { void regenerateSuggestionsForVisible() }}>
-                  刷新建议
-                </Button>
-                <Button onClick={clearTaxonomyFilters} disabled={!hasActiveTaxonomyFilters}>
-                  清空筛选
-                </Button>
+              <div className="kb-lib-taxonomy-toggle-row">
+                <button
+                  type="button"
+                  className={`kb-lib-taxonomy-pill is-status${onlyUnread ? ' is-active' : ''}`}
+                  onClick={() => setOnlyUnread((value) => !value)}
+                >
+                  未读
+                </button>
+                <button
+                  type="button"
+                  className={`kb-lib-taxonomy-pill is-category${onlyUnclassified ? ' is-active' : ''}`}
+                  onClick={() => {
+                    const next = !onlyUnclassified
+                    setOnlyUnclassified(next)
+                    if (next) setPaperCategoryFilter('')
+                  }}
+                >
+                  未分类
+                </button>
+                <button
+                  type="button"
+                  className={`kb-lib-taxonomy-pill is-suggestion${onlySuggested ? ' is-active' : ''}`}
+                  onClick={() => setOnlySuggested((value) => !value)}
+                >
+                  有建议
+                </button>
               </div>
             </div>
           </div>
         </div>
       </Card>
 
-      {browseMode === 'list' ? (
+      {browseMode === 'list' && selectedLibraryCount > 0 ? (
         <Card size="small" className="kb-lib-card kb-lib-batch-card">
           <div className="kb-lib-batch-bar">
             <div className="kb-lib-batch-summary">
