@@ -15,6 +15,7 @@ export interface ConvertProgress {
 export interface LibraryFileItem {
   name: string
   path: string
+  sha1: string
   md_exists: boolean
   md_path: string
   md_folder: string
@@ -23,6 +24,112 @@ export interface LibraryFileItem {
   status: string
   replace_task: boolean
   queue_pos: number
+  paper_category: string
+  reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
+  note: string
+  user_tags: string[]
+  has_suggestions: boolean
+  suggested_category: string
+  suggested_tags: string[]
+}
+
+export interface LibraryMetaUpdateBody {
+  pdf_name?: string
+  sha1?: string
+  path?: string
+  paper_category: string
+  reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
+  note: string
+  user_tags: string[]
+}
+
+export interface LibraryMetaUpdateResponse {
+  ok: boolean
+  sha1: string
+  path: string
+  paper_category: string
+  reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
+  note: string
+  user_tags: string[]
+  has_suggestions: boolean
+  suggested_category: string
+  suggested_tags: string[]
+}
+
+export interface LibraryMetaBatchUpdateBody {
+  pdf_names?: string[]
+  sha1s?: string[]
+  apply_paper_category: boolean
+  paper_category: string
+  apply_reading_status: boolean
+  reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
+  add_tags: string[]
+  remove_tags: string[]
+}
+
+export interface LibraryMetaBatchUpdateItem {
+  name: string
+  sha1: string
+  path: string
+  paper_category: string
+  reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
+  note: string
+  user_tags: string[]
+}
+
+export interface LibraryMetaBatchUpdateResponse {
+  ok: boolean
+  requested: number
+  updated: number
+  items: LibraryMetaBatchUpdateItem[]
+}
+
+export interface LibrarySuggestionRegenerateBody {
+  pdf_names?: string[]
+  sha1s?: string[]
+}
+
+export interface LibrarySuggestionActionBody {
+  pdf_name?: string
+  sha1?: string
+  path?: string
+  category_action?: '' | 'accept' | 'dismiss'
+  accept_tags?: string[]
+  dismiss_tags?: string[]
+  accept_all_tags?: boolean
+  dismiss_all_tags?: boolean
+}
+
+export interface LibrarySuggestionResponseItem {
+  name: string
+  sha1: string
+  path: string
+  paper_category: string
+  reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
+  note: string
+  user_tags: string[]
+  has_suggestions: boolean
+  suggested_category: string
+  suggested_tags: string[]
+}
+
+export interface LibrarySuggestionRegenerateResponse {
+  ok: boolean
+  updated: number
+  items: LibrarySuggestionResponseItem[]
+}
+
+export interface LibrarySuggestionActionResponse {
+  ok: boolean
+  sha1: string
+  path: string
+  paper_category: string
+  reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
+  note: string
+  user_tags: string[]
+  has_suggestions: boolean
+  suggested_category: string
+  suggested_tags: string[]
 }
 
 export interface LibraryFilesResponse {
@@ -206,6 +313,14 @@ export const libraryApi = {
       also_md: Boolean(opts?.alsoMd ?? true),
     }),
   reindex: () => api.post<LibraryReindexResponse>('/api/library/reindex'),
+  updateMeta: (body: LibraryMetaUpdateBody) =>
+    api.post<LibraryMetaUpdateResponse>('/api/library/meta/update', body),
+  batchUpdateMeta: (body: LibraryMetaBatchUpdateBody) =>
+    api.post<LibraryMetaBatchUpdateResponse>('/api/library/meta/batch_update', body),
+  regenerateSuggestions: (body: LibrarySuggestionRegenerateBody) =>
+    api.post<LibrarySuggestionRegenerateResponse>('/api/library/meta/suggestions/regenerate', body),
+  applySuggestionAction: (body: LibrarySuggestionActionBody) =>
+    api.post<LibrarySuggestionActionResponse>('/api/library/meta/suggestions/apply', body),
 
   streamConvertStatus: (
     onData: (data: ConvertProgress) => void,

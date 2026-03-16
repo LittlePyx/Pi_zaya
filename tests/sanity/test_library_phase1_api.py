@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from api.main import app
+from kb.library_store import LibraryStore
 
 
 def test_library_files_route_classifies_queue_and_reconvert(monkeypatch, tmp_path: Path):
@@ -437,3 +439,491 @@ def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):
     assert payload["duplicate"] is False
     assert payload["enqueued"] is True
     assert len(enqueued) == 1
+
+
+def test_library_meta_update_route_persists_user_meta(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test meta")
+
+    store = LibraryStore(tmp_path / "library.db")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/meta/update",
+        json={
+            "pdf_name": "paper.pdf",
+            "paper_category": "SCI",
+            "reading_status": "reading",
+            "note": "important paper",
+            "user_tags": ["pose-free", "Pose-Free", "single-image"],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["paper_category"] == "SCI"
+    assert payload["reading_status"] == "reading"
+    assert payload["note"] == "important paper"
+    assert payload["user_tags"] == ["pose-free", "single-image"]
+
+    meta = store.get_paper_user_meta(path=pdf_path)
+    assert meta is not None
+    assert meta["paper_category"] == "SCI"
+    assert meta["reading_status"] == "reading"
+    assert meta["note"] == "important paper"
+    assert meta["user_tags"] == ["pose-free", "single-image"]
+
+
+def test_library_files_route_includes_paper_meta_fields(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test meta")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert_paper_user_meta(
+        path=pdf_path,
+        paper_category="NeRF",
+        reading_status="done",
+        note="core reference",
+        user_tags=["baseline", "view-synthesis"],
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+
+    client = TestClient(app)
+    response = client.get("/api/library/files", params={"scope": "all"})
+    assert response.status_code == 200
+    payload = response.json()
+    by_name = {str(item.get("name") or ""): item for item in list(payload.get("items") or [])}
+    assert by_name["paper.pdf"]["paper_category"] == "NeRF"
+    assert by_name["paper.pdf"]["reading_status"] == "done"
+    assert by_name["paper.pdf"]["note"] == "core reference"
+    assert by_name["paper.pdf"]["user_tags"] == ["baseline", "view-synthesis"]
+
+
+def test_library_meta_batch_update_route_persists_batch_changes(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_a = pdf_dir / "a.pdf"
+    pdf_b = pdf_dir / "b.pdf"
+    pdf_a.write_bytes(b"%PDF-1.4 a")
+    pdf_b.write_bytes(b"%PDF-1.4 b")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert_paper_user_meta(
+        path=pdf_a,
+        paper_category="NeRF",
+        reading_status="unread",
+        note="a note",
+        user_tags=["baseline", "view-synthesis"],
+    )
+    store.upsert_paper_user_meta(
+        path=pdf_b,
+        paper_category="SCI",
+        reading_status="reading",
+        note="b note",
+        user_tags=["baseline", "single-image"],
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/meta/batch_update",
+        json={
+            "pdf_names": ["a.pdf", "b.pdf"],
+            "apply_paper_category": True,
+            "paper_category": "SCI",
+            "apply_reading_status": True,
+            "reading_status": "done",
+            "add_tags": ["pose-free"],
+            "remove_tags": ["baseline"],
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["requested"] == 2
+    assert payload["updated"] == 2
+
+    meta_a = store.get_paper_user_meta(path=pdf_a)
+    meta_b = store.get_paper_user_meta(path=pdf_b)
+    assert meta_a is not None and meta_b is not None
+    assert meta_a["paper_category"] == "SCI"
+    assert meta_b["paper_category"] == "SCI"
+    assert meta_a["reading_status"] == "done"
+    assert meta_b["reading_status"] == "done"
+    assert meta_a["user_tags"] == ["pose-free", "view-synthesis"]
+    assert meta_b["user_tags"] == ["pose-free", "single-image"]
+
+
+def test_library_suggestions_regenerate_and_apply(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "0")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "scinerf.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    db_path = tmp_path / "library.db"
+    store = LibraryStore(db_path)
+    store.upsert(
+        "sha1-scinerf",
+        pdf_path,
+        citation_meta={
+            "title": "Pose-Free Single-Image Neural Radiance Fields from Snapshot Compressive Sensing",
+            "venue": "CVPR",
+        },
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+
+    client = TestClient(app)
+
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["scinerf.pdf"]},
+    )
+    assert regen_response.status_code == 200
+    regen_payload = regen_response.json()
+    assert regen_payload["updated"] == 1
+    item = regen_payload["items"][0]
+    assert item["suggested_category"] == "SCI"
+    assert "pose-free" in item["suggested_tags"]
+    assert "single-image" in item["suggested_tags"]
+
+    files_response = client.get("/api/library/files", params={"scope": "all"})
+    assert files_response.status_code == 200
+    by_name = {str(file_item.get("name") or ""): file_item for file_item in list(files_response.json().get("items") or [])}
+    assert by_name["scinerf.pdf"]["has_suggestions"] is True
+
+    apply_response = client.post(
+        "/api/library/meta/suggestions/apply",
+        json={
+            "pdf_name": "scinerf.pdf",
+            "category_action": "accept",
+            "accept_tags": ["pose-free"],
+            "dismiss_tags": ["single-image"],
+        },
+    )
+    assert apply_response.status_code == 200
+    applied = apply_response.json()
+    assert applied["paper_category"] == "SCI"
+    assert "pose-free" in applied["user_tags"]
+    assert "pose-free" not in applied["suggested_tags"]
+    assert "single-image" not in applied["suggested_tags"]
+
+    regen_again = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["scinerf.pdf"]},
+    )
+    assert regen_again.status_code == 200
+    refreshed = regen_again.json()["items"][0]
+    assert refreshed["suggested_category"] == ""
+    assert "single-image" not in refreshed["suggested_tags"]
+
+
+def test_library_suggestions_use_markdown_and_user_taxonomy(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "0")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    seed_pdf = pdf_dir / "seed.pdf"
+    target_pdf = pdf_dir / "target.pdf"
+    seed_pdf.write_bytes(b"%PDF-1.4 seed")
+    target_pdf.write_bytes(b"%PDF-1.4 target")
+
+    target_md = md_dir / "target" / "target.en.md"
+    target_md.parent.mkdir(parents=True, exist_ok=True)
+    target_md.write_text(
+        "\n".join(
+            [
+                "# Robust Reconstruction",
+                "",
+                "## Abstract",
+                "We present a physics-informed inverse imaging framework for snapshot reconstruction.",
+                "",
+                "## Introduction",
+                "The inverse imaging pipeline uses physics informed regularization to stabilize training.",
+                "",
+                "## Method",
+                "Our method solves an inverse imaging objective under sparse measurements.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "library.db"
+    store = LibraryStore(db_path)
+    store.upsert("sha1-seed", seed_pdf, citation_meta={"title": "Seed paper"})
+    store.upsert_paper_user_meta(
+        path=seed_pdf,
+        paper_category="Inverse Imaging",
+        reading_status="done",
+        note="seed taxonomy",
+        user_tags=["physics-informed"],
+    )
+    store.upsert(
+        "sha1-target",
+        target_pdf,
+        citation_meta={
+            "title": "Robust Reconstruction Pipeline",
+            "venue": "ICCV",
+        },
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+    monkeypatch.setenv("KB_MD_DIR", str(md_dir))
+
+    client = TestClient(app)
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["target.pdf"]},
+    )
+    assert regen_response.status_code == 200
+    item = regen_response.json()["items"][0]
+    assert item["suggested_category"] == "Inverse Imaging"
+    assert "physics-informed" in item["suggested_tags"]
+
+
+def test_library_suggestions_can_use_llm(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "1")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "semantic-paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 semantic")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert(
+        "sha1-semantic",
+        pdf_path,
+        citation_meta={
+            "title": "Robust Scene Priors for Reconstruction",
+            "abstract": "This abstract is intentionally vague so heuristic matching stays weak.",
+        },
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+    monkeypatch.setattr(LibraryStore, "_build_suggestion_llm", lambda self, total_targets: object())
+    monkeypatch.setattr(
+        LibraryStore,
+        "_generate_llm_suggestions_for_row",
+        lambda self, **kwargs: ("Inverse Imaging", ["physics-informed", "sparse-reconstruction"]),
+    )
+
+    client = TestClient(app)
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["semantic-paper.pdf"]},
+    )
+    assert regen_response.status_code == 200
+    item = regen_response.json()["items"][0]
+    assert item["suggested_category"] == "Inverse Imaging"
+    assert item["suggested_tags"][:2] == ["physics-informed", "sparse-reconstruction"]
+
+
+def test_library_suggestions_block_generic_doc_types_without_explicit_evidence(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "0")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "single-photon.pdf"
+    seed_pdf = pdf_dir / "seed.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 single-photon")
+    seed_pdf.write_bytes(b"%PDF-1.4 seed")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert(
+        "sha1-single-photon",
+        pdf_path,
+        citation_meta={
+            "title": "High-resolution single-photon imaging with physics-informed deep learning",
+            "abstract": (
+                "We propose a physics-informed reconstruction method for single-photon imaging. "
+                "The experiments compare against prior methods on a public dataset."
+            ),
+        },
+    )
+    store.upsert_paper_user_meta(
+        path=pdf_path,
+        paper_category="Dataset",
+        reading_status="",
+        note="",
+        user_tags=["dataset", "physics-informed"],
+    )
+    store.upsert_paper_user_meta(
+        path=seed_pdf,
+        paper_category="Dataset",
+        reading_status="",
+        note="",
+        user_tags=["dataset"],
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+
+    # Reset target paper user meta after seeding library taxonomy so it stays unclassified.
+    store.upsert_paper_user_meta(
+        path=pdf_path,
+        paper_category="",
+        reading_status="",
+        note="",
+        user_tags=["physics-informed"],
+    )
+
+    client = TestClient(app)
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["single-photon.pdf"]},
+    )
+    assert regen_response.status_code == 200
+    item = regen_response.json()["items"][0]
+    assert item["suggested_category"] != "Dataset"
+    assert "dataset" not in item["suggested_tags"]
+
+
+def test_library_suggestions_prefer_domain_category_and_facet_tags(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "0")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "single-photon-physics.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 single-photon-physics")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert(
+        "sha1-single-photon-physics",
+        pdf_path,
+        citation_meta={
+            "title": "High-resolution single-photon imaging with physics-informed deep learning",
+            "abstract": (
+                "We present a physics-informed method for single-photon imaging under low-light conditions. "
+                "The method reconstructs high-resolution images from photon-limited measurements."
+            ),
+        },
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+
+    client = TestClient(app)
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["single-photon-physics.pdf"]},
+    )
+    assert regen_response.status_code == 200
+    item = regen_response.json()["items"][0]
+    assert item["suggested_category"] == "Single-Photon Imaging"
+    assert "physics-informed" in item["suggested_tags"]
+    assert "single-photon" in item["suggested_tags"]
+
+
+def test_library_llm_suggestions_default_to_candidate_vocab(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    class DummyLLM:
+        def chat(self, messages, temperature=0.0, max_tokens=420):
+            return json.dumps(
+                {
+                    "suggested_category": "Computational Imaging",
+                    "suggested_tags": ["physics informed", "deep-learning", "custom odd phrase"],
+                    "category_confidence": 0.95,
+                    "tag_confidence": 0.95,
+                    "reason": "test",
+                }
+            )
+
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "1")
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_ALLOW_NEW_CATEGORY", "0")
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_ALLOW_NEW_TAGS", "0")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "single-photon-llm.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 single-photon-llm")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert(
+        "sha1-single-photon-llm",
+        pdf_path,
+        citation_meta={
+            "title": "High-resolution single-photon imaging with physics-informed deep learning",
+            "abstract": "A physics-informed single-photon imaging method for photon-limited reconstruction.",
+        },
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+    monkeypatch.setattr(LibraryStore, "_build_suggestion_llm", lambda self, total_targets: DummyLLM())
+
+    client = TestClient(app)
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["single-photon-llm.pdf"]},
+    )
+    assert regen_response.status_code == 200
+    item = regen_response.json()["items"][0]
+    assert item["suggested_category"] == "Single-Photon Imaging"
+    assert "physics-informed" in item["suggested_tags"]
+    assert "deep-learning" not in item["suggested_tags"]
+    assert "custom odd phrase" not in item["suggested_tags"]

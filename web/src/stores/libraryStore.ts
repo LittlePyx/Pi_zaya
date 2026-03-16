@@ -1,5 +1,12 @@
 import { create } from 'zustand'
-import { libraryApi, type LibraryFileItem } from '../api/library'
+import {
+  libraryApi,
+  type LibraryFileItem,
+  type LibrarySuggestionActionBody,
+  type LibraryMetaBatchUpdateBody,
+  type LibraryMetaUpdateBody,
+  type LibrarySuggestionRegenerateBody,
+} from '../api/library'
 import { referencesApi } from '../api/references'
 
 interface ConvertProgressState {
@@ -49,6 +56,10 @@ interface LibraryState {
   convertPending: (mode?: string, limit?: number) => Promise<{ ok: boolean; enqueued: number; skipped_busy: number; pending_total: number }>
   openFile: (pdfName: string, target?: 'pdf' | 'md' | 'pdf_dir' | 'md_dir') => Promise<void>
   deleteFile: (pdfName: string, alsoMd?: boolean) => Promise<{ ok: boolean; pdf_deleted: boolean; md_deleted: boolean; removed_queued: number; warnings: string[]; needs_reindex: boolean }>
+  updatePaperMeta: (body: LibraryMetaUpdateBody) => Promise<LibraryFileItem | null>
+  batchUpdatePaperMeta: (body: LibraryMetaBatchUpdateBody) => Promise<number>
+  regenerateSuggestions: (body?: LibrarySuggestionRegenerateBody) => Promise<number>
+  applySuggestionAction: (body: LibrarySuggestionActionBody) => Promise<LibraryFileItem | null>
   cancelConvert: () => Promise<void>
   reindex: () => Promise<{ ok: boolean; stdout: string; stderr: string; refsync: { started?: boolean; reason?: string; run_id?: number } | null; refsync_error: string }>
   startReferenceSync: () => Promise<{ started: boolean; reason?: string; run_id?: number }>
@@ -115,6 +126,82 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const res = await libraryApi.deleteFile(pdfName, alsoMd)
     await get().loadFiles(get().viewScope || '200')
     return res
+  },
+
+  updatePaperMeta: async (body) => {
+    const res = await libraryApi.updateMeta(body)
+    let updated: LibraryFileItem | null = null
+    set((state) => {
+      const files = state.files.map((item) => {
+        const match =
+          (body.pdf_name && item.name === body.pdf_name)
+          || (res.sha1 && item.sha1 === res.sha1)
+          || (res.path && item.path === res.path)
+        if (!match) return item
+        updated = {
+          ...item,
+          sha1: res.sha1 || item.sha1,
+          path: res.path || item.path,
+          paper_category: res.paper_category,
+          reading_status: res.reading_status,
+          note: res.note,
+          user_tags: Array.isArray(res.user_tags) ? res.user_tags : [],
+          has_suggestions: Boolean(res.has_suggestions),
+          suggested_category: String(res.suggested_category || ''),
+          suggested_tags: Array.isArray(res.suggested_tags) ? res.suggested_tags : [],
+        }
+        return updated
+      })
+      return {
+        files,
+        pdfs: files.map((item) => ({ name: item.name, path: item.path })),
+      }
+    })
+    return updated
+  },
+
+  batchUpdatePaperMeta: async (body) => {
+    const res = await libraryApi.batchUpdateMeta(body)
+    await get().loadFiles(get().viewScope || '200')
+    return Number(res.updated || 0)
+  },
+
+  regenerateSuggestions: async (body = {}) => {
+    const res = await libraryApi.regenerateSuggestions(body)
+    await get().loadFiles(get().viewScope || '200')
+    return Number(res.updated || 0)
+  },
+
+  applySuggestionAction: async (body) => {
+    const res = await libraryApi.applySuggestionAction(body)
+    let updated: LibraryFileItem | null = null
+    set((state) => {
+      const files = state.files.map((item) => {
+        const match =
+          (body.pdf_name && item.name === body.pdf_name)
+          || (res.sha1 && item.sha1 === res.sha1)
+          || (res.path && item.path === res.path)
+        if (!match) return item
+        updated = {
+          ...item,
+          sha1: res.sha1 || item.sha1,
+          path: res.path || item.path,
+          paper_category: res.paper_category,
+          reading_status: res.reading_status,
+          note: res.note,
+          user_tags: Array.isArray(res.user_tags) ? res.user_tags : [],
+          has_suggestions: Boolean(res.has_suggestions),
+          suggested_category: String(res.suggested_category || ''),
+          suggested_tags: Array.isArray(res.suggested_tags) ? res.suggested_tags : [],
+        }
+        return updated
+      })
+      return {
+        files,
+        pdfs: files.map((item) => ({ name: item.name, path: item.path })),
+      }
+    })
+    return updated
   },
 
   cancelConvert: async () => {

@@ -196,7 +196,14 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
     return by_path, by_name
 
 
-def _library_file_item(pdf: Path, *, md_root: Path, task_by_path: dict[str, dict], task_by_name: dict[str, dict]) -> dict:
+def _library_file_item(
+    pdf: Path,
+    *,
+    md_root: Path,
+    task_by_path: dict[str, dict],
+    task_by_name: dict[str, dict],
+    meta_rec: dict | None = None,
+) -> dict:
     md_folder, md_main, md_exists = _resolve_md_output_paths(md_root, pdf)
     key = _normalized_path_key(pdf)
     info = task_by_path.get(key) if key else None
@@ -219,6 +226,7 @@ def _library_file_item(pdf: Path, *, md_root: Path, task_by_path: dict[str, dict
     return {
         "name": pdf.name,
         "path": str(pdf),
+        "sha1": str((meta_rec or {}).get("sha1") or ""),
         "md_exists": bool(md_exists),
         "md_path": str(md_main) if md_exists else "",
         "md_folder": str(md_folder),
@@ -227,6 +235,13 @@ def _library_file_item(pdf: Path, *, md_root: Path, task_by_path: dict[str, dict
         "status": status,
         "replace_task": bool(replace_task),
         "queue_pos": int(queue_pos),
+        "paper_category": str((meta_rec or {}).get("paper_category") or ""),
+        "reading_status": str((meta_rec or {}).get("reading_status") or ""),
+        "note": str((meta_rec or {}).get("note") or ""),
+        "user_tags": list((meta_rec or {}).get("user_tags") or []),
+        "has_suggestions": bool((meta_rec or {}).get("has_suggestions")),
+        "suggested_category": str((meta_rec or {}).get("suggested_category") or ""),
+        "suggested_tags": list((meta_rec or {}).get("suggested_tags") or []),
     }
 
 
@@ -247,7 +262,17 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
     view = pdfs_all if limit <= 0 else pdfs_all[:limit]
     snap = _bg_snapshot()
     task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
-    items = [_library_file_item(pdf, md_root=md_dir, task_by_path=task_by_path, task_by_name=task_by_name) for pdf in view]
+    meta_by_path = _library_store().list_records_by_paths(view)
+    items = [
+        _library_file_item(
+            pdf,
+            md_root=md_dir,
+            task_by_path=task_by_path,
+            task_by_name=task_by_name,
+            meta_rec=meta_by_path.get(str(pdf)),
+        )
+        for pdf in view
+    ]
 
     pending = sum(1 for item in items if str(item.get("category") or "") == "pending")
     converted = sum(1 for item in items if str(item.get("category") or "") == "converted")
@@ -1297,6 +1322,43 @@ class GuideSourceBody(BaseModel):
     pdf_name: str
 
 
+class UpdateLibraryMetaBody(BaseModel):
+    pdf_name: str = ""
+    sha1: str = ""
+    path: str = ""
+    paper_category: str = ""
+    reading_status: str = ""
+    note: str = ""
+    user_tags: list[str] = []
+
+
+class BatchUpdateLibraryMetaBody(BaseModel):
+    pdf_names: list[str] = []
+    sha1s: list[str] = []
+    apply_paper_category: bool = False
+    paper_category: str = ""
+    apply_reading_status: bool = False
+    reading_status: str = ""
+    add_tags: list[str] = []
+    remove_tags: list[str] = []
+
+
+class RegenerateLibrarySuggestionsBody(BaseModel):
+    pdf_names: list[str] = []
+    sha1s: list[str] = []
+
+
+class LibrarySuggestionActionBody(BaseModel):
+    pdf_name: str = ""
+    sha1: str = ""
+    path: str = ""
+    category_action: str = ""
+    accept_tags: list[str] = []
+    dismiss_tags: list[str] = []
+    accept_all_tags: bool = False
+    dismiss_all_tags: bool = False
+
+
 @router.post("/file/delete")
 def delete_library_file(body: DeleteLibraryFileBody):
     pdf_name = str(body.pdf_name or "").strip()
@@ -1356,6 +1418,178 @@ def delete_library_file(body: DeleteLibraryFileBody):
         "removed_queued": int(removed_queued),
         "warnings": warnings,
         "needs_reindex": bool(pdf_ok),
+    }
+
+
+@router.post("/meta/update")
+def update_library_meta(body: UpdateLibraryMetaBody):
+    pdf_name = str(body.pdf_name or "").strip()
+    sha1 = str(body.sha1 or "").strip().lower()
+    path_raw = str(body.path or "").strip()
+    resolved_path: Path | None = None
+
+    if pdf_name:
+        if Path(pdf_name).name != pdf_name:
+            raise HTTPException(400, "invalid pdf_name")
+        resolved_path = (_pdf_dir() / pdf_name).expanduser()
+    elif path_raw:
+        resolved_path = Path(path_raw).expanduser()
+    elif not sha1:
+        raise HTTPException(400, "pdf_name, path, or sha1 required")
+
+    payload = _library_store().upsert_paper_user_meta(
+        sha1=sha1,
+        path=resolved_path,
+        paper_category=str(body.paper_category or ""),
+        reading_status=str(body.reading_status or ""),
+        note=str(body.note or ""),
+        user_tags=list(body.user_tags or []),
+    )
+    if not payload:
+        raise HTTPException(404, "library item not found")
+    return {
+        "ok": True,
+        "sha1": str(payload.get("sha1") or ""),
+        "path": str(payload.get("path") or (resolved_path or "")),
+        "paper_category": str(payload.get("paper_category") or ""),
+        "reading_status": str(payload.get("reading_status") or ""),
+        "note": str(payload.get("note") or ""),
+        "user_tags": list(payload.get("user_tags") or []),
+        "has_suggestions": bool(payload.get("has_suggestions")),
+        "suggested_category": str(payload.get("suggested_category") or ""),
+        "suggested_tags": list(payload.get("suggested_tags") or []),
+    }
+
+
+@router.post("/meta/batch_update")
+def batch_update_library_meta(body: BatchUpdateLibraryMetaBody):
+    pdf_names = [str(name or "").strip() for name in list(body.pdf_names or []) if str(name or "").strip()]
+    sha1s = [str(value or "").strip().lower() for value in list(body.sha1s or []) if str(value or "").strip()]
+    if not pdf_names and not sha1s:
+        raise HTTPException(400, "pdf_names or sha1s required")
+    if not (
+        bool(body.apply_paper_category)
+        or bool(body.apply_reading_status)
+        or bool(list(body.add_tags or []))
+        or bool(list(body.remove_tags or []))
+    ):
+        raise HTTPException(400, "no batch changes requested")
+
+    paths: list[Path] = []
+    for pdf_name in pdf_names:
+        if Path(pdf_name).name != pdf_name:
+            raise HTTPException(400, f"invalid pdf_name: {pdf_name}")
+        paths.append((_pdf_dir() / pdf_name).expanduser())
+
+    payloads = _library_store().batch_update_paper_user_meta(
+        sha1s=sha1s,
+        paths=paths,
+        apply_paper_category=bool(body.apply_paper_category),
+        paper_category=str(body.paper_category or ""),
+        apply_reading_status=bool(body.apply_reading_status),
+        reading_status=str(body.reading_status or ""),
+        add_tags=list(body.add_tags or []),
+        remove_tags=list(body.remove_tags or []),
+    )
+
+    return {
+        "ok": True,
+        "requested": len(pdf_names) + len(sha1s),
+        "updated": len(payloads),
+        "items": [
+            {
+                "name": Path(str(payload.get("path") or "")).name,
+                "sha1": str(payload.get("sha1") or ""),
+                "path": str(payload.get("path") or ""),
+                "paper_category": str(payload.get("paper_category") or ""),
+                "reading_status": str(payload.get("reading_status") or ""),
+                "note": str(payload.get("note") or ""),
+                "user_tags": list(payload.get("user_tags") or []),
+            }
+            for payload in payloads
+        ],
+    }
+
+
+@router.post("/meta/suggestions/regenerate")
+def regenerate_library_meta_suggestions(body: RegenerateLibrarySuggestionsBody):
+    pdf_names = [str(name or "").strip() for name in list(body.pdf_names or []) if str(name or "").strip()]
+    sha1s = [str(value or "").strip().lower() for value in list(body.sha1s or []) if str(value or "").strip()]
+
+    paths: list[Path] = []
+    for pdf_name in pdf_names:
+        if Path(pdf_name).name != pdf_name:
+            raise HTTPException(400, f"invalid pdf_name: {pdf_name}")
+        paths.append((_pdf_dir() / pdf_name).expanduser())
+
+    payloads = _library_store().regenerate_paper_suggestions(
+        sha1s=sha1s,
+        paths=paths,
+    )
+    return {
+        "ok": True,
+        "updated": len(payloads),
+        "items": [
+            {
+                "name": Path(str(payload.get("path") or "")).name,
+                "sha1": str(payload.get("sha1") or ""),
+                "path": str(payload.get("path") or ""),
+                "paper_category": str(payload.get("paper_category") or ""),
+                "reading_status": str(payload.get("reading_status") or ""),
+                "note": str(payload.get("note") or ""),
+                "user_tags": list(payload.get("user_tags") or []),
+                "has_suggestions": bool(payload.get("has_suggestions")),
+                "suggested_category": str(payload.get("suggested_category") or ""),
+                "suggested_tags": list(payload.get("suggested_tags") or []),
+            }
+            for payload in payloads
+        ],
+    }
+
+
+@router.post("/meta/suggestions/apply")
+def apply_library_meta_suggestions(body: LibrarySuggestionActionBody):
+    pdf_name = str(body.pdf_name or "").strip()
+    sha1 = str(body.sha1 or "").strip().lower()
+    path_raw = str(body.path or "").strip()
+    resolved_path: Path | None = None
+
+    if pdf_name:
+        if Path(pdf_name).name != pdf_name:
+            raise HTTPException(400, "invalid pdf_name")
+        resolved_path = (_pdf_dir() / pdf_name).expanduser()
+    elif path_raw:
+        resolved_path = Path(path_raw).expanduser()
+    elif not sha1:
+        raise HTTPException(400, "pdf_name, path, or sha1 required")
+
+    category_action = str(body.category_action or "").strip().lower()
+    if category_action not in {"", "accept", "dismiss"}:
+        raise HTTPException(400, "invalid category_action")
+
+    payload = _library_store().apply_paper_suggestion_actions(
+        sha1=sha1,
+        path=resolved_path,
+        category_action=category_action,
+        accept_tags=list(body.accept_tags or []),
+        dismiss_tags=list(body.dismiss_tags or []),
+        accept_all_tags=bool(body.accept_all_tags),
+        dismiss_all_tags=bool(body.dismiss_all_tags),
+    )
+    if not payload:
+        raise HTTPException(404, "library item not found")
+
+    return {
+        "ok": True,
+        "sha1": str(payload.get("sha1") or ""),
+        "path": str(payload.get("path") or (resolved_path or "")),
+        "paper_category": str(payload.get("paper_category") or ""),
+        "reading_status": str(payload.get("reading_status") or ""),
+        "note": str(payload.get("note") or ""),
+        "user_tags": list(payload.get("user_tags") or []),
+        "has_suggestions": bool(payload.get("has_suggestions")),
+        "suggested_category": str(payload.get("suggested_category") or ""),
+        "suggested_tags": list(payload.get("suggested_tags") or []),
     }
 
 
