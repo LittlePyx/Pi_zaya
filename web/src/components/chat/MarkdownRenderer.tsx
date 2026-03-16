@@ -1,5 +1,6 @@
 ﻿import { Children, cloneElement, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { createContext, useContext } from 'react'
+import { Fragment } from 'react'
 import { message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -11,6 +12,9 @@ import type { ReaderDocAnchor, ReaderDocBlock } from '../../api/references'
 
 const TABLE_SEPARATOR_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/
 const TABLE_ROW_RE = /^\s*\|?.+\|.+\|?\s*$/
+const REFERENCES_HEADING_RE = /^#{1,6}\s+(references|bibliography|参考文献)\b/i
+const PLAIN_REFERENCES_HEADING_RE = /^(references|bibliography|参考文献)\s*$/i
+const REFERENCE_ENTRY_START_RE = /^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\.)\s+/
 
 function normalizeTableSegment(segment: string): string {
   let s = String(segment || '').trim()
@@ -48,8 +52,74 @@ function repairCollapsedGfmTables(text: string): string {
   return out.join('\n')
 }
 
+function isReferencesHeadingLine(text: string): boolean {
+  const line = String(text || '').trim()
+  if (!line) return false
+  return REFERENCES_HEADING_RE.test(line) || PLAIN_REFERENCES_HEADING_RE.test(line)
+}
+
+function normalizeReferenceSectionSpacing(text: string): string {
+  if (!text || !/(references|bibliography|参考文献)/i.test(text)) return text
+  const lines = text.split('\n')
+  const out: string[] = []
+  let inReferences = false
+  let currentEntryIndex = -1
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '')
+    const trimmed = line.trim()
+
+    if (isReferencesHeadingLine(trimmed)) {
+      inReferences = true
+      currentEntryIndex = -1
+      if (out.length > 0 && out[out.length - 1] !== '') {
+        out.push('')
+      }
+      out.push(line)
+      out.push('')
+      continue
+    }
+
+    if (inReferences) {
+      if (/^#{1,6}\s+/.test(trimmed) && !isReferencesHeadingLine(trimmed)) {
+        while (out.length > 0 && out[out.length - 1] === '') {
+          out.pop()
+        }
+        out.push('')
+        out.push(line)
+        inReferences = false
+        currentEntryIndex = -1
+        continue
+      }
+      if (!trimmed) continue
+      if (REFERENCE_ENTRY_START_RE.test(trimmed)) {
+        if (out.length > 0 && out[out.length - 1] !== '') {
+          out.push('')
+        }
+        out.push(line)
+        currentEntryIndex = out.length - 1
+        continue
+      }
+      if (currentEntryIndex >= 0) {
+        out[currentEntryIndex] = `${out[currentEntryIndex]} ${trimmed}`.trim()
+        continue
+      }
+      if (out.length > 0 && out[out.length - 1] !== '') {
+        out.push('')
+      }
+      out.push(line)
+      currentEntryIndex = out.length - 1
+      continue
+    }
+
+    out.push(line)
+  }
+
+  return out.join('\n').replace(/\n{3,}/g, '\n\n')
+}
+
 function normalize(text: string) {
-  return repairCollapsedGfmTables(text)
+  return normalizeReferenceSectionSpacing(repairCollapsedGfmTables(text))
     .replace(/\\\(/g, '$').replace(/\\\)/g, '$')
     .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$')
 }
@@ -69,7 +139,7 @@ interface Props {
   readerBlocks?: ReaderDocBlock[]
 }
 
-type LocateSurfaceKind = 'paragraph' | 'list_item' | 'blockquote' | 'equation' | 'figure'
+type LocateSurfaceKind = 'paragraph' | 'list_item' | 'quote' | 'blockquote' | 'equation' | 'figure'
 
 interface LocateRenderMeta {
   kind: LocateSurfaceKind
@@ -126,58 +196,42 @@ function isTailBoundaryElement(node: ReactNode): boolean {
 }
 
 function appendTailButtonToContent(children: ReactNode, btn: ReactNode, keyBase = 'tail'): ReactNode {
-  const tail = (
-    <span key={`${keyBase}:btn`} className="kb-md-loc-tail">
+  const makeTail = (keyPath: string) => (
+    <span key={`${keyPath}:btn`} className="kb-md-loc-tail">
       {btn}
     </span>
   )
+  const withTail = (content: ReactNode, keyPath: string) => ([
+    <Fragment key={`${keyPath}:content`}>{content}</Fragment>,
+    makeTail(keyPath),
+  ])
 
   const append = (node: ReactNode, keyPath: string): ReactNode => {
     if (node === null || node === undefined || typeof node === 'boolean') return node
     if (typeof node === 'string' || typeof node === 'number') {
-      return (
-        <>
-          {node}
-          {tail}
-        </>
-      )
+      return withTail(node, keyPath)
     }
     if (Array.isArray(node)) {
-      const items = [...node]
+      const items = Children.toArray(node)
       for (let idx = items.length - 1; idx >= 0; idx -= 1) {
         if (isEmptyReactNode(items[idx])) continue
-        items[idx] = append(items[idx], `${keyPath}:${idx}`)
+        items[idx] = append(items[idx], `${keyPath}:${idx}`) as (typeof items)[number]
         return items
       }
-      return [...items, tail]
+      return [...items, makeTail(`${keyPath}:append`)]
     }
     if (!isValidElement(node)) {
-      return (
-        <>
-          {node}
-          {tail}
-        </>
-      )
+      return withTail(node, keyPath)
     }
     if (isTailBoundaryElement(node)) {
-      return (
-        <>
-          {node}
-          {tail}
-        </>
-      )
+      return withTail(node, keyPath)
     }
 
     const props = node.props as { children?: ReactNode }
     if (props.children !== undefined) {
       return cloneElement(node, undefined, append(props.children, `${keyPath}:child`))
     }
-    return (
-      <>
-        {node}
-        {tail}
-      </>
-    )
+    return withTail(node, keyPath)
   }
 
   return append(children, keyBase)
@@ -198,6 +252,7 @@ function normalizeLocateSurfacePolicy(
   return {
     paragraph: policy?.paragraph !== false,
     list_item: policy?.list_item !== false,
+    quote: policy?.quote !== false,
     blockquote: policy?.blockquote !== false,
     equation: policy?.equation !== false,
     figure: policy?.figure !== false,
@@ -833,6 +888,8 @@ function buildMarkdownComponents(
     const kind = meta?.kind || 'paragraph'
     const badgeText = kind === 'equation'
       ? '式'
+      : kind === 'quote'
+        ? '引'
       : kind === 'figure'
         ? '图'
         : '原文'
@@ -857,18 +914,20 @@ function buildMarkdownComponents(
   const decorateInlineLocateAnchors = (
     children: ReactNode,
     meta: LocateRenderMeta,
-  ): { content: ReactNode; count: number } => {
+  ): { content: ReactNode; count: number; figureRefCount: number } => {
+    type InlineDecorateResult = { content: ReactNode; count: number; figureRefCount: number }
     const metaForToken = (kind: InlineLocateTokenKind): LocateRenderMeta => {
-      if (kind === 'quote') return { ...meta, kind: 'blockquote' }
+      if (kind === 'quote') return { ...meta, kind: 'quote' }
       if (kind === 'figure_ref') return { ...meta, kind: 'figure' }
       return meta
     }
-    const renderStringNode = (text0: string, keyBase: string): { content: ReactNode; count: number } => {
+    const renderStringNode = (text0: string, keyBase: string): InlineDecorateResult => {
       const tokens = collectInlineLocateTokens(text0, effectiveInlineLocateTokenPolicy)
-      if (tokens.length <= 0) return { content: text0, count: 0 }
+      if (tokens.length <= 0) return { content: text0, count: 0, figureRefCount: 0 }
       const parts: ReactNode[] = []
       let last = 0
       let count = 0
+      let figureRefCount = 0
       tokens.forEach((token, idx) => {
         if (token.start > last) {
           parts.push(text0.slice(last, token.start))
@@ -887,6 +946,9 @@ function buildMarkdownComponents(
             </span>,
           )
           count += 1
+          if (token.kind === 'figure_ref') {
+            figureRefCount += 1
+          }
         } else {
           parts.push(raw)
         }
@@ -895,27 +957,30 @@ function buildMarkdownComponents(
       if (last < text0.length) {
         parts.push(text0.slice(last))
       }
-      return { content: parts, count }
+      return { content: parts, count, figureRefCount }
     }
 
-    const visit = (node: ReactNode, keyBase: string): { content: ReactNode; count: number } => {
+    const visit = (node: ReactNode, keyBase: string): InlineDecorateResult => {
       if (node === null || node === undefined || typeof node === 'boolean') {
-        return { content: node, count: 0 }
+        return { content: node, count: 0, figureRefCount: 0 }
       }
       if (typeof node === 'string' || typeof node === 'number') {
         return renderStringNode(String(node), keyBase)
       }
       if (Array.isArray(node)) {
+        const items = Children.toArray(node)
         let count = 0
-        const content = node.map((item, idx) => {
+        let figureRefCount = 0
+        const content = items.map((item, idx) => {
           const rendered = visit(item, `${keyBase}:${idx}`)
           count += rendered.count
+          figureRefCount += rendered.figureRefCount
           return rendered.content
         })
-        return { content, count }
+        return { content, count, figureRefCount }
       }
       if (!isValidElement(node)) {
-        return { content: node, count: 0 }
+        return { content: node, count: 0, figureRefCount: 0 }
       }
       const nodeType = typeof node.type === 'string' ? node.type.toLowerCase() : ''
       const props = node.props as { children?: ReactNode; className?: string }
@@ -923,19 +988,20 @@ function buildMarkdownComponents(
       if (isInlineMathClass(className)) {
         // Inline KaTeX variables create noisy duplicate entrances; keep entrances
         // only on numbered equation refs / block formulas.
-        return { content: node, count: 0 }
+        return { content: node, count: 0, figureRefCount: 0 }
       }
       if (['a', 'button', 'img', 'code', 'pre', 'script', 'style'].includes(nodeType)) {
-        return { content: node, count: 0 }
+        return { content: node, count: 0, figureRefCount: 0 }
       }
       if (/\bkb-cite-chip\b/.test(className) || /\bkb-md-locate-inline-btn\b/.test(className)) {
-        return { content: node, count: 0 }
+        return { content: node, count: 0, figureRefCount: 0 }
       }
       const rendered = visit(props.children, `${keyBase}:child`)
-      if (rendered.count <= 0) return { content: node, count: 0 }
+      if (rendered.count <= 0) return { content: node, count: 0, figureRefCount: 0 }
       return {
         content: cloneElement(node, undefined, rendered.content),
         count: rendered.count,
+        figureRefCount: rendered.figureRefCount,
       }
     }
 
@@ -1107,7 +1173,7 @@ function buildMarkdownComponents(
       const meta = { kind: 'paragraph' as const, order: renderOrder }
       const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
         ? decorateInlineLocateAnchors(children, meta)
-        : { content: children, count: 0 }
+        : { content: children, count: 0, figureRefCount: 0 }
       const content = inline.count > 0 ? inline.content : children
       if (variant !== 'chat') {
         return <p {...attrs}>{content}</p>
@@ -1115,7 +1181,7 @@ function buildMarkdownComponents(
       if (isFigureHostParagraph(content)) {
         return <p {...attrs} className="kb-md-figure-host">{content}</p>
       }
-      const figureCaptionSnippet = preferredFigureCaptionSnippet(content)
+      const figureCaptionSnippet = inline.figureRefCount > 0 ? '' : preferredFigureCaptionSnippet(content)
       if (figureCaptionSnippet) {
         const figureBtn = renderLocateButton(figureCaptionSnippet, {
           force: true,
@@ -1138,7 +1204,7 @@ function buildMarkdownComponents(
       const meta = { kind: 'list_item' as const, order: renderOrder }
       const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
         ? decorateInlineLocateAnchors(children, meta)
-        : { content: children, count: 0 }
+        : { content: children, count: 0, figureRefCount: 0 }
       return <li {...attrs}>{inline.count > 0 ? inline.content : children}</li>
     },
     div: (props: any) => {
@@ -1233,7 +1299,7 @@ export function MarkdownRenderer({
   const parsedContract = parseAnswerContract(normalizedContent)
 
   return (
-    <div className={`kb-markdown prose dark:prose-invert max-w-none text-sm ${variant === 'reader' ? 'kb-markdown-reader' : 'kb-markdown-chat'}`}>
+    <div className={`kb-markdown prose dark:prose-invert max-w-none min-w-0 text-sm ${variant === 'reader' ? 'kb-markdown-reader' : 'kb-markdown-chat'}`}>
       {parsedContract ? (
         <div className="kb-answer-contract">
           {parsedContract.preamble ? (

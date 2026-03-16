@@ -99,6 +99,7 @@ def start_generation(body: GenerateBody):
         "answer_contract_v1": bool(prefs.get("answer_contract_v1", False)),
         "answer_depth_auto": bool(prefs.get("answer_depth_auto", True)),
         "answer_mode_hint": str(prefs.get("answer_mode_hint") or "").strip()[:32],
+        "answer_output_mode": str(prefs.get("answer_output_mode") or "").strip()[:32],
     }
     _gen_start_task(task)
     return {
@@ -124,6 +125,7 @@ async def stream_generation(session_id: str):
             "answer": t.get("answer", ""),
             "answer_intent": t.get("answer_intent", ""),
             "answer_depth": t.get("answer_depth", ""),
+            "answer_output_mode": t.get("answer_output_mode", ""),
             "answer_contract_v1": bool(t.get("answer_contract_v1", False)),
             "answer_quality": t.get("answer_quality", {}),
         }

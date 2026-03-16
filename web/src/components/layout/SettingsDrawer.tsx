@@ -14,7 +14,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   }
 
   return (
-    <Drawer title={S.settings} open={open} onClose={onClose} width={320}>
+    <Drawer title={S.settings} open={open} onClose={onClose} size={320}>
       <div className="space-y-4">
         <div>
           <Text type="secondary">模型: {s.model || '未配置'}</Text>

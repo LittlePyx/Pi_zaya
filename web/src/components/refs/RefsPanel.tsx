@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { S } from '../../i18n/zh'
 import { referencesApi } from '../../api/references'
 import { useChatStore } from '../../stores/chatStore'
-import type { ReaderOpenPayload } from '../chat/PaperGuideReaderDrawer'
+import type { ReaderOpenPayload } from '../chat/reader/readerTypes'
 import {
   buildCiteDetailFromMeta,
   citationDisplay,

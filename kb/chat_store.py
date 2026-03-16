@@ -496,29 +496,7 @@ class ChatStore:
 
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        out: list[dict] = []
-        for row in rows:
-            rec = dict(row)
-            try:
-                attachments = json.loads(rec.get("attachments_json") or "[]")
-            except Exception:
-                attachments = []
-            if not isinstance(attachments, list):
-                attachments = []
-            try:
-                meta = json.loads(rec.get("meta_json") or "{}")
-            except Exception:
-                meta = {}
-            if not isinstance(meta, dict):
-                meta = {}
-            rec["attachments"] = attachments
-            rec["meta"] = meta
-            if isinstance(meta.get("provenance"), dict):
-                rec["provenance"] = dict(meta.get("provenance") or {})
-            rec.pop("attachments_json", None)
-            rec.pop("meta_json", None)
-            out.append(rec)
-        return out
+        return self._hydrate_message_rows(rows)
 
     def get_messages_upto_id(self, conv_id: str, max_id: int, limit: int | None = None) -> list[dict]:
         mid = int(max_id or 0)
@@ -531,6 +509,40 @@ class ChatStore:
             params = (conv_id, mid, int(limit))
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
+        return self._hydrate_message_rows(rows)
+
+    def get_messages_page(
+        self,
+        conv_id: str,
+        limit: int = 24,
+        before_id: int | None = None,
+    ) -> tuple[list[dict], bool, int | None, int | None]:
+        page_size = max(1, min(200, int(limit or 24)))
+        before = int(before_id or 0)
+        params: tuple
+        sql = (
+            "SELECT id, role, content, attachments_json, meta_json, created_at "
+            "FROM messages WHERE conv_id = ?"
+        )
+        params = (conv_id,)
+        if before > 0:
+            sql += " AND id < ?"
+            params = (conv_id, before)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params = (*params, page_size + 1)
+
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+
+        has_more_before = len(rows) > page_size
+        page_rows = list(rows[:page_size])
+        page_rows.reverse()
+        out = self._hydrate_message_rows(page_rows)
+        oldest_loaded_id = int(out[0]["id"]) if out else None
+        newest_loaded_id = int(out[-1]["id"]) if out else None
+        return out, has_more_before, oldest_loaded_id, newest_loaded_id
+
+    def _hydrate_message_rows(self, rows: list[sqlite3.Row]) -> list[dict]:
         out: list[dict] = []
         for row in rows:
             rec = dict(row)
@@ -595,10 +607,21 @@ class ChatStore:
         text = (content or "").strip()
         now = time.time()
         with self._connect() as conn:
-            row = conn.execute("SELECT conv_id FROM messages WHERE id = ?", (mid,)).fetchone()
+            row = conn.execute("SELECT conv_id, meta_json FROM messages WHERE id = ?", (mid,)).fetchone()
             if not row:
                 return False
-            conn.execute("UPDATE messages SET content = ? WHERE id = ?", (text, mid))
+            try:
+                meta = json.loads(row["meta_json"] or "{}")
+            except Exception:
+                meta = {}
+            if not isinstance(meta, dict):
+                meta = {}
+            meta.pop("render_cache", None)
+            try:
+                meta_json = json.dumps(meta, ensure_ascii=False, default=str)
+            except Exception:
+                meta_json = "{}"
+            conn.execute("UPDATE messages SET content = ?, meta_json = ? WHERE id = ?", (text, meta_json, mid))
             project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
             self._archive_excess_conversations(conn, project_id=project_id)
         return True
@@ -645,6 +668,34 @@ class ChatStore:
             conn.execute("UPDATE messages SET meta_json = ? WHERE id = ?", (meta_json, mid))
             project_id = self._touch_conversation_active(conn, str(row["conv_id"] or ""), now)
             self._archive_excess_conversations(conn, project_id=project_id)
+        return True
+
+    def set_message_render_cache(self, message_id: int, cache_payload: dict | None) -> bool:
+        mid = int(message_id or 0)
+        if mid <= 0:
+            return False
+        with self._connect() as conn:
+            row = conn.execute("SELECT meta_json FROM messages WHERE id = ?", (mid,)).fetchone()
+            if not row:
+                return False
+            try:
+                current = json.loads(row["meta_json"] or "{}")
+            except Exception:
+                current = {}
+            if not isinstance(current, dict):
+                current = {}
+            next_meta = dict(current)
+            if isinstance(cache_payload, dict) and cache_payload:
+                next_meta["render_cache"] = dict(cache_payload)
+            else:
+                next_meta.pop("render_cache", None)
+            if next_meta == current:
+                return True
+            try:
+                meta_json = json.dumps(next_meta, ensure_ascii=False, default=str)
+            except Exception:
+                meta_json = "{}"
+            conn.execute("UPDATE messages SET meta_json = ? WHERE id = ?", (meta_json, mid))
         return True
 
     def delete_message(self, message_id: int) -> bool:

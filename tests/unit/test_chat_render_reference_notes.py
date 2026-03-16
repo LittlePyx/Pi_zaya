@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from kb.chat_store import ChatStore
 from api.chat_render import (
     _enrich_provenance_segments_for_display,
     _normalize_equation_source_notes,
@@ -255,3 +256,91 @@ def test_enrich_provenance_segments_for_display_loads_md_blocks_for_quote_rebind
     assert str(seg.get("primary_block_id") or "") == str(conclusion_block.get("block_id") or "")
     block_map = enriched.get("block_map") or {}
     assert str(conclusion_block.get("block_id") or "") in block_map
+
+
+def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Path):
+    from api import chat_render
+
+    calls = {"primary": 0}
+
+    def fake_primary(_md, _hits, *, anchor_ns=""):
+        del _hits, anchor_ns
+        calls["primary"] += 1
+        return (
+            f"cached::{_md}",
+            [{"num": 1, "anchor": "kb-cite-demo-1", "source_name": "demo.pdf"}],
+        )
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("cache test")
+    user_id = store.append_message(conv_id, "user", "test")
+    store.append_message(conv_id, "assistant", "SPI relies on compressive sensing [[CITE:s1234abcd:1]].")
+    refs_by_user = {
+        user_id: {
+            "prompt_sig": "sig-1",
+            "updated_at": 1.0,
+            "used_query": "test",
+            "used_translation": False,
+            "hits": [
+                {
+                    "text": "dummy",
+                    "meta": {"source_path": r"db\doc\doc.en.md"},
+                }
+            ],
+        }
+    }
+
+    first = enrich_messages_with_reference_render(store.get_messages(conv_id), refs_by_user, conv_id=conv_id, chat_store=store)
+    second = enrich_messages_with_reference_render(store.get_messages(conv_id), refs_by_user, conv_id=conv_id, chat_store=store)
+
+    assert calls["primary"] == 1
+    assert str(first[-1].get("rendered_content") or "") == str(second[-1].get("rendered_content") or "")
+    assert str(second[-1].get("copy_text") or "").strip()
+
+
+def test_enrich_messages_invalidates_render_cache_when_refs_change(monkeypatch, tmp_path: Path):
+    from api import chat_render
+
+    calls = {"primary": 0}
+
+    def fake_primary(_md, _hits, *, anchor_ns=""):
+        del _hits, anchor_ns
+        calls["primary"] += 1
+        return (
+            f"render-{calls['primary']}::{_md}",
+            [{"num": calls["primary"], "anchor": f"kb-cite-demo-{calls['primary']}", "source_name": "demo.pdf"}],
+        )
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("cache invalidation test")
+    user_id = store.append_message(conv_id, "user", "test")
+    store.append_message(conv_id, "assistant", "SPI relies on compressive sensing [[CITE:s1234abcd:1]].")
+
+    refs_v1 = {
+        user_id: {
+            "prompt_sig": "sig-1",
+            "updated_at": 1.0,
+            "used_query": "test",
+            "used_translation": False,
+            "hits": [{"text": "dummy", "meta": {"source_path": r"db\doc\doc.en.md"}}],
+        }
+    }
+    refs_v2 = {
+        user_id: {
+            "prompt_sig": "sig-2",
+            "updated_at": 2.0,
+            "used_query": "test-updated",
+            "used_translation": False,
+            "hits": [{"text": "dummy-updated", "meta": {"source_path": r"db\doc\doc.en.md"}}],
+        }
+    }
+
+    first = enrich_messages_with_reference_render(store.get_messages(conv_id), refs_v1, conv_id=conv_id, chat_store=store)
+    second = enrich_messages_with_reference_render(store.get_messages(conv_id), refs_v2, conv_id=conv_id, chat_store=store)
+
+    assert calls["primary"] == 2
+    assert str(first[-1].get("rendered_content") or "") != str(second[-1].get("rendered_content") or "")

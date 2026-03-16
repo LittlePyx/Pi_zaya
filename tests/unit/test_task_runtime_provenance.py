@@ -1337,6 +1337,108 @@ def test_apply_provenance_required_coverage_contract_hides_duplicate_quote_surfa
     assert str(hidden.get("locate_surface_policy") or "") == "hidden"
 
 
+def test_apply_provenance_required_coverage_contract_assigns_content_core_target_for_lead_sentence():
+    from kb import task_runtime
+
+    segments = task_runtime._apply_provenance_required_coverage_contract(
+        [
+            {
+                "segment_id": "seg_001",
+                "segment_index": 1,
+                "kind": "paragraph",
+                "segment_type": "evidence",
+                "text": "The paper highlights two implementation details:",
+                "raw_markdown": "The paper highlights two implementation details:",
+                "evidence_mode": "direct",
+                "claim_type": "critical_fact_claim",
+                "must_locate": False,
+                "anchor_kind": "sentence",
+                "primary_block_id": "blk_lead",
+                "primary_anchor_id": "p_00011",
+                "primary_heading_path": "Method",
+                "evidence_block_ids": ["blk_lead"],
+                "support_block_ids": [],
+                "anchor_text": "The paper highlights two implementation details:",
+                "evidence_quote": "The paper highlights two implementation details:",
+            },
+            {
+                "segment_id": "seg_002",
+                "segment_index": 2,
+                "kind": "list_item",
+                "segment_type": "bullet",
+                "text": "It uses ground truth images to estimate camera poses.",
+                "raw_markdown": "- It uses ground truth images to estimate camera poses.",
+                "evidence_mode": "direct",
+                "claim_type": "critical_fact_claim",
+                "must_locate": False,
+                "anchor_kind": "sentence",
+                "primary_block_id": "blk_pose",
+                "primary_anchor_id": "p_00012",
+                "primary_heading_path": "Method",
+                "evidence_block_ids": ["blk_pose"],
+                "support_block_ids": [],
+                "anchor_text": "It uses ground truth images to estimate camera poses.",
+                "evidence_quote": "It uses ground truth images to estimate camera poses.",
+            },
+            {
+                "segment_id": "seg_003",
+                "segment_index": 3,
+                "kind": "list_item",
+                "segment_type": "bullet",
+                "text": "It then runs training on the recovered poses.",
+                "raw_markdown": "- It then runs training on the recovered poses.",
+                "evidence_mode": "direct",
+                "claim_type": "critical_fact_claim",
+                "must_locate": False,
+                "anchor_kind": "sentence",
+                "primary_block_id": "blk_train",
+                "primary_anchor_id": "p_00013",
+                "primary_heading_path": "Method",
+                "evidence_block_ids": ["blk_train"],
+                "support_block_ids": [],
+                "anchor_text": "It then runs training on the recovered poses.",
+                "evidence_quote": "It then runs training on the recovered poses.",
+            },
+        ],
+        block_lookup={
+            "blk_lead": {
+                "block_id": "blk_lead",
+                "anchor_id": "p_00011",
+                "kind": "paragraph",
+                "order_index": 11,
+                "text": "The paper highlights two implementation details:",
+                "raw_text": "The paper highlights two implementation details:",
+            },
+            "blk_pose": {
+                "block_id": "blk_pose",
+                "anchor_id": "p_00012",
+                "kind": "paragraph",
+                "order_index": 12,
+                "text": "It uses ground truth images to estimate camera poses.",
+                "raw_text": "It uses ground truth images to estimate camera poses.",
+            },
+            "blk_train": {
+                "block_id": "blk_train",
+                "anchor_id": "p_00013",
+                "kind": "paragraph",
+                "order_index": 13,
+                "text": "It then runs training on the recovered poses.",
+                "raw_text": "It then runs training on the recovered poses.",
+            },
+        },
+    )
+
+    lead = next(seg for seg in segments if str(seg.get("segment_id") or "") == "seg_001")
+    child = next(seg for seg in segments if str(seg.get("segment_id") or "") == "seg_002")
+    assert str(lead.get("claim_group_kind") or "") == "content_core_bundle"
+    assert str(lead.get("claim_group_id") or "") == "content_core_bundle:seg_002"
+    assert str(lead.get("claim_group_target_segment_id") or "") == "seg_002"
+    assert int(lead.get("claim_group_target_distance") or 0) == 1
+    assert "highlights two implementation details" in str(lead.get("claim_group_lead_text") or "").lower()
+    assert str(child.get("claim_group_target_segment_id") or "") == "seg_002"
+    assert int(child.get("claim_group_target_distance") or 0) == 0
+
+
 def test_should_run_provenance_async_refine_requires_flags_and_api_key(monkeypatch):
     from kb import task_runtime
 

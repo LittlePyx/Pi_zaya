@@ -37,6 +37,7 @@ class PrefsPatch(BaseModel):
     answer_contract_v1: bool | None = None
     answer_depth_auto: bool | None = None
     answer_mode_hint: str | None = None
+    answer_output_mode: str | None = None
 
 
 @router.patch("/settings")

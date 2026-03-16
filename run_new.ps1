@@ -3,6 +3,7 @@ param(
   [switch]$StopExisting,
   [switch]$InstallBackendDeps,
   [switch]$InstallFrontendDeps,
+  [switch]$NoBackendReload,
   [string]$BackendHost = "127.0.0.1",
   [int]$BackendPort = 8000,
   [string]$FrontendHost = "127.0.0.1",
@@ -118,9 +119,13 @@ $viteErr = Join-Path $here ".tmp_vite_stderr.log"
 Remove-Item $fastapiOut, $fastapiErr, $viteOut, $viteErr -ErrorAction SilentlyContinue
 
 Write-Info "Starting backend (uvicorn) on http://$BackendHost`:$BackendPort ..."
+$backendArgs = @('-m', 'uvicorn', 'api.main:app', '--host', $BackendHost, '--port', "$BackendPort")
+if (-not $NoBackendReload) {
+  $backendArgs += @('--reload', '--reload-dir', $here)
+}
 $backendProc = Start-Process `
   -FilePath $pythonExe `
-  -ArgumentList @('-m', 'uvicorn', 'api.main:app', '--host', $BackendHost, '--port', "$BackendPort") `
+  -ArgumentList $backendArgs `
   -WorkingDirectory $here `
   -PassThru `
   -RedirectStandardOutput $fastapiOut `
@@ -143,6 +148,7 @@ Write-Info "Backend PID:  $($backendProc.Id)  (port ${BackendPort}: $(if ($backe
 Write-Info "Frontend PID: $($frontendProc.Id)  (port ${FrontendPort}: $(if ($frontendOk) { 'UP' } else { 'DOWN' }))"
 Write-Info "Frontend URL: http://localhost:$FrontendPort"
 Write-Info "Backend URL:  http://localhost:$BackendPort"
+Write-Info "Backend reload: $(if ($NoBackendReload) { 'OFF' } else { 'ON' })"
 Write-Info "Logs: $fastapiErr, $viteOut"
 
 if (-not $backendOk -or -not $frontendOk) {

@@ -5,7 +5,12 @@ import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
-import type { ReaderOpenPayload } from './PaperGuideReaderDrawer'
+import type {
+  ReaderLocateCandidate,
+  ReaderLocateClaimGroup,
+  ReaderLocateTarget,
+  ReaderOpenPayload,
+} from './reader/readerTypes'
 import {
   mergeCiteMeta,
   normalizeCiteDetail,
@@ -27,6 +32,61 @@ const SHELF_SCHEMA_VERSION = 4
 const SHELF_SAVED_SCHEMA_VERSION = 1
 const SHELF_SAVED_MAX_ITEMS = 16
 const SHELF_SAVED_SUFFIX = ':saved_snapshots'
+const MESSAGE_LIST_PREP_PERF_LIMIT = 180
+
+interface MessageListPrepPerfEvent {
+  ts: number
+  convId: string
+  messageCount: number
+  assistantCount: number
+  heavyCount: number
+  lightCount: number
+  cacheHits: number
+  durationMs: number
+}
+
+interface MessageListPrepPerfApi {
+  getLogs: () => MessageListPrepPerfEvent[]
+  clear: () => void
+}
+
+interface MessageListDebugWindow extends Window {
+  __kbMessageListPerf?: MessageListPrepPerfApi
+}
+
+const messageListPrepPerfLog: MessageListPrepPerfEvent[] = []
+
+function messageListPerfNow() {
+  try {
+    return performance.now()
+  } catch {
+    return Date.now()
+  }
+}
+
+function ensureMessageListPerfApi() {
+  if (typeof window === 'undefined') return
+  const w = window as MessageListDebugWindow
+  if (w.__kbMessageListPerf) return
+  w.__kbMessageListPerf = {
+    getLogs: () => messageListPrepPerfLog.slice(),
+    clear: () => {
+      messageListPrepPerfLog.length = 0
+    },
+  }
+}
+
+function pushMessageListPrepPerf(event: MessageListPrepPerfEvent) {
+  messageListPrepPerfLog.push(event)
+  if (messageListPrepPerfLog.length > MESSAGE_LIST_PREP_PERF_LIMIT) {
+    messageListPrepPerfLog.splice(0, messageListPrepPerfLog.length - MESSAGE_LIST_PREP_PERF_LIMIT)
+  }
+  ensureMessageListPerfApi()
+}
+
+if (typeof window !== 'undefined') {
+  ensureMessageListPerfApi()
+}
 
 interface Props {
   activeConvId?: string | null
@@ -35,6 +95,9 @@ interface Props {
   generationPartial?: string
   generationStage?: string
   jumpTarget?: { messageId: number; token: number } | null
+  onJumpHandled?: (jumpTarget: { messageId: number; token: number }) => void
+  trackedMessageIds?: number[]
+  onTrackedMessageActive?: (messageId: number | null) => void
   onOpenReader?: (payload: ReaderOpenPayload) => void
   paperGuideSourcePath?: string
   paperGuideSourceName?: string
@@ -70,6 +133,70 @@ interface RefHitLite {
 
 interface RefEntryLite {
   hits?: RefHitLite[]
+}
+
+interface AssistantLocatePrep {
+  bodyContent: string
+  refsUserMsgId: number
+  locateSourcePath: string
+  locateSourceName: string
+  refsLocateCandidatesAll: LocateCandidate[]
+  guideLocateCandidates: LocateCandidate[]
+  refsScopedCandidates: LocateCandidate[]
+  messageProvenance: Record<string, unknown> | null
+  provenanceSourcePath: string
+  provenanceSourceName: string
+  provenanceBlockMap: Record<string, Record<string, unknown>>
+  provenanceDirectSegments: Array<Record<string, unknown>>
+  hasDirectProvenance: boolean
+  hasStructuredProvenance: boolean
+  effectiveGuideSourcePath: string
+  strictProvenanceLocate: boolean
+  structuredLocateButtonCap: number
+  provenanceLocateEntries: ProvenanceLocateEntry[]
+  structuredProvenanceSegmentsAll: StructuredProvenanceSegment[]
+  provenanceStrictIdentityReady: boolean
+  hasStrictMustLocateEntries: boolean
+  strictStructuredLocateOnly: boolean
+  strictStructuredInlineLocate: boolean
+  provenanceModeLabel: string
+  structuredRenderSlotMap: Map<number, StructuredRenderLocateSlot>
+  structuredLocateOrderBySegmentId: Map<string, number>
+  allowedStructuredRenderOrders: Set<number>
+  locateCandidates: LocateCandidate[]
+}
+
+function createEmptyAssistantLocatePrep(bodyContent: string, refsUserMsgId = 0): AssistantLocatePrep {
+  return {
+    bodyContent,
+    refsUserMsgId,
+    locateSourcePath: '',
+    locateSourceName: '',
+    refsLocateCandidatesAll: [],
+    guideLocateCandidates: [],
+    refsScopedCandidates: [],
+    messageProvenance: null,
+    provenanceSourcePath: '',
+    provenanceSourceName: '',
+    provenanceBlockMap: {},
+    provenanceDirectSegments: [],
+    hasDirectProvenance: false,
+    hasStructuredProvenance: false,
+    effectiveGuideSourcePath: '',
+    strictProvenanceLocate: false,
+    structuredLocateButtonCap: 5,
+    provenanceLocateEntries: [],
+    structuredProvenanceSegmentsAll: [],
+    provenanceStrictIdentityReady: false,
+    hasStrictMustLocateEntries: false,
+    strictStructuredLocateOnly: false,
+    strictStructuredInlineLocate: false,
+    provenanceModeLabel: '',
+    structuredRenderSlotMap: new Map<number, StructuredRenderLocateSlot>(),
+    structuredLocateOrderBySegmentId: new Map<string, number>(),
+    allowedStructuredRenderOrders: new Set<number>(),
+    locateCandidates: [],
+  }
 }
 
 interface LocateCandidate {
@@ -110,7 +237,7 @@ interface ProvenanceLocateEntry {
   groupDistance?: number
 }
 
-type StructuredLocateKind = 'paragraph' | 'list_item' | 'blockquote' | 'equation' | 'figure'
+type StructuredLocateKind = 'paragraph' | 'list_item' | 'quote' | 'blockquote' | 'equation' | 'figure'
 
 interface StructuredRenderSegment {
   order: number
@@ -131,6 +258,9 @@ interface StructuredProvenanceSegment {
   locateSurfacePolicy: string
   claimGroupId: string
   claimGroupKind: string
+  claimGroupTargetSegmentId: string
+  claimGroupTargetDistance: number
+  claimGroupLeadText: string
   formulaOrigin: string
   anchorKind: string
   anchorText: string
@@ -503,6 +633,9 @@ function isLikelySectionBoundarySegment(segment: StructuredProvenanceSegment | n
   return /^(?:\u7ed3\u8bba|\u6838\u5fc3\u7ed3\u8bba|\u4f9d\u636e|\u8bc1\u636e|\u539f\u6587|\u4e0b\u4e00\u6b65|\u5efa\u8bae|\u98ce\u9669|\u9650\u5236)\s*[:\uFF1A]?/.test(text)
 }
 
+void isLikelyClaimGroupLead
+void isLikelySectionBoundarySegment
+
 function mergeStructuredSnippetAliases(...groups: Array<string[] | null | undefined>): string[] {
   const out: string[] = []
   const seen = new Set<string>()
@@ -517,56 +650,6 @@ function mergeStructuredSnippetAliases(...groups: Array<string[] | null | undefi
     }
   }
   return out
-}
-
-function pickClaimGroupTargetSegment(
-  segments: StructuredProvenanceSegment[],
-  startIndex: number,
-): { segment: StructuredProvenanceSegment; distance: number } | null {
-  const current = segments[startIndex] || null
-  if (!current) return null
-  const currentScore = scoreLocateContentCore(current.text, {
-    kind: current.kind,
-    segmentType: current.segmentType,
-    evidenceMode: current.evidenceMode,
-  })
-  const promote = isLikelyClaimGroupLead(current.text, {
-    kind: current.kind,
-    segmentType: current.segmentType,
-  }) || currentScore < 0.42
-  if (!promote && currentScore >= 0.5) {
-    return { segment: current, distance: 0 }
-  }
-
-  let best: { segment: StructuredProvenanceSegment; distance: number; score: number } | null = null
-  for (let idx = startIndex + 1; idx < segments.length && idx <= startIndex + 4; idx += 1) {
-    const candidate = segments[idx]
-    if (!candidate) continue
-    if (idx > startIndex + 1 && isLikelySectionBoundarySegment(candidate)) break
-    if (String(candidate.segmentType || '').trim().toLowerCase() === 'next_step') break
-    const candidateText = String(candidate.text || '').trim()
-    if (!candidateText || isLikelyRhetoricalLocateShell(candidateText)) continue
-    const candidateScore = scoreLocateContentCore(candidateText, {
-      kind: candidate.kind,
-      segmentType: candidate.segmentType,
-      evidenceMode: candidate.evidenceMode,
-    })
-    if (candidateScore < 0.46) continue
-    const distance = idx - startIndex
-    let total = candidateScore - Math.max(0, distance - 1) * 0.12
-    if (String(candidate.kind || '').trim().toLowerCase() === 'list_item') total += 0.06
-    if (String(candidate.evidenceMode || '').trim().toLowerCase() === 'direct') total += 0.04
-    if (String(candidate.segmentType || '').trim().toLowerCase() === 'bullet') total += 0.04
-    if (!best || total > best.score) {
-      best = { segment: candidate, distance, score: total }
-    }
-  }
-
-  if (best) return { segment: best.segment, distance: best.distance }
-  if (currentScore >= 0.5 && !isLikelyClaimGroupLead(current.text, { kind: current.kind, segmentType: current.segmentType })) {
-    return { segment: current, distance: 0 }
-  }
-  return null
 }
 
 function extractQuotedSpans(input: string, minLen = 10): string[] {
@@ -795,6 +878,7 @@ function buildStructuredProvenanceLocateEntries(
   const segmentsRaw = Array.isArray(messageProvenance.segments) ? messageProvenance.segments : []
   const segmentsAll = listStructuredProvenanceSegments(messageProvenance)
   if (segmentsRaw.length <= 0 || segmentsAll.length <= 0) return []
+  const provenanceById = new Map(segmentsAll.map((segment) => [segment.segmentId, segment]))
 
   const scoredEntries: Array<{
     entry: ProvenanceLocateEntry
@@ -847,11 +931,21 @@ function buildStructuredProvenanceLocateEntries(
       continue
     }
     const keepSelfTarget = effectiveMustLocate || ['quote_claim', 'blockquote_claim', 'formula_claim', 'inline_formula_claim', 'equation_explanation_claim', 'figure_claim'].includes(claimType)
-    const target = keepSelfTarget
-      ? { segment: currentSegment, distance: 0 }
-      : pickClaimGroupTargetSegment(segmentsAll, idx)
-    if (!target) continue
-    const targetSegment = target.segment
+    const targetSegmentId = String(
+      segment.claim_group_target_segment_id
+      || currentSegment.claimGroupTargetSegmentId
+      || currentSegment.segmentId
+      || sourceSegmentId,
+    ).trim() || sourceSegmentId
+    const targetDistanceRaw = Number(
+      segment.claim_group_target_distance
+      ?? currentSegment.claimGroupTargetDistance
+      ?? 0,
+    )
+    const targetDistance = Number.isFinite(targetDistanceRaw) && targetDistanceRaw > 0
+      ? Math.max(0, Math.floor(targetDistanceRaw))
+      : 0
+    const targetSegment = provenanceById.get(targetSegmentId) || currentSegment
     const segmentId = String(targetSegment.segmentId || sourceSegmentId).trim() || sourceSegmentId
     if (seenSegment.has(segmentId)) continue
 
@@ -937,8 +1031,10 @@ function buildStructuredProvenanceLocateEntries(
       alternatives,
       relatedBlockIds: coerceStringArray((segment as Record<string, unknown>).related_block_ids, 8, 180),
       sourceSegmentId,
-      groupLeadText: sourceSegmentText && sourceSegmentText !== segmentText ? sourceSegmentText : undefined,
-      groupDistance: target.distance,
+      groupLeadText: targetDistance > 0
+        ? String(segment.claim_group_lead_text || currentSegment.claimGroupLeadText || sourceSegmentText || '').trim() || undefined
+        : undefined,
+      groupDistance: targetDistance,
     }
     const contentKey = normalizeLocateText(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet).slice(0, 220)
     if (contentKey && seenContent.has(contentKey)) continue
@@ -954,7 +1050,7 @@ function buildStructuredProvenanceLocateEntries(
     const score = evidenceConfidence
       + (segmentFormula ? 0.03 : 0)
       + Math.min(0.18, contentCoreScore * 0.16)
-      - Math.min(0.16, target.distance * 0.06)
+      - Math.min(0.16, targetDistance * 0.06)
       + (effectiveMustLocate ? 0.42 : 0)
       + (claimType === 'formula_claim' ? 0.18 : 0)
       + (claimType === 'inline_formula_claim' ? 0.17 : 0)
@@ -1030,9 +1126,118 @@ function normalizeStructuredLocateKind(input: string): StructuredLocateKind | ''
   if (raw === 'equation' || raw === 'math') return 'equation'
   if (raw === 'figure' || raw === 'fig' || raw === 'image' || raw === 'img') return 'figure'
   if (raw === 'list_item' || raw === 'list-item' || raw === 'li') return 'list_item'
+  if (raw === 'quote' || raw === 'quoted_text') return 'quote'
   if (raw === 'blockquote' || raw === 'bq') return 'blockquote'
   if (raw === 'paragraph' || raw === 'p') return 'paragraph'
   return ''
+}
+
+function buildRefsLocateCandidatesAll(refHits: RefHitLite[]): LocateCandidate[] {
+  const out: LocateCandidate[] = []
+  const seen = new Set<string>()
+  const push = (candidate: LocateCandidate | null) => {
+    if (!candidate) return
+    if (out.length >= REF_LOCATE_CANDIDATE_LIMIT) return
+    const sourcePath = String(candidate.sourcePath || '').trim()
+    const matchText = String(candidate.matchText || '').trim()
+    if (!sourcePath || !matchText) return
+    const key = `${normalizeLocateText(sourcePath)}::${normalizeLocateText(candidate.headingPath || '')}::${normalizeLocateText(matchText).slice(0, 220)}`
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(candidate)
+  }
+
+  for (const hit of refHits) {
+    const ui = hit?.ui_meta || {}
+    const meta = hit?.meta || {}
+    const sourcePath = String(ui.source_path || meta.source_path || '').trim()
+    if (!sourcePath) continue
+    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
+
+    const headingCandidates = new Set<string>([
+      String(ui.heading_path || '').trim(),
+      String(ui.section_label || '').trim(),
+      String(ui.subsection_label || '').trim(),
+      String(meta.ref_best_heading_path || '').trim(),
+      String(meta.heading_path || '').trim(),
+    ].filter(Boolean))
+    const anchorKind = String(ui.anchor_target_kind || '').trim().toLowerCase()
+    const anchorNum = Number(ui.anchor_target_number || 0)
+    for (const heading of coerceStringArray(meta.ref_headings, 8, 160)) {
+      headingCandidates.add(String(heading || '').trim())
+    }
+
+    const refLocs = Array.isArray(meta.ref_locs) ? meta.ref_locs : []
+    for (const loc0 of refLocs.slice(0, 10)) {
+      const loc = (loc0 || {}) as Record<string, unknown>
+      const headingPath = String(loc.heading_path || loc.heading || '').trim()
+      if (headingPath) headingCandidates.add(headingPath)
+      const locText = pickFirstRefText(loc)
+      const locAnchorId = String(loc.anchor_id || loc.anchorId || '').trim()
+      const locAnchorKind = String(loc.anchor_kind || loc.kind || anchorKind || '').trim().toLowerCase()
+      const locAnchorNumber = Number(loc.anchor_number || loc.number || anchorNum || 0)
+      if (locText) {
+        push({
+          sourcePath,
+          sourceName,
+          headingPath: headingPath || String(ui.heading_path || '').trim(),
+          focusSnippet: locText,
+          matchText: [headingPath, locText].filter(Boolean).join('\n'),
+          sourceType: 'refs',
+          anchorId: locAnchorId || undefined,
+          anchorKind: locAnchorKind || undefined,
+          anchorNumber: Number.isFinite(locAnchorNumber) && locAnchorNumber > 0 ? Math.floor(locAnchorNumber) : undefined,
+        })
+      }
+    }
+
+    const snippetSeeds = [
+      ...coerceStringArray(ui.summary_line, 1, 360),
+      ...coerceStringArray(ui.why_line, 1, 360),
+      ...coerceStringArray(meta.ref_show_snippets, 4, 2600),
+      ...coerceStringArray(meta.ref_snippets, 4, 2600),
+      ...coerceStringArray(meta.ref_overview_snippets, 2, 2600),
+    ]
+    if (anchorKind === 'equation' && Number.isFinite(anchorNum) && anchorNum > 0) {
+      snippetSeeds.push(
+        `equation ${anchorNum}`,
+        `eq ${anchorNum}`,
+        `(${anchorNum})`,
+      )
+    }
+    const headingFallback = Array.from(headingCandidates).find(Boolean) || ''
+    for (const seed of snippetSeeds) {
+      const pieces = buildGuideLocateCandidates(seed, sourcePath, sourceName, 'refs')
+      if (pieces.length > 0) {
+        for (const piece of pieces.slice(0, 40)) push(piece)
+        continue
+      }
+      push({
+        sourcePath,
+        sourceName,
+        headingPath: headingFallback,
+        focusSnippet: seed,
+        matchText: [headingFallback, seed].filter(Boolean).join('\n'),
+        sourceType: 'refs',
+        anchorKind: anchorKind || undefined,
+        anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
+      })
+    }
+
+    for (const headingPath of headingCandidates) {
+      push({
+        sourcePath,
+        sourceName,
+        headingPath,
+        focusSnippet: headingPath,
+        matchText: headingPath,
+        sourceType: 'refs',
+        anchorKind: anchorKind || undefined,
+        anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
+      })
+    }
+  }
+  return out
 }
 
 function isPreferredStrictFigureRefSnippet(input: string): boolean {
@@ -1091,6 +1296,8 @@ function scoreStructuredAnchorCompatibility(
     return -0.92
   }
   if (anchorKind === 'quote' || claimType === 'quote_claim') {
+    if (renderKind === 'quote') return 0.88
+    if (renderKind === 'blockquote') return 0.58
     if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.28
     return -0.5
   }
@@ -1255,6 +1462,11 @@ function listStructuredProvenanceSegments(
       locateSurfacePolicy: String(segment.locate_surface_policy || '').trim().toLowerCase(),
       claimGroupId: String(segment.claim_group_id || '').trim(),
       claimGroupKind: String(segment.claim_group_kind || '').trim().toLowerCase(),
+      claimGroupTargetSegmentId: String(segment.claim_group_target_segment_id || '').trim(),
+      claimGroupTargetDistance: Number.isFinite(Number(segment.claim_group_target_distance || 0))
+        ? Math.max(0, Math.floor(Number(segment.claim_group_target_distance || 0)))
+        : 0,
+      claimGroupLeadText: stripMarkdownInline(String(segment.claim_group_lead_text || '')).replace(/\s+/g, ' ').trim(),
       formulaOrigin: String(segment.formula_origin || '').trim().toLowerCase(),
       anchorKind: String(segment.anchor_kind || '').trim().toLowerCase(),
       anchorText: stripMarkdownInline(String(segment.anchor_text || '')).replace(/\s+/g, ' ').trim(),
@@ -2280,6 +2492,9 @@ export function MessageList({
   generationPartial,
   generationStage,
   jumpTarget,
+  onJumpHandled,
+  trackedMessageIds,
+  onTrackedMessageActive,
   onOpenReader,
   paperGuideSourcePath,
   paperGuideSourceName,
@@ -2297,6 +2512,8 @@ export function MessageList({
   const [shelfRepairLoadingKey, setShelfRepairLoadingKey] = useState('')
   const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
   const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
+  const assistantLocatePrepCacheRef = useRef(new Map<string, AssistantLocatePrep>())
+  const assistantLocatePrepPerfRef = useRef<MessageListPrepPerfEvent | null>(null)
   const [guideDocCandidates, setGuideDocCandidates] = useState<LocateCandidate[]>([])
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
@@ -2375,7 +2592,144 @@ export function MessageList({
     } catch {
       // no-op: Web Animations may not be available in all envs.
     }
-  }, [jumpTarget, messages])
+    onJumpHandled?.(jumpTarget)
+  }, [jumpTarget, messages, onJumpHandled])
+
+  useEffect(() => {
+    if (!onTrackedMessageActive) return
+    const el = scrollRef.current
+    if (!el) return
+    const trackedIds = Array.isArray(trackedMessageIds)
+      ? trackedMessageIds.filter((id) => Number.isFinite(id))
+      : []
+    if (trackedIds.length <= 0) {
+      onTrackedMessageActive(null)
+      return
+    }
+    let syncFrameId = 0
+    let measureFrameId = 0
+    let lastReported: number | null = null
+    let lastActiveIndex = -1
+    let lastScrollTop = el.scrollTop
+    let trackedAnchors: Array<{ id: number; top: number }> = []
+    const SWITCH_HYSTERESIS_PX = 28
+
+    const transitionMargin = (leftIndex: number, rightIndex: number) => {
+      const leftTop = trackedAnchors[leftIndex]?.top ?? 0
+      const rightTop = trackedAnchors[rightIndex]?.top ?? leftTop
+      const gap = Math.max(0, rightTop - leftTop)
+      return Math.min(SWITCH_HYSTERESIS_PX, Math.max(10, gap * 0.2))
+    }
+
+    const syncActiveMessage = () => {
+      syncFrameId = 0
+      if (trackedAnchors.length <= 0) {
+        lastActiveIndex = -1
+        if (lastReported !== null) {
+          lastReported = null
+          onTrackedMessageActive(null)
+        }
+        return
+      }
+
+      const currentScrollTop = el.scrollTop
+      const anchorTop = currentScrollTop + Math.min(120, Math.max(48, el.clientHeight * 0.2))
+      let low = 0
+      let high = trackedAnchors.length - 1
+      let activeIndex = 0
+      while (low <= high) {
+        const mid = Math.floor((low + high) / 2)
+        if (trackedAnchors[mid]!.top <= anchorTop) {
+          activeIndex = mid
+          low = mid + 1
+        } else {
+          high = mid - 1
+        }
+      }
+      if (lastActiveIndex >= 0 && lastActiveIndex < trackedAnchors.length && activeIndex !== lastActiveIndex) {
+        const direction = currentScrollTop - lastScrollTop
+        if (activeIndex === lastActiveIndex + 1 && direction >= 0) {
+          const nextTop = trackedAnchors[activeIndex]?.top ?? 0
+          if (anchorTop < nextTop + transitionMargin(lastActiveIndex, activeIndex)) {
+            activeIndex = lastActiveIndex
+          }
+        } else if (activeIndex === lastActiveIndex - 1 && direction <= 0) {
+          const currentTop = trackedAnchors[lastActiveIndex]?.top ?? 0
+          if (anchorTop >= currentTop - transitionMargin(activeIndex, lastActiveIndex)) {
+            activeIndex = lastActiveIndex
+          }
+        }
+      }
+      const activeMessageId = trackedAnchors[activeIndex]?.id ?? null
+      lastScrollTop = currentScrollTop
+      lastActiveIndex = activeMessageId != null ? activeIndex : -1
+
+      if (activeMessageId !== lastReported) {
+        lastReported = activeMessageId
+        onTrackedMessageActive(activeMessageId)
+      }
+    }
+
+    const scheduleSync = () => {
+      if (syncFrameId) return
+      syncFrameId = window.requestAnimationFrame(syncActiveMessage)
+    }
+
+    const measureTrackedAnchors = () => {
+      measureFrameId = 0
+      const containerRect = el.getBoundingClientRect()
+      const currentScrollTop = el.scrollTop
+      trackedAnchors = trackedIds
+        .map((id) => {
+          const node = el.querySelector<HTMLElement>(`[data-msg-id="${id}"]`)
+          if (!node) return null
+          const rect = node.getBoundingClientRect()
+          return {
+            id,
+            top: rect.top - containerRect.top + currentScrollTop,
+          }
+        })
+        .filter((item): item is { id: number; top: number } => Boolean(item))
+        .sort((left, right) => left.top - right.top)
+      if (lastReported != null) {
+        lastActiveIndex = trackedAnchors.findIndex((item) => item.id === lastReported)
+      } else {
+        lastActiveIndex = -1
+      }
+      scheduleSync()
+    }
+
+    const scheduleMeasure = () => {
+      if (measureFrameId) return
+      measureFrameId = window.requestAnimationFrame(measureTrackedAnchors)
+    }
+
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+        scheduleMeasure()
+      })
+      : null
+
+    el.addEventListener('scroll', scheduleSync, { passive: true })
+    window.addEventListener('resize', scheduleMeasure)
+    resizeObserver?.observe(el)
+    if (el.firstElementChild instanceof HTMLElement) {
+      resizeObserver?.observe(el.firstElementChild)
+    }
+    scheduleMeasure()
+
+    return () => {
+      el.removeEventListener('scroll', scheduleSync)
+      window.removeEventListener('resize', scheduleMeasure)
+      resizeObserver?.disconnect()
+      if (syncFrameId) {
+        window.cancelAnimationFrame(syncFrameId)
+      }
+      if (measureFrameId) {
+        window.cancelAnimationFrame(measureFrameId)
+      }
+    }
+  }, [messages, onTrackedMessageActive, trackedMessageIds])
 
   useEffect(() => {
     const nextStorageKey = shelfStorageKey(activeConvId)
@@ -2802,6 +3156,294 @@ export function MessageList({
     return `Compared with current: +${diff.added} / -${diff.removed}`
   }, [selectedSavedSnapshot, shelfItems])
 
+  const guideSourcePathSet = useMemo(() => {
+    const out = new Set<string>()
+    for (const item of guideDocCandidates) {
+      const sourcePath = String(item.sourcePath || '').trim()
+      if (sourcePath) out.add(sourcePath)
+    }
+    return out
+  }, [guideDocCandidates])
+
+  const guideDocCandidatesBySourcePath = useMemo(() => {
+    const out = new Map<string, LocateCandidate[]>()
+    for (const item of guideDocCandidates) {
+      const sourcePath = String(item.sourcePath || '').trim()
+      if (!sourcePath) continue
+      const list = out.get(sourcePath) || []
+      list.push(item)
+      out.set(sourcePath, list)
+    }
+    return out
+  }, [guideDocCandidates])
+
+  const assistantLocatePrepByMsgId = useMemo(() => {
+    const nextCache = new Map<string, AssistantLocatePrep>()
+    const out = new Map<number, AssistantLocatePrep>()
+    const guideSourcePath = String(paperGuideSourcePath || '').trim()
+    const guideSourceName = String(paperGuideSourceName || '').trim()
+    const prepStartedAt = messageListPerfNow()
+    let assistantCount = 0
+    let heavyCount = 0
+    let lightCount = 0
+    let cacheHits = 0
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue
+      assistantCount += 1
+      const trace = assistantTraceByMsgId.get(message.id)
+      const bodyContent = message.rendered_body || message.rendered_content || message.content
+      const refsUserMsgId = Number(message.refs_user_msg_id || trace?.userMsgId || 0)
+      const refEntry = refsUserMsgId > 0 ? (refs[String(refsUserMsgId)] as RefEntryLite | undefined) : undefined
+      const refHits = Array.isArray(refEntry?.hits) ? refEntry.hits : []
+      const hasRawCiteDetails = Array.isArray(message.cite_details) && message.cite_details.length > 0
+      const hasProvenancePayload = Boolean(message.provenance && typeof message.provenance === 'object')
+      const shouldBuildLocatePrep = Boolean(onOpenReader) && (
+        Boolean(guideSourcePath)
+        || hasRawCiteDetails
+        || refHits.length > 0
+        || hasProvenancePayload
+      )
+      if (!shouldBuildLocatePrep) {
+        const prepKey = [
+          message.id,
+          String(message.render_cache_key || ''),
+          'light',
+          refsUserMsgId,
+        ].join('::')
+        const cached = assistantLocatePrepCacheRef.current.get(prepKey)
+        if (cached) {
+          cacheHits += 1
+          nextCache.set(prepKey, cached)
+          out.set(message.id, cached)
+          continue
+        }
+        const prep = createEmptyAssistantLocatePrep(bodyContent, refsUserMsgId)
+        lightCount += 1
+        nextCache.set(prepKey, prep)
+        out.set(message.id, prep)
+        continue
+      }
+      const citeDetails = Array.isArray(message.cite_details)
+        ? message.cite_details
+          .map(normalizeCiteDetail)
+          .filter((detail): detail is CiteDetail => Boolean(detail))
+          .map((detail) => ({
+            ...detail,
+            traceConvId: String(activeConvId || ''),
+            traceAssistantMsgId: message.id,
+            traceAssistantOrder: Number(trace?.answerOrder || 0),
+            traceUserMsgId: Number(trace?.userMsgId || 0),
+          }))
+        : []
+      const uniqueSourcePaths = Array.from(
+        new Set(
+          citeDetails
+            .map((detail) => String(detail.sourcePath || '').trim())
+            .filter(Boolean),
+        ),
+      )
+      const guideDocAvailable = Boolean(guideSourcePath && guideSourcePathSet.has(guideSourcePath))
+      const locateSourcePath = (
+        guideSourcePath && guideDocAvailable
+          ? guideSourcePath
+          : (uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : guideSourcePath)
+      )
+      const locateSourceName = (
+        (guideSourcePath && guideDocAvailable ? guideSourceName : '')
+        || (citeDetails.find((detail) => String(detail.sourcePath || '').trim() === locateSourcePath)?.sourceName || '')
+        || guideSourceName
+      )
+      const refSig = `${refsUserMsgId}:${String((refEntry as { prompt_sig?: string } | undefined)?.prompt_sig || '')}:${Number((refEntry as { updated_at?: number } | undefined)?.updated_at || 0)}:${refHits.length}`
+      const prepKey = [
+        message.id,
+        String(message.render_cache_key || ''),
+        guideSourcePath,
+        locateSourcePath,
+        refSig,
+      ].join('::')
+      const cached = assistantLocatePrepCacheRef.current.get(prepKey)
+      if (cached) {
+        cacheHits += 1
+        nextCache.set(prepKey, cached)
+        out.set(message.id, cached)
+        continue
+      }
+
+      const refsLocateCandidatesAll = buildRefsLocateCandidatesAll(refHits)
+      const guideLocateCandidates = guideSourcePath
+        ? (guideDocCandidatesBySourcePath.get(guideSourcePath) || [])
+        : []
+      const refsScopedCandidates = guideSourcePath
+        ? refsLocateCandidatesAll.filter((item) => item.sourcePath === guideSourcePath)
+        : refsLocateCandidatesAll
+      const messageProvenance = (message.provenance && typeof message.provenance === 'object')
+        ? message.provenance as Record<string, unknown>
+        : null
+      const provenanceSourcePath = String(messageProvenance?.source_path || '').trim()
+      const provenanceSourceName = String(messageProvenance?.source_name || '').trim()
+      const provenanceBlockMap = (messageProvenance?.block_map && typeof messageProvenance.block_map === 'object')
+        ? messageProvenance.block_map as Record<string, Record<string, unknown>>
+        : {}
+      const provenanceDirectSegments = Array.isArray(messageProvenance?.segments)
+        ? messageProvenance.segments.filter((segment) => {
+          if (!segment || typeof segment !== 'object') return false
+          const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
+          const locatePolicy = String(segment.locate_policy || '').trim().toLowerCase()
+          const evidenceIds = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
+          return evidenceMode === 'direct' && locatePolicy !== 'hidden' && evidenceIds.length > 0
+        }) as Array<Record<string, unknown>>
+        : []
+      const hasDirectProvenance = Boolean(provenanceSourcePath) && provenanceDirectSegments.length > 0
+      const hasStructuredProvenance = Boolean(
+        provenanceSourcePath
+        && Array.isArray(messageProvenance?.segments),
+      )
+      const effectiveGuideSourcePath = String(
+        guideSourcePath
+        || provenanceSourcePath
+        || locateSourcePath
+        || '',
+      ).trim()
+      const strictProvenanceLocate = Boolean(effectiveGuideSourcePath)
+      const structuredLocateButtonCap = 5
+      const provenanceLocateEntries = buildStructuredProvenanceLocateEntries(
+        messageProvenance,
+        {
+          guideSourcePath: effectiveGuideSourcePath,
+          fallbackSourceName: locateSourceName,
+          maxEntries: structuredLocateButtonCap,
+          minConfidence: 0.62,
+        },
+      )
+      const structuredProvenanceSegmentsAll = messageProvenance
+        ? listStructuredProvenanceSegments(messageProvenance)
+        : []
+      const provenanceStrictIdentityReady = Boolean(messageProvenance?.strict_identity_ready)
+      const hasStrictMustLocateEntries = provenanceLocateEntries.some((entry) => Boolean(entry.mustLocate || entry.locatePolicy === 'required'))
+      const strictStructuredLocateOnly = Boolean(
+        strictProvenanceLocate
+        && hasStructuredProvenance
+        && provenanceStrictIdentityReady
+        && hasStrictMustLocateEntries,
+      )
+      const strictStructuredInlineLocate = Boolean(strictStructuredLocateOnly)
+      const provenanceMappingMode = String(messageProvenance?.mapping_mode || '').trim().toLowerCase()
+      const provenanceLlmCallsRaw = Number(messageProvenance?.llm_rerank_calls || 0)
+      const provenanceLlmCalls = Number.isFinite(provenanceLlmCallsRaw) && provenanceLlmCallsRaw > 0
+        ? Math.floor(provenanceLlmCallsRaw)
+        : 0
+      const provenanceModeLabel = (() => {
+        if (!strictStructuredLocateOnly) return ''
+        if (provenanceMappingMode === 'llm_refined') {
+          if (provenanceLlmCalls > 0) return `\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee\uff08${provenanceLlmCalls} \u6b21\uff09`
+          return '\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee'
+        }
+        if (provenanceMappingMode === 'fast') return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u5feb\u901f\u6620\u5c04'
+        if (hasStructuredProvenance) return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u7ed3\u6784\u5316\u6620\u5c04'
+        return ''
+      })()
+      const structuredRenderSlotMap = buildStructuredRenderLocateSlotMap(
+        String(bodyContent || ''),
+        messageProvenance,
+        provenanceLocateEntries,
+      )
+      const structuredLocateOrderBySegmentId = (() => {
+        const map = new Map<string, number>()
+        for (const slot of structuredRenderSlotMap.values()) {
+          const segmentId = String(slot.entry.segmentId || '').trim()
+          if (!segmentId || map.has(segmentId)) continue
+          map.set(segmentId, Number(slot.order || 0))
+        }
+        return map
+      })()
+      const allowedStructuredRenderOrders = (() => {
+        const ordered = Array.from(structuredRenderSlotMap.values()).sort((a, b) => a.order - b.order)
+        const allowed = new Set<number>()
+        let optionalCount = 0
+        for (const slot of ordered) {
+          if (slot.entry.mustLocate || slot.entry.locatePolicy === 'required') {
+            allowed.add(slot.order)
+            continue
+          }
+          if (optionalCount >= structuredLocateButtonCap) continue
+          allowed.add(slot.order)
+          optionalCount += 1
+        }
+        return allowed
+      })()
+      const locateCandidates = (() => {
+        if (guideLocateCandidates.length > 0) return [...guideLocateCandidates, ...refsScopedCandidates]
+        if (refsScopedCandidates.length > 0) return refsScopedCandidates
+        if (refsLocateCandidatesAll.length > 0) return refsLocateCandidatesAll
+        if (guideSourcePath) return guideDocCandidates
+        return []
+      })()
+
+      const prep: AssistantLocatePrep = {
+        bodyContent,
+        refsUserMsgId,
+        locateSourcePath,
+        locateSourceName,
+        refsLocateCandidatesAll,
+        guideLocateCandidates,
+        refsScopedCandidates,
+        messageProvenance,
+        provenanceSourcePath,
+        provenanceSourceName,
+        provenanceBlockMap,
+        provenanceDirectSegments,
+        hasDirectProvenance,
+        hasStructuredProvenance,
+        effectiveGuideSourcePath,
+        strictProvenanceLocate,
+        structuredLocateButtonCap,
+        provenanceLocateEntries,
+        structuredProvenanceSegmentsAll,
+        provenanceStrictIdentityReady,
+        hasStrictMustLocateEntries,
+        strictStructuredLocateOnly,
+        strictStructuredInlineLocate,
+        provenanceModeLabel,
+        structuredRenderSlotMap,
+        structuredLocateOrderBySegmentId,
+        allowedStructuredRenderOrders,
+        locateCandidates,
+      }
+      heavyCount += 1
+      nextCache.set(prepKey, prep)
+      out.set(message.id, prep)
+    }
+    assistantLocatePrepCacheRef.current = nextCache
+    assistantLocatePrepPerfRef.current = {
+      ts: Date.now(),
+      convId: String(activeConvId || ''),
+      messageCount: messages.length,
+      assistantCount,
+      heavyCount,
+      lightCount,
+      cacheHits,
+      durationMs: Number((messageListPerfNow() - prepStartedAt).toFixed(2)),
+    }
+    return out
+  }, [
+    activeConvId,
+    assistantTraceByMsgId,
+    guideDocCandidates,
+    guideDocCandidatesBySourcePath,
+    guideSourcePathSet,
+    messages,
+    onOpenReader,
+    paperGuideSourceName,
+    paperGuideSourcePath,
+    refs,
+  ])
+
+  useEffect(() => {
+    const perf = assistantLocatePrepPerfRef.current
+    if (!perf) return
+    pushMessageListPrepPerf(perf)
+  }, [activeConvId, assistantLocatePrepByMsgId])
+
   const saveShelfSnapshot = () => {
     const currentItems = dedupeShelfItems(shelfItems).slice(0, SHELF_MAX_ITEMS)
     if (currentItems.length <= 0) {
@@ -2886,250 +3528,33 @@ export function MessageList({
             const imageAttachments = imageAttachmentsOf(message)
             const showUserText = !(isUser && imageAttachments.length > 0 && isImageOnlyPlaceholder(message.content))
             const isImageOnlyUserMessage = isUser && imageAttachments.length > 0 && !showUserText
-            const bodyContent = message.rendered_body || message.rendered_content || message.content
-            const refsUserMsgId = Number(message.refs_user_msg_id || trace?.userMsgId || 0)
-            const refEntry = refsUserMsgId > 0 ? (refs[String(refsUserMsgId)] as RefEntryLite | undefined) : undefined
-            const refHits = Array.isArray(refEntry?.hits) ? refEntry.hits : []
-            const uniqueSourcePaths = Array.from(
-              new Set(
-                citeDetails
-                  .map((detail) => String(detail.sourcePath || '').trim())
-                  .filter(Boolean),
-              ),
-            )
+            const prep = !isUser ? assistantLocatePrepByMsgId.get(message.id) : undefined
+            const bodyContent = prep?.bodyContent || message.rendered_body || message.rendered_content || message.content
             const guideSourcePath = String(paperGuideSourcePath || '').trim()
-            const guideDocAvailable = Boolean(
-              guideSourcePath
-              && guideDocCandidates.some((item) => String(item.sourcePath || '').trim() === guideSourcePath),
+            const locateSourceName = prep?.locateSourceName || String(paperGuideSourceName || '').trim()
+            const messageProvenance = prep?.messageProvenance || (
+              message.provenance && typeof message.provenance === 'object'
+                ? message.provenance as Record<string, unknown>
+                : null
             )
-            const locateSourcePath = (
-              guideSourcePath && guideDocAvailable
-                ? guideSourcePath
-                : (uniqueSourcePaths.length === 1 ? uniqueSourcePaths[0] : guideSourcePath)
-            )
-            const locateSourceName = (
-              (guideSourcePath && guideDocAvailable ? String(paperGuideSourceName || '').trim() : '')
-              || (citeDetails.find((detail) => String(detail.sourcePath || '').trim() === locateSourcePath)?.sourceName || '')
-              || String(paperGuideSourceName || '').trim()
-            )
-            const refsLocateCandidatesAll: LocateCandidate[] = (() => {
-              const out: LocateCandidate[] = []
-              const seen = new Set<string>()
-              const push = (candidate: LocateCandidate | null) => {
-                if (!candidate) return
-                if (out.length >= REF_LOCATE_CANDIDATE_LIMIT) return
-                const sourcePath = String(candidate.sourcePath || '').trim()
-                const matchText = String(candidate.matchText || '').trim()
-                if (!sourcePath || !matchText) return
-                const key = `${normalizeLocateText(sourcePath)}::${normalizeLocateText(candidate.headingPath || '')}::${normalizeLocateText(matchText).slice(0, 220)}`
-                if (seen.has(key)) return
-                seen.add(key)
-                out.push(candidate)
-              }
-
-              for (const hit of refHits) {
-                const ui = hit?.ui_meta || {}
-                const meta = hit?.meta || {}
-                const sourcePath = String(ui.source_path || meta.source_path || '').trim()
-                if (!sourcePath) continue
-                const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
-
-                const headingCandidates = new Set<string>([
-                  String(ui.heading_path || '').trim(),
-                  String(ui.section_label || '').trim(),
-                  String(ui.subsection_label || '').trim(),
-                  String(meta.ref_best_heading_path || '').trim(),
-                  String(meta.heading_path || '').trim(),
-                ].filter(Boolean))
-                const anchorKind = String(ui.anchor_target_kind || '').trim().toLowerCase()
-                const anchorNum = Number(ui.anchor_target_number || 0)
-                for (const heading of coerceStringArray(meta.ref_headings, 8, 160)) {
-                  headingCandidates.add(String(heading || '').trim())
-                }
-
-                const refLocs = Array.isArray(meta.ref_locs) ? meta.ref_locs : []
-                for (const loc0 of refLocs.slice(0, 10)) {
-                  const loc = (loc0 || {}) as Record<string, unknown>
-                  const headingPath = String(loc.heading_path || loc.heading || '').trim()
-                  if (headingPath) headingCandidates.add(headingPath)
-                  const locText = pickFirstRefText(loc)
-                  const locAnchorId = String(loc.anchor_id || loc.anchorId || '').trim()
-                  const locAnchorKind = String(loc.anchor_kind || loc.kind || anchorKind || '').trim().toLowerCase()
-                  const locAnchorNumber = Number(loc.anchor_number || loc.number || anchorNum || 0)
-                  if (locText) {
-                    push({
-                      sourcePath,
-                      sourceName,
-                      headingPath: headingPath || String(ui.heading_path || '').trim(),
-                      focusSnippet: locText,
-                      matchText: [headingPath, locText].filter(Boolean).join('\n'),
-                      sourceType: 'refs',
-                      anchorId: locAnchorId || undefined,
-                      anchorKind: locAnchorKind || undefined,
-                      anchorNumber: Number.isFinite(locAnchorNumber) && locAnchorNumber > 0 ? Math.floor(locAnchorNumber) : undefined,
-                    })
-                  }
-                }
-
-                const snippetSeeds = [
-                  ...coerceStringArray(ui.summary_line, 1, 360),
-                  ...coerceStringArray(ui.why_line, 1, 360),
-                  ...coerceStringArray(meta.ref_show_snippets, 4, 2600),
-                  ...coerceStringArray(meta.ref_snippets, 4, 2600),
-                  ...coerceStringArray(meta.ref_overview_snippets, 2, 2600),
-                ]
-                if (anchorKind === 'equation' && Number.isFinite(anchorNum) && anchorNum > 0) {
-                  snippetSeeds.push(
-                    `equation ${anchorNum}`,
-                    `eq ${anchorNum}`,
-                    `闂傚倸鍊搁崐鐑芥嚄閸洍鈧箓宕煎婵堟嚀椤繄鎹勯搹璇℃Ф婵犵數鍋涘Λ娆撳垂閸洩缍?{anchorNum}`,
-                    `(${anchorNum})`,
-                  )
-                }
-                const headingFallback = Array.from(headingCandidates).find(Boolean) || ''
-                for (const seed of snippetSeeds) {
-                  const pieces = buildGuideLocateCandidates(seed, sourcePath, sourceName, 'refs')
-                  if (pieces.length > 0) {
-                    for (const piece of pieces.slice(0, 40)) push(piece)
-                    continue
-                  }
-                  push({
-                    sourcePath,
-                    sourceName,
-                    headingPath: headingFallback,
-                    focusSnippet: seed,
-                    matchText: [headingFallback, seed].filter(Boolean).join('\n'),
-                    sourceType: 'refs',
-                    anchorKind: anchorKind || undefined,
-                    anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
-                  })
-                }
-
-                for (const headingPath of headingCandidates) {
-                  push({
-                    sourcePath,
-                    sourceName,
-                    headingPath,
-                    focusSnippet: headingPath,
-                    matchText: headingPath,
-                    sourceType: 'refs',
-                    anchorKind: anchorKind || undefined,
-                    anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
-                  })
-                }
-              }
-              return out
-            })()
-            const guideLocateCandidates = guideSourcePath
-              ? guideDocCandidates.filter((item) => item.sourcePath === guideSourcePath)
-              : []
-            const refsScopedCandidates = guideSourcePath
-              ? refsLocateCandidatesAll.filter((item) => item.sourcePath === guideSourcePath)
-              : refsLocateCandidatesAll
-            const messageProvenance = (message.provenance && typeof message.provenance === 'object')
-              ? message.provenance
-              : null
-            const provenanceSourcePath = String(messageProvenance?.source_path || '').trim()
-            const provenanceSourceName = String(messageProvenance?.source_name || '').trim()
-            const provenanceBlockMap = (messageProvenance?.block_map && typeof messageProvenance.block_map === 'object')
-              ? messageProvenance.block_map
-              : {}
-            const provenanceDirectSegments = Array.isArray(messageProvenance?.segments)
-              ? messageProvenance.segments.filter((segment) => {
-                if (!segment || typeof segment !== 'object') return false
-                const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
-                const locatePolicy = String(segment.locate_policy || '').trim().toLowerCase()
-                const evidenceIds = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
-                return evidenceMode === 'direct' && locatePolicy !== 'hidden' && evidenceIds.length > 0
-              })
-              : []
-            const hasDirectProvenance = Boolean(provenanceSourcePath) && provenanceDirectSegments.length > 0
-            const hasStructuredProvenance = Boolean(
-              provenanceSourcePath
-              && Array.isArray(messageProvenance?.segments),
-            )
-            const effectiveGuideSourcePath = String(
-              guideSourcePath
-              || provenanceSourcePath
-              || locateSourcePath
-              || '',
-            ).trim()
-            const strictProvenanceLocate = Boolean(effectiveGuideSourcePath)
-            const structuredLocateButtonCap = 5
-            const provenanceLocateEntries = buildStructuredProvenanceLocateEntries(
-              (messageProvenance && typeof messageProvenance === 'object')
-                ? messageProvenance as Record<string, unknown>
-                : null,
-              {
-                guideSourcePath: effectiveGuideSourcePath,
-                fallbackSourceName: locateSourceName,
-                maxEntries: structuredLocateButtonCap,
-                minConfidence: 0.62,
-              },
-            )
-            const structuredProvenanceSegmentsAll = (
-              messageProvenance && typeof messageProvenance === 'object'
-            )
-              ? listStructuredProvenanceSegments(messageProvenance as Record<string, unknown>)
-              : []
-            const provenanceStrictIdentityReady = Boolean(messageProvenance?.strict_identity_ready)
-            const hasStrictMustLocateEntries = provenanceLocateEntries.some((entry) => Boolean(entry.mustLocate || entry.locatePolicy === 'required'))
-            const strictStructuredLocateOnly = Boolean(
-              strictProvenanceLocate
-              && hasStructuredProvenance
-              && provenanceStrictIdentityReady
-              && hasStrictMustLocateEntries,
-            )
-            const strictStructuredInlineLocate = Boolean(
-              strictStructuredLocateOnly,
-            )
-            const provenanceMappingMode = String(messageProvenance?.mapping_mode || '').trim().toLowerCase()
-            const provenanceLlmCallsRaw = Number(messageProvenance?.llm_rerank_calls || 0)
-            const provenanceLlmCalls = Number.isFinite(provenanceLlmCallsRaw) && provenanceLlmCallsRaw > 0
-              ? Math.floor(provenanceLlmCallsRaw)
-              : 0
-            const provenanceModeLabel = (() => {
-              if (!strictStructuredLocateOnly) return ''
-              if (provenanceMappingMode === 'llm_refined') {
-                if (provenanceLlmCalls > 0) return `\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee\uff08${provenanceLlmCalls} \u6b21\uff09`
-                return '\u5b9a\u4f4d\u6620\u5c04\uff1aLLM\u7cbe\u4fee'
-              }
-              if (provenanceMappingMode === 'fast') return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u5feb\u901f\u6620\u5c04'
-              if (hasStructuredProvenance) return '\u5b9a\u4f4d\u6620\u5c04\uff1a\u7ed3\u6784\u5316\u6620\u5c04'
-              return ''
-            })()
-            const structuredRenderSlotMap = buildStructuredRenderLocateSlotMap(
-              String(bodyContent || ''),
-              (messageProvenance && typeof messageProvenance === 'object')
-                ? messageProvenance as Record<string, unknown>
-                : null,
-              provenanceLocateEntries,
-            )
-            const structuredLocateOrderBySegmentId = (() => {
-              const out = new Map<string, number>()
-              for (const slot of structuredRenderSlotMap.values()) {
-                const segmentId = String(slot.entry.segmentId || '').trim()
-                if (!segmentId || out.has(segmentId)) continue
-                out.set(segmentId, Number(slot.order || 0))
-              }
-              return out
-            })()
-            const allowedStructuredRenderOrders = (() => {
-              const ordered = Array.from(structuredRenderSlotMap.values())
-                .sort((a, b) => a.order - b.order)
-              const allowed = new Set<number>()
-              let optionalCount = 0
-              for (const slot of ordered) {
-                if (slot.entry.mustLocate || slot.entry.locatePolicy === 'required') {
-                  allowed.add(slot.order)
-                  continue
-                }
-                if (optionalCount >= structuredLocateButtonCap) continue
-                allowed.add(slot.order)
-                optionalCount += 1
-              }
-              return allowed
-            })()
+            const provenanceSourcePath = prep?.provenanceSourcePath || ''
+            const provenanceSourceName = prep?.provenanceSourceName || ''
+            const provenanceBlockMap = prep?.provenanceBlockMap || {} as Record<string, Record<string, unknown>>
+            const provenanceDirectSegments = prep?.provenanceDirectSegments || []
+            const hasDirectProvenance = prep?.hasDirectProvenance || false
+            const hasStructuredProvenance = prep?.hasStructuredProvenance || false
+            const effectiveGuideSourcePath = prep?.effectiveGuideSourcePath || guideSourcePath
+            const strictProvenanceLocate = prep?.strictProvenanceLocate || false
+            const provenanceLocateEntries = prep?.provenanceLocateEntries || []
+            const structuredProvenanceSegmentsAll = prep?.structuredProvenanceSegmentsAll || []
+            const provenanceStrictIdentityReady = prep?.provenanceStrictIdentityReady || false
+            const hasStrictMustLocateEntries = prep?.hasStrictMustLocateEntries || false
+            const strictStructuredLocateOnly = prep?.strictStructuredLocateOnly || false
+            const strictStructuredInlineLocate = prep?.strictStructuredInlineLocate || false
+            const provenanceModeLabel = prep?.provenanceModeLabel || ''
+            const structuredRenderSlotMap = prep?.structuredRenderSlotMap || new Map<number, StructuredRenderLocateSlot>()
+            const structuredLocateOrderBySegmentId = prep?.structuredLocateOrderBySegmentId || new Map<string, number>()
+            const allowedStructuredRenderOrders = prep?.allowedStructuredRenderOrders || new Set<number>()
             const resolveStructuredFigureEntry = (snippet: string): ProvenanceLocateEntry | null => {
               const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
               const figureNumbers = extractFigureNumbersFromText(raw)
@@ -3239,19 +3664,32 @@ export function MessageList({
               }
               return rawBestScore >= 0.26 ? rawBest : null
             }
-            const resolveStructuredBlockquoteEntry = (snippet: string): StructuredLocateResolution | null => {
+            const resolveStructuredQuoteEntry = (
+              snippet: string,
+              targetKindInput?: string,
+            ): StructuredLocateResolution | null => {
               const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
+              const targetKind = normalizeStructuredLocateKind(String(targetKindInput || ''))
               if (!raw) return null
               const quoteEntries = provenanceLocateEntries.filter((entry) => {
                 const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
                 const claimType = String(entry.claimType || '').trim().toLowerCase()
-                return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
+                if (targetKind === 'quote') {
+                  return anchorKind === 'quote' || claimType === 'quote_claim'
+                }
+                if (targetKind === 'blockquote') {
+                  return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
+                }
+                return anchorKind === 'quote' || anchorKind === 'blockquote' || claimType === 'quote_claim' || claimType === 'blockquote_claim'
               })
               if (quoteEntries.length <= 0) return null
 
               let best: ProvenanceLocateEntry | null = null
               let bestScore = Number.NEGATIVE_INFINITY
               for (const entry of quoteEntries) {
+                const anchorKind = normalizeStructuredLocateKind(String(entry.anchorKind || ''))
+                const compat = scoreStructuredAnchorCompatibility(targetKind || anchorKind, entry)
+                if (targetKind && compat <= -0.9) continue
                 let score = Math.max(
                   scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
                   overlapScore(raw, entry.anchorText || entry.segmentText),
@@ -3265,12 +3703,17 @@ export function MessageList({
                 if (entry.mustLocate || entry.locatePolicy === 'required') {
                   score += 0.08
                 }
+                if (targetKind && anchorKind === targetKind) {
+                  score += 0.16
+                }
+                score += Math.max(-0.4, compat)
                 if (score > bestScore) {
                   best = entry
                   bestScore = score
                 }
               }
-              if (!best || bestScore < 0.44) return null
+              const floor = targetKind === 'quote' ? 0.46 : 0.44
+              if (!best || bestScore < floor) return null
               const order = Number(structuredLocateOrderBySegmentId.get(String(best.segmentId || '').trim()) || 0)
               return {
                 entry: best,
@@ -3278,16 +3721,41 @@ export function MessageList({
                 fallback: !(order > 0),
               }
             }
+            const isStrictStructuredTargetCompatible = (
+              entry: ProvenanceLocateEntry | null | undefined,
+              targetKindInput?: string,
+            ): boolean => {
+              const targetKind = normalizeStructuredLocateKind(String(targetKindInput || ''))
+              if (!entry) return false
+              if (!targetKind) return true
+              const claimType = String(entry.claimType || '').trim().toLowerCase()
+              const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
+              if (targetKind === 'quote') {
+                return anchorKind === 'quote' || claimType === 'quote_claim'
+              }
+              if (targetKind === 'blockquote') {
+                return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
+              }
+              if (targetKind === 'figure') {
+                return anchorKind === 'figure' || claimType === 'figure_claim'
+              }
+              if (targetKind === 'equation') {
+                return anchorKind === 'equation' && claimType === 'formula_claim'
+              }
+              return true
+            }
             const resolveStructuredInlineResolution = (
               snippet: string,
               meta?: LocateRenderMetaLite,
             ): StructuredLocateResolution | null => {
               if (!strictStructuredInlineLocate) return null
               const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-              const quoteEntry = targetKind === 'blockquote' ? resolveStructuredBlockquoteEntry(snippet) : null
+              const quoteEntry = (targetKind === 'quote' || targetKind === 'blockquote')
+                ? resolveStructuredQuoteEntry(snippet, targetKind)
+                : null
               if (quoteEntry) return quoteEntry
               const slot = resolveStructuredRenderLocateSlot(snippet, meta, structuredRenderSlotMap)
-              if (slot) {
+              if (slot && isStrictStructuredTargetCompatible(slot.entry, targetKind)) {
                 return {
                   entry: slot.entry,
                   order: slot.order,
@@ -3298,7 +3766,7 @@ export function MessageList({
               const fallbackEntry = resolveStructuredFallbackLocateEntry(snippet, meta, provenanceLocateEntries)
               const figureEntry = targetKind === 'figure' ? resolveStructuredFigureEntry(snippet) : null
               const finalEntry = figureEntry || fallbackEntry
-              if (!finalEntry) return null
+              if (!finalEntry || !isStrictStructuredTargetCompatible(finalEntry, targetKind)) return null
               return {
                 entry: finalEntry,
                 order: 10000 + Math.max(0, provenanceLocateEntries.findIndex((item) => item.segmentId === finalEntry.segmentId)),
@@ -3352,7 +3820,7 @@ export function MessageList({
                   if (!formulaQuery && blockKind === 'equation' && evidenceIds.length > 1) continue
                   const blockText = String(block.text || '').trim()
                   if (quoteSpans.length > 0) {
-                    const qBlock = quoteMatchStats(quoteSpans, blockText, segment.text || '', block.heading_path || '')
+                    const qBlock = quoteMatchStats(quoteSpans, blockText, String(segment.text || ''), String(block.heading_path || ''))
                     if (qBlock.hits <= 0 && qBlock.score < 0.85) continue
                   }
                   const key0 = `${provenanceSourcePath}::${blockId}`
@@ -3379,13 +3847,13 @@ export function MessageList({
               }
               return out
             }
-            const locateCandidates = (() => {
-              if (guideLocateCandidates.length > 0) return [...guideLocateCandidates, ...refsScopedCandidates]
-              if (refsScopedCandidates.length > 0) return refsScopedCandidates
-              if (refsLocateCandidatesAll.length > 0) return refsLocateCandidatesAll
-              if (guideSourcePath) return guideDocCandidates
-              return []
-            })()
+            const locateCandidates = prep?.locateCandidates || (guideSourcePath ? guideDocCandidates : [])
+            const enableLocateUi = Boolean(onOpenReader) && (
+              strictStructuredLocateOnly
+              || strictStructuredInlineLocate
+              || hasDirectProvenance
+              || locateCandidates.length > 0
+            )
             const resolveCache = new Map<string, LocateCandidate[]>()
             const usedCount = new Map<string, number>()
             const resolveLocateCandidates = (snippet: string, limit = 4) => {
@@ -3607,6 +4075,7 @@ export function MessageList({
                 anchorKind: picked.anchorKind,
                 anchorNumber: picked.anchorNumber,
                 strictLocate: Boolean(opts?.strictLocate),
+                locateMode: 'heuristic',
                 relatedBlockIds: Array.isArray(opts?.relatedBlockIds)
                   ? opts.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
                   : undefined,
@@ -3619,19 +4088,115 @@ export function MessageList({
                   anchorKind: item.anchorKind,
                   anchorNumber: item.anchorNumber,
                 })),
+                evidenceAlternatives: pickedList.map((item) => ({
+                  headingPath: item.headingPath,
+                  snippet: item.focusSnippet || snippet,
+                  highlightSnippet: highlightSnippet || item.focusSnippet || snippet,
+                  blockId: item.blockId,
+                  anchorId: item.anchorId,
+                  anchorKind: item.anchorKind,
+                  anchorNumber: item.anchorNumber,
+                })),
+                visibleAlternatives: pickedList.map((item) => ({
+                  headingPath: item.headingPath,
+                  snippet: item.focusSnippet || snippet,
+                  highlightSnippet: highlightSnippet || item.focusSnippet || snippet,
+                  blockId: item.blockId,
+                  anchorId: item.anchorId,
+                  anchorKind: item.anchorKind,
+                  anchorNumber: item.anchorNumber,
+                })),
                 initialAltIndex: 0,
               })
             }
             const openReaderByStructuredEntry = (entry: ProvenanceLocateEntry, snippet: string) => {
+              if (!onOpenReader) return
               const queryRaw = stripProvenanceNoise(
                 stripMarkdownInline(String(entry.evidenceQuote || snippet || entry.segmentText || entry.label || '')),
               ).trim()
-              const ranked = (entry.alternatives || []).filter(Boolean)
-              if (ranked.length <= 0) return
-              openReaderByCandidates(ranked, queryRaw || snippet, {
+              const primary = entry.primary
+              if (!primary) return
+              const structuredSnippet = String(queryRaw || primary.focusSnippet || snippet).trim()
+              const structuredHighlight = String(
+                entry.evidenceQuote
+                || queryRaw
+                || primary.focusSnippet
+                || snippet,
+              ).trim()
+              const structuredAnchorKind = String(entry.anchorKind || primary.anchorKind || '').trim()
+              const structuredAnchorNumber = Number.isFinite(Number(entry.equationNumber || primary.anchorNumber || 0))
+                ? Math.floor(Number(entry.equationNumber || primary.anchorNumber || 0))
+                : undefined
+              const groupDistance = Number.isFinite(Number(entry.groupDistance || 0))
+                ? Math.max(0, Math.floor(Number(entry.groupDistance || 0)))
+                : 0
+              const locateTarget: ReaderLocateTarget = {
+                segmentId: String(entry.segmentId || '').trim() || undefined,
+                sourceSegmentId: String(entry.sourceSegmentId || '').trim() || undefined,
+                headingPath: String(primary.headingPath || '').trim() || undefined,
+                snippet: structuredSnippet || undefined,
+                highlightSnippet: structuredHighlight || undefined,
+                evidenceQuote: String(entry.evidenceQuote || '').trim() || undefined,
+                anchorText: String(entry.anchorText || '').trim() || undefined,
+                blockId: String(primary.blockId || '').trim() || undefined,
+                anchorId: String(primary.anchorId || '').trim() || undefined,
+                anchorKind: structuredAnchorKind || undefined,
+                anchorNumber: structuredAnchorNumber,
+                claimType: String(entry.claimType || '').trim() || undefined,
+                locatePolicy: String(entry.locatePolicy || '').trim() || undefined,
+                locateSurfacePolicy: String(entry.locateSurfacePolicy || '').trim() || undefined,
+                snippetAliases: Array.isArray(entry.snippetAliases)
+                  ? entry.snippetAliases.map((item) => String(item || '').trim()).filter(Boolean)
+                  : undefined,
+                relatedBlockIds: Array.isArray(entry.relatedBlockIds)
+                  ? entry.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
+                  : undefined,
+              }
+              const claimGroup: ReaderLocateClaimGroup | undefined = (
+                entry.claimGroupId
+                || entry.claimGroupKind
+                || entry.groupLeadText
+                || groupDistance > 0
+              )
+                ? {
+                  id: String(entry.claimGroupId || '').trim() || undefined,
+                  kind: String(entry.claimGroupKind || '').trim() || undefined,
+                  leadText: String(entry.groupLeadText || '').trim() || undefined,
+                  distance: groupDistance > 0 ? groupDistance : undefined,
+                }
+                : undefined
+              const fallbackAlternatives: ReaderLocateCandidate[] = (entry.alternatives || [])
+                .filter((item) => Boolean(item) && item !== primary)
+                .map((item) => ({
+                  headingPath: String(item.headingPath || '').trim() || undefined,
+                  snippet: String(item.focusSnippet || structuredSnippet).trim() || undefined,
+                  highlightSnippet: structuredHighlight || String(item.focusSnippet || structuredSnippet).trim() || undefined,
+                  blockId: String(item.blockId || '').trim() || undefined,
+                  anchorId: String(item.anchorId || '').trim() || undefined,
+                  anchorKind: String(item.anchorKind || structuredAnchorKind).trim() || undefined,
+                  anchorNumber: Number.isFinite(Number(item.anchorNumber || structuredAnchorNumber || 0))
+                    ? Math.floor(Number(item.anchorNumber || structuredAnchorNumber || 0))
+                    : undefined,
+                }))
+              onOpenReader({
+                sourcePath: primary.sourcePath,
+                sourceName: primary.sourceName,
+                headingPath: String(primary.headingPath || '').trim() || undefined,
+                snippet: structuredSnippet || undefined,
+                highlightSnippet: structuredHighlight || undefined,
+                blockId: String(primary.blockId || '').trim() || undefined,
+                anchorId: String(primary.anchorId || '').trim() || undefined,
+                relatedBlockIds: locateTarget.relatedBlockIds,
+                anchorKind: structuredAnchorKind || undefined,
+                anchorNumber: structuredAnchorNumber,
                 strictLocate: true,
-                highlightSnippet: queryRaw || snippet,
-                relatedBlockIds: entry.relatedBlockIds,
+                locateMode: 'structured',
+                locateTarget,
+                claimGroup,
+                alternatives: fallbackAlternatives.length > 0 ? fallbackAlternatives : undefined,
+                visibleAlternatives: undefined,
+                evidenceAlternatives: undefined,
+                initialAltIndex: 0,
               })
             }
             const bubbleClass = isUser
@@ -3713,18 +4278,19 @@ export function MessageList({
                         content={bodyContent}
                         citeDetails={citeDetails}
                         onCitationClick={openCitation}
-                        inlineLocateTokenPolicy={guideSourcePath ? { quote: false, figure_ref: true } : undefined}
-                        inlineTextLocateEnabled={!guideSourcePath}
-                        locateSurfacePolicy={guideSourcePath
+                        inlineLocateTokenPolicy={enableLocateUi && guideSourcePath ? { quote: true, figure_ref: true } : undefined}
+                        inlineTextLocateEnabled={enableLocateUi ? (!guideSourcePath || strictStructuredInlineLocate) : false}
+                        locateSurfacePolicy={enableLocateUi && guideSourcePath
                           ? {
                             paragraph: false,
                             list_item: false,
+                            quote: true,
                             blockquote: true,
                             equation: true,
                             figure: true,
                           }
                           : undefined}
-                        canLocateSnippet={(snippet, meta) => {
+                        canLocateSnippet={enableLocateUi ? ((snippet, meta) => {
                           if (strictStructuredLocateOnly) {
                             if (!strictStructuredInlineLocate) return false
                             const resolved = resolveStructuredInlineResolution(snippet, meta)
@@ -3733,14 +4299,20 @@ export function MessageList({
                             const order = Number(resolved?.order || 0)
                             if (!resolved?.fallback && !allowedStructuredRenderOrders.has(order)) return false
                             const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
-                            if (!['blockquote', 'equation', 'figure'].includes(targetKind)) {
+                            if (!['quote', 'blockquote', 'equation', 'figure'].includes(targetKind)) {
+                              return false
+                            }
+                            if (!isStrictStructuredTargetCompatible(entry, targetKind)) {
                               return false
                             }
                             const claimType = String(entry.claimType || '').trim().toLowerCase()
                             const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
                             const formulaOrigin = String(entry.formulaOrigin || '').trim().toLowerCase()
                             const locateSurfacePolicy = String(entry.locateSurfacePolicy || '').trim().toLowerCase()
-                            if ((anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim') && targetKind !== 'blockquote') {
+                            if ((anchorKind === 'quote' || claimType === 'quote_claim') && targetKind !== 'quote') {
+                              return false
+                            }
+                            if ((anchorKind === 'blockquote' || claimType === 'blockquote_claim') && targetKind !== 'blockquote') {
                               return false
                             }
                             if ((anchorKind === 'figure' || claimType === 'figure_claim') && targetKind !== 'figure') {
@@ -3784,8 +4356,8 @@ export function MessageList({
                           locateButtonShownKeys.add(key)
                           if (!directPicked) optionalLocateButtonCount += 1
                           return true
-                        }}
-                        onLocateSnippet={onOpenReader
+                        }) : undefined}
+                        onLocateSnippet={enableLocateUi && onOpenReader
                           ? (snippet, meta) => {
                             if (strictStructuredLocateOnly) {
                               if (!strictStructuredInlineLocate) return
@@ -3809,7 +4381,7 @@ export function MessageList({
                             openReaderByCandidates(pickedList, snippet)
                           }
                           : undefined}
-                        locateTitleResolver={(snippet) => {
+                        locateTitleResolver={enableLocateUi ? ((snippet) => {
                           if (strictStructuredLocateOnly) {
                             const resolved = resolveStructuredInlineResolution(snippet)
                             const entry = resolved?.entry || null
@@ -3826,7 +4398,7 @@ export function MessageList({
                           if (!picked) return '\u5b9a\u4f4d\u5230\u539f\u6587'
                           const heading = String(picked.headingPath || '').trim()
                           return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587'
-                        }}
+                        }) : undefined}
                       />
                       <CopyBar
                         text={message.copy_text || message.content}

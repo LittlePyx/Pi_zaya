@@ -8,6 +8,10 @@ __pycache__/
 
 # Local virtualenv
 .venv/
+.ci_venv_2/
+.venv_backup*/
+.venv_st_upgrade_*/
+.venv_streamlit_test/
 
 # Local DB / prefs (per-user, should not be shared)
 chat.sqlite3*
@@ -15,6 +19,25 @@ library.sqlite3
 tmp_*.sqlite3
 user_prefs.json
 db/
+chat.db
+kb_chat.db
+
+# Local logs / temp outputs
+.codex_logs/
+.logs/
+.tmp*
+backups/
+ssp_speed*.log
+test-results/
+test_results/
+tmp/
+tmp*/
+tmp-*
+tmp_*
+test_output_*/
+web/test-results/
+workspace.code-workspace
+image/
 
 # OS
 .env

@@ -25,6 +25,7 @@ Windows 下可直接用脚本：
 说明：
 
 - `run_new.ps1` 默认不会自动安装依赖，需要时加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
+- `run_new.ps1` 默认开启后端 `uvicorn --reload`；若你想用单进程模式，可加 `-NoBackendReload`。
 - `run_new.ps1` 默认端口：后端 `8000`，前端 `5173`。
 
 ## 2. 你能做什么

@@ -20,6 +20,7 @@ export interface SettingsPatch {
   answerContractV1?: boolean
   answerDepthAuto?: boolean
   answerModeHint?: string
+  answerOutputMode?: string
 }
 
 export interface PickDirResponse {
@@ -40,6 +41,7 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.answerContractV1 !== undefined) out.answer_contract_v1 = patch.answerContractV1
   if (patch.answerDepthAuto !== undefined) out.answer_depth_auto = patch.answerDepthAuto
   if (patch.answerModeHint !== undefined) out.answer_mode_hint = patch.answerModeHint
+  if (patch.answerOutputMode !== undefined) out.answer_output_mode = patch.answerOutputMode
   return out
 }
 

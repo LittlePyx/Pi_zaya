@@ -876,7 +876,30 @@ def get_messages(conv_id: str, limit: int | None = None):
     store = get_chat_store()
     messages = [_normalize_message_attachments(msg) for msg in store.get_messages(conv_id, limit=limit)]
     refs_by_user = store.list_message_refs(conv_id) or {}
-    return enrich_messages_with_reference_render(messages, refs_by_user, conv_id=conv_id)
+    return enrich_messages_with_reference_render(messages, refs_by_user, conv_id=conv_id, chat_store=store)
+
+
+@router.get("/conversations/{conv_id}/messages_page")
+def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = None):
+    store = get_chat_store()
+    messages, has_more_before, oldest_loaded_id, newest_loaded_id = store.get_messages_page(
+        conv_id,
+        limit=limit,
+        before_id=before_id,
+    )
+    refs_by_user = store.list_message_refs(conv_id) or {}
+    rendered = enrich_messages_with_reference_render(
+        [_normalize_message_attachments(msg) for msg in messages],
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+    return {
+        "messages": rendered,
+        "has_more_before": bool(has_more_before),
+        "oldest_loaded_id": oldest_loaded_id,
+        "newest_loaded_id": newest_loaded_id,
+    }
 
 
 @router.post("/conversations/{conv_id}/messages")

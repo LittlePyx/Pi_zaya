@@ -1076,6 +1076,223 @@ def _dedupe_str_items(items: list[object] | tuple[object, ...] | None) -> list[s
     return out
 
 
+_CLAIM_GROUP_SECTION_BOUNDARY_RE = re.compile(
+    r"^(?:conclusion|core conclusion|evidence|original text|next steps?|suggestions?|risks?|limits?|"
+    r"\u7ed3\u8bba|\u6838\u5fc3\u7ed3\u8bba|\u4f9d\u636e|\u8bc1\u636e|\u539f\u6587|\u4e0b\u4e00\u6b65|"
+    r"\u5efa\u8bae|\u98ce\u9669|\u9650\u5236)\s*[:\uFF1A]?",
+    flags=re.IGNORECASE,
+)
+_CLAIM_GROUP_LEAD_TAIL_RE = re.compile(
+    r"(?:below|include|includes|including|consists? of|steps?|pipeline|shows?|indicates?|therefore|"
+    r"\u5982\u4e0b|\u5305\u62ec|\u5206\u4e3a|\u6b65\u9aa4|\u6d41\u7a0b|\u8868\u660e|\u8bf4\u660e|\u53ef\u89c1|\u56e0\u6b64)$",
+    flags=re.IGNORECASE,
+)
+_CLAIM_GROUP_CORE_HINT_RE = re.compile(
+    r"(\b(?:gt|ground[ -]?truth|pose|camera|train|training|input|output|pipeline|rendering|volume)\b|"
+    r"\u4f7f\u7528|\u91c7\u7528|\u8f93\u5165|\u8f93\u51fa|\u6062\u590d|\u91cd\u5efa|\u4f30\u8ba1|"
+    r"\u56fa\u5b9a|\u8bad\u7ec3|\u751f\u6210|\u8868\u5f81|\u6f14\u7ece|\u7ea6\u675f|\u5bf9\u6bd4|"
+    r"\u5229\u7528|\u5148\u7528|\u518d\u5c06|\u6765\u81ea|\u5bf9\u5e94)",
+    flags=re.IGNORECASE,
+)
+
+
+def _score_claim_group_content_core(
+    text: str,
+    *,
+    segment_kind: str = "",
+    segment_type: str = "",
+    evidence_mode: str = "",
+) -> float:
+    raw = _strip_provenance_noise_text(text).replace("\n", " ")
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if not raw:
+        return 0.0
+    if _is_rhetorical_shell_sentence(raw):
+        return 0.04
+
+    score = 0.18
+    length = len(raw)
+    if length >= 18:
+        score += 0.12
+    if length >= 28:
+        score += 0.12
+    if length >= 46:
+        score += 0.08
+    if re.search(r"[\"'`\u2018\u2019\u201c\u201d]", raw):
+        score += 0.12
+    if re.search(r"[()\uFF08\uFF09=]", raw):
+        score += 0.08
+    if re.search(r"\d", raw):
+        score += 0.08
+    if re.search(r"[A-Z][A-Za-z0-9+\-]{1,}", raw):
+        score += 0.08
+    if _CLAIM_GROUP_CORE_HINT_RE.search(raw):
+        score += 0.12
+
+    kind = str(segment_kind or "").strip().lower()
+    seg_type = str(segment_type or "").strip().lower()
+    mode = str(evidence_mode or "").strip().lower()
+    if kind == "list_item":
+        score += 0.08
+    if seg_type in {"bullet", "evidence", "equation_explanation"}:
+        score += 0.08
+    if mode == "direct":
+        score += 0.06
+    if re.search(r"[:\uFF1A]$", raw):
+        score -= 0.18
+    return max(0.0, min(1.2, float(score)))
+
+
+def _is_likely_claim_group_lead(text: str, *, segment_kind: str = "", segment_type: str = "") -> bool:
+    raw = _strip_provenance_noise_text(text).replace("\n", " ")
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if not raw:
+        return False
+    if _is_rhetorical_shell_sentence(raw):
+        return True
+    if re.search(r"[:\uFF1A]$", raw):
+        return True
+    kind = str(segment_kind or "").strip().lower()
+    seg_type = str(segment_type or "").strip().lower()
+    if kind == "list_item" or seg_type == "bullet":
+        return bool(_CLAIM_GROUP_LEAD_TAIL_RE.search(raw))
+    return False
+
+
+def _is_likely_claim_group_boundary(segment: dict | None) -> bool:
+    if not isinstance(segment, dict):
+        return True
+    seg_type = str(segment.get("segment_type") or "").strip().lower()
+    if seg_type in {"claim", "next_step"}:
+        return True
+    text = _strip_provenance_noise_text(str(segment.get("text") or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return True
+    return bool(_CLAIM_GROUP_SECTION_BOUNDARY_RE.search(text))
+
+
+def _pick_claim_group_target_segment(
+    segments: list[dict],
+    start_index: int,
+) -> tuple[dict, int] | None:
+    if start_index < 0 or start_index >= len(segments):
+        return None
+    current = segments[start_index]
+    if not isinstance(current, dict):
+        return None
+    current_text = str(current.get("text") or "").strip()
+    current_score = _score_claim_group_content_core(
+        current_text,
+        segment_kind=str(current.get("kind") or ""),
+        segment_type=str(current.get("segment_type") or ""),
+        evidence_mode=str(current.get("evidence_mode") or ""),
+    )
+    promote = _is_likely_claim_group_lead(
+        current_text,
+        segment_kind=str(current.get("kind") or ""),
+        segment_type=str(current.get("segment_type") or ""),
+    ) or current_score < 0.42
+    if (not promote) and current_score >= 0.5:
+        return current, 0
+
+    best_segment: dict | None = None
+    best_distance = 0
+    best_score = -1.0
+    upper = min(len(segments), start_index + 5)
+    for idx in range(start_index + 1, upper):
+        candidate = segments[idx]
+        if not isinstance(candidate, dict):
+            continue
+        if idx > (start_index + 1) and _is_likely_claim_group_boundary(candidate):
+            break
+        if str(candidate.get("segment_type") or "").strip().lower() == "next_step":
+            break
+        if str(candidate.get("evidence_mode") or "").strip().lower() != "direct":
+            continue
+        candidate_text = str(candidate.get("text") or "").strip()
+        if (not candidate_text) or _is_rhetorical_shell_sentence(candidate_text):
+            continue
+        candidate_score = _score_claim_group_content_core(
+            candidate_text,
+            segment_kind=str(candidate.get("kind") or ""),
+            segment_type=str(candidate.get("segment_type") or ""),
+            evidence_mode=str(candidate.get("evidence_mode") or ""),
+        )
+        if candidate_score < 0.46:
+            continue
+        distance = idx - start_index
+        total = candidate_score - max(0, distance - 1) * 0.12
+        if str(candidate.get("kind") or "").strip().lower() == "list_item":
+            total += 0.06
+        if str(candidate.get("evidence_mode") or "").strip().lower() == "direct":
+            total += 0.04
+        if str(candidate.get("segment_type") or "").strip().lower() == "bullet":
+            total += 0.04
+        if (best_segment is None) or (total > best_score):
+            best_segment = candidate
+            best_distance = distance
+            best_score = total
+
+    if best_segment is not None:
+        return best_segment, best_distance
+    if current_score >= 0.5 and not _is_likely_claim_group_lead(
+        current_text,
+        segment_kind=str(current.get("kind") or ""),
+        segment_type=str(current.get("segment_type") or ""),
+    ):
+        return current, 0
+    return None
+
+
+def _assign_claim_group_targets(segments: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for idx, seg0 in enumerate(list(segments or [])):
+        if not isinstance(seg0, dict):
+            continue
+        seg = dict(seg0)
+        segment_id = str(seg.get("segment_id") or "").strip() or f"seg_{idx + 1}"
+        claim_type = str(seg.get("claim_type") or "").strip().lower()
+        locate_policy = str(seg.get("locate_policy") or "").strip().lower()
+        evidence_mode = str(seg.get("evidence_mode") or "").strip().lower()
+        block_ids = _dedupe_str_items(
+            [seg.get("primary_block_id")]
+            + list(seg.get("support_block_ids") or [])
+            + list(seg.get("evidence_block_ids") or [])
+        )
+        keep_self_target = bool(seg.get("must_locate")) or claim_type in {
+            "quote_claim",
+            "blockquote_claim",
+            "formula_claim",
+            "inline_formula_claim",
+            "equation_explanation_claim",
+            "figure_claim",
+        }
+        target: tuple[dict, int] | None = None
+        if keep_self_target:
+            target = (seg, 0)
+        elif evidence_mode == "direct" and locate_policy != "hidden" and block_ids:
+            target = _pick_claim_group_target_segment(segments, idx)
+        if target is None:
+            target = (seg, 0)
+        target_seg, distance = target
+        target_segment_id = str(target_seg.get("segment_id") or "").strip() or segment_id
+        seg["claim_group_target_segment_id"] = target_segment_id
+        seg["claim_group_target_distance"] = int(max(0, distance))
+        lead_text = _strip_provenance_noise_text(str(seg.get("text") or ""))
+        lead_text = re.sub(r"\s+", " ", lead_text).strip()
+        if distance > 0 and lead_text:
+            seg["claim_group_lead_text"] = lead_text[:600]
+            if not str(seg.get("claim_group_kind") or "").strip():
+                seg["claim_group_kind"] = "content_core_bundle"
+            if not str(seg.get("claim_group_id") or "").strip():
+                seg["claim_group_id"] = f"content_core_bundle:{target_segment_id}"
+        else:
+            seg["claim_group_lead_text"] = ""
+        out.append(seg)
+    return out
+
+
 def _segment_claim_meta(
     *,
     segment_text: str,
@@ -2180,7 +2397,7 @@ def _apply_provenance_required_coverage_contract(
                     seg["must_locate"] = False
                     seg["locate_policy"] = "hidden"
                     seg["locate_surface_policy"] = "hidden"
-        return out
+        return _assign_claim_group_targets(out)
 
     bundle_items_by_id: dict[str, list[dict[str, object]]] = {}
     for bundle in formula_bundles:
@@ -2397,7 +2614,7 @@ def _apply_provenance_required_coverage_contract(
                 seg["locate_policy"] = "hidden"
                 seg["locate_surface_policy"] = "hidden"
 
-    return out
+    return _assign_claim_group_targets(out)
 
 
 def _build_paper_guide_answer_provenance(

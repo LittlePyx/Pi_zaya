@@ -33,6 +33,18 @@ def test_detect_answer_depth_auto_and_fixed():
     assert task_runtime._detect_answer_depth("any prompt", intent="reading", auto_depth=False) == "L2"
 
 
+def test_detect_answer_output_mode_marks_anchor_grounded_fact_answer():
+    from kb import task_runtime
+
+    mode = task_runtime._detect_answer_output_mode(
+        "Does the paper explicitly state the formula in Eq. 3?",
+        paper_guide_mode=True,
+        intent="reading",
+        anchor_grounded=True,
+    )
+    assert mode == "fact_answer"
+
+
 def test_apply_answer_contract_with_hits():
     from kb import task_runtime
 
@@ -74,6 +86,18 @@ def test_build_paper_guide_grounding_rules_respects_contract_toggle():
     assert "do not force a fixed section template" in plain
 
 
+def test_build_paper_guide_grounding_rules_fact_answer_discourages_generic_advice():
+    from kb import task_runtime
+
+    rules = task_runtime._build_paper_guide_grounding_rules(
+        answer_contract_v1=True,
+        output_mode="fact_answer",
+    )
+
+    assert "answer the exact paper-grounded question first" in rules
+    assert "avoid generic reading advice" in rules
+
+
 def test_apply_answer_contract_without_hits_adds_limits():
     from kb import task_runtime
 
@@ -89,6 +113,26 @@ def test_apply_answer_contract_without_hits_adds_limits():
     assert "Limits:" in out
     assert "general guidance" in out
     assert "Next Steps:" in out
+
+
+def test_apply_answer_contract_fact_answer_skips_default_next_steps():
+    from kb import task_runtime
+
+    raw = (
+        "The paper defines the loss exactly in Eq. 3.\n\n"
+        "The retrieved snippet quotes the equation and derivation context [1]."
+    )
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="What is the exact loss in Eq. 3?",
+        has_hits=True,
+        intent="reading",
+        depth="L2",
+        output_mode="fact_answer",
+    )
+    assert "Conclusion:" in out
+    assert "Evidence:" in out
+    assert "Next Steps:" not in out
 
 
 def test_apply_answer_contract_is_idempotent_on_structured_text():
@@ -235,6 +279,21 @@ def test_enhance_kb_miss_fallback_respects_contract_disabled():
     assert out == raw
 
 
+def test_enhance_kb_miss_fallback_fact_answer_skips_default_next_steps():
+    from kb import task_runtime
+
+    raw = "Missed library snippets.\n\nHere is a general answer."
+    out = task_runtime._enhance_kb_miss_fallback(
+        raw,
+        has_hits=False,
+        intent="reading",
+        depth="L2",
+        contract_enabled=True,
+        output_mode="fact_answer",
+    )
+    assert out == raw
+
+
 def test_sanitize_structured_tokens_removes_sid_markers():
     from kb import task_runtime
 
@@ -260,6 +319,23 @@ def test_build_answer_quality_probe_with_hits():
     assert probe["has_next_steps"] is True
     assert probe["has_citations"] is True
     assert probe["evidence_ok"] is True
+    assert probe["minimum_ok"] is True
+
+
+def test_build_answer_quality_probe_fact_answer_allows_no_next_steps():
+    from kb import task_runtime
+
+    answer = "Conclusion: yes\n\nEvidence:\n1. exact snippet [1]"
+    probe = task_runtime._build_answer_quality_probe(
+        answer,
+        has_hits=True,
+        contract_enabled=True,
+        intent="reading",
+        depth="L2",
+        output_mode="fact_answer",
+    )
+    assert probe["output_mode"] == "fact_answer"
+    assert probe["next_steps_required"] is False
     assert probe["minimum_ok"] is True
 
 

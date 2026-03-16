@@ -34,6 +34,7 @@ interface SettingsState {
   answerContractV1: boolean
   answerDepthAuto: boolean
   answerModeHint: string
+  answerOutputMode: string
   pdfDir: string
   mdDir: string
   theme: 'light' | 'dark'
@@ -54,6 +55,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   answerContractV1: false,
   answerDepthAuto: true,
   answerModeHint: '',
+  answerOutputMode: '',
   pdfDir: '',
   mdDir: '',
   theme: readInitialTheme(),
@@ -78,6 +80,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         answerContractV1: !!p.answer_contract_v1,
         answerDepthAuto: p.answer_depth_auto !== false,
         answerModeHint: String(p.answer_mode_hint || ''),
+        answerOutputMode: String(p.answer_output_mode || ''),
         pdfDir: String(p.pdf_dir || ''),
         mdDir: String(p.md_dir || ''),
         theme: nextTheme,
@@ -101,6 +104,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (patch.answerContractV1 !== undefined) localPatch.answerContractV1 = patch.answerContractV1
     if (patch.answerDepthAuto !== undefined) localPatch.answerDepthAuto = patch.answerDepthAuto
     if (patch.answerModeHint !== undefined) localPatch.answerModeHint = patch.answerModeHint
+    if (patch.answerOutputMode !== undefined) localPatch.answerOutputMode = patch.answerOutputMode
     if (patch.theme !== undefined) {
       localPatch.theme = patch.theme
       persistTheme(patch.theme)

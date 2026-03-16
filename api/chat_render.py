@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import hashlib
+import json
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -32,6 +33,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
+_RENDER_CACHE_SCHEMA_VERSION = 1
 
 
 @lru_cache(maxsize=1)
@@ -154,6 +156,85 @@ def _build_render_texts(*, rendered_full: str, rendered_body: str, notice: str, 
     copy_markdown = _normalize_copy_citation_links(rendered_content, cite_details)
     copy_text = _md_to_plain_text(copy_markdown)
     return rendered_content, body_norm, copy_markdown, copy_text
+
+
+def _stable_json_hash(payload: object) -> str:
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    except Exception:
+        raw = repr(payload)
+    return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()
+
+
+def _build_message_render_cache_key(
+    *,
+    conv_id: str,
+    msg_id: int,
+    role: str,
+    content: str,
+    refs_user_msg_id: int,
+    ref_pack: dict | None,
+    provenance: dict | None,
+) -> str:
+    base = {
+        "schema": _RENDER_CACHE_SCHEMA_VERSION,
+        "conv_id": str(conv_id or ""),
+        "msg_id": int(msg_id or 0),
+        "role": str(role or ""),
+        "content": str(content or ""),
+        "refs_user_msg_id": int(refs_user_msg_id or 0),
+        "ref_sig": _stable_json_hash(ref_pack or {}),
+        "provenance_sig": _stable_json_hash(provenance or {}),
+    }
+    return _stable_json_hash(base)
+
+
+def _extract_render_cache(meta: dict | None, *, expected_key: str) -> dict | None:
+    if not isinstance(meta, dict):
+        return None
+    cache = meta.get("render_cache")
+    if not isinstance(cache, dict):
+        return None
+    if int(cache.get("schema") or 0) != _RENDER_CACHE_SCHEMA_VERSION:
+        return None
+    if str(cache.get("cache_key") or "").strip() != str(expected_key or "").strip():
+        return None
+    cite_details = cache.get("cite_details")
+    if not isinstance(cite_details, list):
+        cite_details = []
+    return {
+        "notice": str(cache.get("notice") or ""),
+        "rendered_body": str(cache.get("rendered_body") or ""),
+        "rendered_content": str(cache.get("rendered_content") or ""),
+        "copy_markdown": str(cache.get("copy_markdown") or ""),
+        "copy_text": str(cache.get("copy_text") or ""),
+        "cite_details": [dict(item) for item in cite_details if isinstance(item, dict)],
+        "refs_user_msg_id": int(cache.get("refs_user_msg_id") or 0),
+    }
+
+
+def _build_render_cache_payload(
+    *,
+    cache_key: str,
+    notice: str,
+    rendered_body: str,
+    rendered_content: str,
+    copy_markdown: str,
+    copy_text: str,
+    cite_details: list[dict],
+    refs_user_msg_id: int,
+) -> dict:
+    return {
+        "schema": _RENDER_CACHE_SCHEMA_VERSION,
+        "cache_key": str(cache_key or ""),
+        "notice": str(notice or ""),
+        "rendered_body": str(rendered_body or ""),
+        "rendered_content": str(rendered_content or ""),
+        "copy_markdown": str(copy_markdown or ""),
+        "copy_text": str(copy_text or ""),
+        "cite_details": [dict(item) for item in (cite_details or []) if isinstance(item, dict)],
+        "refs_user_msg_id": int(refs_user_msg_id or 0),
+    }
 
 
 def _enrich_provenance_segments_for_display(
@@ -386,7 +467,13 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
     return out, details
 
 
-def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: dict[int, dict], *, conv_id: str) -> list[dict]:
+def enrich_messages_with_reference_render(
+    messages: list[dict],
+    refs_by_user: dict[int, dict],
+    *,
+    conv_id: str,
+    chat_store=None,
+) -> list[dict]:
     out: list[dict] = []
     last_user_msg_id = 0
     for idx, msg in enumerate(messages or []):
@@ -406,63 +493,97 @@ def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: di
 
         ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
         hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
-        notice, body = _split_kb_miss_notice(content)
-        # If refs exist for this turn, keep the answer and suppress stale "KB miss" hints.
-        if notice and hits:
-            notice = ""
-            body = content
-        cite_details: list[dict] = []
-        rendered_body = str(body or "")
-        raw_body = rendered_body
-        if rendered_body.strip():
-            rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
-            rendered_body = _normalize_equation_source_notes(rendered_body)
-            rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
-                rendered_body,
-                hits,
-                anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
-            )
-            # API rendering can receive a primary annotator result that strips
-            # structured cite tokens before it has access to the reference
-            # index. Retry against the raw body only when the primary pass
-            # removed all cite markers entirely. If it already downgraded to
-            # visible numeric markers, keep that safer output.
-            if _should_retry_structured_cite_fallback(
-                raw_body=raw_body,
-                rendered_body=rendered_body,
-                cite_details=cite_details,
-            ):
-                rendered_body, cite_details = _fallback_render_structured_citations(
-                    raw_body,
+        provenance_raw = rec.get("provenance") if isinstance(rec.get("provenance"), dict) else None
+        render_cache_key = _build_message_render_cache_key(
+            conv_id=conv_id,
+            msg_id=msg_id,
+            role=role,
+            content=content,
+            refs_user_msg_id=int(last_user_msg_id or 0),
+            ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
+            provenance=provenance_raw if isinstance(provenance_raw, dict) else None,
+        )
+        cached = _extract_render_cache(
+            rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
+            expected_key=render_cache_key,
+        )
+        if cached:
+            rec["cite_details"] = list(cached.get("cite_details") or [])
+            rec["copy_markdown"] = str(cached.get("copy_markdown") or "")
+            rec["copy_text"] = str(cached.get("copy_text") or "")
+            rec["rendered_content"] = str(cached.get("rendered_content") or "")
+            rec["notice"] = str(cached.get("notice") or "")
+            rec["rendered_body"] = str(cached.get("rendered_body") or "")
+            rec["refs_user_msg_id"] = int(cached.get("refs_user_msg_id") or last_user_msg_id or 0)
+        else:
+            notice, body = _split_kb_miss_notice(content)
+            if notice and hits:
+                notice = ""
+                body = content
+            cite_details: list[dict] = []
+            rendered_body = str(body or "")
+            raw_body = rendered_body
+            if rendered_body.strip():
+                rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
+                rendered_body = _normalize_equation_source_notes(rendered_body)
+                rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                    rendered_body,
                     hits,
                     anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
                 )
+                if _should_retry_structured_cite_fallback(
+                    raw_body=raw_body,
+                    rendered_body=rendered_body,
+                    cite_details=cite_details,
+                ):
+                    rendered_body, cite_details = _fallback_render_structured_citations(
+                        raw_body,
+                        hits,
+                        anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+                    )
 
-        rendered_full = ""
-        if notice and rendered_body:
-            rendered_full = f"{notice}\n\n{rendered_body}"
-        elif notice:
-            rendered_full = notice
-        elif rendered_body:
-            rendered_full = rendered_body
-        else:
-            rendered_full = content
+            rendered_full = ""
+            if notice and rendered_body:
+                rendered_full = f"{notice}\n\n{rendered_body}"
+            elif notice:
+                rendered_full = notice
+            elif rendered_body:
+                rendered_full = rendered_body
+            else:
+                rendered_full = content
 
-        rendered_markdown, rendered_body_norm, copy_markdown, copy_text = _build_render_texts(
-            rendered_full=rendered_full,
-            rendered_body=str(rendered_body or ""),
-            notice=notice,
-            cite_details=cite_details,
-        )
-        rec["cite_details"] = cite_details
-        rec["copy_markdown"] = copy_markdown
-        rec["copy_text"] = copy_text
-        rec["rendered_content"] = rendered_markdown
-        rec["notice"] = notice
-        rec["rendered_body"] = rendered_body_norm
-        rec["refs_user_msg_id"] = int(last_user_msg_id or 0)
+            rendered_markdown, rendered_body_norm, copy_markdown, copy_text = _build_render_texts(
+                rendered_full=rendered_full,
+                rendered_body=str(rendered_body or ""),
+                notice=notice,
+                cite_details=cite_details,
+            )
+            rec["cite_details"] = cite_details
+            rec["copy_markdown"] = copy_markdown
+            rec["copy_text"] = copy_text
+            rec["rendered_content"] = rendered_markdown
+            rec["notice"] = notice
+            rec["rendered_body"] = rendered_body_norm
+            rec["refs_user_msg_id"] = int(last_user_msg_id or 0)
+            if chat_store is not None and msg_id > 0:
+                try:
+                    chat_store.set_message_render_cache(
+                        msg_id,
+                        _build_render_cache_payload(
+                            cache_key=render_cache_key,
+                            notice=notice,
+                            rendered_body=rendered_body_norm,
+                            rendered_content=rendered_markdown,
+                            copy_markdown=copy_markdown,
+                            copy_text=copy_text,
+                            cite_details=cite_details,
+                            refs_user_msg_id=int(last_user_msg_id or 0),
+                        ),
+                    )
+                except Exception:
+                    pass
         enriched_provenance = _enrich_provenance_segments_for_display(
-            rec.get("provenance") if isinstance(rec.get("provenance"), dict) else None,
+            provenance_raw if isinstance(provenance_raw, dict) else None,
             hits,
             anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
         )
@@ -471,9 +592,7 @@ def enrich_messages_with_reference_render(messages: list[dict], refs_by_user: di
             if isinstance(rec.get("meta"), dict):
                 rec["meta"] = dict(rec.get("meta") or {})
                 rec["meta"]["provenance"] = enriched_provenance
-        rec["render_cache_key"] = hashlib.sha1(
-            f"{conv_id}|{msg_id}|{last_user_msg_id}|{content}".encode("utf-8", "ignore")
-        ).hexdigest()[:12]
+        rec["render_cache_key"] = str(render_cache_key or "")[:12]
         out.append(rec)
 
     return out

@@ -39,6 +39,13 @@ export interface Message {
   render_cache_key?: string
 }
 
+export interface MessagePage {
+  messages: Message[]
+  has_more_before: boolean
+  oldest_loaded_id?: number | null
+  newest_loaded_id?: number | null
+}
+
 export interface MessageProvenanceBlock {
   block_id: string
   anchor_id?: string
@@ -61,6 +68,9 @@ export interface MessageProvenanceSegment {
   locate_surface_policy?: 'primary' | 'secondary' | 'hidden' | string
   claim_group_id?: string
   claim_group_kind?: 'formula_bundle' | 'quote_bundle' | string
+  claim_group_target_segment_id?: string
+  claim_group_target_distance?: number
+  claim_group_lead_text?: string
   formula_origin?: 'source' | 'explanation' | 'derived' | string
   text: string
   raw_markdown?: string
@@ -173,6 +183,11 @@ export const chatApi = {
     api.delete(`/api/conversations/${id}`),
   getMessages: (convId: string) =>
     api.get<Message[]>(`/api/conversations/${convId}/messages`),
+  getMessagesPage: (convId: string, opts?: { limit?: number; beforeId?: number | null }) =>
+    api.get<MessagePage>(
+      `/api/conversations/${convId}/messages_page?limit=${Math.max(1, Math.floor(Number(opts?.limit || 24)))}`
+      + `${Number.isFinite(Number(opts?.beforeId)) && Number(opts?.beforeId) > 0 ? `&before_id=${Math.floor(Number(opts?.beforeId))}` : ''}`,
+    ),
   appendMessage: (convId: string, role: string, content: string) =>
     api.post<{ id: number }>(`/api/conversations/${convId}/messages`, { role, content }),
   uploadFiles: async (files: File[], opts?: { quickIngest?: boolean; speedMode?: string; convId?: string | null }) => {

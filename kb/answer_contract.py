@@ -73,6 +73,20 @@ _ANSWER_ORDERED_LIST_RE = re.compile(r"(?m)^\s*1\.\s+\S+")
 _ANSWER_INTENTS = {"reading", "compare", "idea", "experiment", "troubleshoot", "writing"}
 _ANSWER_DEPTHS = {"L1", "L2", "L3"}
 _ANSWER_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+_ANSWER_OUTPUT_MODES = {"fact_answer", "reading_guide", "critical_review"}
+_ANSWER_OUTPUT_MODE_FACT_RE = re.compile(
+    r"(\bquote\b|\bexact\b|\bverif(?:y|ication)\b|\bfact[\s-]?check\b|\bwhich section\b|"
+    r"\bwhich paragraph\b|\bwhere in (?:the )?paper\b|\baccording to the paper\b|"
+    r"\bdoes the paper say\b|\bstated in the paper\b|\bfigure\s*\d+\b|\bfig\.\s*\d+\b|"
+    r"\bequation\s*\d+\b|\beq\.\s*\d+\b|\btheorem\s*\d+\b|\blocate\b|"
+    r"鍘熸枃|寮曠敤|鍝竴鑺?|\u54ea\u4e00\u6bb5|瀹氫綅|璇佸疄|鏄惁鍐欏埌|鍏紡|鍥?|琛?|定理)",
+    flags=re.IGNORECASE,
+)
+_ANSWER_OUTPUT_MODE_CRITICAL_RE = re.compile(
+    r"(\bcrit(?:ical|ique)\b|\breview\b|\blimitation\b|\bweakness\b|\bconcern\b|\brisk\b|"
+    r"\bmissing\b|\bflaw\b|\bproblem\b|\bdrawback\b|灞€闄?|涓嶈冻|缂虹偣|鎵瑰垽|璐ㄧ枒|椋庨櫓|闂)",
+    flags=re.IGNORECASE,
+)
 
 
 def _normalize_answer_mode_hint(answer_mode_hint: str) -> str:
@@ -91,6 +105,65 @@ def _normalize_answer_mode_hint(answer_mode_hint: str) -> str:
         "writing": "writing",
     }
     return alias.get(hint, "")
+
+
+def _normalize_answer_output_mode_hint(answer_output_mode_hint: str) -> str:
+    hint = str(answer_output_mode_hint or "").strip().lower()
+    alias = {
+        "fact": "fact_answer",
+        "fact_answer": "fact_answer",
+        "factanswer": "fact_answer",
+        "verify": "fact_answer",
+        "verification": "fact_answer",
+        "reading": "reading_guide",
+        "reading_guide": "reading_guide",
+        "readingguide": "reading_guide",
+        "guide": "reading_guide",
+        "paper_guide": "reading_guide",
+        "critical": "critical_review",
+        "critical_review": "critical_review",
+        "criticalreview": "critical_review",
+        "review": "critical_review",
+        "critique": "critical_review",
+    }
+    return alias.get(hint, "")
+
+
+def _normalize_answer_output_mode(answer_output_mode: str) -> str:
+    mode = _normalize_answer_output_mode_hint(answer_output_mode)
+    return mode or "reading_guide"
+
+
+def _answer_output_mode_requires_next_steps(answer_output_mode: str) -> bool:
+    return _normalize_answer_output_mode(answer_output_mode) != "fact_answer"
+
+
+def _detect_answer_output_mode(
+    prompt: str,
+    *,
+    answer_output_mode_hint: str = "",
+    answer_mode_hint: str = "",
+    paper_guide_mode: bool = False,
+    intent: str = "",
+    anchor_grounded: bool = False,
+) -> str:
+    explicit_mode = _normalize_answer_output_mode_hint(answer_output_mode_hint)
+    if explicit_mode:
+        return explicit_mode
+    hinted_mode = _normalize_answer_output_mode_hint(answer_mode_hint)
+    if hinted_mode:
+        return hinted_mode
+
+    q = str(prompt or "").strip()
+    if not q:
+        return "reading_guide"
+    if _ANSWER_OUTPUT_MODE_CRITICAL_RE.search(q):
+        return "critical_review"
+    if paper_guide_mode and (anchor_grounded or _ANSWER_OUTPUT_MODE_FACT_RE.search(q)):
+        return "fact_answer"
+    if intent in {"compare", "idea", "experiment", "troubleshoot", "writing"}:
+        return "reading_guide"
+    return "reading_guide"
 
 
 def _detect_answer_intent(prompt: str, *, answer_mode_hint: str = "") -> str:
@@ -166,11 +239,12 @@ def _extract_answer_section_keys(text: str) -> list[str]:
     return keys
 
 
-def _has_sufficient_answer_sections(text: str, *, has_hits: bool) -> bool:
+def _has_sufficient_answer_sections(text: str, *, has_hits: bool, output_mode: str = "reading_guide") -> bool:
     keys = set(_extract_answer_section_keys(text))
+    next_steps_required = _answer_output_mode_requires_next_steps(output_mode)
     if "conclusion" not in keys:
         return False
-    if "next_steps" not in keys:
+    if next_steps_required and ("next_steps" not in keys):
         return False
     if bool(has_hits) and ("evidence" not in keys):
         return False
@@ -184,6 +258,7 @@ def _build_answer_quality_probe(
     contract_enabled: bool,
     intent: str = "",
     depth: str = "",
+    output_mode: str = "reading_guide",
 ) -> dict:
     text = str(answer or "").strip()
     keys = set(_extract_answer_section_keys(text))
@@ -191,16 +266,23 @@ def _build_answer_quality_probe(
     has_evidence = "evidence" in keys
     has_limits = "limits" in keys
     has_next_steps = "next_steps" in keys
-    core_sections = int(has_conclusion) + int(has_evidence) + int(has_next_steps)
-    core_ratio = round(float(core_sections) / 3.0, 3)
     has_citations = bool(_ANSWER_CITE_HINT_RE.search(text) or re.search(r"\[\d{1,3}\]", text))
     evidence_required = bool(has_hits)
+    next_steps_required = _answer_output_mode_requires_next_steps(output_mode)
+    expected_core_sections = max(1, 1 + int(evidence_required) + int(next_steps_required))
+    core_sections = int(has_conclusion)
+    if evidence_required:
+        core_sections += int(has_evidence)
+    if next_steps_required:
+        core_sections += int(has_next_steps)
+    core_ratio = round(float(core_sections) / float(expected_core_sections), 3)
     evidence_ok = (not evidence_required) or bool(has_evidence)
-    minimum_ok = bool(has_conclusion and has_next_steps and evidence_ok)
+    minimum_ok = bool(has_conclusion and evidence_ok and ((not next_steps_required) or has_next_steps))
     return {
         "contract_enabled": bool(contract_enabled),
         "intent": str(intent or ""),
         "depth": str(depth or ""),
+        "output_mode": _normalize_answer_output_mode(output_mode),
         "char_count": len(text),
         "has_hits": bool(has_hits),
         "has_conclusion": bool(has_conclusion),
@@ -209,26 +291,45 @@ def _build_answer_quality_probe(
         "has_next_steps": bool(has_next_steps),
         "has_citations": bool(has_citations),
         "evidence_required": bool(evidence_required),
+        "next_steps_required": bool(next_steps_required),
         "evidence_ok": bool(evidence_ok),
         "core_section_coverage": core_ratio,
         "minimum_ok": bool(minimum_ok),
     }
 
 
-def _build_answer_contract_system_rules(*, intent: str, depth: str, has_hits: bool) -> str:
+def _build_answer_contract_system_rules(
+    *,
+    intent: str,
+    depth: str,
+    has_hits: bool,
+    output_mode: str = "reading_guide",
+) -> str:
+    output_mode_norm = _normalize_answer_output_mode(output_mode)
     lines = [
         "Answer Contract v1 (enabled):",
         "- Keep the response compact but structured.",
-        "- Use this section order when possible: Conclusion, Evidence, Limits, Next Steps.",
         "- Keep the answer in the same language as the user's query.",
         "- Conclusion should answer the user's core question directly in 1-3 sentences.",
         "- Avoid redundancy; keep total bullet/action lines concise (usually <= 8).",
     ]
+    if output_mode_norm == "fact_answer":
+        lines.append("- Use this section order when possible: Conclusion, Evidence, Limits.")
+        lines.append("- Do not add a Next Steps section unless the user explicitly asks for follow-up actions.")
+    else:
+        lines.append("- Use this section order when possible: Conclusion, Evidence, Limits, Next Steps.")
     if has_hits:
         lines.append("- Evidence should be grounded in retrieved snippets and include citations when available.")
     else:
         lines.append("- If retrieval has no hits, avoid fabrication and clearly mark the answer as general guidance.")
-    if depth == "L1":
+    if output_mode_norm == "fact_answer":
+        if depth == "L1":
+            lines.append("- Depth=L1: answer directly with the smallest sufficient evidence span.")
+        elif depth == "L3":
+            lines.append("- Depth=L3: include assumptions/boundaries, but stay focused on resolving the exact question.")
+        else:
+            lines.append("- Depth=L2: include at least one evidence item and keep the response tightly scoped to the asked fact.")
+    elif depth == "L1":
         lines.append("- Depth=L1: concise response, at most one next-step action.")
     elif depth == "L3":
         lines.append("- Depth=L3: include assumptions/boundaries and 2-3 concrete follow-up actions.")
@@ -244,6 +345,10 @@ def _build_answer_contract_system_rules(*, intent: str, depth: str, has_hits: bo
         "writing": "- Intent=writing: provide structure edits and directly reusable wording suggestions.",
     }
     lines.append(intent_rules.get(intent, intent_rules["reading"]))
+    if output_mode_norm == "critical_review":
+        lines.append("- Output mode=critical_review: separate paper-grounded criticism from speculative concerns.")
+    elif output_mode_norm == "fact_answer":
+        lines.append("- Output mode=fact_answer: prefer exact paper-grounded resolution over broad study advice.")
     return "\n" + "\n".join(lines) + "\n"
 
 
@@ -251,7 +356,12 @@ def _answer_contract_enabled(task: dict | None) -> bool:
     return bool((task or {}).get("answer_contract_v1", False))
 
 
-def _build_paper_guide_grounding_rules(*, answer_contract_v1: bool) -> str:
+def _build_paper_guide_grounding_rules(
+    *,
+    answer_contract_v1: bool,
+    output_mode: str = "reading_guide",
+) -> str:
+    output_mode_norm = _normalize_answer_output_mode(output_mode)
     lines = [
         "Paper-guide formula grounding:",
         "- When the question asks about a formula/model, quote the equation from retrieved context as-is, including equation tag/number when available.",
@@ -260,6 +370,15 @@ def _build_paper_guide_grounding_rules(*, answer_contract_v1: bool) -> str:
         "- Do not compress a retrieved long equation plus its explanation into one mixed prose sentence if that would blur the locate target.",
         "- Do not introduce display-math formulas for figure explanations, mechanism summaries, or optimization sketches unless that exact display formula was retrieved from the paper.",
     ]
+    if output_mode_norm == "fact_answer":
+        lines.extend(
+            [
+                "- Output mode=fact_answer: answer the exact paper-grounded question first and avoid generic reading advice.",
+                "- Prefer the smallest evidence span that resolves the question; if the exact span is unavailable, say that explicitly.",
+            ]
+        )
+    elif output_mode_norm == "critical_review":
+        lines.append("- Output mode=critical_review: keep critique tied to retrieved evidence before adding synthesis.")
     if answer_contract_v1:
         lines.extend(
             [
@@ -376,6 +495,7 @@ def _apply_answer_contract_v1(
     has_hits: bool,
     intent: str,
     depth: str,
+    output_mode: str = "reading_guide",
 ) -> str:
     _ = str(prompt or "")
     src = str(answer or "").strip()
@@ -386,7 +506,7 @@ def _apply_answer_contract_v1(
     body = str(body0 if notice else src).strip()
     if not body:
         return src
-    if _has_sufficient_answer_sections(body, has_hits=has_hits):
+    if _has_sufficient_answer_sections(body, has_hits=has_hits, output_mode=output_mode):
         return src
 
     paras = [p.strip() for p in re.split(r"\n{2,}", body) if str(p or "").strip()]
@@ -409,6 +529,7 @@ def _apply_answer_contract_v1(
         evidence = _extract_cited_sentences(body, limit=2)
 
     prefer_zh = _prefer_zh_locale(prompt, src)
+    steps_required = _answer_output_mode_requires_next_steps(output_mode)
     labels = {
         "conclusion": "结论" if prefer_zh else "Conclusion",
         "evidence": "依据" if prefer_zh else "Evidence",
@@ -445,11 +566,13 @@ def _apply_answer_contract_v1(
     depth_level = depth if depth in _ANSWER_DEPTHS else "L2"
     step_limit = 1 if depth_level == "L1" else (3 if depth_level == "L3" else 2)
     body_limit = 2 if depth_level == "L1" else (6 if depth_level == "L3" else 4)
-    steps = _build_default_next_steps(
-        intent=intent if intent in _ANSWER_INTENTS else "reading",
-        has_hits=has_hits,
-        locale="zh" if prefer_zh else "en",
-    )[:step_limit]
+    steps: list[str] = []
+    if steps_required:
+        steps = _build_default_next_steps(
+            intent=intent if intent in _ANSWER_INTENTS else "reading",
+            has_hits=has_hits,
+            locale="zh" if prefer_zh else "en",
+        )[:step_limit]
 
     parts: list[str] = []
     if notice:
@@ -480,6 +603,7 @@ def _enhance_kb_miss_fallback(
     intent: str,
     depth: str,
     contract_enabled: bool,
+    output_mode: str = "reading_guide",
 ) -> str:
     src = str(answer or "").strip()
     if (not src) or has_hits:
@@ -495,6 +619,8 @@ def _enhance_kb_miss_fallback(
     if _ANSWER_NEXT_STEPS_HEADER_RE.search(body):
         return f"{notice}\n\n{body}".strip()
     if _ANSWER_ORDERED_LIST_RE.search(body):
+        return f"{notice}\n\n{body}".strip()
+    if not _answer_output_mode_requires_next_steps(output_mode):
         return f"{notice}\n\n{body}".strip()
 
     depth_level = depth if depth in _ANSWER_DEPTHS else "L2"

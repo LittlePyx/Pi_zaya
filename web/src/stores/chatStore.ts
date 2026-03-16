@@ -5,6 +5,7 @@ import {
   type ChatUploadItem,
   type Conversation,
   type Message,
+  type MessagePage,
   type Project,
 } from '../api/chat'
 import { api } from '../api/client'
@@ -38,18 +39,86 @@ interface SwitchPerfApi {
   clear: () => void
   summary: () => SwitchPerfSummary
 }
+interface ConversationOpenPhaseEvent {
+  ts: number
+  convId: string
+  token: number
+  phase: string
+  durationMs: number
+  detail?: string
+}
+interface ConversationOpenPhaseApi {
+  getLogs: () => ConversationOpenPhaseEvent[]
+  clear: () => void
+}
 interface DebugWindow extends Window {
   __kbSwitchPerf?: SwitchPerfApi
+  __kbConversationOpenPerf?: ConversationOpenPhaseApi
 }
 const switchPerfLog: SwitchPerfEvent[] = []
+const conversationOpenPhaseLog: ConversationOpenPhaseEvent[] = []
 const SWITCH_PERF_LIMIT = 240
+const CONVERSATION_OPEN_PHASE_LIMIT = 480
 const SIDEBAR_CONVERSATION_LIMIT = 80
+const MESSAGE_PAGE_SIZE = 24
 
 function nowMs() {
   try {
     return performance.now()
   } catch {
     return Date.now()
+  }
+}
+
+function buildFullMessagePage(messages: Message[]): MessagePage {
+  return {
+    messages,
+    has_more_before: false,
+    oldest_loaded_id: messages.length > 0 ? Number(messages[0]?.id || 0) || null : null,
+    newest_loaded_id: messages.length > 0 ? Number(messages[messages.length - 1]?.id || 0) || null : null,
+  }
+}
+
+function mergeLatestMessagePage(
+  currentMessages: Message[],
+  currentHasMoreBefore: boolean,
+  page: MessagePage,
+): { messages: Message[]; hasMoreBefore: boolean; oldestLoadedMessageId: number | null } {
+  const latestMessages = Array.isArray(page?.messages) ? page.messages : []
+  const latestIds = new Set(latestMessages.map((item) => Number(item.id || 0)).filter((id) => Number.isFinite(id) && id > 0))
+  const latestOldestId = Number(page?.oldest_loaded_id || 0)
+  const hasLatestOldestId = Number.isFinite(latestOldestId) && latestOldestId > 0
+  const retainedOlder = currentMessages.filter((item) => {
+    const id = Number(item.id || 0)
+    if (!Number.isFinite(id) || id <= 0) return false
+    if (latestIds.has(id)) return false
+    return hasLatestOldestId ? id < latestOldestId : false
+  })
+  const merged = [...retainedOlder, ...latestMessages]
+  return {
+    messages: merged,
+    hasMoreBefore: retainedOlder.length > 0 ? currentHasMoreBefore : Boolean(page?.has_more_before),
+    oldestLoadedMessageId: merged.length > 0 ? Number(merged[0]?.id || 0) || null : null,
+  }
+}
+
+async function getMessagesPageWithFallback(
+  convId: string,
+  opts?: { limit?: number; beforeId?: number | null },
+): Promise<{ page: MessagePage; usedFallback: boolean }> {
+  try {
+    const page = await chatApi.getMessagesPage(convId, opts)
+    return { page, usedFallback: false }
+  } catch (error) {
+    const beforeId = Number(opts?.beforeId || 0)
+    if (beforeId > 0) {
+      throw error
+    }
+    const messages = await chatApi.getMessages(convId)
+    return {
+      page: buildFullMessagePage(Array.isArray(messages) ? messages : []),
+      usedFallback: true,
+    }
   }
 }
 
@@ -85,13 +154,22 @@ function getSwitchPerfSummary(): SwitchPerfSummary {
 function ensureSwitchPerfApi() {
   if (typeof window === 'undefined') return
   const w = window as DebugWindow
-  if (w.__kbSwitchPerf) return
-  w.__kbSwitchPerf = {
-    getLogs: () => switchPerfLog.slice(),
-    clear: () => {
-      switchPerfLog.length = 0
-    },
-    summary: () => getSwitchPerfSummary(),
+  if (!w.__kbSwitchPerf) {
+    w.__kbSwitchPerf = {
+      getLogs: () => switchPerfLog.slice(),
+      clear: () => {
+        switchPerfLog.length = 0
+      },
+      summary: () => getSwitchPerfSummary(),
+    }
+  }
+  if (!w.__kbConversationOpenPerf) {
+    w.__kbConversationOpenPerf = {
+      getLogs: () => conversationOpenPhaseLog.slice(),
+      clear: () => {
+        conversationOpenPhaseLog.length = 0
+      },
+    }
   }
 }
 
@@ -99,6 +177,14 @@ function pushSwitchPerf(event: SwitchPerfEvent) {
   switchPerfLog.push(event)
   if (switchPerfLog.length > SWITCH_PERF_LIMIT) {
     switchPerfLog.splice(0, switchPerfLog.length - SWITCH_PERF_LIMIT)
+  }
+  ensureSwitchPerfApi()
+}
+
+function pushConversationOpenPhase(event: ConversationOpenPhaseEvent) {
+  conversationOpenPhaseLog.push(event)
+  if (conversationOpenPhaseLog.length > CONVERSATION_OPEN_PHASE_LIMIT) {
+    conversationOpenPhaseLog.splice(0, conversationOpenPhaseLog.length - CONVERSATION_OPEN_PHASE_LIMIT)
   }
   ensureSwitchPerfApi()
 }
@@ -239,24 +325,55 @@ function mergeImageAttachments(current: ChatImageAttachment[], incoming: ChatIma
 
 async function loadRefsForConversation(
   convId: string,
-  set: (patch: Partial<ChatState>) => void,
+  set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
   getActiveConvId: () => string | null,
 ) {
   try {
     const refs = await chatApi.getRefs(convId)
     if (getActiveConvId() !== convId) return
-    set({ refs })
+    set((state) => ({
+      refs,
+      conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+        refs,
+        cachedAt: Date.now(),
+      }),
+    }))
     if (needsRefsEnrichment(refs)) {
       void startRefsPolling(convId, set)
     }
   } catch {
     if (getActiveConvId() === convId) {
-      set({ refs: {} })
+      set((state) => ({
+        refs: {},
+        conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+          refs: {},
+          cachedAt: Date.now(),
+        }),
+      }))
     }
   }
 }
 
-async function startRefsPolling(convId: string, set: (patch: Partial<ChatState>) => void) {
+function scheduleLoadRefsForConversation(
+  convId: string,
+  set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  getActiveConvId: () => string | null,
+  delayMs = 120,
+) {
+  if (typeof window === 'undefined') {
+    void loadRefsForConversation(convId, set, getActiveConvId)
+    return
+  }
+  window.setTimeout(() => {
+    if (getActiveConvId() !== convId) return
+    void loadRefsForConversation(convId, set, getActiveConvId)
+  }, Math.max(0, delayMs))
+}
+
+async function startRefsPolling(
+  convId: string,
+  set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+) {
   stopRefsPolling()
   const token = ++refsPollToken
   let tries = 0
@@ -273,7 +390,13 @@ async function startRefsPolling(convId: string, set: (patch: Partial<ChatState>)
     try {
       const refs = await chatApi.getRefs(convId)
       if (token !== refsPollToken) return
-      set({ refs })
+      set((state) => ({
+        refs,
+        conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+          refs,
+          cachedAt: Date.now(),
+        }),
+      }))
       if (!needsRefsEnrichment(refs) || tries >= maxTries) {
         refsPollTimer = null
         return
@@ -303,6 +426,42 @@ interface GuideBinding {
   sourceName: string
 }
 
+interface ConversationViewCache {
+  messages: Message[]
+  refs: Record<string, unknown>
+  messagesHasMoreBefore: boolean
+  oldestLoadedMessageId: number | null
+  cachedAt: number
+}
+
+function upsertConversationViewCache(
+  current: Record<string, ConversationViewCache>,
+  convId: string,
+  patch: Partial<ConversationViewCache>,
+) {
+  const key = String(convId || '').trim()
+  if (!key) return current
+  const prev = current[key]
+  return {
+    ...current,
+    [key]: {
+      messages: Array.isArray(patch.messages) ? patch.messages : Array.isArray(prev?.messages) ? prev.messages : [],
+      refs: patch.refs && typeof patch.refs === 'object'
+        ? patch.refs
+        : (prev?.refs && typeof prev.refs === 'object' ? prev.refs : {}),
+      messagesHasMoreBefore: typeof patch.messagesHasMoreBefore === 'boolean'
+        ? patch.messagesHasMoreBefore
+        : Boolean(prev?.messagesHasMoreBefore),
+      oldestLoadedMessageId: patch.oldestLoadedMessageId !== undefined
+        ? patch.oldestLoadedMessageId ?? null
+        : (prev?.oldestLoadedMessageId ?? null),
+      cachedAt: Number.isFinite(Number(patch.cachedAt))
+        ? Number(patch.cachedAt)
+        : (prev?.cachedAt ?? Date.now()),
+    },
+  }
+}
+
 interface ChatState {
   projects: Project[]
   activeProjectId: string | null
@@ -311,7 +470,12 @@ interface ChatState {
   activeConvId: string | null
   activeConversation: Conversation | null
   guideBindings: Record<string, GuideBinding>
+  conversationCacheById: Record<string, ConversationViewCache>
   messages: Message[]
+  conversationLoading: boolean
+  messagesLoadingMore: boolean
+  messagesHasMoreBefore: boolean
+  oldestLoadedMessageId: number | null
   refs: Record<string, unknown>
   uploadItems: ChatUploadItem[]
   pendingImages: ChatImageAttachment[]
@@ -335,6 +499,7 @@ interface ChatState {
   renameConversation: (id: string, title: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
   moveConversation: (convId: string, projectId: string | null) => Promise<void>
+  loadOlderMessages: () => Promise<void>
   uploadFiles: (files: File[], opts?: { quickIngest?: boolean; speedMode?: string; convId?: string | null }) => Promise<void>
   retryUploadItem: (key: string) => Promise<void>
   cancelUploadItem: (key: string) => Promise<void>
@@ -397,7 +562,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeConvId: null,
   activeConversation: null,
   guideBindings: {},
+  conversationCacheById: {},
   messages: [],
+  conversationLoading: false,
+  messagesLoadingMore: false,
+  messagesHasMoreBefore: false,
+  oldestLoadedMessageId: null,
   refs: {},
   uploadItems: [],
   pendingImages: [],
@@ -476,7 +646,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const current = get()
     if (current.activeConvId === convId) {
       if (Object.keys(current.refs || {}).length === 0) {
-        void loadRefsForConversation(convId, set, () => get().activeConvId)
+        scheduleLoadRefsForConversation(convId, set, () => get().activeConvId)
       }
       pushSwitchPerf({
         ts: Date.now(),
@@ -492,24 +662,51 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const myToken = ++conversationSwitchToken
     const cachedConv = findConversationInState(current, convId)
+    const cachedView = current.conversationCacheById[convId]
     stopRefsPolling()
     stopUploadPolling()
+    const cacheShowStartedAt = nowMs()
     set({
       activeConvId: convId,
       activeConversation: cachedConv || null,
+      messages: Array.isArray(cachedView?.messages) ? cachedView.messages : [],
+      conversationLoading: !cachedView,
+      messagesLoadingMore: false,
+      messagesHasMoreBefore: Boolean(cachedView?.messagesHasMoreBefore),
+      oldestLoadedMessageId: cachedView?.oldestLoadedMessageId ?? null,
       generation: null,
-      refs: {},
+      refs: cachedView?.refs && typeof cachedView.refs === 'object' ? cachedView.refs : {},
       uploadItems: [],
       pendingImages: [],
+    })
+    pushConversationOpenPhase({
+      ts: Date.now(),
+      convId,
+      token: myToken,
+      phase: 'cache_show',
+      durationMs: Number((nowMs() - cacheShowStartedAt).toFixed(2)),
+      detail: cachedView ? `cache_hit:${cachedView.messages?.length || 0}` : 'cache_miss',
     })
     if (cachedConv) {
       set({ activeProjectId: cachedConv.project_id ?? null, activeConversation: cachedConv })
     }
+    const fetchStartedAt = nowMs()
     try {
-      const [conv, msgs] = await Promise.all([
+      const [conv, pageResult] = await Promise.all([
         cachedConv ? Promise.resolve(cachedConv) : chatApi.getConversation(convId).catch(() => null),
-        chatApi.getMessages(convId),
+        getMessagesPageWithFallback(convId, { limit: MESSAGE_PAGE_SIZE }),
       ])
+      pushConversationOpenPhase({
+        ts: Date.now(),
+        convId,
+        token: myToken,
+        phase: 'fetch_page',
+        durationMs: Number((nowMs() - fetchStartedAt).toFixed(2)),
+        detail: pageResult.usedFallback
+          ? `fallback:${Array.isArray(pageResult.page?.messages) ? pageResult.page.messages.length : 0}`
+          : `tail:${Array.isArray(pageResult.page?.messages) ? pageResult.page.messages.length : 0}`,
+      })
+      const page = pageResult.page
       if (myToken !== conversationSwitchToken || get().activeConvId !== convId) {
         pushSwitchPerf({
           ts: Date.now(),
@@ -523,10 +720,36 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         return
       }
+      const applyStartedAt = nowMs()
       set({
         activeProjectId: conv?.project_id ?? null,
         activeConversation: conv || cachedConv || null,
-        messages: msgs,
+        messages: Array.isArray(page?.messages) ? page.messages : [],
+        conversationLoading: false,
+        messagesLoadingMore: false,
+        messagesHasMoreBefore: Boolean(page?.has_more_before),
+        oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
+          ? Number(page?.oldest_loaded_id)
+          : null,
+      })
+      set((state) => ({
+        conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+          messages: Array.isArray(page?.messages) ? page.messages : [],
+          refs: state.refs,
+          messagesHasMoreBefore: Boolean(page?.has_more_before),
+          oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
+            ? Number(page?.oldest_loaded_id)
+            : null,
+          cachedAt: Date.now(),
+        }),
+      }))
+      pushConversationOpenPhase({
+        ts: Date.now(),
+        convId,
+        token: myToken,
+        phase: 'apply_page',
+        durationMs: Number((nowMs() - applyStartedAt).toFixed(2)),
+        detail: `${Array.isArray(page?.messages) ? page.messages.length : 0}`,
       })
       const active = conv || cachedConv || null
       const sourcePath = String(active?.bound_source_path || '').trim()
@@ -539,18 +762,37 @@ export const useChatStore = create<ChatState>((set, get) => ({
           },
         }))
       }
-      void loadRefsForConversation(convId, set, () => get().activeConvId)
+      scheduleLoadRefsForConversation(convId, set, () => get().activeConvId)
+      pushConversationOpenPhase({
+        ts: Date.now(),
+        convId,
+        token: myToken,
+        phase: 'schedule_refs',
+        durationMs: 0,
+        detail: 'deferred',
+      })
       pushSwitchPerf({
         ts: Date.now(),
         convId,
         token: myToken,
         status: 'success',
         durationMs: Number((nowMs() - startedAt).toFixed(2)),
-        usedCache: Boolean(cachedConv),
-        messageCount: msgs.length,
-        note: conv ? 'ok' : 'ok_without_conv_meta',
+        usedCache: Boolean(cachedView),
+        messageCount: Array.isArray(page?.messages) ? page.messages.length : 0,
+        note: pageResult.usedFallback
+          ? (conv ? 'ok_legacy_messages_fallback' : 'ok_without_conv_meta_legacy_messages_fallback')
+          : (conv
+            ? (cachedView ? 'ok_tail_refs_deferred_cache_refresh' : 'ok_tail_refs_deferred')
+            : (cachedView ? 'ok_without_conv_meta_tail_refs_deferred_cache_refresh' : 'ok_without_conv_meta_tail_refs_deferred')),
       })
     } catch {
+      pushConversationOpenPhase({
+        ts: Date.now(),
+        convId,
+        token: myToken,
+        phase: 'fetch_error',
+        durationMs: Number((nowMs() - fetchStartedAt).toFixed(2)),
+      })
       if (myToken !== conversationSwitchToken || get().activeConvId !== convId) {
         pushSwitchPerf({
           ts: Date.now(),
@@ -564,7 +806,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         return
       }
-      set({ messages: [], refs: {}, activeConversation: cachedConv || null })
+      set({
+        messages: Array.isArray(cachedView?.messages) ? cachedView.messages : [],
+        refs: cachedView?.refs && typeof cachedView.refs === 'object' ? cachedView.refs : {},
+        activeConversation: cachedConv || null,
+        conversationLoading: false,
+        messagesLoadingMore: false,
+        messagesHasMoreBefore: Boolean(cachedView?.messagesHasMoreBefore),
+        oldestLoadedMessageId: cachedView?.oldestLoadedMessageId ?? null,
+      })
       pushSwitchPerf({
         ts: Date.now(),
         convId,
@@ -650,20 +900,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const state = get()
     set((cur) => {
       const nextBindings = { ...(cur.guideBindings || {}) }
+      const nextCache = { ...(cur.conversationCacheById || {}) }
       delete nextBindings[id]
+      delete nextCache[id]
       if (state.activeConvId === id) {
         return {
           activeConvId: null,
           activeConversation: null,
           messages: [],
+          conversationLoading: false,
+          messagesLoadingMore: false,
+          messagesHasMoreBefore: false,
+          oldestLoadedMessageId: null,
           refs: {},
           generation: null,
           uploadItems: [],
           pendingImages: [],
           guideBindings: nextBindings,
+          conversationCacheById: nextCache,
         }
       }
-      return { guideBindings: nextBindings }
+      return {
+        guideBindings: nextBindings,
+        conversationCacheById: nextCache,
+      }
     })
     await get().loadSidebarData()
   },
@@ -676,6 +936,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
         activeProjectId: projectId,
         activeConversation: state.activeConversation ? { ...state.activeConversation, project_id: projectId } : state.activeConversation,
       }))
+    }
+  },
+
+  loadOlderMessages: async () => {
+    const state = get()
+    const convId = String(state.activeConvId || '').trim()
+    const beforeId = Number(state.oldestLoadedMessageId || 0)
+    if (!convId || state.conversationLoading || state.messagesLoadingMore || !state.messagesHasMoreBefore || beforeId <= 0) {
+      return
+    }
+    set({ messagesLoadingMore: true })
+    try {
+      const page = await chatApi.getMessagesPage(convId, {
+        limit: MESSAGE_PAGE_SIZE,
+        beforeId,
+      })
+      if (get().activeConvId !== convId) return
+      const olderMessages = Array.isArray(page?.messages) ? page.messages : []
+      set((current) => {
+        const seen = new Set(current.messages.map((item) => Number(item.id || 0)))
+        const merged = [
+          ...olderMessages.filter((item) => !seen.has(Number(item.id || 0))),
+          ...current.messages,
+        ]
+        return {
+          messages: merged,
+          messagesLoadingMore: false,
+          messagesHasMoreBefore: Boolean(page?.has_more_before),
+          oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
+            ? Number(page?.oldest_loaded_id)
+            : (merged.length > 0 ? Number(merged[0]?.id || 0) || null : null),
+          conversationCacheById: upsertConversationViewCache(current.conversationCacheById, convId, {
+            messages: merged,
+            refs: current.refs,
+            messagesHasMoreBefore: Boolean(page?.has_more_before),
+            oldestLoadedMessageId: Number.isFinite(Number(page?.oldest_loaded_id))
+              ? Number(page?.oldest_loaded_id)
+              : (merged.length > 0 ? Number(merged[0]?.id || 0) || null : null),
+            cachedAt: Date.now(),
+          }),
+        }
+      })
+    } catch {
+      if (get().activeConvId === convId) {
+        set({ messagesLoadingMore: false })
+      }
     }
   },
 
@@ -824,6 +1130,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }],
       pendingImages: [],
       uploadItems: state.uploadItems.filter((item) => item.kind !== 'image'),
+      conversationLoading: false,
       generation: {
         sessionId: res.session_id,
         taskId: res.task_id,
@@ -831,6 +1138,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
         partial: '',
         done: false,
       },
+      conversationCacheById: convId
+        ? upsertConversationViewCache(state.conversationCacheById, convId, {
+          messages: [...state.messages, {
+            id: res.user_msg_id,
+            role: 'user',
+            content: userStoreText,
+            created_at: Date.now() / 1000,
+            attachments: pendingImages,
+          }],
+          refs: state.refs,
+          messagesHasMoreBefore: state.messagesHasMoreBefore,
+          oldestLoadedMessageId: state.oldestLoadedMessageId,
+          cachedAt: Date.now(),
+        })
+        : state.conversationCacheById,
     }))
 
     const ctrl = new AbortController()
@@ -865,9 +1187,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
               },
             })
             if (data.done) {
-              const msgs = await chatApi.getMessages(convId!)
-              set({ messages: msgs, generation: null })
-              void loadRefsForConversation(convId!, set, () => get().activeConvId)
+              const { page } = await getMessagesPageWithFallback(convId!, { limit: MESSAGE_PAGE_SIZE })
+              set((state) => {
+                const merged = mergeLatestMessagePage(
+                  state.messages,
+                  state.messagesHasMoreBefore,
+                  page,
+                )
+                return {
+                  messages: merged.messages,
+                  generation: null,
+                  conversationLoading: false,
+                  messagesLoadingMore: false,
+                  messagesHasMoreBefore: merged.hasMoreBefore,
+                  oldestLoadedMessageId: merged.oldestLoadedMessageId,
+                  conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId!, {
+                    messages: merged.messages,
+                    refs: state.refs,
+                    messagesHasMoreBefore: merged.hasMoreBefore,
+                    oldestLoadedMessageId: merged.oldestLoadedMessageId,
+                    cachedAt: Date.now(),
+                  }),
+                }
+              })
+              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId)
               await get().loadSidebarData()
               return
             }

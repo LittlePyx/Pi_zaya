@@ -8,22 +8,29 @@ import { useSettingsStore } from './stores/settingsStore'
 import { AppLayout } from './components/layout/AppSider'
 import ChatPage from './pages/ChatPage'
 import LibraryPage from './pages/LibraryPage'
+import ReaderRegressionPage from './pages/ReaderRegressionPage'
+import ReaderSplitRegressionPage from './pages/ReaderSplitRegressionPage'
 
 function App() {
   const theme = useTheme()
   const load = useSettingsStore(s => s.load)
+  const isReaderRegressionRoute = typeof window !== 'undefined'
+    && window.location.pathname.startsWith('/__')
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    if (isReaderRegressionRoute) return
+    void load()
+  }, [load, isReaderRegressionRoute])
 
   return (
     <ConfigProvider locale={zhCN} theme={theme === 'dark' ? darkTheme : lightTheme}>
       <BrowserRouter>
-        <AppLayout>
-          <Routes>
-            <Route path="/" element={<ChatPage />} />
-            <Route path="/library" element={<LibraryPage />} />
-          </Routes>
-        </AppLayout>
+        <Routes>
+          <Route path="/__reader_test__" element={<ReaderRegressionPage />} />
+          <Route path="/__reader_split_test__" element={<ReaderSplitRegressionPage />} />
+          <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />
+          <Route path="/library" element={<AppLayout><LibraryPage /></AppLayout>} />
+        </Routes>
       </BrowserRouter>
     </ConfigProvider>
   )

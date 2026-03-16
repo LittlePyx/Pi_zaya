@@ -36,11 +36,11 @@ from kb.answer_contract import (
     _build_paper_guide_grounding_rules,
     _detect_answer_depth,
     _detect_answer_intent,
+    _detect_answer_output_mode,
     _enhance_kb_miss_fallback,
     _extract_answer_section_keys,
     _extract_cited_sentences,
     _has_sufficient_answer_sections,
-    _normalize_answer_mode_hint,
     _normalize_answer_section_name,
     _prefer_zh_locale,
     _reconcile_kb_notice,
@@ -822,14 +822,23 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         deep_read = bool(task.get("deep_read"))
         answer_contract_v1 = _answer_contract_enabled(task)
         answer_depth_auto = bool(task.get("answer_depth_auto", True))
+        paper_guide_mode = bool(task.get("paper_guide_mode"))
         answer_mode_hint = str(task.get("answer_mode_hint") or "").strip()
+        answer_output_mode_hint = str(task.get("answer_output_mode") or task.get("answer_output_mode_hint") or "").strip()
         answer_intent = _detect_answer_intent(prompt, answer_mode_hint=answer_mode_hint)
         answer_depth = _detect_answer_depth(prompt, intent=answer_intent, auto_depth=answer_depth_auto)
+        answer_output_mode = _detect_answer_output_mode(
+            prompt,
+            answer_output_mode_hint=answer_output_mode_hint,
+            answer_mode_hint=answer_mode_hint,
+            paper_guide_mode=paper_guide_mode,
+            intent=answer_intent,
+            anchor_grounded=False,
+        )
         llm_rerank = bool(task.get("llm_rerank", True))
         settings_obj = task.get("settings_obj")
         chat_store = ChatStore(chat_db)
         preferred_sources_raw = task.get("preferred_sources") or []
-        paper_guide_mode = bool(task.get("paper_guide_mode"))
         paper_guide_bound_source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
         paper_guide_bound_source_name = str(task.get("paper_guide_bound_source_name") or "").strip()
         paper_guide_bound_source_ready = bool(task.get("paper_guide_bound_source_ready"))
@@ -901,7 +910,20 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             except Exception as exc:
                 _perf_log("gen.provenance_inline_fast", ok=0, err=str(exc)[:120])
             _perf_log("gen.quick_answer", total=time.perf_counter() - worker_t0, conv_id=conv_id)
-            _gen_update_task(session_id, task_id, status="done", stage="done", answer=quick_answer, partial=quick_answer, char_count=len(quick_answer), finished_at=time.time())
+            _gen_update_task(
+                session_id,
+                task_id,
+                status="done",
+                stage="done",
+                answer=quick_answer,
+                partial=quick_answer,
+                char_count=len(quick_answer),
+                answer_intent=answer_intent,
+                answer_depth=answer_depth,
+                answer_output_mode=answer_output_mode,
+                answer_contract_v1=bool(answer_contract_v1),
+                finished_at=time.time(),
+            )
             return
 
         try:
@@ -1295,6 +1317,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             top_n=answer_hit_limit,
         )
         anchor_grounded_answer = _has_anchor_grounded_answer_hits(answer_hits)
+        answer_output_mode = _detect_answer_output_mode(
+            prompt,
+            answer_output_mode_hint=answer_output_mode_hint,
+            answer_mode_hint=answer_mode_hint,
+            paper_guide_mode=paper_guide_mode,
+            intent=answer_intent,
+            anchor_grounded=anchor_grounded_answer,
+        )
         locked_citation_source = _pick_locked_citation_source(list(answer_seed or answer_hits))
         answer_hits = _ensure_locked_source_in_answer_hits(
             answer_hits,
@@ -1392,6 +1422,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             deep_read_added=int(deep_added),
             answer_intent=answer_intent,
             answer_depth=answer_depth,
+            answer_output_mode=answer_output_mode,
             answer_contract_v1=bool(answer_contract_v1),
             citation_locked_sid=str((locked_citation_source or {}).get("sid") or ""),
             stage="answer",
@@ -1454,9 +1485,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 intent=answer_intent,
                 depth=answer_depth,
                 has_hits=bool(answer_hits),
+                output_mode=answer_output_mode,
             )
         if paper_guide_mode and paper_guide_bound_source_ready:
-            system += _build_paper_guide_grounding_rules(answer_contract_v1=bool(answer_contract_v1))
+            system += _build_paper_guide_grounding_rules(
+                answer_contract_v1=bool(answer_contract_v1),
+                output_mode=answer_output_mode,
+            )
         prompt_for_user = prompt or "[Image attachment only request]"
         user = (
             f"Question:\\n{prompt_for_user}\\n\\n"
@@ -1555,6 +1590,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 has_hits=bool(answer_hits),
                 intent=answer_intent,
                 depth=answer_depth,
+                output_mode=answer_output_mode,
             )
         answer = _enhance_kb_miss_fallback(
             answer,
@@ -1562,6 +1598,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             intent=answer_intent,
             depth=answer_depth,
             contract_enabled=bool(answer_contract_v1),
+            output_mode=answer_output_mode,
         )
         answer = _maybe_append_library_figure_markdown(answer, prompt=prompt, answer_hits=answer_hits)
         answer, citation_validation = _validate_structured_citations(
@@ -1576,6 +1613,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             contract_enabled=bool(answer_contract_v1),
             intent=answer_intent,
             depth=answer_depth,
+            output_mode=answer_output_mode,
         )
         _gen_store_answer(task, answer)
         _gen_record_answer_quality(
@@ -1605,6 +1643,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             partial=answer,
             char_count=len(answer),
             answer_ready=True,
+            answer_output_mode=answer_output_mode,
             answer_quality=answer_quality,
             citation_validation=citation_validation,
             finished_at=time.time(),

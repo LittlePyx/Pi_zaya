@@ -112,6 +112,9 @@ def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
         def set_title_if_default(self, conv_id: str, title: str) -> None:
             self.titles.append((conv_id, title))
 
+        def get_conversation(self, conv_id: str) -> dict:
+            return {}
+
     fake_store = FakeStore()
     started_tasks: list[dict] = []
 
@@ -163,6 +166,7 @@ def test_generate_stream_exposes_answer_probe_fields(monkeypatch):
             "answer": "ok",
             "answer_intent": "reading",
             "answer_depth": "L2",
+            "answer_output_mode": "fact_answer",
             "answer_contract_v1": True,
             "answer_quality": {"minimum_ok": True, "core_section_coverage": 1.0},
         },
@@ -178,6 +182,7 @@ def test_generate_stream_exposes_answer_probe_fields(monkeypatch):
     assert payload["status"] == "done"
     assert payload["answer_intent"] == "reading"
     assert payload["answer_depth"] == "L2"
+    assert payload["answer_output_mode"] == "fact_answer"
     assert payload["answer_contract_v1"] is True
     assert payload["answer_quality"]["minimum_ok"] is True
 
