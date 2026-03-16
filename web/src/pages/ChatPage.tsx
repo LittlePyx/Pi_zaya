@@ -524,7 +524,7 @@ export default function ChatPage() {
         ? Number(payload.anchorNumber)
         : undefined,
       strictLocate: Boolean(payload.strictLocate),
-      locateMode: payload.locateMode === 'structured' ? 'structured' : payload.locateMode === 'heuristic' ? 'heuristic' : undefined,
+      locateMode: payload.locateMode === 'heuristic' ? 'heuristic' : undefined,
       locateTarget,
       claimGroup,
       locateRequestId,

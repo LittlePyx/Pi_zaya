@@ -61,11 +61,10 @@ export function PaperGuideReaderDrawer({
   const headingPath = String(payload?.headingPath || '').trim()
   const focusSnippet = String(payload?.snippet || '').trim()
   const highlightSnippet = String(payload?.highlightSnippet || '').trim()
-  const locateMode = String(payload?.locateMode || '').trim().toLowerCase()
   const locateTarget = (payload?.locateTarget && typeof payload.locateTarget === 'object')
     ? payload.locateTarget
     : null
-  const hasStructuredLocateTarget = Boolean(locateTarget) || locateMode === 'structured'
+  const hasStructuredLocateTarget = Boolean(locateTarget)
   const primaryHeadingPath = String(locateTarget?.headingPath || headingPath).trim()
   const primaryFocusSnippet = String(locateTarget?.snippet || focusSnippet).trim()
   const primaryHighlightSnippet = String(

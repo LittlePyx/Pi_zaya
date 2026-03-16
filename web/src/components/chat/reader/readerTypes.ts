@@ -39,7 +39,7 @@ export interface ReaderOpenPayload {
   anchorKind?: string
   anchorNumber?: number
   strictLocate?: boolean
-  locateMode?: 'heuristic' | 'structured'
+  locateMode?: 'heuristic'
   locateTarget?: ReaderLocateTarget
   claimGroup?: ReaderLocateClaimGroup
   locateRequestId?: number
