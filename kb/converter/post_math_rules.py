@@ -53,6 +53,7 @@ def fix_math_markdown(md: str) -> str:
             t2 = re.sub(r"\\text\{([^{}]{0,220})\}", r"\1", t)
             t2 = re.sub(r"\\mathrm\{([^{}]{0,220})\}", r"\1", t2)
             t2 = re.sub(r"\\mathbf\{([^{}]{0,220})\}", r"\1", t2)
+            t2 = re.sub(r"\\textit\{([^{}]{0,220})\}", r"\1", t2)
             if t2 == t:
                 break
             t = t2
@@ -164,7 +165,7 @@ def fix_math_markdown(md: str) -> str:
             return ""
         t = str(s)
         for _ in range(3):
-            t2 = re.sub(r"\\(?:text|mathrm|mathbf)\{([^{}]{0,260})\}", r"\1", t)
+            t2 = re.sub(r"\\(?:text|textit|mathrm|mathbf)\{([^{}]{0,260})\}", r"\1", t)
             t2 = re.sub(r"\\cite\{([^{}]{0,260})\}", r" ", t2)
             if t2 == t:
                 break
@@ -188,6 +189,13 @@ def fix_math_markdown(md: str) -> str:
             # Unwrap when it's clearly prose/citation text rather than equation syntax.
             if (plain_words >= 6 and not _has_hard_math_anchors(t)) or (plain_words >= 4 and cite_like and not _has_hard_math_anchors(t)):
                 return True
+        if "\\textit{" in t and (not _has_hard_math_anchors(t)):
+            plain = _latex_text_to_plain(t)
+            plain_words = len(re.findall(r"\b[A-Za-z]{2,}\b", plain))
+            if plain_words >= 3:
+                return True
+        if ("@" in t) or ("http://" in t.lower()) or ("https://" in t.lower()) or ("www." in t.lower()):
+            return True
         # Obvious prose markers
         if re.search(r"(?i)\b(in this paper|we propose|however|moreover|there are|these methods)\b", t):
             return True
@@ -210,7 +218,15 @@ def fix_math_markdown(md: str) -> str:
         # Don't count citation brackets [] as math symbols.
         t_probe = _strip_text_macros(t)
         sym_n = len(re.findall(r"[=+\-*/^_]|\\frac|\\sum|\\int|\\prod|\\sqrt|\\times|\\cdot|\\odot|\\in|\\partial|\\nabla", t_probe))
+        unit_like = bool(
+            re.search(
+                r"(?i)\b(?:nm|mm|cm|mW|kW|Hz|kHz|MHz|GHz|fps|dB|ms|us|μs|ns|kg|mg|mol|mmol|kV|mA|V|A)\b",
+                t,
+            )
+        )
         if word_n >= 10 and sym_n <= 1:
+            return True
+        if word_n >= 8 and unit_like and sym_n <= 1:
             return True
         # Fragmentary short math blocks with unbalanced delimiters are usually extraction junk.
         if len(t) <= 40:

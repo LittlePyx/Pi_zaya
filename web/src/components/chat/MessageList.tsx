@@ -4190,7 +4190,6 @@ export function MessageList({
                 anchorKind: structuredAnchorKind || undefined,
                 anchorNumber: structuredAnchorNumber,
                 strictLocate: true,
-                locateMode: 'structured',
                 locateTarget,
                 claimGroup,
                 alternatives: fallbackAlternatives.length > 0 ? fallbackAlternatives : undefined,

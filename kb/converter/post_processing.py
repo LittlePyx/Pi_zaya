@@ -622,6 +622,7 @@ def _normalize_figure_caption_blocks(md: str) -> str:
     pending_alt_caption: Optional[str] = None
     pending_alt_id: Optional[str] = None
     pending_after_image = False
+    last_image_line: Optional[str] = None
 
     for ln in lines:
         st = ln.strip()
@@ -697,11 +698,18 @@ def _normalize_figure_caption_blocks(md: str) -> str:
 
         m_img = image_re.match(ln)
         if m_img:
+            norm_img = st
+            if last_image_line and norm_img == last_image_line:
+                continue
             out.append(ln)
             pending_alt_caption = _caption_from_alt(m_img.group(1) or "")
             pending_alt_id = _caption_id(m_img.group(1) or "") if pending_alt_caption else None
             pending_after_image = True
+            last_image_line = norm_img
             continue
+
+        if st:
+            last_image_line = None
 
         if caption_re.match(st):
             cap = _format_caption_line(ln)
@@ -716,6 +724,262 @@ def _normalize_figure_caption_blocks(md: str) -> str:
 
     return "\n".join(out)
 
+
+def _normalize_structural_labels(md: str) -> str:
+    if not md:
+        return md
+    replacements = {
+        r"(?mi)^#{1,6}\s+A\s+B\s+S\s+T\s+R\s+A\s+C\s+T\s*$": "## Abstract",
+        r"(?mi)^#{1,6}\s+R\s+E\s+F\s+E\s+R\s+E\s+N\s+C\s+E\s+S\s*$": "## References",
+        r"(?mi)^#{1,6}\s+K\s+E\s+Y\s+W\s+O\s+R\s+D\s+S\s*$": "## Keywords",
+    }
+    out = md
+    for pat, repl in replacements.items():
+        out = re.sub(pat, repl, out)
+    return out
+
+
+def _strip_frontmatter_metadata_lines(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    out: list[str] = []
+    heading_seen = False
+    heading_re = re.compile(r"^\s*#{1,6}\s+\S")
+    drop_frontmatter_re = re.compile(
+        r"^(?:"
+        r"Article|"
+        r"https?://doi\.org/\S+|"
+        r"doi:\S+|"
+        r"Published online:.*|"
+        r"Received:\s+.*|"
+        r"Accepted:\s+.*|"
+        r"Check for updates|"
+        r"Optics\s*&\s*Laser\s*Technology\s+\d+\s*\(\d{4}\)\s*\d+|"
+        r"Vol\.\s*\d+\s*,\s*No\.\s*\d+\s*\|.*OPTICS\s+EXPRESS.*|"
+        r".*Optical Society of America.*|"
+        r".*\bOCIS codes:\b.*"
+        r")$",
+        flags=re.IGNORECASE,
+    )
+    for idx, line in enumerate(lines):
+        st = line.strip()
+        if heading_re.match(st):
+            heading_seen = True
+        if idx < 30 and drop_frontmatter_re.match(st):
+            continue
+        if idx < 30 and st == "---":
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _demote_panel_headings(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    out: list[str] = []
+    for line in lines:
+        m = re.match(r"^(#{2,6})\s+(.+)$", line)
+        if not m:
+            out.append(line)
+            continue
+        title = (m.group(2) or "").strip()
+        if re.match(r"^[a-z]\s+[A-Z][A-Za-z0-9].{3,120}$", title):
+            out.append(title)
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _rebalance_custom_headings_within_structural_sections(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    out: list[str] = []
+    current_structural_h2: str | None = None
+    for line in lines:
+        m = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if not m:
+            out.append(line)
+            continue
+        level = len(m.group(1))
+        title = (m.group(2) or "").strip()
+        is_numbered = _parse_numbered_heading_level(title) is not None
+        is_appendix = _parse_appendix_heading_level(title) is not None
+        is_structural = _is_common_section_heading(title)
+
+        if level == 2:
+            if is_structural or is_numbered or is_appendix:
+                current_structural_h2 = title
+                out.append(line)
+                continue
+            if current_structural_h2:
+                out.append("### " + title)
+                continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _drop_empty_figure_duplicate_headings(md: str) -> str:
+    if not md:
+        return md
+
+    stop_words = {
+        "the", "and", "for", "with", "from", "into", "onto", "this", "that", "these", "those",
+        "reported", "their", "then", "than", "while", "where", "which", "using", "used", "use",
+        "over", "under", "between", "through", "about", "network",
+    }
+
+    def _title_words(text: str) -> set[str]:
+        norm = _normalize_text(text or "").lower()
+        words = re.findall(r"[a-z]{4,}", norm)
+        return {w for w in words if w not in stop_words}
+
+    def _looks_custom_heading(title: str) -> bool:
+        if not title:
+            return False
+        if _is_common_section_heading(title):
+            return False
+        if _parse_numbered_heading_level(title) is not None:
+            return False
+        if _parse_appendix_heading_level(title) is not None:
+            return False
+        if _is_caption_heading_text(title):
+            return False
+        return True
+
+    lines = md.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^(#{2,6})\s+(.+)$", line)
+        if not m:
+            out.append(line)
+            i += 1
+            continue
+
+        title = (m.group(2) or "").strip()
+        title_words = _title_words(title)
+        if not _looks_custom_heading(title) or len(title_words) < 3:
+            out.append(line)
+            i += 1
+            continue
+
+        j = i + 1
+        while j < len(lines) and not lines[j].strip():
+            j += 1
+        if j >= len(lines) or not re.match(r"^#{1,6}\s+", lines[j] or ""):
+            out.append(line)
+            i += 1
+            continue
+
+        window_end = min(len(lines), i + 40)
+        saw_image = False
+        duplicate_caption = False
+        for k in range(j, window_end):
+            st = (lines[k] or "").strip()
+            if not st:
+                continue
+            if st.startswith("!["):
+                saw_image = True
+                continue
+            if re.match(r"^#{1,6}\s+", st):
+                continue
+            cand_words = _title_words(st)
+            if len(cand_words) < 3:
+                continue
+            overlap = len(title_words & cand_words)
+            if overlap >= 3 and overlap / max(1, len(title_words)) >= 0.5:
+                duplicate_caption = True
+        if saw_image and duplicate_caption:
+            i += 1
+            continue
+
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
+def _cleanup_author_superscript_noise(md: str) -> str:
+    if not md:
+        return md
+    def _digits_only(raw: str) -> str:
+        return re.sub(r"\s+", "", raw or "")
+    out = md
+    out = re.sub(r"\$\^\{ID\s*([0-9,\s]+)\}\$", lambda m: "$^{" + _digits_only(m.group(1)) + "}$", out)
+    out = re.sub(r"\^\{ID\s*([0-9,\s]+)\}", lambda m: "^{" + _digits_only(m.group(1)) + "}", out)
+    return out
+
+
+def _insert_missing_abstract_heading(md: str) -> str:
+    if not md:
+        return md
+    if re.search(r"(?mi)^#{1,6}\s+Abstract\s*$", md):
+        return md
+    lines = md.splitlines()
+    out: list[str] = []
+    inserted = False
+    first_h2_seen = False
+    long_para_re = re.compile(r"[A-Za-z]{4,}")
+    for idx, line in enumerate(lines):
+        st = line.strip()
+        if re.match(r"^##\s+", st):
+            first_h2_seen = True
+        if (
+            (not inserted)
+            and (not first_h2_seen)
+            and idx > 0
+            and len(st) >= 240
+            and long_para_re.search(st)
+            and not st.startswith("![")
+            and not st.startswith("|")
+            and not st.startswith("**Figure")
+        ):
+            prev_nonempty = next((x.strip() for x in reversed(out) if x.strip()), "")
+            if prev_nonempty and re.match(r"^(?:#\s+.+|.+\$\^\{?.+|.+&.+|Published online:.*)$", prev_nonempty):
+                out.append("## Abstract")
+                out.append("")
+                inserted = True
+        out.append(line)
+    return "\n".join(out)
+
+
+def _move_early_references_block_to_end(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    ref_re = re.compile(r"^##\s+References\s*$", re.IGNORECASE)
+    body_heading_re = re.compile(
+        r"^##\s+(?:\d+(?:\.\d+)*\.?\s+.+|Introduction|Background|Related Work|Methods?|Results?|Discussion|Conclusion)\b",
+        re.IGNORECASE,
+    )
+    ref_idx = next((i for i, ln in enumerate(lines) if ref_re.match(ln.strip())), None)
+    if ref_idx is None:
+        return md
+    first_body_idx = next((i for i, ln in enumerate(lines) if body_heading_re.match(ln.strip())), None)
+    if first_body_idx is None or ref_idx > first_body_idx:
+        return md
+    end_idx = None
+    for i in range(ref_idx + 1, len(lines)):
+        if body_heading_re.match(lines[i].strip()):
+            end_idx = i
+            break
+    if end_idx is None:
+        return md
+    ref_payload_n = sum(1 for ln in lines[ref_idx + 1 : end_idx] if re.match(r"^\[\d{1,4}\]", ln.strip()))
+    if ref_payload_n < 5:
+        return md
+    moved = lines[ref_idx:end_idx]
+    kept = lines[:ref_idx] + lines[end_idx:]
+    while kept and not kept[-1].strip():
+        kept.pop()
+    if kept:
+        kept.append("")
+    kept.extend(moved)
+    return "\n".join(kept)
+
 def postprocess_markdown(md: str) -> str:
     md = _cleanup_noise_lines(md)
     md = _drop_ocr_placeholder_lines(md)
@@ -729,10 +993,18 @@ def postprocess_markdown(md: str) -> str:
     md = _fix_split_numbered_headings(md)
     md = _promote_bare_numbered_headings(md)
     md = _unwrap_math_wrapped_headings(md)
+    md = _normalize_structural_labels(md)
+    md = _strip_frontmatter_metadata_lines(md)
+    md = _cleanup_author_superscript_noise(md)
+    md = _insert_missing_abstract_heading(md)
     md = _enforce_heading_policy(md)
+    md = _demote_panel_headings(md)
+    md = _rebalance_custom_headings_within_structural_sections(md)
+    md = _drop_empty_figure_duplicate_headings(md)
     md = _extract_box_sidebars(md)
     md = _repair_dangling_heading_continuations(md)
     md = _format_references(md)
+    md = _move_early_references_block_to_end(md)
     md = _normalize_figure_caption_blocks(md)
     md = _normalize_body_citations_to_superscript(md)
     md = _split_inline_heading_markers(md)

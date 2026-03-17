@@ -53,6 +53,7 @@ class LLMWorker:
         self._cache_confirm_heading: dict[str, dict] = {}
         self._cache_repair_math: dict[str, str] = {}
         self._cache_max_items = 2048
+        self._vision_message_format_supported: bool | None = None
         if self.cfg.llm:
             try:
                 self._client = self._ensure_openai_class()(
@@ -85,6 +86,18 @@ class LLMWorker:
             return str(getattr(self._thread_state, "last_vl_error_code", "") or "").strip().lower()
         except Exception:
             return ""
+
+    def _mark_vision_message_format_supported(self, supported: bool) -> None:
+        try:
+            self._vision_message_format_supported = bool(supported)
+        except Exception:
+            self._vision_message_format_supported = None
+
+    def vision_message_format_supported(self) -> bool | None:
+        try:
+            return self._vision_message_format_supported
+        except Exception:
+            return None
 
     def _resolve_llm_hard_timeout_s(self, *, has_image_payload: bool, request_timeout_s: float) -> float:
         """
@@ -558,6 +571,8 @@ class LLMWorker:
             return None
         if not png_bytes:
             return None
+        if self.vision_message_format_supported() is False:
+            return None
 
         # Cache by content hash to avoid repeated vision calls.
         cache_key = None
@@ -610,6 +625,13 @@ class LLMWorker:
                 max_tokens=min(900, int(getattr(self.cfg.llm, "max_tokens", 4096) or 4096)),
             )
         except Exception as e:
+            try:
+                error_str = str(e)
+                if "image_url" in error_str and "expected `text`" in error_str:
+                    self._set_last_vl_error_code("unsupported_vision")
+                    self._mark_vision_message_format_supported(False)
+            except Exception:
+                pass
             if debug_vision:
                 try:
                     m = str(getattr(self.cfg.llm, "model", "") or "")
@@ -622,6 +644,7 @@ class LLMWorker:
             return None
 
         out = (resp.choices[0].message.content or "").strip()
+        self._mark_vision_message_format_supported(True)
         # Strip fences / delimiters if model disobeyed.
         if out.startswith("```"):
             try:
@@ -678,6 +701,9 @@ class LLMWorker:
             return None
         if not png_bytes:
             return None
+        if self.vision_message_format_supported() is False:
+            self._set_last_vl_error_code("unsupported_vision")
+            return None
         self._set_last_vl_error_code("")
 
         b64 = base64.b64encode(png_bytes).decode("ascii")
@@ -706,17 +732,21 @@ class LLMWorker:
             "Requirements (strict):\n"
             "1. Reproduce all visible body text faithfully. Do not summarize.\n"
             "2. Keep section hierarchy with Markdown headings: # / ## / ### / #### when appropriate.\n"
-            "3. Exclude non-body metadata (journal headers/footers, websites, page counters like '(n of m)', copyright/publisher boilerplate, isolated affiliation/contact/ORCID/DOI footer blocks).\n"
-            "4. Tables must be valid Markdown tables with all cells preserved.\n"
-            "5. Keep figure/image references and captions when present.\n"
-            "6. Use `$...$` or `$$...$$` ONLY for true mathematical expressions.\n"
-            "7. NEVER wrap prose, citations (`[12]`), headings, names, references, or metadata in math delimiters.\n"
-            "8. If one display equation is visually split across lines, reconstruct it into ONE coherent `$$...$$` block.\n"
-            "9. If equation number `(N)` is visible next to a display equation, append `\\tag{N}`.\n"
-            "10. LaTeX must be Typora/KaTeX-compatible. No custom macros (`\\newcommand`, `\\def`, `\\DeclareMathOperator`).\n"
-            "11. For references pages: plain-text references only, one full reference per line, keep `[N]` numbering, no math delimiters/code fences.\n"
-            "12. Never output placeholders like '(incomplete visible)', 'unreadable', 'illegible', or diagnostics.\n"
-            "13. Return ONLY Markdown content. Do not output explanations, diagnostics, or refusal text.\n"
+            "3. For two-column academic layouts, preserve normal reading order: read the left column top-to-bottom before the right column.\n"
+            "4. On the first page, preserve the full Abstract from its first visible sentence. Do not drop the abstract opening even if title/author/figure blocks appear above it.\n"
+            "5. Exclude non-body metadata (journal headers/footers, websites, page counters like '(n of m)', copyright/publisher boilerplate, isolated affiliation/contact/ORCID/DOI footer blocks).\n"
+            "6. Tables must be valid Markdown tables with all cells preserved.\n"
+            "7. Keep figure/image references and captions when present.\n"
+            "8. Use `$...$` or `$$...$$` ONLY for true mathematical expressions.\n"
+            "9. NEVER wrap prose, citations (`[12]`), headings, names, references, or metadata in math delimiters.\n"
+            "10. Preserve equations exactly: keep every visible symbol, accent, subscript, superscript, Greek letter, bold marker, bracket, operator, and equation number.\n"
+            "11. If one display equation is visually split across lines, reconstruct it into ONE coherent `$$...$$` block.\n"
+            "12. If equation number `(N)` is visible next to a display equation, append `\\tag{N}`.\n"
+            "13. Convert visible math glyphs to standard Typora/KaTeX LaTeX. Prefer faithful transcription over paraphrasing or simplifying formulas.\n"
+            "14. LaTeX must be Typora/KaTeX-compatible. No custom macros (`\\newcommand`, `\\def`, `\\DeclareMathOperator`).\n"
+            "15. For references pages: plain-text references only, one full reference per line, keep `[N]` numbering, no math delimiters/code fences.\n"
+            "16. Never output placeholders like '(incomplete visible)', 'unreadable', 'illegible', or diagnostics.\n"
+            "17. Return ONLY Markdown content. Do not output explanations, diagnostics, or refusal text.\n"
         )
 
         if self.cfg.llm.request_sleep_s > 0:
@@ -725,7 +755,10 @@ class LLMWorker:
         system_content = (
             "You are an expert document converter. "
             "You convert PDF page images into clean, faithful Markdown with correct LaTeX math. "
+            "For two-column papers, follow natural reading order: left column first, then right column. "
+            "Never omit the opening abstract paragraph on page 1. "
             "All LaTeX must be Typora/KaTeX-compatible and must not rely on custom macro definitions. "
+            "Preserve every visible math symbol, subscript, superscript, Greek letter, and equation number. "
             "Only mark true mathematical expressions with $...$ or $$...$$; never wrap prose/citations/metadata in math delimiters. "
             "Exclude non-body metadata (author affiliation/contact blocks, journal headers/footers, DOI-only footer lines, copyright/publisher boilerplate). "
             "Return ONLY the Markdown. No explanations."
@@ -782,6 +815,8 @@ class LLMWorker:
             elif "400" in error_str or "BadRequestError" in error_str:
                 print(f"{error_msg}", flush=True)
                 if "image_url" in error_str and "expected `text`" in error_str:
+                    self._set_last_vl_error_code("unsupported_vision")
+                    self._mark_vision_message_format_supported(False)
                     print(
                         "[VISION_PAGE] API rejected image payload. The current model/provider endpoint likely does not support this vision message format.",
                         flush=True,
@@ -803,6 +838,7 @@ class LLMWorker:
             return None
 
         out = (resp.choices[0].message.content or "").strip()
+        self._mark_vision_message_format_supported(True)
         self._set_last_vl_error_code("")
         # Strip markdown fences if model wrapped the whole output
         if out.startswith("```markdown") or out.startswith("```md"):

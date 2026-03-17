@@ -268,7 +268,7 @@ export default function LibraryPage() {
   const updateSettings = useSettingsStore((s) => s.update)
 
   const [scope, setScope] = useState('200')
-  const [tabKey, setTabKey] = useState<FileTabKey>('pending')
+  const [tabKey, setTabKey] = useState<FileTabKey>('all')
   const [browseMode, setBrowseMode] = useState<LibraryBrowseMode>('list')
   const [replaceMd, setReplaceMd] = useState(false)
   const [onlyBusyFiles, setOnlyBusyFiles] = useState(false)
@@ -1302,8 +1302,16 @@ export default function LibraryPage() {
 
   const renderFileRow = (item: LibraryFileItem) => {
     const tag = fileTag(item)
+    const statusTone =
+      tag.color === 'success'
+        ? 'is-success'
+        : tag.color === 'processing'
+          ? 'is-processing'
+          : tag.color === 'warning'
+            ? 'is-warning'
+            : 'is-default'
     const readingLabel = readingStatusLabel(item.reading_status)
-    const metaTags = (item.user_tags || []).slice(0, 3)
+    const metaTags = item.user_tags || []
     const suggestionCount = (item.suggested_category ? 1 : 0) + (item.suggested_tags || []).length
     const categoryActive = !onlyUnclassified && paperCategoryFilter && String(item.paper_category || '') === paperCategoryFilter
     const statusActive = readingStatusFilter && item.reading_status === readingStatusFilter
@@ -1322,16 +1330,14 @@ export default function LibraryPage() {
         <div className="kb-lib-file-main">
           <div className="kb-lib-file-head">
             <div className="kb-lib-file-title-wrap">
-              <Text className="kb-lib-file-title">{item.name}</Text>
+              <Text className="kb-lib-file-title" title={item.name}>{item.name}</Text>
             </div>
             <div className="kb-lib-file-submeta">
-              <Tag color={tag.color}>{tag.text}</Tag>
-              <span className={`kb-lib-file-meta-muted${item.md_exists ? ' is-ready' : ''}`}>
-                {item.md_exists ? 'Markdown 已就绪' : '尚未生成 Markdown'}
-              </span>
+              <span className={`kb-lib-file-status-chip ${statusTone}`}>{tag.text}</span>
+              {!item.md_exists ? <span className="kb-lib-file-meta-muted">待生成 MD</span> : null}
               {suggestionCount > 0 ? (
                 <span className="kb-lib-file-submeta-chip is-suggestion">
-                  {suggestionCount} 条系统建议
+                  {suggestionCount} 建议
                 </span>
               ) : null}
             </div>
@@ -1367,9 +1373,6 @@ export default function LibraryPage() {
                   #{tagValue}
                 </button>
               ))}
-              {(item.user_tags || []).length > metaTags.length ? (
-                <span className="kb-lib-taxonomy-more">+{(item.user_tags || []).length - metaTags.length}</span>
-              ) : null}
             </div>
           ) : null}
 
@@ -1378,30 +1381,32 @@ export default function LibraryPage() {
 
         <div className={`kb-lib-file-actions${showPrimaryConvertAction ? ' has-convert' : ' is-compact'}`}>
           <Button className="kb-lib-file-action-main" size="small" onClick={() => openMetaEditor(item)}>
-            分类/标签
+            分类
           </Button>
-          <Button
-            className="kb-lib-file-action-main"
-            size="small"
-            disabled={!item.md_exists || !item.md_path}
-            onClick={() => { void handleStartPaperGuide(item) }}
-          >
-            阅读指导
-          </Button>
+          {item.md_exists ? (
+            <Button
+              className="kb-lib-file-action-link"
+              type="text"
+              size="small"
+              disabled={!item.md_path}
+              onClick={() => { void handleStartPaperGuide(item) }}
+            >
+              阅读
+            </Button>
+          ) : null}
           {showPrimaryConvertAction ? (
             <Button
-              className="kb-lib-file-action-main"
+              className="kb-lib-file-action-link is-accent"
+              type="text"
               size="small"
-              type="primary"
-              ghost
               disabled={item.task_state !== 'idle'}
               onClick={() => { void handleConvertOne(item) }}
             >
               转换
             </Button>
           ) : null}
-          <Button className="kb-lib-file-action-main" size="small" onClick={() => { void store.openFile(item.name, 'pdf') }}>
-            打开 PDF
+          <Button className="kb-lib-file-action-link" type="text" size="small" onClick={() => { void store.openFile(item.name, 'pdf') }}>
+            PDF
           </Button>
           <div className="kb-lib-file-more">
             <Dropdown
@@ -1992,7 +1997,7 @@ export default function LibraryPage() {
   ) : null
 
   return (
-    <div className="kb-library-page mx-auto w-full max-w-[1760px] space-y-4 p-5">
+    <div className="kb-library-page mx-auto w-full max-w-[1760px] space-y-5 p-5">
       <div className="kb-lib-head flex flex-wrap items-end justify-between gap-3">
         <div className="kb-lib-head-main">
           <Text className="text-2xl font-semibold">文献管理</Text>
@@ -2176,7 +2181,7 @@ export default function LibraryPage() {
       <Card size="small" className="kb-lib-card kb-lib-taxonomy-bar" title="文献分类与标签">
         <div className="kb-lib-taxonomy-shell">
           <div className="kb-lib-taxonomy-top">
-            <div className="kb-lib-taxonomy-top-main">
+            <div className="kb-lib-taxonomy-view">
               <Segmented
                 className="kb-lib-browse-switch"
                 value={browseMode}
@@ -2187,6 +2192,8 @@ export default function LibraryPage() {
                   { label: '标签', value: 'tags' },
                 ]}
               />
+            </div>
+            <div className="kb-lib-taxonomy-meta">
               <div className="kb-lib-taxonomy-summary">
                 <Text type="secondary" className="kb-lib-taxonomy-result">
                   已显示 {visibleAll.length}/{store.files.length} 篇文献
@@ -2197,30 +2204,30 @@ export default function LibraryPage() {
                   </span>
                 ) : null}
               </div>
+              {showTaxonomyTopActions ? (
+                <div className="kb-lib-taxonomy-top-actions">
+                  {showTaxonomySelectAction ? (
+                    <Button className="kb-lib-action-quiet" onClick={selectCurrentListItems}>
+                      选中当前列表
+                    </Button>
+                  ) : null}
+                  {showTaxonomyRefreshAction ? (
+                    <Button
+                      className="kb-lib-action-tonal"
+                      loading={suggestionsRefreshing}
+                      onClick={() => { void regenerateSuggestionsForVisible() }}
+                    >
+                      刷新建议
+                    </Button>
+                  ) : null}
+                  {showTaxonomyClearAction ? (
+                    <Button className="kb-lib-action-quiet" onClick={clearTaxonomyFilters}>
+                      清空筛选
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
-            {showTaxonomyTopActions ? (
-              <div className="kb-lib-taxonomy-top-actions">
-                {showTaxonomySelectAction ? (
-                  <Button className="kb-lib-action-quiet" onClick={selectCurrentListItems}>
-                    选中当前列表
-                  </Button>
-                ) : null}
-                {showTaxonomyRefreshAction ? (
-                  <Button
-                    className="kb-lib-action-tonal"
-                    loading={suggestionsRefreshing}
-                    onClick={() => { void regenerateSuggestionsForVisible() }}
-                  >
-                    刷新建议
-                  </Button>
-                ) : null}
-                {showTaxonomyClearAction ? (
-                  <Button className="kb-lib-action-quiet" onClick={clearTaxonomyFilters}>
-                    清空筛选
-                  </Button>
-                ) : null}
-              </div>
-            ) : null}
           </div>
 
           <div className="kb-lib-taxonomy-controls">
@@ -2322,7 +2329,7 @@ export default function LibraryPage() {
         items={[
           { key: 'pending', label: `待转换 (${visiblePending.length})`, children: renderFiles(visiblePending, '暂无待转换文件') },
           { key: 'converted', label: `已转换 (${visibleConverted.length})`, children: renderFiles(visibleConverted, '暂无已转换文件') },
-          { key: 'all', label: `当前视图 (${visibleAll.length})`, children: renderFiles(visibleAll, '暂无文件') },
+          { key: 'all', label: `全部 (${visibleAll.length})`, children: renderFiles(visibleAll, '暂无文件') },
         ]}
       />
       ) : browseMode === 'categories' ? (

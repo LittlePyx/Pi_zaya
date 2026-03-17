@@ -98,7 +98,6 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
       anchorId: 'a-quote-1',
       anchorKind: 'quote',
       strictLocate: true,
-      locateMode: 'structured',
       locateTarget: {
         segmentId: 'seg-quote-1',
         sourceSegmentId: 'seg-quote-1',
@@ -177,7 +176,6 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
       anchorId: 'missing-quote-anchor',
       anchorKind: 'quote',
       strictLocate: true,
-      locateMode: 'structured',
       locateTarget: {
         segmentId: 'seg-missing-quote',
         sourceSegmentId: 'seg-missing-quote',
@@ -255,7 +253,6 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
       anchorKind: 'equation',
       anchorNumber: 1,
       strictLocate: true,
-      locateMode: 'structured',
       locateTarget: {
         segmentId: 'seg-eq-1',
         sourceSegmentId: 'seg-eq-1',
@@ -285,7 +282,6 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
       anchorKind: 'figure',
       anchorNumber: 1,
       strictLocate: true,
-      locateMode: 'structured',
       locateTarget: {
         segmentId: 'seg-fig-1',
         sourceSegmentId: 'seg-fig-1',
@@ -313,7 +309,6 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
     anchorId: 'a-quote-1',
     anchorKind: 'quote',
     strictLocate: true,
-    locateMode: 'structured',
     locateTarget: {
       segmentId: 'seg-quote-1',
       sourceSegmentId: 'seg-quote-1',

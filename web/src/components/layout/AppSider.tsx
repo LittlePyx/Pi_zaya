@@ -4,7 +4,6 @@ import {
   Menu,
   Button,
   Typography,
-  Popconfirm,
   Modal,
   Input,
   Empty,
@@ -12,6 +11,7 @@ import {
   message,
 } from 'antd'
 import { Dropdown } from 'antd'
+import type { MenuProps } from 'antd'
 import {
   MessageOutlined,
   BookOutlined,
@@ -112,82 +112,74 @@ interface DebugWindow extends Window {
 function ConversationRow({
   conversation,
   active,
-  moveMenuItems,
   onOpen,
   onRename,
-  onMove,
   onDelete,
+  onMove,
+  moveMenuItems,
 }: {
   conversation: Conversation
   active: boolean
-  moveMenuItems: { key: string; label: string }[]
   onOpen: () => void
   onRename: () => void
-  onMove: (target: string | null) => void
   onDelete: () => void
+  onMove?: (targetProjectId: string) => void
+  moveMenuItems?: MenuProps['items']
 }) {
+  const menuItems: MenuProps['items'] = [
+    { key: 'rename', icon: <EditOutlined />, label: '重命名' },
+    ...(moveMenuItems && moveMenuItems.length > 0
+      ? [{ key: 'move', icon: <FolderOpenOutlined />, label: '移动到', children: moveMenuItems }]
+      : []),
+    { type: 'divider' },
+    { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
+  ]
+
   return (
     <div
-      className={`group kb-conv-row flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-xs cursor-pointer ${
+      className={`kb-conv-row flex items-center gap-1 rounded-lg px-1.5 py-0.5 text-xs cursor-pointer ${
         active ? 'is-active' : ''
       }`}
       onClick={onOpen}
     >
       <MessageOutlined className="shrink-0 opacity-60" />
       <div className="kb-conv-meta min-w-0 flex-1">
-        <span className="kb-conv-title truncate">
-          {conversation.title}
-          {conversation.mode === 'paper_guide' ? (
-            <span className="ml-1 inline-block rounded-md border border-[var(--border)] px-1 py-[1px] text-[10px] align-middle text-[var(--accent)]">
-              阅读指导
-            </span>
-          ) : null}
-        </span>
+        <div className="kb-conv-title" title={conversation.title}>
+          <span className="kb-conv-title-text">{conversation.title}</span>
+        </div>
         <span className="kb-conv-time">{formatRelativeTime(conversation.updated_at) || ' '}</span>
       </div>
-      <Button
-        type="text"
-        size="small"
-        icon={<EditOutlined />}
-        className="!w-6 !h-6 shrink-0 opacity-0 group-hover:opacity-100"
-        onClick={(e) => {
-          e.stopPropagation()
-          onRename()
-        }}
-      />
       <Dropdown
+        trigger={['click']}
         menu={{
-          items: moveMenuItems,
+          items: menuItems,
           onClick: ({ key, domEvent }) => {
             domEvent.stopPropagation()
-            onMove(key === '__ungrouped__' ? null : key)
+            if (key === 'rename') {
+              onRename()
+              return
+            }
+            if (String(key).startsWith('move:')) {
+              onMove?.(String(key).slice(5))
+              return
+            }
+            Modal.confirm({
+              title: '确认删除这个对话吗？',
+              onOk: async () => {
+                await onDelete()
+              },
+            })
           },
         }}
-        trigger={['click']}
       >
         <Button
           type="text"
           size="small"
           icon={<MoreOutlined />}
-          className="!w-6 !h-6 shrink-0 opacity-0 group-hover:opacity-100"
+          className="kb-side-menu-trigger"
           onClick={(e) => e.stopPropagation()}
         />
       </Dropdown>
-      <Popconfirm
-        title="确认删除这个对话吗？"
-        onConfirm={(e) => {
-          e?.stopPropagation()
-          onDelete()
-        }}
-      >
-        <Button
-          type="text"
-          size="small"
-          icon={<DeleteOutlined />}
-          className="!w-6 !h-6 shrink-0 opacity-0 group-hover:opacity-100"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </Popconfirm>
     </div>
   )
 }
@@ -197,13 +189,11 @@ function ProjectSection({
   selected,
   conversations,
   activeConvId,
-  moveMenuItems,
   collapsed,
   onToggleCollapsed,
   onSelect,
   onOpenConversation,
   onRenameConversation,
-  onMoveConversation,
   onDeleteConversation,
   onRename,
   onDelete,
@@ -212,20 +202,18 @@ function ProjectSection({
   selected: boolean
   conversations: Conversation[]
   activeConvId: string | null
-  moveMenuItems: { key: string; label: string }[]
   collapsed: boolean
   onToggleCollapsed: () => void
   onSelect: () => void
   onOpenConversation: (id: string) => void
   onRenameConversation: (conversation: Conversation) => void
-  onMoveConversation: (id: string, target: string | null) => void
   onDeleteConversation: (id: string) => void
   onRename: () => void
   onDelete: () => void
 }) {
   return (
     <div className={`kb-project-card rounded-lg overflow-hidden ${selected ? 'is-active' : ''}`}>
-      <div className="group kb-project-head flex items-center gap-1 px-2 py-1">
+      <div className="kb-project-head flex items-center gap-1 px-2 py-1">
         <Button
           type="text"
           size="small"
@@ -237,53 +225,56 @@ function ProjectSection({
           }}
         />
         <div className="min-w-0 flex-1 cursor-pointer" onClick={onSelect}>
-          <Text ellipsis className="text-sm font-medium">
+          <Text ellipsis className="text-[13px] font-medium">
             {project.name}
           </Text>
         </div>
         <div className="ml-auto flex items-center gap-1">
           <Text type="secondary" className="kb-count-text">{conversations.length}</Text>
-          <Button
-            type="text"
-            size="small"
-            icon={<EditOutlined />}
-            className="!w-6 !h-6 opacity-0 group-hover:opacity-100"
-            onClick={(e) => {
-              e.stopPropagation()
-              onRename()
-            }}
-          />
-          <Popconfirm
-            title="确认删除这个项目吗？"
-            description="项目下会话会保留，并自动移动到未分组。"
-            onConfirm={(e) => {
-              e?.stopPropagation()
-              onDelete()
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                { key: 'rename', icon: <EditOutlined />, label: '重命名项目' },
+                { key: 'delete', icon: <DeleteOutlined />, label: '删除项目', danger: true },
+              ],
+              onClick: ({ key, domEvent }) => {
+                domEvent.stopPropagation()
+                if (key === 'rename') {
+                  onRename()
+                  return
+                }
+                Modal.confirm({
+                  title: '确认删除这个项目吗？',
+                  content: '项目下会话会保留，并自动移动到未分组。',
+                  onOk: async () => {
+                    await onDelete()
+                  },
+                })
+              },
             }}
           >
             <Button
               type="text"
               size="small"
-              icon={<DeleteOutlined />}
-              className="!w-6 !h-6 opacity-0 group-hover:opacity-100"
+              icon={<MoreOutlined />}
+              className="kb-side-menu-trigger"
               onClick={(e) => e.stopPropagation()}
             />
-          </Popconfirm>
+          </Dropdown>
         </div>
       </div>
 
       {!collapsed ? (
-        <div className="px-1 pb-1 space-y-0.5">
+        <div className="kb-project-body px-1 pb-1 space-y-0.5">
           {conversations.length > 0 ? (
             conversations.map((conversation) => (
               <ConversationRow
                 key={conversation.id}
                 conversation={conversation}
                 active={conversation.id === activeConvId}
-                moveMenuItems={moveMenuItems}
                 onOpen={() => onOpenConversation(conversation.id)}
                 onRename={() => onRenameConversation(conversation)}
-                onMove={(target) => onMoveConversation(conversation.id, target)}
                 onDelete={() => onDeleteConversation(conversation.id)}
               />
             ))
@@ -338,12 +329,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   const menuKey = loc.pathname === '/library' ? 'library' : 'chat'
   const normalizedKeyword = keyword.trim().toLowerCase()
-
-  const moveMenuItems = useMemo(
-    () => [
-      { key: '__ungrouped__', label: '移动到未分组' },
-      ...projects.map((project) => ({ key: project.id, label: `移动到 ${project.name}` })),
-    ],
+  const projectMoveMenuItems = useMemo<MenuProps['items']>(
+    () => projects.map((project) => ({ key: `move:${project.id}`, label: project.name })),
     [projects],
   )
 
@@ -520,7 +507,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <Layout className="h-screen min-h-0 overflow-hidden">
-      <Sider width={320} className="kb-sider !bg-[var(--panel)] border-r border-[var(--border)] flex flex-col overflow-hidden">
+      <Sider width={320} className="kb-sider flex flex-col overflow-hidden">
         <div className="kb-sider-brand px-2.5 pt-1.5 pb-1.5">
           <div className="kb-sider-team-logo-wrap">
             <img src="/team_logo.png" alt="Team logo" className="kb-sider-team-logo" />
@@ -600,7 +587,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 selected={project.id === activeProjectId}
                 conversations={conversations}
                 activeConvId={activeConvId}
-                moveMenuItems={moveMenuItems.filter((item) => item.key !== project.id)}
                 collapsed={Boolean(collapsedProjects[project.id])}
                 onToggleCollapsed={() => toggleProjectCollapsed(project.id)}
                 onSelect={() => selectProject(project.id)}
@@ -609,9 +595,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
                   void selectConv(id)
                 }}
                 onRenameConversation={openRenameConversation}
-                onMoveConversation={async (id, target) => {
-                  await moveConversation(id, target)
-                }}
                 onDeleteConversation={async (id) => {
                   await deleteConv(id)
                 }}
@@ -622,18 +605,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
               />
             ))
           ) : (
-            <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-3">
+            <div className="kb-sider-empty">
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<Text type="secondary">没有匹配的项目或会话</Text>} />
             </div>
           )}
 
-          <div className={`kb-ungrouped-panel rounded-lg border border-[var(--border)] overflow-hidden ${activeProjectId === null ? 'is-active' : ''}`}>
+          <div className={`kb-ungrouped-panel rounded-lg overflow-hidden ${activeProjectId === null ? 'is-active' : ''}`}>
             <button
               type="button"
-              className="w-full px-2 py-1 border-b border-[var(--border)] flex items-center justify-between gap-2 text-left"
+              className="kb-ungrouped-head w-full flex items-center justify-between gap-2 text-left"
               onClick={() => selectProject(null)}
             >
-              <Text className="text-sm font-medium">未分组对话</Text>
+              <Text className="text-[13px] font-medium">未分组对话</Text>
               <Text type="secondary" className="kb-count-text">{filteredRootConversations.length}</Text>
             </button>
             <div className="kb-root-conversations px-1 py-1 space-y-0.5">
@@ -643,18 +626,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
                     key={conversation.id}
                     conversation={conversation}
                     active={conversation.id === activeConvId}
-                    moveMenuItems={moveMenuItems.filter((item) => item.key !== '__ungrouped__')}
                     onOpen={async () => {
                       nav('/')
                       void selectConv(conversation.id)
                     }}
                     onRename={() => openRenameConversation(conversation)}
-                    onMove={async (target) => {
-                      await moveConversation(conversation.id, target)
-                    }}
                     onDelete={async () => {
                       await deleteConv(conversation.id)
                     }}
+                    onMove={async (targetProjectId) => {
+                      await moveConversation(conversation.id, targetProjectId)
+                    }}
+                    moveMenuItems={projectMoveMenuItems}
                   />
                 ))
               ) : (

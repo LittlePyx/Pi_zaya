@@ -13,7 +13,15 @@ except ImportError:
 from .models import TextBlock
 
 
-def render_blocks_to_markdown(self, blocks: List[TextBlock], page_index: int, *, page=None, assets_dir: Path | None = None) -> str:
+def render_blocks_to_markdown(
+    self,
+    blocks: List[TextBlock],
+    page_index: int,
+    *,
+    page=None,
+    assets_dir: Path | None = None,
+    is_references_page: bool = False,
+) -> str:
     import time
     render_start = time.time()
     llm_call_count = 0
@@ -500,6 +508,11 @@ def render_blocks_to_markdown(self, blocks: List[TextBlock], page_index: int, *,
             math_block_start = time.time()
             math_text_len = len(b.text)
             text_stripped = b.text.strip()
+
+            if is_references_page:
+                out.append(_normalize_text(text_stripped))
+                out.append("")
+                continue
 
             # Some PDFs pack "equation + where explanation + figure caption" into one block/line.
             # If we treat the whole thing as math, it becomes a giant broken $$...$$ block.

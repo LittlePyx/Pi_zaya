@@ -225,6 +225,10 @@ class PDFConverter:
             final_md = self._repair_broken_image_links(final_md, save_dir=save_dir, assets_dir=assets_dir)
         except Exception as e:
             print(f"[WARN] _repair_broken_image_links failed, keep previous markdown: {e}", flush=True)
+        try:
+            final_md = self._inject_title_from_pdf_metadata(final_md, doc)
+        except Exception as e:
+            print(f"[WARN] title metadata injection skipped: {e}", flush=True)
         
         # Write output
         out_file = save_dir / "output.md"
@@ -247,6 +251,27 @@ class PDFConverter:
                     print("[OK] No quality issues detected")
             except Exception as e:
                 print(f"[WARN] quality analysis failed: {e}", flush=True)
+
+    def _inject_title_from_pdf_metadata(self, md: str, doc) -> str:
+        if not md:
+            return md
+        try:
+            title = str((doc.metadata or {}).get("title") or "").strip()
+        except Exception:
+            title = ""
+        if not title:
+            return md
+        if len(title) < 8:
+            return md
+        lines = md.splitlines()
+        first_nonempty = next((ln.strip() for ln in lines if ln.strip()), "")
+        if re.match(r"^#\s+", first_nonempty):
+            return md
+        hay = "\n".join(lines[:40]).lower()
+        if title.lower() in hay:
+            return md
+        prefix = f"# {title}\n\n"
+        return prefix + md.lstrip()
 
     def _cleanup_stale_page_assets(self, *, assets_dir: Path, total_pages: int) -> None:
         """
@@ -538,8 +563,7 @@ class PDFConverter:
 
     def _vision_formula_overlay_enabled(self) -> bool:
         try:
-            # Default OFF: overlay can be useful for hard formula pages, but it may hurt
-            # heading/body fidelity on clean pages if candidate detection is over-inclusive.
+            # Default OFF: keep structure/layout stable unless formula overlay is explicitly enabled.
             raw = str(os.environ.get("KB_PDF_VISION_FORMULA_OVERLAY", "0") or "0").strip().lower()
         except Exception:
             raw = "0"
@@ -572,16 +596,21 @@ class PDFConverter:
         # Fast reject of obvious prose/caption lines.
         if low.startswith(("fig.", "figure ", "table ", "where ", "this ", "we ", "in this ", "note that ")):
             return False
+        if ("@" in t) or ("http://" in low) or ("https://" in low) or ("www." in low):
+            return False
+        if re.search(r"\[\s*\d{1,4}(?:\s*,\s*\d{1,4})*\s*\]", t):
+            return False
         word_n = len(re.findall(r"\b[A-Za-z]{2,}\b", t))
-        anchor_n = len(
+        strong_anchor_n = len(
             re.findall(
-                r"(?:=|\^|_|\\frac|\\sum|\\int|\\prod|\\sqrt|\\min|\\max|\\arg|\\left|\\right|\\cdot|\\times|\\partial|\\nabla|\(|\)|\{|\}|\[|\]|/)",
+                r"(?:=|\^|_|\\frac|\\sum|\\int|\\prod|\\sqrt|\\min|\\max|\\arg|\\left|\\right|\\cdot|\\times|\\partial|\\nabla|\\mathbf|\\mathcal|\\hat|\\bar|\\tilde|/)",
                 t,
                 flags=re.IGNORECASE,
             )
         )
+        bracket_anchor_n = len(re.findall(r"[\(\)\{\}\[\]]", t))
         # Strong equation anchors.
-        if anchor_n >= 2:
+        if strong_anchor_n >= 2:
             return True
         # Equation-number-like fragment.
         if re.fullmatch(r"[\),;:\s]*\(\s*\d{1,4}\s*\)\s*", t):
@@ -592,10 +621,14 @@ class PDFConverter:
                 return True
             if re.search(r"\bDNN\b", t, flags=re.IGNORECASE):
                 return True
-            if any(ch in t for ch in "()[]{}_=+-*/") and word_n <= 5:
+            if any(ch in t for ch in "=+-*/^_") and word_n <= 5:
                 return True
         # Avoid turning long prose into formulas.
-        if word_n >= 12 and anchor_n <= 1 and re.search(r"[.,:;]", t):
+        if word_n >= 12 and strong_anchor_n <= 1 and re.search(r"[.,:;]", t):
+            return False
+        if word_n >= 7 and strong_anchor_n == 0:
+            return False
+        if strong_anchor_n == 0 and bracket_anchor_n >= 2 and word_n >= 4:
             return False
         return False
 
@@ -607,10 +640,14 @@ class PDFConverter:
         low = t.lower()
         if low.startswith(("fig.", "figure ", "table ", "where ")):
             return False
+        if ("@" in t) or ("http://" in low) or ("https://" in low) or ("www." in low):
+            return False
+        if re.search(r"\[\s*\d{1,4}(?:\s*,\s*\d{1,4})*\s*\]", t):
+            return False
         word_n = len(re.findall(r"\b[A-Za-z]{2,}\b", t))
-        anchor_n = len(
+        strong_anchor_n = len(
             re.findall(
-                r"(?:=|\^|_|\\frac|\\sum|\\int|\\prod|\\sqrt|\\min|\\max|\\arg|\\left|\\right|\\cdot|\\times|\\partial|\\nabla|\(|\)|\{|\}|/)",
+                r"(?:=|\^|_|\\frac|\\sum|\\int|\\prod|\\sqrt|\\min|\\max|\\arg|\\left|\\right|\\cdot|\\times|\\partial|\\nabla|\\mathbf|\\mathcal|\\hat|\\bar|\\tilde|/)",
                 t,
                 flags=re.IGNORECASE,
             )
@@ -618,11 +655,11 @@ class PDFConverter:
         has_eqno = bool(re.search(r"\(\s*\d{1,4}\s*\)\s*$", t))
         if has_eqno:
             return True
-        if ("\n" in t) and (anchor_n >= 1):
+        if ("\n" in t) and (strong_anchor_n >= 1):
             return True
-        if anchor_n >= 2 and len(t) >= 12:
+        if strong_anchor_n >= 2 and len(t) >= 12:
             return True
-        if word_n <= 5 and len(t) <= 48 and any(ch in t for ch in "()[]{}_=+-*/"):
+        if word_n <= 5 and len(t) <= 48 and any(ch in t for ch in "=+-*/^_"):
             return True
         return False
 
@@ -1079,6 +1116,411 @@ class PDFConverter:
         return raw in {"1", "true", "yes", "y", "on"}
 
     @staticmethod
+    def _vision_layout_crop_mode_enabled() -> bool:
+        try:
+            raw = str(os.environ.get("KB_PDF_VISION_LAYOUT_CROP_MODE", "0") or "0").strip().lower()
+        except Exception:
+            raw = "0"
+        return raw in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _is_probable_page_number_block(block: TextBlock, *, page_w: float, page_h: float) -> bool:
+        try:
+            x0, y0, x1, y1 = (float(v) for v in block.bbox)
+        except Exception:
+            return False
+        txt = _normalize_text(getattr(block, "text", "") or "").strip()
+        if not re.fullmatch(r"\d{1,4}", txt):
+            return False
+        if (y0 + y1) * 0.5 < page_h * 0.92:
+            return False
+        cx = (x0 + x1) * 0.5
+        if abs(cx - (page_w * 0.5)) > page_w * 0.12:
+            return False
+        return (x1 - x0) <= page_w * 0.10
+
+    @staticmethod
+    def _structured_crop_lane_for_bbox(
+        bbox: tuple[float, float, float, float],
+        *,
+        page_w: float,
+        col_split: float,
+    ) -> str:
+        x0, _, x1, _ = (float(v) for v in bbox)
+        w = max(0.0, x1 - x0)
+        cross_margin = max(18.0, page_w * 0.11)
+        crosses = x0 < (col_split - cross_margin) and x1 > (col_split + cross_margin)
+        if w >= page_w * 0.72 or (crosses and w >= page_w * 0.48):
+            return "full"
+        return "left" if ((x0 + x1) * 0.5) < col_split else "right"
+
+    @staticmethod
+    def _expand_structured_crop_rect(
+        rect: "fitz.Rect",
+        *,
+        lane: str,
+        page_w: float,
+        page_h: float,
+        col_split: float,
+    ) -> "fitz.Rect":
+        r = fitz.Rect(rect)
+        x_pad = max(6.0, page_w * 0.012)
+        y_pad = max(4.0, page_h * 0.008)
+        gutter = max(8.0, page_w * 0.018)
+        x0 = max(0.0, float(r.x0) - x_pad)
+        y0 = max(0.0, float(r.y0) - y_pad)
+        x1 = min(float(page_w), float(r.x1) + x_pad)
+        y1 = min(float(page_h), float(r.y1) + y_pad)
+        if lane == "left":
+            x1 = min(x1, float(col_split) - gutter)
+        elif lane == "right":
+            x0 = max(x0, float(col_split) + gutter)
+        return fitz.Rect(x0, y0, max(x0 + 1.0, x1), max(y0 + 1.0, y1))
+
+    @staticmethod
+    def _fallback_markdown_from_blocks(blocks: list[TextBlock]) -> str:
+        if not blocks:
+            return ""
+        parts: list[str] = []
+        for block in blocks:
+            if bool(getattr(block, "is_table", False)) and getattr(block, "table_markdown", None):
+                md = str(block.table_markdown or "").strip()
+                if md:
+                    parts.append(md)
+                continue
+            txt = str(getattr(block, "text", "") or "").strip()
+            if (not txt) or txt == "[TABLE]":
+                continue
+            lvl = str(getattr(block, "heading_level", "") or "").strip()
+            m_lvl = re.fullmatch(r"\[H([1-6])\]", lvl)
+            if m_lvl:
+                parts.append(("#" * int(m_lvl.group(1))) + f" {txt}")
+            elif bool(getattr(block, "is_caption", False)) and (not txt.startswith("*")):
+                parts.append(f"*{txt}*")
+            else:
+                parts.append(txt)
+        return "\n\n".join(p for p in parts if p.strip()).strip()
+
+    def _convert_page_with_layout_crops(
+        self,
+        *,
+        page,
+        page_index: int,
+        total_pages: int,
+        page_hint: str,
+        speed_mode: str,
+        pdf_path: Path,
+        assets_dir: Path,
+        image_names: list[str],
+    ) -> Optional[str]:
+        if page is None or image_names:
+            return None
+        if page_index == 0:
+            return None
+        if not self._vision_layout_crop_mode_enabled():
+            return None
+
+        try:
+            page_w = float(page.rect.width)
+            page_h = float(page.rect.height)
+        except Exception:
+            return None
+        if page_w <= 2 or page_h <= 2:
+            return None
+
+        try:
+            page_dict = page.get_text("dict") or {}
+        except Exception:
+            page_dict = {}
+        has_table_hint = bool(_page_maybe_has_table_from_dict(page_dict))
+        if not has_table_hint:
+            return None
+
+        try:
+            setattr(page, "has_table_hint", bool(has_table_hint))
+        except Exception:
+            pass
+
+        try:
+            tables = _extract_tables_by_layout(
+                page,
+                pdf_path=pdf_path,
+                page_index=page_index,
+                visual_rects=[],
+                use_pdfplumber_fallback=True,
+            )
+        except Exception:
+            tables = []
+        if not tables:
+            return None
+
+        try:
+            body_size = detect_body_font_size([page])
+        except Exception:
+            body_size = 10.0
+
+        try:
+            blocks = self._extract_text_blocks(
+                page,
+                page_index=page_index,
+                body_size=body_size,
+                tables=tables,
+                visual_rects=[],
+                assets_dir=assets_dir,
+                is_references_page=False,
+            )
+        except Exception:
+            return None
+        blocks = [
+            b for b in (blocks or [])
+            if not self._is_probable_page_number_block(b, page_w=page_w, page_h=page_h)
+        ]
+        if len(blocks) < 3:
+            return None
+
+        col_split = _detect_column_split_x(blocks, page_width=page_w)
+        if col_split is None:
+            return None
+
+        annotated: list[dict] = []
+        for block in blocks:
+            try:
+                bbox = tuple(float(v) for v in block.bbox)
+            except Exception:
+                continue
+            lane = self._structured_crop_lane_for_bbox(
+                bbox,
+                page_w=page_w,
+                col_split=float(col_split),
+            )
+            annotated.append(
+                {
+                    "block": block,
+                    "lane": lane,
+                    "rect": fitz.Rect(bbox),
+                }
+            )
+        if len(annotated) < 3:
+            return None
+
+        def _union_items(items: list[dict]) -> "fitz.Rect":
+            r = fitz.Rect(items[0]["rect"])
+            for row in items[1:]:
+                r |= fitz.Rect(row["rect"])
+            return r
+
+        def _cluster_by_gap(items: list[dict], *, max_gap: float) -> list[list[dict]]:
+            if not items:
+                return []
+            items = sorted(items, key=lambda row: (float(row["rect"].y0), float(row["rect"].x0)))
+            groups: list[list[dict]] = [[items[0]]]
+            for row in items[1:]:
+                prev = groups[-1][-1]
+                gap = float(row["rect"].y0) - float(prev["rect"].y1)
+                if gap <= max_gap:
+                    groups[-1].append(row)
+                else:
+                    groups.append([row])
+            return groups
+
+        full_items = [row for row in annotated if row["lane"] == "full"]
+        full_groups = _cluster_by_gap(full_items, max_gap=max(8.0, page_h * 0.015))
+        full_group_rects = [{"blocks": grp, "rect": _union_items(grp)} for grp in full_groups if grp]
+
+        regions: list[dict] = []
+        order_idx = 0
+        cursor_y = 0.0
+
+        def _append_interval_regions(y_start: float, y_end: float) -> None:
+            nonlocal order_idx
+            if y_end <= y_start + 2.0:
+                return
+            segment_rows = []
+            for row in annotated:
+                if row["lane"] == "full":
+                    continue
+                cy = (float(row["rect"].y0) + float(row["rect"].y1)) * 0.5
+                if y_start <= cy <= y_end:
+                    segment_rows.append(row)
+            if not segment_rows:
+                return
+            for lane in ("left", "right"):
+                lane_rows = [row for row in segment_rows if row["lane"] == lane]
+                if not lane_rows:
+                    continue
+                order_idx += 1
+                rect = self._expand_structured_crop_rect(
+                    _union_items(lane_rows),
+                    lane=lane,
+                    page_w=page_w,
+                    page_h=page_h,
+                    col_split=float(col_split),
+                )
+                regions.append(
+                    {
+                        "order": order_idx,
+                        "lane": lane,
+                        "rect": rect,
+                        "blocks": [row["block"] for row in lane_rows],
+                        "fallback_md": self._fallback_markdown_from_blocks([row["block"] for row in lane_rows]),
+                    }
+                )
+
+        for fg in sorted(full_group_rects, key=lambda row: (float(row["rect"].y0), float(row["rect"].x0))):
+            _append_interval_regions(cursor_y, float(fg["rect"].y0) - 2.0)
+            order_idx += 1
+            regions.append(
+                {
+                    "order": order_idx,
+                    "lane": "full",
+                    "rect": self._expand_structured_crop_rect(
+                        fg["rect"],
+                        lane="full",
+                        page_w=page_w,
+                        page_h=page_h,
+                        col_split=float(col_split),
+                    ),
+                    "blocks": [row["block"] for row in fg["blocks"]],
+                    "fallback_md": self._fallback_markdown_from_blocks([row["block"] for row in fg["blocks"]]),
+                }
+            )
+            cursor_y = float(fg["rect"].y1) + 2.0
+
+        _append_interval_regions(cursor_y, float(page_h))
+
+        regions = [row for row in regions if row.get("fallback_md") or row.get("blocks")]
+        if len(regions) <= 1:
+            return None
+
+        try:
+            raw_dpi = str(os.environ.get("KB_PDF_VISION_DPI", "") or "").strip()
+            dpi = int(raw_dpi) if raw_dpi else 0
+        except Exception:
+            dpi = 0
+        if dpi <= 0:
+            try:
+                dpi = int((getattr(self, "_active_speed_config", None) or {}).get("dpi", 220) or 220)
+            except Exception:
+                dpi = int(getattr(self, "dpi", 220) or 220)
+        dpi = max(220, min(420, int(dpi)))
+
+        try:
+            print(
+                f"[VISION_DIRECT][LAYOUT] page {page_index+1}: structured crop mode enabled ({len(regions)} crops, dpi={int(dpi)})",
+                flush=True,
+            )
+        except Exception:
+            pass
+
+        def _ocr_region(row: dict) -> tuple[int, str]:
+            rid = int(row["order"])
+            lane = str(row["lane"])
+            rect = fitz.Rect(row["rect"])
+            fallback_md = str(row.get("fallback_md", "") or "").strip()
+            try:
+                pix = page.get_pixmap(clip=rect, dpi=int(dpi), alpha=False)
+                png = pix.tobytes("png")
+            except Exception:
+                return rid, fallback_md
+            if not png:
+                return rid, fallback_md
+            hint = (
+                (page_hint + " " if page_hint else "")
+                + f"This is structured crop {rid}/{len(regions)} from a paper page. "
+                  f"It covers the {lane} layout region only. "
+                  "Output only the content visible in this crop, in normal reading order, as Markdown. "
+                  "Preserve formulas, tables, captions, and headings exactly when present. "
+                  "Do not invent or repeat content from other regions."
+            )
+            t0 = time.time()
+            md_part = self.llm_worker.call_llm_page_to_markdown(
+                png,
+                page_number=page_index,
+                total_pages=total_pages,
+                hint=hint,
+                speed_mode=speed_mode,
+                is_references_page=False,
+            )
+            md_part = (md_part or "").strip() or fallback_md
+
+            def _table_presence_key(table_md: str) -> str:
+                lines = [ln.strip() for ln in (table_md or "").splitlines() if ln.strip()]
+                for ln in lines:
+                    if ln.startswith("|") and "---" in ln:
+                        continue
+                    if ln.startswith("|"):
+                        key = re.sub(r"[|`*_]", " ", _normalize_text(ln))
+                        key = re.sub(r"\s+", " ", key).strip().lower()
+                        if key:
+                            return key[:160]
+                key = re.sub(r"[|`*_]", " ", _normalize_text(table_md or ""))
+                key = re.sub(r"\s+", " ", key).strip().lower()
+                return key[:160]
+
+            table_rows: list[tuple[int, str]] = []
+            for pos, block in enumerate(row.get("blocks") or []):
+                if bool(getattr(block, "is_table", False)) and getattr(block, "table_markdown", None):
+                    table_rows.append((pos, str(block.table_markdown or "").strip()))
+            if table_rows:
+                md_norm = re.sub(r"\s+", " ", _normalize_text(md_part or "")).strip().lower()
+                missing_tables: list[tuple[int, str]] = []
+                for pos, table_md in table_rows:
+                    key = _table_presence_key(table_md)
+                    if key and key in md_norm:
+                        continue
+                    missing_tables.append((pos, table_md))
+                if missing_tables:
+                    first_non_table_idx = next(
+                        (
+                            idx for idx, block in enumerate(row.get("blocks") or [])
+                            if not bool(getattr(block, "is_table", False))
+                        ),
+                        len(row.get("blocks") or []),
+                    )
+                    prefix_tables = [table_md for pos, table_md in missing_tables if pos <= first_non_table_idx]
+                    suffix_tables = [table_md for pos, table_md in missing_tables if pos > first_non_table_idx]
+                    md_part = "\n\n".join(
+                        part for part in (
+                            *(prefix_tables or []),
+                            md_part,
+                            *(suffix_tables or []),
+                        )
+                        if part
+                    ).strip()
+            try:
+                print(
+                    f"[VISION_DIRECT][LAYOUT] page {page_index+1} crop {rid}/{len(regions)} ({lane}) done ({time.time()-t0:.1f}s, {len(md_part)} chars)",
+                    flush=True,
+                )
+            except Exception:
+                pass
+            return rid, md_part
+
+        ordered_md: dict[int, str] = {}
+        max_workers = min(4, max(1, len(regions)))
+        if max_workers <= 1:
+            for row in regions:
+                rid, md_part = _ocr_region(row)
+                if md_part:
+                    ordered_md[rid] = md_part
+        else:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futs = [pool.submit(_ocr_region, row) for row in regions]
+                for fut in as_completed(futs):
+                    try:
+                        rid, md_part = fut.result()
+                    except Exception:
+                        continue
+                    if md_part:
+                        ordered_md[rid] = md_part
+
+        parts = [ordered_md[k].strip() for k in sorted(ordered_md.keys()) if ordered_md.get(k)]
+        if not parts:
+            return None
+        merged = "\n\n".join(part for part in parts if part).strip()
+        return merged or None
+
+    @staticmethod
     def _is_reference_placeholder_line(text: str) -> bool:
         t = _normalize_text(text or "").strip().lower()
         if not t:
@@ -1369,6 +1811,7 @@ class PDFConverter:
         is_references_page: bool,
         pdf_path: Path,
         assets_dir: Path,
+        image_names: Optional[list[str]] = None,
         formula_placeholders: Optional[dict[str, str]] = None,
     ) -> Optional[str]:
         """
@@ -1394,6 +1837,26 @@ class PDFConverter:
                     flush=True,
                 )
 
+        if not is_references_page:
+            try:
+                md_layout = self._convert_page_with_layout_crops(
+                    page=page,
+                    page_index=page_index,
+                    total_pages=total_pages,
+                    page_hint=page_hint,
+                    speed_mode=speed_mode,
+                    pdf_path=pdf_path,
+                    assets_dir=assets_dir,
+                    image_names=image_names or [],
+                )
+                if md_layout:
+                    return md_layout
+            except Exception as e:
+                print(
+                    f"[VISION_DIRECT] structured layout OCR failed on page {page_index+1}: {e}",
+                    flush=True,
+                )
+
         md = self.llm_worker.call_llm_page_to_markdown(
             png_bytes,
             page_number=page_index,
@@ -1413,6 +1876,12 @@ class PDFConverter:
             if last_vl_err == "timeout":
                 print(
                     f"[VISION_DIRECT] VL hard-timeout on page {page_index+1}, skip empty retries and fallback",
+                    flush=True,
+                )
+                retry_n = 0
+            elif last_vl_err == "unsupported_vision":
+                print(
+                    f"[VISION_DIRECT] provider/model does not support image payloads on page {page_index+1}, skip empty retries and fallback",
                     flush=True,
                 )
                 retry_n = 0
@@ -2681,9 +3150,13 @@ class PDFConverter:
         if not has_caption_meta:
             md = self._normalize_page_local_image_link_order(
                 md,
-                page_index=page_index,
-                image_names=image_names,
-            )
+            page_index=page_index,
+            image_names=image_names,
+        )
+        md = self._cleanup_page_local_image_markdown(
+            md,
+            page_index=page_index,
+        )
         md = self._inject_table_image_fallbacks(
             md,
             page=page,
@@ -2694,6 +3167,74 @@ class PDFConverter:
             is_references_page=is_references_page,
         )
         return md
+
+    @staticmethod
+    def _cleanup_page_local_image_markdown(md: str, *, page_index: int) -> str:
+        if not md:
+            return md
+
+        lines = md.splitlines()
+
+        def _line_norm(s: str) -> str:
+            s = _normalize_text(s or "")
+            s = re.sub(r"[*_`>#\[\]()]", "", s)
+            s = re.sub(r"\s+", " ", s).strip().lower()
+            return s
+
+        img_re = re.compile(r"!\[([^\]]*)\]\((\.?/)?assets/[^)]+\)", flags=re.IGNORECASE)
+        for idx, raw in enumerate(lines):
+            m = img_re.search(raw or "")
+            if not m:
+                continue
+            alt = (m.group(1) or "").strip()
+            if not alt:
+                continue
+            fig_no = None
+            for probe in range(idx, min(len(lines), idx + 4)):
+                cap_line = _normalize_text(lines[probe] or "").strip()
+                m_cap = re.match(r"^\*{0,2}(?:Figure|Fig\.?)\s*(\d+)\b", cap_line, flags=re.IGNORECASE)
+                if m_cap:
+                    fig_no = m_cap.group(1)
+                    break
+            if fig_no is None:
+                m_alt = re.search(r"\b(?:Figure|Fig\.?)\s*(\d+)\b", alt, flags=re.IGNORECASE)
+                if m_alt:
+                    fig_no = m_alt.group(1)
+            if fig_no and (len(alt) > 32 or re.search(r"[.:,;]", alt)):
+                new_ref = re.sub(
+                    r"!\[[^\]]*\]",
+                    f"![Figure {fig_no}]",
+                    raw,
+                    count=1,
+                )
+                lines[idx] = new_ref
+
+        cleaned: list[str] = []
+        recent_caption_keys: list[str] = []
+        for raw in lines:
+            st = _normalize_text(raw or "").strip()
+            if not st:
+                cleaned.append(raw)
+                continue
+
+            if page_index == 0:
+                wide_gap = bool(re.search(r"(?:\s|\u2000|\u2001|\u2002|\u2003|\u2004|\u2005|\u2006|\u2007|\u2008|\u2009|\u200A|\u3000){6,}", raw or ""))
+                bold_chunks = len(re.findall(r"\*\*[^*]{2,80}\*\*", raw or ""))
+                wordish = len(re.findall(r"[A-Za-z]{2,}", st))
+                if wide_gap and bold_chunks >= 2 and wordish <= 8 and "." not in st:
+                    continue
+
+            if re.match(r"^\*{0,2}(?:Figure|Fig\.?)\s*\d+\b", st, flags=re.IGNORECASE):
+                key = _line_norm(st)
+                if key and key in recent_caption_keys[-3:]:
+                    continue
+                recent_caption_keys.append(key)
+            cleaned.append(raw)
+
+        out = "\n".join(cleaned)
+        out = re.sub(r"(\*\*(?:Figure|Fig\.?)\s*\d+\.?\*\*)\s+\*\*\s*", r"\1 ", out, flags=re.IGNORECASE)
+        out = re.sub(r"(\*\*Table\s*\d+\.?\*\*)\s+\*\*\s*", r"\1 ", out, flags=re.IGNORECASE)
+        return out
 
     # Removed: _process_batch_fast and _process_batch_llm (old text extraction methods)
     # Now only using vision-direct mode (_process_batch_vision_direct) and no-LLM mode (_process_batch_no_llm)
@@ -2760,11 +3301,45 @@ class PDFConverter:
         header_threshold = H * 0.12
         footer_threshold = H * 0.88
         visual_rects = _collect_visual_rects(page)
+        try:
+            cap_candidates = self._extract_page_figure_caption_candidates(page)
+        except Exception:
+            cap_candidates = []
+
+        def _near_caption(rect: "fitz.Rect") -> bool:
+            for cap in (cap_candidates or []):
+                try:
+                    cr = fitz.Rect(cap.get("bbox"))
+                except Exception:
+                    continue
+                if cr.width <= 0 or cr.height <= 0:
+                    continue
+                x_ov = _overlap_1d(float(rect.x0), float(rect.x1), float(cr.x0), float(cr.x1))
+                min_w = max(1.0, min(float(rect.width), float(cr.width)))
+                if (x_ov / min_w) < 0.30:
+                    continue
+                below_gap = float(cr.y0) - float(rect.y1)
+                above_gap = float(rect.y0) - float(cr.y1)
+                if 0.0 <= below_gap <= max(80.0, H * 0.10):
+                    return True
+                if 0.0 <= above_gap <= max(40.0, H * 0.05):
+                    return True
+            return False
+
         # Filter visual rects in header/footer (unless they're large figures)
         visual_rects = [
             r for r in visual_rects 
             if not (r.y1 < header_threshold or r.y0 > footer_threshold) or _rect_area(r) > (W * H * 0.15)
         ]
+        filtered_visual_rects = []
+        for r in visual_rects:
+            area_ratio = _rect_area(r) / max(1.0, (W * H))
+            wide_banner = float(r.width) >= W * 0.55 and float(r.height) <= H * 0.18 and float(r.y0) <= H * 0.28
+            tiny_badge = area_ratio <= 0.015 and float(r.height) <= H * 0.08 and float(r.y0) <= H * 0.45
+            if page_index == 0 and (wide_banner or tiny_badge) and (not _near_caption(r)):
+                continue
+            filtered_visual_rects.append(r)
+        visual_rects = filtered_visual_rects
         print(f"  [Page {page_index+1}] Step 3 (visual rects): {time.time()-step_start:.2f}s, found {len(visual_rects)} rects", flush=True)
         
         # 4. Extract Tables
@@ -2872,7 +3447,13 @@ class PDFConverter:
             
         # 7. Render
         step_start = time.time()
-        result = self._render_blocks_to_markdown(blocks, page_index, page=page, assets_dir=assets_dir)
+        result = self._render_blocks_to_markdown(
+            blocks,
+            page_index,
+            page=page,
+            assets_dir=assets_dir,
+            is_references_page=is_references_page,
+        )
         print(f"  [Page {page_index+1}] Step 7 (render): {time.time()-step_start:.2f}s", flush=True)
         print(f"  [Page {page_index+1}] TOTAL: {time.time()-page_start:.2f}s", flush=True)
         return result
@@ -3111,7 +3692,28 @@ class PDFConverter:
             if "lines" not in b:
                 continue
 
+            from .heuristics import _looks_like_equation_text, _is_caption_like_text
+
             line_items: list[tuple[fitz.Rect, str]] = []
+
+            def _line_overlaps_visual(line_rect: "fitz.Rect", line_text: str) -> bool:
+                try:
+                    if _is_caption_like_text(line_text):
+                        return False
+                except Exception:
+                    pass
+                line_area = max(1.0, _rect_area(line_rect))
+                for vr in visual_rects:
+                    try:
+                        inter = _rect_intersection_area(line_rect, vr)
+                    except Exception:
+                        inter = 0.0
+                    if inter <= 0.0:
+                        continue
+                    if (inter / line_area) >= 0.40:
+                        return True
+                return False
+
             for l in b["lines"]:
                 spans = l.get("spans") or []
                 parts: list[str] = []
@@ -3140,6 +3742,8 @@ class PDFConverter:
                     lb = fitz.Rect(l.get("bbox"))
                 except Exception:
                     lb = bbox
+                if _line_overlaps_visual(lb, line_text):
+                    continue
                 line_items.append((lb, line_text))
 
             if not line_items:
@@ -3147,13 +3751,17 @@ class PDFConverter:
 
             # Split this raw block into sub-blocks by line-type (math-like vs prose-like).
             # This prevents "equation + where paragraph" from becoming one giant math block.
-            from .heuristics import _looks_like_equation_text, _is_caption_like_text
 
             def _is_math_line(txt: str) -> bool:
                 tt = (txt or "").strip()
                 if not tt:
                     return False
                 low = tt.lower()
+                if is_references_page:
+                    if re.match(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\.\s+[A-Z])", tt):
+                        return False
+                    if re.search(r"\b(?:19|20)\d{2}\b", tt) and len(re.findall(r"\b[A-Za-z]{2,}\b", tt)) >= 4:
+                        return False
                 # Captions should never be merged into equations.
                 try:
                     if _is_caption_like_text(tt):
@@ -3650,13 +4258,22 @@ class PDFConverter:
         
         return t
 
-    def _render_blocks_to_markdown(self, blocks: List[TextBlock], page_index: int, *, page=None, assets_dir: Path | None = None) -> str:
+    def _render_blocks_to_markdown(
+        self,
+        blocks: List[TextBlock],
+        page_index: int,
+        *,
+        page=None,
+        assets_dir: Path | None = None,
+        is_references_page: bool = False,
+    ) -> str:
         return render_blocks_to_markdown(
             self,
             blocks,
             page_index,
             page=page,
             assets_dir=assets_dir,
+            is_references_page=is_references_page,
         )
 
     def _merge_split_formulas(self, md: str) -> str:

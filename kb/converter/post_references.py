@@ -201,6 +201,13 @@ def _format_references(md: str) -> str:
     # Pull those lines into the references tail in both explicit and inferred cases.
     tail_start = ref_i if inferred_heading else (ref_i + 1)
     k = ref_i - 1
+    # Some converters insert one or more spacer blank lines immediately before
+    # a late "References" heading. Skip those first so we can still pull the
+    # dense pre-heading reference payload into the references block.
+    leading_blank_gap = 0
+    while k >= 0 and not lines[k].strip() and leading_blank_gap < 4:
+        leading_blank_gap += 1
+        k -= 1
     pre_tail: list[str] = []
     while k >= 0:
         s = lines[k].strip()
@@ -355,9 +362,14 @@ def _format_references(md: str) -> str:
         # If hard-math tokens appear after the first year, trim that tail.
         try:
             hard_math_m = re.search(
-                r"(\\operatorname\*?\{|\\arg(?:min|max)|\\frac|\\sum|\\int|\\left|\\right|\\mathbf\{|\\mathbb\{|\\begin\{|\\end\{|\\tag\{|\\\|)",
+                r"(\\operatorname\*?\{|\\arg(?:min|max)|\\frac|\\sum|\\int|\\left|\\right|\\mathbf\{|\\mathbb\{|\\partial|\\nabla|\\begin\{|\\end\{|\\tag\{|\\\|)",
                 s,
             )
+            if not hard_math_m:
+                hard_math_m = re.search(
+                    r"(?:(?<![A-Za-z0-9])[=^_]{1,2}(?![A-Za-z])|\\[()\[\]])",
+                    s,
+                )
             if hard_math_m:
                 ym0 = re.search(r"\b(?:19|20)\d{2}\b", s)
                 if ym0 and hard_math_m.start() > ym0.start():

@@ -155,6 +155,30 @@ Some normal paragraph.
     assert "[1] [2] [3] [4]" not in out
 
 
+def test_references_pull_dense_block_across_blank_gap_before_heading():
+    src = """
+# Main Body
+Some normal paragraph.
+
+[1] A. Author, J. Test 2020, 1, 1. [2] B. Author, J. Test 2021, 2, 2. [3] C. Author, J. Test 2022, 3, 3.
+
+## References
+
+[4] D. Author, J. Test 2023, 4, 4.
+[5] E. Author, J. Test 2024, 5, 5.
+"""
+    out = postprocess_markdown(src)
+    refs = _refs_tail(out)
+    assert refs
+    ref_lines = [ln.strip() for ln in refs.splitlines() if ln.strip()]
+    assert ref_lines[0].startswith("[1] ")
+    assert any(ln.startswith("[2] ") for ln in ref_lines)
+    assert any(ln.startswith("[3] ") for ln in ref_lines)
+    assert any(ln.startswith("[4] ") for ln in ref_lines)
+    assert any(ln.startswith("[5] ") for ln in ref_lines)
+    assert "[1] A. Author" not in out.split("## References", 1)[0]
+
+
 def test_references_front_keeps_following_body_sections():
     src = """
 # Paper Title

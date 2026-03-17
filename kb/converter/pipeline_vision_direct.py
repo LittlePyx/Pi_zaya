@@ -323,7 +323,14 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
                         "Output plain-text references only, one complete reference per line. "
                         "Do not use $...$ or $$...$$ on this page."
                     )
-                elif image_names:
+                else:
+                    if i == 0:
+                        page_hint = (
+                            "This is the first page of the paper. "
+                            "Preserve the Abstract from its very first visible sentence, in normal reading order. "
+                            "Do not drop the abstract opening because of nearby title, author, or figure content."
+                        )
+                if (not is_references_page) and image_names:
                     show_n = 6
                     paths = ", ".join(f"./assets/{nm}" for nm in image_names[:show_n])
                     hint_img = (
@@ -376,6 +383,7 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
                     is_references_page=is_references_page,
                     pdf_path=pdf_path,
                     assets_dir=assets_dir,
+                    image_names=image_names,
                     formula_placeholders=formula_placeholders,
                 )
                 elapsed = time.time() - t0
@@ -600,7 +608,14 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
                         "Output plain-text references only, one complete reference per line. "
                         "Do not use $...$ or $$...$$ on this page."
                     )
-                elif image_names:
+                else:
+                    if i == 0:
+                        page_hint = (
+                            "This is the first page of the paper. "
+                            "Preserve the Abstract from its very first visible sentence, in normal reading order. "
+                            "Do not drop the abstract opening because of nearby title, author, or figure content."
+                        )
+                if (not is_references_page) and image_names:
                     show_n = 6
                     paths = ", ".join(f"./assets/{nm}" for nm in image_names[:show_n])
                     hint_img = (
@@ -653,6 +668,7 @@ def process_batch_vision_direct(self, doc, pdf_path: Path, assets_dir: Path, spe
                     is_references_page=is_references_page,
                     pdf_path=pdf_path,
                     assets_dir=assets_dir,
+                    image_names=image_names,
                     formula_placeholders=formula_placeholders,
                 )
                 elapsed = time.time() - t0

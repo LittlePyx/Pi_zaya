@@ -306,13 +306,24 @@ NOISE_LINE_PATTERNS = [
     r"^Publication date:\s+",
     r"^ACM Transactions on Graphics\b",
     r"^Latest updates:\s*",
+    r"^Check for updates\s*$",
     r"^RESEARCH-ARTICLE\b",
     r"^PDF Download\b",
     r"^Total Citations:\b",
     r"^Total Downloads:\b",
     r"^Citation in BibTeX format\b",
     r"^Open Access Support provided by:\s*$",
+    r"^Contents lists available at\s+ScienceDirect\s*$",
+    r"^journal homepage:\s+",
+    r"^A\s+R\s+T\s+I\s+C\s+L\s+E\s+I\s+N\s+F\s+O\s*$",
+    r"^Article history\s*$",
+    r"^Keywords:\s*$",
+    r"^Optics and Laser Technology\s*$",
+    r"^Optics Express\s*$",
+    r"^Vol\.\s*\d+\s*,\s*No\.\s*\d+\s*\|\s*\d+.*OPTICS EXPRESS.*$",
+    r"^[A-Z]\.\s*[A-Za-z\-']+\s+et al\.\s*$",
     r"^3D Gaussian Splatting for Real-Time Radiance Field Rendering\s*$",
+    r"^[0-9():,;\s]{8,}$",
     r"^\s*\d+:\d+\s*$",  # e.g. "139:2" page labels in ACM PDFs
     r"^\s*-\s+Bernhard Kerbl, Georgios Kopanas,.*$",  # running author header
     r"^\s*-\s*$",  # stray single dash line
@@ -365,6 +376,47 @@ _JOURNAL_FOOTER_KEYWORDS = {
 }
 
 
+_BODYISH_STOPWORDS_RE = re.compile(
+    r"\b(?:we|our|this|that|these|those|the|and|with|from|into|using|allowing|enables|demonstrates|shows|show|present|presents|propose|proposes|explore|explores|evaluate|evaluates|conduct|conducts|results|scene|image|images|method|approach|paper)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _count_keyword_hits(text: str, keywords: set[str]) -> int:
+    low = text.lower()
+    hits = 0
+    for kw in keywords:
+        k = str(kw or "").strip().lower()
+        if not k:
+            continue
+        if " " in k:
+            if k in low:
+                hits += 1
+        else:
+            if re.search(rf"\b{re.escape(k)}\b", low):
+                hits += 1
+    return hits
+
+
+def _looks_like_body_prose_block(text: str, *, word_n: int = 0, verb_n: int = 0) -> bool:
+    t = _normalize_text(text or "").strip()
+    if not t:
+        return False
+    if word_n <= 0:
+        word_n = len(re.findall(r"[A-Za-z]{2,}", t))
+    if verb_n <= 0:
+        verb_n = len(
+            re.findall(
+                r"\b(?:is|are|was|were|be|been|being|have|has|had|can|may|will|would|should|could|do|does|did|show|shows|shown|propose|proposed|present|presents|discuss|discusses|demonstrate|improve|use|used)\b",
+                t,
+                flags=re.IGNORECASE,
+            )
+        )
+    stop_n = len(_BODYISH_STOPWORDS_RE.findall(t))
+    sentence_punct_n = t.count(".") + t.count(";") + t.count(":")
+    return word_n >= 60 and stop_n >= 6 and verb_n >= 2 and sentence_punct_n >= 2
+
+
 def _is_non_body_metadata_text(
     text: str,
     *,
@@ -413,17 +465,29 @@ def _is_non_body_metadata_text(
         return True
     if re.fullmatch(r"(?:review article|natural photonics|nature photonics)", low):
         return True
+    if re.fullmatch(r"(?:check for updates|contents lists available at sciencedirect)", low):
+        return True
+    if re.match(r"^optics (?:and laser technology|express)\b", low):
+        return True
+    if re.match(r"^journal homepage:\s*", low):
+        return True
+    if re.match(r"^a\s+r\s+t\s+i\s+c\s+l\s+e\s+i\s+n\s+f\s+o\s*$", low):
+        return True
+    if re.match(r"^vol\.\s*\d+\s*,\s*no\.\s*\d+\s*\|", low):
+        return True
+    if re.match(r"^[a-z]\.\s*[a-z\-']+\s+et al\.\s*$", low):
+        return True
     if has_doi and (edge_zone or word_n <= 28):
         return True
     if has_url and edge_zone:
         return True
     if re.search(r"\b(?:all rights reserved|creative commons|open access|copyright|published by)\b", low):
         return True
-    if re.search(r"\b(?:received|accepted|published online|article history)\b", low) and (edge_zone or page_index <= 1):
+    if re.search(r"\b(?:received|accepted|published online|article history|keywords)\b", low) and (edge_zone or page_index <= 1):
         return True
 
-    aff_n = sum(1 for k in _AFFILIATION_KEYWORDS if k in low)
-    journal_n = sum(1 for k in _JOURNAL_FOOTER_KEYWORDS if k in low)
+    aff_n = _count_keyword_hits(low, _AFFILIATION_KEYWORDS)
+    journal_n = _count_keyword_hits(low, _JOURNAL_FOOTER_KEYWORDS)
     zip_n = len(re.findall(r"\b\d{5,6}\b", t))
     country_n = len(
         re.findall(
@@ -439,10 +503,16 @@ def _is_non_body_metadata_text(
             low,
         )
     )
+    looks_body_prose = _looks_like_body_prose_block(t, word_n=word_n, verb_n=verb_n)
 
-    if aff_n >= 3 and word_n <= 130 and verb_n <= 5:
+    # Guardrail: long sentence-like body paragraphs on page 1 can contain code URLs.
+    # They should not be masked as metadata unless they are clearly edge/footer text.
+    if (not edge_zone) and looks_body_prose and (not has_email) and (not has_orcid) and (not has_page_counter):
+        return False
+
+    if aff_n >= 3 and word_n <= 130 and verb_n <= 5 and (not looks_body_prose):
         return True
-    if (page_index <= 1 or edge_zone) and aff_n >= 2 and (zip_n + country_n >= 1 or name_pair_n + initial_name_n >= 2):
+    if (page_index <= 1 or edge_zone) and aff_n >= 2 and (zip_n + country_n >= 1 or name_pair_n + initial_name_n >= 2) and (not looks_body_prose):
         return True
     if edge_zone and journal_n >= 2 and word_n <= 90:
         return True
@@ -466,7 +536,7 @@ def _is_non_body_metadata_text(
             return True
 
     # Extremely long metadata merges (common OCR/LLM collapse case).
-    if len(t) >= 260 and (aff_n >= 2 or has_url or has_doi) and verb_n <= 6:
+    if len(t) >= 260 and (aff_n >= 2 or has_doi or (has_url and edge_zone)) and verb_n <= 6 and (not looks_body_prose):
         return True
 
     return False
@@ -646,6 +716,39 @@ def _page_looks_like_references_content(page) -> bool:
         if bodyish_before >= 5:
             return False
 
+    # Mixed pages exist in some journals: the top of the page continues
+    # references, but the lower half resumes normal body sections
+    # (for example "1. Introduction" or "2. Methods"). Those pages should
+    # not be processed in full references mode.
+    body_section_pat = re.compile(
+        r"^\s*(?:\d+(?:\.\d+)*)\.?\s+"
+        r"(?:introduction|background|related work|method(?:s|ology)?|"
+        r"experiment(?:s|al)?|results?|discussion|conclusion|"
+        r"comparison|theory|materials?|supplementary|appendix)\b",
+        re.IGNORECASE,
+    )
+    if ref_like_lines:
+        first_ref = min(ref_like_lines)
+        for idx, ln in enumerate(lines):
+            if idx <= first_ref + 1:
+                continue
+            if not body_section_pat.match(ln):
+                continue
+            bodyish_after = 0
+            for tail_ln in lines[idx + 1 : idx + 10]:
+                words = re.findall(r"[A-Za-z]{3,}", tail_ln)
+                stop_n = len(
+                    re.findall(
+                        r"\b(?:the|and|with|from|that|this|these|into|through|between|while|where|which|during|using|allows|enables|provides)\b",
+                        tail_ln,
+                        flags=re.IGNORECASE,
+                    )
+                )
+                if len(words) >= 8 and stop_n >= 2 and not ref_line_pat.match(tail_ln):
+                    bodyish_after += 1
+            if bodyish_after >= 2:
+                return False
+
     if ("doi" in t.lower()) or ("http" in t.lower()) or ("arxiv" in t.lower()):
         return True
     # Fallback: pure density of years + many reference-like lines.
@@ -658,6 +761,7 @@ def _is_frontmatter_noise_line(text: str) -> bool:
         return True
     front_pat = [
         r"^Latest updates:\s*",
+        r"^Check for updates\s*$",
         r"^PDF Download\b",
         r"^Total Citations\b",
         r"^Total Downloads\b",
@@ -665,6 +769,16 @@ def _is_frontmatter_noise_line(text: str) -> bool:
         r"^Citation in BibTeX format\b",
         r"^Open Access Support provided by:\b",
         r"^RESEARCH-ARTICLE\b",
+        r"^Contents lists available at\s+ScienceDirect\s*$",
+        r"^journal homepage:\s+",
+        r"^A\s+R\s+T\s+I\s+C\s+L\s+E\s+I\s+N\s+F\s+O\s*$",
+        r"^Article history\s*$",
+        r"^Keywords:\s*$",
+        r"^Optics and Laser Technology\s*$",
+        r"^Optics Express\s*$",
+        r"^Vol\.\s*\d+\s*,\s*No\.\s*\d+\s*\|",
+        r"^[A-Z]\.\s*[A-Za-z\-']+\s+et al\.\s*$",
+        r"^[0-9():,;\s]{8,}$",
     ]
     return any(re.match(p, t, flags=re.IGNORECASE) for p in front_pat)
 

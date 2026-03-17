@@ -7,8 +7,18 @@ from .text_utils import _normalize_text
 
 _ALLOWED_UNNUMBERED_HEADINGS = {
     "ABSTRACT",
+    "DATA AVAILABILITY",
+    "CODE AVAILABILITY",
     "ACKNOWLEDGMENTS",
     "ACKNOWLEDGEMENT",
+    "AUTHOR CONTRIBUTIONS",
+    "COMPETING INTERESTS",
+    "CORRESPONDENCE",
+    "PEER REVIEW INFORMATION",
+    "REPRINTS AND PERMISSIONS INFORMATION",
+    "PUBLISHER'S NOTE",
+    "PUBLISHER’S NOTE",
+    "ETHICS DECLARATIONS",
     "REFERENCES",
     "BIBLIOGRAPHY",
     "APPENDIX",
@@ -250,4 +260,3 @@ def _enforce_heading_policy(md: str) -> str:
 
         out.append("#" * lvl + " " + title)
     return "\n".join(out)
-

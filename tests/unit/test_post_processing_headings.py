@@ -74,3 +74,52 @@ def test_do_not_promote_reference_like_numbered_initials_as_headings():
     out = postprocess_markdown(src)
     assert "## 4. J. Hunt" not in out
     assert "## 5. W. L. Chan" not in out
+
+
+def test_demote_custom_h2_inside_structural_section():
+    src = """
+# Paper Title
+
+## Methods
+
+### Noise modeling of sensors
+Body text.
+
+## Network structure
+Body text.
+
+## Deep feature fusion
+More body text.
+
+## References
+[1] A. Author, J. Test 2024, 1, 1.
+"""
+    out = postprocess_markdown(src)
+    assert "## Methods" in out
+    assert "### Network structure" in out
+    assert "### Deep feature fusion" in out
+    assert "\n## Network structure\n" not in f"\n{out}\n"
+    assert "\n## Deep feature fusion\n" not in f"\n{out}\n"
+
+
+def test_drop_empty_duplicate_heading_when_caption_repeats_it():
+    src = """
+# Paper Title
+
+## Methods
+
+### Network structure
+Some paragraph.
+
+## Workflow and structure of the reported deep transformer network
+
+## Deep feature fusion
+More body text.
+
+**Figure 6.** Illustration of the reported deep transformer network. The workflow and structure of the reported deep transformer network is shown here.
+![Figure 6](./assets/page_10_fig_1.png)
+    """
+    out = postprocess_markdown(src)
+    assert "## Workflow and structure of the reported deep transformer network" not in out
+    assert "### Workflow and structure of the reported deep transformer network" not in out
+    assert "workflow and structure of the reported deep transformer network" in out.lower()
