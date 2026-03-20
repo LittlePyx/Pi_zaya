@@ -1,6 +1,6 @@
 # Paper Guide In-Paper Citation Grounding Plan
 
-Status: `proposed -> phase-1 in progress`  
+Status: `proposed -> phase-1 in progress`
 Last updated: `2026-03-20`
 
 ## 1. Problem Statement
@@ -16,8 +16,8 @@ But the current citation grounding is still too weak.
 
 Observed failure mode:
 
-- the answer repeatedly shows the same in-paper reference such as `【1】`
-- the repeated `【1】` often comes from model-side number guessing, not from correct claim-to-reference grounding
+- the answer repeatedly shows the same in-paper reference such as `[1]`
+- the repeated `[1]` often comes from model-side number guessing, not from correct claim-to-reference grounding
 - once the model outputs `[[CITE:sid:1]]`, the runtime usually accepts it if reference `1` exists in the bound paper
 
 This is not a rendering bug. It is a grounding and validation bug.
@@ -216,7 +216,7 @@ Add or update tests for:
 Run at least one real paper-guide session and verify:
 
 1. the model is no longer exposed to retrieval-block headers that look like `[1]`
-2. answers that previously collapsed to repeated `【1】` no longer do so by default
+2. answers that previously collapsed to repeated `[1]` no longer do so by default
 3. if the answer contains a wrong structured cite, it is either repaired or removed
 4. clickable citation chips still render normally
 
@@ -254,7 +254,7 @@ Phase 1 is accepted only if all of the following are true.
 
 For a representative paper-guide answer:
 
-1. `【1】` does not appear repeatedly just because the first retrieval block was labeled `1`
+1. `[1]` does not appear repeatedly just because the first retrieval block was labeled `1`
 2. when answer-local evidence points to another reference, the final citation reflects that
 3. when grounding is weak, the system avoids confidently wrong in-paper references
 

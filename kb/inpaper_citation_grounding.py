@@ -4,7 +4,8 @@ import re
 
 from kb.citation_meta import extract_first_doi, extract_year_hint
 
-_INPAPER_NUMERIC_RE = re.compile(r"\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\]")
+_RANGE_DASH_CLASS = r"\-\u2013\u2014\u2212"
+_INPAPER_NUMERIC_RE = re.compile(rf"\[(\d{{1,4}}(?:\s*(?:[{_RANGE_DASH_CLASS},])\s*\d{{1,4}})*)\]")
 _AUTHOR_ETAL_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s+et\s+al\.?\b", flags=re.I)
 _AUTHOR_YEAR_PAREN_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s*\(\s*((?:19|20)\d{2})\s*\)")
 _AUTHOR_YEAR_INLINE_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s*,?\s+((?:19|20)\d{2})\b")
@@ -20,7 +21,7 @@ def parse_ref_num_set(spec: str, *, max_items: int = 48) -> list[int]:
         s = str(part or "").strip()
         if not s:
             continue
-        m = re.fullmatch(r"(\d{1,4})\s*(?:-|–|—)\s*(\d{1,4})", s)
+        m = re.fullmatch(rf"(\d{{1,4}})\s*(?:[{_RANGE_DASH_CLASS}])\s*(\d{{1,4}})", s)
         if m:
             try:
                 a = int(m.group(1))
