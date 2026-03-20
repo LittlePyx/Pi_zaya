@@ -53,6 +53,13 @@ from kb.answer_quality import (
 from kb.chat_store import ChatStore
 from kb.file_ops import _resolve_md_output_paths
 from kb.llm import DeepSeekChat
+from kb.inpaper_citation_grounding import (
+    extract_candidate_ref_nums_from_hits,
+    extract_citation_context_hints,
+    has_explicit_reference_conflict,
+    reference_alignment_score,
+)
+
 from kb.paper_guide_provenance import (
     _PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION,
     _apply_provenance_required_coverage_contract,
@@ -185,7 +192,7 @@ _CITE_CANON_RE = re.compile(
 )
 _SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
 _SID_HEADER_LINE_RE = re.compile(
-    r"(?im)^\s*\[\d{1,3}\]\s*\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\][^\n]*\n?",
+    r"(?im)^\s*(?:\[\d{1,3}\]|DOC-\d{1,3})\s*\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\][^\n]*\n?",
     re.IGNORECASE,
 )
 _VISION_IMAGE_MIME_BY_SUFFIX = {
@@ -1345,7 +1352,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             )
             top = "" if _is_probably_bad_heading(focus_heading) else focus_heading
             sid = _cite_source_id(src)
-            header = f"[{i}] [SID:{sid}] {src_name or 'unknown'}" + (f" | {top}" if top else "")
+            header = f"DOC-{i} [SID:{sid}] {src_name or 'unknown'}" + (f" | {top}" if top else "")
+            if paper_guide_mode and src:
+                candidate_refs = extract_candidate_ref_nums_from_hits([h], source_path=src, max_candidates=6)
+                if candidate_refs:
+                    refs_txt = ", ".join(str(int(n)) for n in candidate_refs[:6])
+                    header += f" | candidate refs: {refs_txt}"
             body = ""
             rs = meta.get("ref_show_snippets")
             if isinstance(rs, list):
@@ -1451,6 +1463,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         system += (
             "\nStructured citation protocol:\n"
             "- Context headers contain [SID:<sid>] identifiers.\n"
+            "- Retrieval block labels like DOC-1 / DOC-2 are context ids only, not paper reference numbers.\n"
             "- When citing paper references, MUST use [[CITE:<sid>:<ref_num>]].\n"
             "- Example: [[CITE:s1a2b3c4:24]] or [[CITE:s1a2b3c4:24]][[CITE:s1a2b3c4:25]].\n"
             "- Do NOT output free-form numeric citations like [24] / [2][4].\n"
@@ -1606,6 +1619,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer_hits=answer_hits,
             db_dir=db_dir,
             locked_source=locked_citation_source,
+            paper_guide_mode=bool(paper_guide_mode),
         )
         answer_quality = _build_answer_quality_probe(
             answer,
@@ -2080,12 +2094,91 @@ def _pick_locked_citation_source(answer_hits: list[dict]) -> dict | None:
     return None
 
 
+def _norm_source_key_local(path_like: str) -> str:
+    s = str(path_like or "").strip()
+    if not s:
+        return ""
+    try:
+        return str(Path(s).expanduser().resolve(strict=False)).strip().lower()
+    except Exception:
+        try:
+            return str(Path(s).expanduser()).strip().lower()
+        except Exception:
+            return s.lower()
+
+
+def _source_refs_from_index(index_data: dict, source_path: str, *, source_sha1: str = "") -> dict[int, dict]:
+    if not isinstance(index_data, dict):
+        return {}
+    docs = index_data.get("docs")
+    if not isinstance(docs, dict) or not docs:
+        return {}
+    src = str(source_path or "").strip()
+    if not src:
+        return {}
+
+    target_norm = _norm_source_key_local(src)
+    target_sha = str(source_sha1 or "").strip().lower()
+    want_name = Path(src).name.lower()
+    want_stem = Path(src).stem.lower()
+
+    doc = docs.get(target_norm) if target_norm else None
+    if not isinstance(doc, dict):
+        for cand in docs.values():
+            if not isinstance(cand, dict):
+                continue
+            cand_sha = str(cand.get("sha1") or "").strip().lower()
+            if target_sha and cand_sha and cand_sha == target_sha:
+                doc = cand
+                break
+        if not isinstance(doc, dict):
+            for cand in docs.values():
+                if not isinstance(cand, dict):
+                    continue
+                cand_norm = _norm_source_key_local(str(cand.get("path") or ""))
+                if cand_norm and target_norm and cand_norm == target_norm:
+                    doc = cand
+                    break
+        if not isinstance(doc, dict):
+            for cand in docs.values():
+                if not isinstance(cand, dict):
+                    continue
+                cand_name = str(cand.get("name") or "").strip().lower()
+                cand_stem = str(cand.get("stem") or "").strip().lower()
+                if want_name and cand_name and want_name == cand_name:
+                    doc = cand
+                    break
+                if want_stem and cand_stem and want_stem == cand_stem:
+                    doc = cand
+                    break
+
+    if not isinstance(doc, dict):
+        return {}
+    refs = doc.get("refs")
+    if not isinstance(refs, dict):
+        return {}
+    out: dict[int, dict] = {}
+    for k, v in refs.items():
+        if not isinstance(v, dict):
+            continue
+        try:
+            n = int(k)
+        except Exception:
+            continue
+        if n <= 0:
+            continue
+        out[n] = v
+    return out
+
+
+
 def _validate_structured_citations(
     answer: str,
     *,
     answer_hits: list[dict],
     db_dir: Path | None,
     locked_source: dict | None = None,
+    paper_guide_mode: bool = False,
 ) -> tuple[str, dict]:
     text = str(answer or "")
     if ("[[CITE:" not in text) and ("[CITE:" not in text):
@@ -2130,11 +2223,25 @@ def _validate_structured_citations(
 
     locked_sid = str((locked_source or {}).get("sid") or "").strip().lower()
     locked_source_path = str((locked_source or {}).get("source_path") or "").strip()
+    locked_source_sha1 = str((locked_source or {}).get("source_sha1") or "").strip().lower()
     if locked_sid and locked_source_path and (locked_sid not in sid_to_source):
         sid_to_source[locked_sid] = locked_source_path
-        sha_locked = str((locked_source or {}).get("source_sha1") or "").strip().lower()
+        sha_locked = locked_source_sha1
         if sha_locked and (locked_source_path not in sha_by_source):
             sha_by_source[locked_source_path] = sha_locked
+
+    candidate_ref_nums_by_source: dict[str, list[int]] = {}
+    if paper_guide_mode:
+        for src in list(dict.fromkeys([_hit_source_path(h) for h in answer_hits or []])):
+            src_norm = str(src or "").strip()
+            if not src_norm:
+                continue
+            nums = extract_candidate_ref_nums_from_hits(answer_hits, source_path=src_norm, max_candidates=48)
+            if nums:
+                candidate_ref_nums_by_source[src_norm] = nums
+
+    resolved_ref_cache: dict[tuple[str, int], dict | None] = {}
+    source_refs_cache: dict[str, dict[int, dict]] = {}
 
     def _resolves(sid: str, ref_num: int) -> bool:
         sp = sid_to_source.get(str(sid or "").strip().lower())
@@ -2151,6 +2258,41 @@ def _validate_structured_citations(
             got = None
         return bool(isinstance(got, dict) and isinstance(got.get("ref"), dict))
 
+    def _resolve_ref(sp: str, ref_num: int) -> dict | None:
+        src = str(sp or "").strip()
+        try:
+            n = int(ref_num)
+        except Exception:
+            return None
+        if (not src) or (n <= 0):
+            return None
+        key = (src, n)
+        if key in resolved_ref_cache:
+            return resolved_ref_cache[key]
+        try:
+            got = resolve_reference_entry(
+                index_data,
+                src,
+                n,
+                source_sha1=sha_by_source.get(src, ""),
+            )
+        except Exception:
+            got = None
+        ref = got.get("ref") if isinstance(got, dict) and isinstance(got.get("ref"), dict) else None
+        resolved_ref_cache[key] = ref
+        return ref
+
+    def _source_refs(sp: str) -> dict[int, dict]:
+        src = str(sp or "").strip()
+        if not src:
+            return {}
+        cached = source_refs_cache.get(src)
+        if isinstance(cached, dict):
+            return cached
+        refs = _source_refs_from_index(index_data, src, source_sha1=sha_by_source.get(src, ""))
+        source_refs_cache[src] = refs
+        return refs
+
     stats = {
         "raw_count": int(len(raw_tokens)),
         "kept": 0,
@@ -2158,6 +2300,75 @@ def _validate_structured_citations(
         "dropped": 0,
         "locked_sid": locked_sid,
     }
+
+    def _pick_grounded_ref_num(*, source_path: str, current_ref_num: int, token_start: int, token_end: int) -> int | None:
+        src = str(source_path or "").strip()
+        if (not src) or int(current_ref_num) <= 0:
+            return None
+        if not paper_guide_mode:
+            return int(current_ref_num) if isinstance(_resolve_ref(src, int(current_ref_num)), dict) else None
+
+        current_ref = _resolve_ref(src, int(current_ref_num))
+        candidate_nums = list(candidate_ref_nums_by_source.get(src) or [])
+        hints = extract_citation_context_hints(cleaned, token_start=token_start, token_end=token_end)
+        has_strong_hints = bool(str(hints.get("doi") or "").strip() or (str(hints.get("author") or "").strip() and str(hints.get("year") or "").strip()))
+        current_conflict = bool(current_ref and has_explicit_reference_conflict(current_ref, hints))
+
+        if current_ref and (not candidate_nums) and (not current_conflict):
+            return int(current_ref_num)
+        if current_ref and candidate_nums and (int(current_ref_num) in candidate_nums) and (not current_conflict):
+            return int(current_ref_num)
+
+        pool: list[int] = []
+        seen_pool: set[int] = set()
+        for n0 in candidate_nums:
+            try:
+                n = int(n0)
+            except Exception:
+                continue
+            if n <= 0 or n in seen_pool:
+                continue
+            seen_pool.add(n)
+            pool.append(n)
+        if int(current_ref_num) > 0 and int(current_ref_num) not in seen_pool:
+            seen_pool.add(int(current_ref_num))
+            pool.append(int(current_ref_num))
+        if has_strong_hints:
+            for n in _source_refs(src).keys():
+                if n in seen_pool:
+                    continue
+                seen_pool.add(n)
+                pool.append(n)
+
+        best_num: int | None = None
+        best_score = float("-inf")
+        for n in pool:
+            ref = _resolve_ref(src, n)
+            if not isinstance(ref, dict):
+                ref = _source_refs(src).get(int(n))
+            if not isinstance(ref, dict):
+                continue
+            score = float(reference_alignment_score(ref, hints))
+            if n == int(current_ref_num):
+                score += 0.1
+            if score > best_score:
+                best_score = score
+                best_num = int(n)
+
+        if has_strong_hints:
+            if best_num is None:
+                return None
+            if str(hints.get("doi") or "").strip():
+                return best_num if best_score >= 6.0 else None
+            return best_num if best_score >= 3.5 else None
+
+        if candidate_nums:
+            if len(candidate_nums) == 1:
+                only = int(candidate_nums[0])
+                return only if isinstance(_resolve_ref(src, only), dict) or isinstance(_source_refs(src).get(only), dict) else None
+            return int(current_ref_num) if (int(current_ref_num) in candidate_nums and isinstance(current_ref, dict)) else None
+
+        return int(current_ref_num) if isinstance(current_ref, dict) else None
 
     def _repl(m: re.Match[str]) -> str:
         sid = str(m.group(1) or "").strip().lower()
@@ -2170,23 +2381,49 @@ def _validate_structured_citations(
             return ""
 
         if locked_sid:
-            if _resolves(locked_sid, n):
-                if sid == locked_sid:
+            grounded_n = _pick_grounded_ref_num(
+                source_path=locked_source_path,
+                current_ref_num=n,
+                token_start=int(m.start()),
+                token_end=int(m.end()),
+            )
+            if grounded_n is not None and _resolves(locked_sid, grounded_n):
+                if sid == locked_sid and grounded_n == n:
                     stats["kept"] = int(stats["kept"]) + 1
-                    return f"[[CITE:{locked_sid}:{n}]]"
+                    return f"[[CITE:{locked_sid}:{grounded_n}]]"
                 stats["rewritten"] = int(stats["rewritten"]) + 1
-                return f"[[CITE:{locked_sid}:{n}]]"
-            if sid and _resolves(sid, n):
+                return f"[[CITE:{locked_sid}:{grounded_n}]]"
+            if sid:
+                sid_source_path = sid_to_source.get(sid, "")
+                sid_grounded_n = _pick_grounded_ref_num(
+                    source_path=sid_source_path,
+                    current_ref_num=n,
+                    token_start=int(m.start()),
+                    token_end=int(m.end()),
+                )
+            else:
+                sid_grounded_n = None
+            if sid and sid_grounded_n is not None and _resolves(sid, sid_grounded_n):
                 # Locked source could not validate this ref number; keep the
                 # original only when it resolves cleanly in the cited source.
                 stats["kept"] = int(stats["kept"]) + 1
-                return f"[[CITE:{sid}:{n}]]"
+                return f"[[CITE:{sid}:{sid_grounded_n}]]"
             stats["dropped"] = int(stats["dropped"]) + 1
             return ""
 
-        if sid and _resolves(sid, n):
+        if sid:
+            source_path = sid_to_source.get(sid, "")
+            grounded_n = _pick_grounded_ref_num(
+                source_path=source_path,
+                current_ref_num=n,
+                token_start=int(m.start()),
+                token_end=int(m.end()),
+            )
+        else:
+            grounded_n = None
+        if sid and grounded_n is not None and _resolves(sid, grounded_n):
             stats["kept"] = int(stats["kept"]) + 1
-            return f"[[CITE:{sid}:{n}]]"
+            return f"[[CITE:{sid}:{grounded_n}]]"
         stats["dropped"] = int(stats["dropped"]) + 1
         return ""
 

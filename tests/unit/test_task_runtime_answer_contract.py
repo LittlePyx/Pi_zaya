@@ -297,7 +297,7 @@ def test_enhance_kb_miss_fallback_fact_answer_skips_default_next_steps():
 def test_sanitize_structured_tokens_removes_sid_markers():
     from kb import task_runtime
 
-    raw = "[SID:s50f9c165] text\n[1] [SID:s50f9c165] source | section\nanswer body"
+    raw = "[SID:s50f9c165] text\nDOC-1 [SID:s50f9c165] source | section\nanswer body"
     out = task_runtime._sanitize_structured_cite_tokens(raw)
     assert "[SID:" not in out
     assert "answer body" in out
@@ -414,6 +414,75 @@ def test_validate_structured_citations_rewrites_to_locked_source(monkeypatch, tm
     assert f"[[CITE:{locked_sid}:24]]" in answer
     assert "[[CITE:sdeadbeef:24]]" not in answer
     assert stats["rewritten"] == 1
+
+
+def test_validate_structured_citations_in_paper_guide_rewrites_to_evidence_candidate(monkeypatch, tmp_path):
+    from kb import task_runtime
+
+    source_path = r"db\doc\paper.en.md"
+    locked_sid = task_runtime._cite_source_id(source_path)
+
+    monkeypatch.setattr(task_runtime, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path:
+            return None
+        if int(ref_num) == 1:
+            return {"ref": {"raw": "[1] Wrong ref", "authors": "Smith et al.", "year": "2020", "title": "Wrong Ref"}}
+        if int(ref_num) == 24:
+            return {"ref": {"raw": "[24] Gehm et al. Demo. 2007.", "authors": "Gehm et al.", "year": "2007", "title": "Correct Ref"}}
+        return None
+
+    monkeypatch.setattr(task_runtime, "resolve_reference_entry", fake_resolve)
+
+    answer, stats = task_runtime._validate_structured_citations(
+        "Gehm et al. (2007) support this claim [[CITE:sdeadbeef:1]].",
+        answer_hits=[{"text": "This follows prior work [24].", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        db_dir=tmp_path,
+        locked_source={
+            "sid": locked_sid,
+            "source_path": source_path,
+            "source_sha1": "abc",
+        },
+        paper_guide_mode=True,
+    )
+    assert f"[[CITE:{locked_sid}:24]]" in answer
+    assert f"[[CITE:{locked_sid}:1]]" not in answer
+    assert stats["rewritten"] == 1
+
+
+def test_validate_structured_citations_in_paper_guide_drops_suspicious_ref_num(monkeypatch, tmp_path):
+    from kb import task_runtime
+
+    source_path = r"db\doc\paper.en.md"
+    locked_sid = task_runtime._cite_source_id(source_path)
+
+    monkeypatch.setattr(task_runtime, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path:
+            return None
+        if int(ref_num) in {1, 24, 25}:
+            return {"ref": {"raw": f"[{int(ref_num)}] Demo ref {int(ref_num)}", "authors": "Demo et al.", "year": "2024", "title": f"Ref {int(ref_num)}"}}
+        return None
+
+    monkeypatch.setattr(task_runtime, "resolve_reference_entry", fake_resolve)
+
+    answer, stats = task_runtime._validate_structured_citations(
+        "This sentence has no grounded ref number [[CITE:sdeadbeef:1]].",
+        answer_hits=[{"text": "Evidence mentions [24] and [25].", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        db_dir=tmp_path,
+        locked_source={
+            "sid": locked_sid,
+            "source_path": source_path,
+            "source_sha1": "abc",
+        },
+        paper_guide_mode=True,
+    )
+    assert "[[CITE:" not in answer
+    assert stats["dropped"] == 1
 
 
 def test_gen_answer_quality_summary_aggregates_rates(monkeypatch):
