@@ -18,6 +18,11 @@ import requests
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.config import load_settings
 from kb.file_naming import citation_meta_display_pdf_name
+from kb.inpaper_citation_grounding import (
+    extract_citation_context_hints,
+    has_explicit_reference_conflict,
+    reference_alignment_score,
+)
 from kb.source_filters import is_excluded_source_path
 from kb.reference_index import (
     extract_references_map_from_md as _extract_references_map_from_md_index,
@@ -3378,13 +3383,15 @@ def _annotate_inpaper_citations_with_hover_meta(
         index_data = {}
 
     resolved_cache: dict[tuple[int, str], tuple[str, str, dict] | None] = {}
+    candidate_cache: dict[tuple[int, str], list[tuple[str, str, dict]]] = {}
     detail_by_key: dict[str, dict] = {}
 
-    def _resolve_num(n: int, preferred_sp: str = "") -> tuple[str, str, dict] | None:
+    def _resolve_num_candidates(n: int, preferred_sp: str = "") -> list[tuple[str, str, dict]]:
         pref = str(preferred_sp or "").strip()
         ckey = (int(n), pref.lower())
-        if ckey in resolved_cache:
-            return resolved_cache[ckey]
+        cached = candidate_cache.get(ckey)
+        if isinstance(cached, list):
+            return list(cached)
         matches: list[tuple[str, str, dict]] = []
         ordered_srcs = list(srcs)
         if pref and pref in ordered_srcs:
@@ -3394,14 +3401,22 @@ def _annotate_inpaper_citations_with_hover_meta(
             got = _resolve_reference_entry_from_index(
                 index_data,
                 sp,
-                n,
+                int(n),
                 source_sha1=str(hint.get("source_sha1") or "").strip().lower(),
             )
             if isinstance(got, dict):
                 ref = got.get("ref")
                 if isinstance(ref, dict):
-                    src_name = _display_source_name(sp)
-                    matches.append((sp, src_name, ref))
+                    matches.append((sp, _display_source_name(sp), ref))
+        candidate_cache[ckey] = list(matches)
+        return list(matches)
+
+    def _resolve_num(n: int, preferred_sp: str = "") -> tuple[str, str, dict] | None:
+        pref = str(preferred_sp or "").strip()
+        ckey = (int(n), pref.lower())
+        if ckey in resolved_cache:
+            return resolved_cache[ckey]
+        matches = _resolve_num_candidates(int(n), preferred_sp=pref)
 
         picked: tuple[str, str, dict] | None = None
         if matches:
@@ -3415,24 +3430,6 @@ def _annotate_inpaper_citations_with_hover_meta(
                 picked = None
         resolved_cache[ckey] = picked
         return picked
-
-    def _resolve_num_in_source(n: int, source_path: str) -> tuple[str, str, dict] | None:
-        sp = str(source_path or "").strip()
-        if (not sp) or (int(n) <= 0):
-            return None
-        hint = source_hint_by_path.get(sp) or {}
-        got = _resolve_reference_entry_from_index(
-            index_data,
-            sp,
-            int(n),
-            source_sha1=str(hint.get("source_sha1") or "").strip().lower(),
-        )
-        if not isinstance(got, dict):
-            return None
-        ref = got.get("ref")
-        if not isinstance(ref, dict):
-            return None
-        return sp, _display_source_name(sp), ref
 
     def _remember_detail(n: int, source_path: str, source_name: str, ref: dict) -> dict:
         skey = f"{int(n)}|{str(source_path or '').strip().lower()}"
@@ -3497,170 +3494,43 @@ def _annotate_inpaper_citations_with_hover_meta(
             t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
             return f"[{int(n)}](#{anchor} \"{t_attr}\")"
 
-        def _extract_author_year_hint(pos: int) -> tuple[str, str, bool]:
-            try:
-                left = seg[max(0, int(pos) - 220) : int(pos)]
-            except Exception:
-                left = seg
-            text = re.sub(r"\s+", " ", str(left or "")).strip()
-            if not text:
-                return "", "", False
+        def _pick_grounded_numeric_candidate(
+            n: int,
+            *,
+            pos: int,
+            target_sp: str,
+        ) -> tuple[str, str, dict] | None:
+            pref_sp = str(target_sp or "").strip()
+            matches = _resolve_num_candidates(int(n), preferred_sp=pref_sp)
+            if not matches:
+                return None
+            if not pref_sp and len(matches) == 1:
+                return matches[0]
 
-            years = re.findall(r"(?:19|20)\d{2}", text)
-            year_hint = str(years[-1]) if years else ""
+            hints = extract_citation_context_hints(seg, token_start=int(pos), token_end=int(pos) + max(1, len(f"[{int(n)}]")))
+            doi_hint = str(hints.get("doi") or "").strip()
+            if not doi_hint:
+                # Preserve legacy behavior: for free-form numeric citations like [50],
+                # do not hard-gate by author/year text (it is often not reliable),
+                # but allow DOI to disambiguate or drop on explicit conflict.
+                return _resolve_num(int(n), preferred_sp=pref_sp)
 
-            # Capture explicit author pattern like "Zhang et al. (2018) [50]".
-            m = re.search(
-                r"([A-Z][A-Za-z'`-]{1,40})\s+et\s+al\.?\s*(?:[,(]?\s*(?:19|20)\d{2}\s*[)]?)?\s*$",
-                text,
-                flags=re.I,
-            )
-            author_hint = str(m.group(1) or "").strip().lower() if m else ""
-            if author_hint in {
-                "the",
-                "this",
-                "that",
-                "these",
-                "those",
-                "figure",
-                "table",
-                "section",
-                "equation",
-                "model",
-                "method",
-            }:
-                author_hint = ""
-            return author_hint, year_hint, bool(author_hint)
-
-        def _normalize_doi_text(x: str) -> str:
-            d = str(x or "").strip().lower()
-            if not d:
-                return ""
-            d = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", d, flags=re.I)
-            return d.strip(" \t\r\n.,;:()[]{}<>")
-
-        def _context_window(pos: int, *, left_n: int = 260, right_n: int = 100) -> str:
-            try:
-                st0 = max(0, int(pos) - int(left_n))
-                ed0 = min(len(seg), int(pos) + int(right_n))
-                return str(seg[st0:ed0] or "")
-            except Exception:
-                return str(seg or "")
-
-        def _ref_year(ref2: dict) -> str:
-            y = str((ref2 or {}).get("year") or "").strip()
-            if re.fullmatch(r"(19|20)\d{2}", y):
-                return y
-            raw = " ".join(
-                [
-                    str((ref2 or {}).get("raw") or "").strip(),
-                    str((ref2 or {}).get("cite_fmt") or "").strip(),
-                    str((ref2 or {}).get("title") or "").strip(),
-                ]
-            )
-            m = re.search(r"\b(19|20)\d{2}\b", raw)
-            return str(m.group(0) or "").strip() if m else ""
-
-        def _verify_ref_by_local_context(ref: dict, pos: int) -> bool:
-            # Hard safety gate:
-            # link only when we can verify identity from local sentence context.
-            try:
-                ref2 = _normalize_reference_for_popup(ref or {})
-            except Exception:
-                ref2 = dict(ref or {})
-
-            ctx = _context_window(int(pos))
-            if not ctx.strip():
-                return False
-
-            # 1) DOI exact match -> verified.
-            doi_ctx = _normalize_doi_text(str(extract_first_doi(ctx) or ""))
-            doi_ref = _normalize_doi_text(str((ref2 or {}).get("doi") or extract_first_doi(str((ref2 or {}).get("raw") or "")) or ""))
-            if doi_ctx and doi_ref and (doi_ctx == doi_ref):
-                return True
-
-            # 2) Explicit "Author et al. (Year)" in context matching ref.
-            year = _ref_year(ref2)
-            if not year:
-                return False
-            if not re.search(rf"\b{re.escape(year)}\b", ctx):
-                return False
-            m = re.search(r"\b([A-Z][A-Za-z'`-]{1,40})\s+et\s+al\.?\b", ctx, flags=re.I)
-            if not m:
-                return False
-            fam = str(m.group(1) or "").strip().lower()
-            if not fam:
-                return False
-            ref_hay = " ".join(
-                [
-                    str((ref2 or {}).get("authors") or "").strip(),
-                    str((ref2 or {}).get("raw") or "").strip(),
-                ]
-            ).lower()
-            ref_hay_norm = re.sub(r"[^a-z0-9]+", " ", ref_hay).strip()
-            return bool(ref_hay_norm and (fam in ref_hay_norm))
-
-        def _has_explicit_ref_conflict(ref: dict, author_hint: str, year_hint: str, author_confident: bool) -> bool:
-            if (not author_hint) and (not year_hint):
-                return False
-            try:
-                ref2 = _normalize_reference_for_popup(ref or {})
-            except Exception:
-                ref2 = dict(ref or {})
-            ref_year = str((ref2 or {}).get("year") or "").strip()
-            if year_hint and ref_year and (ref_year != year_hint):
-                return True
-            # Author-only checks are noisy for model names (e.g., DenseNet),
-            # so require a strong "et al." context + year hint.
-            if author_confident and year_hint and author_hint:
-                auth = str((ref2 or {}).get("authors") or "").strip()
-                raw = str((ref2 or {}).get("raw") or "").strip()
-                hay = " ".join([auth, raw]).lower()
-                hay_norm = re.sub(r"[^a-z0-9]+", " ", hay).strip()
-                if auth and hay_norm and (author_hint not in hay_norm):
-                    return True
-            return False
-
-        def _has_positive_ref_alignment(ref: dict, author_hint: str, year_hint: str, author_confident: bool) -> bool:
-            # For free-form numeric citations (e.g., [12]), only link when context
-            # provides positive identity evidence; otherwise keep plain text to
-            # avoid wrong popup binding.
-            if (not year_hint) and (not (author_confident and author_hint)):
-                return False
-            try:
-                ref2 = _normalize_reference_for_popup(ref or {})
-            except Exception:
-                ref2 = dict(ref or {})
-
-            score = 0
-            ref_year = str((ref2 or {}).get("year") or "").strip()
-            if (not ref_year) and isinstance(ref2, dict):
-                raw_year_src = " ".join(
-                    [
-                        str(ref2.get("raw") or "").strip(),
-                        str(ref2.get("title") or "").strip(),
-                        str(ref2.get("cite_fmt") or "").strip(),
-                    ]
-                )
-                m_y = re.search(r"\b(19|20)\d{2}\b", raw_year_src)
-                if m_y:
-                    ref_year = str(m_y.group(0) or "").strip()
-            if year_hint and ref_year and (ref_year == year_hint):
-                score += 1
-
-            if author_confident and author_hint:
-                hay = " ".join(
-                    [
-                        str((ref2 or {}).get("authors") or "").strip(),
-                        str((ref2 or {}).get("title") or "").strip(),
-                        str((ref2 or {}).get("venue") or "").strip(),
-                        str((ref2 or {}).get("raw") or "").strip(),
-                    ]
-                ).lower()
-                hay_norm = re.sub(r"[^a-z0-9]+", " ", hay).strip()
-                if hay_norm and (author_hint in hay_norm):
-                    score += 1
-            return score > 0
+            best: tuple[str, str, dict] | None = None
+            best_score = float("-inf")
+            for cand in matches:
+                ref = cand[2]
+                score = float(reference_alignment_score(ref, hints))
+                if str(cand[0] or "").strip() == pref_sp:
+                    score += 0.1
+                if score > best_score:
+                    best_score = score
+                    best = cand
+            if not best:
+                return None
+            if has_explicit_reference_conflict(best[2], hints):
+                return None
+            # DOI is treated as a hard identity signal.
+            return best if best_score >= 6.0 else None
 
         def _resolve_struct_token(sid_raw: str, n_raw: str, *, pos: int = -1) -> str:
             nonlocal structured_seen
@@ -3719,10 +3589,11 @@ def _annotate_inpaper_citations_with_hover_meta(
             items: list[str] = []
             changed = False
             for n in nums:
-                if _STRICT_STRUCTURED_CITATION_LINKING and target_sp:
-                    picked = _resolve_num_in_source(int(n), target_sp)
-                else:
-                    picked = _resolve_num(int(n), preferred_sp=target_sp)
+                picked = _pick_grounded_numeric_candidate(
+                    int(n),
+                    pos=int(m.start()),
+                    target_sp=target_sp,
+                )
                 if not picked:
                     if not _STRICT_STRUCTURED_CITATION_LINKING:
                         items.append(f"[{int(n)}]")
