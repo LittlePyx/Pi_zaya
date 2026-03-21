@@ -84,7 +84,12 @@ _ANSWER_OUTPUT_MODE_FACT_RE = re.compile(
 )
 _ANSWER_OUTPUT_MODE_CRITICAL_RE = re.compile(
     r"(\bcrit(?:ical|ique)\b|\breview\b|\blimitation\b|\bweakness\b|\bconcern\b|\brisk\b|"
-    r"\bmissing\b|\bflaw\b|\bproblem\b|\bdrawback\b|灞€闄?|涓嶈冻|缂虹偣|鎵瑰垽|璐ㄧ枒|椋庨櫓|闂)",
+    r"\bmissing\b|\bflaw\b|\bdrawback\b|灞€闄?|涓嶈冻|缂虹偣|鎵瑰垽|璐ㄧ枒|椋庨櫓|闂)",
+    flags=re.IGNORECASE,
+)
+_ANSWER_OUTPUT_MODE_OVERVIEW_RE = re.compile(
+    r"(\bwhat problem\b|\bsolve(?:s|d)?\b|\bmain contribution\b|\bcore contribution\b|\bkey contribution\b|"
+    r"\bmain idea\b|\bsummary\b|\bwhat does this paper do\b|瑙ｅ喅.*闂|鏍稿績璐＄尞|涓昏璐＄尞|杩欑瘒.*璁蹭簡浠€涔?)",
     flags=re.IGNORECASE,
 )
 
@@ -156,6 +161,8 @@ def _detect_answer_output_mode(
 
     q = str(prompt or "").strip()
     if not q:
+        return "reading_guide"
+    if paper_guide_mode and _ANSWER_OUTPUT_MODE_OVERVIEW_RE.search(q):
         return "reading_guide"
     if _ANSWER_OUTPUT_MODE_CRITICAL_RE.search(q):
         return "critical_review"
@@ -369,6 +376,12 @@ def _build_paper_guide_grounding_rules(
         "- When quoting a retrieved long equation or numbered equation, render the equation itself as display math and keep the explanation sentence separate.",
         "- Do not compress a retrieved long equation plus its explanation into one mixed prose sentence if that would blur the locate target.",
         "- Do not introduce display-math formulas for figure explanations, mechanism summaries, or optimization sketches unless that exact display formula was retrieved from the paper.",
+        "- Do not introduce hardware models, acquisition parameters, baseline numbers, or modality-specific claims that are not explicitly present in retrieved context.",
+        "- For broad or generic questions, synthesize across retrieved sections, but mark any missing quantity as not stated instead of filling it with background knowledge.",
+        "- Keep entity names exact: do not swap sample type, cell line, nanoparticle type, hardware model, or dataset identity with a plausible nearby alternative.",
+        "- When the paper separately supports a claim with test objects and live-cell demonstrations, keep those evidence scopes separate instead of merging them into one stronger claim.",
+        "- If a 'Paper-guide citation grounding hints' block is provided, keep each claim aligned to the same DOC-k line before choosing [[CITE:<sid>:<ref_num>]].",
+        "- Prefer the ref numbers listed on that DOC-k line; do not borrow a ref number from another DOC-k line unless DOI or author-year text explicitly identifies it.",
     ]
     if output_mode_norm == "fact_answer":
         lines.extend(

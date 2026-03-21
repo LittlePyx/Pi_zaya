@@ -95,6 +95,73 @@ def extract_candidate_ref_nums_from_hits(
     return out
 
 
+def _trim_candidate_cue_text(text: str, *, max_chars: int) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return ""
+    s = s.replace("|", "/")
+    try:
+        limit = max(24, int(max_chars))
+    except Exception:
+        limit = 180
+    if len(s) <= limit:
+        return s
+    m = _INPAPER_NUMERIC_RE.search(s)
+    if not m:
+        return s[: max(0, limit - 3)].rstrip() + "..."
+    start = max(0, int(m.start()) - max(0, limit // 3))
+    end = min(len(s), start + limit)
+    chunk = s[start:end].strip()
+    if start > 0:
+        chunk = "..." + chunk.lstrip()
+    if end < len(s):
+        chunk = chunk.rstrip() + "..."
+    return chunk
+
+
+def extract_candidate_ref_cue_texts(
+    hit: dict,
+    *,
+    max_cues: int = 2,
+    max_chars: int = 180,
+) -> list[str]:
+    if not isinstance(hit, dict):
+        return []
+    try:
+        limit = max(1, int(max_cues))
+    except Exception:
+        limit = 2
+
+    meta = hit.get("meta", {}) or {}
+    texts: list[str] = []
+    primary = str(hit.get("text") or "").strip()
+    if primary:
+        texts.append(primary)
+    snippets = meta.get("ref_show_snippets")
+    if isinstance(snippets, list):
+        for item in snippets:
+            s = str(item or "").strip()
+            if s:
+                texts.append(s)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in texts:
+        if not _INPAPER_NUMERIC_RE.search(raw):
+            continue
+        cue = _trim_candidate_cue_text(raw, max_chars=max_chars)
+        if not cue:
+            continue
+        key = cue.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(cue)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def extract_citation_context_hints(answer_text: str, *, token_start: int, token_end: int) -> dict[str, object]:
     text = str(answer_text or "")
     st = max(0, int(token_start) - 260)

@@ -45,6 +45,18 @@ def test_detect_answer_output_mode_marks_anchor_grounded_fact_answer():
     assert mode == "fact_answer"
 
 
+def test_detect_answer_output_mode_keeps_generic_problem_question_out_of_critical_review():
+    from kb import task_runtime
+
+    mode = task_runtime._detect_answer_output_mode(
+        "What problem does this paper solve, and what are its core contributions?",
+        paper_guide_mode=True,
+        intent="reading",
+        anchor_grounded=False,
+    )
+    assert mode == "reading_guide"
+
+
 def test_apply_answer_contract_with_hits():
     from kb import task_runtime
 
@@ -96,6 +108,15 @@ def test_build_paper_guide_grounding_rules_fact_answer_discourages_generic_advic
 
     assert "answer the exact paper-grounded question first" in rules
     assert "avoid generic reading advice" in rules
+
+
+def test_build_paper_guide_grounding_rules_mentions_doc_scoped_candidate_refs():
+    from kb import task_runtime
+
+    rules = task_runtime._build_paper_guide_grounding_rules(answer_contract_v1=True)
+
+    assert "Paper-guide citation grounding hints" in rules
+    assert "same DOC-k line" in rules
 
 
 def test_apply_answer_contract_without_hits_adds_limits():

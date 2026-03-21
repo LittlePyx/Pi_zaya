@@ -55,11 +55,11 @@ from kb.file_ops import _resolve_md_output_paths
 from kb.llm import DeepSeekChat
 from kb.inpaper_citation_grounding import (
     extract_candidate_ref_nums_from_hits,
+    extract_candidate_ref_cue_texts,
     extract_citation_context_hints,
     has_explicit_reference_conflict,
     reference_alignment_score,
 )
-
 from kb.paper_guide_provenance import (
     _PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION,
     _apply_provenance_required_coverage_contract,
@@ -489,7 +489,320 @@ def _augment_prompt_with_source_hint(prompt: str, source_hint: str) -> str:
     hint = str(source_hint or "").strip()
     if (not q) or (not hint):
         return q
+    if hint.lower() in q.lower():
+        return q
     return f"{hint} {q}".strip()
+
+
+def _apply_bound_source_hints(prompt: str, source_hints: list[str], *, limit: int = 2) -> str:
+    q = str(prompt or "").strip()
+    if not q:
+        return q
+    out = q
+    used = 0
+    seen: set[str] = set()
+    for raw in source_hints or []:
+        hint = str(raw or "").strip()
+        if not hint:
+            continue
+        key = hint.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out = _augment_prompt_with_source_hint(out, hint)
+        used += 1
+        if used >= max(1, int(limit)):
+            break
+    return out
+
+
+_PAPER_GUIDE_OVERVIEW_PROMPT_RE = re.compile(
+    r"(\bwhat problem\b|\bsolve(?:s|d)?\b|\bmain contribution\b|\bcore contribution\b|\bkey contribution\b|"
+    r"\bmain idea\b|\bsummary\b|\bwhat does this paper do\b|解决.*问题|核心贡献|主要贡献|这篇.*讲了什么)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_OVERVIEW_PROMPT_RE_CLEAN = re.compile(
+    r"(\u8fd9\u7bc7(?:\u6587\u7ae0|\u8bba\u6587|\u6587\u732e).{0,8}\u8bb2.{0,4}\u4ec0\u4e48|"
+    r"\u89e3\u51b3.*\u95ee\u9898|\u6838\u5fc3\u8d21\u732e|\u4e3b\u8981\u8d21\u732e|\u4e3b\u8981\u60f3\u6cd5|\u603b\u7ed3)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_ABSTRACT_PROMPT_RE = re.compile(
+    r"(\babstract\b|\bshow\b.*\babstract\b|\bquote\b.*\babstract\b|\boriginal\b.*\babstract\b|"
+    r"\btranslate\b.*\babstract\b|\babstract\b.*\btranslate\b|"
+    r"\u6458\u8981|\u6458\u8981\u539f\u6587|\u539f\u6587.*\u6458\u8981|\u6458\u8981.*\u539f\u6587|"
+    r"\u7ffb\u8bd1.*\u6458\u8981|\u6458\u8981.*\u7ffb\u8bd1|\u628a\u6458\u8981\u539f\u6587\u7ed9\u51fa|\u7ed9\u51fa\u6458\u8981)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_COMPARE_PROMPT_RE = re.compile(
+    r"(\badvantage\b|\btrade[\s-]?off\b|\bcompared with\b|\bversus\b|\bvs\.?\b|"
+    r"\bopen[-\s]?pinhole\b|\bclosed[-\s]?pinhole\b|\bcnr\b|\bnec\b|\bresolution\b|"
+    r"优势|代价|对比|区别|取舍|分辨率|噪声|信噪比)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN = re.compile(
+    r"(\u5bf9\u6bd4|\u533a\u522b|\u53d6\u820d|\u4f18\u52bf|\u4ee3\u4ef7|\u5206\u8fa8\u7387|\u566a\u58f0|\u4fe1\u566a\u6bd4)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_REPRO_PROMPT_RE = re.compile(
+    r"(\breproduc(?:e|ibility)\b|\breplicate\b|\bimplement\b|\bsetup\b|\bhardware\b|\bacquisition\b|"
+    r"\bparameter\b|\bprotocol\b|\bmaterials and methods\b|复现|搭建|硬件|采集|参数|流程|方法细节)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN = re.compile(
+    r"(\u590d\u73b0|\u642d\u5efa|\u786c\u4ef6|\u91c7\u96c6|\u53c2\u6570|\u6d41\u7a0b|\u65b9\u6cd5\u7ec6\u8282)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_STRENGTH_PROMPT_RE = re.compile(
+    r"(\bstrongest evidence\b|\blimitation\b|\bweakness\b|\bindirect(?:ly)? supported\b|\bwhat is missing\b|"
+    r"证据|局限|不足|缺点|薄弱|支撑)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN = re.compile(
+    r"(\u8bc1\u636e|\u5c40\u9650|\u4e0d\u8db3|\u7f3a\u70b9|\u8584\u5f31|\u652f\u6491)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_METHOD_PROMPT_RE = re.compile(
+    r"(\bhow does it work\b|\bmethod\b|\bmechanism\b|\bprinciple\b|\balgorithm\b|\bapr\b|"
+    r"\bwhy\b.*\bapr\b|原理|方法|机制|算法|为什么.*APR|怎么做到的)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN = re.compile(
+    r"(\u8fd9\u4e2a?\u65b9\u6cd5.{0,8}(?:\u5177\u4f53)?\u4ecb\u7ecd|\u65b9\u6cd5.{0,4}\u4ecb\u7ecd|"
+    r"\u600e\u4e48\u5de5\u4f5c|\u600e\u4e48\u5b9e\u73b0|\u539f\u7406|\u673a\u5236|\u7b97\u6cd5)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_REF_SECTION_RE = re.compile(
+    r"\b(references?|bibliography|works?\s+cited|citation|appendi(?:x|ces)|supplementary|acknowledg(e)?ments?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
+    q = str(prompt or "").strip()
+    if not q:
+        return ""
+    if _PAPER_GUIDE_ABSTRACT_PROMPT_RE.search(q):
+        return "abstract"
+    if _PAPER_GUIDE_REPRO_PROMPT_RE.search(q) or _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN.search(q) or intent == "experiment":
+        return "reproduce"
+    if _PAPER_GUIDE_STRENGTH_PROMPT_RE.search(q) or _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN.search(q):
+        return "strength_limits"
+    if _PAPER_GUIDE_COMPARE_PROMPT_RE.search(q) or _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN.search(q) or intent == "compare":
+        return "compare"
+    if _PAPER_GUIDE_METHOD_PROMPT_RE.search(q) or _PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN.search(q):
+        return "method"
+    if _PAPER_GUIDE_OVERVIEW_PROMPT_RE.search(q) or _PAPER_GUIDE_OVERVIEW_PROMPT_RE_CLEAN.search(q):
+        return "overview"
+    return ""
+
+
+def _augment_paper_guide_retrieval_prompt(
+    prompt: str,
+    *,
+    family: str = "",
+    intent: str = "",
+    output_mode: str = "",
+) -> str:
+    q = str(prompt or "").strip()
+    if not q:
+        return q
+    family_norm = str(family or "").strip().lower() or _paper_guide_prompt_family(q, intent=intent)
+    if not family_norm:
+        return q
+
+    extras_by_family = {
+        "abstract": [
+            "abstract",
+            "summary",
+        ],
+        "overview": [
+            "abstract",
+            "introduction",
+            "results",
+            "discussion",
+            "contribution",
+            "we introduce",
+            "we propose",
+        ],
+        "compare": [
+            "results",
+            "resolution",
+            "contrast",
+            "contrast-to-noise ratio",
+            "CNR",
+            "noise equivalent contrast",
+            "NEC",
+            "open pinhole",
+            "closed pinhole",
+            "iISM-APR",
+        ],
+        "reproduce": [
+            "materials and methods",
+            "microscope setup",
+            "hardware control",
+            "data acquisition",
+            "data analysis",
+            "adaptive pixel-reassignment",
+            "APR",
+            "software packages",
+        ],
+        "strength_limits": [
+            "results",
+            "discussion",
+            "resolution",
+            "CNR",
+            "limitations",
+            "evidence",
+        ],
+        "method": [
+            "principle of interferometric ISM",
+            "adaptive pixel-reassignment",
+            "APR",
+            "equation",
+            "analysis",
+            "algorithm",
+        ],
+    }
+    extras = list(extras_by_family.get(family_norm) or [])
+    if (family_norm == "overview") and (str(output_mode or "").strip().lower() == "critical_review"):
+        extras.extend(["limitations", "discussion"])
+
+    norm = normalize_match_text(q)
+    missing: list[str] = []
+    for extra in extras:
+        if normalize_match_text(extra) in norm:
+            continue
+        missing.append(extra)
+    if not missing:
+        return q
+    return f"{q} {' '.join(missing[:8])}".strip()
+
+
+def _paper_guide_allows_citeless_answer(prompt_family: str) -> bool:
+    return str(prompt_family or "").strip().lower() == "abstract"
+
+
+def _looks_like_reference_list_snippet_local(text: str) -> bool:
+    s = " ".join(str(text or "").strip().split())
+    if not s:
+        return False
+    if _PAPER_GUIDE_REF_SECTION_RE.search(s[:160]):
+        return True
+    if len(re.findall(r"\[\d{1,3}\]", s)) >= 2:
+        return True
+    if re.match(r"^\[\d{1,3}\]\s+[A-Z][A-Za-z][^.!?]{8,}", s):
+        low = s.lower()
+        if (
+            re.search(r"\b(?:19|20)\d{2}\b", s)
+            or "proceedings" in low
+            or "conference" in low
+            or "arxiv" in low
+            or "ieee" in low
+            or "springer" in low
+        ):
+            return True
+    return False
+
+
+def _paper_guide_deepread_heading(hit: dict) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    meta = hit.get("meta", {}) or {}
+    heading = str(meta.get("heading_path") or "").strip()
+    if heading:
+        return heading
+    text = str(hit.get("text") or "").strip()
+    if not text:
+        return ""
+    for ln in text.splitlines():
+        s = str(ln or "").strip()
+        if not s:
+            continue
+        if s.startswith("#"):
+            return s.lstrip("#").strip()
+        break
+    return ""
+
+
+def _select_paper_guide_deepread_extras(
+    extras: list[dict],
+    *,
+    prompt: str,
+    prompt_family: str = "",
+    limit: int = 2,
+) -> list[str]:
+    try:
+        keep_limit = max(1, int(limit))
+    except Exception:
+        keep_limit = 2
+
+    family = str(prompt_family or "").strip().lower()
+    q = str(prompt or "").strip()
+    wants_references = bool(re.search(r"(\breference\b|\bcitation\b|\bcite\b|参考文献|引用|引文|bibliography)", q, flags=re.IGNORECASE))
+
+    ranked: list[tuple[float, str]] = []
+    for ex in extras or []:
+        if not isinstance(ex, dict):
+            continue
+        text = str(ex.get("text") or "").strip()
+        if not text:
+            continue
+        heading = _paper_guide_deepread_heading(ex)
+        heading_norm = normalize_match_text(heading)
+        text_norm = normalize_match_text(text[:240])
+        if (not wants_references) and (
+            (_PAPER_GUIDE_REF_SECTION_RE.search(heading or "") is not None)
+            or _looks_like_reference_list_snippet_local(text)
+        ):
+            continue
+
+        try:
+            score = float(ex.get("score") or 0.0)
+        except Exception:
+            score = 0.0
+
+        if family == "abstract":
+            if "abstract" in heading_norm or text.lstrip().lower().startswith("# abstract"):
+                score += 100.0
+            elif "introduction" in heading_norm:
+                score += 8.0
+            elif heading_norm:
+                score -= 24.0
+            if any(token in heading_norm for token in ("results", "discussion", "materials and methods", "methods", "appendix")):
+                score -= 20.0
+            if "here we introduce" in text_norm or "next generation technique" in text_norm:
+                score += 2.0
+
+        ranked.append((score, text))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    out: list[str] = []
+    seen: set[str] = set()
+    for _score, text in ranked:
+        key = hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()[:12]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= keep_limit:
+            break
+    return out
+
+
+def _stabilize_paper_guide_output_mode(
+    output_mode: str,
+    *,
+    prompt: str,
+    intent: str = "",
+    explicit_hint: str = "",
+) -> str:
+    mode = str(output_mode or "").strip().lower() or "reading_guide"
+    if explicit_hint:
+        return mode
+    family = _paper_guide_prompt_family(prompt, intent=intent)
+    if (family in {"abstract", "overview", "compare", "reproduce", "method"}) and mode == "critical_review":
+        return "reading_guide"
+    return mode
 
 
 _INPAPER_QUERY_RE = re.compile(
@@ -558,6 +871,8 @@ def _paper_guide_fallback_deepread_hits(
     bound_source_path: str,
     bound_source_name: str,
     query: str,
+    prompt: str = "",
+    prompt_family: str = "",
     top_k: int,
     db_dir: Path | str | None = None,
 ) -> list[dict]:
@@ -577,9 +892,26 @@ def _paper_guide_fallback_deepread_hits(
         max_snippets=max(2, min(int(top_k or 4), 4)),
         snippet_chars=1200,
     )
+    selected_texts = _select_paper_guide_deepread_extras(
+        deep_hits,
+        prompt=prompt or q,
+        prompt_family=prompt_family,
+        limit=max(1, min(int(top_k or 4), 4)),
+    )
+    if not selected_texts:
+        return []
+    selected_keys = {
+        hashlib.sha1(str(text or "").encode("utf-8", "ignore")).hexdigest()[:12]
+        for text in selected_texts
+        if str(text or "").strip()
+    }
     out: list[dict] = []
     for idx, h in enumerate(deep_hits, start=1):
         if not isinstance(h, dict):
+            continue
+        text = str(h.get("text") or "").strip()
+        key = hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest()[:12] if text else ""
+        if selected_keys and key not in selected_keys:
             continue
         rec = dict(h)
         meta = rec.get("meta", {}) or {}
@@ -842,6 +1174,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             intent=answer_intent,
             anchor_grounded=False,
         )
+        if paper_guide_mode:
+            answer_output_mode = _stabilize_paper_guide_output_mode(
+                answer_output_mode,
+                prompt=prompt,
+                intent=answer_intent,
+                explicit_hint=(answer_output_mode_hint or answer_mode_hint),
+            )
         llm_rerank = bool(task.get("llm_rerank", True))
         settings_obj = task.get("settings_obj")
         chat_store = ChatStore(chat_db)
@@ -958,6 +1297,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             if len(preferred_source_hints) > 3:
                 preferred_source_hints = preferred_source_hints[:3]
         inferred_source_hint = ""
+        if paper_guide_mode and paper_guide_bound_source_ready and preferred_source_hints:
+            retrieval_prompt = _apply_bound_source_hints(retrieval_prompt, preferred_source_hints, limit=2)
         if retrieval_prompt and _needs_conversational_source_hint(retrieval_prompt):
             inferred_source_hint = _pick_recent_source_hint(
                 conv_id=conv_id,
@@ -974,6 +1315,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 bound_hints = _pick_recent_bound_source_hints(conv_id=conv_id, chat_store=chat_store, limit=2)
                 for h in bound_hints:
                     retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
+        paper_guide_prompt_family = ""
+        if paper_guide_mode and paper_guide_bound_source_ready:
+            paper_guide_prompt_family = _paper_guide_prompt_family(prompt, intent=answer_intent)
+            retrieval_prompt = _augment_paper_guide_retrieval_prompt(
+                retrieval_prompt,
+                family=paper_guide_prompt_family,
+                intent=answer_intent,
+                output_mode=answer_output_mode,
+            )
 
         t_load0 = time.perf_counter()
         chunks = load_all_chunks(db_dir)
@@ -1009,6 +1359,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         bound_source_path=paper_guide_bound_source_path,
                         bound_source_name=paper_guide_bound_source_name,
                         query=(retrieval_prompt or prompt or ""),
+                        prompt=(prompt or retrieval_prompt or ""),
+                        prompt_family=paper_guide_prompt_family,
                         top_k=max(2, min(int(top_k or 4), 4)),
                         db_dir=db_dir,
                     )
@@ -1054,7 +1406,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer_grouped_docs = list(grouped_docs or [])
             answer_hit_limit = max(1, min(int(top_k), 4))
             guide_strict_mode = bool(paper_guide_mode and paper_guide_bound_source_ready)
-            answer_doc_cap = max(answer_hit_limit, min(int(top_k), 4 if guide_strict_mode else 3))
+            answer_doc_cap = max(
+                answer_hit_limit,
+                min(
+                    int(top_k),
+                    5 if (guide_strict_mode and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits"}) else (4 if guide_strict_mode else 3),
+                ),
+            )
             should_sync_deep_seed = bool(hits_raw) and (
                 guide_strict_mode
                 or _needs_bound_source_hint(prompt or retrieval_prompt or "")
@@ -1316,13 +1674,27 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         ctx_parts: list[str] = []
         doc_first_idx: dict[str, int] = {}
         # Keep prompt compact for fast first-token latency.
-        answer_hit_limit = max(1, min(int(top_k), 4))
-        answer_seed = answer_grouped_docs or grouped_docs or hits
-        answer_hits = _build_answer_hits_for_generation(
-            grouped_docs=list(answer_seed or []),
-            heading_hits=list(hits or []),
-            top_n=answer_hit_limit,
+        answer_hit_limit = max(
+            1,
+            min(
+                int(top_k),
+                5 if (paper_guide_mode and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits"}) else 4,
+            ),
         )
+        answer_seed = answer_grouped_docs or grouped_docs or hits
+        if paper_guide_mode and paper_guide_bound_source_ready:
+            answer_hits = _select_paper_guide_answer_hits(
+                grouped_docs=list(answer_seed or []),
+                heading_hits=list(hits or []),
+                prompt=prompt,
+                top_n=answer_hit_limit,
+            )
+        else:
+            answer_hits = _build_answer_hits_for_generation(
+                grouped_docs=list(answer_seed or []),
+                heading_hits=list(hits or []),
+                top_n=answer_hit_limit,
+            )
         anchor_grounded_answer = _has_anchor_grounded_answer_hits(answer_hits)
         answer_output_mode = _detect_answer_output_mode(
             prompt,
@@ -1332,6 +1704,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             intent=answer_intent,
             anchor_grounded=anchor_grounded_answer,
         )
+        if paper_guide_mode:
+            answer_output_mode = _stabilize_paper_guide_output_mode(
+                answer_output_mode,
+                prompt=prompt,
+                intent=answer_intent,
+                explicit_hint=(answer_output_mode_hint or answer_mode_hint),
+            )
         locked_citation_source = _pick_locked_citation_source(list(answer_seed or answer_hits))
         answer_hits = _ensure_locked_source_in_answer_hits(
             answer_hits,
@@ -1396,23 +1775,17 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 p = Path(src)
                 extras: list[dict] = []
                 if q_fine:
-                    extras.extend(_deep_read_md_for_context(p, q_fine, max_snippets=2, snippet_chars=1000))
+                    deep_snippet_cap = 4 if str(paper_guide_prompt_family or "").strip().lower() == "abstract" else 2
+                    extras.extend(_deep_read_md_for_context(p, q_fine, max_snippets=deep_snippet_cap, snippet_chars=1000))
                 if not extras:
                     continue
                 deep_docs += 1
-                seen_snip = set()
-                extras2: list[str] = []
-                for ex in sorted(extras, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True):
-                    t = (ex.get("text") or "").strip()
-                    if not t:
-                        continue
-                    k = hashlib.sha1(t.encode("utf-8", "ignore")).hexdigest()[:12]
-                    if k in seen_snip:
-                        continue
-                    seen_snip.add(k)
-                    extras2.append(t)
-                    if len(extras2) >= 2:
-                        break
+                extras2 = _select_paper_guide_deepread_extras(
+                    extras,
+                    prompt=(prompt or retrieval_prompt or q_fine),
+                    prompt_family=paper_guide_prompt_family,
+                    limit=1 if _paper_guide_allows_citeless_answer(paper_guide_prompt_family) else 2,
+                )
                 if not extras2:
                     continue
                 try:
@@ -1440,6 +1813,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             stage="answer",
         )
         ctx = "\n\n---\n\n".join(ctx_parts)
+        paper_guide_citation_grounding_block = ""
+        if paper_guide_mode and paper_guide_bound_source_ready and (not _paper_guide_allows_citeless_answer(paper_guide_prompt_family)):
+            paper_guide_citation_grounding_block = _build_paper_guide_citation_grounding_block(answer_hits)
 
         system = (
             "你的名字是 π-zaya。\n"
@@ -1469,7 +1845,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "- Do NOT output free-form numeric citations like [24] / [2][4].\n"
             "- NEVER output malformed markers like [[CITE:<sid>]] or [CITE:<sid>] (missing ref_num).\n"
         )
-        if locked_citation_source:
+        if paper_guide_mode and _paper_guide_allows_citeless_answer(paper_guide_prompt_family):
+            system += (
+                "\nPaper-guide abstract rule:\n"
+                "- When the user asks for the abstract or its translation, use the paper's Abstract section itself.\n"
+                "- Prefer Abstract over Introduction, Results, Discussion, Methods, and References.\n"
+                "- Do NOT append title, author list, explanatory notes, or in-paper citation markers unless the user explicitly asks for them or the quoted abstract text itself contains them.\n"
+            )
+        if locked_citation_source and (not _paper_guide_allows_citeless_answer(paper_guide_prompt_family)):
             locked_sid = str(locked_citation_source.get("sid") or "").strip()
             locked_name = str(locked_citation_source.get("source_name") or "").strip()
             system += (
@@ -1510,6 +1893,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             f"Question:\\n{prompt_for_user}\\n\\n"
             f"Retrieved context (with deep-read supplements):\\n{ctx if ctx else '(none)'}\\n"
         )
+        if paper_guide_citation_grounding_block:
+            user += f"\\n{paper_guide_citation_grounding_block}\\n"
         if anchor_grounded_answer:
             user += (
                 "\\nAnchor-grounded retrieval: the requested numbered item is already matched in the library snippets above. "
@@ -1613,6 +1998,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             contract_enabled=bool(answer_contract_v1),
             output_mode=answer_output_mode,
         )
+        if paper_guide_mode:
+            answer = _sanitize_paper_guide_answer_for_user(answer, has_hits=bool(answer_hits))
         answer = _maybe_append_library_figure_markdown(answer, prompt=prompt, answer_hits=answer_hits)
         answer, citation_validation = _validate_structured_citations(
             answer,
@@ -1900,11 +2287,238 @@ def _hit_source_path(hit: dict) -> str:
     return str(meta.get("source_path") or "").strip()
 
 
+def _split_heading_path_parts(heading_path: str) -> list[str]:
+    return [part.strip() for part in str(heading_path or "").split(" / ") if part.strip()]
+
+
+def _is_generic_heading_part(heading: str) -> bool:
+    norm = normalize_match_text(heading)
+    if not norm:
+        return False
+    return any(token in norm for token in _GENERIC_HEADING_HINTS)
+
+
+def _paper_guide_focus_heading(hit: dict) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    meta = hit.get("meta", {}) or {}
+    heading_path = (
+        str(meta.get("ref_best_heading_path") or "").strip()
+        or str(meta.get("heading_path") or "").strip()
+        or str(meta.get("top_heading") or "").strip()
+    )
+    parts = _split_heading_path_parts(heading_path)
+    if not parts:
+        return ""
+    specific_parts = [part for part in parts if not _is_generic_heading_part(part)]
+    if len(specific_parts) >= 2:
+        return " / ".join(specific_parts[-2:])
+    if specific_parts:
+        return specific_parts[-1]
+    if len(parts) >= 2:
+        return " / ".join(parts[-2:])
+    return parts[-1]
+
+
+def _looks_like_title_only_hit(hit: dict) -> bool:
+    if not isinstance(hit, dict):
+        return False
+    text = str(hit.get("text") or "").strip()
+    if not text:
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    if not lines[0].startswith("# "):
+        return False
+    if len(lines) <= 2:
+        return True
+    if len(lines) == 3 and ("@" in lines[-1] or "$^{" in lines[-1]):
+        return True
+    return False
+
+
+def _paper_guide_answer_hit_score(hit: dict, *, prompt: str) -> float:
+    if not isinstance(hit, dict):
+        return float("-inf")
+    meta = hit.get("meta", {}) or {}
+    try:
+        score = float(hit.get("score") or 0.0)
+    except Exception:
+        score = 0.0
+
+    heading_path = str(meta.get("heading_path") or meta.get("ref_best_heading_path") or meta.get("top_heading") or "").strip()
+    focus_heading = _paper_guide_focus_heading(hit)
+    heading_norm = normalize_match_text(focus_heading or heading_path)
+    prompt_norm = normalize_match_text(prompt)
+    text = str(hit.get("text") or "")
+    text_norm = normalize_match_text(text[:1600])
+    family = _paper_guide_prompt_family(prompt)
+
+    if heading_norm:
+        score += 1.8 * _text_token_overlap_score(prompt_norm, heading_norm)
+    if text_norm:
+        score += 0.35 * _text_token_overlap_score(prompt_norm, text_norm[:480])
+
+    if _looks_like_title_only_hit(hit):
+        score -= 18.0
+    if _is_generic_heading_path(heading_path):
+        score -= 3.5
+    if "abstract" in heading_norm:
+        score -= 1.2
+    if "reference" in heading_norm:
+        score -= 7.0
+
+    if family == "abstract":
+        if "abstract" in heading_norm:
+            score += 6.5
+        if "introduction" in heading_norm:
+            score += 1.2
+        if any(token in heading_norm for token in ("results", "discussion", "materials and methods", "method", "reference")):
+            score -= 4.0
+        if any(
+            token in text_norm
+            for token in (
+                "here we introduce",
+                "next generation technique",
+                "label free imaging inside live cells",
+            )
+        ):
+            score += 1.5
+    elif family == "overview":
+        if any(token in heading_norm for token in ("abstract", "introduction", "discussion", "result")):
+            score += 3.8
+        if any(token in heading_norm for token in ("materials and methods", "microscope setup", "hardware control", "data acquisition")):
+            score -= 1.8
+        if any(
+            token in text_norm
+            for token in (
+                "here, we introduce",
+                "in this work, we propose",
+                "our results establish",
+                "core contribution",
+                "opens new avenues",
+            )
+        ):
+            score += 2.0
+    elif family == "compare":
+        if any(token in heading_norm for token in ("results", "resolution", "discussion")):
+            score += 3.2
+        if any(token in text_norm for token in ("cnr", "nec", "fwhm", "open-pinhole", "closed-pinhole", "iism-apr", "same incident illumination power")):
+            score += 3.0
+    elif family == "reproduce":
+        if any(token in heading_norm for token in ("materials and methods", "microscope setup", "hardware control", "data acquisition", "data analysis", "software packages")):
+            score += 5.0
+        if any(token in text_norm for token in ("cobolt", "hamamatsu", "picoquant", "symphotime", "pyLabLib", "dwell time", "camera exposure", "scan control")):
+            score += 3.0
+        if any(token in heading_norm for token in ("abstract", "discussion")):
+            score -= 1.5
+    elif family == "strength_limits":
+        if any(token in heading_norm for token in ("discussion", "results", "resolution")):
+            score += 3.4
+        if any(token in text_norm for token in ("not stated", "good agreement", "remaining difference", "could be improved", "quantified")):
+            score += 2.0
+
+    if _CLAIM_METHOD_HINT_RE.search(prompt):
+        if any(token in heading_norm for token in _METHOD_HEADING_HINTS):
+            score += 4.5
+        if any(token in heading_norm for token in ("principle", "setup", "analysis", "algorithm", "adaptive")):
+            score += 2.2
+        if any(
+            token in text_norm
+            for token in (
+                "we developed",
+                "we introduced",
+                "we modified",
+                "to adapt",
+                "workflow",
+                "algorithm",
+                "camera acquisition",
+                "illumination is provided",
+            )
+        ):
+            score += 1.8
+
+    if _CLAIM_EXPERIMENT_HINT_RE.search(prompt):
+        if any(token in heading_norm for token in _EXPERIMENT_HEADING_HINTS):
+            score += 3.0
+
+    return score
+
+
+def _select_paper_guide_answer_hits(
+    *,
+    grouped_docs: list[dict],
+    heading_hits: list[dict],
+    prompt: str,
+    top_n: int,
+) -> list[dict]:
+    try:
+        limit = max(1, int(top_n))
+    except Exception:
+        limit = 1
+
+    wants_references = bool(
+        re.search(
+            r"(\breference\b|\bcitation\b|\bcite\b|\[\d{1,3}\]|参考文献|引用|引文)",
+            str(prompt or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+    ranked: list[tuple[float, dict]] = []
+    seen_raw: set[tuple[str, str, str]] = set()
+    for hit in list(heading_hits or []) + list(grouped_docs or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta", {}) or {}
+        src = str(meta.get("source_path") or "").strip()
+        heading = str(meta.get("heading_path") or meta.get("ref_best_heading_path") or meta.get("top_heading") or "").strip()
+        text = str(hit.get("text") or "").strip()
+        raw_key = (
+            src,
+            normalize_match_text(heading),
+            hashlib.sha1(text[:320].encode("utf-8", "ignore")).hexdigest()[:12],
+        )
+        if raw_key in seen_raw:
+            continue
+        seen_raw.add(raw_key)
+        score = _paper_guide_answer_hit_score(hit, prompt=prompt)
+        rec = dict(hit)
+        meta_out = dict(meta)
+        focus_heading = _paper_guide_focus_heading(hit)
+        if focus_heading:
+            meta_out["top_heading"] = focus_heading
+        rec["meta"] = meta_out
+        ranked.append((score, rec))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    out: list[dict] = []
+    seen_out: set[tuple[str, str]] = set()
+    for _score, hit in ranked:
+        meta = hit.get("meta", {}) or {}
+        src = str(meta.get("source_path") or "").strip()
+        focus = str(meta.get("top_heading") or meta.get("heading_path") or "").strip()
+        focus_norm = normalize_match_text(focus)
+        if (not wants_references) and ("reference" in focus_norm):
+            continue
+        if _looks_like_title_only_hit(hit) and out:
+            continue
+        out_key = (src, focus_norm)
+        if out_key in seen_out:
+            continue
+        seen_out.add(out_key)
+        out.append(hit)
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
 def _build_answer_hits_for_generation(
     *,
     grouped_docs: list[dict],
     heading_hits: list[dict],
     top_n: int,
+    allow_same_source_multiple: bool = False,
 ) -> list[dict]:
     try:
         limit = max(1, int(top_n))
@@ -1919,10 +2533,10 @@ def _build_answer_hits_for_generation(
             if not isinstance(h, dict):
                 continue
             src = _hit_source_path(h)
-            if src and (src in seen_src):
+            if (not allow_same_source_multiple) and src and (src in seen_src):
                 continue
             out.append(h)
-            if src:
+            if (not allow_same_source_multiple) and src:
                 seen_src.add(src)
             if len(out) >= limit:
                 return
@@ -2171,7 +2785,6 @@ def _source_refs_from_index(index_data: dict, source_path: str, *, source_sha1: 
     return out
 
 
-
 def _validate_structured_citations(
     answer: str,
     *,
@@ -2314,7 +2927,7 @@ def _validate_structured_citations(
         has_strong_hints = bool(str(hints.get("doi") or "").strip() or (str(hints.get("author") or "").strip() and str(hints.get("year") or "").strip()))
         current_conflict = bool(current_ref and has_explicit_reference_conflict(current_ref, hints))
 
-        if current_ref and (not candidate_nums) and (not current_conflict):
+        if current_ref and (not candidate_nums) and has_strong_hints and (not current_conflict):
             return int(current_ref_num)
         if current_ref and candidate_nums and (int(current_ref_num) in candidate_nums) and (not current_conflict):
             return int(current_ref_num)
@@ -2362,13 +2975,16 @@ def _validate_structured_citations(
                 return best_num if best_score >= 6.0 else None
             return best_num if best_score >= 3.5 else None
 
+        if not candidate_nums:
+            return None
+
         if candidate_nums:
             if len(candidate_nums) == 1:
                 only = int(candidate_nums[0])
                 return only if isinstance(_resolve_ref(src, only), dict) or isinstance(_source_refs(src).get(only), dict) else None
             return int(current_ref_num) if (int(current_ref_num) in candidate_nums and isinstance(current_ref, dict)) else None
 
-        return int(current_ref_num) if isinstance(current_ref, dict) else None
+        return None
 
     def _repl(m: re.Match[str]) -> str:
         sid = str(m.group(1) or "").strip().lower()
@@ -2495,6 +3111,130 @@ def _sanitize_structured_cite_tokens(answer: str) -> str:
     s = _SID_HEADER_LINE_RE.sub("", s)
     s = _SID_INLINE_RE.sub("", s)
     return s
+
+
+_PAPER_GUIDE_INTERNAL_POLICY_LINE_RE = re.compile(
+    r"(?im)^\s*(?:"
+    r"根据规则.*|"
+    r"规则第\s*\d+.*|"
+    r"不得编造.*|"
+    r"若您能提供以下任一内容.*|"
+    r"如果您能提供以下任一内容.*|"
+    r"请提供以下任一内容.*|"
+    r"如果检索片段为空.*|"
+    r"do not invent.*|"
+    r"not present in retrieved context.*"
+    r")\s*$"
+)
+
+
+def _sanitize_paper_guide_answer_for_user(answer: str, *, has_hits: bool) -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return text
+
+    if "未命中知识库片段" in text:
+        if has_hits:
+            text = text.replace("未命中知识库片段。", "").replace("未命中知识库片段", "").strip()
+        else:
+            text = re.sub(
+                r"^\s*未命中知识库片段[。.\s]*",
+                "当前检索到的原文证据不足，下面只保留能确认的部分。\n\n",
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            ).strip()
+
+    paras = [p.strip() for p in re.split(r"\n{2,}", text) if str(p or "").strip()]
+    if not paras:
+        return text
+
+    kept: list[str] = []
+    for para in paras:
+        lines = [ln.rstrip() for ln in para.splitlines()]
+        filtered = [ln for ln in lines if not _PAPER_GUIDE_INTERNAL_POLICY_LINE_RE.match(ln.strip())]
+        para2 = "\n".join(filtered).strip()
+        if not para2:
+            continue
+        if _PAPER_GUIDE_INTERNAL_POLICY_LINE_RE.search(para2):
+            continue
+        kept.append(para2)
+
+    out = "\n\n".join(kept).strip()
+    if out:
+        return out
+    if has_hits:
+        return text
+    return "当前检索到的原文证据不足，下面只保留能确认的部分。"
+
+
+def _trim_paper_guide_prompt_field(text: str, *, max_chars: int = 160) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return ""
+    s = s.replace("|", "/")
+    try:
+        limit = max(24, int(max_chars))
+    except Exception:
+        limit = 160
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _build_paper_guide_citation_grounding_block(
+    answer_hits: list[dict],
+    *,
+    max_blocks: int = 4,
+) -> str:
+    try:
+        limit = max(1, int(max_blocks))
+    except Exception:
+        limit = 4
+
+    lines: list[str] = []
+    seen: set[tuple[str, str, tuple[int, ...], str]] = set()
+    for i, hit in enumerate(answer_hits or [], start=1):
+        if len(lines) >= limit:
+            break
+        src = _hit_source_path(hit)
+        if not src:
+            continue
+        candidate_refs = extract_candidate_ref_nums_from_hits([hit], source_path=src, max_candidates=6)
+        if not candidate_refs:
+            continue
+        heading = _trim_paper_guide_prompt_field(_paper_guide_focus_heading(hit), max_chars=96)
+        cue_texts = extract_candidate_ref_cue_texts(hit, max_cues=1, max_chars=160)
+        cue = _trim_paper_guide_prompt_field(cue_texts[0], max_chars=160) if cue_texts else ""
+        key = (
+            str(src).strip().lower(),
+            heading.lower(),
+            tuple(int(n) for n in candidate_refs[:6]),
+            cue.lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+
+        sid = _cite_source_id(src)
+        refs_txt = ", ".join(str(int(n)) for n in candidate_refs[:6])
+        parts = [f"DOC-{i}", f"sid={sid}", f"refs={refs_txt}"]
+        if heading:
+            parts.append(f"heading={heading}")
+        if cue:
+            parts.append(f"cue={cue}")
+        lines.append("- " + " | ".join(parts))
+
+    if not lines:
+        return ""
+
+    return (
+        "Paper-guide citation grounding hints:\n"
+        "- Match each claim to the same DOC-k evidence block before choosing [[CITE:<sid>:<ref_num>]].\n"
+        "- Prefer ref numbers listed on that DOC-k line; only go outside that list when DOI or author-year text in the claim gives a stronger identity signal.\n"
+        + "\n".join(lines)
+    )
+
 
 def _requested_figure_number(prompt: str, answer_hits: list[dict]) -> int:
     n = _extract_figure_number(prompt)

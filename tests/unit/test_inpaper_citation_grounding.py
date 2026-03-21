@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from kb.inpaper_citation_grounding import (
     extract_candidate_ref_nums_from_hits,
+    extract_candidate_ref_cue_texts,
     extract_citation_context_hints,
     has_explicit_reference_conflict,
     parse_ref_num_set,
@@ -43,6 +44,28 @@ def test_extract_candidate_ref_nums_from_hits_reads_text_and_snippets():
     ]
 
     assert extract_candidate_ref_nums_from_hits(hits, source_path="doc.en.md") == [24, 30, 31, 45, 46]
+
+
+def test_extract_candidate_ref_cue_texts_keeps_numeric_citation_windows():
+    hit = {
+        "text": (
+            "A long introduction sentence that keeps going before the citation appears and still needs trimming "
+            "because the actual evidence mentions prior work [24] and should stay visible in the cue."
+        ),
+        "meta": {
+            "ref_show_snippets": [
+                "No citation here.",
+                "Supporting refs [30-31] appear in the localized snippet.",
+            ]
+        },
+    }
+
+    cues = extract_candidate_ref_cue_texts(hit, max_cues=2, max_chars=72)
+
+    assert len(cues) == 2
+    assert "[24]" in cues[0]
+    assert "[30-31]" in cues[1]
+    assert "No citation here." not in " ".join(cues)
 
 
 def test_extract_citation_context_hints_captures_doi_author_and_year():
