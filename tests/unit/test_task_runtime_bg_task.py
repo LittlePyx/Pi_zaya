@@ -44,6 +44,7 @@ from kb.task_runtime import (
     _select_paper_guide_raw_target_hits,
     _stabilize_paper_guide_output_mode,
 )
+from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
 
 
 def test_ultra_fast_does_not_force_no_llm():
@@ -745,11 +746,12 @@ def test_paper_guide_has_requested_target_hits_detects_target_miss():
     )
 
 
-def test_paper_guide_targeted_source_block_hits_extracts_box_block():
+def test_paper_guide_targeted_source_block_hits_extracts_box_block(tmp_path: Path):
+    fixture = build_paper_guide_runtime_fixture(tmp_path)
     hits = _paper_guide_targeted_source_block_hits(
-        bound_source_path=r"X:\NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+        bound_source_path=str(fixture["nat_source_path"]),
         prompt="From Box 1 only, what condition on M is given for reconstructing the image in the transform domain?",
-        db_dir=Path("db"),
+        db_dir=Path(fixture["db_root"]),
         limit=4,
     )
     assert hits
@@ -757,11 +759,12 @@ def test_paper_guide_targeted_source_block_hits_extracts_box_block():
     assert any("M \\ge O(K \\log(N/K))" in str(hit.get("text") or "") for hit in hits)
 
 
-def test_paper_guide_targeted_source_block_hits_extracts_hadamard_block():
+def test_paper_guide_targeted_source_block_hits_extracts_hadamard_block(tmp_path: Path):
+    fixture = build_paper_guide_runtime_fixture(tmp_path)
     hits = _paper_guide_targeted_source_block_hits(
-        bound_source_path=r"X:\NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+        bound_source_path=str(fixture["nat_source_path"]),
         prompt="Which references are cited for Hadamard-basis examples in the acquisition strategy section, and where is that stated?",
-        db_dir=Path("db"),
+        db_dir=Path(fixture["db_root"]),
         limit=3,
     )
     assert hits
@@ -935,10 +938,11 @@ def test_repair_paper_guide_focus_answer_generic_replaces_not_stated_for_citatio
     assert "64,65" in out
 
 
-def test_build_paper_guide_direct_citation_lookup_answer_for_rvt():
+def test_build_paper_guide_direct_citation_lookup_answer_for_rvt(tmp_path: Path):
+    fixture = build_paper_guide_runtime_fixture(tmp_path)
     out = _build_paper_guide_direct_citation_lookup_answer(
         prompt="Which prior work is RVT attributed to in this paper, and what in-paper citation do they use when introducing it?",
-        source_path=r"X:\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells.pdf",
+        source_path=str(fixture["lsa_source_path"]),
         answer_hits=[
             {
                 "text": (
@@ -949,7 +953,7 @@ def test_build_paper_guide_direct_citation_lookup_answer_for_rvt():
             }
         ],
         special_focus_block="",
-        db_dir=Path("db"),
+        db_dir=Path(fixture["db_root"]),
     )
 
     assert "[34]" in out

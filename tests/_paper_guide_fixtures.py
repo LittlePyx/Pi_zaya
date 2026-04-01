@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -52,4 +53,76 @@ def build_scinerf_like_fixture(tmp_path: Path) -> dict[str, object]:
         "wrong_method_block": wrong_method_block,
         "conclusion_block": conclusion_block,
         "eq3_block": eq3_block,
+    }
+
+
+def build_paper_guide_runtime_fixture(tmp_path: Path) -> dict[str, object]:
+    db_root = tmp_path / "db"
+    db_root.mkdir(parents=True, exist_ok=True)
+
+    nat_stem = "NatPhoton-2019-SPI"
+    nat_dir = db_root / nat_stem
+    nat_dir.mkdir(parents=True, exist_ok=True)
+    nat_md = nat_dir / f"{nat_stem}.en.md"
+    nat_md.write_text(
+        (
+            "## Acquisition and image reconstruction strategies\n\n"
+            "<!-- box:start id=1 -->\n"
+            "**[Box 1 - The maths behind single-pixel imaging]**\n\n"
+            "It can be shown that when the number of sampling patterns used "
+            "$M \\ge O(K \\log(N/K))$, the image in the transform domain can be reconstructed.\n"
+            "<!-- box:end id=1 -->\n\n"
+            "An alternative approach is to perform sampling using a basis that is not necessarily incoherent\n"
+            "with the spatial properties of the image, for example by using the Hadamard$^{64,65}$ basis.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    lsa_stem = "LSA-2026-iISM-live-cells"
+    lsa_dir = db_root / lsa_stem
+    lsa_dir.mkdir(parents=True, exist_ok=True)
+    lsa_md = lsa_dir / f"{lsa_stem}.en.md"
+    lsa_md.write_text(
+        (
+            "## Results / APR\n\n"
+            "Specifically, we use the radial variance transform (RVT)[34], which converts an interferogram\n"
+            "into an intensity-only map.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    lsa_md_abs = lsa_md.resolve(strict=False)
+    refs_doc = {
+        "path": str(lsa_md_abs),
+        "name": lsa_md.name,
+        "stem": lsa_md.stem.lower(),
+        "sha1": "",
+        "refs": {
+            "34": {
+                "num": 34,
+                "raw": "[34] Precision single-particle localization using radial variance transform.",
+                "title": "Precision single-particle localization using radial variance transform",
+            }
+        },
+    }
+    refs_index = {
+        "version": 1,
+        "updated_at": 0.0,
+        "doc_count": 1,
+        "next_cursor": 1,
+        "docs": {
+            str(lsa_md_abs).strip().lower(): refs_doc,
+        },
+    }
+    (db_root / "references_index.json").write_text(
+        json.dumps(refs_index, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    return {
+        "db_root": db_root,
+        "nat_source_path": rf"X:\{nat_stem}.pdf",
+        "lsa_source_path": rf"X:\{lsa_stem}.pdf",
+        "nat_md": nat_md,
+        "lsa_md": lsa_md,
     }

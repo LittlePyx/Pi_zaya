@@ -16,6 +16,7 @@ from kb.paper_guide_retrieval_runtime import (
     _paper_guide_targeted_source_block_hits,
     _select_paper_guide_deepread_extras,
 )
+from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
 
 
 def test_paper_guide_deepread_heading_prefers_meta_heading_then_markdown_header():
@@ -56,11 +57,12 @@ def test_filter_hits_for_paper_guide_keeps_only_bound_source_matches():
     assert [str((item.get("meta") or {}).get("source_path") or "") for item in out] == ["paper_a.md"]
 
 
-def test_paper_guide_targeted_source_block_hits_extracts_box_block():
+def test_paper_guide_targeted_source_block_hits_extracts_box_block(tmp_path: Path):
+    fixture = build_paper_guide_runtime_fixture(tmp_path)
     hits = _paper_guide_targeted_source_block_hits(
-        bound_source_path=r"X:\NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+        bound_source_path=str(fixture["nat_source_path"]),
         prompt="From Box 1 only, what condition on M is given for reconstructing the image in the transform domain?",
-        db_dir=Path("db"),
+        db_dir=Path(fixture["db_root"]),
         limit=4,
         citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
         citation_lookup_signal_score=lambda **_kwargs: 0.0,
@@ -71,15 +73,16 @@ def test_paper_guide_targeted_source_block_hits_extracts_box_block():
     assert any("M \\ge O(K \\log(N/K))" in str(hit.get("text") or "") for hit in hits)
 
 
-def test_paper_guide_fallback_deepread_hits_prefers_targeted_hits_for_box_query():
+def test_paper_guide_fallback_deepread_hits_prefers_targeted_hits_for_box_query(tmp_path: Path):
+    fixture = build_paper_guide_runtime_fixture(tmp_path)
     hits = _paper_guide_fallback_deepread_hits(
-        bound_source_path=r"X:\NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+        bound_source_path=str(fixture["nat_source_path"]),
         bound_source_name="NatPhoton-2019-Principles and prospects for single-pixel imaging",
         query="box 1 transform domain condition",
         prompt="From Box 1 only, what condition on M is given for reconstructing the image in the transform domain?",
         prompt_family="overview",
         top_k=3,
-        db_dir=Path("db"),
+        db_dir=Path(fixture["db_root"]),
         citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
         citation_lookup_signal_score=lambda **_kwargs: 0.0,
         resolve_support_slot_block=lambda **_kwargs: {"heading_path": "Box 1", "block_id": "blk_box1", "anchor_id": "a1"},
