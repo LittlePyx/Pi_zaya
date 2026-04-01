@@ -4,10 +4,16 @@ import hashlib
 import os
 import shutil
 import time
-import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
 from typing import Optional
+
+try:
+    import tkinter as tk
+    from tkinter import filedialog
+except Exception:
+    # Optional dependency on headless/minimal Linux environments (e.g. CI).
+    tk = None  # type: ignore[assignment]
+    filedialog = None  # type: ignore[assignment]
 
 
 def _to_os_path(path_like: Path | str) -> str:
@@ -180,6 +186,8 @@ def _pick_directory_dialog(initial_dir: str) -> Optional[str]:
     """
     Open a native folder picker on the local machine.
     """
+    if (tk is None) or (filedialog is None):
+        return None
     try:
         root = tk.Tk()
         root.withdraw()
