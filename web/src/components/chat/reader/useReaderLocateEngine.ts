@@ -380,46 +380,92 @@ export function useReaderLocateEngine({
             headingTarget = bestHeading
           }
         }
-        const hintBlockText = String(readerBlockHint?.text || '').trim()
-        const focusSeed = String(activeHighlightSnippet || activeFocusSnippet || hintBlockText).trim()
-        if (focusSeed) {
-          const probe = snippetProbeText(focusSeed)
-          const hintKind = String(readerBlockHint?.kind || '').trim().toLowerCase()
-          const eqNumbersAll = [
-            ...extractEquationNumbers(`${activeFocusSnippet} ${activeHeadingPath}`),
-            ...extractEquationNumbers(`${hintBlockText} ${hintHeadingPath}`),
-          ]
-          const hintNumber = Number(readerBlockHint?.number || 0)
-          if (Number.isFinite(hintNumber) && hintNumber > 0) {
-            eqNumbersAll.push(Math.floor(hintNumber))
-          }
-          const eqNumbers = Array.from(new Set(eqNumbersAll.filter((item) => Number.isFinite(item) && item > 0)))
-          const figNumbersAll = [
-            ...extractFigureNumbers(`${activeFocusSnippet} ${activeHeadingPath}`),
-            ...extractFigureNumbers(`${hintBlockText} ${hintHeadingPath}`),
-          ]
-          if (Number.isFinite(hintNumber) && hintNumber > 0 && (activeAnchorKind === 'figure' || hintKind === 'figure')) {
-            figNumbersAll.push(Math.floor(hintNumber))
-          }
-          const figNumbers = Array.from(new Set(figNumbersAll.filter((item) => Number.isFinite(item) && item > 0)))
-          const preferFormula = Boolean(
+          const hintBlockText = String(readerBlockHint?.text || '').trim()
+          const focusSeed = String(activeHighlightSnippet || activeFocusSnippet || hintBlockText).trim()
+          if (focusSeed) {
+            const probe = snippetProbeText(focusSeed)
+            const hintKind = String(readerBlockHint?.kind || '').trim().toLowerCase()
+            const activeAnchorNum = Number.isFinite(Number(activeAnchorNumber || 0))
+              ? Math.max(0, Math.floor(Number(activeAnchorNumber || 0)))
+              : 0
+            const eqNumbersAll = [
+              ...extractEquationNumbers(`${activeFocusSnippet} ${activeHeadingPath}`),
+              ...extractEquationNumbers(`${hintBlockText} ${hintHeadingPath}`),
+            ]
+            if (activeAnchorNum > 0 && activeAnchorKind === 'equation') {
+              eqNumbersAll.push(activeAnchorNum)
+            }
+            const hintNumber = Number(readerBlockHint?.number || 0)
+            if (Number.isFinite(hintNumber) && hintNumber > 0) {
+              eqNumbersAll.push(Math.floor(hintNumber))
+            }
+            const eqNumbers = Array.from(new Set(eqNumbersAll.filter((item) => Number.isFinite(item) && item > 0)))
+            const figNumbersAll = [
+              ...extractFigureNumbers(`${activeFocusSnippet} ${activeHeadingPath}`),
+              ...extractFigureNumbers(`${hintBlockText} ${hintHeadingPath}`),
+            ]
+            if (activeAnchorNum > 0 && activeAnchorKind === 'figure') {
+              figNumbersAll.push(activeAnchorNum)
+            }
+            if (Number.isFinite(hintNumber) && hintNumber > 0 && (activeAnchorKind === 'figure' || hintKind === 'figure')) {
+              figNumbersAll.push(Math.floor(hintNumber))
+            }
+            const figNumbers = Array.from(new Set(figNumbersAll.filter((item) => Number.isFinite(item) && item > 0)))
+            const preferFormula = Boolean(
             hasFormulaSignal(probe)
             || hasFormulaSignal(hintBlockText)
             || hintKind === 'equation'
             || activeAnchorKind === 'equation'
-          )
-          const preferFigure = Boolean(activeAnchorKind === 'figure' || hintKind === 'figure' || figNumbers.length > 0)
-          if (!target && preferFigure && Array.isArray(readerBlocks) && readerBlocks.length > 0) {
-            const figBlock = readerBlocks.find((item) => {
-              if (String(item?.kind || '').trim().toLowerCase() !== 'figure') return false
-              const blockNumber = Number(item?.number || 0)
-              return figNumbers.length <= 0 || (Number.isFinite(blockNumber) && figNumbers.includes(Math.floor(blockNumber)))
-            }) || null
-            if (figBlock) {
-              target = root.querySelector<HTMLElement>(`[data-kb-block-id="${CSS.escape(String(figBlock.block_id || '').trim())}"]`)
-              if (!target) {
-                target = Array.from(root.querySelectorAll<HTMLElement>('[data-kb-anchor-id]'))
-                  .find((node) => String(node.getAttribute('data-kb-anchor-id') || '') === String(figBlock.anchor_id || '').trim()) || null
+            )
+            const preferFigure = Boolean(activeAnchorKind === 'figure' || hintKind === 'figure' || figNumbers.length > 0)
+            if (!target && preferFigure && Array.isArray(readerBlocks) && readerBlocks.length > 0) {
+              const figureBlocks = readerBlocks.filter(
+                (item) => String(item?.kind || '').trim().toLowerCase() === 'figure',
+              )
+              let figBlock: ReaderDocBlock | null = null
+              if (figureBlocks.length > 0) {
+                let best: ReaderDocBlock | null = null
+                let bestScore = Number.NEGATIVE_INFINITY
+                for (const item of figureBlocks) {
+                  const blockNumber = Number(item?.number || 0)
+                  const blockText = String(item?.text || '').trim()
+                  const blockHeading = String(item?.heading_path || '').trim()
+                  let score = 0
+                  if (figNumbers.length > 0) {
+                    if (Number.isFinite(blockNumber) && figNumbers.includes(Math.floor(blockNumber))) {
+                      score += 2.25
+                    } else {
+                      score -= 1.0
+                    }
+                  } else {
+                    score += 0.42 * snippetMatchScore(probe, blockText)
+                    score += 0.28 * headingMatchScore(String(activeHeadingPath || hintHeadingPath || ''), blockHeading)
+                  }
+                  if (activeAnchorNum > 0 && Number.isFinite(blockNumber) && Math.floor(blockNumber) === activeAnchorNum) {
+                    score += 2.4
+                  }
+                  if (
+                    readerBlockHint
+                    && String(item?.block_id || '').trim()
+                    && String(item?.block_id || '').trim() === String(readerBlockHint?.block_id || '').trim()
+                  ) {
+                    score += 1.6
+                  }
+                  if (score > bestScore) {
+                    best = item
+                    bestScore = score
+                  }
+                }
+                const floor = (figNumbers.length > 0 || activeAnchorNum > 0) ? 0.8 : 0.32
+                if (best && bestScore >= floor) {
+                  figBlock = best
+                }
+              }
+              if (figBlock) {
+                target = root.querySelector<HTMLElement>(`[data-kb-block-id="${CSS.escape(String(figBlock.block_id || '').trim())}"]`)
+                if (!target) {
+                  target = Array.from(root.querySelectorAll<HTMLElement>('[data-kb-anchor-id]'))
+                    .find((node) => String(node.getAttribute('data-kb-anchor-id') || '') === String(figBlock.anchor_id || '').trim()) || null
               }
             }
           }

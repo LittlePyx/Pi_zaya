@@ -37,6 +37,35 @@ def _lib_store() -> LibraryStore:
     return LibraryStore(get_settings().library_db_path)
 
 
+def _project_root() -> Path:
+    s = get_settings()
+    return Path(s.db_dir).expanduser().resolve().parent
+
+
+def _reference_asset_roots() -> list[Path]:
+    roots: list[Path] = []
+    for raw in (_md_dir(), _project_root() / "tmp"):
+        try:
+            resolved = Path(raw).expanduser().resolve(strict=False)
+        except Exception:
+            continue
+        if resolved in roots:
+            continue
+        roots.append(resolved)
+    return roots
+
+
+def _path_within_roots(path_obj: Path, roots: list[Path]) -> bool:
+    p = Path(path_obj)
+    for root in roots:
+        try:
+            p.relative_to(root)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 @router.post("/sync")
 def start_sync(workers: int | None = None, crossref_budget_s: float | None = None):
     s = get_settings()
@@ -193,7 +222,7 @@ def _resolve_reader_md_path(source_path: str) -> Path | None:
         return md_main
 
 
-def _rewrite_md_asset_links(md_text: str, *, md_path: Path, md_root: Path) -> str:
+def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Path]) -> str:
     text = str(md_text or "")
     if not text:
         return text
@@ -215,9 +244,7 @@ def _rewrite_md_asset_links(md_text: str, *, md_path: Path, md_root: Path) -> st
                 cand = cand.resolve(strict=False)
             if (not cand.exists()) or (not cand.is_file()):
                 return m.group(0)
-            try:
-                cand.relative_to(md_root.resolve())
-            except Exception:
+            if not _path_within_roots(cand, asset_roots):
                 return m.group(0)
             asset_url = f"/api/references/asset?path={quote(str(cand), safe='')}"
             return f"![{alt}]({asset_url})"
@@ -305,8 +332,11 @@ def get_reader_doc(body: ReaderDocBody):
     except Exception:
         raise HTTPException(500, "failed to read markdown")
 
-    md_root = _md_dir()
-    md_render = _rewrite_md_asset_links(md_text, md_path=md_path, md_root=md_root)
+    md_render = _rewrite_md_asset_links(
+        md_text,
+        md_path=md_path,
+        asset_roots=_reference_asset_roots(),
+    )
     anchors, blocks = _build_reader_anchors(md_text, md_path=md_path)
     source_name = md_path.name
     low = source_name.lower()
@@ -339,10 +369,7 @@ def get_reference_asset(path: str):
         raise HTTPException(404, "asset not found")
     if resolved.suffix.lower() not in _ASSET_IMAGE_EXTS:
         raise HTTPException(404, "asset not found")
-    root = _md_dir().resolve()
-    try:
-        resolved.relative_to(root)
-    except Exception:
+    if not _path_within_roots(resolved, _reference_asset_roots()):
         raise HTTPException(404, "asset not found")
     media_type = str(mimetypes.guess_type(str(resolved))[0] or "application/octet-stream")
     return FileResponse(str(resolved), media_type=media_type, filename=resolved.name)

@@ -121,6 +121,15 @@ def test_paper_guide_targeted_source_block_hits_uses_family_seed_tokens_for_cjk_
     assert any("methods" in str((hit.get("meta") or {}).get("heading_path") or "").lower() for hit in hits)
 
 
+def test_seed_query_tokens_merges_augmented_family_terms_when_prompt_has_cjk_tokens():
+    tokens = retrieval_runtime._paper_guide_seed_query_tokens_for_targeted_scan(
+        prompt="请解释这个方法的关键步骤",
+        family="method",
+        bound_source_path=r"X:\demo.pdf",
+    )
+    assert {"algorithm", "analysis", "apr"}.intersection(tokens)
+
+
 def test_paper_guide_should_force_rescue_for_exact_method_when_only_generic_hits_exist():
     hits = [
         {
@@ -165,6 +174,35 @@ def test_paper_guide_should_force_rescue_skips_when_targeted_hit_already_exists(
             "and what is the batch size measured in rays?"
         ),
         prompt_family="method",
+    )
+
+
+def test_paper_guide_should_force_rescue_for_overview_when_only_reference_hits_exist():
+    hits = [
+        {
+            "score": 9.0,
+            "text": "[12] Doe et al. A method for imaging.",
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "References",
+                "block_id": "blk_ref_12",
+            },
+        },
+        {
+            "score": 8.4,
+            "text": "[13] Roe et al. Another related work.",
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "References",
+                "block_id": "blk_ref_13",
+            },
+        },
+    ]
+
+    assert _paper_guide_should_force_rescue(
+        scoped_hits=hits,
+        prompt="What are the core contributions of this paper?",
+        prompt_family="overview",
     )
 
 
@@ -366,6 +404,63 @@ def test_build_paper_guide_direct_citation_lookup_answer_prefers_author_attribut
 
     assert "The paper cites [4]" in out
     assert "Single-pixel imaging via compressive sampling" in out
+
+
+def test_build_paper_guide_direct_citation_lookup_answer_focuses_on_target_ref_clause_for_sci():
+    out = _build_paper_guide_direct_citation_lookup_answer(
+        prompt="In the Abstract, which reference do they cite for video Snapshot Compressive Imaging (SCI), and where is it stated exactly?",
+        source_path=r"X:\demo.pdf",
+        answer_hits=[
+            {
+                "text": (
+                    "Drawing inspiration from Compressed Sensing (CS) [5,8], "
+                    "video Snapshot Compressive Imaging (SCI) [50] system has emerged to address these limitations."
+                ),
+                "meta": {"heading_path": "Abstract"},
+            }
+        ],
+        special_focus_block="",
+        db_dir=Path("db"),
+        extract_special_focus_excerpt=lambda block: "",
+        reference_entry_lookup=lambda _src, ref_num, **_kwargs: {
+            "title": "Snapshot Compressive Imaging"
+        }
+        if int(ref_num) == 50
+        else {"title": f"Reference {int(ref_num)}"},
+    )
+
+    assert "The paper cites [50]" in out
+    assert "video Snapshot Compressive Imaging (SCI) [50]" in out
+    assert "[5,8]" not in out
+
+
+def test_build_paper_guide_direct_citation_lookup_answer_focuses_on_target_ref_clause_for_admm():
+    out = _build_paper_guide_direct_citation_lookup_answer(
+        prompt="In Related Work, which reference is cited for ADMM, and where is it stated exactly?",
+        source_path=r"X:\demo.pdf",
+        answer_hits=[
+            {
+                "text": (
+                    "In SCI, different regularizers and priors have been used, including sparsity [47] and total variation (TV) [49]. "
+                    "When solving the optimization problems, most methods employ alternating direction method of multipliers (ADMM) [4], "
+                    "which leads to good results."
+                ),
+                "meta": {"heading_path": "2. Related Work"},
+            }
+        ],
+        special_focus_block="",
+        db_dir=Path("db"),
+        extract_special_focus_excerpt=lambda block: "",
+        reference_entry_lookup=lambda _src, ref_num, **_kwargs: {
+            "title": "ADMM classic work"
+        }
+        if int(ref_num) == 4
+        else {"title": f"Reference {int(ref_num)}"},
+    )
+
+    assert "The paper cites [4]" in out
+    assert "ADMM) [4]" in out
+    assert "[49]" not in out
 
 
 def test_paper_guide_citation_lookup_signal_score_penalizes_reference_list_for_intext_query():

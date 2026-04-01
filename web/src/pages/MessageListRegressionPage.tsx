@@ -9,7 +9,7 @@ import {
 
 const EQUATION_TEXT = '$$\nC(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt\n$$'
 
-const regressionMessages: Message[] = [
+const structuredPrimaryRerankMessages: Message[] = [
   {
     id: 1,
     role: 'assistant',
@@ -71,7 +71,68 @@ const regressionMessages: Message[] = [
   },
 ]
 
+const requiredFallbackAnchorMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: '单像素成像需要已知调制与重建流程协同。',
+    rendered_body: '单像素成像需要已知调制与重建流程协同。',
+    copy_text: '单像素成像需要已知调制与重建流程协同。',
+    copy_markdown: '单像素成像需要已知调制与重建流程协同。',
+    created_at: Date.now(),
+    provenance: {
+      source_path: READER_REGRESSION_SOURCE_PATH,
+      source_name: READER_REGRESSION_SOURCE_NAME,
+      strict_identity_ready: true,
+      mapping_mode: 'fast',
+      block_map: {
+        'p-1': {
+          block_id: 'p-1',
+          anchor_id: 'a-p-1',
+          kind: 'paragraph',
+          heading_path: 'Fixture Paper / 1. Intro',
+          text: 'Single-pixel imaging combines known modulation patterns with one detector and reconstruction.',
+        },
+      },
+      segments: [
+        {
+          segment_id: 'seg-required-fallback',
+          segment_index: 0,
+          kind: 'paragraph',
+          segment_type: 'paragraph',
+          claim_type: 'shell_sentence',
+          must_locate: true,
+          locate_policy: 'required',
+          locate_surface_policy: 'primary',
+          text: 'Single-pixel imaging combines known modulation patterns with one detector and reconstruction.',
+          snippet_key: 'single pixel imaging modulation reconstruction',
+          evidence_mode: 'direct',
+          evidence_block_ids: ['p-1'],
+          primary_block_id: 'p-1',
+          primary_anchor_id: 'a-p-1',
+          primary_heading_path: 'Fixture Paper / 1. Intro',
+          evidence_confidence: 0.9,
+          anchor_kind: '',
+          anchor_text: '',
+        },
+      ],
+    },
+  },
+]
+
+type RegressionScenario = 'structured-primary-rerank' | 'required-fallback-anchor'
+
 export default function MessageListRegressionPage() {
+  const scenarioParam = (() => {
+    if (typeof window === 'undefined') return ''
+    return new URLSearchParams(window.location.search).get('scenario') || ''
+  })().trim().toLowerCase()
+  const scenario: RegressionScenario = scenarioParam === 'required-fallback-anchor'
+    ? 'required-fallback-anchor'
+    : 'structured-primary-rerank'
+  const regressionMessages: Message[] = scenario === 'required-fallback-anchor'
+    ? requiredFallbackAnchorMessages
+    : structuredPrimaryRerankMessages
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
 
   return (
@@ -82,7 +143,7 @@ export default function MessageListRegressionPage() {
             MessageList locate regression harness
           </div>
           <div className="text-xs text-black/45 dark:text-white/45" data-testid="message-list-test-scenario">
-            structured-primary-rerank
+            {scenario}
           </div>
         </div>
 

@@ -313,6 +313,31 @@ function normalizeStrictAnchorText(input: string): string {
     .trim()
 }
 
+function inferStrictAnchorKind(
+  rawKind: string,
+  claimType: string,
+): string {
+  const kind = String(rawKind || '').trim().toLowerCase()
+  if (kind) return kind
+  const claim = String(claimType || '').trim().toLowerCase()
+  if (claim === 'formula_claim' || claim === 'inline_formula_claim' || claim === 'equation_explanation_claim') {
+    return 'equation'
+  }
+  if (claim === 'figure_claim') return 'figure'
+  if (claim === 'quote_claim') return 'quote'
+  if (claim === 'blockquote_claim') return 'blockquote'
+  if (
+    claim === 'shell_sentence'
+    || claim === 'critical_fact_claim'
+    || claim === 'method_detail'
+    || claim === 'prior_work'
+    || claim === 'doc_map'
+  ) {
+    return 'paragraph'
+  }
+  return ''
+}
+
 function hasSegmentStrictLocateIdentity(
   segment: Record<string, unknown> | null | undefined,
   currentSegment?: StructuredProvenanceSegment | null,
@@ -321,15 +346,18 @@ function hasSegmentStrictLocateIdentity(
   const evidenceBlockIds = Array.isArray(segment?.evidence_block_ids)
     ? segment?.evidence_block_ids.map((item) => String(item || '').trim()).filter(Boolean)
     : []
-  const anchorKind = String(segment?.anchor_kind || currentSegment?.anchorKind || '').trim().toLowerCase()
+  const anchorKindRaw = String(segment?.anchor_kind || currentSegment?.anchorKind || '').trim().toLowerCase()
+  const claimType = String(segment?.claim_type || currentSegment?.claimType || '').trim().toLowerCase()
+  const anchorKind = inferStrictAnchorKind(anchorKindRaw, claimType)
   const anchorText = normalizeStrictAnchorText(String(segment?.anchor_text || currentSegment?.anchorText || ''))
   const evidenceQuote = normalizeStrictAnchorText(String(segment?.evidence_quote || ''))
-  return Boolean(
-    primaryBlockId
-    && evidenceBlockIds.length > 0
-    && anchorKind
-    && (anchorText || evidenceQuote),
-  )
+  if (!(primaryBlockId && evidenceBlockIds.length > 0)) return false
+  if (anchorKindRaw && (anchorText || evidenceQuote)) return true
+  const locatePolicy = String(segment?.locate_policy || currentSegment?.locatePolicy || '').trim().toLowerCase()
+  const mustLocate = Boolean(segment?.must_locate ?? currentSegment?.mustLocate)
+  if (!(mustLocate || locatePolicy === 'required')) return false
+  const segmentText = normalizeStrictAnchorText(String(segment?.text || currentSegment?.text || ''))
+  return Boolean(anchorKind && (anchorText || evidenceQuote || segmentText))
 }
 
 function isFormulaBundleLocateEntry(entry: Pick<ProvenanceLocateEntry, 'claimGroupKind' | 'claimGroupId' | 'anchorKind' | 'claimType' | 'primary'>): boolean {

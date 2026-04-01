@@ -26,9 +26,11 @@ from kb.paper_guide_postprocess import _sanitize_paper_guide_answer_for_user
 from kb.paper_guide_provenance import _resolve_paper_guide_md_path
 from kb.paper_guide_provenance import _extract_figure_number
 from kb.paper_guide_retrieval_runtime import (
+    _focus_citation_fragment_for_refs,
     _paper_guide_citation_lookup_fragments,
     _paper_guide_citation_lookup_query_tokens,
     _paper_guide_citation_lookup_signal_score,
+    _select_primary_refs_for_prompt,
     _select_paper_guide_local_citation_lookup_refs,
     _paper_guide_targeted_source_block_hits,
 )
@@ -1145,6 +1147,28 @@ def _resolve_exact_citation_lookup_support_from_source(
     local_refs = _select_paper_guide_local_citation_lookup_refs(best_fragment, prompt=q, max_candidates=4)
     if local_refs and ((len(best_refs) <= 1) or (not focus_entity_tokens)):
         best_refs = local_refs
+    best_refs = _select_primary_refs_for_prompt(
+        fragment=best_fragment,
+        prompt=q,
+        refs=best_refs,
+        max_keep=4,
+    )
+    fragment_before_focus = str(best_fragment or "").strip()
+    focused_fragment = _focus_citation_fragment_for_refs(
+        fragment_before_focus,
+        target_refs=best_refs,
+        prompt=q,
+    )
+    if focused_fragment:
+        focused_low = str(focused_fragment or "").strip().lower()
+        focused_query_overlap = set(_paper_guide_citation_lookup_query_tokens(focused_fragment)).intersection(query_tokens)
+        focused_entity_overlap = [tok for tok in query_focus_tokens if tok in focused_low]
+        # Keep focused clause only when it still carries the question intent.
+        # Otherwise keep the original longer fragment to preserve missing focus terms.
+        if focused_query_overlap or focused_entity_overlap or (not query_tokens):
+            best_fragment = focused_fragment
+        else:
+            best_fragment = fragment_before_focus
 
     # Some papers phrase attributions as a long sentence starting with a subordinate clause
     # ("When ..., ... (METHOD) ^{[n]} ..."). Those "When ..." leads can be treated as rhetorical

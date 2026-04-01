@@ -1293,7 +1293,9 @@ export function MarkdownRenderer({
   readerAnchors,
   readerBlocks,
 }: Props) {
-  const normalizedContent = normalize(content)
+  const renderContent = variant === 'reader'
+    ? String(content || '')
+    : normalize(content)
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
   const toneBySource = useMemo(() => buildToneMap(citeDetails), [citeDetails])
   const readerBlockResolver = useMemo(
@@ -1319,7 +1321,7 @@ export function MarkdownRenderer({
     readerAnchorAllocator,
     readerBlockResolver,
   )
-  const parsedContract = parseAnswerContract(normalizedContent)
+  const parsedContract = variant === 'chat' ? parseAnswerContract(renderContent) : null
 
   return (
     <div className={`kb-markdown prose dark:prose-invert max-w-none min-w-0 text-sm ${variant === 'reader' ? 'kb-markdown-reader' : 'kb-markdown-chat'}`}>
@@ -1353,7 +1355,7 @@ export function MarkdownRenderer({
           rehypePlugins={[rehypeKatex, rehypeHighlight]}
           components={components}
         >
-          {normalizedContent}
+          {renderContent}
         </ReactMarkdown>
       )}
     </div>

@@ -1457,19 +1457,54 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         or citation_lookup_targeted
                         or method_exact_support_targeted
                         or (len(scoped_hits) < max(10, int(top_k or 4) * 3))
-                        or paper_guide_prompt_family in {"method", "figure_walkthrough", "reproduce", "compare", "strength_limits"}
+                        or paper_guide_prompt_family in {"method", "figure_walkthrough", "reproduce", "compare", "strength_limits", "equation", "overview"}
                     )
                 )
                 if should_supplement:
-                    scan_prompt = (used_query or "").strip() if bool(used_translation) else ""
-                    if not scan_prompt:
-                        scan_prompt = str(prompt or retrieval_prompt or "").strip()
-                    supplemental_hits = _paper_guide_targeted_source_block_hits(
-                        bound_source_path=paper_guide_bound_source_path,
-                        prompt=scan_prompt,
-                        db_dir=db_dir,
-                        limit=max(2, min(int(top_k or 4), 4)),
-                    )
+                    scan_candidates: list[str] = []
+                    scan_seen: set[str] = set()
+                    for candidate in (
+                        prompt or "",
+                        retrieval_prompt or "",
+                        (used_query or "") if bool(used_translation) else "",
+                        used_query or "",
+                    ):
+                        cand = str(candidate or "").strip()
+                        if not cand:
+                            continue
+                        cand_key = normalize_match_text(cand)
+                        if cand_key in scan_seen:
+                            continue
+                        scan_seen.add(cand_key)
+                        scan_candidates.append(cand)
+                        if len(scan_candidates) >= 3:
+                            break
+
+                    supplemental_hits: list[dict] = []
+                    supplemental_seen: set[str] = set()
+                    for scan_prompt in scan_candidates:
+                        scan_hits = _paper_guide_targeted_source_block_hits(
+                            bound_source_path=paper_guide_bound_source_path,
+                            prompt=scan_prompt,
+                            db_dir=db_dir,
+                            limit=max(2, min(int(top_k or 4), 3)),
+                        )
+                        for h in list(scan_hits or []):
+                            if not isinstance(h, dict):
+                                continue
+                            key = hashlib.sha1(
+                                (
+                                    str((h.get("meta", {}) or {}).get("block_id") or "")
+                                    + "\n"
+                                    + str((h.get("meta", {}) or {}).get("heading_path") or "")
+                                    + "\n"
+                                    + str(h.get("text") or "")
+                                ).encode("utf-8", "ignore")
+                            ).hexdigest()[:16]
+                            if key in supplemental_seen:
+                                continue
+                            supplemental_seen.add(key)
+                            supplemental_hits.append(h)
                     if supplemental_hits:
                         merged_hits: list[dict] = []
                         seen_keys: set[str] = set()

@@ -52,7 +52,7 @@
           "title": "SCI overview citation",
           "prompt_family": "citation_lookup",
           "tags": ["citation_lookup", "general"],
-          "prompt": "In the Abstract, the authors mention video Snapshot Compressive Imaging (SCI). Which reference do they cite for SCI, and where is that stated exactly? Provide the exact supporting sentence.",
+          "prompt": "In the Introduction, the authors mention video Snapshot Compressive Imaging (SCI). Which reference do they cite for SCI, and where is that stated exactly? Provide the exact supporting sentence.",
           "checks": {
             "answer": {
               "contains_any": ["Snapshot Compressive Imaging", "SCI"]
@@ -65,7 +65,7 @@
             "locate": {
               "required": true,
               "exact": true,
-              "heading_includes_any": ["Abstract"],
+              "heading_includes_any": ["Introduction", "1. Introduction"],
               "anchor_contains_any": ["video Snapshot Compressive Imaging", "SCI"]
             }
           }

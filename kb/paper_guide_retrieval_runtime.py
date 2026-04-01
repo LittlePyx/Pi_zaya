@@ -49,13 +49,11 @@ def _paper_guide_seed_query_tokens_for_targeted_scan(
 ) -> set[str]:
     q = str(prompt or "").strip()
     tokens = set(_paper_guide_cue_tokens(q))
-    if tokens:
-        return tokens
     augmented = _augment_paper_guide_retrieval_prompt(
         q,
         family=family,
     )
-    tokens = set(_paper_guide_cue_tokens(augmented))
+    tokens.update(_paper_guide_cue_tokens(augmented))
     if tokens:
         return tokens
     raw_src = str(bound_source_path or "").strip()
@@ -594,6 +592,49 @@ def _paper_guide_should_force_rescue(
     if explicit_targeting and (not _paper_guide_has_requested_target_hits(hits, prompt=q)):
         return True
 
+    explicit_ref_list_request = bool(
+        re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
+    )
+    query_tokens = _paper_guide_seed_query_tokens_for_targeted_scan(
+        prompt=q,
+        family=family,
+        bound_source_path="",
+    )
+    strong_signal = False
+    non_reference_signal = False
+    for hit in hits:
+        meta = hit.get("meta", {}) or {}
+        if bool(meta.get("paper_guide_targeted_block")) or bool(meta.get("paper_guide_fallback")):
+            strong_signal = True
+            non_reference_signal = True
+            continue
+        heading = str(meta.get("heading_path") or meta.get("top_heading") or "").strip()
+        text = str(hit.get("text") or "").strip()
+        if not text:
+            continue
+        looks_reference = bool(_PAPER_GUIDE_REF_SECTION_RE.search(heading) or _looks_like_reference_list_snippet_local(text))
+        if looks_reference:
+            if family == "citation_lookup" or explicit_ref_list_request:
+                non_reference_signal = True
+            else:
+                continue
+        else:
+            non_reference_signal = True
+        overlap = 0
+        if query_tokens:
+            overlap = len(set(_paper_guide_cue_tokens("\n".join(part for part in (heading, text[:1200]) if part))).intersection(query_tokens))
+        if overlap >= 2:
+            strong_signal = True
+            break
+        if overlap >= 1 and len(text) >= 120:
+            strong_signal = True
+            break
+
+    if (family != "citation_lookup") and (not explicit_ref_list_request) and (not non_reference_signal):
+        return True
+    if not strong_signal:
+        return True
+
     if family not in {"citation_lookup", "method", "figure_walkthrough", "reproduce"}:
         return False
 
@@ -813,6 +854,122 @@ def _paper_guide_citation_lookup_query_tokens(prompt: str) -> list[str]:
         seen.add(tok)
         out.append(tok)
     return out
+
+
+def _focus_citation_fragment_for_refs(text: str, *, target_refs: list[int], prompt: str = "") -> str:
+    src = str(text or "").strip()
+    if not src:
+        return ""
+    refs_target = {int(n) for n in list(target_refs or []) if int(n) > 0}
+    if not refs_target:
+        return src
+    q_tokens = set(_paper_guide_citation_lookup_query_tokens(prompt))
+    sentence_like: list[str] = []
+    for base in re.split(r"(?<=[.!?])\s+|\n+", src):
+        s = str(base or "").strip(" >-*")
+        if not s:
+            continue
+        sentence_like.append(s)
+        # Long lines in converted markdown often hold multiple citation clauses;
+        # split once more to isolate the clause around the target reference.
+        if len(s) >= 120:
+            for sub in re.split(r"(?<=[,;:])\s+", s):
+                ss = str(sub or "").strip(" >-*")
+                if ss and (ss != s):
+                    sentence_like.append(ss)
+
+    best = ""
+    best_score = float("-inf")
+    seen: set[str] = set()
+    for cand in sentence_like:
+        key = normalize_match_text(cand)
+        if (not key) or (key in seen):
+            continue
+        seen.add(key)
+        refs = _extract_inline_reference_numbers(cand, max_candidates=8)
+        if not refs:
+            continue
+        refs_set = {int(n) for n in refs if int(n) > 0}
+        overlap = refs_set.intersection(refs_target)
+        if not overlap:
+            continue
+        extra = refs_set.difference(refs_target)
+        score = 10.0
+        score += 4.0 * float(len(overlap))
+        score -= 5.0 * float(len(extra))
+        if len(cand) < 28:
+            score -= 6.0
+        score -= min(4.0, 0.006 * float(len(cand)))
+        if q_tokens:
+            tok_overlap = len(set(_paper_guide_citation_lookup_query_tokens(cand)).intersection(q_tokens))
+            score += min(4.0, 1.2 * float(tok_overlap))
+        if score > best_score:
+            best_score = score
+            best = cand
+    return best or src
+
+
+def _paper_guide_prompt_prefers_single_reference(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    if re.search(r"(?i)\b(?:which|what)\s+references?\b", q):
+        if re.search(r"(?i)\b(?:which|what)\s+references\b", q):
+            return False
+        return True
+    if re.search(r"(?i)\b(?:which|what)\s+(?:in-?paper\s+)?citation\b", q):
+        return True
+    if re.search(r"(?i)\bcite(?:d|s)?\b[^\n]{0,60}\bfor\b", q):
+        return True
+    return False
+
+
+def _select_primary_refs_for_prompt(*, fragment: str, prompt: str, refs: list[int], max_keep: int = 4) -> list[int]:
+    ordered: list[int] = []
+    seen: set[int] = set()
+    for raw in list(refs or []):
+        try:
+            n = int(raw)
+        except Exception:
+            continue
+        if n <= 0 or n in seen:
+            continue
+        seen.add(n)
+        ordered.append(n)
+    if not ordered:
+        return []
+    keep = max(1, int(max_keep or 4))
+    if len(ordered) <= 1:
+        return ordered[:keep]
+    if not _paper_guide_prompt_prefers_single_reference(prompt):
+        return ordered[:keep]
+    q_tokens = set(_paper_guide_citation_lookup_query_tokens(prompt))
+    best_ref = ordered[0]
+    best_score = float("-inf")
+    for ref_num in ordered:
+        focused = _focus_citation_fragment_for_refs(
+            fragment,
+            target_refs=[int(ref_num)],
+            prompt=prompt,
+        )
+        focused_refs = _extract_inline_reference_numbers(focused, max_candidates=6)
+        score = _paper_guide_citation_lookup_signal_score(
+            prompt=prompt,
+            heading="",
+            text=focused,
+            inline_refs=focused_refs,
+            explicit_ref_list_request=False,
+        )
+        if q_tokens:
+            overlap = len(set(_paper_guide_citation_lookup_query_tokens(focused)).intersection(q_tokens))
+            score += 2.4 * float(overlap)
+        if int(ref_num) in focused_refs:
+            score += 6.0
+        score -= min(2.0, 0.004 * float(len(focused)))
+        if score > best_score:
+            best_score = score
+            best_ref = int(ref_num)
+    return [best_ref]
 
 
 def _paper_guide_citation_lookup_signal_score(
@@ -1094,6 +1251,17 @@ def _build_paper_guide_direct_citation_lookup_answer(
     local_refs = _select_paper_guide_local_citation_lookup_refs(best_fragment, prompt=q, max_candidates=4)
     if local_refs:
         best_refs = local_refs
+    best_refs = _select_primary_refs_for_prompt(
+        fragment=best_fragment,
+        prompt=q,
+        refs=best_refs,
+        max_keep=4,
+    )
+    best_fragment = _focus_citation_fragment_for_refs(
+        best_fragment,
+        target_refs=best_refs,
+        prompt=q,
+    )
 
     ref_lines: list[str] = []
     for n in best_refs[:4]:

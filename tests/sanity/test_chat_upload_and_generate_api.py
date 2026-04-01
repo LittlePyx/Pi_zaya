@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -442,6 +443,7 @@ def test_references_asset_route_serves_md_assets_only(monkeypatch, tmp_path: Pat
     out_root_asset.write_bytes(b"\x89PNG\r\n\x1a\nfake2")
 
     monkeypatch.setattr(refs_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(refs_router, "_reference_asset_roots", lambda: [md_root.resolve()])
     client = TestClient(app)
 
     ok_resp = client.get("/api/references/asset", params={"path": str(in_root_asset)})
@@ -450,3 +452,34 @@ def test_references_asset_route_serves_md_assets_only(monkeypatch, tmp_path: Pat
 
     bad_resp = client.get("/api/references/asset", params={"path": str(out_root_asset)})
     assert bad_resp.status_code == 404
+
+
+def test_references_reader_doc_rewrites_tmp_assets_and_serves(monkeypatch, tmp_path: Path):
+    from api.routers import references as refs_router
+
+    md_root = tmp_path / "md_output"
+    tmp_root = tmp_path / "tmp"
+    doc_dir = tmp_root / "reconvert_doc"
+    assets_dir = doc_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    fig = assets_dir / "page_2_fig_1.png"
+    fig.write_bytes(b"\x89PNG\r\n\x1a\nfake-fig")
+    md_path = doc_dir / "output.md"
+    md_path.write_text("![Figure 1](./assets/page_2_fig_1.png)\n", encoding="utf-8")
+
+    monkeypatch.setattr(refs_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(refs_router, "_reference_asset_roots", lambda: [md_root.resolve(), tmp_root.resolve()])
+    client = TestClient(app)
+
+    doc_resp = client.post("/api/references/reader/doc", json={"source_path": str(md_path)})
+    assert doc_resp.status_code == 200
+    markdown = str(doc_resp.json().get("markdown") or "")
+    assert "/api/references/asset?path=" in markdown
+
+    m = re.search(r"\((/api/references/asset\?path=[^)]+)\)", markdown)
+    assert m is not None
+    asset_url = m.group(1)
+    asset_resp = client.get(asset_url)
+    assert asset_resp.status_code == 200
+    assert asset_resp.headers["content-type"].startswith("image/png")

@@ -116,6 +116,64 @@ def test_resolve_exact_citation_lookup_support_from_source_scans_source_blocks_w
     assert "dynamic supersampling" in rec["locate_anchor"]
 
 
+def test_resolve_exact_citation_lookup_support_from_source_prefers_single_ref_and_focus_clause(tmp_path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        lambda **_kwargs: [
+            {
+                "text": (
+                    "Drawing inspiration from Compressed Sensing (CS) [5,8], "
+                    "video Snapshot Compressive Imaging (SCI) [50] system has emerged to address these limitations."
+                ),
+                "meta": {"heading_path": "1. Introduction", "block_id": "blk_intro", "anchor_id": "anc_intro"},
+            }
+        ],
+    )
+    monkeypatch.setattr(answer_post_runtime, "load_source_blocks", lambda _path: [])
+
+    rec = answer_post_runtime._resolve_exact_citation_lookup_support_from_source(
+        "demo.pdf",
+        prompt=(
+            "In the Abstract, the authors mention video Snapshot Compressive Imaging (SCI). "
+            "Which reference do they cite for SCI, and where is that stated exactly?"
+        ),
+        db_dir=tmp_path,
+    )
+
+    assert rec["ref_nums"] == [50]
+    assert "SCI) [50]" in rec["locate_anchor"]
+    assert "[5,8]" not in rec["locate_anchor"]
+
+
+def test_resolve_exact_citation_lookup_support_from_source_keeps_multi_refs_for_plural_prompt(tmp_path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        lambda **_kwargs: [
+            {
+                "text": "The transformer framework [33,34] has recently attracted increasing attention.",
+                "meta": {"heading_path": "Related Work", "block_id": "blk_rel", "anchor_id": "anc_rel"},
+            }
+        ],
+    )
+    monkeypatch.setattr(answer_post_runtime, "load_source_blocks", lambda _path: [])
+
+    rec = answer_post_runtime._resolve_exact_citation_lookup_support_from_source(
+        "demo.pdf",
+        prompt="Which references do the authors cite for the transformer framework, and where is that stated exactly?",
+        db_dir=tmp_path,
+    )
+
+    assert set(rec["ref_nums"]) == {33, 34}
+
+
 def test_resolve_exact_equation_support_from_source_picks_equation_and_neighbor_explanation(tmp_path, monkeypatch):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text("placeholder", encoding="utf-8")

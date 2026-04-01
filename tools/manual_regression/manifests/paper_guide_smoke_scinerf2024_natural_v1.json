@@ -47,7 +47,7 @@
             "locate": {
               "required": true,
               "exact": true,
-              "heading_includes_any": ["Abstract"],
+              "heading_includes_any": ["Introduction", "1. Introduction"],
               "anchor_contains_any": ["video Snapshot Compressive Imaging", "SCI"]
             }
           }
