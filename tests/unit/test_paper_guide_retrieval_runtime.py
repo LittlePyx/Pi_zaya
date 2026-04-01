@@ -91,6 +91,36 @@ def test_paper_guide_fallback_deepread_hits_prefers_targeted_hits_for_box_query(
     assert all(bool((hit.get("meta") or {}).get("paper_guide_targeted_block")) for hit in hits)
 
 
+def test_paper_guide_targeted_source_block_hits_uses_family_seed_tokens_for_cjk_prompt(tmp_path: Path):
+    source_pdf = tmp_path / "DemoMethod.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / "DemoMethod"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoMethod.en.md"
+    md_main.write_text(
+        (
+            "## Materials and Methods\n\n"
+            "APR was performed using image registration based on phase correlation.\n\n"
+            "## Results\n\n"
+            "The method improves CNR and sectioning.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=r"X:\DemoMethod.pdf",
+        prompt="这个方法具体怎么实现？请给出关键步骤。",
+        db_dir=db_root,
+        limit=3,
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {"heading_path": "Materials and Methods", "block_id": "blk_method", "anchor_id": "a1"},
+    )
+    assert hits
+    assert any("methods" in str((hit.get("meta") or {}).get("heading_path") or "").lower() for hit in hits)
+
+
 def test_paper_guide_should_force_rescue_for_exact_method_when_only_generic_hits_exist():
     hits = [
         {
@@ -185,6 +215,56 @@ def test_paper_guide_fallback_deepread_hits_merges_original_and_translated_targe
 
     assert calls == ["原始问题", "translated query"]
     assert {str((hit.get("meta") or {}).get("block_id") or "") for hit in out} == {"blk_orig", "blk_trans"}
+
+
+def test_paper_guide_fallback_deepread_hits_rebinds_block_anchor_for_locate(monkeypatch, tmp_path: Path):
+    source_pdf = tmp_path / "DemoMethod.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / "DemoMethod"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoMethod.en.md"
+    md_main.write_text(
+        (
+            "## Materials and Methods\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        retrieval_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        retrieval_runtime,
+        "_deep_read_md_for_context",
+        lambda *_args, **_kwargs: [
+            {
+                "text": "APR was performed using image registration based on phase correlation of the off-axis raw images.",
+                "score": 1.0,
+                "meta": {},
+            }
+        ],
+    )
+
+    out = _paper_guide_fallback_deepread_hits(
+        bound_source_path=r"X:\DemoMethod.pdf",
+        bound_source_name="DemoMethod",
+        query="这个方法具体怎么实现？",
+        prompt="这个方法具体怎么实现？",
+        prompt_family="method",
+        top_k=2,
+        db_dir=db_root,
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {"heading_path": "Materials and Methods", "block_id": "blk_method", "anchor_id": "a1"},
+    )
+    assert out
+    meta = out[0].get("meta", {}) or {}
+    assert str(meta.get("block_id") or "").strip()
+    assert str(meta.get("anchor_id") or "").strip()
 
 
 def test_paper_guide_citation_lookup_query_tokens_drops_stopwords():

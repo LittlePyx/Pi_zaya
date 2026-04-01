@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from kb.paper_guide_evidence_atoms import _build_paper_guide_evidence_atoms
@@ -15,6 +16,7 @@ from kb.paper_guide_prompting import (
     _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE,
     _PAPER_GUIDE_CITATION_LOOKUP_QUERY_STOPWORDS,
     _PAPER_GUIDE_REF_SECTION_RE,
+    _augment_paper_guide_retrieval_prompt,
     _looks_like_reference_list_snippet_local,
     _paper_guide_box_header_number,
     _paper_guide_prompt_family,
@@ -37,6 +39,74 @@ from kb.paper_guide_provenance import (
 )
 from kb.retrieval_engine import _deep_read_md_for_context
 from kb.source_blocks import load_source_blocks, normalize_inline_markdown, normalize_match_text
+
+
+def _paper_guide_seed_query_tokens_for_targeted_scan(
+    *,
+    prompt: str,
+    family: str,
+    bound_source_path: str,
+) -> set[str]:
+    q = str(prompt or "").strip()
+    tokens = set(_paper_guide_cue_tokens(q))
+    if tokens:
+        return tokens
+    augmented = _augment_paper_guide_retrieval_prompt(
+        q,
+        family=family,
+    )
+    tokens = set(_paper_guide_cue_tokens(augmented))
+    if tokens:
+        return tokens
+    raw_src = str(bound_source_path or "").strip()
+    src_seed = re.sub(r"\.pdf$", "", raw_src, flags=re.IGNORECASE)
+    seeded = f"{src_seed} method methods result results figure equation reference discussion"
+    return set(_paper_guide_cue_tokens(seeded))
+
+
+def _paper_guide_best_block_for_fallback_hit(
+    *,
+    hit_text: str,
+    block_rows: list[dict],
+) -> dict | None:
+    snippet = str(hit_text or "").strip()
+    if not snippet:
+        return None
+    snippet_norm = normalize_match_text(snippet)
+    if not snippet_norm:
+        return None
+    snippet_tokens = set(_paper_guide_cue_tokens(snippet[:1200]))
+    snippet_head = snippet_norm[:220]
+    best_row: dict | None = None
+    best_score = 0.0
+    for row in block_rows:
+        block_norm = str(row.get("norm_text") or "")
+        if not block_norm:
+            continue
+        score = 0.0
+        if snippet_norm == block_norm:
+            score += 140.0
+        elif snippet_norm in block_norm:
+            score += 120.0
+        elif snippet_head and snippet_head in block_norm:
+            score += 78.0
+        elif (len(block_norm) >= 60) and (block_norm in snippet_norm):
+            score += 48.0
+        block_tokens = set(row.get("tokens") or [])
+        shared = snippet_tokens.intersection(block_tokens) if snippet_tokens and block_tokens else set()
+        if shared:
+            score += min(26.0, 2.4 * float(len(shared)))
+        try:
+            ratio = SequenceMatcher(None, snippet_norm[:320], block_norm[:420]).ratio()
+        except Exception:
+            ratio = 0.0
+        score += 16.0 * float(ratio)
+        if score > best_score:
+            best_score = score
+            best_row = row
+    if (best_row is None) or (best_score < 7.5):
+        return None
+    return best_row
 
 
 def _paper_guide_deepread_heading(hit: dict) -> str:
@@ -356,16 +426,20 @@ def _paper_guide_targeted_source_block_hits(
         (float(hit.get("score") or 0.0), hit) for hit in box_excerpt_hits if isinstance(hit, dict)
     ]
     explicit_hints = _paper_guide_requested_heading_hints(q)
-    is_citation_lookup = bool(_paper_guide_prompt_family(q) == "citation_lookup")
+    family = str(_paper_guide_prompt_family(q) or "").strip().lower()
+    is_citation_lookup = bool(family == "citation_lookup")
     explicit_ref_list_request = bool(
         re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
     )
     require_target_match = bool(explicit_hints) and (not is_citation_lookup)
-    query_tokens = set(
-        citation_lookup_query_tokens(q)
-        if is_citation_lookup and callable(citation_lookup_query_tokens)
-        else _paper_guide_cue_tokens(q)
-    )
+    if is_citation_lookup and callable(citation_lookup_query_tokens):
+        query_tokens = set(citation_lookup_query_tokens(q))
+    else:
+        query_tokens = _paper_guide_seed_query_tokens_for_targeted_scan(
+            prompt=q,
+            family=family,
+            bound_source_path=bound_source_path,
+        )
     blocks = list(load_source_blocks(md_path))
     target_boxes = set(_paper_guide_requested_box_numbers(q))
     box_context_indices: set[int] = set()
@@ -405,12 +479,36 @@ def _paper_guide_targeted_source_block_hits(
             score += 32.0
         if box_context_match:
             score += 14.0
+        heading_low = heading.lower()
         tokens = set(_paper_guide_cue_tokens(combined))
         shared = tokens.intersection(query_tokens)
         if shared:
             score += min(14.0, 2.0 * float(len(shared)))
         q_low = q.lower()
         text_low = text.lower()
+        if family == "method":
+            if any(token in heading_low for token in ("method", "methods", "materials and methods", "methodology", "implementation", "algorithm", "analysis")):
+                score += 7.0
+            if any(token in text_low for token in ("phase correlation", "image registration", "algorithm", "workflow", "rvt")):
+                score += 3.5
+        elif family == "reproduce":
+            if any(token in heading_low for token in ("materials and methods", "methods", "setup", "data acquisition", "protocol", "implementation")):
+                score += 6.0
+            if any(token in text_low for token in ("camera", "laser", "dwell time", "exposure", "acquisition", "hardware")):
+                score += 3.2
+        elif family == "overview":
+            if any(token in heading_low for token in ("abstract", "introduction", "results", "discussion", "conclusion")):
+                score += 4.5
+        elif family == "equation":
+            if any(token in heading_low for token in ("equation", "formula", "method", "background")):
+                score += 5.0
+            if any(token in text for token in ("\\tag{", "$$", "\\[", "\\]", "where ", "denotes", "represents")):
+                score += 3.8
+        elif family == "figure_walkthrough":
+            if any(token in heading_low for token in ("figure", "caption", "panel", "results")):
+                score += 5.0
+            if any(token in text_low for token in ("figure", "fig.", "panel", "caption")):
+                score += 2.5
         if "hadamard" in q_low and "hadamard" in text_low:
             score += 12.0
         if "richardson" in q_low and "richardson" in text_low:
@@ -531,6 +629,7 @@ def _paper_guide_fallback_deepread_hits(
         q = f"{bound_source_name or md_path.stem} contribution method experiment limitation"
     prompt_raw = str(prompt or "").strip()
     prompt_effective = prompt_raw or q
+    family_eff = str(prompt_family or _paper_guide_prompt_family(prompt_effective or q)).strip().lower()
     # If retrieval provided a translated/English query, prefer it for targeted scans when
     # the original prompt is CJK-heavy. This improves recall for English papers.
     try:
@@ -546,6 +645,20 @@ def _paper_guide_fallback_deepread_hits(
         if any(normalize_match_text(cand) == normalize_match_text(existing) for existing in prompt_candidates):
             continue
         prompt_candidates.append(cand)
+    has_lexical_candidate = any(bool(_paper_guide_cue_tokens(cand)) for cand in prompt_candidates)
+    if not has_lexical_candidate:
+        augmented_candidate = _augment_paper_guide_retrieval_prompt(
+            prompt_effective or q,
+            family=family_eff,
+        )
+        cand_aug = str(augmented_candidate or "").strip()
+        if cand_aug and not any(normalize_match_text(cand_aug) == normalize_match_text(existing) for existing in prompt_candidates):
+            prompt_candidates.append(cand_aug)
+            prompt_effective = cand_aug
+    if not prompt_candidates:
+        seed = f"{bound_source_name or md_path.stem} method result figure equation reference discussion"
+        prompt_candidates.append(seed)
+        prompt_effective = seed
 
     targeted_ranked: list[tuple[float, dict]] = []
     targeted_seen: set[str] = set()
@@ -603,6 +716,24 @@ def _paper_guide_fallback_deepread_hits(
         if str(text or "").strip()
     }
     out: list[dict] = []
+    block_rows: list[dict] = []
+    try:
+        for block in list(load_source_blocks(md_path)):
+            if not isinstance(block, dict):
+                continue
+            block_text = str(block.get("raw_text") or block.get("text") or "").strip()
+            if not block_text:
+                continue
+            block_rows.append(
+                {
+                    "block": block,
+                    "text": block_text,
+                    "norm_text": normalize_match_text(block_text[:2200]),
+                    "tokens": _paper_guide_cue_tokens(block_text[:1400]),
+                }
+            )
+    except Exception:
+        block_rows = []
     for idx, h in enumerate(deep_hits, start=1):
         if not isinstance(h, dict):
             continue
@@ -623,6 +754,23 @@ def _paper_guide_fallback_deepread_hits(
             score0 = 0.0
         if score0 <= 0.0:
             rec["score"] = max(0.01, 1.0 - (idx - 1) * 0.1)
+        best_row = _paper_guide_best_block_for_fallback_hit(
+            hit_text=text,
+            block_rows=block_rows,
+        )
+        if best_row:
+            block_best = best_row.get("block") or {}
+            block_id = str(block_best.get("block_id") or "").strip()
+            anchor_id = str(block_best.get("anchor_id") or "").strip()
+            heading_best = str(block_best.get("heading_path") or "").strip()
+            if heading_best and (not str(meta.get("heading_path") or "").strip()):
+                meta["heading_path"] = heading_best
+            if block_id:
+                meta["block_id"] = block_id
+            if anchor_id:
+                meta["anchor_id"] = anchor_id
+            if block_id or anchor_id:
+                meta["paper_guide_rebound_block"] = True
         out.append(rec)
     return out
 
