@@ -1,0 +1,205 @@
+{
+  "suite_id": "paper_guide_scinerf_v5_converter_eval",
+  "title": "Paper Guide SCINeRF v5 Converter Eval",
+  "prefs_patch": {
+    "answer_contract_v1": true,
+    "answer_depth_auto": true,
+    "answer_mode_hint": "reading",
+    "answer_output_mode": "reading_guide"
+  },
+  "generate_body": {
+    "top_k": 10,
+    "deep_read": true,
+    "max_tokens": 5200,
+    "temperature": 0.25
+  },
+  "default_checks": {
+    "structured_markers": {
+      "forbid_raw_structured_cites": true,
+      "forbid_raw_support_markers": true
+    },
+    "quality": {
+      "minimum_ok_required": true
+    }
+  },
+  "papers": [
+    {
+      "id": "cvpr_2024_scinerf_v5",
+      "title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (v5 reconverted)",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_llm_hybrid_refs_v5\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+      "cases": [
+        {
+          "id": "SCINERF2024_V5_CITATION_ADMM",
+          "title": "ADMM citation in SCI decoding",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "converter_eval",
+            "citation_lookup",
+            "reference_quality",
+            "core"
+          ],
+          "prompt": "In the Related Work section, the authors say many optimization-based SCI methods employ ADMM. Which reference do they cite for ADMM, and where is that stated exactly? Provide the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "ADMM",
+                "alternating direction method of multipliers"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                4
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Related Work",
+                "Snapshot Compressive Imaging"
+              ],
+              "anchor_contains_any": [
+                "alternating direction method of multipliers",
+                "ADMM"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_v5",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (v5 reconverted)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_llm_hybrid_refs_v5\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_V5_METHOD_IMPL_ITER_BATCH",
+          "title": "Implementation details: iterations and batch size (rays)",
+          "prompt_family": "method",
+          "tags": [
+            "converter_eval",
+            "method_exact_support",
+            "false_miss",
+            "core"
+          ],
+          "prompt": "In the Implementation details paragraph (Experiments section), how many iterations do they train for, and what is the batch size measured in rays? Point me to the exact supporting sentence(s) and make sure the jump target is correct.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "iterations",
+                "100",
+                "200",
+                "5000",
+                "rays",
+                "batch size"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not contain",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Experiments",
+                "Implementation details"
+              ],
+              "anchor_contains_any": [
+                "100-200K iterations",
+                "5000 rays",
+                "batch size"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_v5",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (v5 reconverted)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_llm_hybrid_refs_v5\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_V5_FIG3_CAPTION_COMPONENTS",
+          "title": "Figure 3 experimental setup caption",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "converter_eval",
+            "figure_locate",
+            "core"
+          ],
+          "prompt": "For Figure 3, which key components are listed in the experimental setup caption? Point me to the exact supporting caption sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "CCD",
+                "DMD",
+                "relay lens",
+                "camera"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 3"
+              ],
+              "anchor_contains_any": [
+                "Experimental setup for real dataset collection",
+                "CCD camera",
+                "DMD"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_v5",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (v5 reconverted)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_llm_hybrid_refs_v5\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_V5_FIG4_SCENES",
+          "title": "Figure 4 synthetic scenes caption",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "converter_eval",
+            "figure_locate",
+            "figure_caption_quality"
+          ],
+          "prompt": "For Figure 4, which scenes do the authors say are shown from top to bottom in the synthetic dataset evaluation? Point me to the exact supporting caption sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Cozy2room",
+                "Tanabata",
+                "Factory",
+                "Vender"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 4"
+              ],
+              "anchor_contains_any": [
+                "Cozy2room",
+                "Tanabata",
+                "Factory",
+                "Vender"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_v5",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (v5 reconverted)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_llm_hybrid_refs_v5\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        }
+      ]
+    }
+  ]
+}

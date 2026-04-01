@@ -13,6 +13,7 @@ function parseScenario(input: string | null): ReaderRegressionScenario {
   if (raw === 'candidate-fallback') return 'candidate-fallback'
   if (raw === 'equation') return 'equation'
   if (raw === 'figure') return 'figure'
+  if (raw === 'multi-panel') return 'multi-panel'
   return 'strict-quote'
 }
 

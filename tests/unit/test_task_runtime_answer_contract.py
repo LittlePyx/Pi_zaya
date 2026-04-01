@@ -110,13 +110,58 @@ def test_build_paper_guide_grounding_rules_fact_answer_discourages_generic_advic
     assert "avoid generic reading advice" in rules
 
 
+def test_build_paper_guide_grounding_rules_adds_abstract_and_figure_family_guards():
+    from kb import task_runtime
+
+    abstract_rules = task_runtime._build_paper_guide_grounding_rules(
+        answer_contract_v1=False,
+        prompt_family="abstract",
+    )
+    figure_rules = task_runtime._build_paper_guide_grounding_rules(
+        answer_contract_v1=False,
+        prompt_family="figure_walkthrough",
+    )
+
+    assert "abstract span itself" in abstract_rules
+    assert "Conclusion/Evidence/Next Steps" in abstract_rules
+    assert "panel letters" in figure_rules
+
+
+def test_build_paper_guide_grounding_rules_adds_method_family_guard():
+    from kb import task_runtime
+
+    rules = task_runtime._build_paper_guide_grounding_rules(
+        answer_contract_v1=False,
+        prompt_family="method",
+    )
+
+    assert "phase correlation" in rules
+    assert "generic mechanism paraphrase" in rules
+
+
+def test_build_paper_guide_grounding_rules_adds_citation_lookup_guard():
+    from kb import task_runtime
+
+    rules = task_runtime._build_paper_guide_grounding_rules(
+        answer_contract_v1=False,
+        prompt_family="citation_lookup",
+    )
+
+    assert "exact in-paper reference numbers" in rules
+    assert "do not answer 'not stated'" in rules
+
+
 def test_build_paper_guide_grounding_rules_mentions_doc_scoped_candidate_refs():
     from kb import task_runtime
 
     rules = task_runtime._build_paper_guide_grounding_rules(answer_contract_v1=True)
 
+    assert "Paper-guide support slots" in rules
+    assert "support_example marker" in rules
+    assert "[[SUPPORT:" in rules
     assert "Paper-guide citation grounding hints" in rules
     assert "same DOC-k line" in rules
+    assert "cite_example" in rules
 
 
 def test_apply_answer_contract_without_hits_adds_limits():
@@ -324,6 +369,35 @@ def test_sanitize_structured_tokens_removes_sid_markers():
     assert "answer body" in out
 
 
+def test_sanitize_structured_tokens_drops_non_numeric_cite_markers():
+    from kb import task_runtime
+
+    raw = "See [[CITE:s50f9c165:DOC-1]] and [[CITE:s50f9c165:24]]."
+    out = task_runtime._sanitize_structured_cite_tokens(raw)
+    assert "[[CITE:s50f9c165:DOC-1]]" not in out
+    assert "[[CITE:s50f9c165:24]]" in out
+
+
+def test_promote_paper_guide_numeric_reference_citations_rewrites_reference_label():
+    from kb import task_runtime
+
+    out = task_runtime._promote_paper_guide_numeric_reference_citations(
+        "Consult reference [35] for the implementation details.",
+        locked_source={"sid": "s50f9c165"},
+    )
+    assert out == "Consult reference [[CITE:s50f9c165:35]] for the implementation details."
+
+
+def test_promote_paper_guide_numeric_reference_citations_leaves_plain_numeric_brackets():
+    from kb import task_runtime
+
+    out = task_runtime._promote_paper_guide_numeric_reference_citations(
+        "The measured width is [35] nm in this notation.",
+        locked_source={"sid": "s50f9c165"},
+    )
+    assert out == "The measured width is [35] nm in this notation."
+
+
 def test_build_answer_quality_probe_with_hits():
     from kb import task_runtime
 
@@ -357,6 +431,64 @@ def test_build_answer_quality_probe_fact_answer_allows_no_next_steps():
     )
     assert probe["output_mode"] == "fact_answer"
     assert probe["next_steps_required"] is False
+    assert probe["minimum_ok"] is True
+
+
+def test_build_answer_quality_probe_paper_guide_abstract_rejects_section_shells():
+    from kb import task_runtime
+
+    answer = "Conclusion: Here is the abstract.\n\nEvidence:\n1. quoted text"
+    probe = task_runtime._build_answer_quality_probe(
+        answer,
+        has_hits=True,
+        contract_enabled=False,
+        intent="reading",
+        depth="L2",
+        paper_guide_mode=True,
+        prompt_family="abstract",
+    )
+    assert probe["evidence_required"] is False
+    assert probe["abstract_style_ok"] is False
+    assert probe["minimum_ok"] is False
+
+
+def test_build_answer_quality_probe_paper_guide_plain_answer_without_contract_is_ok():
+    from kb import task_runtime
+
+    answer = (
+        "The paper introduces interferometric image scanning microscopy for label-free live-cell imaging.\n\n"
+        "It combines ISM-style scanning with interferometric detection to improve resolution and contrast."
+    )
+    probe = task_runtime._build_answer_quality_probe(
+        answer,
+        has_hits=True,
+        contract_enabled=False,
+        intent="reading",
+        depth="L2",
+        paper_guide_mode=True,
+        prompt_family="overview",
+    )
+    assert probe["evidence_required"] is False
+    assert probe["next_steps_required"] is False
+    assert probe["minimum_ok"] is True
+
+
+def test_build_answer_quality_probe_paper_guide_figure_tracks_locate_hint():
+    from kb import task_runtime
+
+    answer = "Conclusion: Figure 1 compares the pinhole conditions.\n\nEvidence:\n1. Figure 1d/e reports the resolution and CNR.\n\nNext Steps:\n1. Re-open Figure 1."
+    probe = task_runtime._build_answer_quality_probe(
+        answer,
+        has_hits=True,
+        contract_enabled=True,
+        intent="reading",
+        depth="L2",
+        paper_guide_mode=True,
+        prompt_family="figure_walkthrough",
+    )
+    assert probe["locate_required"] is True
+    assert probe["has_locate_hint"] is True
+    assert probe["locate_ok"] is True
     assert probe["minimum_ok"] is True
 
 
@@ -504,6 +636,211 @@ def test_validate_structured_citations_in_paper_guide_drops_suspicious_ref_num(m
     )
     assert "[[CITE:" not in answer
     assert stats["dropped"] == 1
+
+
+def test_validate_structured_citations_in_paper_guide_accepts_focus_candidate_refs(monkeypatch, tmp_path):
+    from kb import task_runtime
+
+    source_path = r"db\doc\paper.en.md"
+    locked_sid = task_runtime._cite_source_id(source_path)
+
+    monkeypatch.setattr(task_runtime, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path:
+            return None
+        if int(ref_num) == 35:
+            return {"ref": {"raw": "[35] Demo APR ref", "authors": "Demo et al.", "year": "2023", "title": "APR Tool"}}
+        return None
+
+    monkeypatch.setattr(task_runtime, "resolve_reference_entry", fake_resolve)
+
+    answer, stats = task_runtime._validate_structured_citations(
+        f"Implementation detail: APR uses phase correlation [[CITE:{locked_sid}:35]].",
+        answer_hits=[{"text": "Broad summary with no in-paper citations.", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        db_dir=tmp_path,
+        locked_source={
+            "sid": locked_sid,
+            "source_path": source_path,
+            "source_sha1": "abc",
+        },
+        paper_guide_mode=True,
+        paper_guide_candidate_refs_by_source={source_path: [35]},
+    )
+    assert f"[[CITE:{locked_sid}:35]]" in answer
+    assert stats["kept"] == 1
+
+
+def test_validate_structured_citations_in_paper_guide_drops_visible_cite_for_locate_only_slot(monkeypatch, tmp_path):
+    from kb import task_runtime
+
+    source_path = r"db\doc\paper.en.md"
+    locked_sid = task_runtime._cite_source_id(source_path)
+
+    monkeypatch.setattr(task_runtime, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path:
+            return None
+        if int(ref_num) == 25:
+            return {"ref": {"raw": "[25] Demo figure ref", "authors": "Demo et al.", "year": "2021", "title": "Figure Ref"}}
+        return None
+
+    monkeypatch.setattr(task_runtime, "resolve_reference_entry", fake_resolve)
+
+    answer, stats = task_runtime._validate_structured_citations(
+        f"Figure 2 overview [[CITE:{locked_sid}:25]].",
+        answer_hits=[{"text": "Broad Figure 2 evidence mentions [25].", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        db_dir=tmp_path,
+        locked_source={
+            "sid": locked_sid,
+            "source_path": source_path,
+            "source_sha1": "abc",
+        },
+        paper_guide_mode=True,
+        paper_guide_candidate_refs_by_source={source_path: [25]},
+        paper_guide_support_slots=[
+            {
+                "doc_idx": 1,
+                "support_id": "DOC-1-S1",
+                "sid": locked_sid,
+                "source_path": source_path,
+                "heading_path": "Results / Figure 2",
+                "snippet": "Figure 2. APR workflow.",
+                "locate_anchor": "Figure 2. APR workflow.",
+                "claim_type": "figure_panel",
+                "cite_policy": "locate_only",
+                "candidate_refs": [],
+                "ref_spans": [],
+            }
+        ],
+    )
+    assert "[[CITE:" not in answer
+    assert stats["dropped"] == 1
+
+
+def test_validate_structured_citations_in_paper_guide_prefers_support_resolution_for_locate_only(monkeypatch, tmp_path):
+    from kb import task_runtime
+
+    source_path = r"db\doc\paper.en.md"
+    locked_sid = task_runtime._cite_source_id(source_path)
+
+    monkeypatch.setattr(task_runtime, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path:
+            return None
+        if int(ref_num) == 25:
+            return {"ref": {"raw": "[25] Demo figure ref", "authors": "Demo et al.", "year": "2021", "title": "Figure Ref"}}
+        return None
+
+    monkeypatch.setattr(task_runtime, "resolve_reference_entry", fake_resolve)
+
+    raw = task_runtime._drop_paper_guide_locate_only_line_citations(
+        f"Figure 2 overview [[CITE:{locked_sid}:25]].",
+        support_resolution=[
+            {
+                "line_index": 0,
+                "doc_idx": 1,
+                "support_id": "DOC-1-S1",
+                "sid": locked_sid,
+                "source_path": source_path,
+                "block_id": "blk_fig2",
+                "heading_path": "Results / Figure 2",
+                "locate_anchor": "Figure 2. APR workflow.",
+                "claim_type": "figure_panel",
+                "cite_policy": "locate_only",
+                "candidate_refs": [],
+                "resolved_ref_num": 0,
+                "citation_resolution_mode": "locate_only",
+            }
+        ],
+    )
+
+    answer, stats = task_runtime._validate_structured_citations(
+        raw,
+        answer_hits=[{"text": "Broad Figure 2 evidence mentions [25].", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        db_dir=tmp_path,
+        locked_source={
+            "sid": locked_sid,
+            "source_path": source_path,
+            "source_sha1": "abc",
+        },
+        paper_guide_mode=True,
+        paper_guide_candidate_refs_by_source={source_path: [25]},
+        paper_guide_support_slots=[
+            {
+                "doc_idx": 1,
+                "support_id": "DOC-1-S1",
+                "sid": locked_sid,
+                "source_path": source_path,
+                "heading_path": "Methods / APR",
+                "snippet": "APR uses phase correlation [25].",
+                "locate_anchor": "APR uses phase correlation.",
+                "claim_type": "method_detail",
+                "cite_policy": "prefer_ref",
+                "candidate_refs": [25],
+                "ref_spans": [{"text": "phase correlation [25]", "nums": [25], "scope": "same_sentence"}],
+            }
+        ],
+    )
+    assert "[[CITE:" not in answer
+    assert stats["raw_count"] == 0
+
+
+def test_validate_structured_citations_in_paper_guide_prefers_local_support_slot_ref(monkeypatch, tmp_path):
+    from kb import task_runtime
+
+    source_path = r"db\doc\paper.en.md"
+    locked_sid = task_runtime._cite_source_id(source_path)
+
+    monkeypatch.setattr(task_runtime, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) != source_path:
+            return None
+        if int(ref_num) == 25:
+            return {"ref": {"raw": "[25] Wrong ref", "authors": "Wrong et al.", "year": "2021", "title": "Wrong Ref"}}
+        if int(ref_num) == 35:
+            return {"ref": {"raw": "[35] APR library ref", "authors": "Demo et al.", "year": "2023", "title": "APR Tool"}}
+        return None
+
+    monkeypatch.setattr(task_runtime, "resolve_reference_entry", fake_resolve)
+
+    answer, stats = task_runtime._validate_structured_citations(
+        f"Implementation detail: APR uses phase correlation [[CITE:{locked_sid}:25]].",
+        answer_hits=[{"text": "Broad evidence mentions [25] and [35].", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        db_dir=tmp_path,
+        locked_source={
+            "sid": locked_sid,
+            "source_path": source_path,
+            "source_sha1": "abc",
+        },
+        paper_guide_mode=True,
+        paper_guide_candidate_refs_by_source={source_path: [25, 35]},
+        paper_guide_support_slots=[
+            {
+                "doc_idx": 1,
+                "support_id": "DOC-1-S1",
+                "sid": locked_sid,
+                "source_path": source_path,
+                "heading_path": "Methods / APR",
+                "snippet": "APR was performed using image registration based on phase correlation [35].",
+                "locate_anchor": "APR was performed using image registration based on phase correlation.",
+                "claim_type": "method_detail",
+                "cite_policy": "prefer_ref",
+                "candidate_refs": [35],
+                "ref_spans": [{"text": "phase correlation [35]", "nums": [35], "scope": "same_sentence"}],
+            }
+        ],
+    )
+    assert f"[[CITE:{locked_sid}:35]]" in answer
+    assert f"[[CITE:{locked_sid}:25]]" not in answer
+    assert stats["rewritten"] == 1
 
 
 def test_gen_answer_quality_summary_aggregates_rates(monkeypatch):

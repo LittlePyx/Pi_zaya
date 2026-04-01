@@ -91,6 +91,66 @@ def test_extract_references_map_does_not_use_body_fig_or_section_numbers_as_refs
     assert "Second real reference" in str(out.get(2) or "")
 
 
+def test_build_reference_catalog_from_md_marks_gapped_tail_and_confidence():
+    md_text = (
+        "# Demo\n\n"
+        "## References\n"
+        "[1] A. Author. First real reference entry. Journal of Testing, 2020.\n"
+        "[3] C. Author. Third real reference entry. Conference on Validation, 2022.\n"
+    )
+
+    catalog = ref_index.build_reference_catalog_from_md(md_text, source_name="demo.en.md")
+
+    assert str(catalog.get("tail_continuity_status") or "") == "gapped"
+    assert list(catalog.get("missing_numbers") or []) == [2]
+    rows = list(catalog.get("refs") or [])
+    assert len(rows) == 2
+    assert int(rows[0].get("reference_number") or 0) == 1
+    assert float(rows[0].get("parse_confidence") or 0.0) >= 0.70
+
+
+def test_build_reference_index_persists_reference_catalog_and_quality_fields(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    md_path.write_text(
+        (
+            "# Demo\n\n"
+            "## References\n"
+            "[1] A. Author. First real reference entry. Journal of Testing, 2020.\n"
+            "[3] C. Author. Third real reference entry. Conference on Validation, 2022.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: False)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+
+    out = ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=False,
+        enable_title_lookup=False,
+    )
+
+    assert int(out.get("docs_updated") or 0) == 1
+    catalog_path = md_path.parent / ref_index.REFERENCE_CATALOG_FILE_NAME
+    assert catalog_path.exists()
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    assert str(catalog.get("tail_continuity_status") or "") == "gapped"
+    assert list(catalog.get("missing_numbers") or []) == [2]
+
+    data = ref_index.load_reference_index(db_dir)
+    doc = next(iter((data.get("docs") or {}).values()))
+    assert str(doc.get("reference_catalog_status") or "") == "gapped"
+    assert list(doc.get("reference_catalog_missing_numbers") or []) == [2]
+    ref = (doc.get("refs") or {}).get("1") or {}
+    assert float(ref.get("parse_confidence") or 0.0) > 0.0
+    assert str(ref.get("tail_continuity_status") or "") == "gapped"
+
+
 def test_cleanup_reference_number_noise_removes_large_gap_outlier():
     ref_map = {
         1: "[1] A",

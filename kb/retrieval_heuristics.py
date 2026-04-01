@@ -256,14 +256,20 @@ def _is_noise_snippet_text(t: str) -> bool:
         "doi:",
         "issn",
         "arxiv:",
-        "$",
         "usd",
     )
     if any(x in low for x in bad):
         return True
+    # "$" is common in LaTeX math (e.g. "$\\mu$m", "$r_{\\min}$", "$9 \\times 9$") and must NOT be treated as noise.
+    # Only treat it as noise when it looks like a *lone* currency token (no closing "$" nearby).
+    if ("$" in s) and (s.count("$") < 2) and re.search(r"(?<!\\\\)\\$\\s*\\d", s):
+        return True
     # Affiliations / author lists (comma-heavy lines)
     if s.count(",") >= 6 and len(s) > 120:
-        return True
+        # Abstract/Methods prose can be comma-heavy; only drop when it doesn't look like sentences.
+        # Author/affiliation blocks are typically comma-separated with few sentence terminators.
+        if s.count(".") <= 1 and s.count("?") == 0 and s.count("!") == 0:
+            return True
     if re.search(r"university|institute|department|laboratory|school of|college of", low) and len(s) > 80:
         return True
     return False

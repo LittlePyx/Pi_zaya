@@ -5,7 +5,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(BASE + url, init)
   } catch {
-    throw new Error('无法连接后端，请确认 8000 服务已启动')
+    throw new Error(
+      'Cannot connect to backend. Ensure the backend is running and Vite proxy /api targets the correct port.',
+    )
   }
   if (!res.ok) {
     let detail = ''
@@ -36,3 +38,4 @@ export const api = {
     }),
   delete: <T>(url: string) => request<T>(url, { method: 'DELETE' }),
 }
+

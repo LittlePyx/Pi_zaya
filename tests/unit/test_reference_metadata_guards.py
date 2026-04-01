@@ -543,6 +543,37 @@ def test_numeric_citation_is_clickable_when_unique_across_multiple_sources(monke
     assert len(details) == 1
 
 
+def test_numeric_citation_range_expands_middle_member(monkeypatch):
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) not in {11, 12, 13}:
+            return None
+        return {
+            "source_path": "doc.en.md",
+            "source_name": "doc.pdf",
+            "ref_num": int(ref_num),
+            "ref": {
+                "authors": "Range Author",
+                "year": "2021",
+                "title": f"Reference {int(ref_num)}",
+                "raw": f"[{int(ref_num)}] Range Author. Reference {int(ref_num)}. Journal, 2021.",
+            },
+        }
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "doc.pdf")
+
+    md = "Prior work [11-13] supports this claim."
+    hits = [{"meta": {"source_path": "doc.en.md", "source_sha1": "abc"}}]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[11](#" in out
+    assert "[12](#" in out
+    assert "[13](#" in out
+    assert sorted(int(item.get("num") or 0) for item in details) == [11, 12, 13]
+
+
 def test_structured_citation_is_hidden_when_sid_cannot_map(monkeypatch):
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
 

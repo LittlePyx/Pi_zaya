@@ -1,0 +1,603 @@
+[
+  {
+    "conv_id": "d582b46bf9ca4b718963b95c1851a25b",
+    "case": {
+      "id": "SCINERF2024_EQUATION1_DEFINE_VARS",
+      "title": "Equation (1) definition and variable support",
+      "prompt_family": "equation",
+      "tags": [
+        "equation",
+        "exact_support",
+        "p2"
+      ],
+      "prompt": "What does Equation (1) define in this paper, and where do the authors define the variables like t_n, t_f, sigma(r(t)), T(t), and c(r(t), d)? Point me to the exact supporting part.",
+      "checks": {
+        "answer": {
+          "contains_any": [
+            "Equation (1)",
+            "The variable definitions appear immediately after the equation:",
+            "where $t_n$ and $t_f$ are near and far bounds",
+            "where t_n and t_f are near and far bounds"
+          ],
+          "not_contains_any": [
+            "not stated",
+            "does not specify",
+            "cannot be determined"
+          ]
+        },
+        "locate": {
+          "required": true,
+          "exact": true,
+          "heading_includes_any": [
+            "3.1. Background on NeRF"
+          ],
+          "anchor_contains_any": [
+            "where $t_n$ and $t_f$ are near and far bounds",
+            "where t_n and t_f are near and far bounds",
+            "\\tag{1}"
+          ],
+          "claim_types": [
+            "formula_claim",
+            "equation_explanation_claim"
+          ]
+        }
+      },
+      "paper_id": "cvpr_2024_scinerf",
+      "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+    },
+    "payload": {
+      "stage": "done",
+      "partial": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:\n\n$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n\nThe variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+      "char_count": 1768,
+      "done": true,
+      "status": "done",
+      "answer": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:\n\n$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n\nThe variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+      "answer_intent": "reading",
+      "answer_depth": "L2",
+      "answer_output_mode": "reading_guide",
+      "answer_contract_v1": true,
+      "answer_quality": {
+        "contract_enabled": false,
+        "intent": "reading",
+        "depth": "L2",
+        "output_mode": "reading_guide",
+        "char_count": 1768,
+        "has_hits": true,
+        "has_conclusion": false,
+        "has_evidence": false,
+        "has_limits": false,
+        "has_next_steps": false,
+        "has_citations": true,
+        "paper_guide_mode": true,
+        "prompt_family": "equation",
+        "has_locate_hint": false,
+        "locate_required": false,
+        "locate_ok": true,
+        "abstract_style_ok": true,
+        "evidence_required": false,
+        "next_steps_required": false,
+        "evidence_ok": true,
+        "core_section_coverage": 0.0,
+        "minimum_ok": true
+      }
+    },
+    "message": {
+      "id": 101,
+      "role": "assistant",
+      "content": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:\n\n$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n\nThe variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+      "created_at": 1774964702.2591445,
+      "attachments": [],
+      "meta": {
+        "provenance": {
+          "version": 4,
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+          "md_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "doc_id": "29cad7662df5",
+          "segments": [
+            {
+              "segment_id": "seg_001",
+              "segment_index": 1,
+              "kind": "paragraph",
+              "segment_type": "prose",
+              "text": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF: The lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+              "raw_markdown": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+              "snippet_key": "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3. method / 3.1. background on nerf: the lead-in sentence says: given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), nerf [26] transfers the pixels of the input images into rays. it then samples points along each",
+              "snippet_aliases": [
+                "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3. method / 3.1. background on nerf: the lead-in sentence says: given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), nerf [26] transfers the pixels of the input images into rays. it then samples points along each",
+                "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3. method / 3.1. background on nerf: the lead-in sentence says: given a set of input multi-view images (to",
+                "equation (1) is stated in scinerf:",
+                "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3."
+              ],
+              "evidence_mode": "direct",
+              "evidence_block_ids": [
+                "blk_29cad7662df5_00024"
+              ],
+              "primary_block_id": "blk_29cad7662df5_00024",
+              "primary_anchor_id": "p_00014",
+              "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+              "support_block_ids": [],
+              "evidence_quote": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays.",
+              "evidence_confidence": 2.1784,
+              "mapping_quality": 1.449,
+              "mapping_source": "fast",
+              "claim_type": "critical_fact_claim",
+              "must_locate": true,
+              "anchor_kind": "sentence",
+              "anchor_text": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays.",
+              "equation_number": 0,
+              "related_block_ids": [],
+              "locate_policy": "required",
+              "locate_surface_policy": "primary",
+              "claim_group_id": "",
+              "claim_group_kind": "",
+              "formula_origin": "",
+              "claim_group_target_segment_id": "seg_001",
+              "claim_group_target_distance": 0,
+              "claim_group_lead_text": "",
+              "strict_identity_missing_reasons": [],
+              "display_markdown": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF  transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+              "cite_details": []
+            },
+            {
+              "segment_id": "seg_002",
+              "segment_index": 2,
+              "kind": "paragraph",
+              "segment_type": "equation_explanation",
+              "text": "$$ C(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+              "raw_markdown": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+              "snippet_key": "$$ c(\\mathbf{r}) = \\int_{t_n}^{t_f} t(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+              "snippet_aliases": [
+                "$$ c(\\mathbf{r}) = \\int_{t_n}^{t_f} t(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$"
+              ],
+              "evidence_mode": "direct",
+              "evidence_block_ids": [
+                "blk_29cad7662df5_00025"
+              ],
+              "primary_block_id": "blk_29cad7662df5_00025",
+              "primary_anchor_id": "eq_00001",
+              "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF / Figure 1",
+              "support_block_ids": [],
+              "evidence_quote": "$$ C(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+              "evidence_confidence": 7.13,
+              "mapping_quality": 0.0,
+              "mapping_source": "support_slot",
+              "claim_type": "formula_claim",
+              "must_locate": true,
+              "anchor_kind": "equation",
+              "anchor_text": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+              "equation_number": 1,
+              "related_block_ids": [],
+              "locate_policy": "required",
+              "locate_surface_policy": "primary",
+              "claim_group_id": "formula_bundle:blk_29cad7662df5_00025",
+              "claim_group_kind": "formula_bundle",
+              "formula_origin": "source",
+              "claim_group_target_segment_id": "seg_002",
+              "claim_group_target_distance": 0,
+              "claim_group_lead_text": "",
+              "strict_identity_missing_reasons": [],
+              "support_doc_k": 0,
+              "support_slot_claim_type": "formula_claim",
+              "support_slot_cite_policy": "locate_only",
+              "support_ref_candidates": [],
+              "resolved_ref_num": 0,
+              "citation_resolution_mode": "",
+              "support_locate_anchor": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+              "support_slot_figure_number": 0,
+              "support_slot_box_number": 0,
+              "support_slot_panel_letters": [],
+              "display_markdown": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n*（式(1) 对应命中的库内文献：`CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*",
+              "cite_details": []
+            },
+            {
+              "segment_id": "seg_003",
+              "segment_index": 3,
+              "kind": "paragraph",
+              "segment_type": "prose",
+              "text": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+              "raw_markdown": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+              "snippet_key": "the variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3d point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the mlp, $t(t)$ denotes the accumulated",
+              "snippet_aliases": [
+                "the variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3d point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the mlp, $t(t)$ denotes the accumulated",
+                "the variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3d point along the ray $r$ at",
+                "the variable definitions appear immediately after the equation:"
+              ],
+              "evidence_mode": "direct",
+              "evidence_block_ids": [
+                "blk_29cad7662df5_00026",
+                "blk_29cad7662df5_00025"
+              ],
+              "primary_block_id": "blk_29cad7662df5_00026",
+              "primary_anchor_id": "p_00015",
+              "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+              "support_block_ids": [
+                "blk_29cad7662df5_00025"
+              ],
+              "evidence_quote": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the",
+              "evidence_confidence": 2.2608,
+              "mapping_quality": 1.1258,
+              "mapping_source": "support_slot",
+              "claim_type": "equation_explanation_claim",
+              "must_locate": true,
+              "anchor_kind": "sentence",
+              "anchor_text": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the",
+              "equation_number": 1,
+              "related_block_ids": [
+                "blk_29cad7662df5_00025"
+              ],
+              "locate_policy": "required",
+              "locate_surface_policy": "secondary",
+              "claim_group_id": "formula_bundle:blk_29cad7662df5_00025",
+              "claim_group_kind": "formula_bundle",
+              "formula_origin": "explanation",
+              "claim_group_target_segment_id": "seg_003",
+              "claim_group_target_distance": 0,
+              "claim_group_lead_text": "",
+              "strict_identity_missing_reasons": [],
+              "support_doc_k": 0,
+              "support_slot_claim_type": "equation_explanation_claim",
+              "support_slot_cite_policy": "locate_only",
+              "support_ref_candidates": [],
+              "resolved_ref_num": 0,
+              "citation_resolution_mode": "",
+              "support_locate_anchor": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+              "support_slot_figure_number": 0,
+              "support_slot_box_number": 0,
+              "support_slot_panel_letters": [],
+              "display_markdown": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+              "cite_details": []
+            }
+          ],
+          "block_map": {
+            "blk_29cad7662df5_00024": {
+              "doc_id": "29cad7662df5",
+              "block_id": "blk_29cad7662df5_00024",
+              "anchor_id": "p_00014",
+              "kind": "paragraph",
+              "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+              "order_index": 24,
+              "line_start": 45,
+              "line_end": 45,
+              "text": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+              "raw_text": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:"
+            },
+            "blk_29cad7662df5_00025": {
+              "doc_id": "29cad7662df5",
+              "block_id": "blk_29cad7662df5_00025",
+              "anchor_id": "eq_00001",
+              "kind": "equation",
+              "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+              "order_index": 25,
+              "line_start": 47,
+              "line_end": 49,
+              "text": "$$ C(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+              "raw_text": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+              "number": 1
+            },
+            "blk_29cad7662df5_00026": {
+              "doc_id": "29cad7662df5",
+              "block_id": "blk_29cad7662df5_00026",
+              "anchor_id": "p_00015",
+              "kind": "paragraph",
+              "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+              "order_index": 26,
+              "line_start": 52,
+              "line_end": 52,
+              "text": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+              "raw_text": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP."
+            }
+          },
+          "status": "ready",
+          "candidate_block_count": 23,
+          "mapping_mode": "fast",
+          "pool_mode": "retrieval",
+          "llm_rerank_enabled": true,
+          "llm_rerank_calls": 0,
+          "provenance_schema_version": 4,
+          "must_locate_candidate_count": 3,
+          "must_locate_count": 3,
+          "strict_identity_count": 3,
+          "strict_identity_ready": true,
+          "identity_missing_reasons": {},
+          "identity_missing_segments": []
+        }
+      },
+      "provenance": {
+        "version": 4,
+        "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+        "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+        "md_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+        "doc_id": "29cad7662df5",
+        "segments": [
+          {
+            "segment_id": "seg_001",
+            "segment_index": 1,
+            "kind": "paragraph",
+            "segment_type": "prose",
+            "text": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF: The lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+            "raw_markdown": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+            "snippet_key": "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3. method / 3.1. background on nerf: the lead-in sentence says: given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), nerf [26] transfers the pixels of the input images into rays. it then samples points along each",
+            "snippet_aliases": [
+              "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3. method / 3.1. background on nerf: the lead-in sentence says: given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), nerf [26] transfers the pixels of the input images into rays. it then samples points along each",
+              "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3. method / 3.1. background on nerf: the lead-in sentence says: given a set of input multi-view images (to",
+              "equation (1) is stated in scinerf:",
+              "equation (1) is stated in scinerf: neural radiance fields from a snapshot compressive image / 3."
+            ],
+            "evidence_mode": "direct",
+            "evidence_block_ids": [
+              "blk_29cad7662df5_00024"
+            ],
+            "primary_block_id": "blk_29cad7662df5_00024",
+            "primary_anchor_id": "p_00014",
+            "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+            "support_block_ids": [],
+            "evidence_quote": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays.",
+            "evidence_confidence": 2.1784,
+            "mapping_quality": 1.449,
+            "mapping_source": "fast",
+            "claim_type": "critical_fact_claim",
+            "must_locate": true,
+            "anchor_kind": "sentence",
+            "anchor_text": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays.",
+            "equation_number": 0,
+            "related_block_ids": [],
+            "locate_policy": "required",
+            "locate_surface_policy": "primary",
+            "claim_group_id": "",
+            "claim_group_kind": "",
+            "formula_origin": "",
+            "claim_group_target_segment_id": "seg_001",
+            "claim_group_target_distance": 0,
+            "claim_group_lead_text": "",
+            "strict_identity_missing_reasons": [],
+            "display_markdown": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF  transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+            "cite_details": []
+          },
+          {
+            "segment_id": "seg_002",
+            "segment_index": 2,
+            "kind": "paragraph",
+            "segment_type": "equation_explanation",
+            "text": "$$ C(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+            "raw_markdown": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+            "snippet_key": "$$ c(\\mathbf{r}) = \\int_{t_n}^{t_f} t(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+            "snippet_aliases": [
+              "$$ c(\\mathbf{r}) = \\int_{t_n}^{t_f} t(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$"
+            ],
+            "evidence_mode": "direct",
+            "evidence_block_ids": [
+              "blk_29cad7662df5_00025"
+            ],
+            "primary_block_id": "blk_29cad7662df5_00025",
+            "primary_anchor_id": "eq_00001",
+            "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF / Figure 1",
+            "support_block_ids": [],
+            "evidence_quote": "$$ C(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+            "evidence_confidence": 7.13,
+            "mapping_quality": 0.0,
+            "mapping_source": "support_slot",
+            "claim_type": "formula_claim",
+            "must_locate": true,
+            "anchor_kind": "equation",
+            "anchor_text": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+            "equation_number": 1,
+            "related_block_ids": [],
+            "locate_policy": "required",
+            "locate_surface_policy": "primary",
+            "claim_group_id": "formula_bundle:blk_29cad7662df5_00025",
+            "claim_group_kind": "formula_bundle",
+            "formula_origin": "source",
+            "claim_group_target_segment_id": "seg_002",
+            "claim_group_target_distance": 0,
+            "claim_group_lead_text": "",
+            "strict_identity_missing_reasons": [],
+            "support_doc_k": 0,
+            "support_slot_claim_type": "formula_claim",
+            "support_slot_cite_policy": "locate_only",
+            "support_ref_candidates": [],
+            "resolved_ref_num": 0,
+            "citation_resolution_mode": "",
+            "support_locate_anchor": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+            "support_slot_figure_number": 0,
+            "support_slot_box_number": 0,
+            "support_slot_panel_letters": [],
+            "display_markdown": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n*（式(1) 对应命中的库内文献：`CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*",
+            "cite_details": []
+          },
+          {
+            "segment_id": "seg_003",
+            "segment_index": 3,
+            "kind": "paragraph",
+            "segment_type": "prose",
+            "text": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+            "raw_markdown": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+            "snippet_key": "the variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3d point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the mlp, $t(t)$ denotes the accumulated",
+            "snippet_aliases": [
+              "the variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3d point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the mlp, $t(t)$ denotes the accumulated",
+              "the variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3d point along the ray $r$ at",
+              "the variable definitions appear immediately after the equation:"
+            ],
+            "evidence_mode": "direct",
+            "evidence_block_ids": [
+              "blk_29cad7662df5_00026",
+              "blk_29cad7662df5_00025"
+            ],
+            "primary_block_id": "blk_29cad7662df5_00026",
+            "primary_anchor_id": "p_00015",
+            "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+            "support_block_ids": [
+              "blk_29cad7662df5_00025"
+            ],
+            "evidence_quote": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the",
+            "evidence_confidence": 2.2608,
+            "mapping_quality": 1.1258,
+            "mapping_source": "support_slot",
+            "claim_type": "equation_explanation_claim",
+            "must_locate": true,
+            "anchor_kind": "sentence",
+            "anchor_text": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the",
+            "equation_number": 1,
+            "related_block_ids": [
+              "blk_29cad7662df5_00025"
+            ],
+            "locate_policy": "required",
+            "locate_surface_policy": "secondary",
+            "claim_group_id": "formula_bundle:blk_29cad7662df5_00025",
+            "claim_group_kind": "formula_bundle",
+            "formula_origin": "explanation",
+            "claim_group_target_segment_id": "seg_003",
+            "claim_group_target_distance": 0,
+            "claim_group_lead_text": "",
+            "strict_identity_missing_reasons": [],
+            "support_doc_k": 0,
+            "support_slot_claim_type": "equation_explanation_claim",
+            "support_slot_cite_policy": "locate_only",
+            "support_ref_candidates": [],
+            "resolved_ref_num": 0,
+            "citation_resolution_mode": "",
+            "support_locate_anchor": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+            "support_slot_figure_number": 0,
+            "support_slot_box_number": 0,
+            "support_slot_panel_letters": [],
+            "display_markdown": "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+            "cite_details": []
+          }
+        ],
+        "block_map": {
+          "blk_29cad7662df5_00024": {
+            "doc_id": "29cad7662df5",
+            "block_id": "blk_29cad7662df5_00024",
+            "anchor_id": "p_00014",
+            "kind": "paragraph",
+            "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+            "order_index": 24,
+            "line_start": 45,
+            "line_end": 45,
+            "text": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:",
+            "raw_text": "Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:"
+          },
+          "blk_29cad7662df5_00025": {
+            "doc_id": "29cad7662df5",
+            "block_id": "blk_29cad7662df5_00025",
+            "anchor_id": "eq_00001",
+            "kind": "equation",
+            "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+            "order_index": 25,
+            "line_start": 47,
+            "line_end": 49,
+            "text": "$$ C(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1} $$",
+            "raw_text": "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+            "number": 1
+          },
+          "blk_29cad7662df5_00026": {
+            "doc_id": "29cad7662df5",
+            "block_id": "blk_29cad7662df5_00026",
+            "anchor_id": "p_00015",
+            "kind": "paragraph",
+            "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF",
+            "order_index": 26,
+            "line_start": 52,
+            "line_end": 52,
+            "text": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+            "raw_text": "where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP."
+          }
+        },
+        "status": "ready",
+        "candidate_block_count": 23,
+        "mapping_mode": "fast",
+        "pool_mode": "retrieval",
+        "llm_rerank_enabled": true,
+        "llm_rerank_calls": 0,
+        "provenance_schema_version": 4,
+        "must_locate_candidate_count": 3,
+        "must_locate_count": 3,
+        "strict_identity_count": 3,
+        "strict_identity_ready": true,
+        "identity_missing_reasons": {},
+        "identity_missing_segments": []
+      },
+      "cite_details": [],
+      "copy_markdown": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF  transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:\n\n$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n*（式(1) 对应命中的库内文献：`CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*\n\n\nThe variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+      "copy_text": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF  transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:\n\n$$\nC(\\mathbf{r}) = \\int{tn}^{tf} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n（式(1) 对应命中的库内文献：CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf）\n\nThe variable definitions appear immediately after the equation: where $tn$ and $tf$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $tn$ to $t$, and is defined as $\\exp(-\\int{tn}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+      "rendered_content": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF  transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:\n\n$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n*（式(1) 对应命中的库内文献：`CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*\n\n\nThe variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+      "notice": "",
+      "rendered_body": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF  transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the density and color to synthesize the corresponding pixel intensity C of the image. The whole process can be formally defined via following equation:\n\n$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$\n*（式(1) 对应命中的库内文献：`CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf`）*\n\n\nThe variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center, $\\sigma(r(t))$ represents the predicted density of the sampled point $r(t)$ by the MLP, $T(t)$ denotes the accumulated transmittance along the ray from $t_n$ to $t$, and is defined as $\\exp(-\\int_{t_n}^{t} T(s)\\sigma(r(s))ds)$, $d$ is the viewing direction in the world coordinate frame, and $c(r(t),d)$ is the predicted color of the sampled point $r(t)$ by the MLP.",
+      "refs_user_msg_id": 100,
+      "render_cache_key": "77c225cca234"
+    },
+    "evaluation": {
+      "id": "SCINERF2024_EQUATION1_DEFINE_VARS",
+      "title": "Equation (1) definition and variable support",
+      "paper_id": "cvpr_2024_scinerf",
+      "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "prompt_family": "equation",
+      "prompt": "What does Equation (1) define in this paper, and where do the authors define the variables like t_n, t_f, sigma(r(t)), T(t), and c(r(t), d)? Point me to the exact supporting part.",
+      "tags": [
+        "equation",
+        "exact_support",
+        "p2"
+      ],
+      "status": "PASS",
+      "reasons": [],
+      "gate_results": {
+        "answer": {
+          "status": "PASS",
+          "reasons": []
+        },
+        "structured_markers": {
+          "status": "PASS",
+          "reasons": [],
+          "raw_structured_cite_count": 0,
+          "raw_support_marker_count": 0
+        },
+        "quality": {
+          "status": "PASS",
+          "reasons": []
+        },
+        "locate": {
+          "status": "PASS",
+          "reasons": [],
+          "matched_segment_count": 2,
+          "matched_headings": [
+            "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF / Figure 1",
+            "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF"
+          ],
+          "matched_anchors": [
+            "$$\nC(\\mathbf{r}) = \\int_{t_n}^{t_f} T(t)\\sigma(\\mathbf{r}(t))\\mathbf{c}(\\mathbf{r}(t),\\mathbf{d})dt, \\tag{1}\n$$",
+            "The variable definitions appear immediately after the equation: where $t_n$ and $t_f$ are near and far bounds for volumetric rendering respectively, $r(t)$ is the sampled 3D point along the ray $r$ at the distance $t$ from the camera center"
+          ]
+        }
+      },
+      "answer_quality": {
+        "contract_enabled": false,
+        "intent": "reading",
+        "depth": "L2",
+        "output_mode": "reading_guide",
+        "char_count": 1768,
+        "has_hits": true,
+        "has_conclusion": false,
+        "has_evidence": false,
+        "has_limits": false,
+        "has_next_steps": false,
+        "has_citations": true,
+        "paper_guide_mode": true,
+        "prompt_family": "equation",
+        "has_locate_hint": false,
+        "locate_required": false,
+        "locate_ok": true,
+        "abstract_style_ok": true,
+        "evidence_required": false,
+        "next_steps_required": false,
+        "evidence_ok": true,
+        "core_section_coverage": 0.0,
+        "minimum_ok": true
+      },
+      "cite_count": 0,
+      "raw_structured_cite_count": 0,
+      "answer_preview": "Equation (1) is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.1. Background on NeRF:\nThe lead-in sentence says: Given a set of input multi-view images (together with both the camera intrinsic and extrinsic parameters), NeRF [26] transfers the pixels of the input images into rays. It then samples points along each ray, and takes 5D vectors (i.e., the 3D position of sampled point and the 2D viewing directions) as input. The volume density \\sigma and view-dependent RGB color c of each sampled 3D point are then estimated by a Multi-layer Perceptron (MLP). The reason that NeRF predicts color from both position and viewing direction is to better deal with the specular reflection of the scene. After obtaining the volume density and color of each sampled point along the ray, it employs a conventional volumetric rendering technique to integrate the de"
+    }
+  }
+]

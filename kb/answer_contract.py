@@ -79,17 +79,17 @@ _ANSWER_OUTPUT_MODE_FACT_RE = re.compile(
     r"\bwhich paragraph\b|\bwhere in (?:the )?paper\b|\baccording to the paper\b|"
     r"\bdoes the paper say\b|\bstated in the paper\b|\bfigure\s*\d+\b|\bfig\.\s*\d+\b|"
     r"\bequation\s*\d+\b|\beq\.\s*\d+\b|\btheorem\s*\d+\b|\blocate\b|"
-    r"鍘熸枃|寮曠敤|鍝竴鑺?|\u54ea\u4e00\u6bb5|瀹氫綅|璇佸疄|鏄惁鍐欏埌|鍏紡|鍥?|琛?|定理)",
+    r"原文|引用|哪一节|哪一段|定位|证实|是否写到|公式|图|表|定理)",
     flags=re.IGNORECASE,
 )
 _ANSWER_OUTPUT_MODE_CRITICAL_RE = re.compile(
     r"(\bcrit(?:ical|ique)\b|\breview\b|\blimitation\b|\bweakness\b|\bconcern\b|\brisk\b|"
-    r"\bmissing\b|\bflaw\b|\bdrawback\b|灞€闄?|涓嶈冻|缂虹偣|鎵瑰垽|璐ㄧ枒|椋庨櫓|闂)",
+    r"\bmissing\b|\bflaw\b|\bdrawback\b|局限|不足|缺点|批判|质疑|风险|问题)",
     flags=re.IGNORECASE,
 )
 _ANSWER_OUTPUT_MODE_OVERVIEW_RE = re.compile(
     r"(\bwhat problem\b|\bsolve(?:s|d)?\b|\bmain contribution\b|\bcore contribution\b|\bkey contribution\b|"
-    r"\bmain idea\b|\bsummary\b|\bwhat does this paper do\b|瑙ｅ喅.*闂|鏍稿績璐＄尞|涓昏璐＄尞|杩欑瘒.*璁蹭簡浠€涔?)",
+    r"\bmain idea\b|\bsummary\b|\bwhat does this paper do\b|解决.*问题|核心贡献|主要贡献|这篇.*讲了什么)",
     flags=re.IGNORECASE,
 )
 
@@ -162,6 +162,12 @@ def _detect_answer_output_mode(
     q = str(prompt or "").strip()
     if not q:
         return "reading_guide"
+    if re.search(r"(解决.*问题|核心贡献|主要贡献|这篇.*讲了什么)", q, flags=re.IGNORECASE):
+        return "reading_guide"
+    if re.search(r"(局限|不足|缺点|批判|质疑|风险|问题)", q, flags=re.IGNORECASE):
+        return "critical_review"
+    if paper_guide_mode and (anchor_grounded or re.search(r"(原文|哪一段|定位|证实|是否写到|公式|图|表|定理)", q, flags=re.IGNORECASE)):
+        return "fact_answer"
     if paper_guide_mode and _ANSWER_OUTPUT_MODE_OVERVIEW_RE.search(q):
         return "reading_guide"
     if _ANSWER_OUTPUT_MODE_CRITICAL_RE.search(q):
@@ -180,6 +186,16 @@ def _detect_answer_intent(prompt: str, *, answer_mode_hint: str = "") -> str:
     q = str(prompt or "").strip()
     if not q:
         return "reading"
+    if re.search(r"(对比|区别|优劣|哪个好|怎么选)", q, flags=re.IGNORECASE):
+        return "compare"
+    if re.search(r"(想法|创新|可行性|值得做|是否可做|研究点子)", q, flags=re.IGNORECASE):
+        return "idea"
+    if re.search(r"(实验|对照|指标|评估|消融|复现|验证方案)", q, flags=re.IGNORECASE):
+        return "experiment"
+    if re.search(r"(报错|排查|卡住|失败|不收敛|跑不通)", q, flags=re.IGNORECASE):
+        return "troubleshoot"
+    if re.search(r"(写作|润色|改写|表达|摘要|相关工作)", q, flags=re.IGNORECASE):
+        return "writing"
     if _ANSWER_INTENT_COMPARE_RE.search(q):
         return "compare"
     if _ANSWER_INTENT_IDEA_RE.search(q):
@@ -266,6 +282,8 @@ def _build_answer_quality_probe(
     intent: str = "",
     depth: str = "",
     output_mode: str = "reading_guide",
+    paper_guide_mode: bool = False,
+    prompt_family: str = "",
 ) -> dict:
     text = str(answer or "").strip()
     keys = set(_extract_answer_section_keys(text))
@@ -274,8 +292,30 @@ def _build_answer_quality_probe(
     has_limits = "limits" in keys
     has_next_steps = "next_steps" in keys
     has_citations = bool(_ANSWER_CITE_HINT_RE.search(text) or re.search(r"\[\d{1,3}\]", text))
-    evidence_required = bool(has_hits)
-    next_steps_required = _answer_output_mode_requires_next_steps(output_mode)
+    prompt_family_norm = str(prompt_family or "").strip().lower()
+    output_mode_norm = _normalize_answer_output_mode(output_mode)
+    abstract_mode = bool(paper_guide_mode and prompt_family_norm == "abstract")
+    locate_required = bool(paper_guide_mode and prompt_family_norm == "figure_walkthrough" and has_hits)
+    structured_required = bool(contract_enabled)
+    has_locate_hint = bool(
+        re.search(r"(/api/references/asset|(?:^|\b)(?:fig(?:ure)?\.?\s*\d+|图\s*\d+|panel\s*[a-z]))", text, flags=re.IGNORECASE)
+    )
+    has_locate_hint = bool(
+        has_locate_hint
+        or re.search(r"(/api/references/asset|(?:^|\b)(?:fig(?:ure)?\.?\s*\d+|图\s*\d+|panel\s*[a-z]))", text, flags=re.IGNORECASE)
+    )
+    abstract_style_ok = bool(
+        (not abstract_mode)
+        or (
+            len(text) >= 40
+            and (not bool(keys.intersection({"conclusion", "evidence", "limits", "next_steps"})))
+        )
+    )
+    evidence_required = bool(has_hits and (not abstract_mode))
+    next_steps_required = bool(_answer_output_mode_requires_next_steps(output_mode_norm) and (not abstract_mode))
+    if not structured_required:
+        evidence_required = False
+        next_steps_required = False
     expected_core_sections = max(1, 1 + int(evidence_required) + int(next_steps_required))
     core_sections = int(has_conclusion)
     if evidence_required:
@@ -284,12 +324,18 @@ def _build_answer_quality_probe(
         core_sections += int(has_next_steps)
     core_ratio = round(float(core_sections) / float(expected_core_sections), 3)
     evidence_ok = (not evidence_required) or bool(has_evidence)
-    minimum_ok = bool(has_conclusion and evidence_ok and ((not next_steps_required) or has_next_steps))
+    locate_ok = (not locate_required) or bool(has_locate_hint)
+    if abstract_mode:
+        minimum_ok = bool(abstract_style_ok)
+    elif not structured_required:
+        minimum_ok = bool(len(text) >= 40 and locate_ok)
+    else:
+        minimum_ok = bool(has_conclusion and evidence_ok and ((not next_steps_required) or has_next_steps) and locate_ok)
     return {
         "contract_enabled": bool(contract_enabled),
         "intent": str(intent or ""),
         "depth": str(depth or ""),
-        "output_mode": _normalize_answer_output_mode(output_mode),
+        "output_mode": output_mode_norm,
         "char_count": len(text),
         "has_hits": bool(has_hits),
         "has_conclusion": bool(has_conclusion),
@@ -297,6 +343,12 @@ def _build_answer_quality_probe(
         "has_limits": bool(has_limits),
         "has_next_steps": bool(has_next_steps),
         "has_citations": bool(has_citations),
+        "paper_guide_mode": bool(paper_guide_mode),
+        "prompt_family": prompt_family_norm,
+        "has_locate_hint": bool(has_locate_hint),
+        "locate_required": bool(locate_required),
+        "locate_ok": bool(locate_ok),
+        "abstract_style_ok": bool(abstract_style_ok),
         "evidence_required": bool(evidence_required),
         "next_steps_required": bool(next_steps_required),
         "evidence_ok": bool(evidence_ok),
@@ -367,8 +419,10 @@ def _build_paper_guide_grounding_rules(
     *,
     answer_contract_v1: bool,
     output_mode: str = "reading_guide",
+    prompt_family: str = "",
 ) -> str:
     output_mode_norm = _normalize_answer_output_mode(output_mode)
+    prompt_family_norm = str(prompt_family or "").strip().lower()
     lines = [
         "Paper-guide formula grounding:",
         "- When the question asks about a formula/model, quote the equation from retrieved context as-is, including equation tag/number when available.",
@@ -380,9 +434,51 @@ def _build_paper_guide_grounding_rules(
         "- For broad or generic questions, synthesize across retrieved sections, but mark any missing quantity as not stated instead of filling it with background knowledge.",
         "- Keep entity names exact: do not swap sample type, cell line, nanoparticle type, hardware model, or dataset identity with a plausible nearby alternative.",
         "- When the paper separately supports a claim with test objects and live-cell demonstrations, keep those evidence scopes separate instead of merging them into one stronger claim.",
+        "- If a 'Paper-guide method focus' or 'Paper-guide figure focus' block is provided, resolve that focal sub-question from the focus block before using broader context.",
+        "- If a 'Paper-guide support slots' block is provided, end each paper-grounded claim with that slot's exact support_example marker instead of guessing a paper reference number directly.",
+        "- Treat [[SUPPORT:...]] as the primary grounding marker for paper-guide mode; runtime will resolve it into the final citation or locate-only support.",
+        "- If a slot says cite_policy=locate_only, still use its support_example marker but do not invent a paper reference number.",
+        "- If a 'Paper-guide evidence cards' block is provided, treat each DOC-k card as a hard boundary for paper-grounded claims.",
+        "- Follow the card's use= instruction and stay inside the snippet scope instead of merging multiple cards into a stronger unsupported claim.",
+        "- If a DOC-k card shows cite_example=[[CITE:<sid>:<ref_num>]], reuse that exact marker on the claim derived from the card unless DOI or author-year text clearly identifies a different ref.",
         "- If a 'Paper-guide citation grounding hints' block is provided, keep each claim aligned to the same DOC-k line before choosing [[CITE:<sid>:<ref_num>]].",
         "- Prefer the ref numbers listed on that DOC-k line; do not borrow a ref number from another DOC-k line unless DOI or author-year text explicitly identifies it.",
     ]
+    if prompt_family_norm == "abstract":
+        lines.extend(
+            [
+                "- Prompt family=abstract: use the abstract span itself before any translation or explanation.",
+                "- Do not prepend title, authors, or reading-guide shells such as Conclusion/Evidence/Next Steps to an abstract-only answer.",
+            ]
+        )
+    elif prompt_family_norm == "figure_walkthrough":
+        lines.extend(
+            [
+                "- Prompt family=figure_walkthrough: preserve figure numbers and panel letters exactly as shown in the evidence cards/snippets.",
+                "- Do not infer unlabeled panels, hardware details, or cross-panel relationships that are not explicitly stated in the retrieved figure caption/result text.",
+            ]
+        )
+    elif prompt_family_norm == "method":
+        lines.extend(
+            [
+                "- Prompt family=method: when the question explicitly names APR or another sub-module, prefer the exact implementation detail from the narrowest matching snippet over a broader overview summary.",
+                "- If the retrieved method snippet names phase correlation, image registration, or RVT, keep those terms exact instead of replacing them with a generic mechanism paraphrase.",
+            ]
+        )
+    elif prompt_family_norm == "equation":
+        lines.extend(
+            [
+                "- Prompt family=equation: keep the equation itself and the nearby variable-definition sentence together when both are available.",
+                "- Do not replace math symbols or variable names with a generic prose paraphrase if the retrieved equation text already states them explicitly.",
+            ]
+        )
+    elif prompt_family_norm == "citation_lookup":
+        lines.extend(
+            [
+                "- Prompt family=citation_lookup: extract the exact in-paper reference numbers or reference-list entries from the narrowest matching snippet before adding interpretation.",
+                "- If the retrieved snippet already shows the explicit refs, do not answer 'not stated' or 'not mentioned'.",
+            ]
+        )
     if output_mode_norm == "fact_answer":
         lines.extend(
             [
@@ -650,3 +746,4 @@ def _enhance_kb_miss_fallback(
     step_lines = "\n".join(f"{i}. {s}" for i, s in enumerate(steps, start=1))
     next_steps_title = "下一步建议" if prefer_zh else "Next Steps"
     return f"{notice}\n\n{body}\n\n{next_steps_title}:\n{step_lines}".strip()
+

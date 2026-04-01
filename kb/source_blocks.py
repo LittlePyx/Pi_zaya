@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 from pathlib import Path
 from typing import TypedDict
+import threading
+
+from kb import runtime_state as RUNTIME
 
 
 class SourceBlock(TypedDict, total=False):
@@ -19,6 +23,14 @@ class SourceBlock(TypedDict, total=False):
     text: str
     raw_text: str
     number: int
+    figure_id: str
+    figure_ident: str
+    paper_figure_number: int
+    figure_role: str
+    linked_figure_block_id: str
+    asset_name: str
+    asset_name_alias: str
+    caption_text: str
 
 
 _MD_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
@@ -254,12 +266,76 @@ def _equation_number_score(block: SourceBlock, target_number: int) -> float:
     return 0.0
 
 
+def _figure_number_score(block: SourceBlock, target_number: int) -> float:
+    if int(target_number or 0) <= 0:
+        return 0.0
+    text = normalize_match_text(str(block.get("text") or block.get("raw_text") or ""))
+    if not text:
+        return 0.0
+    try:
+        block_number = int(block.get("paper_figure_number") or block.get("number") or 0)
+    except Exception:
+        block_number = 0
+    if block_number > 0 and block_number == int(target_number):
+        score = 1.08
+        if str(block.get("figure_role") or "").strip().lower() == "caption":
+            score += 0.12
+        return score
+    if re.search(rf"\bfig(?:ure)?\.?\s*#?\s*{int(target_number)}\b", text, flags=re.IGNORECASE):
+        return 0.96
+    return 0.0
+
+
 def doc_id_for_path(md_path: Path | str) -> str:
     raw = str(md_path or "").strip().replace("\\", "/").lower()
     return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:12]
 
 
-def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
+def _load_figure_identity_by_asset(md_path: Path | str) -> dict[str, dict]:
+    path = Path(str(md_path or "")).expanduser()
+    assets_dir = path.parent / "assets"
+    if not assets_dir.exists():
+        return {}
+
+    figure_index_path = assets_dir / "figure_index.json"
+    rows: list[dict] = []
+    if figure_index_path.exists():
+        try:
+            payload = json.loads(figure_index_path.read_text(encoding="utf-8"))
+            figures = payload.get("figures") if isinstance(payload, dict) else None
+            if isinstance(figures, list):
+                rows = [dict(item) for item in figures if isinstance(item, dict)]
+        except Exception:
+            rows = []
+
+    if not rows:
+        for meta_path in sorted(assets_dir.glob("page_*_fig_index.json")):
+            try:
+                payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            figures = payload.get("figures") if isinstance(payload, dict) else None
+            if not isinstance(figures, list):
+                continue
+            rows.extend(dict(item) for item in figures if isinstance(item, dict))
+
+    out: dict[str, dict] = {}
+    for row in rows:
+        raw_name = str(row.get("asset_name_raw") or row.get("asset_name") or "").strip()
+        alias_name = str(row.get("asset_name_alias") or "").strip()
+        if raw_name:
+            out[raw_name] = dict(row)
+        if alias_name:
+            out[alias_name] = dict(row)
+    return out
+
+
+def build_source_blocks(
+    md_text: str,
+    *,
+    doc_id: str,
+    figure_meta_by_asset: dict[str, dict] | None = None,
+) -> list[SourceBlock]:
     lines = str(md_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     if not lines:
         return []
@@ -276,15 +352,24 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
     in_fence = False
     fence_mark = ""
     order_index = 0
+    pending_figure_context: dict[str, object] | None = None
 
     def heading_path() -> str:
         return " / ".join(item[1] for item in heading_stack if item[1]).strip()
 
-    def push(kind: str, raw_text: str, *, line_start: int, line_end: int, number: int = 0) -> None:
+    def push(
+        kind: str,
+        raw_text: str,
+        *,
+        line_start: int,
+        line_end: int,
+        number: int = 0,
+        extras: dict[str, object] | None = None,
+    ) -> SourceBlock | None:
         nonlocal order_index
         clean = normalize_inline_markdown(raw_text)
         if kind not in {"heading", "figure"} and len(clean) < 4:
-            return
+            return None
         counters[kind] = int(counters.get(kind, 0) or 0) + 1
         order_index += 1
         block: SourceBlock = {
@@ -301,10 +386,20 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
         }
         if int(number or 0) > 0:
             block["number"] = int(number)
+            if kind == "figure":
+                block["paper_figure_number"] = int(number)
+        if extras:
+            for key, value in extras.items():
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
+                block[key] = value
         blocks.append(block)
+        return block
 
     def flush_paragraph(end_line: int) -> None:
-        nonlocal para_buf, para_start
+        nonlocal para_buf, para_start, pending_figure_context
         if not para_buf:
             return
         raw = "\n".join(para_buf).strip()
@@ -312,12 +407,29 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
         if not raw:
             return
         is_equation = is_display_equation_block(raw)
+        extras: dict[str, object] | None = None
+        if pending_figure_context:
+            pending_number = int(pending_figure_context.get("paper_figure_number") or pending_figure_context.get("number") or 0)
+            caption_number = extract_figure_number(raw)
+            if pending_number > 0 and caption_number == pending_number:
+                extras = {
+                    "figure_id": str(pending_figure_context.get("figure_id") or "").strip(),
+                    "figure_ident": str(pending_figure_context.get("figure_ident") or "").strip(),
+                    "paper_figure_number": pending_number,
+                    "figure_role": "caption",
+                    "linked_figure_block_id": str(pending_figure_context.get("figure_block_id") or "").strip(),
+                    "asset_name": str(pending_figure_context.get("asset_name") or "").strip(),
+                    "asset_name_alias": str(pending_figure_context.get("asset_name_alias") or "").strip(),
+                    "caption_text": normalize_inline_markdown(raw)[:1200],
+                }
+            pending_figure_context = None
         push(
             "equation" if is_equation else "paragraph",
             raw,
             line_start=para_start,
             line_end=end_line,
             number=(extract_equation_number(raw) if is_equation else 0),
+            extras=extras,
         )
 
     def flush_table(end_line: int) -> None:
@@ -362,6 +474,7 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
         if heading:
             flush_paragraph(max(1, line_no - 1))
             flush_table(max(1, line_no - 1))
+            pending_figure_context = None
             level = len(str(heading.group(1) or ""))
             text = normalize_inline_markdown(str(heading.group(2) or ""))
             if text:
@@ -373,6 +486,7 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
 
         if _MD_TABLE_RE.match(line):
             flush_paragraph(max(1, line_no - 1))
+            pending_figure_context = None
             if not table_buf:
                 table_start = line_no
             table_buf.append(line)
@@ -383,15 +497,44 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
         if image_match:
             flush_paragraph(max(1, line_no - 1))
             alt_text = str(image_match.group(1) or "").strip()
+            raw_path = str(image_match.group(2) or "").strip().strip('"').strip("'")
+            asset_name = Path(raw_path).name
+            meta = dict((figure_meta_by_asset or {}).get(asset_name) or {})
+            figure_number = 0
+            try:
+                figure_number = int(meta.get("paper_figure_number") or meta.get("fig_no") or 0)
+            except Exception:
+                figure_number = 0
+            if figure_number <= 0:
+                figure_number = extract_figure_number(alt_text or line)
+            generic_alt = bool(re.fullmatch(r"fig(?:ure)?\.?", alt_text, flags=re.IGNORECASE))
             figure_text = alt_text or str(line or "").strip()
+            if (not alt_text or generic_alt) and figure_number > 0:
+                figure_text = f"Figure {figure_number}"
             if figure_text:
-                push(
+                figure_block = push(
                     "figure",
                     figure_text,
                     line_start=line_no,
                     line_end=line_no,
-                    number=extract_figure_number(figure_text),
+                    number=figure_number,
+                    extras={
+                        "figure_id": str(meta.get("figure_id") or "").strip(),
+                        "figure_ident": str(meta.get("figure_ident") or meta.get("fig_ident") or "").strip(),
+                        "paper_figure_number": figure_number if figure_number > 0 else None,
+                        "asset_name": asset_name,
+                        "asset_name_alias": str(meta.get("asset_name_alias") or "").strip(),
+                        "caption_text": str(meta.get("caption") or "").strip(),
+                    },
                 )
+                pending_figure_context = {
+                    "figure_block_id": str((figure_block or {}).get("block_id") or "").strip(),
+                    "figure_id": str(meta.get("figure_id") or "").strip(),
+                    "figure_ident": str(meta.get("figure_ident") or meta.get("fig_ident") or "").strip(),
+                    "paper_figure_number": figure_number,
+                    "asset_name": asset_name,
+                    "asset_name_alias": str(meta.get("asset_name_alias") or "").strip(),
+                }
             continue
 
         if not line.strip():
@@ -401,12 +544,14 @@ def build_source_blocks(md_text: str, *, doc_id: str) -> list[SourceBlock]:
         list_match = _MD_LIST_RE.match(line)
         if list_match:
             flush_paragraph(max(1, line_no - 1))
+            pending_figure_context = None
             push("list_item", str(list_match.group(1) or ""), line_start=line_no, line_end=line_no)
             continue
 
         quote_match = _MD_BLOCKQUOTE_RE.match(line)
         if quote_match:
             flush_paragraph(max(1, line_no - 1))
+            pending_figure_context = None
             push("blockquote", str(quote_match.group(1) or ""), line_start=line_no, line_end=line_no)
             continue
 
@@ -435,6 +580,12 @@ def source_blocks_to_reader_anchors(blocks: list[SourceBlock]) -> list[dict]:
         }
         if int(block.get("number") or 0) > 0:
             rec["number"] = int(block.get("number") or 0)
+        if str(block.get("figure_id") or "").strip():
+            rec["figure_id"] = str(block.get("figure_id") or "").strip()
+        if int(block.get("paper_figure_number") or 0) > 0:
+            rec["paper_figure_number"] = int(block.get("paper_figure_number") or 0)
+        if str(block.get("figure_role") or "").strip():
+            rec["figure_role"] = str(block.get("figure_role") or "").strip()
         out.append(rec)
     return out
 
@@ -442,8 +593,60 @@ def source_blocks_to_reader_anchors(blocks: list[SourceBlock]) -> list[dict]:
 def load_source_blocks(md_path: Path | str, *, md_text: str | None = None) -> list[SourceBlock]:
     path = Path(str(md_path or "")).expanduser()
     if md_text is None:
+        return load_source_blocks_cached(path)
+    return build_source_blocks(
+        md_text,
+        doc_id=doc_id_for_path(path),
+        figure_meta_by_asset=_load_figure_identity_by_asset(path),
+    )
+
+
+def load_source_blocks_cached(md_path: Path | str) -> list[SourceBlock]:
+    """
+    Cache SourceBlocks in-process keyed by path+mtime+size.
+    This is a hot path for paper-guide targeted scans, and re-parsing full markdown
+    on every request can add noticeable latency on large docs.
+    """
+    path = Path(str(md_path or "")).expanduser()
+    figure_index_path = path.parent / "assets" / "figure_index.json"
+    try:
+        st = path.stat()
+        key = f"{str(path)}|{int(st.st_mtime)}|{int(st.st_size)}"
+        try:
+            fig_st = figure_index_path.stat()
+            key += f"|{int(fig_st.st_mtime)}|{int(fig_st.st_size)}"
+        except Exception:
+            pass
+    except Exception:
+        key = str(path)
+
+    lock: threading.Lock = getattr(RUNTIME, "CACHE_LOCK", threading.Lock())
+    cache: dict = getattr(RUNTIME, "CACHE", {})
+    with lock:
+        bucket = cache.setdefault("source_blocks_v1", {})
+        v = bucket.get(key)
+    if isinstance(v, list) and v:
+        return v
+
+    try:
         md_text = path.read_text(encoding="utf-8", errors="ignore")
-    return build_source_blocks(md_text, doc_id=doc_id_for_path(path))
+    except Exception:
+        md_text = ""
+    figure_meta_by_asset = _load_figure_identity_by_asset(path)
+    blocks = build_source_blocks(
+        md_text,
+        doc_id=doc_id_for_path(path),
+        figure_meta_by_asset=figure_meta_by_asset,
+    ) if md_text else []
+
+    with lock:
+        bucket = cache.setdefault("source_blocks_v1", {})
+        bucket[key] = blocks
+        if len(bucket) > 120:
+            # Drop oldest insertion order (Py>=3.7).
+            for k in list(bucket.keys())[: max(1, len(bucket) // 2)]:
+                bucket.pop(k, None)
+    return blocks
 
 
 def match_source_blocks(
@@ -484,7 +687,10 @@ def match_source_blocks(
         if heading:
             score += 0.34 * _heading_overlap_score(heading, str(block.get("heading_path") or ""))
         if int(target_number or 0) > 0:
-            score += _equation_number_score(block, int(target_number))
+            if prefer_kind_norm == "figure" or block_kind == "figure" or str(block.get("figure_role") or "").strip().lower() == "caption":
+                score += _figure_number_score(block, int(target_number))
+            else:
+                score += _equation_number_score(block, int(target_number))
         if prefer_kind_norm and block_kind == prefer_kind_norm:
             score += 0.18
         if has_equation_signal(query) and block_kind == "equation":

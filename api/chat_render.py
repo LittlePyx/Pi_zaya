@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from kb import task_runtime
+from kb.paper_guide_provenance import _canonicalize_support_segment_heading
 from kb.citation_meta import extract_first_doi
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
@@ -34,6 +35,75 @@ _EQ_SOURCE_NOTE_RE = re.compile(
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 _RENDER_CACHE_SCHEMA_VERSION = 1
+
+
+def _extract_box_number_for_display(seg: dict) -> int:
+    try:
+        box_num = int((seg or {}).get("support_slot_box_number") or 0)
+    except Exception:
+        box_num = 0
+    if box_num > 0:
+        return box_num
+    heading = str((seg or {}).get("primary_heading_path") or "").strip()
+    m = re.search(r"(?i)\bbox\s*(\d+)\b", heading)
+    if m:
+        try:
+            return int(m.group(1) or 0)
+        except Exception:
+            return 0
+    text = str((seg or {}).get("text") or "").strip()
+    m = re.search(r"(?i)^\s*from\s+box\s*(\d+)\b", text)
+    if m:
+        try:
+            return int(m.group(1) or 0)
+        except Exception:
+            return 0
+    return 0
+
+
+def _propagate_box_scope_for_display(segments: list[dict]) -> list[dict]:
+    out = [dict(seg) if isinstance(seg, dict) else seg for seg in list(segments or [])]
+    visible_direct_indices = [
+        idx
+        for idx, seg in enumerate(out)
+        if isinstance(seg, dict)
+        and str(seg.get("evidence_mode") or "").strip().lower() == "direct"
+        and str(seg.get("locate_policy") or "").strip().lower() != "hidden"
+    ]
+    if not visible_direct_indices:
+        return out
+    explicit_boxes: dict[int, int] = {}
+    for idx in visible_direct_indices:
+        seg = out[idx]
+        box_num = _extract_box_number_for_display(seg)
+        if box_num <= 0:
+            continue
+        explicit_boxes[idx] = box_num
+        seg["primary_heading_path"] = f"Box {int(box_num)}"
+        seg["support_slot_box_number"] = int(box_num)
+    if not explicit_boxes:
+        return out
+    for pos, idx in enumerate(visible_direct_indices):
+        if idx in explicit_boxes:
+            continue
+        seg = out[idx]
+        heading = str(seg.get("primary_heading_path") or "").strip()
+        if re.search(r"(?i)\bfig(?:ure)?\b", heading):
+            continue
+        prev_box = 0
+        next_box = 0
+        for prev_idx in reversed(visible_direct_indices[:pos]):
+            prev_box = int(explicit_boxes.get(prev_idx) or 0)
+            if prev_box > 0:
+                break
+        for next_idx in visible_direct_indices[pos + 1 :]:
+            next_box = int(explicit_boxes.get(next_idx) or 0)
+            if next_box > 0:
+                break
+        if prev_box > 0 and prev_box == next_box:
+            seg["primary_heading_path"] = f"Box {int(prev_box)}"
+            seg["support_slot_box_number"] = int(prev_box)
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -294,6 +364,15 @@ def _enrich_provenance_segments_for_display(
                 provenance[key] = value
         except Exception:
             provenance = dict(provenance)
+    if isinstance(provenance.get("segments"), list):
+        provenance = dict(provenance)
+        provenance["segments"] = [
+            _canonicalize_support_segment_heading(seg)
+            if isinstance(seg, dict)
+            else seg
+            for seg in list(provenance.get("segments") or [])
+        ]
+        provenance["segments"] = _propagate_box_scope_for_display(provenance.get("segments") or [])
     segments_raw = provenance.get("segments")
     if not isinstance(segments_raw, list):
         return provenance

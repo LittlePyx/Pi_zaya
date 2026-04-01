@@ -258,6 +258,139 @@ def test_enrich_provenance_segments_for_display_loads_md_blocks_for_quote_rebind
     assert str(conclusion_block.get("block_id") or "") in block_map
 
 
+def test_enrich_provenance_segments_for_display_preserves_figure_scope_heading():
+    provenance = {
+        "block_map": {},
+        "segments": [
+            {
+                "segment_id": "seg_001",
+                "segment_index": 0,
+                "text": "Panel (f) corresponds to methane imaging using SPC.",
+                "raw_markdown": "Panel (f) corresponds to methane imaging using SPC.",
+                "evidence_mode": "direct",
+                "claim_type": "figure_claim",
+                "must_locate": True,
+                "anchor_kind": "figure",
+                "anchor_text": "(f) methane imaging using SPC$^{15}$",
+                "primary_heading_path": "Applications and future potential for single-pixel imaging",
+                "support_slot_claim_type": "figure_panel",
+                "support_slot_figure_number": 3,
+                "support_slot_panel_letters": ["f"],
+                "support_locate_anchor": "(f) methane imaging using SPC$^{15}$",
+                "locate_policy": "required",
+            }
+        ],
+    }
+
+    enriched = _enrich_provenance_segments_for_display(provenance, hits=[], anchor_ns="conv:test")
+
+    assert isinstance(enriched, dict)
+    segments = enriched.get("segments") or []
+    assert len(segments) == 1
+    assert str(segments[0].get("primary_heading_path") or "") == (
+        "Applications and future potential for single-pixel imaging / Figure 3"
+    )
+
+
+def test_enrich_provenance_segments_for_display_preserves_box_only_heading():
+    provenance = {
+        "block_map": {},
+        "segments": [
+            {
+                "segment_id": "seg_001",
+                "segment_index": 0,
+                "text": "It can be shown that when the number of sampling patterns used M >= O(K log(N/K))...",
+                "raw_markdown": "It can be shown that when the number of sampling patterns used M >= O(K log(N/K))...",
+                "evidence_mode": "direct",
+                "claim_type": "own_result",
+                "must_locate": False,
+                "anchor_kind": "sentence",
+                "anchor_text": "It can be shown that when the number of sampling patterns used M >= O(K log(N/K))...",
+                "primary_heading_path": "Acquisition and image reconstruction strategies",
+                "support_slot_claim_type": "own_result",
+                "support_slot_box_number": 1,
+                "support_slot_panel_letters": [],
+                "support_locate_anchor": "It can be shown that when the number of sampling patterns used $M \\ge O(K \\log(N/K))$...",
+                "locate_policy": "hidden",
+            }
+        ],
+    }
+
+    enriched = _enrich_provenance_segments_for_display(provenance, hits=[], anchor_ns="conv:test")
+
+    assert isinstance(enriched, dict)
+    segments = enriched.get("segments") or []
+    assert len(segments) == 1
+    assert str(segments[0].get("primary_heading_path") or "") == "Box 1"
+    assert str(segments[0].get("support_locate_anchor") or "") == (
+        "It can be shown that when the number of sampling patterns used M >= O(K log(N/K))..."
+    )
+    assert str(segments[0].get("locate_policy") or "") == "required"
+
+
+def test_enrich_provenance_segments_for_display_preserves_exact_method_detail_heading():
+    provenance = {
+        "block_map": {
+            "blk_setup": {
+                "block_id": "blk_setup",
+                "anchor_id": "p_00035",
+                "heading_path": "ARTICLE / Methods / Principle of high-throughput SPH",
+                "kind": "paragraph",
+                "text": (
+                    "**Experimental setup.** Thus, the beat frequency of these two beams is 62,500 Hz. "
+                    "The data acquisition card uses a sampling rate of 1.25 Ms/s."
+                ),
+                "raw_text": (
+                    "**Experimental setup.** Thus, the beat frequency of these two beams is 62,500 Hz. "
+                    "The data acquisition card uses a sampling rate of 1.25 Ms/s."
+                ),
+            }
+        },
+        "segments": [
+            {
+                "segment_id": "seg_001",
+                "segment_index": 1,
+                "text": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+                "raw_markdown": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+                "evidence_mode": "synthesis",
+                "claim_type": "critical_fact_claim",
+                "anchor_kind": "sentence",
+                "anchor_text": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+                "locate_policy": "hidden",
+            },
+            {
+                "segment_id": "seg_002",
+                "segment_index": 2,
+                "text": "Thus, the beat frequency of these two beams is 62,500 Hz. The data acquisition card uses a sampling rate of 1.25 Ms/s.",
+                "raw_markdown": "Thus, the beat frequency of these two beams is 62,500 Hz. The data acquisition card uses a sampling rate of 1.25 Ms/s.",
+                "evidence_mode": "direct",
+                "claim_type": "method_detail",
+                "must_locate": True,
+                "anchor_kind": "sentence",
+                "anchor_text": "Thus, the beat frequency of these two beams is 62,500 Hz. The data acquisition card uses a sampling rate of 1.25 Ms/s.",
+                "primary_block_id": "blk_setup",
+                "primary_anchor_id": "p_00035",
+                "primary_heading_path": "ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup",
+                "evidence_block_ids": ["blk_setup"],
+                "support_block_ids": [],
+                "support_slot_claim_type": "method_detail",
+                "support_locate_anchor": "Thus, the beat frequency of these two beams is 62,500 Hz. The data acquisition card uses a sampling rate of 1.25 Ms/s.",
+                "locate_policy": "required",
+            },
+        ],
+    }
+
+    enriched = _enrich_provenance_segments_for_display(provenance, hits=[], anchor_ns="conv:test")
+
+    assert isinstance(enriched, dict)
+    segments = enriched.get("segments") or []
+    assert len(segments) == 2
+    assert str(segments[1].get("primary_heading_path") or "") == (
+        "ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup"
+    )
+    assert str(segments[1].get("support_slot_claim_type") or "") == "method_detail"
+
+
 def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Path):
     from api import chat_render
 

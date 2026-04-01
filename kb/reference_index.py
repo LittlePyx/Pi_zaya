@@ -28,6 +28,7 @@ from kb.store import compute_file_sha1
 
 INDEX_FILE_NAME = "references_index.json"
 CROSSREF_CACHE_FILE_NAME = "crossref_cache.json"
+REFERENCE_CATALOG_FILE_NAME = "reference_catalog.json"
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -41,6 +42,11 @@ _DOI_TRIM_RE = re.compile(r"^[ \t\r\n.,;:(){}\[\]<>]+|[ \t\r\n.,;:(){}\[\]<>]+$"
 _SOURCE_DOI_HTTP_RE = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)", re.IGNORECASE)
 _SOURCE_DOI_RE = re.compile(r"\bdoi\s*:?\s*(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b", re.IGNORECASE)
 _QUOTED_TITLE_RE = re.compile(r"[\"“”]([^\"“”]{8,260})[\"“”]")
+_YEAR_ANY_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+_REFERENCE_TRUNCATION_HINT_RE = re.compile(
+    r"(?:\.\.\.|…|\b(?:incomplete|partially visible|not fully visible|unreadable|illegible)\b)",
+    re.IGNORECASE,
+)
 
 
 def _to_os_path(path_like: str | Path) -> str:
@@ -344,6 +350,156 @@ def _cleanup_reference_number_noise(ref_map: dict[int, str]) -> dict[int, str]:
         out = {n: t for n, t in out.items() if n <= cap}
 
     return out
+
+
+def _reference_parse_confidence(entry_text: str) -> float:
+    raw = str(entry_text or "").strip()
+    if not raw:
+        return 0.0
+    score = 0.50
+    word_count = len(re.findall(r"\S+", raw))
+    if len(raw) >= 40:
+        score += 0.16
+    if word_count >= 8:
+        score += 0.12
+    if _YEAR_ANY_RE.search(raw):
+        score += 0.08
+    if extract_first_doi(raw):
+        score += 0.09
+    if raw.count(".") >= 2 or raw.count(",") >= 3:
+        score += 0.06
+    if _REFERENCE_TRUNCATION_HINT_RE.search(raw):
+        score -= 0.28
+    if len(raw) < 20 or word_count < 4:
+        score -= 0.18
+    return max(0.05, min(0.99, float(score)))
+
+
+def build_reference_catalog_from_ref_map(
+    ref_map: dict[int, str],
+    *,
+    source_path: str = "",
+    source_name: str = "",
+    source_sha1: str = "",
+) -> dict:
+    refs_in = ref_map if isinstance(ref_map, dict) else {}
+    ref_nums = sorted(int(k) for k in refs_in.keys() if int(k) > 0)
+    missing_numbers: list[int] = []
+    continuity_status = "empty"
+    if ref_nums:
+        if ref_nums[0] <= ref_nums[-1]:
+            want = set(range(ref_nums[0], ref_nums[-1] + 1))
+            missing_numbers = sorted(int(n) for n in (want - set(ref_nums)))
+        if missing_numbers:
+            continuity_status = "gapped"
+        elif ref_nums[0] != 1:
+            continuity_status = "offset"
+        else:
+            continuity_status = "continuous"
+
+    rows: list[dict] = []
+    for n in ref_nums:
+        text = str(refs_in.get(int(n)) or "").strip()
+        if not text:
+            continue
+        rows.append(
+            {
+                "reference_number": int(n),
+                "reference_text": text,
+                "reference_entry_id": f"ref_{int(n):04d}",
+                "parse_confidence": _reference_parse_confidence(text),
+            }
+        )
+
+    return {
+        "version": 1,
+        "source_path": str(source_path or "").strip(),
+        "source_name": str(source_name or "").strip(),
+        "source_sha1": str(source_sha1 or "").strip(),
+        "ref_count": int(len(rows)),
+        "first_ref_num": int(ref_nums[0]) if ref_nums else 0,
+        "max_ref_num": int(ref_nums[-1]) if ref_nums else 0,
+        "tail_continuity_status": continuity_status,
+        "missing_numbers": list(missing_numbers[:128]),
+        "refs": rows,
+    }
+
+
+def build_reference_catalog_from_md(
+    md_text: str,
+    *,
+    source_path: str = "",
+    source_name: str = "",
+    source_sha1: str = "",
+) -> dict:
+    ref_map = extract_references_map_from_md(md_text)
+    return build_reference_catalog_from_ref_map(
+        ref_map,
+        source_path=source_path,
+        source_name=source_name,
+        source_sha1=source_sha1,
+    )
+
+
+def _reference_catalog_path_for_md(md_path: Path | str) -> Path:
+    path = Path(str(md_path or "")).expanduser()
+    return path.parent / REFERENCE_CATALOG_FILE_NAME
+
+
+def load_reference_catalog_for_md(md_path: Path | str) -> dict:
+    p = _reference_catalog_path_for_md(md_path)
+    data = _load_json(p)
+    if not isinstance(data, dict):
+        return {}
+    refs = data.get("refs")
+    if not isinstance(refs, list):
+        data["refs"] = []
+    return data
+
+
+def reference_catalog_to_map(catalog: dict | None) -> dict[int, str]:
+    if not isinstance(catalog, dict):
+        return {}
+    refs = catalog.get("refs")
+    if not isinstance(refs, list):
+        return {}
+    out: dict[int, str] = {}
+    for item in refs:
+        if not isinstance(item, dict):
+            continue
+        try:
+            n = int(item.get("reference_number") or 0)
+        except Exception:
+            n = 0
+        text = str(item.get("reference_text") or "").strip()
+        if n <= 0 or not text:
+            continue
+        out[int(n)] = text
+    return out
+
+
+def persist_reference_catalog_for_md(
+    md_path: Path | str,
+    *,
+    md_text: str | None = None,
+    source_sha1: str = "",
+) -> dict:
+    path = Path(str(md_path or "")).expanduser()
+    source_name = path.name
+    source_path = str(path.resolve(strict=False))
+    if md_text is None:
+        try:
+            md_text = path.read_text(encoding="utf-8")
+        except Exception:
+            md_text = ""
+    catalog = build_reference_catalog_from_md(
+        str(md_text or ""),
+        source_path=source_path,
+        source_name=source_name,
+        source_sha1=source_sha1,
+    )
+    _save_json(_reference_catalog_path_for_md(path), catalog)
+    return catalog
 
 
 def _extract_query_title(entry: str) -> str:
@@ -1690,7 +1846,10 @@ def _prepare_doc_context_prefetch(
 ) -> dict[str, Any]:
     md_head = _read_text_head(md_path, max_bytes=220_000)
     md_tail = _read_text_tail(md_path, max_bytes=1_500_000)
-    ref_map = extract_references_map_from_md(md_tail)
+    catalog = load_reference_catalog_for_md(md_path)
+    ref_map = reference_catalog_to_map(catalog)
+    if not ref_map:
+        ref_map = extract_references_map_from_md(md_tail)
 
     source_doi = ""
     try:
@@ -1721,6 +1880,7 @@ def _prepare_doc_context_prefetch(
         "md_head": md_head,
         "md_tail": md_tail,
         "ref_map": ref_map if isinstance(ref_map, dict) else {},
+        "reference_catalog": catalog if isinstance(catalog, dict) else {},
         "source_doi": _clean_doi_for_url(source_doi),
         "source_ref_rows": source_ref_rows if isinstance(source_ref_rows, list) else [],
     }
@@ -1987,6 +2147,7 @@ def build_reference_index(
             md_head = str(prepped.get("md_head") or "")
             md_tail = str(prepped.get("md_tail") or "")
             ref_map_prepped = prepped.get("ref_map")
+            reference_catalog_prepped = prepped.get("reference_catalog")
             source_doi_prepped = _clean_doi_for_url(str(prepped.get("source_doi") or ""))
             source_ref_rows_prepped = prepped.get("source_ref_rows")
             if not isinstance(source_ref_rows_prepped, list):
@@ -2032,7 +2193,32 @@ def build_reference_index(
                 md_head = _read_text_head(p, max_bytes=220_000)
             if not md_tail:
                 md_tail = _read_text_tail(p, max_bytes=1_500_000)
-            ref_map = ref_map_prepped if isinstance(ref_map_prepped, dict) else extract_references_map_from_md(md_tail)
+            ref_map = (
+                ref_map_prepped
+                if isinstance(ref_map_prepped, dict)
+                else extract_references_map_from_md(md_tail)
+            )
+            reference_catalog = (
+                dict(reference_catalog_prepped)
+                if isinstance(reference_catalog_prepped, dict)
+                else {}
+            )
+            catalog_sha1 = str(reference_catalog.get("source_sha1") or "").strip()
+            if (
+                (not reference_catalog)
+                or (not reference_catalog_to_map(reference_catalog))
+                or (str(sha1 or "").strip() and catalog_sha1 != str(sha1 or "").strip())
+            ):
+                reference_catalog = build_reference_catalog_from_ref_map(
+                    ref_map,
+                    source_path=src_path,
+                    source_name=p.name,
+                    source_sha1=sha1,
+                )
+                try:
+                    _save_json(_reference_catalog_path_for_md(p), reference_catalog)
+                except Exception:
+                    pass
             refs_obj: dict[str, dict] = {}
             unresolved_promising = 0
             sparse_promising = 0
@@ -2344,6 +2530,8 @@ def build_reference_index(
                         if isinstance(meta, dict)
                         else ("raw_title" if str(title_fallback or "").strip() else "")
                     ),
+                    "parse_confidence": _reference_parse_confidence(raw),
+                    "tail_continuity_status": str(reference_catalog.get("tail_continuity_status") or "").strip(),
                 }
                 refs_obj[str(int(n))] = rec
                 if promising_ref:
@@ -2364,6 +2552,9 @@ def build_reference_index(
                 "sha1": sha1,
                 "source_doi": source_doi,
                 "crossref_enriched": bool(crossref_enriched_doc),
+                "reference_catalog_status": str(reference_catalog.get("tail_continuity_status") or "").strip(),
+                "reference_catalog_ref_count": int(reference_catalog.get("ref_count") or 0),
+                "reference_catalog_missing_numbers": list(reference_catalog.get("missing_numbers") or []),
                 "refs": refs_obj,
             }
     

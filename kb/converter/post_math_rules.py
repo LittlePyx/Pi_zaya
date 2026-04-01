@@ -537,7 +537,13 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
             inner_probe = re.sub(r"\\(?:cite|text|mathrm|mathbf)\{[^}]{0,200}\}", "", inner0)
             hard_math0 = bool(re.search(r"[=^_{}]|\\frac|\\sum|\\int|\\prod|\\sqrt|\\odot|\\in|\\times", inner_probe))
             looks_like_cite0 = bool(re.search(r"\[\s*\d", inner0)) or ("\\cite{" in inner0) or ("\\text{" in inner0)
-            if looks_like_cite0 and (not hard_math0):
+            word_n0 = len(re.findall(r"\b[A-Za-z]{2,}\b", inner0))
+            looks_like_prose_fragment0 = bool(
+                re.match(r"^[a-z][A-Za-z]*(?:\(|\b)", inner0)
+                or re.search(r"(?i)\b(?:see|where|with|and|or|for|to|in|on|by|as|because)\b", inner0)
+                or (word_n0 >= 2 and re.search(r"[.,;:()]", inner0))
+            )
+            if (looks_like_cite0 or looks_like_prose_fragment0) and (not hard_math0):
                 t = inner0
 
         for _ in range(3):

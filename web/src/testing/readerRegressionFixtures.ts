@@ -7,6 +7,7 @@ export type ReaderRegressionScenario =
   | 'candidate-fallback'
   | 'equation'
   | 'figure'
+  | 'multi-panel'
 
 export const READER_REGRESSION_SOURCE_PATH = '__reader_regression__/fixture.md'
 export const READER_REGRESSION_SOURCE_NAME = 'Fixture Paper'
@@ -19,6 +20,8 @@ const CONCLUSION_P1 = 'Our method achieves stable reconstruction from a single s
 const FIGURE_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220"><rect width="480" height="220" fill="#eef3f8"/><rect x="28" y="36" width="180" height="128" rx="18" fill="#9bb7d4"/><rect x="234" y="58" width="218" height="26" rx="13" fill="#cbd8e6"/><rect x="234" y="98" width="184" height="20" rx="10" fill="#d6e0ea"/><rect x="234" y="130" width="146" height="20" rx="10" fill="#d6e0ea"/><circle cx="128" cy="100" r="34" fill="#f7fafc"/><text x="28" y="196" font-family="Georgia, serif" font-size="18" fill="#425466">Figure 1. SCI system pipeline.</text></svg>',
 )}`
+
+const MULTI_PANEL_SNIPPET = 'f Resulting iPSF from iISM after adaptive pixel-reassignment (APR), with same incident illumination power and number of detected photons. g Line profiles of the iPSF in the three configurations as indicated in d-f.'
 
 export const readerRegressionMarkdown = [
   '# Fixture Paper',
@@ -49,6 +52,8 @@ export const readerRegressionMarkdown = [
   '',
   CONCLUSION_P1,
   '',
+  `**Figure 2.** ${MULTI_PANEL_SNIPPET}`,
+  '',
 ].join('\n')
 
 export const readerRegressionBlocks: ReaderDocBlock[] = [
@@ -63,6 +68,7 @@ export const readerRegressionBlocks: ReaderDocBlock[] = [
   { doc_id: 'fixture-doc', block_id: 'fig-1', anchor_id: 'a-fig-1', kind: 'figure', heading_path: 'Fixture Paper / 2. Method', text: 'Figure 1. SCI system pipeline.', number: 1, line_start: 21, line_end: 21 },
   { doc_id: 'fixture-doc', block_id: 'h-conclusion', anchor_id: 'a-h-conclusion', kind: 'heading', heading_path: 'Fixture Paper / 3. Conclusion', text: '3. Conclusion', line_start: 25, line_end: 25 },
   { doc_id: 'fixture-doc', block_id: 'p-conclusion-1', anchor_id: 'a-p-conclusion-1', kind: 'paragraph', heading_path: 'Fixture Paper / 3. Conclusion', text: CONCLUSION_P1, line_start: 27, line_end: 27 },
+  { doc_id: 'fixture-doc', block_id: 'p-fig-panels', anchor_id: 'a-p-fig-panels', kind: 'paragraph', heading_path: 'Fixture Paper / 3. Conclusion', text: `Figure 2. ${MULTI_PANEL_SNIPPET}`, line_start: 29, line_end: 29 },
 ]
 
 export const readerRegressionAnchors: ReaderDocAnchor[] = readerRegressionBlocks.map((block) => ({
@@ -87,6 +93,35 @@ export const readerRegressionDocResponse = {
 }
 
 export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario): ReaderOpenPayload {
+  if (scenario === 'multi-panel') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 3. Conclusion',
+      snippet: MULTI_PANEL_SNIPPET,
+      highlightSnippet: MULTI_PANEL_SNIPPET,
+      blockId: 'p-fig-panels',
+      anchorId: 'a-p-fig-panels',
+      anchorKind: 'paragraph',
+      strictLocate: true,
+      locateTarget: {
+        segmentId: 'seg-fig-panels',
+        sourceSegmentId: 'seg-fig-panels',
+        headingPath: 'Fixture Paper / 3. Conclusion',
+        snippet: MULTI_PANEL_SNIPPET,
+        highlightSnippet: MULTI_PANEL_SNIPPET,
+        evidenceQuote: MULTI_PANEL_SNIPPET,
+        anchorText: MULTI_PANEL_SNIPPET,
+        blockId: 'p-fig-panels',
+        anchorId: 'a-p-fig-panels',
+        anchorKind: 'paragraph',
+        claimType: 'quote_claim',
+        locatePolicy: 'required',
+        locateSurfacePolicy: 'primary',
+      },
+    }
+  }
+
   if (scenario === 'evidence-nav') {
     return {
       sourcePath: READER_REGRESSION_SOURCE_PATH,

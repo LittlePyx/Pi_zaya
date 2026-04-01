@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from .text_utils import _normalize_text
+from .text_utils import _looks_like_body_figure_reference_sentence, _normalize_text
 
 _ALLOWED_UNNUMBERED_HEADINGS = {
     "ABSTRACT",
+    "DATA ANALYSIS",
     "DATA AVAILABILITY",
     "CODE AVAILABILITY",
     "ACKNOWLEDGMENTS",
@@ -41,6 +42,18 @@ _JOURNAL_METADATA_HEADINGS = {
     "REVIEW ARTICLE",
     "NATURAL PHOTONICS",
     "NATURE PHOTONICS",
+    "OPTICS EXPRESS",
+    "ADVANCED SCIENCE NEWS",
+}
+
+_COMMON_SECTION_HEADING_VARIANTS = {
+    "RESULTS AND DISCUSSION",
+    "DISCUSSION AND CONCLUSION",
+    "DISCUSSION AND CONCLUSIONS",
+    "MATERIALS AND METHODS",
+    "METHODS AND MATERIALS",
+    "AUTHOR INFORMATION",
+    "SUPPLEMENTARY INFORMATION",
 }
 
 
@@ -88,6 +101,8 @@ def _is_caption_heading_text(title: str) -> bool:
     t = _normalize_text(title or "").strip()
     if not t:
         return False
+    if _looks_like_body_figure_reference_sentence(t):
+        return False
     if re.match(r"^(?:figure|fig\.?|table|algorithm)\s*(?:\d+|[ivxlc]+)\b", t, re.IGNORECASE):
         return True
     if re.match(r"^(?:figure|fig\.?|table|algorithm)\s+\d+\s+caption\b", t, re.IGNORECASE):
@@ -107,12 +122,19 @@ def _is_journal_metadata_heading(title: str) -> bool:
     if re.fullmatch(r"[A-Z][A-Z\s&\-]{5,40}", t) and ("ARTICLE" in t):
         if t not in _ALLOWED_UNNUMBERED_HEADINGS:
             return True
+    words = re.findall(r"[A-Z][A-Z&\-]*", t)
+    journal_tokens = {"EXPRESS", "LETTERS", "COMMUNICATIONS", "JOURNAL", "REVIEW", "PHOTONICS", "OPTICS", "SCIENCE", "NATURE", "NEWS"}
+    if 1 <= len(words) <= 4 and any(w in journal_tokens for w in words):
+        if re.fullmatch(r"[A-Z][A-Z\s&\-.]{4,50}", t):
+            return True
     return False
 
 
 def _is_common_section_heading(title: str) -> bool:
-    t = _normalize_text(title).upper()
-    return any(x in t for x in _ALLOWED_UNNUMBERED_HEADINGS)
+    t = _normalize_text(title or "").upper()
+    t = re.sub(r"[\s\.:;\-]+$", "", t).strip()
+    t = re.sub(r"\s+", " ", t)
+    return t in _ALLOWED_UNNUMBERED_HEADINGS or t in _COMMON_SECTION_HEADING_VARIANTS
 
 
 def _enforce_heading_policy(md: str) -> str:
@@ -201,7 +223,12 @@ def _enforce_heading_policy(md: str) -> str:
             or re.match(r"^[IVX]+\.\s+", title, re.IGNORECASE)
             or _parse_appendix_heading_level(title) is not None
         )
-        if (len(cap_words) >= 4) and (len(re.findall(r"\d", title)) >= 2) and (not numbered_like):
+        if (
+            (len(cap_words) >= 4)
+            and (len(re.findall(r"\d", title)) >= 2)
+            and (not numbered_like)
+            and (title.count(",") >= 1 or title.count(";") >= 1)
+        ):
             authorish = True
         if authorish:
             out.append(title)

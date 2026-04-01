@@ -8,7 +8,12 @@ try:
 except ImportError:
     fitz = None
 
-from .text_utils import _normalize_text, _is_letter, _join_lines_preserving_words
+from .text_utils import (
+    _is_letter,
+    _join_lines_preserving_words,
+    _looks_like_body_figure_reference_sentence,
+    _normalize_text,
+)
 from .geometry_utils import _bbox_width
 
 
@@ -831,6 +836,8 @@ def detect_header_tag(
 def _is_caption_like_text(text: str) -> bool:
     t = _normalize_text(text or "").strip()
     if not t:
+        return False
+    if _looks_like_body_figure_reference_sentence(t):
         return False
     return bool(
         re.match(

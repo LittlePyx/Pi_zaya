@@ -216,3 +216,63 @@ def test_references_drop_incomplete_visible_placeholders():
     assert "incomplete visible" not in out.lower()
     assert "## 4. J. R." not in out
     assert "[4] J. Hunt" in refs
+
+
+def test_references_keep_year_backref_lines_with_previous_entry_and_do_not_spawn_fake_year_refs():
+    src = """
+## References
+[16] Diederik P Kingma and Jimmy Ba. Adam: A method for stochastic optimization.
+arXiv preprint arXiv:1412.6980,
+2014. 5
+[17] Moyang Li, Peng Wang, Lingzhe Zhao, Bangyan Liao, and Peidong Liu. USB-NeRF: Unrolling shutter bundle adjusted
+neural radiance fields. In arXiv preprint arXiv:2310.02687,
+2023. 4
+[48] Lin Yen-Chen. Nerf-pytorch. https://github.com/
+yenchenlin/nerf-pytorch/, 2020. 5
+[50] Xin Yuan, David J Brady, and Aggelos K Katsaggelos. Snapshot compressive imaging: Theory, algorithms, and applications.
+IEEE Signal Processing Magazine, 38(2):65-88,
+2021. 1
+"""
+    out = postprocess_markdown(src)
+    refs = _refs_tail(out)
+    assert refs
+    assert "[16] Diederik P Kingma and Jimmy Ba. Adam: A method for stochastic optimization. arXiv preprint arXiv:1412.6980, 2014." in refs
+    assert "[17] Moyang Li, Peng Wang, Lingzhe Zhao, Bangyan Liao, and Peidong Liu. USB-NeRF: Unrolling shutter bundle adjusted neural radiance fields. In arXiv preprint arXiv:2310.02687, 2023." in refs
+    assert "[48] Lin Yen-Chen. Nerf-pytorch. https://github.com/yenchenlin/nerf-pytorch/, 2020." in refs
+    assert "[50] Xin Yuan, David J Brady, and Aggelos K Katsaggelos. Snapshot compressive imaging: Theory, algorithms, and applications. IEEE Signal Processing Magazine, 38(2):65-88, 2021." in refs
+    assert "[2014]" not in refs
+    assert "[2020]" not in refs
+    assert "[2021]" not in refs
+    assert "[2023]" not in refs
+
+
+def test_references_drop_standalone_page_number_lines_inside_references():
+    src = """
+## References
+[54] Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shechtman, and Oliver Wang. The unreasonable effectiveness of deep features as a perceptual metric.
+In Proceedings of the IEEE conference on computer vision and pattern recognition, pages 586-595,
+2018. 5
+11
+"""
+    out = postprocess_markdown(src)
+    refs = _refs_tail(out)
+    assert refs
+    assert "[54] Richard Zhang" in refs
+    assert "2018." in refs
+    assert " 11" not in refs
+
+
+def test_references_split_bare_numbered_following_item_after_period():
+    src = """
+## References
+[20] Sun, Q. et al. End-to-End Learned, Optically Coded SuperResolution SPAD Camera. ACM Trans. Graph. 39, 1-14 (2020). 21. Bolduc, E., Agnew, M. & Leach, J. Video-rate denoising of low-lightlevel images acquired with a SPAD camera. In 2016 Photonics North (PN), p. 1-1 (2016).
+[22] Chandramouli, P. et al. A bit too much? high speed imaging from sparse photon counts. In 2019 IEEE International Conference on Computational Photography (ICCP), p. 1-1 (2019).
+"""
+    out = postprocess_markdown(src)
+    refs = _refs_tail(out)
+    assert refs
+    ref_lines = [ln.strip() for ln in refs.splitlines() if ln.strip()]
+    assert any(ln.startswith("[20] Sun, Q. et al.") for ln in ref_lines)
+    assert any(ln.startswith("[21] Bolduc, E., Agnew, M. & Leach, J.") for ln in ref_lines)
+    assert any(ln.startswith("[22] Chandramouli, P. et al.") for ln in ref_lines)
+    assert "(2020). 21." not in refs

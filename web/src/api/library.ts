@@ -1,11 +1,23 @@
 import { api } from './client'
 
+export interface ConvertActiveTask {
+  task_id: string
+  name: string
+  pdf: string
+  replace: boolean
+  cur_page_done: number
+  cur_page_total: number
+  cur_page_msg: string
+}
+
 export interface ConvertProgress {
   running: boolean
   done: boolean
   total: number
   completed: number
   current: string
+  active_count: number
+  active_tasks: ConvertActiveTask[]
   cur_page_done: number
   cur_page_total: number
   cur_page_msg: string
@@ -24,6 +36,9 @@ export interface LibraryFileItem {
   status: string
   replace_task: boolean
   queue_pos: number
+  cur_page_done: number
+  cur_page_total: number
+  cur_page_msg: string
   paper_category: string
   reading_status: '' | 'unread' | 'reading' | 'done' | 'revisit'
   note: string
@@ -147,6 +162,8 @@ export interface LibraryFilesResponse {
   scope: string
   queue: {
     running: boolean
+    active_count: number
+    active_tasks: ConvertActiveTask[]
     current: string
     done: number
     total: number
@@ -164,6 +181,10 @@ export interface RenameSuggestionItem {
     venue: string
     year: string
     title: string
+    match_method: string
+    year_source: string
+    basis_label: string
+    basis_detail: string
   }
   md_exists: boolean
   md_path: string
@@ -200,6 +221,10 @@ export interface UploadInspectResponse {
     venue: string
     year: string
     title: string
+    match_method: string
+    year_source: string
+    basis_label: string
+    basis_detail: string
   }
 }
 
@@ -274,12 +299,12 @@ export const libraryApi = {
       pdf_name: pdfName,
       speed_mode: speedMode,
       no_llm: speedMode === 'no_llm',
-      replace: Boolean(opts?.replace),
+      replace: opts?.replace ?? true,
     }),
   convertPending: (speedMode = 'balanced', limit = 0) =>
     api.post<{ ok: boolean; enqueued: number; skipped_busy: number; pending_total: number }>(
       '/api/library/convert/pending',
-      { speed_mode: speedMode, limit },
+      { speed_mode: speedMode, limit, replace: true },
     ),
   cancelConvert: () => api.post('/api/library/convert/cancel'),
   openFile: (pdfName: string, target: 'pdf' | 'md' | 'pdf_dir' | 'md_dir' = 'pdf') =>

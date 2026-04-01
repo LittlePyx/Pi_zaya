@@ -64,7 +64,7 @@ def test_collect_doc_figure_assets_and_append_markdown(tmp_path: Path):
         }
     ]
     out = task_runtime._maybe_append_library_figure_markdown(answer, prompt="这篇文章的第二张图是什么", answer_hits=hits)
-    assert "文献图示（库内截图）" in out
+    assert "### Library Figure" in out
     assert "/api/references/asset?path=" in out
     assert "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf" in out
 

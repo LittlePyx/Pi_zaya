@@ -48,15 +48,24 @@ _MOJIBAKE_REPL: dict[str, str] = _build_mojibake_repl()
 _GARBLED_SYMBOL_REPL: dict[str, str] = {
     # Common mojibake patterns from PDFs
     "ďŹ": "fi",
-    "Ď": "σ",  # Often sigma
+    "Ď": "σ",   # Often sigma
     "Î´": "δ",
     "Îą": "α",
-    "âĽ": "≤",  # Less than or equal
-    "âĺ¤": "≥",  # Greater than or equal
-    "â": "∈",  # Often element-of, but context-dependent
-    "ˆ": "^",  # Hat/caret in math context
-    "âĺ": "→",  # Arrow
-    "âĺ": "→",  # Arrow variant
+    "âĽ": "≤",
+    "âĺ¤": "≥",
+    "âĺ": "→",
+    "â€“": "-",
+    "â€”": "-",
+    "â€˜": "'",
+    "â€™": "'",
+    "â€œ": "\"",
+    "â€": "\"",
+    "â€¦": "...",
+    "脳": "×",
+    "渭": "μ",
+    "鈥檚": "'s",
+    "聽": " ",
+    "ˆ": "^",
 }
 
 
@@ -154,3 +163,32 @@ def _common_prefix_length(s1: str, s2: str) -> int:
     while i < min(len(s1), len(s2)) and s1[i] == s2[i]:
         i += 1
     return i
+
+
+def _looks_like_body_figure_reference_sentence(text: str) -> bool:
+    """
+    Distinguish narrative body sentences like:
+      "Figure 1b, c compare ..."
+    from real captions like:
+      "Figure 1. Optical setup ..."
+
+    We keep this intentionally narrow so we do not suppress legitimate captions.
+    """
+    t = _normalize_text(text or "").strip()
+    if not t:
+        return False
+    probe = re.sub(r"^\*{1,2}\s*", "", t)
+    probe = re.sub(r"\s*\*{1,2}\s*", "", probe)
+    probe = re.sub(r"^\s*#{1,6}\s*", "", probe)
+    probe = re.sub(r"(?i)^(figure|fig\.?)\s*(\d+[A-Za-z])\.\s*,\s*", r"\1 \2, ", probe)
+    verb_alt = (
+        r"(?:compare|compares|show|shows|illustrate|illustrates|"
+        r"demonstrate|demonstrates|depict|depicts|present|presents|"
+        r"highlight|highlights|summarize|summarizes)"
+    )
+    patterns = [
+        rf"^\s*(?:fig(?:ure)?\.?)\s*\d+[A-Za-z](?:\s*,\s*[A-Za-z])+\s+{verb_alt}\b",
+        rf"^\s*(?:fig(?:ure)?\.?)\s*\d+[A-Za-z]\s+{verb_alt}\b",
+        rf"^\s*(?:fig(?:ure)?\.?)\s*\d+\([A-Za-z]\)\s+{verb_alt}\b",
+    ]
+    return any(re.match(pat, probe, flags=re.IGNORECASE) for pat in patterns)

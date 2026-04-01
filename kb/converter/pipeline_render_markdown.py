@@ -11,6 +11,41 @@ except ImportError:
     fitz = None
 
 from .models import TextBlock
+from .text_utils import _normalize_text
+
+_UNICODE_MATH_SYMBOLS_RE = r"[∑∏∫√∞≈≠≤≥±×·⋅∈∂∇]"
+
+
+def _has_mathish_symbol(text: str) -> bool:
+    return bool(re.search(rf"[=^_\\]|{_UNICODE_MATH_SYMBOLS_RE}", text or ""))
+
+
+def _count_mathish_symbols(text: str) -> int:
+    return len(re.findall(rf"[=+\-*/^_{{}}\\\[\]]|{_UNICODE_MATH_SYMBOLS_RE}", text or ""))
+
+
+def _has_complex_math_token(text: str) -> bool:
+    return bool(
+        re.search(
+            rf"{_UNICODE_MATH_SYMBOLS_RE}|\\(?:frac|sqrt|sum|int|prod|log|exp|left|right|begin)\b",
+            text or "",
+        )
+    )
+
+
+def _looks_like_short_prose_math_fragment(text: str) -> bool:
+    ss = (text or "").strip()
+    if not ss or len(ss) > 48:
+        return False
+    if not re.search(r"[A-Za-z]{2,}", ss):
+        return False
+    if re.match(r"(?i)^(?:see\s+)?eq\.?~?\s*\(?\d+\)?\.?$", ss):
+        return True
+    if _has_complex_math_token(ss):
+        return False
+    if re.search(r"[=^_{}\\\[\]]", ss):
+        return False
+    return bool(re.match(r"^[a-z]{2,}", ss) and (re.search(r"(?i)\bsee\s+eq\b", ss) or re.search(r"[().,;:]", ss)))
 
 
 def render_blocks_to_markdown(
@@ -423,7 +458,7 @@ def render_blocks_to_markdown(
                     is_m = bool(getattr(b0, "is_math", False))
                 except Exception:
                     is_m = False
-                if (not is_m) and (not re.search(r"[=^_\\]|[鈭堚墹鈮モ増脳路危鈭戔埆鈭炩啋鈫怾", t0)):
+                if (not is_m) and (not _has_mathish_symbol(t0)):
                     continue
                 print(f"[DEBUG]  idx={i0:03d} is_math={int(is_m)} bbox={bb0} text={ascii(t0[:140])}", flush=True)
     except Exception:
@@ -565,6 +600,21 @@ def render_blocks_to_markdown(
                 continue
             if math_src:
                 text_stripped = math_src
+
+            try:
+                prev_idx = len(out) - 1
+                while prev_idx >= 0 and not (out[prev_idx] or "").strip():
+                    prev_idx -= 1
+                if prev_idx >= 0:
+                    prev_line = (out[prev_idx] or "").rstrip()
+                    if prev_line.endswith("-") and _looks_like_short_prose_math_fragment(text_stripped):
+                        out[prev_idx] = prev_line[:-1] + text_stripped.lstrip()
+                        if prose_tail:
+                            out.append(prose_tail)
+                            out.append("")
+                        continue
+            except Exception:
+                pass
 
             def _strip_prose_tail_from_math(s: str) -> str:
                 ss = (s or "").strip()
@@ -740,13 +790,8 @@ LaTeX:"""
                         # "display-ish" heuristic (controls cost): include common non-'=' display equations too.
                         # Many papers have short display equations without '=' (e.g., sums / norms / constraints).
                         ms = (math_src or "").strip()
-                        sym_n = len(re.findall(r"[=+\-*/^_{}\\\[\]]|[鈭堚墹鈮モ増脳路危鈭戔埆鈭炩啋鈫愨嚁鈬抅", ms))
-                        complex_tok = bool(
-                            re.search(
-                                r"[鈭懳ｂ埆鈭炩墹鈮モ増鈮犫啋鈫愨嚁鈬掆垰]|\\(?:frac|sqrt|sum|int|prod|log|exp|left|right|begin)\b",
-                                ms,
-                            )
-                        )
+                        sym_n = _count_mathish_symbols(ms)
+                        complex_tok = _has_complex_math_token(ms)
                         r = _expand_math_group_bbox(block_idx, bb)
                         is_wide = False
                         try:

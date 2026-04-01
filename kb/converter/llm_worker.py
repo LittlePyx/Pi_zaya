@@ -25,13 +25,78 @@ from .post_processing import (
     _fix_malformed_code_fences,
 )
 
+
+class _SharedInflightLimiter:
+    def __init__(self, limit: int):
+        self._limit = max(1, min(32, int(limit)))
+        self._active = 0
+        self._cond = threading.Condition()
+
+    def configure(self, limit: int) -> int:
+        with self._cond:
+            self._limit = max(1, min(32, int(limit)))
+            self._cond.notify_all()
+            return self._limit
+
+    def get_limit(self) -> int:
+        with self._cond:
+            return int(self._limit)
+
+    def acquire(self, timeout: float | None = None) -> bool:
+        deadline = None
+        if timeout is not None:
+            try:
+                timeout = float(timeout)
+            except Exception:
+                timeout = None
+            if timeout is not None and timeout >= 0:
+                deadline = time.monotonic() + timeout
+        with self._cond:
+            while self._active >= self._limit:
+                if deadline is None:
+                    self._cond.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._cond.wait(timeout=remaining)
+            self._active += 1
+            return True
+
+    def release(self) -> None:
+        with self._cond:
+            if self._active > 0:
+                self._active -= 1
+            self._cond.notify_all()
+
+
 class LLMWorker:
+    _shared_page_ocr_cache: dict[str, str] = {}
+    _shared_llm_gate_lock = threading.Lock()
+    _shared_llm_gate: _SharedInflightLimiter | None = None
+
+    @classmethod
+    def _get_or_create_shared_llm_gate(cls, limit: int) -> _SharedInflightLimiter:
+        with cls._shared_llm_gate_lock:
+            gate = cls._shared_llm_gate
+            if gate is None:
+                gate = _SharedInflightLimiter(limit)
+                cls._shared_llm_gate = gate
+            else:
+                gate.configure(limit)
+            return gate
+
+    @classmethod
+    def _reset_shared_llm_gate_for_tests(cls, limit: int = 8) -> None:
+        with cls._shared_llm_gate_lock:
+            cls._shared_llm_gate = _SharedInflightLimiter(limit)
+
     def __init__(self, cfg: ConvertConfig):
         self.cfg = cfg
         self._client = None
-        # Global-ish concurrency limiter: one LLMWorker is shared across page threads in PDFConverter.
-        # This prevents "N pages in parallel" from flooding the provider and stalling on throttling.
-        self._llm_sem: threading.Semaphore | None = None
+        # Process-level concurrency limiter shared across all converter instances.
+        # This is required before we can safely run multiple PDFs in parallel.
+        self._llm_gate: _SharedInflightLimiter | None = None
         self._llm_max_inflight: int = 8
         self._thread_state = threading.local()
         try:
@@ -43,15 +108,16 @@ class LLMWorker:
                 # Too high concurrency commonly triggers provider-side timeout/rate-limit cascades.
                 max_inflight = 8
             max_inflight = max(1, min(32, int(max_inflight)))
-            self._llm_max_inflight = int(max_inflight)
-            self._llm_sem = threading.Semaphore(max_inflight)
+            self._llm_gate = self._get_or_create_shared_llm_gate(max_inflight)
+            self._llm_max_inflight = int(self._llm_gate.get_limit())
         except Exception:
-            self._llm_max_inflight = 8
-            self._llm_sem = threading.Semaphore(self._llm_max_inflight)
+            self._llm_gate = self._get_or_create_shared_llm_gate(8)
+            self._llm_max_inflight = int(self._llm_gate.get_limit())
         # Small in-memory caches to avoid repeated calls for identical snippets.
         # These caches live per Streamlit process and reset on restart.
         self._cache_confirm_heading: dict[str, dict] = {}
         self._cache_repair_math: dict[str, str] = {}
+        self._cache_page_ocr = self._shared_page_ocr_cache
         self._cache_max_items = 2048
         self._vision_message_format_supported: bool | None = None
         if self.cfg.llm:
@@ -234,7 +300,7 @@ class LLMWorker:
         last_err: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
-                if self._llm_sem is None:
+                if self._llm_gate is None:
                     return self._client_create_with_guard_timeout(
                         timeout_s=timeout_s,
                         has_image_payload=has_image_payload,
@@ -245,7 +311,7 @@ class LLMWorker:
                 sem_timeout = max(60.0, float(timeout_s) * 2.0)
                 # But cap at 120s to avoid infinite waits
                 sem_timeout = min(120.0, sem_timeout)
-                acquired = self._llm_sem.acquire(timeout=sem_timeout)
+                acquired = self._llm_gate.acquire(timeout=sem_timeout)
                 if not acquired:
                     raise TimeoutError(
                         f"LLM inflight slots saturated (KB_LLM_MAX_INFLIGHT). "
@@ -259,7 +325,7 @@ class LLMWorker:
                     )
                 finally:
                     try:
-                        self._llm_sem.release()
+                        self._llm_gate.release()
                     except Exception:
                         pass
             except TimeoutError as e:
@@ -286,6 +352,7 @@ class LLMWorker:
         speed_mode: str = 'normal',
         *,
         is_references_page: bool = False,
+        max_tokens_override: int | None = None,
     ) -> int:
         """Get max_tokens for vision calls, with an optional tighter cap for references pages."""
         try:
@@ -314,9 +381,19 @@ class LLMWorker:
         config_val = int(getattr(self.cfg.llm, "max_tokens", 0) or 0)
         if config_val > 0:
             if is_references_page:
-                return min(config_val, 3072)
-            return min(config_val, 4096)  # Respect config but cap at 4096
-        return default
+                chosen = min(config_val, 3072)
+            else:
+                chosen = min(config_val, 4096)  # Respect config but cap at 4096
+        else:
+            chosen = default
+
+        try:
+            override_val = int(max_tokens_override or 0)
+        except Exception:
+            override_val = 0
+        if override_val > 0:
+            chosen = min(chosen, max(1024, min(4096, override_val)))
+        return chosen
 
     def _sanitize_vl_markdown(self, md: str, *, is_references_page: bool = False) -> str:
         """
@@ -394,6 +471,41 @@ class LLMWorker:
                     cache.pop(k, None)
             except Exception:
                 cache.clear()
+
+    @classmethod
+    def clear_shared_page_ocr_cache(cls) -> None:
+        try:
+            cls._shared_page_ocr_cache.clear()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _vision_page_cache_enabled() -> bool:
+        try:
+            raw = str(os.environ.get("KB_PDF_VISION_PAGE_CACHE", "1") or "1").strip().lower()
+        except Exception:
+            raw = "1"
+        return raw in {"1", "true", "yes", "y", "on"}
+
+    def _build_page_ocr_cache_key(
+        self,
+        png_bytes: bytes,
+        *,
+        page_number: int,
+        total_pages: int,
+        hint: str,
+        speed_mode: str,
+        is_references_page: bool,
+    ) -> str:
+        import hashlib
+
+        img_h = hashlib.sha1(png_bytes).hexdigest()[:20]
+        hint_h = hashlib.sha1((hint or "").encode("utf-8", "ignore")).hexdigest()[:16]
+        model = str(getattr(self.cfg.llm, "model", "") or "").strip().lower()
+        return (
+            f"page_ocr:{model}:{speed_mode}:{int(bool(is_references_page))}:"
+            f"{int(page_number)}:{int(total_pages)}:{hint_h}:{img_h}"
+        )
 
     def _extract_json_array(self, s: str) -> Optional[list]:
         if not s:
@@ -690,6 +802,7 @@ class LLMWorker:
         hint: str = "",
         speed_mode: str = 'normal',
         is_references_page: bool = False,
+        max_tokens_override: int | None = None,
     ) -> Optional[str]:
         """
         Vision-based full-page conversion: send a page screenshot to the VL model
@@ -705,6 +818,23 @@ class LLMWorker:
             self._set_last_vl_error_code("unsupported_vision")
             return None
         self._set_last_vl_error_code("")
+
+        cache_key = None
+        if self._vision_page_cache_enabled():
+            try:
+                cache_key = self._build_page_ocr_cache_key(
+                    png_bytes,
+                    page_number=page_number,
+                    total_pages=total_pages,
+                    hint=hint,
+                    speed_mode=speed_mode,
+                    is_references_page=is_references_page,
+                )
+                cached = self._cache_page_ocr.get(cache_key)
+                if isinstance(cached, str) and cached.strip():
+                    return cached
+            except Exception:
+                cache_key = None
 
         b64 = base64.b64encode(png_bytes).decode("ascii")
         data_url = f"data:image/png;base64,{b64}"
@@ -791,6 +921,7 @@ class LLMWorker:
                 max_tokens=self._get_max_tokens_for_vision(
                     speed_mode=speed_mode,
                     is_references_page=is_references_page,
+                    max_tokens_override=max_tokens_override,
                 ),
             )
         except Exception as e:
@@ -857,6 +988,11 @@ class LLMWorker:
             out = self._sanitize_vl_markdown(out, is_references_page=is_references_page)
         except Exception:
             pass
+        if cache_key and out:
+            try:
+                self._cache_set(self._cache_page_ocr, cache_key, out)
+            except Exception:
+                pass
         return out or None
 
     def call_llm_confirm_and_level_heading(

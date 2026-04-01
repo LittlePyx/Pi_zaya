@@ -184,7 +184,7 @@ function createEmptyAssistantLocatePrep(bodyContent: string, refsUserMsgId = 0):
     hasStructuredProvenance: false,
     effectiveGuideSourcePath: '',
     strictProvenanceLocate: false,
-    structuredLocateButtonCap: 5,
+    structuredLocateButtonCap: 12,
     provenanceLocateEntries: [],
     structuredProvenanceSegmentsAll: [],
     provenanceStrictIdentityReady: false,
@@ -836,6 +836,18 @@ function shortSegmentLabel(input: string, maxLen = 84): string {
   return `${text.slice(0, Math.max(18, maxLen - 3)).trimEnd()}...`
 }
 
+function compactHeadingPath(input: string, maxLen = 56): string {
+  const raw = String(input || '').replace(/\s+/g, ' ').trim()
+  if (!raw) return ''
+  // Prefer the leaf section label rather than repeating the full paper title path.
+  const parts = raw.split('/').map((p) => p.trim()).filter(Boolean)
+  const leaf = (parts[parts.length - 1] || raw).trim()
+  const tail = parts.length >= 2 ? `${parts[parts.length - 2]} / ${leaf}` : leaf
+  const pick = tail.length >= 12 ? tail : leaf
+  if (pick.length <= maxLen) return pick
+  return `${pick.slice(0, Math.max(18, maxLen - 3)).trimEnd()}...`
+}
+
 function normalizeSourcePathForMatch(input: string): string {
   return String(input || '').trim().replace(/\\/g, '/').toLowerCase()
 }
@@ -894,6 +906,7 @@ function buildStructuredProvenanceLocateEntries(
     if (!currentSegment) continue
     const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
     const primaryBlockId = String(segment.primary_block_id || '').trim()
+    const primaryAnchorId = String(segment.primary_anchor_id || '').trim()
     const supportBlockIdsRaw = Array.isArray(segment.support_block_ids) ? segment.support_block_ids : []
     const evidenceBlockIdsRaw = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
     const claimType = String(segment.claim_type || currentSegment.claimType || '').trim().toLowerCase()
@@ -984,7 +997,10 @@ function buildStructuredProvenanceLocateEntries(
       const blockText = stripMarkdownInline(String(block.text || '')).trim()
       const headingPath = String(block.heading_path || '').trim()
       const anchorId = String(block.anchor_id || '').trim()
-      const anchorKind = String(segmentAnchorKind || block.kind || '').trim().toLowerCase()
+      const blockKind = String(block.kind || '').trim().toLowerCase()
+      let anchorKind = String(segmentAnchorKind || blockKind || '').trim().toLowerCase()
+      if (blockKind === 'equation') anchorKind = 'equation'
+      if (blockKind === 'figure') anchorKind = 'figure'
       const anchorNumberRaw = Number(segmentEquationNumber || block.number || 0)
       const focusSnippet = segmentAnchorText || evidenceQuote || blockText || segmentText || headingPath
       if (!focusSnippet) continue
@@ -1005,10 +1021,35 @@ function buildStructuredProvenanceLocateEntries(
     }
     if (candidates.length <= 0) continue
 
-    const primary = candidates[0]
+    const rankedCandidates = [...candidates].sort((a, b) => {
+      const scoreB = scoreStructuredPrimaryCandidate(b, {
+        claimType,
+        anchorKind: segmentAnchorKind,
+        anchorText: segmentAnchorText,
+        evidenceQuote,
+        segmentText,
+        equationNumber: segmentEquationNumber,
+        primaryBlockId,
+        primaryAnchorId,
+      })
+      const scoreA = scoreStructuredPrimaryCandidate(a, {
+        claimType,
+        anchorKind: segmentAnchorKind,
+        anchorText: segmentAnchorText,
+        evidenceQuote,
+        segmentText,
+        equationNumber: segmentEquationNumber,
+        primaryBlockId,
+        primaryAnchorId,
+      })
+      if (scoreB !== scoreA) return scoreB - scoreA
+      return candidates.indexOf(a) - candidates.indexOf(b)
+    })
+
+    const primary = rankedCandidates[0]
     const alternatives = [
       primary,
-      ...candidates.filter((cand) => cand !== primary),
+      ...rankedCandidates.filter((cand) => cand !== primary),
     ]
     const entry: ProvenanceLocateEntry = {
       segmentId,
@@ -1115,7 +1156,39 @@ function buildStructuredProvenanceLocateEntries(
     ...mustLocateEntries,
     ...optionalEntries.slice(0, Math.max(0, maxEntries - mustLocateEntries.length)),
   ]
-  return limited
+
+  // Deduplicate by primary evidence block id to avoid repeating the same source block across multiple segments.
+  // Prefer required/must-locate entries; otherwise prefer higher score.
+  const bestByBlock = new Map<string, (typeof limited)[number]>()
+  for (const item of limited) {
+    const blockId = String(item.entry?.primary?.blockId || '').trim()
+    const anchorId = String(item.entry?.primary?.anchorId || '').trim()
+    const key = blockId || (anchorId ? `${item.entry.primary.sourcePath}::${anchorId}` : '')
+    if (!key) continue
+    const prev = bestByBlock.get(key)
+    if (!prev) {
+      bestByBlock.set(key, item)
+      continue
+    }
+    const prevRequired = Boolean(prev.entry.mustLocate || prev.entry.locatePolicy === 'required')
+    const curRequired = Boolean(item.entry.mustLocate || item.entry.locatePolicy === 'required')
+    if (curRequired && !prevRequired) {
+      bestByBlock.set(key, item)
+      continue
+    }
+    if (curRequired === prevRequired) {
+      if (item.score > prev.score + 1e-6) {
+        bestByBlock.set(key, item)
+        continue
+      }
+      if (Math.abs(item.score - prev.score) <= 1e-6 && item.idx < prev.idx) {
+        bestByBlock.set(key, item)
+        continue
+      }
+    }
+  }
+  const deduped = Array.from(bestByBlock.values())
+  return deduped
     .sort((a, b) => a.idx - b.idx)
     .map((item) => item.entry)
 }
@@ -1883,6 +1956,77 @@ function scoreLocateCandidate(snippet: string, cand: LocateCandidate): number {
   return score
 }
 
+function scoreStructuredPrimaryCandidate(
+  cand: LocateCandidate,
+  opts: {
+    claimType?: string
+    anchorKind?: string
+    anchorText?: string
+    evidenceQuote?: string
+    segmentText?: string
+    equationNumber?: number
+    primaryBlockId?: string
+    primaryAnchorId?: string
+  },
+): number {
+  const claimType = String(opts.claimType || '').trim().toLowerCase()
+  const anchorKind = String(opts.anchorKind || '').trim().toLowerCase()
+  const anchorText = String(opts.anchorText || '').trim()
+  const evidenceQuote = String(opts.evidenceQuote || '').trim()
+  const segmentText = String(opts.segmentText || '').trim()
+  const seed = anchorText || evidenceQuote || segmentText || String(cand.focusSnippet || '').trim()
+  let score = scoreLocateCandidate(seed, cand)
+
+  const candKind = String(cand.anchorKind || '').trim().toLowerCase()
+  const candHeading = String(cand.headingPath || '').trim().toLowerCase()
+  const candNumber = Number.isFinite(Number(cand.anchorNumber || 0))
+    ? Math.max(0, Math.floor(Number(cand.anchorNumber || 0)))
+    : 0
+  const equationNumber = Number.isFinite(Number(opts.equationNumber || 0))
+    ? Math.max(0, Math.floor(Number(opts.equationNumber || 0)))
+    : 0
+
+  if (opts.primaryBlockId && String(cand.blockId || '').trim() === String(opts.primaryBlockId || '').trim()) {
+    score += 0.12
+  }
+  if (opts.primaryAnchorId && String(cand.anchorId || '').trim() === String(opts.primaryAnchorId || '').trim()) {
+    score += 0.08
+  }
+  if (anchorKind && candKind === anchorKind) {
+    score += 0.42
+  }
+
+  if (claimType === 'formula_claim') {
+    if (candKind === 'equation') score += 1.55
+    else if (candKind) score -= 0.72
+    if (equationNumber > 0 && candNumber === equationNumber) score += 0.95
+    if (candHeading.includes('figure')) score -= 0.26
+  } else if (claimType === 'inline_formula_claim') {
+    if (candKind === 'equation') score += 1.1
+    else if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.58
+  } else if (claimType === 'equation_explanation_claim') {
+    if (candKind === 'equation') score -= 0.62
+    if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.74
+    if (equationNumber > 0 && candNumber === equationNumber) score += 0.08
+  } else if (claimType === 'figure_claim') {
+    if (candKind === 'figure') score += 1.18
+    else if (candKind) score -= 0.34
+  } else if (claimType === 'quote_claim') {
+    if (candKind === 'quote') score += 1.02
+    else if (candKind === 'blockquote') score += 0.48
+    else if (candKind) score -= 0.2
+  } else if (claimType === 'blockquote_claim') {
+    if (candKind === 'blockquote') score += 1.0
+    else if (candKind === 'quote') score += 0.42
+    else if (candKind) score -= 0.18
+  } else if (claimType === 'method_detail' || claimType === 'prior_work' || claimType === 'doc_map') {
+    if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.34
+    if (candKind === 'equation' || candKind === 'figure') score -= 0.28
+  }
+
+  return score
+}
+
 function isImageOnlyPlaceholder(content: string) {
   return /^\[Image attachment x\d+\]$/i.test(String(content || '').trim())
 }
@@ -2524,6 +2668,7 @@ export function MessageList({
     open: false,
     items: [],
   })
+  const flushShelfSnapshotRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     const sourcePath = String(paperGuideSourcePath || '').trim()
@@ -2817,9 +2962,34 @@ export function MessageList({
     return () => window.removeEventListener('storage', onStorage)
   }, [activeConvId])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     latestShelfStateRef.current = { convId: activeConvId, open: shelfOpen, items: shelfItems }
   }, [activeConvId, shelfItems, shelfOpen])
+
+  useEffect(() => {
+    flushShelfSnapshotRef.current = () => {
+      if (persistShelfTimerRef.current !== null) {
+        window.clearTimeout(persistShelfTimerRef.current)
+        persistShelfTimerRef.current = null
+      }
+      const latest = latestShelfStateRef.current
+      const storageKey = shelfStorageKey(latest.convId)
+      const currentRevision = Number(shelfRevisionByKeyRef.current[storageKey] || 0)
+      const nextRevision = persistShelfSnapshot(
+        storageKey,
+        { open: latest.open, items: latest.items },
+        currentRevision,
+      )
+      shelfRevisionByKeyRef.current[storageKey] = nextRevision
+      activeStorageKeyRef.current = storageKey
+    }
+    return () => {
+      if (flushShelfSnapshotRef.current) {
+        flushShelfSnapshotRef.current()
+      }
+      flushShelfSnapshotRef.current = null
+    }
+  }, [])
 
   useEffect(() => {
     setSelectedSavedSnapshotId((current) => {
@@ -2834,6 +3004,18 @@ export function MessageList({
         window.clearTimeout(persistShelfTimerRef.current)
         persistShelfTimerRef.current = null
       }
+    }
+  }, [])
+
+  useEffect(() => {
+    const flushShelfSnapshot = () => {
+      flushShelfSnapshotRef.current?.()
+    }
+    window.addEventListener('pagehide', flushShelfSnapshot)
+    window.addEventListener('beforeunload', flushShelfSnapshot)
+    return () => {
+      window.removeEventListener('pagehide', flushShelfSnapshot)
+      window.removeEventListener('beforeunload', flushShelfSnapshot)
     }
   }, [])
 
@@ -3305,7 +3487,7 @@ export function MessageList({
         || '',
       ).trim()
       const strictProvenanceLocate = Boolean(effectiveGuideSourcePath)
-      const structuredLocateButtonCap = 5
+      const structuredLocateButtonCap = 12
       const provenanceLocateEntries = buildStructuredProvenanceLocateEntries(
         messageProvenance,
         {
@@ -3551,6 +3733,11 @@ export function MessageList({
             const hasStrictMustLocateEntries = prep?.hasStrictMustLocateEntries || false
             const strictStructuredLocateOnly = prep?.strictStructuredLocateOnly || false
             const strictStructuredInlineLocate = prep?.strictStructuredInlineLocate || false
+            const guideInlineTextTailLocate = Boolean(
+              guideSourcePath
+              && provenanceLocateEntries.length > 0
+              && !strictStructuredLocateOnly,
+            )
             const provenanceModeLabel = prep?.provenanceModeLabel || ''
             const structuredRenderSlotMap = prep?.structuredRenderSlotMap || new Map<number, StructuredRenderLocateSlot>()
             const structuredLocateOrderBySegmentId = prep?.structuredLocateOrderBySegmentId || new Map<string, number>()
@@ -3773,6 +3960,14 @@ export function MessageList({
                 fallback: true,
               }
             }
+            const resolveExactStructuredInlineResolution = (
+              snippet: string,
+              meta?: LocateRenderMetaLite,
+            ): StructuredLocateResolution | null => {
+              const resolved = resolveStructuredInlineResolution(snippet, meta)
+              if (!resolved || resolved.fallback) return null
+              return resolved
+            }
             const resolveProvenanceLocateCandidates = (snippet: string, limit = 4): LocateCandidate[] => {
               const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || '')))
               const key = normalizeLocateText(raw).slice(0, 360)
@@ -3852,6 +4047,7 @@ export function MessageList({
               strictStructuredLocateOnly
               || strictStructuredInlineLocate
               || hasDirectProvenance
+              || provenanceLocateEntries.length > 0
               || locateCandidates.length > 0
             )
             const resolveCache = new Map<string, LocateCandidate[]>()
@@ -4279,10 +4475,11 @@ export function MessageList({
                         onCitationClick={openCitation}
                         inlineLocateTokenPolicy={enableLocateUi && guideSourcePath ? { quote: true, figure_ref: true } : undefined}
                         inlineTextLocateEnabled={enableLocateUi ? (!guideSourcePath || strictStructuredInlineLocate) : false}
+                        inlineTextTailLocateEnabled={enableLocateUi ? guideInlineTextTailLocate : false}
                         locateSurfacePolicy={enableLocateUi && guideSourcePath
                           ? {
-                            paragraph: false,
-                            list_item: false,
+                            paragraph: guideInlineTextTailLocate,
+                            list_item: guideInlineTextTailLocate,
                             quote: true,
                             blockquote: true,
                             equation: true,
@@ -4292,11 +4489,11 @@ export function MessageList({
                         canLocateSnippet={enableLocateUi ? ((snippet, meta) => {
                           if (strictStructuredLocateOnly) {
                             if (!strictStructuredInlineLocate) return false
-                            const resolved = resolveStructuredInlineResolution(snippet, meta)
+                            const resolved = resolveExactStructuredInlineResolution(snippet, meta)
                             const entry = resolved?.entry || null
                             if (!entry) return false
                             const order = Number(resolved?.order || 0)
-                            if (!resolved?.fallback && !allowedStructuredRenderOrders.has(order)) return false
+                            if (!allowedStructuredRenderOrders.has(order)) return false
                             const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
                             if (!['quote', 'blockquote', 'equation', 'figure'].includes(targetKind)) {
                               return false
@@ -4360,10 +4557,10 @@ export function MessageList({
                           ? (snippet, meta) => {
                             if (strictStructuredLocateOnly) {
                               if (!strictStructuredInlineLocate) return
-                              const resolved = resolveStructuredInlineResolution(snippet, meta)
+                              const resolved = resolveExactStructuredInlineResolution(snippet, meta)
                               const entry = resolved?.entry || null
                               if (!entry) return
-                              if (!resolved?.fallback && !allowedStructuredRenderOrders.has(Number(resolved?.order || 0))) return
+                              if (!allowedStructuredRenderOrders.has(Number(resolved?.order || 0))) return
                               openReaderByStructuredEntry(entry, snippet)
                               return
                             }
@@ -4382,7 +4579,7 @@ export function MessageList({
                           : undefined}
                         locateTitleResolver={enableLocateUi ? ((snippet) => {
                           if (strictStructuredLocateOnly) {
-                            const resolved = resolveStructuredInlineResolution(snippet)
+                            const resolved = resolveExactStructuredInlineResolution(snippet)
                             const entry = resolved?.entry || null
                             if (entry) {
                               const heading = String(entry.primary.headingPath || '').trim()
@@ -4399,6 +4596,50 @@ export function MessageList({
                           return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587'
                         }) : undefined}
                       />
+                      {Boolean(onOpenReader) && provenanceLocateEntries.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {provenanceLocateEntries.map((entry, idx) => {
+                            const heading = String(entry.primary?.headingPath || '').trim()
+                            const label = String(entry.label || '').trim()
+                            const snippet = shortSegmentLabel(
+                              String(entry.anchorText || entry.evidenceQuote || entry.segmentText || label || ''),
+                              72,
+                            )
+                            const headingLite = compactHeadingPath(heading, 56)
+                            const text = snippet
+                              || label
+                              || headingLite
+                              || '\u539f\u6587\u8bc1\u636e'
+                            const seedSnippet = String(
+                              entry.evidenceQuote
+                              || entry.anchorText
+                              || entry.segmentText
+                              || entry.label
+                              || '',
+                            ).trim()
+                            const focusSnippet = String(entry.primary?.focusSnippet || entry.primary?.matchText || seedSnippet || '').trim()
+                            return (
+                              <button
+                                key={`${message.id}::prov::${String(entry.segmentId || idx)}::${idx}`}
+                                type="button"
+                                className="kb-prov-locate-chip"
+                                aria-label={'\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e'}
+                                title={heading
+                                  ? `\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e\uff1a${heading}`
+                                  : (headingLite ? `\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e\uff1a${headingLite}` : '\u5b9a\u4f4d\u5230\u539f\u6587\u8bc1\u636e')}
+                                data-kb-locate-focus={focusSnippet.slice(0, 220)}
+                                data-kb-locate-block-id={String(entry.primary?.blockId || '').trim()}
+                                data-kb-locate-anchor-id={String(entry.primary?.anchorId || '').trim()}
+                                data-kb-locate-heading={String(entry.primary?.headingPath || '').trim()}
+                                onClick={() => openReaderByStructuredEntry(entry, seedSnippet)}
+                              >
+                                <span className="kb-prov-locate-chip-num">{`\u8bc1\u636e${idx + 1}`}</span>
+                                <span className="kb-prov-locate-chip-text">{text}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ) : null}
                       <CopyBar
                         text={message.copy_text || message.content}
                         markdown={message.copy_markdown}

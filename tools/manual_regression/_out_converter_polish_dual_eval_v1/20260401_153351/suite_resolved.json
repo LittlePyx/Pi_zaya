@@ -1,0 +1,397 @@
+{
+  "suite_id": "paper_guide_converter_polish_dual_eval_v1",
+  "title": "Paper Guide Converter Polish Dual Eval v1",
+  "prefs_patch": {
+    "answer_contract_v1": true,
+    "answer_depth_auto": true,
+    "answer_mode_hint": "reading",
+    "answer_output_mode": "reading_guide"
+  },
+  "generate_body": {
+    "top_k": 10,
+    "deep_read": true,
+    "max_tokens": 5200,
+    "temperature": 0.25
+  },
+  "default_checks": {
+    "structured_markers": {
+      "forbid_raw_structured_cites": true,
+      "forbid_raw_support_markers": true
+    },
+    "quality": {
+      "minimum_ok_required": true
+    }
+  },
+  "papers": [
+    {
+      "id": "cvpr_2024_scinerf_polish_v8",
+      "title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (text polish v8)",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_text_polish_v8\\output.md",
+      "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+      "cases": [
+        {
+          "id": "SCINERF2024_V7_CITATION_ADMM",
+          "title": "ADMM citation in SCI decoding",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "converter_polish",
+            "citation_lookup",
+            "reference_quality",
+            "core"
+          ],
+          "prompt": "In the Related Work section, the authors say many optimization-based SCI methods employ ADMM. Which reference do they cite for ADMM, and where is that stated exactly? Provide the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "ADMM",
+                "alternating direction method of multipliers"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                4
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Related Work",
+                "Snapshot Compressive Imaging"
+              ],
+              "anchor_contains_any": [
+                "alternating direction method of multipliers",
+                "ADMM"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_polish_v8",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (text polish v8)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_text_polish_v8\\output.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_V7_METHOD_IMPL_ITER_BATCH",
+          "title": "Implementation details: iterations and batch size (rays)",
+          "prompt_family": "method",
+          "tags": [
+            "converter_polish",
+            "method_exact_support",
+            "false_miss",
+            "core"
+          ],
+          "prompt": "In the Implementation details paragraph (Experiments section), how many iterations do they train for, and what is the batch size measured in rays? Point me to the exact supporting sentence(s) and make sure the jump target is correct.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "iterations",
+                "100",
+                "200",
+                "5000",
+                "rays",
+                "batch size"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not contain",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Experiments",
+                "Implementation details"
+              ],
+              "anchor_contains_any": [
+                "100-200K iterations",
+                "5000 rays",
+                "batch size"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_polish_v8",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (text polish v8)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_text_polish_v8\\output.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_V7_FIG3_CAPTION_COMPONENTS",
+          "title": "Figure 3 experimental setup caption",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "converter_polish",
+            "figure_locate",
+            "core"
+          ],
+          "prompt": "For Figure 3, which key components are listed in the experimental setup caption? Point me to the exact supporting caption sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "CCD",
+                "DMD",
+                "relay lens",
+                "camera"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 3"
+              ],
+              "anchor_contains_any": [
+                "Experimental setup for real dataset collection",
+                "CCD camera",
+                "DMD"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_polish_v8",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (text polish v8)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_text_polish_v8\\output.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_V7_FIG4_SCENES",
+          "title": "Figure 4 synthetic scenes caption",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "converter_polish",
+            "figure_locate",
+            "figure_caption_quality"
+          ],
+          "prompt": "For Figure 4, which scenes do the authors say are shown from top to bottom in the synthetic dataset evaluation? Point me to the exact supporting caption sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Cozy2room",
+                "Tanabata",
+                "Factory",
+                "Vender"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 4"
+              ],
+              "anchor_contains_any": [
+                "Cozy2room",
+                "Tanabata",
+                "Factory",
+                "Vender"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf_polish_v8",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image (text polish v8)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_scinerf_text_polish_v8\\output.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        }
+      ]
+    },
+    {
+      "id": "natcommun_2023_spad_sr_polish_v3",
+      "title": "High-resolution single-photon imaging with physics-informed deep learning (text polish v3)",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_natcommun2023_text_polish_v3\\output.md",
+      "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf",
+      "cases": [
+        {
+          "id": "NC2023_POLISH_CITATION_TRANSFORMER_FRAMEWORK",
+          "title": "Transformer framework citations",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "converter_polish",
+            "citation_lookup",
+            "core"
+          ],
+          "prompt": "Which references do the authors cite for the transformer framework, and where is that stated exactly? Give the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "transformer framework"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                33,
+                34
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "anchor_contains_any": [
+                "transformer framework"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2023_spad_sr_polish_v3",
+          "paper_title": "High-resolution single-photon imaging with physics-informed deep learning (text polish v3)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_natcommun2023_text_polish_v3\\output.md",
+          "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf"
+        },
+        {
+          "id": "NC2023_POLISH_CITATION_PASCAL_VOC",
+          "title": "PASCAL VOC dataset citations",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "converter_polish",
+            "citation_lookup",
+            "reference_quality",
+            "core"
+          ],
+          "prompt": "The authors mention using off-the-shelf public high-resolution images from PASCAL VOC2007/VOC2012 to synthesize training data. Which references correspond to those datasets, and where is that stated exactly?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "PASCAL",
+                "VOC2007",
+                "VOC2012"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                31,
+                32
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "anchor_contains_any": [
+                "PASCAL",
+                "VOC2007",
+                "VOC2012"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2023_spad_sr_polish_v3",
+          "paper_title": "High-resolution single-photon imaging with physics-informed deep learning (text polish v3)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_natcommun2023_text_polish_v3\\output.md",
+          "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf"
+        },
+        {
+          "id": "NC2023_POLISH_METHOD_NETWORK_TRAINING",
+          "title": "Network training exact details",
+          "prompt_family": "method",
+          "tags": [
+            "converter_polish",
+            "method_exact_support",
+            "core"
+          ],
+          "prompt": "In the Network training section, what framework (PyTorch), optimizer, initial learning rate, and batch size did they use? Point me to the exact supporting sentence(s) and make sure the jump target is correct.",
+          "checks": {
+            "answer": {
+              "contains_all": [
+                "Pytorch",
+                "Adam",
+                "0.0003",
+                "batch size",
+                "24"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does **not** contain",
+                "does not contain",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Network training"
+              ],
+              "anchor_contains_any": [
+                "Pytorch",
+                "Adam",
+                "learning rate",
+                "batch size"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2023_spad_sr_polish_v3",
+          "paper_title": "High-resolution single-photon imaging with physics-informed deep learning (text polish v3)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_natcommun2023_text_polish_v3\\output.md",
+          "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf"
+        },
+        {
+          "id": "NC2023_POLISH_FIGURE6_PANEL_B_CLAUSE",
+          "title": "Figure 6 panel (b) caption clause jump",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "converter_polish",
+            "figure_panel_locate",
+            "core"
+          ],
+          "prompt": "For Figure 6 panel (b), what exactly does that panel show? Point me to the exact supporting caption clause.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Figure 6",
+                "panel b",
+                "U-net",
+                "transformer"
+              ]
+            },
+            "figure_panel": {
+              "required": true,
+              "panel_letters": [
+                "b"
+              ],
+              "heading_includes_any": [
+                "Workflow and structure",
+                "Figure 6"
+              ],
+              "anchor_contains_any": [
+                "enhancement comparison",
+                "U-net"
+              ],
+              "claim_types": [
+                "figure_panel"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Workflow and structure",
+                "Figure 6"
+              ],
+              "anchor_contains_any": [
+                "enhancement comparison",
+                "U-net"
+              ],
+              "claim_types": [
+                "figure_panel"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "natcommun_2023_spad_sr_polish_v3",
+          "paper_title": "High-resolution single-photon imaging with physics-informed deep learning (text polish v3)",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\tmp\\reconvert_natcommun2023_text_polish_v3\\output.md",
+          "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf"
+        }
+      ]
+    }
+  ]
+}

@@ -7,6 +7,8 @@ from typing import Optional
 BG_LOCK = threading.Lock()
 BG_STATE = {
     "queue": [],
+    "active_tasks": [],
+    "active_count": 0,
     "running": False,
     "done": 0,
     "total": 0,
@@ -18,6 +20,7 @@ BG_STATE = {
     "last": "",
 }
 BG_THREAD: Optional[threading.Thread] = None
+BG_THREADS: list[threading.Thread] = []
 
 
 GEN_LOCK = threading.Lock()

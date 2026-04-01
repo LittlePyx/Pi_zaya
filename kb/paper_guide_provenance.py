@@ -7,6 +7,7 @@ import uuid
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from kb.paper_guide_contracts import _normalize_paper_guide_support_resolution
 from kb.paper_guide_shared import (
     DeepSeekChat,
     _CLAIM_EXPERIMENT_HINT_RE,
@@ -49,6 +50,8 @@ from kb.paper_guide_shared import (
 )
 
 _PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION = 4
+_CITE_MARKER_RE = re.compile(r"\[\[\s*CITE\s*:\s*[A-Za-z0-9_-]{4,24}\s*:\s*\d{1,4}\s*\]\]", re.IGNORECASE)
+_SUPPORT_MARKER_RE = re.compile(r"\[\[\s*SUPPORT\s*:\s*[A-Za-z0-9_-]{4,32}\s*\]\]", re.IGNORECASE)
 
 
 def _normalize_fs_path_for_match(value: str) -> str:
@@ -87,6 +90,454 @@ def _source_stem_identity(value: str) -> str:
     return _source_basename_identity(name)
 
 
+def _source_identities_match(left: str, right: str) -> bool:
+    lhs = _source_basename_identity(left)
+    rhs = _source_basename_identity(right)
+    if (not lhs) or (not rhs):
+        return False
+    if lhs == rhs:
+        return True
+    short, long = (lhs, rhs) if len(lhs) <= len(rhs) else (rhs, lhs)
+    if (len(short) >= 18) and (short in long):
+        return True
+    short_tokens = [tok for tok in short.split() if tok]
+    long_tokens = [tok for tok in long.split() if tok]
+    if (len(short_tokens) < 6) or (len(long_tokens) <= len(short_tokens)):
+        return False
+    prefix_len = 0
+    while prefix_len < len(short_tokens) and prefix_len < len(long_tokens):
+        if short_tokens[prefix_len] != long_tokens[prefix_len]:
+            break
+        prefix_len += 1
+    suffix_len = 0
+    while suffix_len < (len(short_tokens) - prefix_len) and suffix_len < len(long_tokens):
+        if short_tokens[-(suffix_len + 1)] != long_tokens[-(suffix_len + 1)]:
+            break
+        suffix_len += 1
+    return bool(prefix_len >= 4 and suffix_len >= 3 and (prefix_len + suffix_len) >= max(6, len(short_tokens) - 2))
+
+
+def _normalize_support_resolution_surface(text: str) -> str:
+    src = str(text or "")
+    if not src:
+        return ""
+    src = _CITE_MARKER_RE.sub(" ", src)
+    src = _SUPPORT_MARKER_RE.sub(" ", src)
+    src = normalize_inline_markdown(src)
+    src = re.sub(r"\s+([,.;:!?])", r"\1", src)
+    return re.sub(r"\s+", " ", src).strip().lower()
+
+
+def _support_heading_with_figure_local(heading_path: str, *, figure_number: int) -> str:
+    heading = str(heading_path or "").strip()
+    try:
+        fig_num = int(figure_number or 0)
+    except Exception:
+        fig_num = 0
+    if fig_num <= 0:
+        return heading
+    if re.search(rf"(?i)\bfig(?:ure)?\.?\s*{int(fig_num)}\b", heading):
+        return heading
+    if heading:
+        return f"{heading} / Figure {int(fig_num)}"
+    return f"Figure {int(fig_num)}"
+
+
+def _support_heading_with_box_local(heading_path: str, *, box_number: int) -> str:
+    heading = str(heading_path or "").strip()
+    try:
+        box_num = int(box_number or 0)
+    except Exception:
+        box_num = 0
+    if box_num <= 0:
+        return heading
+    if re.search(rf"(?i)\bbox\s*{int(box_num)}\b", heading):
+        return heading
+    if heading:
+        return f"{heading} / Box {int(box_num)}"
+    return f"Box {int(box_num)}"
+
+
+def _support_heading_for_box_target_local(
+    heading_path: str,
+    *,
+    box_number: int,
+    box_only: bool,
+) -> str:
+    try:
+        box_num = int(box_number or 0)
+    except Exception:
+        box_num = 0
+    if box_num <= 0:
+        return str(heading_path or "").strip()
+    if box_only:
+        return f"Box {int(box_num)}"
+    return _support_heading_with_box_local(heading_path, box_number=box_num)
+
+
+def _plain_text_support_locate_anchor_local(text: str) -> str:
+    plain = str(text or "").strip()
+    if not plain:
+        return ""
+    plain = plain.replace("\\ge", ">=").replace("\\le", "<=").replace("\\log", "log")
+    plain = re.sub(r"\$+", "", plain)
+    plain = re.sub(r"\s+", " ", plain).strip()
+    return plain
+
+
+def _canonicalize_support_segment_heading(seg: dict) -> dict:
+    seg_out = dict(seg or {})
+    heading = str(seg_out.get("primary_heading_path") or "").strip()
+    support_claim_type = str(seg_out.get("support_slot_claim_type") or "").strip().lower()
+    claim_type = str(seg_out.get("claim_type") or "").strip().lower()
+    anchor_kind = str(seg_out.get("anchor_kind") or "").strip().lower()
+    support_locate_anchor = str(seg_out.get("support_locate_anchor") or "").strip()
+    try:
+        support_target_fig = int(seg_out.get("support_slot_figure_number") or 0)
+    except Exception:
+        support_target_fig = 0
+    if support_target_fig <= 0:
+        for raw_fig in (
+            seg_out.get("paper_figure_number"),
+            seg_out.get("anchor_target_number"),
+            seg_out.get("figure_number"),
+            seg_out.get("number"),
+        ):
+            try:
+                support_target_fig = int(raw_fig or 0)
+            except Exception:
+                support_target_fig = 0
+            if support_target_fig > 0:
+                break
+    figure_like_segment = bool(
+        support_claim_type in {"figure_claim", "figure_panel"}
+        or claim_type in {"figure_claim", "figure_panel"}
+        or anchor_kind == "figure"
+        or str(seg_out.get("figure_id") or "").strip()
+    )
+    if support_target_fig <= 0 and figure_like_segment:
+        support_target_fig = int(
+            _extract_figure_number(
+                "\n".join(
+                    part
+                    for part in [
+                        heading,
+                        str(seg_out.get("anchor_text") or "").strip(),
+                        support_locate_anchor,
+                        str(seg_out.get("evidence_quote") or "").strip(),
+                        str(seg_out.get("text") or "").strip(),
+                    ]
+                    if str(part or "").strip()
+                )
+            )
+            or 0
+        )
+    try:
+        support_target_box = int(seg_out.get("support_slot_box_number") or 0)
+    except Exception:
+        support_target_box = 0
+    support_panel_letters = [
+        str(ch or "").strip().lower()
+        for ch in list(seg_out.get("support_slot_panel_letters") or [])
+        if str(ch or "").strip()
+    ]
+    if support_claim_type != "figure_panel" and support_target_fig <= 0:
+        support_panel_letters = []
+    box_only = bool(
+        support_target_box > 0
+        and support_target_fig <= 0
+        and not support_panel_letters
+    )
+    heading = _support_heading_with_figure_local(
+        heading,
+        figure_number=int(support_target_fig or 0),
+    )
+    heading = _support_heading_for_box_target_local(
+        heading,
+        box_number=int(support_target_box or 0),
+        box_only=box_only,
+    )
+    if heading:
+        seg_out["primary_heading_path"] = heading
+    if support_target_box > 0 and support_locate_anchor:
+        plain_anchor = _plain_text_support_locate_anchor_local(support_locate_anchor)
+        if plain_anchor:
+            seg_out["support_locate_anchor"] = plain_anchor[:900]
+    if support_locate_anchor and (support_target_fig > 0 or support_target_box > 0):
+        seg_out["locate_policy"] = "required"
+        seg_out["locate_surface_policy"] = "primary"
+        seg_out["must_locate"] = True
+    return seg_out
+
+
+def _annotate_segments_with_support_resolution(
+    segments: list[dict],
+    *,
+    support_resolution: list[dict] | None,
+    block_lookup: dict[str, dict],
+) -> list[dict]:
+    records: list[dict] = []
+    for item in list(support_resolution or []):
+        if not isinstance(item, dict):
+            continue
+        rec = _normalize_paper_guide_support_resolution(item)
+        # Important: the contracts layer defaults missing `segment_index` to 0.
+        # Preserve whether the caller provided a usable segment index, but allow
+        # negative sentinels (for example -1 from deterministic exact-support
+        # postprocess) to fall back to surface-based matching.
+        try:
+            raw_segment_index = item.get("segment_index")
+            segment_index_value = (
+                int(raw_segment_index)
+                if (raw_segment_index is not None and str(raw_segment_index).strip())
+                else -1
+            )
+        except Exception:
+            segment_index_value = -1
+        rec["_segment_index_provided"] = bool(
+            ("segment_index" in item)
+            and (item.get("segment_index") is not None)
+            and (segment_index_value >= 0)
+        )
+        records.append(rec)
+    if not records:
+        return list(segments or [])
+    by_segment_index: dict[int, list[tuple[int, dict]]] = {}
+    by_surface: dict[str, list[tuple[int, dict]]] = {}
+    for idx, rec in enumerate(records):
+        try:
+            raw_seg_idx = rec.get("segment_index")
+            seg_idx = int(raw_seg_idx) if raw_seg_idx is not None else -1
+        except Exception:
+            seg_idx = -1
+        if bool(rec.get("_segment_index_provided")) and seg_idx >= 0:
+            by_segment_index.setdefault(seg_idx, []).append((idx, rec))
+        # Only allow surface-based matching when the record does not carry an explicit segment_index.
+        # This prevents a record meant for a specific segment from being applied to a different segment
+        # due to normalization collisions.
+        if not bool(rec.get("_segment_index_provided")):
+            rec_norm = _normalize_support_resolution_surface(str(rec.get("segment_text") or ""))
+            if rec_norm:
+                by_surface.setdefault(rec_norm, []).append((idx, rec))
+    used: set[int] = set()
+    out: list[dict] = []
+    for ordinal_idx, seg in enumerate(segments or []):
+        seg_out = dict(seg or {})
+        seg_norm = _normalize_support_resolution_surface(
+            str(seg_out.get("raw_markdown") or seg_out.get("text") or "")
+        )
+        chosen_idx = -1
+        rec: dict | None = None
+
+        direct_rows = [
+            (idx, item)
+            for idx, item in list(by_segment_index.get(int(ordinal_idx), []) or [])
+            if idx not in used
+        ]
+        if direct_rows:
+            direct_rows.sort(
+                key=lambda pair: (
+                    1 if str(pair[1].get("block_id") or "").strip() else 0,
+                    1 if int(pair[1].get("resolved_ref_num") or 0) > 0 else 0,
+                    len(str(pair[1].get("locate_anchor") or "").strip()),
+                ),
+                reverse=True,
+            )
+            chosen_idx, rec = direct_rows[0]
+        elif seg_norm:
+            exact_rows = [
+                (idx, item)
+                for idx, item in list(by_surface.get(seg_norm, []) or [])
+                if idx not in used
+            ]
+            if exact_rows:
+                exact_rows.sort(
+                    key=lambda pair: (
+                        1 if str(pair[1].get("block_id") or "").strip() else 0,
+                        1 if int(pair[1].get("resolved_ref_num") or 0) > 0 else 0,
+                        len(str(pair[1].get("locate_anchor") or "").strip()),
+                    ),
+                    reverse=True,
+                )
+                chosen_idx, rec = exact_rows[0]
+
+        if chosen_idx >= 0 and isinstance(rec, dict):
+            used.add(chosen_idx)
+            seg_out["support_doc_k"] = int(rec.get("doc_idx") or 0)
+            seg_out["support_slot_claim_type"] = str(rec.get("claim_type") or "").strip()
+            seg_out["support_slot_cite_policy"] = str(rec.get("cite_policy") or "").strip()
+            seg_out["support_ref_candidates"] = [
+                int(n)
+                for n in list(rec.get("candidate_refs") or [])
+                if str(n).strip().isdigit() and int(n) > 0
+            ]
+            seg_out["resolved_ref_num"] = int(rec.get("resolved_ref_num") or 0)
+            seg_out["citation_resolution_mode"] = str(rec.get("citation_resolution_mode") or "").strip()
+            seg_out["support_locate_anchor"] = str(rec.get("locate_anchor") or "").strip()[:900]
+            support_claim_type = str(rec.get("claim_type") or "").strip().lower()
+            support_locate_anchor = str(rec.get("locate_anchor") or "").strip()
+            support_heading_path = str(rec.get("heading_path") or "").strip()
+            support_target_scope = dict(rec.get("target_scope") or {}) if isinstance(rec.get("target_scope"), dict) else {}
+            try:
+                support_target_fig = int(rec.get("figure_number") or support_target_scope.get("target_figure_num") or 0)
+            except Exception:
+                support_target_fig = 0
+            try:
+                support_target_box = int(rec.get("box_number") or 0)
+            except Exception:
+                support_target_box = 0
+            if support_target_box <= 0:
+                for raw_box in list(support_target_scope.get("requested_boxes") or []):
+                    try:
+                        support_target_box = int(raw_box)
+                    except Exception:
+                        continue
+                    if support_target_box > 0:
+                        break
+            support_panel_letters = [
+                str(ch or "").strip().lower()
+                for ch in list(rec.get("panel_letters") or support_target_scope.get("target_panel_letters") or [])
+                if str(ch or "").strip()
+            ]
+            if support_claim_type != "figure_panel" and support_target_fig <= 0:
+                support_panel_letters = []
+            support_requested_sections = [
+                str(sec or "").strip().lower()
+                for sec in list(support_target_scope.get("requested_sections") or [])
+                if str(sec or "").strip()
+            ]
+            support_is_box_only = bool(
+                support_target_box > 0
+                and not support_target_fig
+                and not support_panel_letters
+                and not support_requested_sections
+            )
+            seg_out["support_slot_figure_number"] = int(support_target_fig or 0)
+            seg_out["support_slot_box_number"] = int(support_target_box or 0)
+            seg_out["support_slot_panel_letters"] = list(support_panel_letters)
+            block_id = str(rec.get("block_id") or "").strip()
+            rec_anchor_id = str(rec.get("anchor_id") or "").strip()
+            block = block_lookup.get(block_id) if block_id else None
+            if isinstance(block, dict):
+                block_heading = str(block.get("heading_path") or "").strip()
+                block_text = str(block.get("raw_text") or block.get("text") or "").strip()
+                try:
+                    block_fig_num = int(block.get("number") or 0)
+                except Exception:
+                    block_fig_num = 0
+                if block_fig_num <= 0:
+                    block_fig_num = int(_extract_figure_number(f"{block_heading}\n{block_text[:1200]}") or 0)
+                canonical_heading = support_heading_path or block_heading
+                canonical_heading = _support_heading_with_figure_local(
+                    canonical_heading,
+                    figure_number=int(support_target_fig or block_fig_num or 0),
+                )
+                canonical_heading = _support_heading_for_box_target_local(
+                    canonical_heading,
+                    box_only=support_is_box_only,
+                    box_number=int(support_target_box or 0),
+                )
+                old_primary = str(seg_out.get("primary_block_id") or "").strip()
+                seg_out["primary_block_id"] = block_id
+                seg_out["primary_anchor_id"] = str(block.get("anchor_id") or "").strip()
+                seg_out["primary_heading_path"] = canonical_heading
+                seg_out["evidence_block_ids"] = _dedupe_str_items(
+                    [block_id] + list(seg_out.get("evidence_block_ids") or [])
+                )
+                seg_out["support_block_ids"] = _dedupe_str_items(
+                    ([old_primary] if old_primary and old_primary != block_id else [])
+                    + list(seg_out.get("support_block_ids") or [])
+                )
+                seg_out["mapping_source"] = "support_slot"
+                if str(seg_out.get("evidence_mode") or "").strip().lower() == "synthesis":
+                    seg_out["evidence_mode"] = "direct"
+                if support_claim_type in {"prior_work", "method_detail", "doc_map", "figure_panel"}:
+                    seg_out["claim_type"] = support_claim_type
+                # For exact-support style records (method_detail / prior_work / caption clause),
+                # the locate anchor itself should be the visible jump target even if the
+                # initial fast mapping picked a nearby but wrong block.
+                if support_locate_anchor and support_claim_type in {"prior_work", "method_detail", "doc_map", "figure_panel"}:
+                    seg_out["anchor_text"] = support_locate_anchor[:900]
+                    seg_out["evidence_quote"] = support_locate_anchor[:900]
+                if not str(seg_out.get("anchor_text") or "").strip():
+                    seg_out["anchor_text"] = str(rec.get("locate_anchor") or "").strip()[:900]
+            elif block_id:
+                # The resolved support record may reference a block that isn't present in the current
+                # provenance lookup (for example, an implicit caption paragraph that wasn't retrieved as a hit).
+                # Still bind the jump target to the resolved block id/anchor id so locate scroll can succeed.
+                canonical_heading = support_heading_path or str(seg_out.get("primary_heading_path") or "").strip()
+                canonical_heading = _support_heading_with_figure_local(
+                    canonical_heading,
+                    figure_number=int(support_target_fig or 0),
+                )
+                canonical_heading = _support_heading_for_box_target_local(
+                    canonical_heading,
+                    box_only=support_is_box_only,
+                    box_number=int(support_target_box or 0),
+                )
+                old_primary = str(seg_out.get("primary_block_id") or "").strip()
+                seg_out["primary_block_id"] = block_id
+                if rec_anchor_id:
+                    seg_out["primary_anchor_id"] = rec_anchor_id
+                if canonical_heading:
+                    seg_out["primary_heading_path"] = canonical_heading
+                seg_out["evidence_block_ids"] = _dedupe_str_items(
+                    [block_id] + list(seg_out.get("evidence_block_ids") or [])
+                )
+                seg_out["support_block_ids"] = _dedupe_str_items(
+                    ([old_primary] if old_primary and old_primary != block_id else [])
+                    + list(seg_out.get("support_block_ids") or [])
+                )
+                seg_out["mapping_source"] = "support_slot"
+                if str(seg_out.get("evidence_mode") or "").strip().lower() == "synthesis":
+                    seg_out["evidence_mode"] = "direct"
+                if support_claim_type in {"prior_work", "method_detail", "doc_map", "figure_panel"}:
+                    seg_out["claim_type"] = support_claim_type
+                if support_locate_anchor and support_claim_type in {"prior_work", "method_detail", "doc_map", "figure_panel"}:
+                    seg_out["anchor_text"] = support_locate_anchor[:900]
+                    seg_out["evidence_quote"] = support_locate_anchor[:900]
+                if not str(seg_out.get("anchor_text") or "").strip():
+                    seg_out["anchor_text"] = str(rec.get("locate_anchor") or "").strip()[:900]
+            elif support_heading_path:
+                support_heading_path = _support_heading_with_figure_local(
+                    support_heading_path,
+                    figure_number=int(support_target_fig or 0),
+                )
+                support_heading_path = _support_heading_for_box_target_local(
+                    support_heading_path,
+                    box_only=support_is_box_only,
+                    box_number=int(support_target_box or 0),
+                )
+                seg_out["primary_heading_path"] = support_heading_path
+            else:
+                fallback_heading = str(seg_out.get("primary_heading_path") or "").strip()
+                fallback_heading = _support_heading_with_figure_local(
+                    fallback_heading,
+                    figure_number=int(support_target_fig or 0),
+                )
+                fallback_heading = _support_heading_for_box_target_local(
+                    fallback_heading,
+                    box_only=support_is_box_only,
+                    box_number=int(support_target_box or 0),
+                )
+                if fallback_heading:
+                    seg_out["primary_heading_path"] = fallback_heading
+            if support_locate_anchor:
+                seg_out["locate_policy"] = "required"
+                seg_out["locate_surface_policy"] = "primary"
+                seg_out["must_locate"] = True
+            if support_claim_type == "figure_panel" and support_locate_anchor:
+                seg_out["anchor_text"] = support_locate_anchor[:900]
+                seg_out["evidence_quote"] = support_locate_anchor[:900]
+                if str(rec_anchor_id or "").strip().lower().startswith("fg_"):
+                    # Only force a figure-asset anchor when the resolved record anchor looks like a figure id.
+                    # For panel-clause exact support, the jump target should remain the caption paragraph.
+                    seg_out["claim_type"] = "figure_claim"
+                    seg_out["anchor_kind"] = "figure"
+        out.append(seg_out)
+    return out
+
+
 def _resolve_paper_guide_md_path(
     source_path: str,
     *,
@@ -118,6 +569,10 @@ def _resolve_paper_guide_md_path(
         except Exception:
             pass
         try:
+            roots.append(Path(db_dir).expanduser() / "db")
+        except Exception:
+            pass
+        try:
             roots.append(Path(db_dir).expanduser().parent / "md_output")
         except Exception:
             pass
@@ -140,13 +595,66 @@ def _resolve_paper_guide_md_path(
             _md_dir, md_main, md_exists = _resolve_md_output_paths(root, src)
         except Exception:
             continue
-        if not md_exists:
-            continue
+        if md_exists:
+            try:
+                if md_main.is_file():
+                    return md_main.resolve(strict=False)
+            except Exception:
+                pass
         try:
-            if md_main.is_file():
-                return md_main.resolve(strict=False)
+            root_path = Path(root).expanduser()
         except Exception:
             continue
+        if not root_path.exists() or (not root_path.is_dir()):
+            continue
+        target_identity = _source_stem_identity(str(src))
+        if not target_identity:
+            continue
+        fallback_candidates: list[Path] = []
+        try:
+            for child in root_path.iterdir():
+                child_name = str(child.name or "").strip()
+                if not child_name:
+                    continue
+                child_identity = _source_basename_identity(child_name)
+                if not _source_identities_match(child_identity, target_identity):
+                    continue
+                if child.is_dir():
+                    canonical = child / f"{child.name}.en.md"
+                    output_md = child / "output.md"
+                    if canonical.is_file():
+                        fallback_candidates.append(canonical)
+                    if output_md.is_file():
+                        fallback_candidates.append(output_md)
+                    try:
+                        fallback_candidates.extend(
+                            cand
+                            for cand in child.glob("*.md")
+                            if cand.is_file() and cand.name.lower() not in {"assets_manifest.md"}
+                        )
+                    except Exception:
+                        pass
+                elif child.is_file() and child.suffix.lower().endswith(".md"):
+                    fallback_candidates.append(child)
+        except Exception:
+            fallback_candidates = []
+        if fallback_candidates:
+            seen_paths: set[str] = set()
+            uniq_candidates: list[Path] = []
+            for cand in fallback_candidates:
+                key = _normalize_fs_path_for_match(str(cand))
+                if (not key) or (key in seen_paths):
+                    continue
+                seen_paths.add(key)
+                uniq_candidates.append(cand)
+            uniq_candidates.sort(key=lambda p: (0 if p.name.lower().endswith(".en.md") else 1, len(str(p))))
+            try:
+                return uniq_candidates[0].resolve(strict=False)
+            except Exception:
+                try:
+                    return uniq_candidates[0]
+                except Exception:
+                    pass
 
     return None
 
@@ -171,7 +679,7 @@ def _is_hit_from_bound_source(
             return True
         hit_stem = _source_stem_identity(hit_source)
         target_stem = _source_stem_identity(bound_source_path)
-        if target_stem and hit_stem and (hit_stem == target_stem) and (len(target_stem) >= 8):
+        if target_stem and hit_stem and _source_identities_match(hit_stem, target_stem) and (len(target_stem) >= 8):
             return True
         return False
 
@@ -179,7 +687,7 @@ def _is_hit_from_bound_source(
     if not target_name:
         return False
     hit_stem = _source_stem_identity(hit_source)
-    return bool(hit_stem and (hit_stem == target_name))
+    return bool(hit_stem and _source_identities_match(hit_stem, target_name))
 
 
 def _is_display_formula_segment(text: str, *, segment_kind: str = "") -> bool:
@@ -368,6 +876,13 @@ def _is_rhetorical_shell_sentence(text: str) -> bool:
     if _SHELL_ONLY_RE.match(raw):
         return True
     if _SHELL_PREFIX_RE.match(raw):
+        # Consider it a shell sentence only if it does not contain substantive content after a lead-in.
+        parts = re.split(r"[:：]", raw, maxsplit=1)
+        if len(parts) == 2 and len(parts[1].strip()) >= 24:
+            return False
+        word_count = len(_LATIN_WORD_RE.findall(raw)) + len(_CJK_WORD_RE.findall(raw))
+        if len(raw) >= 60 and word_count >= 12:
+            return False
         return True
     if raw.endswith(":") or raw.endswith("："):
         informative_tail = re.sub(r"[:：]\s*$", "", raw).strip()
@@ -383,11 +898,37 @@ def _is_explicit_non_source_segment(text: str) -> bool:
     if not raw:
         return False
     low = raw.lower()
+    if re.search(
+        r"(?i)\b(?:the retrieved (?:context|evidence)|the provided (?:context|evidence)|the discussion section)\b.{0,80}\b(?:does not|is not|not present|missing)\b",
+        raw,
+    ):
+        return True
     if "补充说明" in raw and ("检索片段" in raw or "retrieved context" in low):
+        return True
+    if re.search(
+        r"(?i)\b(?:the authors|the paper)\b.{0,80}\b(?:do not discuss|does not discuss|makes no statement|do not mention|does not mention)\b",
+        raw,
+    ):
         return True
     for hint in _NON_SOURCE_SEGMENT_HINTS:
         if hint and ((hint in raw) or (hint in low)):
             return True
+    return False
+
+
+def _is_explicit_generic_knowledge_supplement_segment(text: str) -> bool:
+    raw = _strip_provenance_noise_text(text)
+    if not raw:
+        return False
+    low = raw.lower()
+    # Explicit "generic knowledge / non-retrieved content" supplements should not be treated
+    # as source-grounded claims even if we have a concrete block binding.
+    if ("通用知识" in raw) or ("非检索片段" in raw) or ("非检索内容" in raw):
+        return True
+    if ("generic knowledge" in low) or ("non-retrieved" in low) or ("non retrieved" in low):
+        return True
+    if ("supplementary note" in low) and ("retrieved" in low or "context" in low):
+        return True
     return False
 
 
@@ -550,6 +1091,44 @@ def _summary_block_adjustment(segment_text: str, block: dict | None) -> float:
             score -= 0.10
 
     return float(score)
+
+
+def _is_broad_figure_summary_claim(text: str) -> bool:
+    raw = _strip_provenance_noise_text(text)
+    if not raw or not _FIGURE_CLAIM_RE.search(raw):
+        return False
+    low = normalize_inline_markdown(raw).lower()
+    figure_number = _extract_figure_number(raw)
+    panel_group_count = len(
+        re.findall(
+            r"\(([a-g](?:\s*[–—-]\s*[a-g]|(?:\s*,\s*[a-g])+){0,1})\)",
+            raw,
+            flags=re.IGNORECASE,
+        )
+    )
+    if re.search(
+        r"^\s*(?:in summary,\s*)?figure\s*\d+\s+(?:demonstrates|shows|establishes|illustrates|summarizes)\b",
+        low,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if re.search(r"^\s*in summary,\s*figure\s*\d+\b", low, flags=re.IGNORECASE):
+        return True
+    if figure_number > 0 and re.search(
+        r"\b(?:panel-by-panel walkthrough|walkthrough|all claims are directly supported|supported by the figure caption)\b",
+        low,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    if figure_number > 0 and re.search(r"\bwalks the reader\b", low, flags=re.IGNORECASE):
+        return True
+    if figure_number > 0 and panel_group_count >= 2 and re.search(
+        r"\b(?:demonstrates|shows|establishes|illustrates|validates|benchmarks|overcomes)\b",
+        low,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    return False
 
 
 def _heading_focus_adjustment(segment_text: str, heading_path: str) -> float:
@@ -1315,8 +1894,13 @@ def _segment_claim_meta(
     anchor_kind = ""
     claim_type = "critical_fact_claim"
     explicit_non_source = _is_explicit_non_source_segment(raw_md or seg_text)
+    explicit_generic_supplement = explicit_non_source and _is_explicit_generic_knowledge_supplement_segment(raw_md or seg_text)
     eq_number = extract_equation_number(raw_md or seg_text) if has_equation_signal(raw_md or seg_text) else 0
     figure_number = _extract_figure_number(raw_md or seg_text) if _FIGURE_CLAIM_RE.search(raw_md or seg_text) else 0
+    broad_figure_summary = bool(
+        (str((primary_block or {}).get("kind") or "").strip().lower() == "figure" or figure_number > 0)
+        and _is_broad_figure_summary_claim(raw_md or seg_text)
+    )
     primary_kind = str((primary_block or {}).get("kind") or "").strip().lower()
     primary_inline_formula = _pick_primary_inline_formula_span(raw_md or seg_text)
     inline_formula_dominant = False
@@ -1336,6 +1920,23 @@ def _segment_claim_meta(
         )
 
     if explicit_non_source:
+        if explicit_generic_supplement:
+            claim_type = "shell_sentence"
+            anchor_kind = ""
+            anchor_text = ""
+        # Conservative statements ("not stated in retrieved context") can still be grounded to a concrete block.
+        # When we have a direct binding, expose it as an evidence note so the UI can locate the inspected context.
+        elif mode == "direct" and str((primary_block or {}).get("block_id") or "").strip():
+            claim_type = "evidence_note_claim"
+            anchor_kind = "sentence"
+            anchor_text = str(evidence_quote or seg_text).strip()[:320]
+        else:
+            claim_type = "shell_sentence"
+            anchor_kind = ""
+            anchor_text = ""
+    elif broad_figure_summary:
+        # Broad "walkthrough" / panel-by-panel summaries should not be force-grounded
+        # to a single figure block for locate jumps.
         claim_type = "shell_sentence"
         anchor_kind = ""
         anchor_text = ""
@@ -1396,6 +1997,14 @@ def _segment_claim_meta(
     )
     if claim_type == "shell_sentence":
         must_locate = False
+        # For segments that are still grounded to a concrete source block (direct evidence), allow them to surface
+        # as an optional "evidence note" so the UI can offer a locate jump even when the answer is conservative.
+        if mode == "direct" and has_identity and (not broad_figure_summary) and (not explicit_non_source):
+            claim_type = "evidence_note_claim"
+            if not str(anchor_kind or "").strip():
+                anchor_kind = "sentence"
+            if not str(anchor_text or "").strip():
+                anchor_text = str(evidence_quote or seg_text).strip()[:320]
     if claim_type == "formula_claim" and eq_number <= 0:
         try:
             eq_number = int((primary_block or {}).get("number") or 0)
@@ -1497,13 +2106,20 @@ def _select_figure_claim_binding(
             line_start = 0
         return max(0, line_start)
 
-    def _caption_score(block: dict | None, figure_order: int) -> float:
+    def _caption_score(block: dict | None, figure_order: int, *, figure_id: str = "", figure_block_id: str = "") -> float:
         if not isinstance(block, dict):
             return -1.0
         text = str(block.get("raw_text") or block.get("text") or "").strip()
-        if _extract_figure_number(text) != figure_number:
+        block_figure_id = str(block.get("figure_id") or "").strip()
+        if _extract_figure_number(text) != figure_number and (not figure_id or block_figure_id != figure_id):
             return -1.0
         score = 0.0
+        if figure_id and block_figure_id == figure_id:
+            score += 1.8
+        if figure_block_id and str(block.get("linked_figure_block_id") or "").strip() == figure_block_id:
+            score += 1.1
+        if str(block.get("figure_role") or "").strip().lower() == "caption":
+            score += 0.72
         if re.match(rf"^\s*(?:fig(?:ure)?\.?\s*{figure_number}\b|图\s*{figure_number}\b)", text, re.IGNORECASE):
             score += 1.3
         if "single snapshot compressed image" in text.lower():
@@ -1540,23 +2156,28 @@ def _select_figure_claim_binding(
         figure_block = figure_blocks[0]
 
     figure_order = _order_of(figure_block or current_primary)
+    figure_identity = str((figure_block or current_primary).get("figure_id") or "").strip()
+    figure_block_id = str((figure_block or {}).get("block_id") or "").strip()
     caption_candidates = [
         block
         for block in blocks
         if str(block.get("kind") or "").strip().lower() in {"paragraph", "list_item", "blockquote"}
-        and _extract_figure_number(str(block.get("raw_text") or block.get("text") or "")) == figure_number
+        and (
+            _extract_figure_number(str(block.get("raw_text") or block.get("text") or "")) == figure_number
+            or (figure_identity and str(block.get("figure_id") or "").strip() == figure_identity)
+        )
     ]
     caption_block: dict | None = None
     if caption_candidates:
         caption_candidates.sort(
             key=lambda block: (
-                -_caption_score(block, figure_order),
+                -_caption_score(block, figure_order, figure_id=figure_identity, figure_block_id=figure_block_id),
                 _order_of(block) if _order_of(block) > 0 else 10**9,
                 str(block.get("block_id") or ""),
             )
         )
         caption_block = caption_candidates[0]
-        if _caption_score(caption_block, figure_order) < 0.18:
+        if _caption_score(caption_block, figure_order, figure_id=figure_identity, figure_block_id=figure_block_id) < 0.18:
             caption_block = None
 
     return figure_block, caption_block
@@ -2239,6 +2860,27 @@ def _apply_provenance_required_coverage_contract(
                 seg["primary_heading_path"] = primary_heading_path
                 seg["evidence_block_ids"] = evidence_block_ids
                 seg["support_block_ids"] = support_block_ids
+                figure_meta = figure_block or caption_block or primary_block or {}
+                try:
+                    figure_number = int(
+                        figure_meta.get("paper_figure_number")
+                        or figure_meta.get("number")
+                        or seg.get("paper_figure_number")
+                        or seg.get("anchor_target_number")
+                        or 0
+                    )
+                except Exception:
+                    figure_number = 0
+                figure_id = str(figure_meta.get("figure_id") or "").strip()
+                if figure_id:
+                    seg["figure_id"] = figure_id
+                if figure_number > 0:
+                    seg["paper_figure_number"] = figure_number
+                    seg["anchor_target_number"] = figure_number
+                seg["caption_block_id"] = str((caption_block or {}).get("block_id") or "").strip()
+                seg["asset_name"] = str(figure_meta.get("asset_name") or "").strip()
+                seg["asset_name_alias"] = str(figure_meta.get("asset_name_alias") or "").strip()
+                seg["jump_surface"] = "figure_caption" if isinstance(caption_block, dict) else "figure_asset"
                 if isinstance(caption_block, dict):
                     caption_text = str(caption_block.get("raw_text") or caption_block.get("text") or "").strip()
                     if caption_text:
@@ -2626,6 +3268,7 @@ def _build_paper_guide_answer_provenance(
     db_dir: Path | str | None,
     settings_obj: object | None = None,
     llm_rerank: bool = False,
+    support_resolution: list[dict] | None = None,
 ) -> dict | None:
     source_path = str(bound_source_path or "").strip()
     if not source_path:
@@ -2645,6 +3288,27 @@ def _build_paper_guide_answer_provenance(
         if isinstance(block, dict) and str(block.get("block_id") or "").strip()
     }
 
+    def _is_heading_block(block: dict) -> bool:
+        return str(block.get("kind") or "").strip().lower() == "heading"
+
+    def _is_reference_section_block(block: dict) -> bool:
+        # References headings and reference list entries are very high-entropy and tend to spuriously match
+        # arbitrary snippets (especially for cross-language / paraphrased answers). Default to excluding them
+        # from evidence mapping.
+        hp = str(block.get("heading_path") or "").strip().lower()
+        if "references" in hp:
+            return True
+        txt = str(block.get("text") or block.get("raw_text") or "").strip()
+        if re.match(r"^\[\s*\d{1,4}\s*\]\s+", txt):
+            return True
+        return False
+
+    blocks_for_match = [
+        dict(block)
+        for block in blocks
+        if isinstance(block, dict) and (not _is_heading_block(block)) and (not _is_reference_section_block(block))
+    ]
+
     evidence_pool = _collect_paper_guide_block_pool(
         blocks=blocks,
         answer_hits=answer_hits,
@@ -2652,6 +3316,7 @@ def _build_paper_guide_answer_provenance(
         bound_source_name=bound_source_name,
     )
     mapping_mode = "fast"
+    pool_mode = "retrieval"
     empty_contract_meta = {
         "provenance_schema_version": int(_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION),
         "must_locate_candidate_count": 0,
@@ -2662,7 +3327,59 @@ def _build_paper_guide_answer_provenance(
         "identity_missing_segments": [],
     }
 
-    if not evidence_pool:
+    def _env_truthy(name: str, default: str) -> bool:
+        raw = str(os.environ.get(name, default) or "").strip().lower()
+        return raw not in {"0", "false", "no", "off"}
+
+    try:
+        # Merging a small retrieval pool with the full document can cause over-binding
+        # (segments drifting away from the retrieved context). Keep this opt-in.
+        min_pool = int(os.environ.get("KB_PROVENANCE_FULLDOC_MIN_POOL", "0") or 0)
+    except Exception:
+        min_pool = 0
+    min_pool = max(0, min(120, min_pool))
+    try:
+        max_full_doc_blocks = int(os.environ.get("KB_PROVENANCE_FULLDOC_MAX_BLOCKS", "650") or 650)
+    except Exception:
+        max_full_doc_blocks = 650
+    max_full_doc_blocks = max(40, min(2400, max_full_doc_blocks))
+
+    full_doc_candidates_enabled = _env_truthy("KB_PROVENANCE_FULLDOC_CANDIDATES", "1")
+
+    candidate_blocks = [
+        dict(item.get("block") or {})
+        for item in (evidence_pool or [])
+        if isinstance(item.get("block"), dict)
+        and (not _is_heading_block(item.get("block") or {}))
+        and (not _is_reference_section_block(item.get("block") or {}))
+    ]
+    if full_doc_candidates_enabled and len(blocks) <= max_full_doc_blocks:
+        if not candidate_blocks:
+            # Retrieval occasionally misses entirely (especially for cross-language queries). Falling back to a
+            # full-document candidate pool is slower but avoids "no evidence to locate" failures.
+            candidate_blocks = list(blocks_for_match)
+            pool_mode = "full_doc_fallback"
+        elif len(candidate_blocks) < min_pool:
+            seen: set[str] = set()
+            merged: list[dict] = []
+            for block in candidate_blocks:
+                bid = str(block.get("block_id") or "").strip()
+                if not bid or bid in seen:
+                    continue
+                seen.add(bid)
+                merged.append(block)
+            for block in blocks_for_match:
+                if not isinstance(block, dict):
+                    continue
+                bid = str(block.get("block_id") or "").strip()
+                if not bid or bid in seen:
+                    continue
+                seen.add(bid)
+                merged.append(dict(block))
+            candidate_blocks = merged
+            pool_mode = "merged_full_doc"
+    elif not candidate_blocks:
+        # Keep the previous behavior for very large documents unless explicitly asked to include the full doc.
         return {
             "version": int(_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION),
             "source_path": source_path,
@@ -2673,12 +3390,11 @@ def _build_paper_guide_answer_provenance(
             "block_map": {},
             "status": "no_evidence_pool",
             "mapping_mode": mapping_mode,
+            "pool_mode": pool_mode,
             "llm_rerank_enabled": bool(llm_rerank),
             "llm_rerank_calls": 0,
             **empty_contract_meta,
         }
-
-    candidate_blocks = [dict(item.get("block") or {}) for item in evidence_pool if isinstance(item.get("block"), dict)]
     block_map: dict[str, dict] = {}
     segments_out: list[dict] = []
     segments = split_answer_segments(answer)
@@ -2694,6 +3410,54 @@ def _build_paper_guide_answer_provenance(
             llm_picker = DeepSeekChat(settings_obj) if settings_obj is not None else None
         except Exception:
             llm_picker = None
+
+    def _probe_variants(text: str) -> list[str]:
+        raw = str(text or "").strip()
+        if not raw:
+            return []
+        variants = [raw]
+        try:
+            cjk = len(re.findall(r"[\u4e00-\u9fff]", raw))
+            latin = len(re.findall(r"[A-Za-z]", raw))
+        except Exception:
+            cjk, latin = 0, 0
+        # Heuristic cross-language keyword expansion (no API key required).
+        if cjk >= 6 and latin <= (cjk * 2):
+            terms: list[str] = []
+            mapping = [
+                ("单像素", "single-pixel"),
+                ("压缩成像", "compressive imaging"),
+                ("压缩感知", "compressed sensing"),
+                ("压缩率", "compression ratio"),
+                ("测量数", "number of measurements"),
+                ("采样数", "number of measurements"),
+                ("采样率", "sampling rate"),
+                ("重建质量", "reconstruction quality"),
+                ("欠采样", "undersampling"),
+                ("下奈奎斯特", "sub-Nyquist"),
+                ("子奈奎斯特", "sub-Nyquist"),
+                ("模式", "patterns"),
+                ("图案", "patterns"),
+                ("噪声", "noise"),
+                ("速度", "acquisition speed"),
+                ("分辨率", "resolution"),
+                ("硬件", "hardware"),
+            ]
+            for zh, en in mapping:
+                if zh in raw:
+                    terms.append(en)
+            if terms:
+                uniq: list[str] = []
+                seen: set[str] = set()
+                for t in terms:
+                    if t in seen:
+                        continue
+                    seen.add(t)
+                    uniq.append(t)
+                enq = " ".join(uniq[:10]).strip()
+                if enq:
+                    variants.append(enq)
+        return variants
 
     def _is_formula_block(block: dict) -> bool:
         kind = str(block.get("kind") or "").strip().lower()
@@ -2722,11 +3486,15 @@ def _build_paper_guide_answer_provenance(
         quoted_spans = _extract_quoted_spans(raw_markdown or seg_text, min_len=12)
         quote_anchor = _longest_quoted_span(raw_markdown or seg_text, min_len=12)
         probe_text = str(quote_anchor or seg_text).strip()
+        probe_variants = _probe_variants(probe_text)
+        probe_text = probe_variants[0] if probe_variants else probe_text
+        used_translated_probe = False
+        metrics_probe = probe_text
         summary_tags = _summary_segment_tags(seg_text) if not is_formula else set()
         prefer_kind = "equation" if is_formula else ""
         base_blocks = candidate_blocks
         if (not is_formula) and (str(seg_kind).strip().lower() == "blockquote" or bool(quote_anchor)):
-            base_blocks = blocks
+            base_blocks = blocks_for_match
         if is_formula and global_formula_blocks:
             base_blocks = global_formula_blocks
         if is_formula:
@@ -2743,6 +3511,25 @@ def _build_paper_guide_answer_provenance(
             limit=rank_limit,
             score_floor=(0.12 if summary_tags else None),
         )
+        # Cross-language fallback: if the original probe is CJK-heavy and lexical matching fails,
+        # retry with an English keyword expansion probe.
+        if (not is_formula) and (not ranked) and len(probe_variants) >= 2:
+            probe_en = str(probe_variants[1] or "").strip()
+            heading_hint = "compressed sensing" if "compressed sensing" in probe_en.lower() else ""
+            # Use the full-document block set for translated keyword probes. Retrieval-derived candidate pools can
+            # miss the right section entirely for cross-language questions.
+            ranked = match_source_blocks(
+                blocks_for_match or base_blocks,
+                snippet=probe_en,
+                heading_path=heading_hint,
+                prefer_kind="",
+                target_number=0,
+                limit=max(rank_limit, 10),
+                score_floor=0.08,
+            )
+            if ranked:
+                used_translated_probe = True
+                metrics_probe = probe_en or metrics_probe
         if (not ranked) and (not is_formula) and quote_anchor and base_blocks is not candidate_blocks:
             ranked = match_source_blocks(
                 candidate_blocks,
@@ -2806,6 +3593,7 @@ def _build_paper_guide_answer_provenance(
 
         segment_mapping_source = "fast"
         chosen_ids: list[str] = []
+        llm_picked_ids: list[str] = []
         best_score = float(ranked[0].get("score") or 0.0) if ranked else 0.0
         second_score = float(ranked[1].get("score") or 0.0) if len(ranked) > 1 else 0.0
         score_gap = best_score - second_score
@@ -2832,6 +3620,7 @@ def _build_paper_guide_answer_provenance(
             )
             llm_calls_used += 1
             if llm_ids:
+                llm_picked_ids = [str(bid or "").strip() for bid in llm_ids if str(bid or "").strip()]
                 by_id = {
                     str((row.get("block") or {}).get("block_id") or "").strip(): row
                     for row in ranked
@@ -2871,13 +3660,16 @@ def _build_paper_guide_answer_provenance(
             "generic_heading": False,
             "summary_adjust": 0.0,
         }
-        if (not is_formula) and ranked:
+        # For cross-language paper-guide answers, the lexical support metrics can be unreliable.
+        # When an LLM has already picked the most relevant block(s), avoid rescoring that may
+        # mistakenly penalize the correct match.
+        if (not is_formula) and ranked and segment_mapping_source != "llm_refined":
             rescored: list[dict] = []
             for row in ranked:
                 block0 = row.get("block")
                 if not isinstance(block0, dict):
                     continue
-                metrics = _block_support_metrics(probe_text, block0)
+                metrics = _block_support_metrics(metrics_probe, block0)
                 summary_adjust = _summary_block_adjustment(seg_text, block0)
                 capped_base = min(float(row.get("score") or 0.0), 1.32)
                 final_score = capped_base
@@ -2902,57 +3694,72 @@ def _build_paper_guide_answer_provenance(
             second_score = float(ranked[1].get("score") or 0.0) if len(ranked) > 1 else 0.0
             score_gap = best_score - second_score
 
-        min_score = 0.44 if is_formula else 0.63
+        min_score = 0.44 if is_formula else (0.34 if used_translated_probe else 0.63)
         dynamic_floor = max(min_score, best_score - (0.14 if is_formula else 0.10))
         keep_limit = 2
-        for row in ranked:
-            score = float(row.get("score") or 0.0)
-            block = row.get("block")
-            if not isinstance(block, dict):
-                continue
-            block_id = str(block.get("block_id") or "").strip()
-            if not block_id:
-                continue
-            block_is_formula = _is_formula_block(block)
-            if not is_formula and block_is_formula and score < (dynamic_floor + 0.12):
-                continue
-            if not is_formula:
-                support_score = float(row.get("support_score") or 0.0)
-                quote_score = float(row.get("quote_score") or 0.0)
-                heading_adjust = float(row.get("heading_adjust") or 0.0)
-                generic_heading = bool(row.get("generic_heading"))
-                summary_adjust = float(row.get("summary_adjust") or 0.0)
-                if summary_tags:
-                    if support_score < 0.18 and summary_adjust < 0.60:
-                        continue
-                    if generic_heading and support_score < 0.42 and summary_adjust < 0.60:
-                        continue
-                else:
-                    if support_score < 0.24:
-                        continue
-                    if generic_heading and support_score < 0.42:
-                        continue
-                if quote_score < 0.18 and heading_adjust < -0.10:
+        if llm_picked_ids:
+            for block_id in llm_picked_ids:
+                block = block_lookup.get(str(block_id or "").strip())
+                if not isinstance(block, dict):
                     continue
-                if summary_tags and summary_adjust <= -0.48 and support_score < 0.58:
+                bid = str(block.get("block_id") or "").strip()
+                if (not bid) or (bid in chosen_ids):
                     continue
-            if score < dynamic_floor:
-                continue
-            if block_id in chosen_ids:
-                continue
-            chosen_ids.append(block_id)
-            _ensure_provenance_block_entry(block_map, block)
-            if len(chosen_ids) == 1:
-                primary_support_metrics = {
-                    "quote": str(row.get("support_quote") or ""),
-                    "quote_score": float(row.get("quote_score") or 0.0),
-                    "support_score": float(row.get("support_score") or 0.0),
-                    "heading_adjust": float(row.get("heading_adjust") or 0.0),
-                    "generic_heading": bool(row.get("generic_heading")),
-                    "summary_adjust": float(row.get("summary_adjust") or 0.0),
-                }
-            if len(chosen_ids) >= keep_limit:
-                break
+                chosen_ids.append(bid)
+                _ensure_provenance_block_entry(block_map, block)
+                if len(chosen_ids) >= keep_limit:
+                    break
+            if chosen_ids and best_score <= 0.0:
+                best_score = 1.0
+        else:
+            for row in ranked:
+                score = float(row.get("score") or 0.0)
+                block = row.get("block")
+                if not isinstance(block, dict):
+                    continue
+                block_id = str(block.get("block_id") or "").strip()
+                if not block_id:
+                    continue
+                block_is_formula = _is_formula_block(block)
+                if not is_formula and block_is_formula and score < (dynamic_floor + 0.12):
+                    continue
+                if not is_formula:
+                    support_score = float(row.get("support_score") or 0.0)
+                    quote_score = float(row.get("quote_score") or 0.0)
+                    heading_adjust = float(row.get("heading_adjust") or 0.0)
+                    generic_heading = bool(row.get("generic_heading"))
+                    summary_adjust = float(row.get("summary_adjust") or 0.0)
+                    if summary_tags:
+                        if support_score < 0.18 and summary_adjust < 0.60:
+                            continue
+                        if generic_heading and support_score < 0.42 and summary_adjust < 0.60:
+                            continue
+                    else:
+                        if support_score < 0.24:
+                            continue
+                        if generic_heading and support_score < 0.42:
+                            continue
+                    if quote_score < 0.18 and heading_adjust < -0.10:
+                        continue
+                    if summary_tags and summary_adjust <= -0.48 and support_score < 0.58:
+                        continue
+                if score < dynamic_floor:
+                    continue
+                if block_id in chosen_ids:
+                    continue
+                chosen_ids.append(block_id)
+                _ensure_provenance_block_entry(block_map, block)
+                if len(chosen_ids) == 1:
+                    primary_support_metrics = {
+                        "quote": str(row.get("support_quote") or ""),
+                        "quote_score": float(row.get("quote_score") or 0.0),
+                        "support_score": float(row.get("support_score") or 0.0),
+                        "heading_adjust": float(row.get("heading_adjust") or 0.0),
+                        "generic_heading": bool(row.get("generic_heading")),
+                        "summary_adjust": float(row.get("summary_adjust") or 0.0),
+                    }
+                if len(chosen_ids) >= keep_limit:
+                    break
 
         if is_formula and not chosen_ids:
             eq_ranked = match_source_blocks(
@@ -3048,7 +3855,7 @@ def _build_paper_guide_answer_provenance(
         primary_block_id = str(chosen_ids[0] or "").strip() if chosen_ids else ""
         support_block_ids = [str(item or "").strip() for item in chosen_ids[1:] if str(item or "").strip()]
         primary_block = block_lookup.get(primary_block_id) if primary_block_id else None
-        if primary_block and (not is_formula):
+        if primary_block and (not is_formula) and segment_mapping_source != "llm_refined" and (not used_translated_probe):
             support_score = float(primary_support_metrics.get("support_score") or 0.0)
             generic_heading = bool(primary_support_metrics.get("generic_heading"))
             summary_adjust = float(primary_support_metrics.get("summary_adjust") or 0.0)
@@ -3118,6 +3925,83 @@ def _build_paper_guide_answer_provenance(
             }
         )
 
+    # Fallback: if we failed to bind any segment to a direct evidence block, create a single coarse
+    # locate entry so the UI can still jump into the most relevant section of the paper.
+    has_any_direct = any(
+        isinstance(seg, dict)
+        and str(seg.get("evidence_mode") or "").strip().lower() == "direct"
+        and bool(list(seg.get("evidence_block_ids") or []))
+        for seg in (segments_out or [])
+    )
+    # If support slots are present, they can bind segments to concrete blocks after the initial fast pass,
+    # so avoid injecting an extra "fallback_global" segment that would reorder/expand the segment list.
+    if not has_any_direct and blocks_for_match and (not list(support_resolution or [])):
+        probe_base = normalize_inline_markdown(str(answer or "")).strip()
+        if len(probe_base) > 1600:
+            probe_base = probe_base[:1600]
+        best_row: dict | None = None
+        best_probe = ""
+        for probe in (_probe_variants(probe_base) or [probe_base]):
+            p = str(probe or "").strip()
+            if not p:
+                continue
+            rows = match_source_blocks(
+                blocks_for_match,
+                snippet=p,
+                prefer_kind="",
+                target_number=0,
+                limit=1,
+                score_floor=0.06,
+            )
+            if not rows:
+                continue
+            row0 = rows[0]
+            score0 = float(row0.get("score") or 0.0)
+            if (best_row is None) or (score0 > float(best_row.get("score") or 0.0)):
+                best_row = row0
+                best_probe = p
+        if isinstance(best_row, dict) and isinstance(best_row.get("block"), dict):
+            fb_block = dict(best_row.get("block") or {})
+            fb_block_id = str(fb_block.get("block_id") or "").strip()
+            if fb_block_id:
+                _ensure_provenance_block_entry(block_map, fb_block)
+                fb_kind = str(fb_block.get("kind") or "").strip().lower()
+                fb_anchor_kind = "equation" if fb_kind == "equation" else ("figure" if fb_kind == "figure" else "sentence")
+                fb_heading_path = str(fb_block.get("heading_path") or "").strip()
+                fb_anchor_id = str(fb_block.get("anchor_id") or "").strip()
+                fb_quote = _best_evidence_quote(best_probe or probe_base, fb_block)[:900]
+                fb_text = fb_quote or str(fb_block.get("text") or "").strip()
+                if len(fb_text) > 900:
+                    fb_text = fb_text[:900]
+                fb_index = int(len(segments_out) + 1)
+                segments_out.append(
+                    {
+                        "segment_id": f"seg_{fb_index:03d}",
+                        "segment_index": fb_index,
+                        "kind": "paragraph",
+                        "segment_type": _segment_type_from_text(fb_text, segment_kind="paragraph"),
+                        "text": fb_text,
+                        "raw_markdown": fb_text,
+                        "snippet_key": normalize_match_text(fb_text[:360]),
+                        "snippet_aliases": [],
+                        "evidence_mode": "direct",
+                        "evidence_block_ids": [fb_block_id],
+                        "primary_block_id": fb_block_id,
+                        "primary_anchor_id": fb_anchor_id,
+                        "primary_heading_path": fb_heading_path,
+                        "support_block_ids": [],
+                        "evidence_quote": fb_quote,
+                        "evidence_confidence": round(float(best_row.get("score") or 0.0), 4),
+                        "mapping_quality": 0.0,
+                        "mapping_source": "fallback_global",
+                        "claim_type": "evidence_note_claim",
+                        "must_locate": False,
+                        "anchor_kind": fb_anchor_kind,
+                        "anchor_text": fb_quote or fb_text,
+                        "equation_number": int(fb_block.get("number") or 0) if fb_kind == "equation" else 0,
+                    }
+                )
+
     if llm_calls_used > 0:
         mapping_mode = "llm_refined"
     segments_with_policy = _apply_provenance_required_coverage_contract(
@@ -3125,6 +4009,29 @@ def _build_paper_guide_answer_provenance(
         block_lookup=block_lookup,
     )
     segments_hardened, contract_meta = _apply_provenance_strict_identity_contract(segments_with_policy)
+    segments_hardened = _annotate_segments_with_support_resolution(
+        segments_hardened,
+        support_resolution=support_resolution,
+        block_lookup=block_lookup,
+    )
+    segments_hardened = [
+        _canonicalize_support_segment_heading(seg)
+        if isinstance(seg, dict)
+        else seg
+        for seg in list(segments_hardened or [])
+    ]
+    for seg in segments_hardened:
+        if not isinstance(seg, dict):
+            continue
+        block_ids = _dedupe_str_items(
+            [str(seg.get("primary_block_id") or "").strip()]
+            + list(seg.get("support_block_ids") or [])
+            + list(seg.get("evidence_block_ids") or [])
+        )
+        for block_id in block_ids:
+            block = block_lookup.get(str(block_id or "").strip())
+            if isinstance(block, dict):
+                _ensure_provenance_block_entry(block_map, block)
 
     return {
         "version": int(_PAPER_GUIDE_PROVENANCE_SCHEMA_VERSION),
@@ -3137,6 +4044,7 @@ def _build_paper_guide_answer_provenance(
         "status": "ready",
         "candidate_block_count": len(candidate_blocks),
         "mapping_mode": mapping_mode,
+        "pool_mode": pool_mode,
         "llm_rerank_enabled": bool(llm_rerank),
         "llm_rerank_calls": int(llm_calls_used),
         **contract_meta,

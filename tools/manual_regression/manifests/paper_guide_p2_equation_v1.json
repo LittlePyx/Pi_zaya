@@ -1,0 +1,68 @@
+{
+  "suite_id": "paper_guide_p2_equation_v1",
+  "title": "Paper Guide P2 Equation Skill v1",
+  "prefs_patch": {
+    "answer_contract_v1": true,
+    "answer_depth_auto": true,
+    "answer_mode_hint": "reading",
+    "answer_output_mode": "reading_guide"
+  },
+  "generate_body": {
+    "top_k": 10,
+    "deep_read": true,
+    "max_tokens": 5200,
+    "temperature": 0.3
+  },
+  "default_checks": {
+    "structured_markers": {
+      "forbid_raw_structured_cites": true,
+      "forbid_raw_support_markers": true
+    },
+    "quality": {
+      "minimum_ok_required": true
+    }
+  },
+  "papers": [
+    {
+      "id": "cvpr_2024_scinerf",
+      "title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "source_path": "../../../db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+      "cases": [
+        {
+          "id": "SCINERF2024_EQUATION1_DEFINE_VARS",
+          "title": "Equation (1) definition and variable support",
+          "prompt_family": "equation",
+          "tags": ["equation", "exact_support", "p2"],
+          "prompt": "What does Equation (1) define in this paper, and where do the authors define the variables like t_n, t_f, sigma(r(t)), T(t), and c(r(t), d)? Point me to the exact supporting part.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Equation (1)",
+                "The variable definitions appear immediately after the equation:",
+                "where $t_n$ and $t_f$ are near and far bounds",
+                "where t_n and t_f are near and far bounds"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not specify",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["3.1. Background on NeRF"],
+              "anchor_contains_any": [
+                "where $t_n$ and $t_f$ are near and far bounds",
+                "where t_n and t_f are near and far bounds",
+                "\\tag{1}"
+              ],
+              "claim_types": ["formula_claim", "equation_explanation_claim"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

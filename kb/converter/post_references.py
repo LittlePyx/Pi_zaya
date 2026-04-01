@@ -3,6 +3,11 @@ from __future__ import annotations
 import re
 
 from .post_heading_rules import _parse_appendix_heading_level
+from .reference_markdown import (
+    _is_year_backref_continuation_line,
+    _join_reference_fragments,
+    _strip_reference_backref_suffix,
+)
 
 def _is_references_heading_line(text: str) -> bool:
     st = (text or "").strip()
@@ -311,9 +316,22 @@ def _format_references(md: str) -> str:
 
     # Split multiple [n] items that got collapsed into one line.
     blob = re.sub(r"\s+(?=\[\d+\])", "\n", blob)
-    # Normalize leading markers like "1] ..." or "1. ..."
-    blob = re.sub(r"(?m)^\s*(\d+)\]\s*", r"[\1] ", blob)
-    blob = re.sub(r"(?m)^\s*(\d+)\.\s+", r"[\1] ", blob)
+    # Some reference pages emit the next entry as a bare numbered marker after a
+    # normal sentence terminus, e.g. "... (2020). 21. Author ...". Split these
+    # before marker normalization so they can become standalone [21] entries.
+    blob = re.sub(r"(?<=[\.\?\!])\s+(?=\d{1,4}\.\s+[A-Z])", "\n", blob)
+    # Normalize leading markers like "1] ..." or "1. ...", but do not
+    # reinterpret detached year/backref lines like "2020. 2, 5" as references.
+    norm_blob_lines: list[str] = []
+    for raw_blob_line in blob.splitlines():
+        st = (raw_blob_line or "").strip()
+        if _is_year_backref_continuation_line(st):
+            norm_blob_lines.append(st)
+            continue
+        st = re.sub(r"^\s*(\d+)\]\s*", r"[\1] ", st)
+        st = re.sub(r"^\s*(\d+)\.\s+", r"[\1] ", st)
+        norm_blob_lines.append(st)
+    blob = "\n".join(norm_blob_lines)
 
     # Inline rescue: some preprocessors/OCR outputs collapse the first lines of
     # supplementary material into the tail of the last reference line.
@@ -341,6 +359,7 @@ def _format_references(md: str) -> str:
         s = re.sub(r"\s+", " ", (entry or "")).strip()
         if not s:
             return s
+        s = _strip_reference_backref_suffix(s)
 
         # Drop explicit OCR placeholders from clipped column crops.
         if re.search(
@@ -381,9 +400,12 @@ def _format_references(md: str) -> str:
         end = -1
         first_start = None
         end_pats = [
+            r"\bhttps?://\S+,\s*(?:19|20)\d{2}\.",
+            r"\bwww\.[^\s,]+,\s*(?:19|20)\d{2}\.",
             r"\b(?:19|20)\d{2}\s*,\s*\d+\s*,\s*[A-Za-z]?\d+[A-Za-z0-9\-]*\s*\.",
             r"\b(?:19|20)\d{2}\s*,\s*\d+\s*,\s*[A-Za-z]?\d+[A-Za-z0-9\-]*\b",
             r"\b(?:19|20)\d{2}\s*,\s*\d+\s*\.",
+            r"\b(?:19|20)\d{2}\.",
             r"\b\d+\s*\(\s*\d+\s*\)\s*,\s*[A-Za-z]?\d+[A-Za-z0-9\-]*\s*\\?\s*\(\s*(?:19|20)\d{2}\s*\)",
             r"\b\d+\s*\(\s*\d+\s*\)\s*,\s*[A-Za-z]?\d+[A-Za-z0-9\-]*\s*\(\s*(?:19|20)\d{2}\s*\)",
         ]
@@ -409,8 +431,6 @@ def _format_references(md: str) -> str:
             r"\bSupporting Information\b",
             r"\bThis work was supported\b",
             r"\bReceived\b|\bAccepted\b|\bPublished\b",
-            r"\bwww\.[^\s]+",
-            r"https?://[^\s]+",
             r"(?:copyright|\(c\)|©)\s*\d{4}",
             r"\(\s*\d+\s+of\s+\d+\s*\)",
             r"\b(?:advancedsciencenews|lpr-journal)\b",
@@ -513,10 +533,16 @@ def _format_references(md: str) -> str:
         s = raw.strip()
         if not s:
             continue
+        if re.fullmatch(r"\d{1,4}", s):
+            continue
+        if re.search(r"\bpage\s+\d+\s+of\s+\d+\b", s, flags=re.IGNORECASE):
+            continue
         m = start_re.match(s)
         if m:
             if cur:
-                entries.append(" ".join(cur).strip())
+                joined = _join_reference_fragments(cur)
+                if joined:
+                    entries.append(joined)
             cur = [s]
             continue
         # Ignore garbage before first reference marker
@@ -524,7 +550,9 @@ def _format_references(md: str) -> str:
             continue
         cur.append(s)
     if cur:
-        entries.append(" ".join(cur).strip())
+        joined = _join_reference_fragments(cur)
+        if joined:
+            entries.append(joined)
 
     if not entries:
         out0 = head + [""] + tail

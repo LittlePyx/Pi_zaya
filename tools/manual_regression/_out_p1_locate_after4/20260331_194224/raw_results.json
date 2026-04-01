@@ -1,0 +1,425 @@
+[
+  {
+    "conv_id": "420b552e6ae24160ac313e0c1b77ef68",
+    "case": {
+      "id": "NC2021_METHOD_BEAT_FREQUENCY",
+      "title": "Experimental setup: beat frequency and DAC rate",
+      "prompt_family": "method",
+      "tags": [
+        "baseline",
+        "method_exact_support",
+        "false_miss"
+      ],
+      "prompt": "In the Experimental setup section, what beat frequency do they use, and what sampling rate does the data acquisition card use? Point me to the exact supporting sentence.",
+      "checks": {
+        "answer": {
+          "contains_any": [
+            "62,500 Hz",
+            "62500 Hz",
+            "1.25 Ms/s",
+            "1.25 MS/s"
+          ],
+          "not_contains_any": [
+            "not stated",
+            "does not contain",
+            "cannot be determined"
+          ]
+        },
+        "locate": {
+          "required": true,
+          "exact": true,
+          "heading_includes_any": [
+            "Experimental setup"
+          ],
+          "anchor_contains_any": [
+            "beat frequency of these two beams is 62,500 Hz",
+            "sampling rate of 1.25 Ms/s",
+            "data acquisition card"
+          ]
+        }
+      },
+      "paper_id": "natcommun_2021_sph",
+      "paper_title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+      "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf"
+    },
+    "payload": {
+      "stage": "done",
+      "partial": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+      "char_count": 499,
+      "done": true,
+      "status": "done",
+      "answer": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+      "answer_intent": "reading",
+      "answer_depth": "L2",
+      "answer_output_mode": "reading_guide",
+      "answer_contract_v1": true,
+      "answer_quality": {
+        "contract_enabled": false,
+        "intent": "reading",
+        "depth": "L2",
+        "output_mode": "reading_guide",
+        "char_count": 499,
+        "has_hits": true,
+        "has_conclusion": false,
+        "has_evidence": false,
+        "has_limits": false,
+        "has_next_steps": false,
+        "has_citations": false,
+        "paper_guide_mode": true,
+        "prompt_family": "reproduce",
+        "has_locate_hint": false,
+        "locate_required": false,
+        "locate_ok": true,
+        "abstract_style_ok": true,
+        "evidence_required": false,
+        "next_steps_required": false,
+        "evidence_ok": true,
+        "core_section_coverage": 0.0,
+        "minimum_ok": true
+      }
+    },
+    "message": {
+      "id": 3272,
+      "role": "assistant",
+      "content": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+      "created_at": 1774957344.1760192,
+      "attachments": [],
+      "meta": {
+        "provenance": {
+          "version": 4,
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+          "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf",
+          "md_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+          "doc_id": "44da71e0bad4",
+          "segments": [
+            {
+              "segment_id": "seg_001",
+              "segment_index": 1,
+              "kind": "paragraph",
+              "segment_type": "prose",
+              "text": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+              "raw_markdown": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+              "snippet_key": "the paper states this explicitly in article / methods / principle of high-throughput sph / experimental setup:",
+              "snippet_aliases": [
+                "the paper states this explicitly in article / methods / principle of high-throughput sph / experimental setup:"
+              ],
+              "evidence_mode": "synthesis",
+              "evidence_block_ids": [],
+              "primary_block_id": "",
+              "primary_anchor_id": "",
+              "primary_heading_path": "",
+              "support_block_ids": [],
+              "evidence_quote": "",
+              "evidence_confidence": 0.0,
+              "mapping_quality": 0.0,
+              "mapping_source": "fast",
+              "claim_type": "critical_fact_claim",
+              "must_locate": false,
+              "anchor_kind": "sentence",
+              "anchor_text": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+              "equation_number": 0,
+              "related_block_ids": [],
+              "locate_policy": "hidden",
+              "locate_surface_policy": "hidden",
+              "claim_group_id": "",
+              "claim_group_kind": "",
+              "formula_origin": "",
+              "claim_group_target_segment_id": "seg_001",
+              "claim_group_target_distance": 0,
+              "claim_group_lead_text": "",
+              "strict_identity_missing_reasons": [],
+              "display_markdown": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+              "cite_details": []
+            },
+            {
+              "segment_id": "seg_002",
+              "segment_index": 2,
+              "kind": "blockquote",
+              "segment_type": "prose",
+              "text": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+              "raw_markdown": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+              "snippet_key": "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs. using a lens with 150-mm focal length, the combined light was collected by a photodetector (det10a2, thorlabs) with a bandwidth of 350 mhz, which was then digitized by a data acquisition card (dac, usb-6251, national instrument) with a sampling rate of 1.25 ms/s",
+              "snippet_aliases": [
+                "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs. using a lens with 150-mm focal length, the combined light was collected by a photodetector (det10a2, thorlabs) with a bandwidth of 350 mhz, which was then digitized by a data acquisition card (dac, usb-6251, national instrument) with a sampling rate of 1.25 ms/s ",
+                "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs. using a lens with 150-mm focal length, the combined light was collected by a photodetector (det10a2, th",
+                "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs."
+              ],
+              "evidence_mode": "direct",
+              "evidence_block_ids": [
+                "blk_44da71e0bad4_00056"
+              ],
+              "primary_block_id": "blk_44da71e0bad4_00056",
+              "primary_anchor_id": "p_00035",
+              "primary_heading_path": "ARTICLE / Methods / Principle of high-throughput SPH",
+              "support_block_ids": [],
+              "evidence_quote": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs.",
+              "evidence_confidence": 2.6658,
+              "mapping_quality": 1.481,
+              "mapping_source": "support_slot",
+              "claim_type": "blockquote_claim",
+              "must_locate": true,
+              "anchor_kind": "blockquote",
+              "anchor_text": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs.",
+              "equation_number": 0,
+              "related_block_ids": [],
+              "locate_policy": "required",
+              "locate_surface_policy": "primary",
+              "claim_group_id": "quote_bundle:blk_44da71e0bad4_00056",
+              "claim_group_kind": "quote_bundle",
+              "formula_origin": "",
+              "claim_group_target_segment_id": "seg_002",
+              "claim_group_target_distance": 0,
+              "claim_group_lead_text": "",
+              "strict_identity_missing_reasons": [],
+              "support_doc_k": 0,
+              "support_slot_claim_type": "method_detail",
+              "support_slot_cite_policy": "locate_only",
+              "support_ref_candidates": [],
+              "resolved_ref_num": 0,
+              "citation_resolution_mode": "",
+              "support_locate_anchor": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+              "support_slot_figure_number": 0,
+              "support_slot_box_number": 0,
+              "support_slot_panel_letters": [],
+              "display_markdown": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+              "cite_details": []
+            }
+          ],
+          "block_map": {
+            "blk_44da71e0bad4_00056": {
+              "doc_id": "44da71e0bad4",
+              "block_id": "blk_44da71e0bad4_00056",
+              "anchor_id": "p_00035",
+              "kind": "paragraph",
+              "heading_path": "ARTICLE / Methods / Principle of high-throughput SPH",
+              "order_index": 56,
+              "line_start": 145,
+              "line_end": 145,
+              "text": "Experimental setup. The experimental setup is schematically shown in Fig. 7. As a demonstration of principle, a long-coherence solid-state semiconductor laser (MSL-FN-532-100mW, CNI) that operates at 532 nm was used as the light source. After passing through a polarizing beam splitter (PBS), the light source was divided into a signal beam and a reference beam. A half-wave plate was placed in front of the PBS to adjust the intensity ratio of the two beams. To maximize the visibility of the fringes and achieve a good signal-to-noise ratio during experiments, the desired intensity ratio that reaches the single-pixel detector is 50% : 50%. Heterodyne holography was realized by using two AOMs (AOM-505AF1, Intraaction, Optical frequency shift range: $\\pm 40 \\sim 60$ MHz), which were controlled by a function generator. In this setup, AOM1 in the reference beam shifted optical frequency by 50 MHz $+ 31,250$ Hz, while AOM2 in the signal beam shifted optical frequency by 50 MHz $- 31,250$ Hz. Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. After frequency modulation, both beams were expanded by a pair of lenses with 7.5-mm and 250-mm focal lengths. The signal beam was then diffracted by a DMD (V7001 DLP7000&DLP-C410) to achieve binary amplitude modulation. This DMD has 768 $\\times$ 1024 pixels with 13.68-µm pixel size and a 22-kHz refresh rate. Since the DMD diffracts light like a two-dimensional grating, the optimum incident and diffracted angles are calculated to be 17.92° and 41.92° (detailed in the Supplementary Note 4). A $4f$ system that consists of two lenses (scalable due to different operational modes) then imaged the surface of the DMD onto the sample. The sample was placed so that its surface was orthogonal to the optical axis. After interacting with the sample, the signal beam was combined with the reference beam through a beam splitter. It is worth mentioning that since the DMD slightly altered the polarization after modulation, a quarter-wave plate (not shown in the figure) was inserted in the reference beam to maximize the interference visibility. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure). Considering the 48-µs refresh time of the DMD and the 62,500-Hz beating frequency, three beating cycles last for each Hadamard pattern and 20 data points were acquired within one cycle. We note here that this DMD can support a shorter refresh time down to 45 µs (22 kHz refresh rate), corresponding to on average 56.8 data points for the duration of one Hadamard pattern. Although such a choice can gain an increase in data rate by roughly 5%, it causes difficulties in batch processing to reconstruct images. What’s more, the choice of the beating frequency is also not unique. In practice, there are many choices for beating frequencies such as 125,000 Hz and 250,000 Hz, distributing these 60 data points into 6 and 12 beating cycles, respectively. Notably, for the same number of data points for one displayed Hadamard pattern, the quality of the reconstructed signal should not be sensitive on the choice of the beating frequency, provided the Nyquist sampling criterion was followed. An integer number of beating cycles for each displayed pattern is also desired for computational convenience.",
+              "raw_text": "**Experimental setup.** The experimental setup is schematically shown in Fig. 7. As a demonstration of principle, a long-coherence solid-state semiconductor laser (MSL-FN-532-100mW, CNI) that operates at 532 nm was used as the light source. After passing through a polarizing beam splitter (PBS), the light source was divided into a signal beam and a reference beam. A half-wave plate was placed in front of the PBS to adjust the intensity ratio of the two beams. To maximize the visibility of the fringes and achieve a good signal-to-noise ratio during experiments, the desired intensity ratio that reaches the single-pixel detector is 50% : 50%. Heterodyne holography was realized by using two AOMs (AOM-505AF1, Intraaction, Optical frequency shift range: $\\pm 40 \\sim 60$ MHz), which were controlled by a function generator. In this setup, AOM1 in the reference beam shifted optical frequency by 50 MHz $+ 31,250$ Hz, while AOM2 in the signal beam shifted optical frequency by 50 MHz $- 31,250$ Hz. Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. After frequency modulation, both beams were expanded by a pair of lenses with 7.5-mm and 250-mm focal lengths. The signal beam was then diffracted by a DMD (V7001 DLP7000&DLP-C410) to achieve binary amplitude modulation. This DMD has 768 $\\times$ 1024 pixels with 13.68-µm pixel size and a 22-kHz refresh rate. Since the DMD diffracts light like a two-dimensional grating, the optimum incident and diffracted angles are calculated to be 17.92° and 41.92° (detailed in the Supplementary Note 4). A $4f$ system that consists of two lenses (scalable due to different operational modes) then imaged the surface of the DMD onto the sample. The sample was placed so that its surface was orthogonal to the optical axis. After interacting with the sample, the signal beam was combined with the reference beam through a beam splitter. It is worth mentioning that since the DMD slightly altered the polarization after modulation, a quarter-wave plate (not shown in the figure) was inserted in the reference beam to maximize the interference visibility. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure). Considering the 48-µs refresh time of the DMD and the 62,500-Hz beating frequency, three beating cycles last for each Hadamard pattern and 20 data points were acquired within one cycle. We note here that this DMD can support a shorter refresh time down to 45 µs (22 kHz refresh rate), corresponding to on average 56.8 data points for the duration of one Hadamard pattern. Although such a choice can gain an increase in data rate by roughly 5%, it causes difficulties in batch processing to reconstruct images. What’s more, the choice of the beating frequency is also not unique. In practice, there are many choices for beating frequencies such as 125,000 Hz and 250,000 Hz, distributing these 60 data points into 6 and 12 beating cycles, respectively. Notably, for the same number of data points for one displayed Hadamard pattern, the quality of the reconstructed signal should not be sensitive on the choice of the beating frequency, provided the Nyquist sampling criterion was followed. An integer number of beating cycles for each displayed pattern is also desired for computational convenience."
+            }
+          },
+          "status": "ready",
+          "candidate_block_count": 24,
+          "mapping_mode": "fast",
+          "pool_mode": "retrieval",
+          "llm_rerank_enabled": false,
+          "llm_rerank_calls": 0,
+          "provenance_schema_version": 4,
+          "must_locate_candidate_count": 1,
+          "must_locate_count": 1,
+          "strict_identity_count": 1,
+          "strict_identity_ready": true,
+          "identity_missing_reasons": {},
+          "identity_missing_segments": []
+        }
+      },
+      "provenance": {
+        "version": 4,
+        "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+        "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf",
+        "md_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+        "doc_id": "44da71e0bad4",
+        "segments": [
+          {
+            "segment_id": "seg_001",
+            "segment_index": 1,
+            "kind": "paragraph",
+            "segment_type": "prose",
+            "text": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+            "raw_markdown": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+            "snippet_key": "the paper states this explicitly in article / methods / principle of high-throughput sph / experimental setup:",
+            "snippet_aliases": [
+              "the paper states this explicitly in article / methods / principle of high-throughput sph / experimental setup:"
+            ],
+            "evidence_mode": "synthesis",
+            "evidence_block_ids": [],
+            "primary_block_id": "",
+            "primary_anchor_id": "",
+            "primary_heading_path": "",
+            "support_block_ids": [],
+            "evidence_quote": "",
+            "evidence_confidence": 0.0,
+            "mapping_quality": 0.0,
+            "mapping_source": "fast",
+            "claim_type": "critical_fact_claim",
+            "must_locate": false,
+            "anchor_kind": "sentence",
+            "anchor_text": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+            "equation_number": 0,
+            "related_block_ids": [],
+            "locate_policy": "hidden",
+            "locate_surface_policy": "hidden",
+            "claim_group_id": "",
+            "claim_group_kind": "",
+            "formula_origin": "",
+            "claim_group_target_segment_id": "seg_001",
+            "claim_group_target_distance": 0,
+            "claim_group_lead_text": "",
+            "strict_identity_missing_reasons": [],
+            "display_markdown": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:",
+            "cite_details": []
+          },
+          {
+            "segment_id": "seg_002",
+            "segment_index": 2,
+            "kind": "blockquote",
+            "segment_type": "prose",
+            "text": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+            "raw_markdown": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+            "snippet_key": "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs. using a lens with 150-mm focal length, the combined light was collected by a photodetector (det10a2, thorlabs) with a bandwidth of 350 mhz, which was then digitized by a data acquisition card (dac, usb-6251, national instrument) with a sampling rate of 1.25 ms/s",
+            "snippet_aliases": [
+              "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs. using a lens with 150-mm focal length, the combined light was collected by a photodetector (det10a2, thorlabs) with a bandwidth of 350 mhz, which was then digitized by a data acquisition card (dac, usb-6251, national instrument) with a sampling rate of 1.25 ms/s ",
+              "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs. using a lens with 150-mm focal length, the combined light was collected by a photodetector (det10a2, th",
+              "thus, the beat frequency of these two beams is 62,500 hz, indicating a temporal period of 16 µs."
+            ],
+            "evidence_mode": "direct",
+            "evidence_block_ids": [
+              "blk_44da71e0bad4_00056"
+            ],
+            "primary_block_id": "blk_44da71e0bad4_00056",
+            "primary_anchor_id": "p_00035",
+            "primary_heading_path": "ARTICLE / Methods / Principle of high-throughput SPH",
+            "support_block_ids": [],
+            "evidence_quote": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs.",
+            "evidence_confidence": 2.6658,
+            "mapping_quality": 1.481,
+            "mapping_source": "support_slot",
+            "claim_type": "blockquote_claim",
+            "must_locate": true,
+            "anchor_kind": "blockquote",
+            "anchor_text": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs.",
+            "equation_number": 0,
+            "related_block_ids": [],
+            "locate_policy": "required",
+            "locate_surface_policy": "primary",
+            "claim_group_id": "quote_bundle:blk_44da71e0bad4_00056",
+            "claim_group_kind": "quote_bundle",
+            "formula_origin": "",
+            "claim_group_target_segment_id": "seg_002",
+            "claim_group_target_distance": 0,
+            "claim_group_lead_text": "",
+            "strict_identity_missing_reasons": [],
+            "support_doc_k": 0,
+            "support_slot_claim_type": "method_detail",
+            "support_slot_cite_policy": "locate_only",
+            "support_ref_candidates": [],
+            "resolved_ref_num": 0,
+            "citation_resolution_mode": "",
+            "support_locate_anchor": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+            "support_slot_figure_number": 0,
+            "support_slot_box_number": 0,
+            "support_slot_panel_letters": [],
+            "display_markdown": "Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+            "cite_details": []
+          }
+        ],
+        "block_map": {
+          "blk_44da71e0bad4_00056": {
+            "doc_id": "44da71e0bad4",
+            "block_id": "blk_44da71e0bad4_00056",
+            "anchor_id": "p_00035",
+            "kind": "paragraph",
+            "heading_path": "ARTICLE / Methods / Principle of high-throughput SPH",
+            "order_index": 56,
+            "line_start": 145,
+            "line_end": 145,
+            "text": "Experimental setup. The experimental setup is schematically shown in Fig. 7. As a demonstration of principle, a long-coherence solid-state semiconductor laser (MSL-FN-532-100mW, CNI) that operates at 532 nm was used as the light source. After passing through a polarizing beam splitter (PBS), the light source was divided into a signal beam and a reference beam. A half-wave plate was placed in front of the PBS to adjust the intensity ratio of the two beams. To maximize the visibility of the fringes and achieve a good signal-to-noise ratio during experiments, the desired intensity ratio that reaches the single-pixel detector is 50% : 50%. Heterodyne holography was realized by using two AOMs (AOM-505AF1, Intraaction, Optical frequency shift range: $\\pm 40 \\sim 60$ MHz), which were controlled by a function generator. In this setup, AOM1 in the reference beam shifted optical frequency by 50 MHz $+ 31,250$ Hz, while AOM2 in the signal beam shifted optical frequency by 50 MHz $- 31,250$ Hz. Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. After frequency modulation, both beams were expanded by a pair of lenses with 7.5-mm and 250-mm focal lengths. The signal beam was then diffracted by a DMD (V7001 DLP7000&DLP-C410) to achieve binary amplitude modulation. This DMD has 768 $\\times$ 1024 pixels with 13.68-µm pixel size and a 22-kHz refresh rate. Since the DMD diffracts light like a two-dimensional grating, the optimum incident and diffracted angles are calculated to be 17.92° and 41.92° (detailed in the Supplementary Note 4). A $4f$ system that consists of two lenses (scalable due to different operational modes) then imaged the surface of the DMD onto the sample. The sample was placed so that its surface was orthogonal to the optical axis. After interacting with the sample, the signal beam was combined with the reference beam through a beam splitter. It is worth mentioning that since the DMD slightly altered the polarization after modulation, a quarter-wave plate (not shown in the figure) was inserted in the reference beam to maximize the interference visibility. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure). Considering the 48-µs refresh time of the DMD and the 62,500-Hz beating frequency, three beating cycles last for each Hadamard pattern and 20 data points were acquired within one cycle. We note here that this DMD can support a shorter refresh time down to 45 µs (22 kHz refresh rate), corresponding to on average 56.8 data points for the duration of one Hadamard pattern. Although such a choice can gain an increase in data rate by roughly 5%, it causes difficulties in batch processing to reconstruct images. What’s more, the choice of the beating frequency is also not unique. In practice, there are many choices for beating frequencies such as 125,000 Hz and 250,000 Hz, distributing these 60 data points into 6 and 12 beating cycles, respectively. Notably, for the same number of data points for one displayed Hadamard pattern, the quality of the reconstructed signal should not be sensitive on the choice of the beating frequency, provided the Nyquist sampling criterion was followed. An integer number of beating cycles for each displayed pattern is also desired for computational convenience.",
+            "raw_text": "**Experimental setup.** The experimental setup is schematically shown in Fig. 7. As a demonstration of principle, a long-coherence solid-state semiconductor laser (MSL-FN-532-100mW, CNI) that operates at 532 nm was used as the light source. After passing through a polarizing beam splitter (PBS), the light source was divided into a signal beam and a reference beam. A half-wave plate was placed in front of the PBS to adjust the intensity ratio of the two beams. To maximize the visibility of the fringes and achieve a good signal-to-noise ratio during experiments, the desired intensity ratio that reaches the single-pixel detector is 50% : 50%. Heterodyne holography was realized by using two AOMs (AOM-505AF1, Intraaction, Optical frequency shift range: $\\pm 40 \\sim 60$ MHz), which were controlled by a function generator. In this setup, AOM1 in the reference beam shifted optical frequency by 50 MHz $+ 31,250$ Hz, while AOM2 in the signal beam shifted optical frequency by 50 MHz $- 31,250$ Hz. Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. After frequency modulation, both beams were expanded by a pair of lenses with 7.5-mm and 250-mm focal lengths. The signal beam was then diffracted by a DMD (V7001 DLP7000&DLP-C410) to achieve binary amplitude modulation. This DMD has 768 $\\times$ 1024 pixels with 13.68-µm pixel size and a 22-kHz refresh rate. Since the DMD diffracts light like a two-dimensional grating, the optimum incident and diffracted angles are calculated to be 17.92° and 41.92° (detailed in the Supplementary Note 4). A $4f$ system that consists of two lenses (scalable due to different operational modes) then imaged the surface of the DMD onto the sample. The sample was placed so that its surface was orthogonal to the optical axis. After interacting with the sample, the signal beam was combined with the reference beam through a beam splitter. It is worth mentioning that since the DMD slightly altered the polarization after modulation, a quarter-wave plate (not shown in the figure) was inserted in the reference beam to maximize the interference visibility. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure). Considering the 48-µs refresh time of the DMD and the 62,500-Hz beating frequency, three beating cycles last for each Hadamard pattern and 20 data points were acquired within one cycle. We note here that this DMD can support a shorter refresh time down to 45 µs (22 kHz refresh rate), corresponding to on average 56.8 data points for the duration of one Hadamard pattern. Although such a choice can gain an increase in data rate by roughly 5%, it causes difficulties in batch processing to reconstruct images. What’s more, the choice of the beating frequency is also not unique. In practice, there are many choices for beating frequencies such as 125,000 Hz and 250,000 Hz, distributing these 60 data points into 6 and 12 beating cycles, respectively. Notably, for the same number of data points for one displayed Hadamard pattern, the quality of the reconstructed signal should not be sensitive on the choice of the beating frequency, provided the Nyquist sampling criterion was followed. An integer number of beating cycles for each displayed pattern is also desired for computational convenience."
+          }
+        },
+        "status": "ready",
+        "candidate_block_count": 24,
+        "mapping_mode": "fast",
+        "pool_mode": "retrieval",
+        "llm_rerank_enabled": false,
+        "llm_rerank_calls": 0,
+        "provenance_schema_version": 4,
+        "must_locate_candidate_count": 1,
+        "must_locate_count": 1,
+        "strict_identity_count": 1,
+        "strict_identity_ready": true,
+        "identity_missing_reasons": {},
+        "identity_missing_segments": []
+      },
+      "cite_details": [],
+      "copy_markdown": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+      "copy_text": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+      "rendered_content": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+      "notice": "",
+      "rendered_body": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure).",
+      "refs_user_msg_id": 3271,
+      "render_cache_key": "c5424e7cb4ef"
+    },
+    "evaluation": {
+      "id": "NC2021_METHOD_BEAT_FREQUENCY",
+      "title": "Experimental setup: beat frequency and DAC rate",
+      "paper_id": "natcommun_2021_sph",
+      "paper_title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+      "prompt_family": "method",
+      "prompt": "In the Experimental setup section, what beat frequency do they use, and what sampling rate does the data acquisition card use? Point me to the exact supporting sentence.",
+      "tags": [
+        "baseline",
+        "method_exact_support",
+        "false_miss"
+      ],
+      "status": "FAIL",
+      "reasons": [
+        "locate:locate_missing_matching_segment"
+      ],
+      "gate_results": {
+        "answer": {
+          "status": "PASS",
+          "reasons": []
+        },
+        "structured_markers": {
+          "status": "PASS",
+          "reasons": [],
+          "raw_structured_cite_count": 0,
+          "raw_support_marker_count": 0
+        },
+        "quality": {
+          "status": "PASS",
+          "reasons": []
+        },
+        "locate": {
+          "status": "FAIL",
+          "reasons": [
+            "locate_missing_matching_segment"
+          ],
+          "matched_segment_count": 0,
+          "matched_headings": [],
+          "matched_anchors": []
+        }
+      },
+      "answer_quality": {
+        "contract_enabled": false,
+        "intent": "reading",
+        "depth": "L2",
+        "output_mode": "reading_guide",
+        "char_count": 499,
+        "has_hits": true,
+        "has_conclusion": false,
+        "has_evidence": false,
+        "has_limits": false,
+        "has_next_steps": false,
+        "has_citations": false,
+        "paper_guide_mode": true,
+        "prompt_family": "reproduce",
+        "has_locate_hint": false,
+        "locate_required": false,
+        "locate_ok": true,
+        "abstract_style_ok": true,
+        "evidence_required": false,
+        "next_steps_required": false,
+        "evidence_ok": true,
+        "core_section_coverage": 0.0,
+        "minimum_ok": true
+      },
+      "cite_count": 0,
+      "raw_structured_cite_count": 0,
+      "answer_preview": "The paper states this explicitly in ARTICLE / Methods / Principle of high-throughput SPH / Experimental setup:\n> Thus, the beat frequency of these two beams is 62,500 Hz, indicating a temporal period of 16 µs. Using a lens with 150-mm focal length, the combined light was collected by a photodetector (DET10A2, Thorlabs) with a bandwidth of 350 MHz, which was then digitized by a data acquisition card (DAC, USB-6251, National Instrument) with a sampling rate of 1.25 Ms/s (not shown in the figure)."
+    }
+  }
+]

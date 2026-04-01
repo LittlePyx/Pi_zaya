@@ -894,16 +894,48 @@ def _page_range_from_meta(meta: dict) -> tuple[int | None, int | None]:
 
 def _translate_query_for_search(settings, prompt_text: str) -> str | None:
     """
-    Translate a CJK-only query to a compact English search query (keywords),
+    Translate a CJK-heavy query to a compact English search query (keywords),
     so BM25 can match English papers.
     """
-    q = (prompt_text or "").strip()
+    q_raw = (prompt_text or "").strip()
+    if not q_raw:
+        return None
+    # Strip bound-source hints / file paths before language heuristics, otherwise a
+    # Chinese question with an appended PDF path looks "latin-heavy" and won't translate.
+    q = q_raw
+    try:
+        q = re.sub(r"(?i)\b[a-z]:\\\\[^\s]{6,}\b", " ", q)  # Windows paths
+        q = re.sub(r"(?i)\bhttps?://[^\s]{6,}\b", " ", q)  # URLs
+        q = re.sub(r"(?i)\b[^\s]+\\.(pdf|md|txt|docx?)\b", " ", q)  # filenames
+        q = " ".join(q.split())
+    except Exception:
+        q = q_raw
+    # If a bound-source hint was prepended (often a long Latin-only title), drop it for translation.
+    try:
+        m_cjk = re.search(r"[\u4e00-\u9fff]", q)
+        if m_cjk and m_cjk.start() >= 12:
+            prefix = q[: m_cjk.start()]
+            if (re.search(r"[\u4e00-\u9fff]", prefix) is None) and (re.search(r"[A-Za-z]", prefix) is not None):
+                q = q[m_cjk.start() :].strip()
+    except Exception:
+        q = q
+
     if not q:
         return None
-    if not _has_cjk(q) or _has_latin(q):
+    if not _has_cjk(q):
         return None
-    if not getattr(settings, "api_key", None):
-        return None
+    # Allow translation for mixed queries like:
+    #   "这篇文章核心问题是什么 NatPhoton-2019 ..."
+    # where the bound-source hint introduces Latin tokens but the query is still CJK-heavy.
+    if _has_latin(q):
+        try:
+            cjk_chars = len(re.findall(r"[\u4e00-\u9fff]", q))
+            latin_chars = len(re.findall(r"[A-Za-z]", q))
+        except Exception:
+            cjk_chars, latin_chars = 0, 0
+        # If the query is mostly Latin, translation is unnecessary and can hurt recall.
+        if cjk_chars < 6 or latin_chars > (cjk_chars * 3):
+            return None
 
     key = hashlib.sha1((str(getattr(settings, "api_key", None)) + "|" + q).encode("utf-8", "ignore")).hexdigest()[:16]
     cached = _cache_get("trans", key)
@@ -920,6 +952,54 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         ("\u5355\u6b21\u66dd\u5149", "single-shot"),
         ("\u538b\u7f29\u6210\u50cf", "compressive imaging"),
         ("\u538b\u7f29\u611f\u77e5", "compressed sensing"),
+        ("\u538b\u7f29\u7387", "compression ratio"),
+        ("\u91c7\u6837\u6570", "number of measurements"),
+        ("\u91c7\u6837\u7387", "sampling rate"),
+        ("\u6d4b\u91cf\u6570", "number of measurements"),
+        ("\u6d4b\u91cf", "measurements"),
+        ("\u6a21\u5f0f\u6570", "number of patterns"),
+        ("\u91cd\u5efa\u8d28\u91cf", "reconstruction quality"),
+        ("\u6838\u5fc3\u95ee\u9898", "core problem"),
+        ("\u5173\u952e\u95ee\u9898", "key problem"),
+        ("\u95ee\u9898\u610f\u8bc6", "problem formulation"),
+        ("\u4e3a\u4ec0\u4e48", "motivation"),
+        ("\u4f20\u7edf\u65b9\u6848", "conventional approach"),
+        ("\u4e0d\u591f\u597d", "limitations"),
+        ("\u4f18\u7f3a\u70b9", "advantages disadvantages"),
+        ("\u4f18\u70b9", "advantages"),
+        ("\u7f3a\u70b9", "disadvantages"),
+        ("\u9002\u7528\u573a\u666f", "applications"),
+        ("\u9002\u7528", "applicable"),
+        ("\u4e3b\u6d41", "mainstream"),
+        ("\u91cd\u5efa\u65b9\u6cd5", "reconstruction methods"),
+        ("\u91cd\u5efa\u7b97\u6cd5", "reconstruction algorithm"),
+        ("\u7b97\u6cd5", "algorithm"),
+        ("\u6df1\u5ea6\u5b66\u4e60", "deep learning"),
+        ("\u795e\u7ecf\u7f51\u7edc", "neural network"),
+        ("\u4e3b\u8981\u8d21\u732e", "main contribution"),
+        ("\u6838\u5fc3\u8d21\u732e", "core contribution"),
+        ("\u8d21\u732e", "contribution"),
+        ("\u539f\u7406", "principle"),
+        ("\u673a\u5236", "mechanism"),
+        ("\u65b9\u6cd5", "method"),
+        ("\u7b97\u6cd5", "algorithm"),
+        ("\u5b9e\u9a8c", "experiment"),
+        ("\u7ed3\u679c", "results"),
+        ("\u8ba8\u8bba", "discussion"),
+        ("\u7ed3\u8bba", "conclusion"),
+        ("\u5c40\u9650", "limitation"),
+        ("\u7f3a\u70b9", "limitation"),
+        ("\u672a\u6765\u5de5\u4f5c", "future work"),
+        ("\u590d\u73b0", "reproducibility"),
+        ("\u590d\u73b0\u6027", "reproducibility"),
+        ("\u5f15\u7528", "citation"),
+        ("\u53c2\u8003\u6587\u732e", "references"),
+        ("\u76ee\u5f55", "table of contents"),
+        ("\u5927\u7eb2", "outline"),
+        ("\u56fe", "figure"),
+        ("\u8868", "table"),
+        ("\u516c\u5f0f", "equation"),
+        ("\u5b9a\u4e49", "definition"),
         ("\u5c0f\u6ce2", "wavelet"),
         ("\u6210\u50cf", "imaging"),
         ("\u91cd\u5efa", "reconstruction"),
@@ -948,6 +1028,10 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
             _cache_set("trans", key, heuristic, max_items=500)
             return heuristic
 
+    # No API key: we can't call the translation LLM, but the heuristic fallback above may still help.
+    if not getattr(settings, "api_key", None):
+        return None
+
     try:
         settings_fast = replace(
             settings,
@@ -964,11 +1048,11 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         "- Prefer keywords and key phrases; include useful synonyms.\n"
         "- Keep it compact (8-18 tokens).\n"
         "- DO NOT confuse terms:\n"
-        "  - 鍗曟洕鍏?鍗曟鏇濆厜 -> single-shot, single exposure, snapshot\n"
-        "  - 鍗曞儚绱?-> single-pixel\n"
-        "  - 鍘嬬缉鎴愬儚 -> compressive imaging\n"
-        "  - 鍏夎氨鎴愬儚 -> spectral imaging\n"
-        "- If the user didn't mention 鍗曞儚绱? avoid adding single-pixel.\n"
+        "  - 单曝光/单次曝光 -> single-shot, single exposure, snapshot\n"
+        "  - 单像素 -> single-pixel\n"
+        "  - 压缩成像 -> compressive imaging\n"
+        "  - 光谱成像 -> spectral imaging\n"
+        "- If the user didn't mention 单像素 avoid adding single-pixel.\n"
     )
     user = f"Question: {q}\n\nEnglish search keywords:"
     try:

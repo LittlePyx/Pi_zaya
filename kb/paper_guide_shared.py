@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import re
+from pathlib import Path
 
 from kb.file_ops import _resolve_md_output_paths
 from kb.llm import DeepSeekChat
@@ -15,8 +17,8 @@ from kb.source_blocks import (
 )
 
 _FIG_NUMBER_PATTERNS = (
-    re.compile(r"\bfig(?:ure)?\.?\s*(\d{1,3})\b", flags=re.IGNORECASE),
-    re.compile(r"\bfigure\s*#?\s*(\d{1,3})\b", flags=re.IGNORECASE),
+    re.compile(r"\bfig(?:ure)?\.?\s*(\d{1,3})(?:\s*[a-z])?\b", flags=re.IGNORECASE),
+    re.compile(r"\bfigure\s*#?\s*(\d{1,3})(?:\s*[a-z])?\b", flags=re.IGNORECASE),
     re.compile(r"图\s*([0-9]{1,3})\b"),
     re.compile(r"第\s*([0-9]{1,3})\s*张图"),
     re.compile(r"(?:^|[_\-/])fig(?:ure)?[_\-]?(\d{1,3})(?:\D|$)", flags=re.IGNORECASE),
@@ -123,6 +125,23 @@ _SUMMARY_RESULT_HINT_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+
+def _cite_source_id(source_path: str) -> str:
+    s = str(source_path or "").strip()
+    if not s:
+        return "s0000000"
+    return "s" + hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()[:8]
+
+
+def _source_name_from_md_path(source_path: str) -> str:
+    src = Path(str(source_path or "").strip())
+    name = src.name or src.stem or "unknown-source"
+    if name.lower().endswith(".en.md"):
+        return re.sub(r"\.en\.md$", ".pdf", name, flags=re.IGNORECASE)
+    if name.lower().endswith(".md"):
+        return re.sub(r"\.md$", ".pdf", name, flags=re.IGNORECASE)
+    return name
 _CONTRIBUTION_BLOCK_HINT_RE = re.compile(
     r"("
     r"\b(?:first(?:\s+to)?|novel|we\s+propose|introduc(?:e|es|ed|ing)|"
@@ -192,3 +211,87 @@ _EQUATION_EXPLANATION_HINT_RE = re.compile(
 )
 _QUOTE_ELLIPSIS_RE = re.compile(r"(?:\[\s*(?:\.{3,}|…)\s*\]|\.{3,}|…)")
 
+
+def _trim_paper_guide_prompt_field(text: str, *, max_chars: int = 160) -> str:
+    s = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not s:
+        return ""
+    s = s.replace("|", "/")
+    try:
+        limit = max(24, int(max_chars))
+    except Exception:
+        limit = 160
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _trim_paper_guide_prompt_snippet(text: str, *, max_chars: int = 420) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    lines = [re.sub(r"[ \t]+", " ", str(line or "").strip()) for line in raw.splitlines()]
+    kept: list[str] = []
+    last_blank = False
+    for line in lines:
+        if not line:
+            if kept and (not last_blank):
+                kept.append("")
+            last_blank = True
+            continue
+        kept.append(line)
+        last_blank = False
+    s = "\n".join(kept).strip()
+    if not s:
+        return ""
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    try:
+        limit = max(80, int(max_chars))
+    except Exception:
+        limit = 420
+    if len(s) <= limit:
+        return s
+    return s[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _extract_paper_guide_abstract_excerpt(text: str, *, max_chars: int = 560) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    lines = [str(line or "").rstrip() for line in raw.splitlines()]
+    start_idx = -1
+    for idx, line in enumerate(lines):
+        s = str(line or "").strip()
+        if not s:
+            continue
+        if re.match(r"^\s*#\s*abstract\b", s, flags=re.IGNORECASE):
+            start_idx = idx + 1
+            break
+        if normalize_match_text(s) in {"abstract", "摘要"}:
+            start_idx = idx + 1
+            break
+    body_lines: list[str] = []
+    if start_idx >= 0:
+        for line in lines[start_idx:]:
+            s = str(line or "").rstrip()
+            if re.match(r"^\s*#{1,6}\s+", s) and body_lines:
+                break
+            body_lines.append(s)
+    if not body_lines:
+        body_lines = lines[:]
+        if body_lines and body_lines[0].lstrip().startswith("#"):
+            body_lines = body_lines[1:]
+        while len(body_lines) > 1:
+            first = str(body_lines[0] or "").strip()
+            if not first:
+                body_lines = body_lines[1:]
+                continue
+            if ("@" in first) or ("$^{" in first):
+                body_lines = body_lines[1:]
+                continue
+            if (len(first) <= 96) and (not re.search(r"[.!?。！？]$", first)):
+                body_lines = body_lines[1:]
+                continue
+            break
+    body = "\n".join(body_lines).strip()
+    return _trim_paper_guide_prompt_snippet(body, max_chars=max_chars)

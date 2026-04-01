@@ -53,7 +53,8 @@ $$range of SPI has been expanded from visible light[8] to UV,[9,10] infrared,[11
     out = postprocess_markdown(src)
     assert "$$" not in out
     assert "range of SPI has been expanded from visible light" in out
-    assert "$^{[8]}$" in out
+    assert "[8]" in out
+    assert "$^{[8]}$" not in out
 
 
 def test_keep_real_display_math_superscript_not_converted_to_hat():
@@ -98,3 +99,41 @@ Normal paragraph.
     assert re.search(r"(?m)^#{1,6}\s+4\.\s+Results\b", out)
     standalone_fences = [ln for ln in out.splitlines() if re.match(r"^\s*```\s*$", ln)]
     assert len(standalone_fences) >= 2
+
+
+def test_normalize_common_unit_rendering_artifacts():
+    src = r"""
+Cover glasses (high precision, $22 \times 22\,mm$ No. 1.5H $170\,\mum \pm 5\,\mum$ thickness) were heated to 37 掳C.
+"""
+    out = postprocess_markdown(src)
+    assert r"\mum" not in out
+    assert r"\mu\mathrm{m}" in out
+    assert "37 °C" in out
+
+
+def test_normalize_unit_wrapping_and_common_ocr_word_splits():
+    src = r"""
+**Figure 3.** Example at 0.5 μ W and scale bar 10 μ m. Line pro fi les on fl at- fi elded background at ( t 0 − t 4 ).
+The system runs with $0.5\,\mu$W illumination and 150 $\mu$l sample volume.
+This improves photon collection but sacri ﬁ ces contrast at low inci- dent powers.
+"""
+    out = postprocess_markdown(src)
+    assert "$0.5\\,\\mu\\mathrm{W}$" in out
+    assert "$10\\,\\mu\\mathrm{m}$" in out
+    assert "$150\\,\\mu\\mathrm{l}$" in out
+    assert "profiles" in out
+    assert "flat-fielded" in out
+    assert "(t0–t4)" in out
+    assert "sacrifices contrast" in out
+    assert "incident powers" in out
+
+
+def test_unwrap_inline_math_line_that_is_actually_prose_fragment():
+    src = """
+displace-
+
+$ments(see eq.(2)).$
+"""
+    out = postprocess_markdown(src)
+    assert "$ments(see eq.(2)).$" not in out
+    assert "ments (see eq.(2))." in out

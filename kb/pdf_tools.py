@@ -25,6 +25,8 @@ class PdfMetaSuggestion:
     year: str = ""
     title: str = ""
     crossref_meta: dict | None = None  # Stored Crossref metadata if trusted
+    match_method: str = ""
+    year_source: str = ""
 
 
 # Keep abbreviations explicit and deterministic (avoid LLM guessing for filenames).
@@ -891,6 +893,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
         top_text = ""
 
     year = _guess_year(top_text) or _guess_year(first_text)
+    year_source = "heuristic" if year else ""
     venue = _guess_venue(top_text) or _guess_venue(first_text)
     if (not venue or _is_generic_venue(venue)) and file_venue and (not _is_generic_venue(file_venue)):
         venue = file_venue
@@ -906,6 +909,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
                 title = sugg.title
             if not year and sugg.year:
                 year = sugg.year
+                year_source = "llm"
             if sugg.venue and (not venue or _is_generic_venue(venue) or _is_arxiv_venue(venue)):
                 venue = _prefer_real_venue_over_arxiv(venue, sugg.venue)
 
@@ -966,6 +970,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
             cross = None
 
     crossref_meta_stored = None
+    match_method = ""
     if isinstance(cross, dict):
         c_title = _sanitize_component(str(cross.get("title") or "").strip())
         c_year = _sanitize_component(str(cross.get("year") or "").strip())
@@ -974,6 +979,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
         c_score = float(cross.get("match_score") or 0.0)
         c_trusted = (c_method == "doi") or (c_score >= 0.90)
         cross_trusted = bool(c_trusted)
+        match_method = "doi" if c_method == "doi" else ("crossref_strong" if c_trusted else "crossref_weak")
 
         if c_title:
             t_sim = title_similarity(title, c_title) if title else 1.0
@@ -983,8 +989,10 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
         if c_trusted:
             if c_year and re.fullmatch(r"(19\d{2}|20\d{2})", c_year):
                 year = c_year
+                year_source = "doi" if c_method == "doi" else "crossref"
             else:
                 year = ""
+                year_source = ""
             if c_venue:
                 venue = _prefer_real_venue_over_arxiv(venue, c_venue)
             # Store trusted Crossref metadata for later use
@@ -992,6 +1000,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
         else:
             # For filename suggestions, prefer empty year over a potentially wrong year.
             year = ""
+            year_source = ""
             # Even if Crossref year is not trusted enough, venue can still be useful when the
             # current label is only "arXiv"/generic and Crossref provides a specific venue.
             if c_venue and (not _is_arxiv_venue(c_venue)):
@@ -1000,6 +1009,7 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
     else:
         # User preference: if Crossref cannot be confirmed, keep year empty.
         year = ""
+        year_source = ""
 
     # Safety fallback: avoid generic top-level journal names when untrusted.
     if _is_generic_venue(venue) and (not cross_trusted):
@@ -1012,6 +1022,12 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
             venue = file_venue
     if (not title) and file_title:
         title = file_title
+    if (not year) and file_year and re.fullmatch(r"(19\d{2}|20\d{2})", file_year):
+        # Preserve a stable filename-encoded year when Crossref does not confidently confirm one.
+        year = file_year
+        year_source = "filename"
+    if (not match_method) and year_source in {"heuristic", "llm", "filename"}:
+        match_method = year_source
 
     # Cleanups
     title = _sanitize_component(title)
@@ -1023,7 +1039,14 @@ def extract_pdf_meta_suggestion(pdf_path: Path, *, settings: Any | None = None) 
         venue = _sanitize_component(venue)
     year = _sanitize_component(year)
 
-    return PdfMetaSuggestion(venue=venue, year=year, title=title, crossref_meta=crossref_meta_stored)
+    return PdfMetaSuggestion(
+        venue=venue,
+        year=year,
+        title=title,
+        crossref_meta=crossref_meta_stored,
+        match_method=match_method,
+        year_source=year_source,
+    )
 
 
 def open_in_explorer(path: Path) -> None:
@@ -1042,6 +1065,59 @@ def open_in_explorer(path: Path) -> None:
         pass
 
 
+def _split_subprocess_llm_budget(
+    *,
+    no_llm_mode: bool,
+    workers: int,
+    llm_workers: int,
+    max_active_docs: int | None,
+) -> tuple[int, int, int | None, int, int]:
+    def _default_global_inflight(active_docs_hint: int) -> int:
+        cpu = max(1, int(os.cpu_count() or 1))
+        # Single-document frontend runs are still bound by the same subprocess
+        # worker defaults, so giving larger hosts the full 12-request budget
+        # improves throughput without changing OCR quality knobs.
+        if active_docs_hint <= 1:
+            if cpu >= 12:
+                return 12
+            return 8
+        # Multi-document frontend runs can share a slightly wider budget on
+        # larger hosts because the total is split before reaching child
+        # processes.
+        if cpu >= 12:
+            return 16
+        if cpu >= 8:
+            return 12
+        return 8
+
+    safe_workers = max(1, int(workers or 1))
+    safe_llm_workers = max(1, int(llm_workers or 1))
+    active_docs = max(1, int(max_active_docs or 1))
+    if bool(no_llm_mode):
+        return safe_workers, safe_llm_workers, None, active_docs, 0
+
+    try:
+        raw_global = str(os.environ.get("KB_LLM_MAX_INFLIGHT", "") or "").strip()
+        global_inflight = int(raw_global) if raw_global else _default_global_inflight(active_docs)
+    except Exception:
+        global_inflight = _default_global_inflight(active_docs)
+    global_inflight = max(1, min(32, int(global_inflight)))
+    per_doc_inflight = max(1, global_inflight // max(1, active_docs))
+
+    capped_workers = safe_workers
+    capped_llm_workers = safe_llm_workers
+    while (capped_workers * capped_llm_workers) > per_doc_inflight:
+        if capped_workers >= capped_llm_workers and capped_workers > 1:
+            capped_workers -= 1
+        elif capped_llm_workers > 1:
+            capped_llm_workers -= 1
+        elif capped_workers > 1:
+            capped_workers -= 1
+        else:
+            break
+    return capped_workers, capped_llm_workers, per_doc_inflight, active_docs, global_inflight
+
+
 def run_pdf_to_md(
     pdf_path: Path,
     out_root: Path,
@@ -1053,6 +1129,7 @@ def run_pdf_to_md(
     heartbeat_s: float = 1.0,
     stall_timeout_s: float | None = None,
     speed_mode: str | None = None,
+    max_active_conversions: int | None = None,
     _safe_retry_attempt: int = 0,
 ) -> tuple[bool, str]:
     """
@@ -1281,9 +1358,25 @@ def run_pdf_to_md(
         ui_workers_default, ui_llm_workers_default = _auto_llm_workers_defaults(page_count, cpu_count)
 
     ui_workers = _env_int("KB_PDF_WORKERS", default=ui_workers_default, lo=0, hi=64)
+    ui_llm_workers = _env_int("KB_PDF_LLM_WORKERS", default=ui_llm_workers_default, lo=0, hi=32)
+    split_llm_inflight = None
+    budget_active_docs = max(1, int(max_active_conversions or 1))
+    budget_global_inflight = 0
+    if (not bool(no_llm)) and ui_workers > 0 and ui_llm_workers > 0:
+        (
+            ui_workers,
+            ui_llm_workers,
+            split_llm_inflight,
+            budget_active_docs,
+            budget_global_inflight,
+        ) = _split_subprocess_llm_budget(
+            no_llm_mode=bool(no_llm),
+            workers=ui_workers,
+            llm_workers=ui_llm_workers,
+            max_active_docs=max_active_conversions,
+        )
     if ui_workers > 0:
         args.extend(["--workers", str(ui_workers)])
-    ui_llm_workers = _env_int("KB_PDF_LLM_WORKERS", default=ui_llm_workers_default, lo=0, hi=32)
     if ui_llm_workers > 0:
         args.extend(["--llm-workers", str(ui_llm_workers)])
 
@@ -1337,6 +1430,9 @@ def run_pdf_to_md(
                     f"script={str(script)}, "
                     f"workers={ui_workers if ui_workers > 0 else 'auto'}, "
                     f"llm_workers={ui_llm_workers if ui_llm_workers > 0 else 'auto'}, "
+                    f"shared_active_docs={budget_active_docs}, "
+                    f"shared_global_inflight={budget_global_inflight if budget_global_inflight > 0 else 'n/a'}, "
+                    f"shared_doc_inflight={split_llm_inflight if split_llm_inflight is not None else 'n/a'}, "
                     f"llm_timeout={ui_llm_timeout}s, llm_retries={ui_llm_retries}, "
                     f"page_stall_timeout={int(page_stall_timeout_s)}s, "
                     f"auto_page_llm_threshold={auto_page_llm_threshold}, "
@@ -1395,6 +1491,8 @@ def run_pdf_to_md(
         cp_out = []
         env = dict(os.environ)
         env["PYTHONUNBUFFERED"] = "1"
+        if split_llm_inflight is not None:
+            env["KB_LLM_MAX_INFLIGHT"] = str(int(split_llm_inflight))
         proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -1636,6 +1734,7 @@ def run_pdf_to_md(
                     heartbeat_s=heartbeat_s,
                     stall_timeout_s=stall_timeout_s,
                     speed_mode=speed_mode,
+                    max_active_conversions=max_active_conversions,
                     _safe_retry_attempt=int(_safe_retry_attempt) + 1,
                 )
             finally:
@@ -1686,6 +1785,7 @@ def run_pdf_to_md(
                     heartbeat_s=heartbeat_s,
                     stall_timeout_s=stall_timeout_s,
                     speed_mode=speed_mode,
+                    max_active_conversions=max_active_conversions,
                     _safe_retry_attempt=int(_safe_retry_attempt) + 1,
                 )
             finally:

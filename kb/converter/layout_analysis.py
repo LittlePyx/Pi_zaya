@@ -137,6 +137,27 @@ def _merge_nearby_visual_rects(rects: list["fitz.Rect"], *, page_w: float, page_
                 area_b = max(0.0, float(b.width) * float(b.height))
                 inter_area = _rect_intersection_area(cur, b)
                 fill_ratio = (area_a + area_b - max(0.0, inter_area)) / max(1.0, union_area)
+                top_banner_a = (
+                    float(cur.y0) <= page_h * 0.14
+                    and float(cur.width) >= page_w * 0.50
+                    and float(cur.height) <= page_h * 0.08
+                )
+                top_banner_b = (
+                    float(b.y0) <= page_h * 0.14
+                    and float(b.width) >= page_w * 0.50
+                    and float(b.height) <= page_h * 0.08
+                )
+                if top_banner_a or top_banner_b:
+                    banner = cur if top_banner_a else b
+                    other = b if top_banner_a else cur
+                    gap_below = max(0.0, float(other.y0) - float(banner.y1))
+                    if (
+                        gap_below >= max(10.0, page_h * 0.012)
+                        and float(other.height) >= float(banner.height) * 2.2
+                    ):
+                        # Running journal banners / top logos can sit directly above a real figure.
+                        # Keep them separate so the figure crop does not absorb the page header.
+                        continue
                 # Multi-panel figures are often stacked (a)(b)/(c) with a moderate y-gap.
                 # Keep this merge conservative to avoid collapsing unrelated figures.
                 stacked_panel = (
@@ -261,7 +282,7 @@ def _detect_column_split_x(blocks: list, page_width: float) -> Optional[float]:
         for b in blocks
         if _bbox_width(b.bbox) < page_width * 0.62
     ]
-    if len(candidates) < 4:
+    if len(candidates) < 2:
         return None
     centers = sorted(candidates)
 
@@ -284,8 +305,51 @@ def _detect_column_split_x(blocks: list, page_width: float) -> Optional[float]:
 
     left_n = sum(1 for c in centers if c < best_mid)
     right_n = len(centers) - left_n
-    if left_n < 2 or right_n < 2:
+    if left_n < 1 or right_n < 1:
         return None
+
+    def _is_substantial_column_block(block) -> bool:
+        try:
+            x0, y0, x1, y1 = [float(v) for v in block.bbox]
+        except Exception:
+            return False
+        width = max(0.0, x1 - x0)
+        height = max(0.0, y1 - y0)
+        if width < page_width * 0.18 or width >= page_width * 0.62:
+            return False
+        if height < 36.0:
+            return False
+        try:
+            txt = str(getattr(block, "text", "") or "")
+        except Exception:
+            txt = ""
+        if txt and len(re.sub(r"\s+", " ", txt).strip()) < 40:
+            return False
+        return True
+
+    substantial_left = 0
+    substantial_right = 0
+    for block in blocks:
+        if not _is_substantial_column_block(block):
+            continue
+        cx = (float(block.bbox[0]) + float(block.bbox[2])) / 2.0
+        if cx < best_mid:
+            substantial_left += 1
+        else:
+            substantial_right += 1
+
+    if len(candidates) < 4:
+        if substantial_left < 1 or substantial_right < 1:
+            return None
+        if best_gap < page_width * 0.16:
+            return None
+        return float(best_mid)
+
+    if left_n < 2 or right_n < 2:
+        if substantial_left < 1 or substantial_right < 1:
+            return None
+        if best_gap < page_width * 0.10:
+            return None
     return float(best_mid)
 
 
@@ -304,6 +368,21 @@ def sort_blocks_reading_order(blocks: list, page_width: float) -> list:
     out: list = []
     segment: list = []
 
+    def _is_effectively_spanning_block(block) -> bool:
+        x0, _, x1, _ = [float(v) for v in block.bbox]
+        width = max(0.0, x1 - x0)
+        if width >= spanning_threshold:
+            return True
+        left_w = max(0.0, min(float(col_split), x1) - x0)
+        right_w = max(0.0, x1 - max(float(col_split), x0))
+        if left_w <= 0.0 or right_w <= 0.0:
+            return False
+        if min(left_w, right_w) < max(14.0, page_width * 0.03):
+            return False
+        if (min(left_w, right_w) / max(1.0, width)) < 0.18:
+            return False
+        return x0 < (col_split - cross_margin) and x1 > (col_split + cross_margin)
+
     def flush_segment():
         nonlocal segment
         if not segment:
@@ -317,9 +396,7 @@ def sort_blocks_reading_order(blocks: list, page_width: float) -> list:
         segment = []
 
     for b in by_y:
-        x0, _, x1, _ = b.bbox
-        crosses_split = float(x0) < (col_split - cross_margin) and float(x1) > (col_split + cross_margin)
-        if _bbox_width(b.bbox) >= spanning_threshold or crosses_split:
+        if _is_effectively_spanning_block(b):
             flush_segment()
             out.append(b)
         else:

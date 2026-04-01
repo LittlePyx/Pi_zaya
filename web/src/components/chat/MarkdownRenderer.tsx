@@ -133,6 +133,7 @@ interface Props {
   locateTitleResolver?: (snippet: string) => string
   inlineLocateTokenPolicy?: Partial<Record<InlineLocateTokenKind, boolean>>
   inlineTextLocateEnabled?: boolean
+  inlineTextTailLocateEnabled?: boolean
   locateSurfacePolicy?: Partial<Record<LocateSurfaceKind, boolean>>
   variant?: 'chat' | 'reader'
   readerAnchors?: ReaderDocAnchor[]
@@ -833,6 +834,7 @@ function buildMarkdownComponents(
   locateTitleResolver?: (snippet: string) => string,
   inlineLocateTokenPolicy?: Partial<Record<InlineLocateTokenKind, boolean>>,
   inlineTextLocateEnabled: boolean = true,
+  inlineTextTailLocateEnabled: boolean = false,
   locateSurfacePolicy?: Partial<Record<LocateSurfaceKind, boolean>>,
   variant: 'chat' | 'reader' = 'chat',
   readerAnchorAllocator?: ReaderAnchorAllocator | null,
@@ -1193,6 +1195,15 @@ function buildMarkdownComponents(
           return <p {...attrs} className="kb-md-figure-caption">{tailed}</p>
         }
       }
+      if (inlineTextTailLocateEnabled && !insideBlockquote && inline.count <= 0) {
+        const tailBtn = renderLocateButton(content, {
+          meta,
+        })
+        if (tailBtn) {
+          const tailed = appendTailButtonToContent(content, tailBtn, `paragraph-${renderOrder}`)
+          return <p {...attrs}>{tailed}</p>
+        }
+      }
       return <p {...attrs}>{content}</p>
     },
     li: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
@@ -1205,7 +1216,17 @@ function buildMarkdownComponents(
       const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
         ? decorateInlineLocateAnchors(children, meta)
         : { content: children, count: 0, figureRefCount: 0 }
-      return <li {...attrs}>{inline.count > 0 ? inline.content : children}</li>
+      const content = inline.count > 0 ? inline.content : children
+      if (variant === 'chat' && inlineTextTailLocateEnabled && !insideBlockquote && inline.count <= 0) {
+        const tailBtn = renderLocateButton(content, {
+          meta,
+        })
+        if (tailBtn) {
+          const tailed = appendTailButtonToContent(content, tailBtn, `list-item-${renderOrder}`)
+          return <li {...attrs}>{tailed}</li>
+        }
+      }
+      return <li {...attrs}>{content}</li>
     },
     div: (props: any) => {
       const { node, className, children, ...rest } = props || {}
@@ -1266,6 +1287,7 @@ export function MarkdownRenderer({
   locateTitleResolver,
   inlineLocateTokenPolicy,
   inlineTextLocateEnabled = true,
+  inlineTextTailLocateEnabled = false,
   locateSurfacePolicy,
   variant = 'chat',
   readerAnchors,
@@ -1291,6 +1313,7 @@ export function MarkdownRenderer({
     locateTitleResolver,
     inlineLocateTokenPolicy,
     inlineTextLocateEnabled,
+    inlineTextTailLocateEnabled,
     locateSurfacePolicy,
     variant,
     readerAnchorAllocator,

@@ -8,6 +8,7 @@ import { useSettingsStore } from './stores/settingsStore'
 import { AppLayout } from './components/layout/AppSider'
 import ChatPage from './pages/ChatPage'
 import LibraryPage from './pages/LibraryPage'
+import MessageListRegressionPage from './pages/MessageListRegressionPage'
 import ReaderRegressionPage from './pages/ReaderRegressionPage'
 import ReaderSplitRegressionPage from './pages/ReaderSplitRegressionPage'
 
@@ -26,6 +27,7 @@ function App() {
     <ConfigProvider locale={zhCN} theme={theme === 'dark' ? darkTheme : lightTheme}>
       <BrowserRouter>
         <Routes>
+          <Route path="/__message_list_test__" element={<MessageListRegressionPage />} />
           <Route path="/__reader_test__" element={<ReaderRegressionPage />} />
           <Route path="/__reader_split_test__" element={<ReaderSplitRegressionPage />} />
           <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />

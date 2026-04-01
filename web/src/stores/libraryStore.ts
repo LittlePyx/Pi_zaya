@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   libraryApi,
+  type ConvertActiveTask,
   type LibraryFileItem,
   type LibrarySuggestionActionBody,
   type LibraryMetaBatchUpdateBody,
@@ -13,6 +14,8 @@ interface ConvertProgressState {
   total: number
   completed: number
   current: string
+  activeCount: number
+  activeTasks: ConvertActiveTask[]
   curPageDone: number
   curPageTotal: number
   curPageMsg: string
@@ -99,7 +102,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     return libraryApi.upload(file, baseName)
   },
 
-  convert: async (name, mode = 'balanced', replace = false) => {
+  convert: async (name, mode = 'balanced', replace = true) => {
     set({ converting: true, progress: null })
     await libraryApi.convert(name, mode, { replace })
     await get().loadFiles(get().viewScope || '200')
@@ -235,6 +238,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             total: data.total,
             completed: data.completed,
             current: data.current,
+            activeCount: Number(data.active_count || 0),
+            activeTasks: Array.isArray(data.active_tasks) ? data.active_tasks : [],
             curPageDone: data.cur_page_done,
             curPageTotal: data.cur_page_total,
             curPageMsg: data.cur_page_msg,

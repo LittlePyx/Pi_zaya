@@ -100,6 +100,13 @@ test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
 })
 
+test('multi-panel caption locate highlights the combined target snippet', async ({ page }) => {
+  await openHarness(page, 'multi-panel')
+  await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
+  await expect(page.locator('.kb-reader-focus[data-kb-block-id="p-fig-panels"]')).toHaveCount(1)
+  await expect(page.locator('.kb-reader-inline-hit')).toContainText('g Line profiles of the iPSF')
+})
+
 test('outline jump lands on the selected section heading', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 560 })
   await openHarness(page, 'strict-quote')

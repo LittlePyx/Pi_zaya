@@ -179,7 +179,8 @@ export function useReaderLocateEngine({
     let observer: MutationObserver | null = null
     let lastVisibleCount = -1
     let stablePasses = 0
-    const deadline = Date.now() + (strictLocate ? 2600 : 1600)
+    // Strict locate may need more time for KaTeX and large markdown to fully render/bind anchors.
+    const deadline = Date.now() + (strictLocate ? 6500 : 1600)
     const finalize = (boundCount: number) => {
       if (cancelled) return
       observer?.disconnect()
@@ -270,7 +271,8 @@ export function useReaderLocateEngine({
     let scrollRaf = 0
     let retryTimer = 0
     let observer: MutationObserver | null = null
-    const deadline = Date.now() + (strictLocate ? 2800 : 1800)
+    // Strict locate may need more time for KaTeX and large markdown to fully render/bind anchors.
+    const deadline = Date.now() + (strictLocate ? 6500 : 1800)
     const scheduleLocate = (delayMs = 0) => {
       if (cancelled) return
       window.cancelAnimationFrame(locateRaf)

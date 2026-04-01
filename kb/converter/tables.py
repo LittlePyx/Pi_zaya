@@ -172,6 +172,189 @@ def _is_markdown_table_sane(md: str) -> bool:
     return True
 
 
+def _split_md_table_cells(line: str) -> list[str]:
+    text = (line or "").strip()
+    if not text.startswith("|"):
+        return []
+    inner = text.strip("|")
+    parts = re.split(r"(?<!\\)\|", inner)
+    return [p.strip() for p in parts]
+
+
+def _looks_separator_cell(cell: str) -> bool:
+    return bool(re.fullmatch(r":?-{3,}:?", (cell or "").strip()))
+
+
+def _looks_numeric_table_cell(cell: str) -> bool:
+    t = (cell or "").strip()
+    if not t:
+        return False
+    if re.fullmatch(r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:%|e[+-]?\d+)?", t, flags=re.IGNORECASE):
+        return True
+    if re.fullmatch(r"\d+\s*/\s*\d+", t):
+        return True
+    return False
+
+
+def _looks_value_header_cell(cell: str) -> bool:
+    t = (cell or "").strip()
+    if not t:
+        return False
+    if re.fullmatch(r"(?:\d+(?:\.\d+)?)%?", t):
+        return True
+    if re.fullmatch(r"\d+\s*/\s*\d+", t):
+        return True
+    return False
+
+
+def _expand_multicolumn_cells(cells: list[str]) -> list[str]:
+    out: list[str] = []
+    for cell in cells:
+        t = (cell or "").strip()
+        m = re.fullmatch(r"\\multicolumn\{(\d+)\}\{[^}]*\}\{(.*)\}", t)
+        if not m:
+            out.append(t)
+            continue
+        span = max(1, int(m.group(1)))
+        label = _normalize_text(m.group(2) or "").strip()
+        out.append(label)
+        out.extend([""] * (span - 1))
+    return out
+
+
+def _table_numeric_suffix_width(cells: list[str]) -> int:
+    width = 0
+    for cell in reversed(cells):
+        if _looks_numeric_table_cell(cell):
+            width += 1
+            continue
+        break
+    return width
+
+
+def _table_value_header_suffix_width(cells: list[str]) -> int:
+    width = 0
+    for cell in reversed(cells):
+        if _looks_value_header_cell(cell):
+            width += 1
+            continue
+        break
+    return width
+
+
+def _normalize_sparse_prefix(cells: list[str], *, target_width: int, suffix_width: int) -> list[str]:
+    if len(cells) >= target_width or suffix_width <= 0 or suffix_width >= len(cells):
+        return cells + [""] * max(0, target_width - len(cells))
+    prefix = cells[:-suffix_width]
+    suffix = cells[-suffix_width:]
+    target_prefix = max(0, target_width - suffix_width)
+    if len(prefix) < target_prefix:
+        head = prefix[:1]
+        rest = prefix[1:]
+        prefix = head + ([""] * (target_prefix - len(prefix))) + rest
+    return (prefix + suffix + [""] * target_width)[:target_width]
+
+
+def _normalize_sparse_header_row(
+    cells: list[str],
+    *,
+    target_width: int,
+    value_header_start: int | None,
+) -> list[str]:
+    cells = [(c or "").strip() for c in cells]
+    if len(cells) >= target_width:
+        return cells[:target_width]
+    if value_header_start is None:
+        return cells + [""] * (target_width - len(cells))
+
+    labels = [c for c in cells if c]
+    if not labels:
+        return [""] * target_width
+
+    span_label = next(
+        (lab for lab in labels if re.search(r"(?i)(sampling|ratio|measurement|frequency)", lab)),
+        None,
+    )
+    base = [""] * target_width
+    if span_label:
+        others = labels.copy()
+        others.remove(span_label)
+        if others:
+            start = max(0, value_header_start - len(others))
+            for i, lab in enumerate(others):
+                if start + i < target_width:
+                    base[start + i] = lab
+        if value_header_start < target_width:
+            base[value_header_start] = span_label
+        return base
+
+    if len(cells) == target_width - 1:
+        head = cells[:1]
+        rest = cells[1:]
+        return (head + [""] + rest + [""] * target_width)[:target_width]
+
+    return cells + [""] * (target_width - len(cells))
+
+
+def _render_markdown_table(rows: list[list[str]]) -> str:
+    width = max(len(r) for r in rows)
+    norm_rows = [r + [""] * (width - len(r)) for r in rows]
+    md_lines = [
+        "| " + " | ".join(norm_rows[0]) + " |",
+        "| " + " | ".join(["---"] * width) + " |",
+    ]
+    for row in norm_rows[1:]:
+        md_lines.append("| " + " | ".join(row) + " |")
+    return "\n".join(md_lines)
+
+
+def normalize_markdown_table_block(md: str) -> str:
+    lines = [ln.rstrip() for ln in (md or "").splitlines() if ln.strip()]
+    if len(lines) < 2 or not all(ln.lstrip().startswith("|") for ln in lines):
+        return md
+
+    rows: list[list[str]] = []
+    for line in lines:
+        cells = _expand_multicolumn_cells(_split_md_table_cells(line))
+        if not cells:
+            return md
+        if cells and all(_looks_separator_cell(c) or not c for c in cells):
+            continue
+        rows.append(cells)
+    if len(rows) < 2:
+        return md
+
+    target_width = max(len(r) for r in rows)
+    if target_width < 2:
+        return md
+
+    numeric_suffixes = [_table_numeric_suffix_width(r) for r in rows]
+    value_header_suffixes = [_table_value_header_suffix_width(r) for r in rows]
+    tail_candidates = [w for w in numeric_suffixes if w >= 2]
+    if not tail_candidates:
+        tail_candidates = [w for w in value_header_suffixes if w >= 2]
+    tail_width = max(tail_candidates, key=tail_candidates.count) if tail_candidates else 0
+    value_header_start = (target_width - tail_width) if tail_width >= 2 else None
+
+    normalized: list[list[str]] = []
+    for row, numeric_tail, value_tail in zip(rows, numeric_suffixes, value_header_suffixes):
+        if tail_width >= 2 and numeric_tail >= 2:
+            normalized.append(_normalize_sparse_prefix(row, target_width=target_width, suffix_width=numeric_tail))
+            continue
+        if tail_width >= 2 and value_tail >= 2:
+            normalized.append(_normalize_sparse_prefix(row, target_width=target_width, suffix_width=value_tail))
+            continue
+        normalized.append(
+            _normalize_sparse_header_row(
+                row,
+                target_width=target_width,
+                value_header_start=value_header_start,
+            )
+        )
+
+    return _render_markdown_table(normalized)
+
+
 def _extract_tables_by_pdfplumber(pdf_path: Optional[Path], page_index: int) -> list[tuple["fitz.Rect", str]]:
     if fitz is None or (pdf_path is None):
         return []

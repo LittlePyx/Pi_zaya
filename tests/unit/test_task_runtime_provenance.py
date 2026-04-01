@@ -21,6 +21,38 @@ def test_resolve_paper_guide_md_path_accepts_db_dir_as_md_root(tmp_path: Path):
     assert resolved.resolve(strict=False) == md_main.resolve(strict=False)
 
 
+def test_resolve_paper_guide_md_path_falls_back_to_matching_db_folder_identity(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "external_uploads" / "DemoPaper.pdf"
+    db_root = tmp_path / "db"
+    md_dir = db_root / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text("# Demo\n\nCaption evidence.", encoding="utf-8")
+
+    resolved = task_runtime._resolve_paper_guide_md_path(str(source_pdf), db_dir=db_root)
+
+    assert resolved is not None
+    assert resolved.resolve(strict=False) == md_main.resolve(strict=False)
+
+
+def test_resolve_paper_guide_md_path_matches_truncated_db_folder_identity(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "external_uploads" / "NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf"
+    db_root = tmp_path / "db"
+    md_dir = db_root / "NatPhoton-2025-Structured detection for...in laser scanning microscopy"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "NatPhoton-2025-Structured detection for...in laser scanning microscopy.en.md"
+    md_main.write_text("# Demo\n\nFigure 2 caption evidence.", encoding="utf-8")
+
+    resolved = task_runtime._resolve_paper_guide_md_path(str(source_pdf), db_dir=db_root)
+
+    assert resolved is not None
+    assert resolved.resolve(strict=False) == md_main.resolve(strict=False)
+
+
 def test_segment_snippet_aliases_yields_sentence_level_aliases():
     from kb import task_runtime
 
@@ -36,6 +68,253 @@ def test_segment_snippet_aliases_yields_sentence_level_aliases():
     assert len(aliases) <= 6
     assert aliases[0].startswith("this first sentence is intentionally")
     assert any("the second sentence adds extra context" in item for item in aliases)
+
+
+def test_extract_figure_number_accepts_panel_suffix():
+    from kb.paper_guide_provenance import _extract_figure_number
+
+    assert _extract_figure_number("Fig. 2a shows the RVT output.") == 2
+    assert _extract_figure_number("Figure 3b compares the open and closed pinhole views.") == 3
+
+
+def test_is_explicit_non_source_segment_detects_missing_discussion_notice():
+    from kb.paper_guide_provenance import _is_explicit_non_source_segment
+
+    assert _is_explicit_non_source_segment(
+        "The retrieved context does not include the Discussion section of the paper."
+    )
+
+
+def test_is_explicit_non_source_segment_detects_negative_discussion_summary():
+    from kb.paper_guide_provenance import _is_explicit_non_source_segment
+
+    assert _is_explicit_non_source_segment(
+        "The authors do not discuss integrating the iISM approach into commercial fluorescence ISM systems in the Discussion section."
+    )
+
+
+def test_annotate_segments_with_support_resolution_promotes_figure_panel_anchor():
+    from kb.paper_guide_provenance import _annotate_segments_with_support_resolution
+
+    segments = [
+        {
+            "segment_id": "seg_1",
+            "text": "Panel (f) shows the APR result.",
+            "raw_markdown": "Panel (f) shows the APR result.",
+            "evidence_mode": "direct",
+            "claim_type": "critical_fact_claim",
+            "anchor_kind": "sentence",
+            "anchor_text": "Panel (f) shows the APR result.",
+            "primary_block_id": "blk_old",
+            "evidence_block_ids": ["blk_old"],
+            "support_block_ids": [],
+        }
+    ]
+    support_resolution = [
+        {
+            "segment_index": 0,
+            "doc_idx": 1,
+            "claim_type": "figure_panel",
+            "cite_policy": "locate_only",
+            "locate_anchor": "f Resulting iPSF from iISM after adaptive pixel-reassignment (APR).",
+            "block_id": "blk_caption",
+        }
+    ]
+    block_lookup = {
+        "blk_caption": {
+            "block_id": "blk_caption",
+            "anchor_id": "anc_caption",
+            "heading_path": "Results / Figure 1",
+        }
+    }
+
+    out = _annotate_segments_with_support_resolution(
+        segments,
+        support_resolution=support_resolution,
+        block_lookup=block_lookup,
+    )
+
+    # Figure-panel exact support should bind the jump target to the resolved caption paragraph,
+    # not force a figure-asset anchor.
+    assert out[0]["claim_type"] == "figure_panel"
+    assert out[0]["anchor_kind"] == "sentence"
+    assert out[0]["anchor_text"] == "f Resulting iPSF from iISM after adaptive pixel-reassignment (APR)."
+    assert out[0]["primary_block_id"] == "blk_caption"
+
+
+def test_select_figure_claim_binding_prefers_caption_with_matching_figure_identity():
+    from kb.paper_guide_provenance import _select_figure_claim_binding
+
+    segment = {
+        "segment_id": "seg_1",
+        "text": "Figure 4 compares the reconstruction outputs.",
+        "raw_markdown": "Figure 4 compares the reconstruction outputs.",
+        "anchor_text": "Figure 4 compares the reconstruction outputs.",
+        "evidence_quote": "Figure 4 compares the reconstruction outputs.",
+        "primary_block_id": "blk_result",
+    }
+    block_lookup = {
+        "blk_result": {
+            "block_id": "blk_result",
+            "kind": "paragraph",
+            "text": "Nearby discussion of Figure 4.",
+            "order_index": 30,
+        },
+        "blk_figure": {
+            "block_id": "blk_figure",
+            "kind": "figure",
+            "number": 4,
+            "paper_figure_number": 4,
+            "figure_id": "fig_004",
+            "order_index": 10,
+        },
+        "blk_caption_good": {
+            "block_id": "blk_caption_good",
+            "kind": "paragraph",
+            "text": "Figure 4. Correct caption text for the reconstructed image.",
+            "raw_text": "Figure 4. Correct caption text for the reconstructed image.",
+            "figure_id": "fig_004",
+            "figure_role": "caption",
+            "linked_figure_block_id": "blk_figure",
+            "order_index": 11,
+        },
+        "blk_caption_bad": {
+            "block_id": "blk_caption_bad",
+            "kind": "paragraph",
+            "text": "Figure 4. Another nearby paragraph that should lose.",
+            "raw_text": "Figure 4. Another nearby paragraph that should lose.",
+            "order_index": 18,
+        },
+    }
+
+    figure_block, caption_block = _select_figure_claim_binding(segment, block_lookup)
+
+    assert str((figure_block or {}).get("block_id") or "") == "blk_figure"
+    assert str((caption_block or {}).get("block_id") or "") == "blk_caption_good"
+
+
+def test_annotate_segments_with_support_resolution_negative_segment_index_falls_back_to_surface_match():
+    from kb.paper_guide_provenance import _annotate_segments_with_support_resolution
+
+    segments = [
+        {
+            "segment_id": "seg_1",
+            "text": "The paper states this explicitly in Results / APR:",
+            "raw_markdown": "The paper states this explicitly in Results / APR:",
+            "evidence_mode": "synthesis",
+            "claim_type": "critical_fact_claim",
+            "anchor_kind": "sentence",
+            "anchor_text": "The paper states this explicitly in Results / APR:",
+            "primary_block_id": "",
+            "evidence_block_ids": [],
+            "support_block_ids": [],
+        },
+        {
+            "segment_id": "seg_2",
+            "text": "Finally, these RVT-APR shift vectors were applied back to the original iISM dataset, yielding reconstructions with enhanced spatial resolution.",
+            "raw_markdown": "Finally, these RVT-APR shift vectors were applied back to the original iISM dataset, yielding reconstructions with enhanced spatial resolution.",
+            "evidence_mode": "synthesis",
+            "claim_type": "blockquote_claim",
+            "anchor_kind": "blockquote",
+            "anchor_text": "Finally, these RVT-APR shift vectors were applied back to the original iISM dataset, yielding reconstructions with enhanced spatial resolution.",
+            "primary_block_id": "",
+            "evidence_block_ids": [],
+            "support_block_ids": [],
+        },
+    ]
+    support_resolution = [
+        {
+            "segment_index": -1,
+            "doc_idx": 1,
+            "claim_type": "method_detail",
+            "cite_policy": "locate_only",
+            "locate_anchor": "Finally, these RVT-APR shift vectors were applied back to the original iISM dataset, yielding reconstructions with enhanced spatial resolution.",
+            "segment_text": "Finally, these RVT-APR shift vectors were applied back to the original iISM dataset, yielding reconstructions with enhanced spatial resolution.",
+            "block_id": "blk_apr",
+            "anchor_id": "anc_apr",
+            "heading_path": "Results / APR",
+        }
+    ]
+    block_lookup = {
+        "blk_apr": {
+            "block_id": "blk_apr",
+            "anchor_id": "anc_apr",
+            "heading_path": "Results / APR",
+        }
+    }
+
+    out = _annotate_segments_with_support_resolution(
+        segments,
+        support_resolution=support_resolution,
+        block_lookup=block_lookup,
+    )
+
+    assert str(out[0].get("mapping_source") or "") != "support_slot"
+    assert str(out[1].get("mapping_source") or "") == "support_slot"
+    assert str(out[1].get("support_slot_claim_type") or "") == "method_detail"
+    assert str(out[1].get("primary_block_id") or "") == "blk_apr"
+    assert str(out[1].get("primary_anchor_id") or "") == "anc_apr"
+    assert str(out[1].get("primary_heading_path") or "") == "Results / APR"
+    assert str(out[1].get("anchor_text") or "").startswith("Finally, these RVT-APR shift vectors")
+    assert str(out[1].get("support_locate_anchor") or "").startswith("Finally, these RVT-APR shift vectors")
+    assert str(out[1].get("locate_policy") or "") == "required"
+
+
+def test_canonicalize_support_segment_heading_appends_figure_number():
+    from kb.paper_guide_provenance import _canonicalize_support_segment_heading
+
+    seg = {
+        "primary_heading_path": "Results / Principle of interferometric ISM (iISM)",
+        "support_slot_claim_type": "figure_panel",
+        "support_slot_figure_number": 1,
+        "support_slot_panel_letters": ["f"],
+        "support_locate_anchor": "f Resulting iPSF from iISM after adaptive pixel-reassignment (APR).",
+        "locate_policy": "optional",
+        "must_locate": False,
+    }
+
+    out = _canonicalize_support_segment_heading(seg)
+
+    assert out["primary_heading_path"] == "Results / Principle of interferometric ISM (iISM) / Figure 1"
+    assert out["locate_policy"] == "required"
+    assert out["must_locate"] is True
+
+
+def test_canonicalize_support_segment_heading_falls_back_to_paper_figure_number():
+    from kb.paper_guide_provenance import _canonicalize_support_segment_heading
+
+    seg = {
+        "primary_heading_path": "4. Experiments / 4.2. Additional Study",
+        "claim_type": "figure_claim",
+        "anchor_kind": "figure",
+        "paper_figure_number": 4,
+        "anchor_text": "**Figure 4.** Qualitative evaluations on the synthetic dataset.",
+    }
+
+    out = _canonicalize_support_segment_heading(seg)
+
+    assert out["primary_heading_path"] == "4. Experiments / 4.2. Additional Study / Figure 4"
+
+
+def test_canonicalize_support_segment_heading_collapses_box_only_scope():
+    from kb.paper_guide_provenance import _canonicalize_support_segment_heading
+
+    seg = {
+        "primary_heading_path": "Principles / Acquisition and image reconstruction strategies",
+        "support_slot_claim_type": "own_result",
+        "support_slot_box_number": 1,
+        "support_slot_panel_letters": [],
+        "support_locate_anchor": "It can be shown that when the number of sampling patterns used $M \\ge O(K \\log(N/K))$...",
+        "locate_policy": "hidden",
+        "must_locate": False,
+    }
+
+    out = _canonicalize_support_segment_heading(seg)
+
+    assert out["primary_heading_path"] == "Box 1"
+    assert out["support_locate_anchor"] == "It can be shown that when the number of sampling patterns used M >= O(K log(N/K))..."
+    assert out["locate_policy"] == "required"
+    assert out["must_locate"] is True
 
 
 def test_build_paper_guide_answer_provenance_contains_snippet_aliases(tmp_path: Path):
@@ -792,6 +1071,57 @@ def test_build_paper_guide_answer_provenance_rebinds_figure_claim_to_figure_bloc
     assert "single snapshot compressed image" in str(fig_seg.get("evidence_quote") or "").lower()
 
 
+def test_build_paper_guide_answer_provenance_hides_broad_figure_summary_claim(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "VisionPaper.pdf"
+    md_dir = tmp_path / "VisionPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "VisionPaper.en.md"
+    fig_caption = "Figure 3. Reconstruction quality comparison across baseline methods."
+    md_main.write_text(
+        (
+            "# Results\n\n"
+            f"{fig_caption}\n\n"
+            "Figure 3 compares baseline methods and shows the result panels.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    answer = (
+        "In summary, Figure 3 walks the reader through the baseline comparison via a panel-by-panel walkthrough.\n\n"
+        "Panel (a): shows the baseline reconstruction."
+    )
+    hits = [
+        {
+            "text": fig_caption,
+            "meta": {
+                "source_path": str(source_pdf),
+                "ref_show_snippets": [fig_caption],
+                "ref_best_heading_path": "Results",
+                "anchor_target_kind": "figure",
+                "anchor_target_number": 3,
+            },
+        }
+    ]
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=hits,
+        bound_source_path=str(source_pdf),
+        bound_source_name="VisionPaper.pdf",
+        db_dir=None,
+        llm_rerank=False,
+    )
+
+    segments = provenance.get("segments") or []
+    assert len(segments) >= 1
+    broad_seg = segments[0]
+    assert str(broad_seg.get("claim_type") or "") == "shell_sentence"
+    assert str(broad_seg.get("locate_policy") or "") == "hidden"
+    assert str(broad_seg.get("anchor_kind") or "") == ""
+
+
 def test_build_paper_guide_answer_provenance_groups_formula_explanation_as_required(tmp_path: Path):
     from kb import task_runtime
 
@@ -1472,10 +1802,17 @@ def test_gen_store_answer_provenance_async_enables_llm_rerank(monkeypatch):
 
     captured: dict[str, object] = {}
 
-    def _fake_store(task: dict, *, answer: str, answer_hits: list[dict]) -> None:
+    def _fake_store(
+        task: dict,
+        *,
+        answer: str,
+        answer_hits: list[dict],
+        support_resolution: list[dict] | None = None,
+    ) -> None:
         captured["task"] = dict(task)
         captured["answer"] = answer
         captured["answer_hits"] = list(answer_hits)
+        captured["support_resolution"] = list(support_resolution or [])
 
     class _ImmediateThread:
         def __init__(self, target=None, daemon=None, name=None):
@@ -1497,6 +1834,7 @@ def test_gen_store_answer_provenance_async_enables_llm_rerank(monkeypatch):
 
     assert captured["answer"] == "demo answer"
     assert captured["answer_hits"] == [{"text": "x"}]
+    assert captured["support_resolution"] == []
     assert isinstance(captured["task"], dict)
     assert captured["task"].get("llm_rerank") is True
     assert task_in.get("llm_rerank") is False
@@ -1600,3 +1938,289 @@ def test_apply_provenance_required_coverage_contract_hides_non_exact_display_for
     assert str(seg.get("locate_policy") or "") == "hidden"
     assert str(seg.get("claim_group_id") or "") == ""
     assert str(seg.get("claim_group_kind") or "") == ""
+
+
+def test_build_paper_guide_answer_provenance_annotates_support_slot_resolution(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "# Abstract\n\n"
+            "APR improves coherent reconstruction and CNR.\n\n"
+            "# Methods\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images "
+            "with respect to the central one [35].\n"
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = task_runtime.load_source_blocks(md_main)
+    abstract_block = next(
+        block for block in blocks
+        if str(block.get("heading_path") or "").strip().lower() == "abstract"
+    )
+    method_block = next(
+        block for block in blocks
+        if "phase correlation" in str(block.get("text") or "").lower()
+    )
+
+    answer = "APR improves coherent reconstruction and CNR [[CITE:s50f9c165:35]]."
+    hits = [
+        {
+            "text": str(abstract_block.get("text") or ""),
+            "meta": {
+                "source_path": str(source_pdf),
+                "ref_show_snippets": [str(abstract_block.get("text") or "")],
+                "ref_best_heading_path": "Abstract",
+            },
+        }
+    ]
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=hits,
+        bound_source_path=str(source_pdf),
+        bound_source_name="DemoPaper.pdf",
+        db_dir=tmp_path,
+        llm_rerank=False,
+        support_resolution=[
+            {
+                "doc_idx": 1,
+                "sid": "s50f9c165",
+                "source_path": str(source_pdf),
+                "block_id": str(method_block.get("block_id") or ""),
+                "anchor_id": str(method_block.get("anchor_id") or ""),
+                "heading_path": str(method_block.get("heading_path") or ""),
+                "locate_anchor": "APR was performed using image registration based on phase correlation.",
+                "claim_type": "method_detail",
+                "cite_policy": "prefer_ref",
+                "candidate_refs": [35],
+                "resolved_ref_num": 35,
+                "citation_resolution_mode": "slot_ref_span",
+                "segment_text": "APR improves coherent reconstruction and CNR.",
+            }
+        ],
+    )
+
+    segments = provenance.get("segments") or []
+    assert len(segments) == 1
+    seg = segments[0]
+    assert seg.get("support_doc_k") == 1
+    assert seg.get("support_slot_claim_type") == "method_detail"
+    assert seg.get("support_slot_cite_policy") == "prefer_ref"
+    assert seg.get("support_ref_candidates") == [35]
+    assert seg.get("resolved_ref_num") == 35
+    assert seg.get("citation_resolution_mode") == "slot_ref_span"
+    assert str(seg.get("primary_block_id") or "") == str(method_block.get("block_id") or "")
+    assert str(seg.get("primary_anchor_id") or "") == str(method_block.get("anchor_id") or "")
+    assert str(seg.get("primary_heading_path") or "") == str(method_block.get("heading_path") or "")
+    assert str(seg.get("mapping_source") or "") == "support_slot"
+    assert str(seg.get("support_locate_anchor") or "").startswith("APR was performed using image registration")
+    assert str(method_block.get("block_id") or "") in list(seg.get("evidence_block_ids") or [])
+    assert str(abstract_block.get("block_id") or "") != str(seg.get("primary_block_id") or "")
+    block_map = provenance.get("block_map") or {}
+    method_entry = block_map.get(str(method_block.get("block_id") or ""))
+    assert isinstance(method_entry, dict)
+    assert str(method_entry.get("heading_path") or "") == str(method_block.get("heading_path") or "")
+
+
+def test_build_paper_guide_answer_provenance_prefers_support_resolution_heading_path(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "# Results\n\n"
+            "![Figure 3](assets/fig3.png)\n\n"
+            "**Figure 3.** Thumbnail images: (e) methane imaging using scanning laser; (f) methane imaging using SPC.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = task_runtime.load_source_blocks(md_main)
+    figure_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "").lower() == "figure"
+    )
+
+    answer = "Panel (f) corresponds to methane imaging using SPC."
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=[],
+        bound_source_path=str(source_pdf),
+        bound_source_name="DemoPaper.pdf",
+        db_dir=tmp_path,
+        llm_rerank=False,
+        support_resolution=[
+            {
+                "doc_idx": 1,
+                "sid": "s-fig3f",
+                "source_path": str(source_pdf),
+                "block_id": str(figure_block.get("block_id") or ""),
+                "anchor_id": str(figure_block.get("anchor_id") or ""),
+                "heading_path": "Results / Figure 3",
+                "locate_anchor": "(f) methane imaging using SPC.",
+                "claim_type": "figure_panel",
+                "cite_policy": "locate_only",
+                "segment_index": -1,
+                "figure_number": 3,
+                "panel_letters": ["f"],
+                "segment_text": answer,
+            }
+        ],
+    )
+
+    segments = provenance.get("segments") or []
+    assert len(segments) == 1
+    seg = segments[0]
+    assert str(seg.get("support_slot_claim_type") or "") == "figure_panel"
+    assert str(seg.get("primary_heading_path") or "") == "Results / Figure 3"
+    assert int(seg.get("support_slot_figure_number") or 0) == 3
+    assert list(seg.get("support_slot_panel_letters") or []) == ["f"]
+    assert str(seg.get("support_locate_anchor") or "") == "(f) methane imaging using SPC."
+    assert str(seg.get("locate_policy") or "") == "required"
+
+
+def test_build_paper_guide_answer_provenance_adds_box_heading_and_visible_locate(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "# Acquisition and image reconstruction strategies\n\n"
+            "**[Box 1 - The maths behind single-pixel imaging]**\n\n"
+            "It can be shown that when the number of sampling patterns used $M \\ge O(K \\log(N/K))$, the image in the transform domain can be reconstructed.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = task_runtime.load_source_blocks(md_main)
+    box_sentence = next(
+        block for block in blocks
+        if "transform domain" in str(block.get("text") or "").lower()
+    )
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer="From Box 1, the transform-domain reconstruction condition is stated explicitly.",
+        answer_hits=[],
+        bound_source_path=str(source_pdf),
+        bound_source_name="DemoPaper.pdf",
+        db_dir=tmp_path,
+        llm_rerank=False,
+        support_resolution=[
+            {
+                "doc_idx": 1,
+                "sid": "s-box1",
+                "source_path": str(source_pdf),
+                "block_id": str(box_sentence.get("block_id") or ""),
+                "anchor_id": str(box_sentence.get("anchor_id") or ""),
+                "heading_path": "Acquisition and image reconstruction strategies",
+                "locate_anchor": "It can be shown that when the number of sampling patterns used $M \\ge O(K \\log(N/K))$, the image in the transform domain can be reconstructed.",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "box_number": 1,
+                "target_scope": {"requested_boxes": [1]},
+                "segment_text": "From Box 1, the transform-domain reconstruction condition is stated explicitly.",
+            }
+        ],
+    )
+
+    seg = (provenance.get("segments") or [])[0]
+    assert str(seg.get("primary_heading_path") or "") == "Box 1"
+    assert int(seg.get("support_slot_box_number") or 0) == 1
+    assert str(seg.get("locate_policy") or "") == "required"
+    assert str(seg.get("support_locate_anchor") or "").startswith("It can be shown that when the number of sampling patterns")
+
+
+def test_build_paper_guide_answer_provenance_support_resolution_uses_segment_index_not_fuzzy_match(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "# Introduction\n\n"
+            "In this work, we propose and demonstrate an experimental implementation of interferometric Scanning Microscopy.\n\n"
+            "# Methods\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one [35].\n"
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = task_runtime.load_source_blocks(md_main)
+    intro_block = next(
+        block for block in blocks
+        if "experimental implementation" in str(block.get("text") or "").lower()
+    )
+    method_block = next(
+        block for block in blocks
+        if "phase correlation" in str(block.get("text") or "").lower()
+    )
+
+    answer = (
+        "Based on the retrieved context, APR is discussed together with phase correlation and registration.\n\n"
+        "APR uses phase correlation to register the off-axis raw images [[CITE:s50f9c165:35]]."
+    )
+    hits = [
+        {
+            "text": str(intro_block.get("text") or ""),
+            "meta": {
+                "source_path": str(source_pdf),
+                "ref_show_snippets": [str(intro_block.get("text") or "")],
+                "ref_best_heading_path": "Introduction",
+            },
+        }
+    ]
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=answer,
+        answer_hits=hits,
+        bound_source_path=str(source_pdf),
+        bound_source_name="DemoPaper.pdf",
+        db_dir=tmp_path,
+        llm_rerank=False,
+        support_resolution=[
+            {
+                "doc_idx": 1,
+                "sid": "s50f9c165",
+                "source_path": str(source_pdf),
+                "block_id": str(method_block.get("block_id") or ""),
+                "anchor_id": str(method_block.get("anchor_id") or ""),
+                "heading_path": str(method_block.get("heading_path") or ""),
+                "locate_anchor": "APR was performed using image registration based on phase correlation.",
+                "claim_type": "method_detail",
+                "cite_policy": "prefer_ref",
+                "candidate_refs": [35],
+                "resolved_ref_num": 35,
+                "citation_resolution_mode": "slot_ref_span",
+                "segment_text": "APR uses phase correlation to register the off-axis raw images.",
+                "segment_index": 1,
+                "segment_kind": "paragraph",
+                "segment_snippet_key": "apr uses phase correlation to register the off axis raw images",
+            }
+        ],
+    )
+
+    segments = provenance.get("segments") or []
+    assert len(segments) == 2
+    intro_seg, detail_seg = segments
+    assert str(intro_seg.get("primary_block_id") or "") != str(method_block.get("block_id") or "")
+    assert str(intro_seg.get("mapping_source") or "") != "support_slot"
+    assert str(detail_seg.get("primary_block_id") or "") == str(method_block.get("block_id") or "")
+    assert str(detail_seg.get("mapping_source") or "") == "support_slot"

@@ -1,0 +1,165 @@
+{
+  "suite_id": "paper_guide_smoke_general_v1",
+  "title": "Paper Guide Smoke (General v1)",
+  "prefs_patch": {
+    "answer_contract_v1": true,
+    "answer_depth_auto": true,
+    "answer_mode_hint": "reading",
+    "answer_output_mode": "reading_guide"
+  },
+  "generate_body": {
+    "top_k": 6,
+    "deep_read": true,
+    "max_tokens": 2600,
+    "temperature": 0.15
+  },
+  "default_checks": {
+    "structured_markers": {
+      "forbid_raw_structured_cites": true,
+      "forbid_raw_support_markers": true
+    },
+    "quality": {
+      "minimum_ok_required": true
+    }
+  },
+  "papers": [
+    {
+      "id": "natphoton_2019_spi",
+      "title": "Principles and prospects for single-pixel imaging",
+      "source_path": "../../../db/NatPhoton-2019-Principles and prospects for single-pixel imaging/NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+      "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+      "cases": [
+        {
+          "id": "GEN_NP2019_CITATION_DUARTE_ZH",
+          "title": "Compressive sampling cited ref (Chinese)",
+          "prompt_family": "citation_lookup",
+          "tags": ["citation_lookup", "zh", "general"],
+          "prompt": "作者在讲 single-pixel imaging 的 compressive sampling 时，引用的是哪篇工作（引用编号是什么）？原文哪里明确写到？请给出可定位的原句支持。",
+          "checks": {
+            "answer": {
+              "contains_any": ["compressive", "sampling", "Duarte", "\u538b\u7f29", "\u91c7\u6837"]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [4],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Acquisition and image reconstruction strategies"],
+              "anchor_contains_any": ["Duarte", "compressive", "seminal"]
+            }
+          }
+        },
+        {
+          "id": "GEN_NP2019_FIGURE3_PANEL_F_ZH",
+          "title": "Figure 3 panel (f) caption clause jump (Chinese)",
+          "prompt_family": "figure_walkthrough",
+          "tags": ["figure_panel_locate", "zh", "general"],
+          "prompt": "请解释 Figure 3 的 (f) 子图具体对应什么，并指向图注里 (f) 对应的那一句（caption clause），要求可定位跳转。",
+          "checks": {
+            "answer": {
+              "contains_any": ["panel f", "methane", "SPC", "\u7532\u70f7", "\u5355\u50cf\u7d20"]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [15],
+              "allow_only_expected": true
+            },
+            "figure_panel": {
+              "required": true,
+              "panel_letters": ["f"],
+              "heading_includes_any": ["Figure 3"],
+              "anchor_contains_any": ["methane imaging using SPC", "SPC"],
+              "claim_types": ["figure_panel"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Figure 3"],
+              "anchor_contains_any": ["methane imaging using SPC", "SPC"],
+              "claim_types": ["figure_panel"]
+            },
+            "jump": {
+              "required": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "lsa_2026",
+      "title": "Interferometric Image Scanning Microscopy for label-free imaging at 120 nm lateral resolution inside live cells",
+      "source_path": "../../../db/LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells/LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells.en.md",
+      "source_name": "LSA-2026-Interferometric Image Scanning Microscopy.pdf",
+      "cases": [
+        {
+          "id": "GEN_LSA_DOC_MAP_ZH",
+          "title": "Doc map with locate (Chinese)",
+          "prompt_family": "overview",
+          "tags": ["doc_map", "zh", "general"],
+          "prompt": "给我一个按章节的阅读地图：每个大章节用 1 句原文锚点概括，方便查找，并且每条都要求可定位跳转。",
+          "checks": {
+            "answer": {
+              "contains_any": ["Doc map (verbatim anchors by section):"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Introduction", "Methods", "Results", "Discussion"],
+              "claim_types": ["doc_map"]
+            }
+          }
+        },
+        {
+          "id": "GEN_LSA_CITATION_RVT_ZH",
+          "title": "RVT cited ref (Chinese)",
+          "prompt_family": "citation_lookup",
+          "tags": ["citation_lookup", "zh", "general"],
+          "prompt": "RVT 这一步作者引用了哪篇 prior work（引用编号是什么）？原文哪里明确写到？请给出可定位的原句支持。",
+          "checks": {
+            "answer": {
+              "contains_any": ["RVT", "radial variance transform"]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [34],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["RVT", "Methods", "Adaptive pixel-reassignment"],
+              "anchor_contains_any": ["radial variance transform", "RVT"]
+            }
+          }
+        },
+        {
+          "id": "GEN_LSA_METHOD_REAPPLY_ZH",
+          "title": "APR re-apply shift vectors exact support (Chinese)",
+          "prompt_family": "method",
+          "tags": ["method_exact_support", "zh", "general"],
+          "prompt": "在 APR 流水线里，作者在原文哪里说 shift vectors 被重新 applied back 到 original iISM dataset？请指向 exact supporting part（原句）并可定位跳转。",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "original iISM dataset",
+                "applied back to the original iISM dataset"
+              ],
+              "not_contains_any": ["not stated"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Adaptive pixel-reassignment", "Methods", "APR"],
+              "anchor_contains_any": ["original iISM dataset", "shift vectors"],
+              "claim_types": ["method_detail"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
+

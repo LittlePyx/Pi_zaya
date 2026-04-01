@@ -70,12 +70,17 @@ class MarkdownAnalyzer:
             if match:
                 level = len(match.group(1))
                 text = match.group(2).strip()
+                numbered_section_like = bool(
+                    re.match(r"^\d+(?:\.\d+)*\.?\s+[A-Z][A-Za-z]", text)
+                )
                 
                 # Check if heading looks like a formula (common mistake)
-                if re.search(r'^\s*[A-Z]?\s*\d+\s*[a-z]', text) or \
+                if (not numbered_section_like) and (
+                   re.search(r'^\s*[A-Z]?\s*\d+\s*[a-z]', text) or \
                    re.search(r'^\s*\d+\s*[a-z]+\s*[+\-]', text) or \
                    re.search(r'^\s*[a-z]\s*\d+', text) or \
-                   (len(text) <= 10 and re.search(r'\d+.*[a-z]|[a-z].*\d+', text) and not re.search(r'[A-Z]{2,}', text)):
+                   (len(text) <= 10 and re.search(r'\d+.*[a-z]|[a-z].*\d+', text) and not re.search(r'[A-Z]{2,}', text))
+                ):
                     self.issues.append(QualityIssue(
                         category='heading',
                         severity='error',
@@ -207,7 +212,14 @@ class MarkdownAnalyzer:
         table_rows = []
         
         for i, line in enumerate(lines, 1):
-            if '|' in line and not line.strip().startswith('```'):
+            stripped = line.strip()
+            looks_md_table = (
+                stripped.startswith('|')
+                and stripped.count('|') >= 2
+                and not stripped.startswith('```')
+                and not re.match(r'^\s*\*\*(?:Figure|Table)\s+\w+\.\*\*\s+\|', stripped, re.IGNORECASE)
+            )
+            if looks_md_table:
                 if not in_table:
                     in_table = True
                     table_start = i

@@ -62,6 +62,85 @@ def test_library_files_route_classifies_queue_and_reconvert(monkeypatch, tmp_pat
     assert int((payload.get("counts") or {}).get("converted") or 0) == 0
 
 
+def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_a = pdf_dir / "a.pdf"
+    pdf_b = pdf_dir / "b.pdf"
+    pdf_c = pdf_dir / "c.pdf"
+    for p in (pdf_a, pdf_b, pdf_c):
+        p.write_bytes(b"%PDF-1.4 test")
+
+    md_b = md_dir / "b" / "b.en.md"
+    md_b.parent.mkdir(parents=True, exist_ok=True)
+    md_b.write_text("# b\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        lambda: {
+            "running": True,
+            "current": "a.pdf",
+            "cur_task_replace": False,
+            "active_count": 2,
+            "active_tasks": [
+                {
+                    "_tid": "r1",
+                    "pdf": str(pdf_a),
+                    "name": "a.pdf",
+                    "replace": False,
+                    "cur_page_done": 1,
+                    "cur_page_total": 4,
+                    "cur_page_msg": "page 1",
+                },
+                {
+                    "_tid": "r2",
+                    "pdf": str(pdf_b),
+                    "name": "b.pdf",
+                    "replace": True,
+                    "cur_page_done": 2,
+                    "cur_page_total": 6,
+                    "cur_page_msg": "page 2",
+                },
+            ],
+            "queue": [
+                {"pdf": str(pdf_c), "name": "c.pdf", "replace": False, "_tid": "q1"},
+            ],
+            "done": 0,
+            "total": 3,
+        },
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/library/files", params={"scope": "all"})
+    assert response.status_code == 200
+    payload = response.json()
+
+    by_name = {str(item.get("name") or ""): item for item in list(payload.get("items") or [])}
+    assert by_name["a.pdf"]["task_state"] == "running"
+    assert by_name["b.pdf"]["task_state"] == "running"
+    assert by_name["b.pdf"]["replace_task"] is True
+    assert by_name["b.pdf"]["category"] == "pending"
+    assert by_name["a.pdf"]["cur_page_done"] == 1
+    assert by_name["b.pdf"]["cur_page_total"] == 6
+    assert by_name["c.pdf"]["task_state"] == "queued"
+    assert by_name["c.pdf"]["queue_pos"] == 1
+    counts = payload.get("counts") or {}
+    assert int(counts.get("running") or 0) == 2
+    assert int(counts.get("queued") or 0) == 1
+    assert int(counts.get("pending") or 0) == 3
+    queue_meta = payload.get("queue") or {}
+    assert int(queue_meta.get("active_count") or 0) == 2
+    assert len(list(queue_meta.get("active_tasks") or [])) == 2
+
+
 def test_convert_pending_enqueues_only_idle_pending(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -113,6 +192,7 @@ def test_convert_pending_enqueues_only_idle_pending(monkeypatch, tmp_path: Path)
     assert len(enqueued) == 1
     assert str(enqueued[0].get("name") or "") == "c.pdf"
     assert str(enqueued[0].get("speed_mode") or "") == "ultra_fast"
+    assert bool(enqueued[0].get("replace")) is True
 
 
 def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Path):
@@ -156,6 +236,40 @@ def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Pat
     assert not pdf_d.exists()
     assert not md_d.parent.exists()
     assert fake_store.deleted == [str(pdf_d)]
+
+
+def test_delete_library_file_route_blocks_any_active_task(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_d = pdf_dir / "d.pdf"
+    pdf_d.write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        lambda: {
+            "running": True,
+            "current": "other.pdf",
+            "active_count": 2,
+            "active_tasks": [
+                {"_tid": "r1", "pdf": str(pdf_d), "name": "d.pdf", "replace": False},
+                {"_tid": "r2", "pdf": str(pdf_dir / "x.pdf"), "name": "x.pdf", "replace": False},
+            ],
+            "queue": [],
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/library/file/delete", json={"pdf_name": "d.pdf", "also_md": True})
+    assert response.status_code == 409
+    assert "currently converting" in response.text
 
 
 def test_open_library_file_route_opens_md_target(monkeypatch, tmp_path: Path):
@@ -231,6 +345,7 @@ def test_start_convert_route_infers_no_llm_from_mode(monkeypatch, tmp_path: Path
     response = client.post("/api/library/convert", json={"pdf_name": "z.pdf", "speed_mode": "no_llm"})
     assert response.status_code == 200
     assert bool(captured.get("no_llm")) is True
+    assert bool(captured.get("replace")) is True
     assert len(enqueued) == 1
 
 
@@ -337,6 +452,9 @@ def test_rename_suggestions_route_returns_items(monkeypatch, tmp_path: Path):
     assert len(items) == 1
     assert str(items[0].get("name") or "") == "paper_a.pdf"
     assert isinstance(items[0].get("suggested_name"), str)
+    meta = dict(items[0].get("meta") or {})
+    assert isinstance(meta.get("basis_label"), str)
+    assert isinstance(meta.get("basis_detail"), str)
 
 
 def test_apply_rename_suggestions_route_runs_selected(monkeypatch, tmp_path: Path):
@@ -402,6 +520,9 @@ def test_upload_inspect_route_returns_suggestion(monkeypatch, tmp_path: Path):
     assert payload["duplicate"] is False
     assert isinstance(payload.get("suggested_stem"), str)
     assert isinstance(payload.get("display_full_name"), str)
+    meta = dict(payload.get("meta") or {})
+    assert isinstance(meta.get("basis_label"), str)
+    assert isinstance(meta.get("basis_detail"), str)
 
 
 def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):
@@ -439,6 +560,49 @@ def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):
     assert payload["duplicate"] is False
     assert payload["enqueued"] is True
     assert len(enqueued) == 1
+
+
+def test_save_pdf_to_library_respects_explicit_base_name_even_with_llm_title(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.saved: list[tuple[str, str]] = []
+
+        def upsert(self, sha1: str, path: Path, citation_meta: dict | None = None) -> None:
+            self.saved.append((sha1, str(path)))
+
+    fake_store = FakeStore()
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: fake_store)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda *args, **kwargs: SimpleNamespace(title="LLM Preferred Title", venue="", year="", crossref_meta=None),
+    )
+
+    payload = library_router.save_pdf_to_library(
+        file_name="draft.pdf",
+        data=b"%PDF-1.4 demo",
+        base_name="custom-upload-name",
+    )
+
+    assert payload["duplicate"] is False
+    assert payload["name"] == "custom-upload-name.pdf"
+    assert (pdf_dir / "custom-upload-name.pdf").exists()
+    assert fake_store.saved
 
 
 def test_library_meta_update_route_persists_user_meta(monkeypatch, tmp_path: Path):

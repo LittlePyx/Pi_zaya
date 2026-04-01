@@ -1,0 +1,534 @@
+[
+  {
+    "conv_id": "dc19a306eee04b8fb2ac372f5d51ee8e",
+    "case": {
+      "id": "SCINERF2024_CITATION_ADMM",
+      "title": "ADMM citation in SCI decoding",
+      "prompt_family": "citation_lookup",
+      "tags": [
+        "baseline",
+        "citation_lookup",
+        "broken_refs",
+        "core"
+      ],
+      "prompt": "In the Related Work section, the authors say many optimization-based SCI methods employ ADMM. Which reference do they cite for ADMM, and where is that stated exactly? Provide the exact supporting sentence.",
+      "checks": {
+        "answer": {
+          "contains_any": [
+            "ADMM",
+            "alternating direction method of multipliers"
+          ]
+        },
+        "citation": {
+          "required": true,
+          "expected_ref_nums": [
+            4
+          ],
+          "allow_only_expected": true
+        },
+        "locate": {
+          "required": true,
+          "exact": true,
+          "heading_includes_any": [
+            "Related Work",
+            "Snapshot Compressive Imaging"
+          ],
+          "anchor_contains_any": [
+            "alternating direction method of multipliers",
+            "ADMM"
+          ]
+        }
+      },
+      "paper_id": "cvpr_2024_scinerf",
+      "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+    },
+    "payload": {
+      "stage": "done",
+      "partial": "The paper cites [4] for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+      "char_count": 400,
+      "done": true,
+      "status": "done",
+      "answer": "The paper cites [4] for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+      "answer_intent": "reading",
+      "answer_depth": "L2",
+      "answer_output_mode": "reading_guide",
+      "answer_contract_v1": true,
+      "answer_quality": {
+        "contract_enabled": false,
+        "intent": "reading",
+        "depth": "L2",
+        "output_mode": "reading_guide",
+        "char_count": 400,
+        "has_hits": true,
+        "has_conclusion": false,
+        "has_evidence": false,
+        "has_limits": false,
+        "has_next_steps": false,
+        "has_citations": true,
+        "paper_guide_mode": true,
+        "prompt_family": "citation_lookup",
+        "has_locate_hint": false,
+        "locate_required": false,
+        "locate_ok": true,
+        "abstract_style_ok": true,
+        "evidence_required": false,
+        "next_steps_required": false,
+        "evidence_ok": true,
+        "core_section_coverage": 0.0,
+        "minimum_ok": true
+      }
+    },
+    "message": {
+      "id": 3254,
+      "role": "assistant",
+      "content": "The paper cites [4] for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+      "created_at": 1774945154.0883734,
+      "attachments": [],
+      "meta": {
+        "provenance": {
+          "version": 4,
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+          "md_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "doc_id": "29cad7662df5",
+          "segments": [
+            {
+              "segment_id": "seg_001",
+              "segment_index": 1,
+              "kind": "paragraph",
+              "segment_type": "prose",
+              "text": "The paper cites [4] for this point. This is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:",
+              "raw_markdown": "The paper cites [4] for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:",
+              "snippet_key": "the paper cites [4] for this point. this is stated in scinerf: neural radiance fields from a snapshot compressive image / 2. related work:",
+              "snippet_aliases": [
+                "the paper cites [4] for this point. this is stated in scinerf: neural radiance fields from a snapshot compressive image / 2. related work:",
+                "the paper cites [4] for this point.",
+                "the paper cites [4] for this point. this is stated in scinerf:"
+              ],
+              "evidence_mode": "direct",
+              "evidence_block_ids": [
+                "blk_29cad7662df5_00034"
+              ],
+              "primary_block_id": "blk_29cad7662df5_00034",
+              "primary_anchor_id": "p_00020",
+              "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.2. Image Formation Model of Video SCI",
+              "support_block_ids": [],
+              "evidence_quote": "Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone.",
+              "evidence_confidence": 1.1875,
+              "mapping_quality": 0.3573,
+              "mapping_source": "fast",
+              "claim_type": "critical_fact_claim",
+              "must_locate": true,
+              "anchor_kind": "sentence",
+              "anchor_text": "Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone.",
+              "equation_number": 0,
+              "related_block_ids": [],
+              "locate_policy": "required",
+              "locate_surface_policy": "primary",
+              "claim_group_id": "",
+              "claim_group_kind": "",
+              "formula_origin": "",
+              "claim_group_target_segment_id": "seg_001",
+              "claim_group_target_distance": 0,
+              "claim_group_lead_text": "",
+              "strict_identity_missing_reasons": [],
+              "display_markdown": "The paper cites [4](#kb-cite-ccb18c4133-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\") for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:",
+              "cite_details": [
+                {
+                  "num": 4,
+                  "anchor": "kb-cite-ccb18c4133-4",
+                  "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+                  "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+                  "raw": "Stephen Boyd, Neal Parikh, Eric Chu, Borja Peleato, Jonathan Eckstein, et al. Distributed optimization and statistical learning via the alternating direction method of multipliers. Foundations and Trends® in Machine learning, 3(1):1–122, 2011.",
+                  "title": "Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers",
+                  "authors": "Boyd S",
+                  "venue": "Foundations and Trends® in Machine Learning",
+                  "year": "2010",
+                  "volume": "3",
+                  "issue": "1",
+                  "pages": "1-122",
+                  "doi": "10.1561/2200000016",
+                  "doi_url": "https://doi.org/10.1561/2200000016",
+                  "cite_fmt": "Boyd S. Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers. Foundations and Trends® in Machine Learning, 3(1):1-122 (2010)."
+                }
+              ]
+            },
+            {
+              "segment_id": "seg_002",
+              "segment_index": 2,
+              "kind": "blockquote",
+              "segment_type": "prose",
+              "text": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+              "raw_markdown": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+              "snippet_key": "when solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (admm) [4], which leads to good results and easier to adapt to different systems.",
+              "snippet_aliases": [
+                "when solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (admm) [4], which leads to good results and easier to adapt to different systems.",
+                "when solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (admm) [4], which lead"
+              ],
+              "evidence_mode": "direct",
+              "evidence_block_ids": [
+                "blk_29cad7662df5_00017"
+              ],
+              "primary_block_id": "blk_29cad7662df5_00017",
+              "primary_anchor_id": "p_00009",
+              "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work",
+              "support_block_ids": [],
+              "evidence_quote": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+              "evidence_confidence": 3.2608,
+              "mapping_quality": 2.48,
+              "mapping_source": "fast",
+              "claim_type": "blockquote_claim",
+              "must_locate": true,
+              "anchor_kind": "blockquote",
+              "anchor_text": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+              "equation_number": 0,
+              "related_block_ids": [],
+              "locate_policy": "required",
+              "locate_surface_policy": "primary",
+              "claim_group_id": "quote_bundle:blk_29cad7662df5_00017",
+              "claim_group_kind": "quote_bundle",
+              "formula_origin": "",
+              "claim_group_target_segment_id": "seg_002",
+              "claim_group_target_distance": 0,
+              "claim_group_lead_text": "",
+              "strict_identity_missing_reasons": [],
+              "display_markdown": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4](#kb-cite-13e1a7566c-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\"), which leads to good results and easier to adapt to different systems.",
+              "cite_details": [
+                {
+                  "num": 4,
+                  "anchor": "kb-cite-13e1a7566c-4",
+                  "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+                  "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+                  "raw": "Stephen Boyd, Neal Parikh, Eric Chu, Borja Peleato, Jonathan Eckstein, et al. Distributed optimization and statistical learning via the alternating direction method of multipliers. Foundations and Trends® in Machine learning, 3(1):1–122, 2011.",
+                  "title": "Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers",
+                  "authors": "Boyd S",
+                  "venue": "Foundations and Trends® in Machine Learning",
+                  "year": "2010",
+                  "volume": "3",
+                  "issue": "1",
+                  "pages": "1-122",
+                  "doi": "10.1561/2200000016",
+                  "doi_url": "https://doi.org/10.1561/2200000016",
+                  "cite_fmt": "Boyd S. Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers. Foundations and Trends® in Machine Learning, 3(1):1-122 (2010)."
+                }
+              ]
+            }
+          ],
+          "block_map": {
+            "blk_29cad7662df5_00034": {
+              "doc_id": "29cad7662df5",
+              "block_id": "blk_29cad7662df5_00034",
+              "anchor_id": "p_00020",
+              "kind": "paragraph",
+              "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.2. Image Formation Model of Video SCI",
+              "order_index": 34,
+              "line_start": 71,
+              "line_end": 71,
+              "text": "where both $H$ and $W$ are image height and width respectively. For practical hardware implementation, those masks are achieved by displaying different 2D patterns on the Digital Micro-mirror Device (DMD) and a spatial light modulator, e.g., liquid crystal. The image sensor then accumulates the modulated photons across exposure time to a compressed/coded image. The number of masks or different patterns on the DMD within exposure time determine the number of coded frames, i.e., the temporal compression ratio (CR). Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone. The whole imaging process can be described formally as:",
+              "raw_text": "where both $H$ and $W$ are image height and width respectively. For practical hardware implementation, those masks are achieved by displaying different 2D patterns on the Digital Micro-mirror Device (DMD) and a spatial light modulator, e.g., liquid crystal. The image sensor then accumulates the modulated photons across exposure time to a compressed/coded image. The number of masks or different patterns on the DMD within exposure time determine the number of coded frames, i.e., the temporal compression ratio (CR). Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone. The whole imaging process can be described formally as:"
+            },
+            "blk_29cad7662df5_00017": {
+              "doc_id": "29cad7662df5",
+              "block_id": "blk_29cad7662df5_00017",
+              "anchor_id": "p_00009",
+              "kind": "paragraph",
+              "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work",
+              "order_index": 17,
+              "line_start": 31,
+              "line_end": 31,
+              "text": "Snapshot Compressive Imaging. Early SCI image decoding/reconstruction methods focus on regularized optimization-based approach [18,20,47,49]. It estimates the input compressed images from SCI encoding system by solving an optimization problem iteratively. In SCI, different regularizers and priors have been used, including sparsity [47] and total variation (TV) [49]. When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems. The decompress SCI (DeSCI) [20] and GAP-TV [49] are state-of-the-art optimization-based approaches. However, this type of methods suffer from long running time and low flexibility to high resolution images.",
+              "raw_text": "**Snapshot Compressive Imaging.** Early SCI image decoding/reconstruction methods focus on regularized optimization-based approach [18,20,47,49]. It estimates the input compressed images from SCI encoding system by solving an optimization problem iteratively. In SCI, different regularizers and priors have been used, including sparsity [47] and total variation (TV) [49]. When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems. The decompress SCI (DeSCI) [20] and GAP-TV [49] are state-of-the-art optimization-based approaches. However, this type of methods suffer from long running time and low flexibility to high resolution images."
+            }
+          },
+          "status": "ready",
+          "candidate_block_count": 23,
+          "mapping_mode": "fast",
+          "pool_mode": "retrieval",
+          "llm_rerank_enabled": false,
+          "llm_rerank_calls": 0,
+          "provenance_schema_version": 4,
+          "must_locate_candidate_count": 2,
+          "must_locate_count": 2,
+          "strict_identity_count": 2,
+          "strict_identity_ready": true,
+          "identity_missing_reasons": {},
+          "identity_missing_segments": []
+        }
+      },
+      "provenance": {
+        "version": 4,
+        "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+        "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+        "md_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+        "doc_id": "29cad7662df5",
+        "segments": [
+          {
+            "segment_id": "seg_001",
+            "segment_index": 1,
+            "kind": "paragraph",
+            "segment_type": "prose",
+            "text": "The paper cites [4] for this point. This is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:",
+            "raw_markdown": "The paper cites [4] for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:",
+            "snippet_key": "the paper cites [4] for this point. this is stated in scinerf: neural radiance fields from a snapshot compressive image / 2. related work:",
+            "snippet_aliases": [
+              "the paper cites [4] for this point. this is stated in scinerf: neural radiance fields from a snapshot compressive image / 2. related work:",
+              "the paper cites [4] for this point.",
+              "the paper cites [4] for this point. this is stated in scinerf:"
+            ],
+            "evidence_mode": "direct",
+            "evidence_block_ids": [
+              "blk_29cad7662df5_00034"
+            ],
+            "primary_block_id": "blk_29cad7662df5_00034",
+            "primary_anchor_id": "p_00020",
+            "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.2. Image Formation Model of Video SCI",
+            "support_block_ids": [],
+            "evidence_quote": "Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone.",
+            "evidence_confidence": 1.1875,
+            "mapping_quality": 0.3573,
+            "mapping_source": "fast",
+            "claim_type": "critical_fact_claim",
+            "must_locate": true,
+            "anchor_kind": "sentence",
+            "anchor_text": "Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone.",
+            "equation_number": 0,
+            "related_block_ids": [],
+            "locate_policy": "required",
+            "locate_surface_policy": "primary",
+            "claim_group_id": "",
+            "claim_group_kind": "",
+            "formula_origin": "",
+            "claim_group_target_segment_id": "seg_001",
+            "claim_group_target_distance": 0,
+            "claim_group_lead_text": "",
+            "strict_identity_missing_reasons": [],
+            "display_markdown": "The paper cites [4](#kb-cite-ccb18c4133-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\") for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:",
+            "cite_details": [
+              {
+                "num": 4,
+                "anchor": "kb-cite-ccb18c4133-4",
+                "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+                "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+                "raw": "Stephen Boyd, Neal Parikh, Eric Chu, Borja Peleato, Jonathan Eckstein, et al. Distributed optimization and statistical learning via the alternating direction method of multipliers. Foundations and Trends® in Machine learning, 3(1):1–122, 2011.",
+                "title": "Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers",
+                "authors": "Boyd S",
+                "venue": "Foundations and Trends® in Machine Learning",
+                "year": "2010",
+                "volume": "3",
+                "issue": "1",
+                "pages": "1-122",
+                "doi": "10.1561/2200000016",
+                "doi_url": "https://doi.org/10.1561/2200000016",
+                "cite_fmt": "Boyd S. Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers. Foundations and Trends® in Machine Learning, 3(1):1-122 (2010)."
+              }
+            ]
+          },
+          {
+            "segment_id": "seg_002",
+            "segment_index": 2,
+            "kind": "blockquote",
+            "segment_type": "prose",
+            "text": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+            "raw_markdown": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+            "snippet_key": "when solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (admm) [4], which leads to good results and easier to adapt to different systems.",
+            "snippet_aliases": [
+              "when solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (admm) [4], which leads to good results and easier to adapt to different systems.",
+              "when solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (admm) [4], which lead"
+            ],
+            "evidence_mode": "direct",
+            "evidence_block_ids": [
+              "blk_29cad7662df5_00017"
+            ],
+            "primary_block_id": "blk_29cad7662df5_00017",
+            "primary_anchor_id": "p_00009",
+            "primary_heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work",
+            "support_block_ids": [],
+            "evidence_quote": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+            "evidence_confidence": 3.2608,
+            "mapping_quality": 2.48,
+            "mapping_source": "fast",
+            "claim_type": "blockquote_claim",
+            "must_locate": true,
+            "anchor_kind": "blockquote",
+            "anchor_text": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+            "equation_number": 0,
+            "related_block_ids": [],
+            "locate_policy": "required",
+            "locate_surface_policy": "primary",
+            "claim_group_id": "quote_bundle:blk_29cad7662df5_00017",
+            "claim_group_kind": "quote_bundle",
+            "formula_origin": "",
+            "claim_group_target_segment_id": "seg_002",
+            "claim_group_target_distance": 0,
+            "claim_group_lead_text": "",
+            "strict_identity_missing_reasons": [],
+            "display_markdown": "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4](#kb-cite-13e1a7566c-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\"), which leads to good results and easier to adapt to different systems.",
+            "cite_details": [
+              {
+                "num": 4,
+                "anchor": "kb-cite-13e1a7566c-4",
+                "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+                "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+                "raw": "Stephen Boyd, Neal Parikh, Eric Chu, Borja Peleato, Jonathan Eckstein, et al. Distributed optimization and statistical learning via the alternating direction method of multipliers. Foundations and Trends® in Machine learning, 3(1):1–122, 2011.",
+                "title": "Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers",
+                "authors": "Boyd S",
+                "venue": "Foundations and Trends® in Machine Learning",
+                "year": "2010",
+                "volume": "3",
+                "issue": "1",
+                "pages": "1-122",
+                "doi": "10.1561/2200000016",
+                "doi_url": "https://doi.org/10.1561/2200000016",
+                "cite_fmt": "Boyd S. Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers. Foundations and Trends® in Machine Learning, 3(1):1-122 (2010)."
+              }
+            ]
+          }
+        ],
+        "block_map": {
+          "blk_29cad7662df5_00034": {
+            "doc_id": "29cad7662df5",
+            "block_id": "blk_29cad7662df5_00034",
+            "anchor_id": "p_00020",
+            "kind": "paragraph",
+            "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 3. Method / 3.2. Image Formation Model of Video SCI",
+            "order_index": 34,
+            "line_start": 71,
+            "line_end": 71,
+            "text": "where both $H$ and $W$ are image height and width respectively. For practical hardware implementation, those masks are achieved by displaying different 2D patterns on the Digital Micro-mirror Device (DMD) and a spatial light modulator, e.g., liquid crystal. The image sensor then accumulates the modulated photons across exposure time to a compressed/coded image. The number of masks or different patterns on the DMD within exposure time determine the number of coded frames, i.e., the temporal compression ratio (CR). Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone. The whole imaging process can be described formally as:",
+            "raw_text": "where both $H$ and $W$ are image height and width respectively. For practical hardware implementation, those masks are achieved by displaying different 2D patterns on the Digital Micro-mirror Device (DMD) and a spatial light modulator, e.g., liquid crystal. The image sensor then accumulates the modulated photons across exposure time to a compressed/coded image. The number of masks or different patterns on the DMD within exposure time determine the number of coded frames, i.e., the temporal compression ratio (CR). Due to the mask modulation, the image restoration problem is not ill-posed anymore, i.e., the $N$ virtual images can be recovered from a single compressed image alone. The whole imaging process can be described formally as:"
+          },
+          "blk_29cad7662df5_00017": {
+            "doc_id": "29cad7662df5",
+            "block_id": "blk_29cad7662df5_00017",
+            "anchor_id": "p_00009",
+            "kind": "paragraph",
+            "heading_path": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work",
+            "order_index": 17,
+            "line_start": 31,
+            "line_end": 31,
+            "text": "Snapshot Compressive Imaging. Early SCI image decoding/reconstruction methods focus on regularized optimization-based approach [18,20,47,49]. It estimates the input compressed images from SCI encoding system by solving an optimization problem iteratively. In SCI, different regularizers and priors have been used, including sparsity [47] and total variation (TV) [49]. When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems. The decompress SCI (DeSCI) [20] and GAP-TV [49] are state-of-the-art optimization-based approaches. However, this type of methods suffer from long running time and low flexibility to high resolution images.",
+            "raw_text": "**Snapshot Compressive Imaging.** Early SCI image decoding/reconstruction methods focus on regularized optimization-based approach [18,20,47,49]. It estimates the input compressed images from SCI encoding system by solving an optimization problem iteratively. In SCI, different regularizers and priors have been used, including sparsity [47] and total variation (TV) [49]. When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems. The decompress SCI (DeSCI) [20] and GAP-TV [49] are state-of-the-art optimization-based approaches. However, this type of methods suffer from long running time and low flexibility to high resolution images."
+          }
+        },
+        "status": "ready",
+        "candidate_block_count": 23,
+        "mapping_mode": "fast",
+        "pool_mode": "retrieval",
+        "llm_rerank_enabled": false,
+        "llm_rerank_calls": 0,
+        "provenance_schema_version": 4,
+        "must_locate_candidate_count": 2,
+        "must_locate_count": 2,
+        "strict_identity_count": 2,
+        "strict_identity_ready": true,
+        "identity_missing_reasons": {},
+        "identity_missing_segments": []
+      },
+      "cite_details": [
+        {
+          "num": 4,
+          "anchor": "kb-cite-bb77d3a519-4",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "raw": "Stephen Boyd, Neal Parikh, Eric Chu, Borja Peleato, Jonathan Eckstein, et al. Distributed optimization and statistical learning via the alternating direction method of multipliers. Foundations and Trends® in Machine learning, 3(1):1–122, 2011.",
+          "title": "Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers",
+          "authors": "Boyd S",
+          "venue": "Foundations and Trends® in Machine Learning",
+          "year": "2010",
+          "volume": "3",
+          "issue": "1",
+          "pages": "1-122",
+          "doi": "10.1561/2200000016",
+          "doi_url": "https://doi.org/10.1561/2200000016",
+          "cite_fmt": "Boyd S. Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers. Foundations and Trends® in Machine Learning, 3(1):1-122 (2010)."
+        }
+      ],
+      "copy_markdown": "The paper cites [4](https://doi.org/10.1561/2200000016) for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4](https://doi.org/10.1561/2200000016), which leads to good results and easier to adapt to different systems.",
+      "copy_text": "The paper cites [4] for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems.",
+      "rendered_content": "The paper cites [4](#kb-cite-bb77d3a519-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\") for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4](#kb-cite-bb77d3a519-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\"), which leads to good results and easier to adapt to different systems.",
+      "notice": "",
+      "rendered_body": "The paper cites [4](#kb-cite-bb77d3a519-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\") for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4](#kb-cite-bb77d3a519-4 \"source: CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf | ref [4] | Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers | DOI: 10.1561/2200000016\"), which leads to good results and easier to adapt to different systems.",
+      "refs_user_msg_id": 3253,
+      "render_cache_key": "8787b1fb7e67"
+    },
+    "evaluation": {
+      "id": "SCINERF2024_CITATION_ADMM",
+      "title": "ADMM citation in SCI decoding",
+      "paper_id": "cvpr_2024_scinerf",
+      "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "prompt_family": "citation_lookup",
+      "prompt": "In the Related Work section, the authors say many optimization-based SCI methods employ ADMM. Which reference do they cite for ADMM, and where is that stated exactly? Provide the exact supporting sentence.",
+      "tags": [
+        "baseline",
+        "citation_lookup",
+        "broken_refs",
+        "core"
+      ],
+      "status": "PASS",
+      "reasons": [],
+      "gate_results": {
+        "answer": {
+          "status": "PASS",
+          "reasons": []
+        },
+        "structured_markers": {
+          "status": "PASS",
+          "reasons": [],
+          "raw_structured_cite_count": 0,
+          "raw_support_marker_count": 0
+        },
+        "quality": {
+          "status": "PASS",
+          "reasons": []
+        },
+        "citation": {
+          "status": "PASS",
+          "reasons": [],
+          "matched_ref_nums": [
+            4
+          ]
+        },
+        "locate": {
+          "status": "PASS",
+          "reasons": [],
+          "matched_segment_count": 1,
+          "matched_headings": [
+            "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work"
+          ],
+          "matched_anchors": [
+            "When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to"
+          ]
+        }
+      },
+      "answer_quality": {
+        "contract_enabled": false,
+        "intent": "reading",
+        "depth": "L2",
+        "output_mode": "reading_guide",
+        "char_count": 400,
+        "has_hits": true,
+        "has_conclusion": false,
+        "has_evidence": false,
+        "has_limits": false,
+        "has_next_steps": false,
+        "has_citations": true,
+        "paper_guide_mode": true,
+        "prompt_family": "citation_lookup",
+        "has_locate_hint": false,
+        "locate_required": false,
+        "locate_ok": true,
+        "abstract_style_ok": true,
+        "evidence_required": false,
+        "next_steps_required": false,
+        "evidence_ok": true,
+        "core_section_coverage": 0.0,
+        "minimum_ok": true
+      },
+      "cite_count": 1,
+      "raw_structured_cite_count": 0,
+      "answer_preview": "The paper cites [4] for this point.\nThis is stated in SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image / 2. Related Work:\n> When solving the optimization problems, instead of using conventional gradient descent algorithm, most of the existing methods employ alternating direction method of multipliers (ADMM) [4], which leads to good results and easier to adapt to different systems."
+    }
+  }
+]

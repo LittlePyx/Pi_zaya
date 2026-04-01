@@ -1,0 +1,303 @@
+from pathlib import Path
+
+from kb import paper_guide_retrieval_runtime as retrieval_runtime
+from kb.paper_guide_retrieval_runtime import (
+    _build_paper_guide_direct_citation_lookup_answer,
+    _extract_paper_guide_local_citation_lookup_refs,
+    _filter_hits_for_paper_guide,
+    _paper_guide_fallback_deepread_hits,
+    _paper_guide_citation_lookup_fragments,
+    _paper_guide_citation_lookup_query_tokens,
+    _paper_guide_citation_lookup_signal_score,
+    _paper_guide_deepread_heading,
+    _paper_guide_has_requested_target_hits,
+    _paper_guide_should_force_rescue,
+    _select_paper_guide_raw_target_hits,
+    _paper_guide_targeted_source_block_hits,
+    _select_paper_guide_deepread_extras,
+)
+
+
+def test_paper_guide_deepread_heading_prefers_meta_heading_then_markdown_header():
+    assert _paper_guide_deepread_heading({"meta": {"heading_path": "Methods > APR"}}) == "Methods > APR"
+    assert _paper_guide_deepread_heading({"text": "# Discussion\nFuture work."}) == "Discussion"
+
+
+def test_select_paper_guide_deepread_extras_skips_reference_like_snippets_for_abstract():
+    out = _select_paper_guide_deepread_extras(
+        [
+            {"text": "## References\n[34] Smith et al. 2020.", "score": 99},
+            {"text": "# Abstract\nWe used low illumination power.", "score": 10},
+        ],
+        prompt="Show the abstract and translate it.",
+        prompt_family="abstract",
+        limit=1,
+    )
+    assert out == ["# Abstract\nWe used low illumination power."]
+
+
+def test_paper_guide_has_requested_target_hits_detects_box_hit():
+    assert _paper_guide_has_requested_target_hits(
+        [{"meta": {"heading_path": "Box 1"}, "text": "Box 1. A transform-domain condition is stated here."}],
+        prompt="From Box 1 only, what condition on M is given?",
+    )
+
+
+def test_filter_hits_for_paper_guide_keeps_only_bound_source_matches():
+    hits = [
+        {"meta": {"source_path": "paper_a.md"}, "text": "A"},
+        {"meta": {"source_path": "paper_b.md"}, "text": "B"},
+    ]
+    out = _filter_hits_for_paper_guide(
+        hits,
+        bound_source_path="paper_a.md",
+        bound_source_name="paper_a",
+    )
+    assert [str((item.get("meta") or {}).get("source_path") or "") for item in out] == ["paper_a.md"]
+
+
+def test_paper_guide_targeted_source_block_hits_extracts_box_block():
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=r"X:\NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+        prompt="From Box 1 only, what condition on M is given for reconstructing the image in the transform domain?",
+        db_dir=Path("db"),
+        limit=4,
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {"heading_path": "Box 1", "block_id": "blk_box1", "anchor_id": "a1"},
+    )
+    assert hits
+    assert any("Box 1" in str(hit.get("text") or "") for hit in hits)
+    assert any("M \\ge O(K \\log(N/K))" in str(hit.get("text") or "") for hit in hits)
+
+
+def test_paper_guide_fallback_deepread_hits_prefers_targeted_hits_for_box_query():
+    hits = _paper_guide_fallback_deepread_hits(
+        bound_source_path=r"X:\NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+        bound_source_name="NatPhoton-2019-Principles and prospects for single-pixel imaging",
+        query="box 1 transform domain condition",
+        prompt="From Box 1 only, what condition on M is given for reconstructing the image in the transform domain?",
+        prompt_family="overview",
+        top_k=3,
+        db_dir=Path("db"),
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {"heading_path": "Box 1", "block_id": "blk_box1", "anchor_id": "a1"},
+    )
+    assert hits
+    assert all(bool((hit.get("meta") or {}).get("paper_guide_targeted_block")) for hit in hits)
+
+
+def test_paper_guide_should_force_rescue_for_exact_method_when_only_generic_hits_exist():
+    hits = [
+        {
+            "score": 8.0,
+            "text": "This paper studies neural rendering from compressive imaging.",
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "Introduction",
+                "block_id": "blk_intro",
+            },
+        }
+    ]
+
+    assert _paper_guide_should_force_rescue(
+        scoped_hits=hits,
+        prompt=(
+            "In the Implementation details paragraph, how many iterations do they train for, "
+            "and what is the batch size measured in rays? Point me to the exact supporting sentence."
+        ),
+        prompt_family="method",
+    )
+
+
+def test_paper_guide_should_force_rescue_skips_when_targeted_hit_already_exists():
+    hits = [
+        {
+            "score": 15.0,
+            "text": "We train for 100-200K iterations, with 5000 rays as batch size.",
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "Experiments / Implementation details",
+                "block_id": "blk_impl",
+                "paper_guide_targeted_block": True,
+            },
+        }
+    ]
+
+    assert not _paper_guide_should_force_rescue(
+        scoped_hits=hits,
+        prompt=(
+            "In the Implementation details paragraph, how many iterations do they train for, "
+            "and what is the batch size measured in rays?"
+        ),
+        prompt_family="method",
+    )
+
+
+def test_paper_guide_fallback_deepread_hits_merges_original_and_translated_targeted_scans(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        retrieval_runtime,
+        "_resolve_paper_guide_md_path",
+        lambda *_args, **_kwargs: Path(r"db\demo\paper.en.md"),
+    )
+
+    def _fake_targeted(*, prompt: str, **_kwargs):
+        calls.append(prompt)
+        if prompt == "原始问题":
+            return [
+                {
+                    "text": "原始问题命中了方法段。",
+                    "score": 13.0,
+                    "meta": {"block_id": "blk_orig", "heading_path": "Methods"},
+                }
+            ]
+        if prompt == "translated query":
+            return [
+                {
+                    "text": "Translated query matched the implementation details.",
+                    "score": 15.0,
+                    "meta": {"block_id": "blk_trans", "heading_path": "Experiments / Implementation details"},
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        retrieval_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        _fake_targeted,
+    )
+
+    out = _paper_guide_fallback_deepread_hits(
+        bound_source_path=r"X:\demo.pdf",
+        bound_source_name="Demo",
+        query="translated query",
+        prompt="原始问题",
+        prompt_family="method",
+        top_k=4,
+        db_dir=Path("db"),
+    )
+
+    assert calls == ["原始问题", "translated query"]
+    assert {str((hit.get("meta") or {}).get("block_id") or "") for hit in out} == {"blk_orig", "blk_trans"}
+
+
+def test_paper_guide_citation_lookup_query_tokens_drops_stopwords():
+    toks = _paper_guide_citation_lookup_query_tokens(
+        "Which prior work is RVT attributed to in this paper, and what in-paper citation do they use?"
+    )
+    assert "rvt" in toks
+    assert "which" not in toks
+    assert "paper" not in toks
+
+
+def test_extract_paper_guide_local_citation_lookup_refs_prefers_token_adjacent_refs():
+    refs = _extract_paper_guide_local_citation_lookup_refs(
+        "Specifically, we use the radial variance transform (RVT)[34], which converts an interferogram into an intensity-only map.",
+        prompt="Which prior work is RVT attributed to in this paper?",
+    )
+    assert refs == [34]
+
+
+def test_select_paper_guide_raw_target_hits_prefers_intext_citation_lookup_hit():
+    hits = [
+        {
+            "score": 12.0,
+            "text": "[33] Richardson, W. H. Bayesian-based iterative method of image restoration.",
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "References",
+                "block_id": "blk_refs",
+            },
+        },
+        {
+            "score": 10.0,
+            "text": "Specifically, we use the radial variance transform (RVT)[34], which converts an interferogram into an intensity-only map.",
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "Methods / RVT",
+                "block_id": "blk_rvt_intro",
+                "paper_guide_targeted_block": True,
+            },
+        },
+    ]
+    out = _select_paper_guide_raw_target_hits(
+        hits_raw=hits,
+        prompt="Which prior work is RVT attributed to in this paper, and what in-paper citation do they use when introducing it?",
+        top_n=1,
+        answer_hit_score=lambda hit, *, prompt: float(hit.get("score") or 0.0),
+    )
+    assert len(out) == 1
+    assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_rvt_intro"
+
+
+def test_build_paper_guide_direct_citation_lookup_answer_uses_reference_lookup():
+    out = _build_paper_guide_direct_citation_lookup_answer(
+        prompt="Which prior work is RVT attributed to in this paper, and what in-paper citation do they use when introducing it?",
+        source_path=r"X:\demo.pdf",
+        answer_hits=[
+            {
+                "text": "Specifically, we use the radial variance transform (RVT)[34], which converts an interferogram into an intensity-only map.",
+                "meta": {"heading_path": "Results / APR"},
+            }
+        ],
+        special_focus_block="",
+        db_dir=Path("db"),
+        extract_special_focus_excerpt=lambda block: "",
+        reference_entry_lookup=lambda _src, ref_num, **_kwargs: {
+            "title": "Precision single-particle localization using radial variance transform"
+        }
+        if int(ref_num) == 34
+        else {},
+    )
+    assert "[34]" in out
+    assert "Precision single-particle localization using radial variance transform" in out
+
+
+def test_build_paper_guide_direct_citation_lookup_answer_prefers_author_attribution_ref_span():
+    out = _build_paper_guide_direct_citation_lookup_answer(
+        prompt="Which reference do the authors cite for single-pixel imaging via compressive sampling, and where is that stated exactly?",
+        source_path=r"X:\demo.pdf",
+        answer_hits=[
+            {
+                "text": (
+                    "The original concept of the single-pixel imaging approach, demonstrated by Sen et al.$^{3,58}$, "
+                    "was developed further in conjunction with compressive sensing$^{59}$ and reported soon after in a seminal paper by Duarte et al. at Rice University$^{4}$."
+                ),
+                "meta": {"heading_path": "Acquisition and image reconstruction strategies"},
+            }
+        ],
+        special_focus_block="",
+        db_dir=Path("db"),
+        extract_special_focus_excerpt=lambda block: "",
+        reference_entry_lookup=lambda _src, ref_num, **_kwargs: {
+            "title": "Single-pixel imaging via compressive sampling"
+        }
+        if int(ref_num) == 4
+        else {
+            "title": "Sparsity and incoherence in compressive sampling"
+        },
+    )
+
+    assert "The paper cites [4]" in out
+    assert "Single-pixel imaging via compressive sampling" in out
+
+
+def test_paper_guide_citation_lookup_signal_score_penalizes_reference_list_for_intext_query():
+    intext_score = _paper_guide_citation_lookup_signal_score(
+        prompt="Which prior work is RVT attributed to in this paper?",
+        heading="Methods / RVT",
+        text="Specifically, we use the radial variance transform (RVT)[34], which converts an interferogram into an intensity-only map.",
+        inline_refs=[34],
+        explicit_ref_list_request=False,
+    )
+    ref_score = _paper_guide_citation_lookup_signal_score(
+        prompt="Which prior work is RVT attributed to in this paper?",
+        heading="References",
+        text="[34] Smith et al. Precision single-particle localization using radial variance transform.",
+        inline_refs=[34],
+        explicit_ref_list_request=False,
+    )
+    assert intext_score > ref_score

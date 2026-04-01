@@ -1,0 +1,279 @@
+{
+  "suite_id": "paper_guide_smoke_scinerf2024_v1",
+  "title": "Paper Guide Smoke (SCINeRF CVPR 2024 v1)",
+  "prefs_patch": {
+    "answer_contract_v1": true,
+    "answer_depth_auto": true,
+    "answer_mode_hint": "reading",
+    "answer_output_mode": "reading_guide"
+  },
+  "generate_body": {
+    "top_k": 10,
+    "deep_read": true,
+    "max_tokens": 5200,
+    "temperature": 0.3
+  },
+  "default_checks": {
+    "structured_markers": {
+      "forbid_raw_structured_cites": true,
+      "forbid_raw_support_markers": true
+    },
+    "quality": {
+      "minimum_ok_required": true
+    }
+  },
+  "papers": [
+    {
+      "id": "cvpr_2024_scinerf",
+      "title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+      "cases": [
+        {
+          "id": "SCINERF2024_ABSTRACT_SUMMARY_ZH",
+          "title": "Abstract summary with exact anchor (Chinese)",
+          "prompt_family": "abstract",
+          "tags": [
+            "abstract",
+            "zh",
+            "general"
+          ],
+          "prompt": "请直接给出这篇文章的 Abstract 原文（英文即可，不要翻译），并从 Abstract 里挑 1 句原文完整句子作为可定位跳转的锚点。",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Abstract text",
+                "Snapshot Compressive Imaging",
+                "SCI",
+                "NeRF"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Abstract"
+              ],
+              "anchor_contains_any": [
+                "video Snapshot Compressive Imaging",
+                "snapshot compressed"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_CITATION_SCI_OVERVIEW",
+          "title": "SCI overview citation",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "citation_lookup",
+            "general"
+          ],
+          "prompt": "In the Abstract, the authors mention video Snapshot Compressive Imaging (SCI). Which reference do they cite for SCI, and where is that stated exactly? Provide the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Snapshot Compressive Imaging",
+                "SCI"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                50
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Abstract"
+              ],
+              "anchor_contains_any": [
+                "video Snapshot Compressive Imaging",
+                "SCI"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_CITATION_ADMM",
+          "title": "ADMM citation in SCI decoding",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "citation_lookup",
+            "general"
+          ],
+          "prompt": "In the Related Work section, the authors say many optimization-based SCI methods employ ADMM. Which reference do they cite for ADMM, and where is that stated exactly? Provide the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "ADMM",
+                "alternating direction method of multipliers"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                4
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Related Work",
+                "Snapshot Compressive Imaging"
+              ],
+              "anchor_contains_any": [
+                "alternating direction method of multipliers",
+                "ADMM"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_METHOD_IMPL_ITER_BATCH",
+          "title": "Implementation details: iterations and batch size (rays)",
+          "prompt_family": "method",
+          "tags": [
+            "method_exact_support",
+            "general"
+          ],
+          "prompt": "In the Implementation details paragraph (Experiments section), how many iterations do they train for, and what is the batch size measured in rays? Point me to the exact supporting sentence(s) and make sure the jump target is correct.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "iterations",
+                "100",
+                "200",
+                "5000",
+                "rays",
+                "batch size"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not contain",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Experiments",
+                "Implementation details"
+              ],
+              "anchor_contains_any": [
+                "100–200K iterations",
+                "100-200K iterations",
+                "5000 rays",
+                "batch size"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_CITATION_SPLINE",
+          "title": "Higher-order spline citation for complex motion",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "citation_lookup",
+            "general"
+          ],
+          "prompt": "In the Method section, they say for more complex camera motions they can exploit a higher-order spline. Which reference do they cite for that, and where is it stated exactly? Provide the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "spline",
+                "higher-order"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                17
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Proposed Framework",
+                "Method"
+              ],
+              "anchor_contains_any": [
+                "higher-order spline",
+                "spline"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_FIG3_CAPTION_COMPONENTS_ZH",
+          "title": "Figure 3 caption clause jump (Chinese)",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "figure_locate",
+            "zh",
+            "general"
+          ],
+          "prompt": "Figure 3 的实验装置包含哪些关键部件？请指向图注里对应的那句话（原文完整句子），并要求可定位跳转到 Figure 3 的 caption。",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "CCD",
+                "DMD",
+                "relay lens",
+                "镜头",
+                "相机"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 3"
+              ],
+              "anchor_contains_any": [
+                "Experimental setup for real dataset collection",
+                "CCD camera",
+                "DMD"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        }
+      ]
+    }
+  ]
+}

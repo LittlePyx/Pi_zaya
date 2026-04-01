@@ -118,10 +118,19 @@ $viteOut = Join-Path $here ".tmp_vite_stdout.log"
 $viteErr = Join-Path $here ".tmp_vite_stderr.log"
 Remove-Item $fastapiOut, $fastapiErr, $viteOut, $viteErr -ErrorAction SilentlyContinue
 
+$backendPrePids = Get-PortPids -Ports @($BackendPort)
+$frontendPrePids = Get-PortPids -Ports @($FrontendPort)
+
 Write-Info "Starting backend (uvicorn) on http://$BackendHost`:$BackendPort ..."
 $backendArgs = @('-m', 'uvicorn', 'api.main:app', '--host', $BackendHost, '--port', "$BackendPort")
 if (-not $NoBackendReload) {
-  $backendArgs += @('--reload', '--reload-dir', $here)
+  # Avoid reload loops caused by benchmark outputs / logs written under repo root.
+  $backendArgs += @(
+    '--reload',
+    '--reload-dir', (Join-Path $here 'api'),
+    '--reload-dir', (Join-Path $here 'kb'),
+    '--reload-dir', (Join-Path $here 'ui')
+  )
 }
 $backendProc = Start-Process `
   -FilePath $pythonExe `
@@ -132,6 +141,8 @@ $backendProc = Start-Process `
   -RedirectStandardError $fastapiErr
 
 Write-Info "Starting frontend (vite) on http://$FrontendHost`:$FrontendPort ..."
+# Tell Vite proxy where the backend lives.
+$env:VITE_BACKEND_URL = "http://$BackendHost`:$BackendPort"
 $frontendProc = Start-Process `
   -FilePath $npmExe `
   -ArgumentList @('run', 'dev', '--', '--host', $FrontendHost, '--port', "$FrontendPort") `
@@ -140,8 +151,14 @@ $frontendProc = Start-Process `
   -RedirectStandardOutput $viteOut `
   -RedirectStandardError $viteErr
 
-$backendOk = Wait-PortListening -Port $BackendPort -TimeoutSeconds 25 -IntervalMs 500
-$frontendOk = Wait-PortListening -Port $FrontendPort -TimeoutSeconds 25 -IntervalMs 500
+$backendListening = Wait-PortListening -Port $BackendPort -TimeoutSeconds 25 -IntervalMs 500
+$frontendListening = Wait-PortListening -Port $FrontendPort -TimeoutSeconds 25 -IntervalMs 500
+$backendPostPids = Get-PortPids -Ports @($BackendPort)
+$frontendPostPids = Get-PortPids -Ports @($FrontendPort)
+$backendNewPids = @($backendPostPids | Where-Object { $backendPrePids -notcontains $_ })
+$frontendNewPids = @($frontendPostPids | Where-Object { $frontendPrePids -notcontains $_ })
+$backendOk = $backendListening -and ($backendNewPids.Count -gt 0)
+$frontendOk = $frontendListening -and ($frontendNewPids.Count -gt 0)
 
 Write-Host ""
 Write-Info "Backend PID:  $($backendProc.Id)  (port ${BackendPort}: $(if ($backendOk) { 'UP' } else { 'DOWN' }))"

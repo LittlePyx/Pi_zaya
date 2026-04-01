@@ -51,6 +51,44 @@ router = APIRouter(prefix="/api/library", tags=["library"])
 _RENAME_SUGGEST_CACHE: dict[str, dict] = {}
 
 
+def _suggestion_basis_meta(suggestion: PdfMetaSuggestion, *, venue: str, year: str, title: str) -> dict:
+    match_method = str(getattr(suggestion, "match_method", "") or "").strip()
+    year_source = str(getattr(suggestion, "year_source", "") or "").strip()
+    if match_method == "doi":
+        basis_label = "DOI确认"
+        basis_detail = "题录由 DOI 直连确认。"
+    elif match_method == "crossref_strong":
+        basis_label = "Crossref强匹配"
+        basis_detail = "题录由 Crossref 强匹配确认。"
+    elif match_method == "crossref_weak" and year_source == "filename" and year:
+        basis_label = "年份沿用文件名"
+        basis_detail = "Crossref 未形成强确认，年份沿用原文件名。"
+    elif match_method == "crossref_weak":
+        basis_label = "Crossref弱匹配"
+        basis_detail = "Crossref 未形成强确认，年份未直接采用。"
+    elif year_source == "filename" and year:
+        basis_label = "年份沿用文件名"
+        basis_detail = "年份沿用原文件名，未额外做强校验。"
+    elif year_source == "heuristic" and year:
+        basis_label = "首页文本提取"
+        basis_detail = "年份根据 PDF 首页文本规则提取。"
+    elif year_source == "llm" and year:
+        basis_label = "LLM提取"
+        basis_detail = "年份根据首页内容由 LLM 抽取。"
+    else:
+        basis_label = "启发式建议"
+        basis_detail = "建议名来自标题/会议信息提取，未形成强确认。"
+    return {
+        "venue": str(venue or ""),
+        "year": str(year or ""),
+        "title": str(title or ""),
+        "match_method": match_method,
+        "year_source": year_source,
+        "basis_label": basis_label,
+        "basis_detail": basis_detail,
+    }
+
+
 def _pdf_dir() -> Path:
     prefs = load_prefs()
     s = get_settings()
@@ -142,9 +180,93 @@ def _normalized_path_key(raw: str | Path) -> str:
         return s
 
 
+def _merge_task_map_entry(mapping: dict[str, dict], key: str, info: dict) -> None:
+    k = str(key or "").strip()
+    if not k:
+        return
+    prev = mapping.get(k)
+    if not isinstance(prev, dict):
+        mapping[k] = dict(info)
+        return
+    merged = dict(prev)
+    merged["queued"] = bool(prev.get("queued")) or bool(info.get("queued"))
+    merged["running"] = bool(prev.get("running")) or bool(info.get("running"))
+    merged["replace"] = bool(prev.get("replace")) or bool(info.get("replace"))
+    prev_q = int(prev.get("queue_pos") or 0)
+    next_q = int(info.get("queue_pos") or 0)
+    if next_q > 0 and ((prev_q <= 0) or (next_q < prev_q)):
+        merged["queue_pos"] = next_q
+    else:
+        merged["queue_pos"] = prev_q
+    next_tid = str(info.get("task_id") or "").strip()
+    if next_tid and (not str(prev.get("task_id") or "").strip()):
+        merged["task_id"] = next_tid
+    for field in ("cur_page_done", "cur_page_total", "cur_page_msg"):
+        if field in info:
+            merged[field] = info.get(field)
+    mapping[k] = merged
+
+
+def _compact_active_tasks(snap: dict) -> list[dict]:
+    items: list[dict] = []
+    for task in list((snap or {}).get("active_tasks") or []):
+        if not isinstance(task, dict):
+            continue
+        items.append(
+            {
+                "task_id": str(task.get("_tid") or ""),
+                "name": str(task.get("name") or ""),
+                "pdf": str(task.get("pdf") or ""),
+                "replace": bool(task.get("replace", False)),
+                "cur_page_done": int(task.get("cur_page_done", 0) or 0),
+                "cur_page_total": int(task.get("cur_page_total", 0) or 0),
+                "cur_page_msg": str(task.get("cur_page_msg") or ""),
+            }
+        )
+    return items
+
+
+def _is_pdf_active_in_snapshot(*, snap: dict, pdf_path: Path, pdf_name: str) -> bool:
+    pdf_key = _normalized_path_key(pdf_path)
+    for task in _compact_active_tasks(snap):
+        task_name = str(task.get("name") or "").strip()
+        task_pdf = str(task.get("pdf") or "").strip()
+        task_key = _normalized_path_key(task_pdf)
+        if task_name and (task_name == pdf_name):
+            return True
+        if pdf_key and task_key and (task_key == pdf_key):
+            return True
+    if bool((snap or {}).get("running")):
+        current_name = str((snap or {}).get("current") or "").strip()
+        if current_name and (current_name == pdf_name):
+            return True
+    return False
+
+
 def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[str, dict]]:
     by_path: dict[str, dict] = {}
     by_name: dict[str, dict] = {}
+    for task in _compact_active_tasks(snap):
+        task_pdf = str(task.get("pdf") or "").strip()
+        if not task_pdf:
+            continue
+        task_name = str(task.get("name") or Path(task_pdf).name).strip()
+        info = {
+            "queued": False,
+            "running": True,
+            "replace": bool(task.get("replace", False)),
+            "queue_pos": 0,
+            "task_id": str(task.get("task_id") or ""),
+            "cur_page_done": int(task.get("cur_page_done", 0) or 0),
+            "cur_page_total": int(task.get("cur_page_total", 0) or 0),
+            "cur_page_msg": str(task.get("cur_page_msg") or ""),
+        }
+        key = _normalized_path_key(task_pdf)
+        if key:
+            _merge_task_map_entry(by_path, key, info)
+        if task_name:
+            _merge_task_map_entry(by_name, task_name, info)
+
     queue = list((snap or {}).get("queue") or [])
     for idx, task in enumerate(queue, start=1):
         if not isinstance(task, dict):
@@ -162,23 +284,9 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
         }
         key = _normalized_path_key(task_pdf)
         if key:
-            prev = by_path.get(key)
-            if not isinstance(prev, dict):
-                by_path[key] = dict(info)
-            else:
-                prev["queued"] = True
-                prev["replace"] = bool(prev.get("replace")) or bool(info.get("replace"))
-                prev["queue_pos"] = min(int(prev.get("queue_pos") or idx), int(info.get("queue_pos") or idx))
-                by_path[key] = prev
+            _merge_task_map_entry(by_path, key, info)
         if task_name:
-            prev_n = by_name.get(task_name)
-            if not isinstance(prev_n, dict):
-                by_name[task_name] = dict(info)
-            else:
-                prev_n["queued"] = True
-                prev_n["replace"] = bool(prev_n.get("replace")) or bool(info.get("replace"))
-                prev_n["queue_pos"] = min(int(prev_n.get("queue_pos") or idx), int(info.get("queue_pos") or idx))
-                by_name[task_name] = prev_n
+            _merge_task_map_entry(by_name, task_name, info)
 
     current_name = str((snap or {}).get("current") or "").strip()
     if bool((snap or {}).get("running")) and current_name:
@@ -192,7 +300,7 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
         }
         cur["running"] = True
         cur["replace"] = bool(cur.get("replace")) or current_replace
-        by_name[current_name] = cur
+        _merge_task_map_entry(by_name, current_name, cur)
     return by_path, by_name
 
 
@@ -213,6 +321,9 @@ def _library_file_item(
     running = bool((info or {}).get("running"))
     replace_task = bool((info or {}).get("replace"))
     queue_pos = int((info or {}).get("queue_pos") or 0)
+    cur_page_done = int((info or {}).get("cur_page_done") or 0)
+    cur_page_total = int((info or {}).get("cur_page_total") or 0)
+    cur_page_msg = str((info or {}).get("cur_page_msg") or "")
     task_state = "running" if running else ("queued" if queued else "idle")
     queued_or_running = bool(queued or running)
     reconverting = bool(replace_task and queued_or_running)
@@ -235,6 +346,9 @@ def _library_file_item(
         "status": status,
         "replace_task": bool(replace_task),
         "queue_pos": int(queue_pos),
+        "cur_page_done": int(cur_page_done),
+        "cur_page_total": int(cur_page_total),
+        "cur_page_msg": cur_page_msg,
         "paper_category": str((meta_rec or {}).get("paper_category") or ""),
         "reading_status": str((meta_rec or {}).get("reading_status") or ""),
         "note": str((meta_rec or {}).get("note") or ""),
@@ -294,10 +408,12 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
         "truncated": bool(limit > 0 and len(pdfs_all) > len(view)),
         "scope": "all" if limit <= 0 else str(limit),
         "queue": {
-            "running": bool(snap.get("running", False)),
+            "running": bool(snap.get("running", False)) or bool(list(snap.get("active_tasks") or [])),
+            "active_count": int(snap.get("active_count", len(list(snap.get("active_tasks") or []))) or 0),
             "current": str(snap.get("current", "")),
             "done": int(snap.get("done", 0) or 0),
             "total": int(snap.get("total", 0) or 0),
+            "active_tasks": _compact_active_tasks(snap),
         },
     }
 
@@ -428,11 +544,7 @@ def _build_rename_suggestion_item(*, pdf_path: Path, pdf_dir: Path, md_dir: Path
         "suggested_stem": dest.stem,
         "display_full_name": display_full_name,
         "diff": str(dest.name) != str(pdf_path.name),
-        "meta": {
-            "venue": venue,
-            "year": year,
-            "title": title,
-        },
+        "meta": _suggestion_basis_meta(suggestion, venue=venue, year=year, title=title),
         "md_exists": bool(md_exists),
         "md_path": str(md_main) if md_exists else "",
         "md_folder": str(md_folder),
@@ -508,18 +620,22 @@ def save_pdf_to_library(*, file_name: str, data: bytes, base_name: str = "", fas
             except Exception:
                 sug = PdfMetaSuggestion()
 
-        fallback_title = Path((base_name or "").strip() or raw_name_pdf).stem or "Untitled"
+        explicit_base = Path((base_name or "").strip()).stem
+        fallback_title = explicit_base or Path(raw_name_pdf).stem or "Untitled"
         venue = str(getattr(sug, "venue", "") or "").strip()
         year = str(getattr(sug, "year", "") or "").strip()
         title = str(getattr(sug, "title", "") or "").strip() or fallback_title
 
-        base = build_storage_base_name(
-            venue=venue,
-            year=year,
-            title=title,
-            pdf_dir=pdf_d,
-            md_out_root=md_d,
-        )
+        if explicit_base:
+            base = explicit_base
+        else:
+            base = build_storage_base_name(
+                venue=venue,
+                year=year,
+                title=title,
+                pdf_dir=pdf_d,
+                md_out_root=md_d,
+            )
         dest_pdf = _next_pdf_dest_path(pdf_d, base)
         display_full_name = build_display_pdf_filename(
             venue=venue,
@@ -575,18 +691,22 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
     except Exception:
         sug = PdfMetaSuggestion()
 
-    fallback_title = Path((base_name or "").strip() or src_pdf.stem).stem or "Untitled"
+    explicit_base = Path((base_name or "").strip()).stem
+    fallback_title = explicit_base or src_pdf.stem or "Untitled"
     venue = str(getattr(sug, "venue", "") or "").strip()
     year = str(getattr(sug, "year", "") or "").strip()
     title = str(getattr(sug, "title", "") or "").strip() or fallback_title
 
-    base = build_storage_base_name(
-        venue=venue,
-        year=year,
-        title=title,
-        pdf_dir=pdf_d,
-        md_out_root=md_d,
-    )
+    if explicit_base:
+        base = explicit_base
+    else:
+        base = build_storage_base_name(
+            venue=venue,
+            year=year,
+            title=title,
+            pdf_dir=pdf_d,
+            md_out_root=md_d,
+        )
     cand_pdf = _next_pdf_dest_path(pdf_d, base)
     dest_pdf = cand_pdf if cand_pdf.resolve() != src_pdf else src_pdf
     if (not dest_pdf.exists()) and (dest_pdf.resolve() != src_pdf):
@@ -942,6 +1062,7 @@ class ConvertPendingBody(BaseModel):
     speed_mode: str = "balanced"
     no_llm: bool = False
     limit: int = 0
+    replace: bool = True
 
 
 def _inspect_pdf_upload(*, file_name: str, data: bytes, use_llm: bool = True) -> dict:
@@ -991,11 +1112,7 @@ def _inspect_pdf_upload(*, file_name: str, data: bytes, use_llm: bool = True) ->
             "suggested_name": dest.name,
             "suggested_stem": dest.stem,
             "display_full_name": display_full_name,
-            "meta": {
-                "venue": venue,
-                "year": year,
-                "title": title,
-            },
+            "meta": _suggestion_basis_meta(sug, venue=venue, year=year, title=title),
         }
     finally:
         try:
@@ -1036,7 +1153,15 @@ def list_rename_suggestions(scope: str = "30", use_llm: bool = True):
                     "suggested_stem": p.stem,
                     "display_full_name": p.name,
                     "diff": False,
-                    "meta": {"venue": "", "year": "", "title": ""},
+                    "meta": {
+                        "venue": "",
+                        "year": "",
+                        "title": "",
+                        "match_method": "",
+                        "year_source": "",
+                        "basis_label": "建议生成失败",
+                        "basis_detail": "本次未能生成稳定建议，保留原文件名。",
+                    },
                     "md_exists": False,
                     "md_path": "",
                     "md_folder": "",
@@ -1121,6 +1246,7 @@ def convert_pending(body: ConvertPendingBody):
     items = list(listing.get("items") or [])
     limit = max(0, int(body.limit or 0))
     no_llm = bool(body.no_llm) or (str(body.speed_mode or "").strip().lower() == "no_llm")
+    replace = bool(body.replace)
 
     enqueued = 0
     skipped_busy = 0
@@ -1142,7 +1268,7 @@ def convert_pending(body: ConvertPendingBody):
             out_root=md_d,
             db_dir=Path(s.db_dir).expanduser(),
             no_llm=no_llm,
-            replace=False,
+            replace=replace,
             speed_mode=str(body.speed_mode or "balanced"),
         )
         _bg_enqueue(task)
@@ -1211,7 +1337,7 @@ async def commit_upload_pdf(
                 out_root=md_d,
                 db_dir=s.db_dir,
                 no_llm=no_llm,
-                replace=False,
+                replace=True,
                 speed_mode=str(speed_mode or "balanced"),
             )
             _bg_enqueue(task)
@@ -1228,7 +1354,7 @@ class ConvertBody(BaseModel):
     pdf_name: str
     speed_mode: str = "balanced"
     no_llm: bool = False
-    replace: bool = False
+    replace: bool = True
 
 
 @router.post("/convert")
@@ -1256,11 +1382,13 @@ async def convert_status():
     def poll():
         snap = _bg_snapshot()
         return {
-            "running": snap.get("running", False),
-            "done": not snap.get("running", False) and snap.get("total", 0) > 0,
+            "running": bool(snap.get("running", False)) or bool(list(snap.get("active_tasks") or [])),
+            "done": (not bool(snap.get("running", False))) and (not bool(list(snap.get("active_tasks") or []))) and snap.get("total", 0) > 0,
             "total": snap.get("total", 0),
             "completed": snap.get("done", 0),
             "current": snap.get("current", ""),
+            "active_count": int(snap.get("active_count", len(list(snap.get("active_tasks") or []))) or 0),
+            "active_tasks": _compact_active_tasks(snap),
             "cur_page_done": snap.get("cur_page_done", 0),
             "cur_page_total": snap.get("cur_page_total", 0),
             "cur_page_msg": snap.get("cur_page_msg", ""),
@@ -1371,9 +1499,7 @@ def delete_library_file(body: DeleteLibraryFileBody):
         raise HTTPException(404, "pdf not found")
 
     snap = _bg_snapshot()
-    running_now = bool(snap.get("running"))
-    current_name = str(snap.get("current") or "").strip()
-    if running_now and current_name and (current_name == pdf_name):
+    if _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name):
         raise HTTPException(409, "file is currently converting")
 
     removed_queued = 0

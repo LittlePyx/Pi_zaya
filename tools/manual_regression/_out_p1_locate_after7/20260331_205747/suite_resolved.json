@@ -1,0 +1,773 @@
+{
+  "suite_id": "paper_guide_baseline_p0_v1",
+  "title": "Paper Guide Baseline (P0 v1)",
+  "prefs_patch": {
+    "answer_contract_v1": true,
+    "answer_depth_auto": true,
+    "answer_mode_hint": "reading",
+    "answer_output_mode": "reading_guide"
+  },
+  "generate_body": {
+    "top_k": 10,
+    "deep_read": true,
+    "max_tokens": 5200,
+    "temperature": 0.25
+  },
+  "default_checks": {
+    "structured_markers": {
+      "forbid_raw_structured_cites": true,
+      "forbid_raw_support_markers": true
+    },
+    "quality": {
+      "minimum_ok_required": true
+    }
+  },
+  "papers": [
+    {
+      "id": "cvpr_2024_scinerf",
+      "title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+      "cases": [
+        {
+          "id": "SCINERF2024_CITATION_ADMM",
+          "title": "ADMM citation in SCI decoding",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "baseline",
+            "citation_lookup",
+            "broken_refs",
+            "core"
+          ],
+          "prompt": "In the Related Work section, the authors say many optimization-based SCI methods employ ADMM. Which reference do they cite for ADMM, and where is that stated exactly? Provide the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "ADMM",
+                "alternating direction method of multipliers"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                4
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Related Work",
+                "Snapshot Compressive Imaging"
+              ],
+              "anchor_contains_any": [
+                "alternating direction method of multipliers",
+                "ADMM"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_METHOD_IMPL_ITER_BATCH",
+          "title": "Implementation details: iterations and batch size (rays)",
+          "prompt_family": "method",
+          "tags": [
+            "baseline",
+            "method_exact_support",
+            "false_miss",
+            "core"
+          ],
+          "prompt": "In the Implementation details paragraph (Experiments section), how many iterations do they train for, and what is the batch size measured in rays? Point me to the exact supporting sentence(s) and make sure the jump target is correct.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "iterations",
+                "100",
+                "200",
+                "5000",
+                "rays",
+                "batch size"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not contain",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Experiments",
+                "Implementation details"
+              ],
+              "anchor_contains_any": [
+                "100-200K iterations",
+                "5000 rays",
+                "batch size"
+              ]
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        },
+        {
+          "id": "SCINERF2024_FIG3_CAPTION_COMPONENTS",
+          "title": "Figure 3 experimental setup caption",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "baseline",
+            "figure_locate",
+            "core"
+          ],
+          "prompt": "For Figure 3, which key components are listed in the experimental setup caption? Point me to the exact supporting caption sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "CCD",
+                "DMD",
+                "relay lens",
+                "camera"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 3"
+              ],
+              "anchor_contains_any": [
+                "Experimental setup for real dataset collection",
+                "CCD camera",
+                "DMD"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "cvpr_2024_scinerf",
+          "paper_title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image\\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+          "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"
+        }
+      ]
+    },
+    {
+      "id": "natphoton_2019_spi",
+      "title": "Principles and prospects for single-pixel imaging",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatPhoton-2019-Principles and prospects for single-pixel imaging\\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+      "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+      "cases": [
+        {
+          "id": "NP2019_BOX1_ONLY",
+          "title": "Box 1 exact support",
+          "prompt_family": "box_only",
+          "tags": [
+            "baseline",
+            "section_targeted",
+            "box_only",
+            "false_miss",
+            "core"
+          ],
+          "prompt": "From Box 1 only, what condition do the authors give for reconstructing the image in the transform domain? Point me to the exact supporting part.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "K log(N/K)",
+                "M >= O(K log(N/K))"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Box 1"
+              ],
+              "anchor_contains_any": [
+                "K log(N/K)",
+                "M >="
+              ]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": [
+                "Box 1"
+              ],
+              "heading_excludes_any": [
+                "How a single-pixel camera works",
+                "Acquisition and image reconstruction strategies",
+                "Applications and future potential",
+                "References"
+              ]
+            }
+          },
+          "paper_id": "natphoton_2019_spi",
+          "paper_title": "Principles and prospects for single-pixel imaging",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatPhoton-2019-Principles and prospects for single-pixel imaging\\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+          "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf"
+        },
+        {
+          "id": "NP2019_CITATION_DUARTE",
+          "title": "Duarte citation lookup",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "baseline",
+            "citation_lookup",
+            "core"
+          ],
+          "prompt": "Which reference do the authors cite for single-pixel imaging via compressive sampling, and where is that stated exactly?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Duarte",
+                "compressive sampling"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                4
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Acquisition and image reconstruction strategies"
+              ],
+              "anchor_contains_any": [
+                "Duarte",
+                "compressive sensing",
+                "seminal paper"
+              ]
+            }
+          },
+          "paper_id": "natphoton_2019_spi",
+          "paper_title": "Principles and prospects for single-pixel imaging",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatPhoton-2019-Principles and prospects for single-pixel imaging\\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+          "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf"
+        },
+        {
+          "id": "NP2019_FIGURE3_PANEL_F",
+          "title": "Figure 3 panel f",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "baseline",
+            "figure_panel_locate",
+            "core"
+          ],
+          "prompt": "For Figure 3 panel (f), what exactly does that panel correspond to? Point me to the exact supporting caption clause.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "methane imaging using SPC",
+                "SPC",
+                "single-pixel camera"
+              ]
+            },
+            "figure_panel": {
+              "required": true,
+              "panel_letters": [
+                "f"
+              ],
+              "heading_includes_any": [
+                "Figure 3"
+              ],
+              "anchor_contains_any": [
+                "methane imaging using SPC",
+                "SPC"
+              ],
+              "claim_types": [
+                "figure_panel"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 3"
+              ],
+              "anchor_contains_any": [
+                "methane imaging using SPC",
+                "SPC"
+              ],
+              "claim_types": [
+                "figure_panel"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "natphoton_2019_spi",
+          "paper_title": "Principles and prospects for single-pixel imaging",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatPhoton-2019-Principles and prospects for single-pixel imaging\\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+          "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf"
+        },
+        {
+          "id": "NP2019_NOT_STATED_GPU",
+          "title": "Control question: unspecified GPU",
+          "prompt_family": "reproduce",
+          "tags": [
+            "baseline",
+            "not_stated_control"
+          ],
+          "prompt": "What GPU model do the authors report using for the single-pixel imaging experiments?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "not stated",
+                "does not specify",
+                "cannot be determined"
+              ]
+            }
+          },
+          "paper_id": "natphoton_2019_spi",
+          "paper_title": "Principles and prospects for single-pixel imaging",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatPhoton-2019-Principles and prospects for single-pixel imaging\\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+          "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf"
+        }
+      ]
+    },
+    {
+      "id": "lsa_2026",
+      "title": "Interferometric Image Scanning Microscopy for label-free imaging at 120 nm lateral resolution inside live cells",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells.en.md",
+      "source_name": "LSA-2026-Interferometric Image Scanning Microscopy.pdf",
+      "cases": [
+        {
+          "id": "LSA_DOC_MAP",
+          "title": "Doc map / outline",
+          "prompt_family": "overview",
+          "tags": [
+            "baseline",
+            "doc_map",
+            "core"
+          ],
+          "prompt": "First give me a section-by-section reading map of the markdown: one verbatim anchor sentence for each major section, and keep the answer navigable for locate jumps.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Doc map (verbatim anchors by section):"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Introduction",
+                "Methods",
+                "Results",
+                "Discussion"
+              ],
+              "claim_types": [
+                "doc_map"
+              ]
+            }
+          },
+          "paper_id": "lsa_2026",
+          "paper_title": "Interferometric Image Scanning Microscopy for label-free imaging at 120 nm lateral resolution inside live cells",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells.en.md",
+          "source_name": "LSA-2026-Interferometric Image Scanning Microscopy.pdf"
+        },
+        {
+          "id": "LSA_CITATION_RVT",
+          "title": "RVT citation lookup",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "baseline",
+            "citation_lookup",
+            "core"
+          ],
+          "prompt": "Which prior work do the authors cite for the RVT step, and where is that stated exactly?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "RVT",
+                "radial variance transform"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                34
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "RVT",
+                "Methods",
+                "Adaptive pixel-reassignment"
+              ],
+              "anchor_contains_any": [
+                "radial variance transform",
+                "RVT"
+              ]
+            }
+          },
+          "paper_id": "lsa_2026",
+          "paper_title": "Interferometric Image Scanning Microscopy for label-free imaging at 120 nm lateral resolution inside live cells",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells.en.md",
+          "source_name": "LSA-2026-Interferometric Image Scanning Microscopy.pdf"
+        },
+        {
+          "id": "LSA_METHOD_REAPPLY",
+          "title": "APR exact support",
+          "prompt_family": "method",
+          "tags": [
+            "baseline",
+            "method_exact_support",
+            "core"
+          ],
+          "prompt": "In the APR pipeline, where do the authors say the shift vectors are re-applied to the original iISM dataset? Point me to the exact supporting part of the paper.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "original iISM dataset",
+                "applied back to the original iISM dataset"
+              ],
+              "not_contains_any": [
+                "not stated"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Adaptive pixel-reassignment",
+                "Methods",
+                "APR"
+              ],
+              "anchor_contains_any": [
+                "original iISM dataset",
+                "shift vectors"
+              ],
+              "claim_types": [
+                "method_detail"
+              ]
+            }
+          },
+          "paper_id": "lsa_2026",
+          "paper_title": "Interferometric Image Scanning Microscopy for label-free imaging at 120 nm lateral resolution inside live cells",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells\\LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells.en.md",
+          "source_name": "LSA-2026-Interferometric Image Scanning Microscopy.pdf"
+        }
+      ]
+    },
+    {
+      "id": "natcommun_2023_spad_sr",
+      "title": "High-resolution single-photon imaging with physics-informed deep learning",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.en.md",
+      "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf",
+      "cases": [
+        {
+          "id": "NC2023_CITATION_TRANSFORMER_FRAMEWORK",
+          "title": "Transformer framework citations",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "baseline",
+            "citation_lookup",
+            "core"
+          ],
+          "prompt": "Which references do the authors cite for the transformer framework, and where is that stated exactly? Give the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "transformer framework"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                33,
+                34
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "anchor_contains_any": [
+                "transformer framework"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2023_spad_sr",
+          "paper_title": "High-resolution single-photon imaging with physics-informed deep learning",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.en.md",
+          "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf"
+        },
+        {
+          "id": "NC2023_METHOD_NETWORK_TRAINING",
+          "title": "Network training exact details",
+          "prompt_family": "method",
+          "tags": [
+            "baseline",
+            "method_exact_support",
+            "core"
+          ],
+          "prompt": "In the Network training section, what framework, optimizer, initial learning rate, and batch size did they use? Point me to the exact supporting sentence(s) and make sure the jump target is correct.",
+          "checks": {
+            "answer": {
+              "contains_all": [
+                "Pytorch",
+                "Adam",
+                "0.0003",
+                "batch size",
+                "24"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not contain",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Network training"
+              ],
+              "anchor_contains_any": [
+                "Pytorch",
+                "Adam",
+                "learning rate",
+                "batch size"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2023_spad_sr",
+          "paper_title": "High-resolution single-photon imaging with physics-informed deep learning",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.en.md",
+          "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf"
+        },
+        {
+          "id": "NC2023_FIGURE6_PANEL_B_CLAUSE",
+          "title": "Figure 6 panel (b) caption clause jump",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "baseline",
+            "figure_panel_locate",
+            "core"
+          ],
+          "prompt": "For Figure 6 panel (b), what exactly does that panel show? Point me to the exact supporting caption clause.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "Figure 6",
+                "panel b",
+                "U-net",
+                "transformer"
+              ]
+            },
+            "figure_panel": {
+              "required": true,
+              "panel_letters": [
+                "b"
+              ],
+              "heading_includes_any": [
+                "Workflow and structure",
+                "Figure 6"
+              ],
+              "anchor_contains_any": [
+                "enhancement comparison",
+                "U-net"
+              ],
+              "claim_types": [
+                "figure_panel"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Workflow and structure",
+                "Figure 6"
+              ],
+              "anchor_contains_any": [
+                "enhancement comparison",
+                "U-net"
+              ],
+              "claim_types": [
+                "figure_panel"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "natcommun_2023_spad_sr",
+          "paper_title": "High-resolution single-photon imaging with physics-informed deep learning",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning\\NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.en.md",
+          "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf"
+        }
+      ]
+    },
+    {
+      "id": "natcommun_2021_sph",
+      "title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+      "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+      "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf",
+      "cases": [
+        {
+          "id": "NC2021_OVERVIEW_THROUGHPUT",
+          "title": "Overview: throughput contribution",
+          "prompt_family": "overview",
+          "tags": [
+            "baseline",
+            "overview"
+          ],
+          "prompt": "What throughput contribution do the authors claim in this paper, and how do they frame its importance for biological tissue imaging?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "41,667",
+                "pixels/s",
+                "single-pixel compressive holography",
+                "biological tissue"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2021_sph",
+          "paper_title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+          "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf"
+        },
+        {
+          "id": "NC2021_CITATION_DYNAMIC_SUPERSAMPLING",
+          "title": "Dynamic supersampling citation lookup",
+          "prompt_family": "citation_lookup",
+          "tags": [
+            "baseline",
+            "citation_lookup"
+          ],
+          "prompt": "Which reference do the authors cite for adaptive and smart sensing with dynamic supersampling, and where is that stated exactly?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "dynamic supersampling",
+                "adaptive and smart sensing"
+              ]
+            },
+            "citation": {
+              "required": true,
+              "expected_ref_nums": [
+                31
+              ],
+              "allow_only_expected": true
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "ARTICLE"
+              ],
+              "anchor_contains_any": [
+                "adaptive and smart sensing with dynamic supersampling",
+                "31"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2021_sph",
+          "paper_title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+          "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf"
+        },
+        {
+          "id": "NC2021_METHOD_BEAT_FREQUENCY",
+          "title": "Experimental setup: beat frequency and DAC rate",
+          "prompt_family": "method",
+          "tags": [
+            "baseline",
+            "method_exact_support",
+            "false_miss"
+          ],
+          "prompt": "In the Experimental setup section, what beat frequency do they use, and what sampling rate does the data acquisition card use? Point me to the exact supporting sentence.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "62,500 Hz",
+                "62500 Hz",
+                "1.25 Ms/s",
+                "1.25 MS/s"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not contain",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Experimental setup"
+              ],
+              "anchor_contains_any": [
+                "beat frequency of these two beams is 62,500 Hz",
+                "sampling rate of 1.25 Ms/s",
+                "data acquisition card"
+              ]
+            }
+          },
+          "paper_id": "natcommun_2021_sph",
+          "paper_title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+          "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf"
+        },
+        {
+          "id": "NC2021_FIGURE7_SETUP",
+          "title": "Figure 7 setup caption",
+          "prompt_family": "figure_walkthrough",
+          "tags": [
+            "baseline",
+            "figure_locate"
+          ],
+          "prompt": "For Figure 7, what exactly does the setup include? Point me to the exact supporting caption clause.",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "DMD",
+                "AOM1-2",
+                "beam splitter",
+                "photodetector"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Figure 7"
+              ],
+              "anchor_contains_any": [
+                "Experiment setup of the high-throughput single-pixel compressive holography system",
+                "AOM1-2",
+                "DMD"
+              ]
+            },
+            "jump": {
+              "required": true
+            }
+          },
+          "paper_id": "natcommun_2021_sph",
+          "paper_title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+          "source_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\db\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography\\NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+          "source_name": "NatCommun-2021-Imaging biological tissue with high-throughput single-pixel compressive holography.pdf"
+        }
+      ]
+    }
+  ]
+}
