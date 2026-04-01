@@ -109,7 +109,7 @@ def test_paper_guide_targeted_source_block_hits_uses_family_seed_tokens_for_cjk_
     )
 
     hits = _paper_guide_targeted_source_block_hits(
-        bound_source_path=r"X:\DemoMethod.pdf",
+        bound_source_path=str(source_pdf),
         prompt="这个方法具体怎么实现？请给出关键步骤。",
         db_dir=db_root,
         limit=3,
@@ -288,7 +288,7 @@ def test_paper_guide_fallback_deepread_hits_rebinds_block_anchor_for_locate(monk
     )
 
     out = _paper_guide_fallback_deepread_hits(
-        bound_source_path=r"X:\DemoMethod.pdf",
+        bound_source_path=str(source_pdf),
         bound_source_name="DemoMethod",
         query="这个方法具体怎么实现？",
         prompt="这个方法具体怎么实现？",
