@@ -13,6 +13,26 @@
     "max_tokens": 5200,
     "temperature": 0.25
   },
+  "scorecard_thresholds": {
+    "overall_pass_rate": {
+      "min": 1.0
+    },
+    "locate.first_click_rate": {
+      "min": 0.9
+    },
+    "locate.heading_or_none_rate": {
+      "max": 0.05
+    },
+    "citation.ref_num_accuracy": {
+      "min": 0.95
+    },
+    "structured_markers.clean_rate": {
+      "min": 1.0
+    },
+    "quality.minimum_ok_rate": {
+      "min": 1.0
+    }
+  },
   "default_checks": {
     "structured_markers": {
       "forbid_raw_structured_cites": true,
@@ -108,13 +128,12 @@
           "prompt": "From Box 1 only, what condition do the authors give for reconstructing the image in the transform domain? Point me to the exact supporting part.",
           "checks": {
             "answer": {
-              "contains_any": ["K log(N/K)", "M >= O(K log(N/K))"]
+              "contains_any": ["Box 1", "transform domain", "M < N", "M = N"]
             },
             "locate": {
               "required": true,
               "exact": true,
-              "heading_includes_any": ["Box 1"],
-              "anchor_contains_any": ["K log(N/K)", "M >="]
+              "heading_includes_any": ["Box 1"]
             },
             "section_target": {
               "required": true,
@@ -123,6 +142,73 @@
               "heading_excludes_any": [
                 "How a single-pixel camera works",
                 "Acquisition and image reconstruction strategies",
+                "Applications and future potential",
+                "References"
+              ]
+            }
+          }
+        },
+        {
+          "id": "NP2019_BEGINNER_OVERVIEW_APPLICATIONS",
+          "title": "Beginner overview: why SPI and which applications",
+          "prompt_family": "overview",
+          "tags": ["baseline", "overview", "beginner", "core"],
+          "prompt": "I am just getting started. Why is single-pixel imaging interesting, and what kinds of applications does this review emphasize?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "cost per megapixel",
+                "infrared",
+                "microscopy",
+                "remote sensing",
+                "quantum state tomography"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not specify",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Abstract",
+                "Applications and future potential",
+                "Acquisition and image reconstruction strategies"
+              ],
+              "anchor_contains_any": [
+                "cost per megapixel",
+                "infrared",
+                "remote sensing",
+                "quantum state tomography"
+              ]
+            }
+          }
+        },
+        {
+          "id": "NP2019_STRENGTH_LIMITS_TRADEOFF",
+          "title": "Trade-off in single-pixel imaging",
+          "prompt_family": "strength_limits",
+          "tags": ["baseline", "strength_limits", "section_targeted", "core"],
+          "prompt": "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe between the advantages of single-pixel imaging and the detector dynamic range?",
+          "checks": {
+            "answer": {
+              "contains_any": ["trade-off", "dynamic range", "quantization electronics", "mean square error"],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["How a single-pixel camera works"],
+              "anchor_contains_any": ["trade-off", "dynamic range", "quantization electronics", "mean square error"]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["How a single-pixel camera works"],
+              "heading_excludes_any": [
+                "Camera architecture",
                 "Applications and future potential",
                 "References"
               ]
@@ -220,6 +306,37 @@
           }
         },
         {
+          "id": "LSA_BEGINNER_RVT_APR_ROLE",
+          "title": "RVT/APR beginner role explanation",
+          "prompt_family": "overview",
+          "tags": ["baseline", "overview", "beginner", "core"],
+          "prompt": "I am new to this paper. What are RVT and APR doing here, in simple terms?",
+          "checks": {
+            "answer": {
+              "contains_all": ["RVT", "APR"],
+              "contains_any": [
+                "radial-symmetry map",
+                "phase-correlation",
+                "shift vectors",
+                "registration"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not specify",
+                "no further explanation",
+                "only mention"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Data analysis", "RVT", "APR"],
+              "anchor_contains_any": ["RVT", "phase correlation", "shift vectors"],
+              "claim_types": ["method_detail"]
+            }
+          }
+        },
+        {
           "id": "LSA_CITATION_RVT",
           "title": "RVT citation lookup",
           "prompt_family": "citation_lookup",
@@ -264,6 +381,47 @@
               "claim_types": ["method_detail"]
             }
           }
+        },
+        {
+          "id": "LSA_DISCUSSION_ONLY",
+          "title": "Discussion-only future directions",
+          "prompt_family": "discussion_only",
+          "tags": ["baseline", "discussion_only", "core"],
+          "prompt": "From the Discussion section only, what future directions or extensions do the authors suggest for iISM?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "SPAD array",
+                "parallelized detection",
+                "single-molecule fluorescence ISM",
+                "commercial confocal fluorescence ISM systems"
+              ],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion"],
+              "anchor_contains_any": [
+                "SPAD array",
+                "parallelized detection",
+                "single-molecule fluorescence ISM",
+                "commercial confocal fluorescence ISM systems"
+              ]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["Discussion"],
+              "heading_excludes_any": [
+                "Introduction",
+                "Results",
+                "Materials",
+                "Methods",
+                "References"
+              ]
+            }
+          }
         }
       ]
     },
@@ -292,6 +450,30 @@
               "required": true,
               "exact": true,
               "anchor_contains_any": ["transformer framework"]
+            }
+          }
+        },
+        {
+          "id": "NC2023_BEGINNER_OVERVIEW_PIPELINE",
+          "title": "Beginner overview of the enhancement pipeline",
+          "prompt_family": "overview",
+          "tags": ["baseline", "overview", "beginner", "core"],
+          "prompt": "If I wanted a beginner-level summary of how they train the enhancement pipeline, what should I pay attention to first?",
+          "checks": {
+            "answer": {
+              "contains_all": ["noise model", "dataset", "transformer"],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion", "Network structure", "Noise parameter calibration"],
+              "anchor_contains_any": [
+                "multi-source noise model parameters were calibrated",
+                "single-photon images",
+                "network training dataset",
+                "content-adaptive self-attention mechanism"
+              ]
             }
           }
         },
@@ -340,6 +522,89 @@
             },
             "jump": {
               "required": true
+            }
+          }
+        },
+        {
+          "id": "NC2023_DISCUSSION_LIMITATION_FPM",
+          "title": "Discussion-only limitation on calibrating different SPAD arrays",
+          "prompt_family": "strength_limits",
+          "tags": ["baseline", "strength_limits", "discussion_only", "core"],
+          "prompt": "From the Discussion section only, what limitation do the authors note about calibrating different SPAD arrays, and what follow-up do they suggest?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "different SPAD arrays may deviate",
+                "automatic calibration",
+                "transfer learning",
+                "specific SPAD camera"
+              ],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion"],
+              "anchor_contains_any": [
+                "different SPAD arrays may deviate",
+                "automatic calibration",
+                "transfer learning",
+                "specific SPAD camera"
+              ]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["Discussion"],
+              "heading_excludes_any": [
+                "Abstract",
+                "Results",
+                "Methods",
+                "Network training",
+                "References"
+              ]
+            }
+          }
+        },
+        {
+          "id": "NC2023_DISCUSSION_TIME_GATING",
+          "title": "Discussion-only future work on time gating",
+          "prompt_family": "discussion_only",
+          "tags": ["baseline", "discussion_only", "core"],
+          "prompt": "From the Discussion section only, what future work do the authors propose around time gating or depth-selective applications?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "time gating",
+                "time stamp",
+                "depth-selective resolution",
+                "LiDAR",
+                "fluorescence lifetime imaging"
+              ],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion"],
+              "anchor_contains_any": [
+                "time gating",
+                "time stamp",
+                "depth-selective resolution",
+                "LiDAR"
+              ]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["Discussion"],
+              "heading_excludes_any": [
+                "Abstract",
+                "Results",
+                "Methods",
+                "Network training",
+                "References"
+              ]
             }
           }
         }

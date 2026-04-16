@@ -39,6 +39,9 @@ _MD_BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
 _MD_TABLE_RE = re.compile(r"^\s*\|.*\|\s*$")
 _MD_FENCE_RE = re.compile(r"^\s*(```+|~~~+)\s*")
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_BOX_START_RE = re.compile(r"^\s*<!--\s*box:start\s+id=(\d+)\s*-->\s*$", re.IGNORECASE)
+_BOX_END_RE = re.compile(r"^\s*<!--\s*box:end(?:\s+id=(\d+))?\s*-->\s*$", re.IGNORECASE)
+_BOX_TITLE_RE = re.compile(r"^\s*\*\*\[\s*Box\s+(\d+)\b[^\]]*\]\*\*\s*$", re.IGNORECASE)
 _EQ_NUMBER_RE = re.compile(
     r"(?:\b(?:eq|equation|formula)\s*[#(]?\s*|[\(])(\d{1,4})(?:\s*[)])",
     re.IGNORECASE,
@@ -206,6 +209,32 @@ def extract_figure_number(text: str) -> int:
     return number if number > 0 else 0
 
 
+def _extract_panel_marker_letters(text: str) -> list[str]:
+    src = normalize_inline_markdown(text)
+    if not src:
+        return []
+    letters: list[str] = []
+    for match in re.finditer(r"\(\s*([A-Za-z])\s*\)", src):
+        letter = str(match.group(1) or "").strip().lower()
+        if letter:
+            letters.append(letter)
+    for match in re.finditer(r"(?<![A-Za-z0-9])([A-Ga-g])\s+(?=[A-Z])", src):
+        letter = str(match.group(1) or "").strip().lower()
+        if letter:
+            letters.append(letter)
+    return letters
+
+
+def _looks_like_figure_panel_continuation(text: str) -> bool:
+    src = re.sub(r"\s+", " ", normalize_inline_markdown(text)).strip()
+    if len(src) < 16:
+        return False
+    if re.match(r"^(?:\(?\s*[A-Ga-g]\s*\)?|\*\*\s*[A-Ga-g]\s*\*\*)\s+(?=[A-Z])", src):
+        return True
+    letters = [letter for letter in _extract_panel_marker_letters(src) if "a" <= letter <= "g"]
+    return len(set(letters)) >= 2
+
+
 def _formula_tokens(text: str) -> list[str]:
     src = str(text or "")
     if not src:
@@ -291,6 +320,14 @@ def doc_id_for_path(md_path: Path | str) -> str:
     return hashlib.sha1(raw.encode("utf-8", "ignore")).hexdigest()[:12]
 
 
+def _join_heading_path(base: str, tail: str) -> str:
+    base_clean = str(base or "").strip().strip("/")
+    tail_clean = str(tail or "").strip().strip("/")
+    if base_clean and tail_clean:
+        return f"{base_clean} / {tail_clean}"
+    return base_clean or tail_clean
+
+
 def _load_figure_identity_by_asset(md_path: Path | str) -> dict[str, dict]:
     path = Path(str(md_path or "")).expanduser()
     assets_dir = path.parent / "assets"
@@ -352,10 +389,14 @@ def build_source_blocks(
     in_fence = False
     fence_mark = ""
     order_index = 0
+    box_stack: list[dict[str, object]] = []
     pending_figure_context: dict[str, object] | None = None
+    caption_follow_context: dict[str, object] | None = None
 
     def heading_path() -> str:
-        return " / ".join(item[1] for item in heading_stack if item[1]).strip()
+        base = " / ".join(item[1] for item in heading_stack if item[1]).strip()
+        box_label = str((box_stack[-1] or {}).get("label") or "").strip() if box_stack else ""
+        return _join_heading_path(base, box_label)
 
     def push(
         kind: str,
@@ -399,7 +440,7 @@ def build_source_blocks(
         return block
 
     def flush_paragraph(end_line: int) -> None:
-        nonlocal para_buf, para_start, pending_figure_context
+        nonlocal para_buf, para_start, pending_figure_context, caption_follow_context
         if not para_buf:
             return
         raw = "\n".join(para_buf).strip()
@@ -408,10 +449,12 @@ def build_source_blocks(
             return
         is_equation = is_display_equation_block(raw)
         extras: dict[str, object] | None = None
+        next_caption_follow_context: dict[str, object] | None = None
         if pending_figure_context:
             pending_number = int(pending_figure_context.get("paper_figure_number") or pending_figure_context.get("number") or 0)
             caption_number = extract_figure_number(raw)
             if pending_number > 0 and caption_number == pending_number:
+                figure_heading = _join_heading_path(heading_path(), f"Figure {pending_number}")
                 extras = {
                     "figure_id": str(pending_figure_context.get("figure_id") or "").strip(),
                     "figure_ident": str(pending_figure_context.get("figure_ident") or "").strip(),
@@ -421,8 +464,45 @@ def build_source_blocks(
                     "asset_name": str(pending_figure_context.get("asset_name") or "").strip(),
                     "asset_name_alias": str(pending_figure_context.get("asset_name_alias") or "").strip(),
                     "caption_text": normalize_inline_markdown(raw)[:1200],
+                    "heading_path": figure_heading or heading_path(),
+                }
+                next_caption_follow_context = {
+                    "figure_block_id": str(pending_figure_context.get("figure_block_id") or "").strip(),
+                    "figure_id": str(pending_figure_context.get("figure_id") or "").strip(),
+                    "figure_ident": str(pending_figure_context.get("figure_ident") or "").strip(),
+                    "paper_figure_number": pending_number,
+                    "asset_name": str(pending_figure_context.get("asset_name") or "").strip(),
+                    "asset_name_alias": str(pending_figure_context.get("asset_name_alias") or "").strip(),
+                    "heading_path": figure_heading or heading_path(),
+                    "remaining": 2,
                 }
             pending_figure_context = None
+        elif caption_follow_context and _looks_like_figure_panel_continuation(raw):
+            try:
+                follow_number = int(caption_follow_context.get("paper_figure_number") or 0)
+            except Exception:
+                follow_number = 0
+            extras = {
+                "figure_id": str(caption_follow_context.get("figure_id") or "").strip(),
+                "figure_ident": str(caption_follow_context.get("figure_ident") or "").strip(),
+                "paper_figure_number": follow_number if follow_number > 0 else None,
+                "figure_role": "caption_continuation",
+                "linked_figure_block_id": str(caption_follow_context.get("figure_block_id") or "").strip(),
+                "asset_name": str(caption_follow_context.get("asset_name") or "").strip(),
+                "asset_name_alias": str(caption_follow_context.get("asset_name_alias") or "").strip(),
+                "caption_text": normalize_inline_markdown(raw)[:1200],
+                "heading_path": str(caption_follow_context.get("heading_path") or heading_path()).strip() or heading_path(),
+            }
+            remaining = 0
+            try:
+                remaining = int(caption_follow_context.get("remaining") or 0)
+            except Exception:
+                remaining = 0
+            if remaining > 1:
+                next_caption_follow_context = dict(caption_follow_context)
+                next_caption_follow_context["remaining"] = remaining - 1
+        else:
+            caption_follow_context = None
         push(
             "equation" if is_equation else "paragraph",
             raw,
@@ -431,6 +511,7 @@ def build_source_blocks(
             number=(extract_equation_number(raw) if is_equation else 0),
             extras=extras,
         )
+        caption_follow_context = next_caption_follow_context
 
     def flush_table(end_line: int) -> None:
         nonlocal table_buf, table_start
@@ -475,6 +556,7 @@ def build_source_blocks(
             flush_paragraph(max(1, line_no - 1))
             flush_table(max(1, line_no - 1))
             pending_figure_context = None
+            caption_follow_context = None
             level = len(str(heading.group(1) or ""))
             text = normalize_inline_markdown(str(heading.group(2) or ""))
             if text:
@@ -484,9 +566,51 @@ def build_source_blocks(
                 push("heading", text, line_start=line_no, line_end=line_no)
             continue
 
+        box_start = _BOX_START_RE.match(line)
+        if box_start:
+            flush_paragraph(max(1, line_no - 1))
+            flush_table(max(1, line_no - 1))
+            pending_figure_context = None
+            caption_follow_context = None
+            try:
+                box_id = int(str(box_start.group(1) or "0"))
+            except Exception:
+                box_id = 0
+            if box_id > 0:
+                box_stack.append({"id": box_id, "label": f"Box {box_id}"})
+            continue
+
+        box_end = _BOX_END_RE.match(line)
+        if box_end:
+            flush_paragraph(max(1, line_no - 1))
+            flush_table(max(1, line_no - 1))
+            pending_figure_context = None
+            caption_follow_context = None
+            end_id = 0
+            try:
+                end_id = int(str(box_end.group(1) or "0"))
+            except Exception:
+                end_id = 0
+            if box_stack:
+                if end_id > 0:
+                    for idx in range(len(box_stack) - 1, -1, -1):
+                        try:
+                            current_id = int(box_stack[idx].get("id") or 0)
+                        except Exception:
+                            current_id = 0
+                        if current_id == end_id:
+                            del box_stack[idx:]
+                            break
+                    else:
+                        box_stack.pop()
+                else:
+                    box_stack.pop()
+            continue
+
         if _MD_TABLE_RE.match(line):
             flush_paragraph(max(1, line_no - 1))
             pending_figure_context = None
+            caption_follow_context = None
             if not table_buf:
                 table_start = line_no
             table_buf.append(line)
@@ -496,6 +620,7 @@ def build_source_blocks(
         image_match = _MD_IMAGE_RE.search(line)
         if image_match:
             flush_paragraph(max(1, line_no - 1))
+            caption_follow_context = None
             alt_text = str(image_match.group(1) or "").strip()
             raw_path = str(image_match.group(2) or "").strip().strip('"').strip("'")
             asset_name = Path(raw_path).name
@@ -512,6 +637,7 @@ def build_source_blocks(
             if (not alt_text or generic_alt) and figure_number > 0:
                 figure_text = f"Figure {figure_number}"
             if figure_text:
+                figure_heading = _join_heading_path(heading_path(), f"Figure {figure_number}") if figure_number > 0 else ""
                 figure_block = push(
                     "figure",
                     figure_text,
@@ -525,6 +651,7 @@ def build_source_blocks(
                         "asset_name": asset_name,
                         "asset_name_alias": str(meta.get("asset_name_alias") or "").strip(),
                         "caption_text": str(meta.get("caption") or "").strip(),
+                        "heading_path": figure_heading or heading_path(),
                     },
                 )
                 pending_figure_context = {
@@ -540,6 +667,15 @@ def build_source_blocks(
         if not line.strip():
             flush_paragraph(max(1, line_no - 1))
             continue
+
+        box_title = _BOX_TITLE_RE.match(line)
+        if box_title and box_stack:
+            try:
+                title_box_id = int(str(box_title.group(1) or "0"))
+            except Exception:
+                title_box_id = 0
+            if title_box_id > 0:
+                box_stack[-1]["label"] = f"Box {title_box_id}"
 
         list_match = _MD_LIST_RE.match(line)
         if list_match:

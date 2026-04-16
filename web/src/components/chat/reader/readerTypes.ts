@@ -13,6 +13,7 @@ export interface ReaderLocateTarget extends ReaderLocateCandidate {
   sourceSegmentId?: string
   evidenceQuote?: string
   anchorText?: string
+  hitLevel?: 'exact' | 'block' | 'heading' | 'none' | string
   claimType?: string
   locatePolicy?: string
   locateSurfacePolicy?: string

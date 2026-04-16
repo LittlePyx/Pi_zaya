@@ -25,6 +25,12 @@ def test_build_paper_guide_context_records_prefers_ref_show_snippets_and_builds_
     assert len(out["paper_guide_evidence_cards"]) == 1
     assert out["paper_guide_evidence_cards"][0]["candidate_refs"] == [35]
     assert out["paper_guide_evidence_cards"][0]["snippet"].count("phase correlation") == 1
+    primary = out["paper_guide_evidence_cards"][0]["primary_evidence"]
+    assert primary["source_path"] == r"db\demo\paper.en.md"
+    assert primary["source_name"] == "paper.pdf"
+    assert primary["heading_path"] == "Materials and Methods / Adaptive pixel-reassignment (APR)"
+    assert primary["selection_reason"] == "answer_hit_top"
+    assert "phase correlation [35]" in primary["snippet"]
 
 
 def test_apply_paper_guide_deepread_context_updates_card_snippet_for_abstract():
@@ -52,6 +58,31 @@ def test_apply_paper_guide_deepread_context_updates_card_snippet_for_abstract():
     assert card["deepread_texts"] == ["# Abstract\nHere we introduce a new method."]
 
 
+def test_build_paper_guide_context_records_builds_primary_evidence_card_even_when_not_paper_guide():
+    hit = {
+        "text": "Section 2.2 discusses Fourier single-pixel imaging and compares it with Hadamard sampling.",
+        "meta": {
+            "source_path": r"db\demo\oe2017.en.md",
+            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+            "block_id": "blk_22",
+            "anchor_id": "a_22",
+        },
+    }
+
+    out = context_runtime._build_paper_guide_context_records(
+        [hit],
+        paper_guide_mode=False,
+    )
+
+    assert len(out["paper_guide_evidence_cards"]) == 1
+    card = out["paper_guide_evidence_cards"][0]
+    assert card["candidate_refs"] == []
+    assert card["heading"] == "2. Comparison of theory"
+    assert card["primary_evidence"]["heading_path"] == "2. Comparison of theory / 2.2 Basis patterns generation"
+    assert card["primary_evidence"]["block_id"] == "blk_22"
+    assert card["primary_evidence"]["anchor_id"] == "a_22"
+
+
 def test_prepare_paper_guide_prompt_context_builds_blocks_and_candidate_refs(monkeypatch):
     monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots", lambda *args, **kwargs: [{"support_example": "[[SUPPORT:DOC-1]]"}])
     monkeypatch.setattr(context_runtime, "_build_paper_guide_evidence_cards_block", lambda *args, **kwargs: "EVIDENCE BLOCK")
@@ -71,6 +102,13 @@ def test_prepare_paper_guide_prompt_context_builds_blocks_and_candidate_refs(mon
             "cue": "phase correlation [35]",
             "snippet": "APR was performed using image registration [35].",
             "deepread_texts": [],
+            "primary_evidence": {
+                "source_path": r"db\demo\paper.en.md",
+                "source_name": "paper.pdf",
+                "heading_path": "Results / Figure 1",
+                "snippet": "APR was performed using image registration [35].",
+                "selection_reason": "answer_hit_top",
+            },
         }
     ]
 
@@ -95,3 +133,18 @@ def test_prepare_paper_guide_prompt_context_builds_blocks_and_candidate_refs(mon
     assert out["paper_guide_support_slots"] == [{"support_example": "[[SUPPORT:DOC-1]]"}]
     assert out["paper_guide_target_scope"]["prompt_family"] == "method"
     assert out["paper_guide_focus_source_path"] == r"db\demo\paper.en.md"
+    seed = out["paper_guide_contracts_seed"]
+    assert seed["version"] == 1
+    assert seed["intent"]["family"] == "method"
+    assert seed["retrieval_bundle"]["prompt_family"] == "method"
+    assert seed["retrieval_bundle"]["candidate_refs_by_source"] == {r"db\demo\paper.en.md": [35]}
+    assert seed["retrieval_bundle"]["evidence_cards"][0]["sid"] == "s12345678"
+    assert seed["retrieval_bundle"]["evidence_cards"][0]["candidate_refs"] == [35]
+    assert seed["retrieval_bundle"]["evidence_cards"][0]["primary_evidence"]["heading_path"] == "Results / Figure 1"
+    assert seed["support_pack"]["family"] == "method"
+    assert seed["support_pack"]["support_records"][0]["support_example"] == "[[SUPPORT:DOC-1]]"
+    assert seed["prompt_context"]["target_scope"]["prompt_family"] == "method"
+    assert seed["prompt_context"]["focus_source_path"] == r"db\demo\paper.en.md"
+    assert seed["prompt_context"]["bound_source_path"] == r"db\demo\paper.en.md"
+    assert seed["primary_evidence"]["source_path"] == r"db\demo\paper.en.md"
+    assert seed["primary_evidence"]["heading_path"] == "Results / Figure 1"

@@ -1,0 +1,186 @@
+{
+  "suite_id": "paper_guide_implicit_sections_v1",
+  "description": "Real-paper converter regression suite for implicit Abstract and Introduction recovery.",
+  "defaults": {
+    "head_line_limit": 80,
+    "max_chars": 24000
+  },
+  "cases": [
+    {
+      "id": "natcommun_2021_sph_implicit_abstract_intro",
+      "title": "NatCommun 2021 title-shell frontmatter with implicit abstract and introduction",
+      "pdf_path": "F:/research-papers/research-paper-pyx/NatCommun-2021-Imaging biological tissue with...pixel compressive holography.pdf",
+      "source_path": "db/NatCommun-2021-Imaging biological tissue with...pixel compressive holography/NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## Introduction",
+          "## Results"
+        ],
+        "ordered": [
+          "## Abstract",
+          "## Introduction",
+          "## Results"
+        ]
+      }
+    },
+    {
+      "id": "nature_2025_multi_paragraph_abstract_only",
+      "title": "Nature article with multi-paragraph implicit abstract and no introduction heading",
+      "pdf_path": "F:/research-papers/research-paper-pyx/Nature-2025-Electrically driven lasing from a dual-cavity perovskite device.pdf",
+      "source_path": "db/Nature-2025-Electrically driven lasing from a dual-cavity perovskite device/Nature-2025-Electrically driven lasing from a dual-cavity perovskite device.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract"
+        ],
+        "must_not_contain": [
+          "## Introduction"
+        ],
+        "must_contain_titles": [
+          "Structure of the integrated dual-cavity perovskite laser"
+        ],
+        "ordered": [
+          "## Abstract"
+        ],
+        "ordered_titles": [
+          "Structure of the integrated dual-cavity perovskite laser"
+        ]
+      }
+    },
+    {
+      "id": "optics_laser_2024_spaced_abstract_heading",
+      "title": "Elsevier-style spaced abstract heading should normalize cleanly",
+      "pdf_path": "F:/research-papers/research-paper-pyx/Optics & Laser Technology-2024-Part-based image-loop network for single-pixel imaging.pdf",
+      "source_path": "db/Optics & Laser Technology-2024-Part-based image-loop network for single-pixel imaging/Optics & Laser Technology-2024-Part-based image-loop network for single-pixel imaging.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## 1. Introduction"
+        ],
+        "must_not_contain": [
+          "## A B S T R A C T"
+        ],
+        "ordered": [
+          "## Abstract",
+          "## 1. Introduction"
+        ]
+      }
+    },
+    {
+      "id": "optica_2016_implicit_abstract_before_intro",
+      "title": "Optica article with implicit abstract before explicit introduction",
+      "pdf_path": "F:/research-papers/research-paper-pyx/Optica-2016-Frequency-division-multiplexed single-pixel imaging with metamaterials.pdf",
+      "source_path": "db/Optica-2016-Frequency-division-multiplexed single-pixel imaging with metamaterials/Optica-2016-Frequency-division-multiplexed single-pixel imaging with metamaterials.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## 1. INTRODUCTION"
+        ],
+        "must_contain_text": [
+          "We propose and experimentally realize the concept of frequency-division-multiplexed single-pixel imaging."
+        ],
+        "ordered": [
+          "## Abstract",
+          "## 1. INTRODUCTION"
+        ]
+      }
+    },
+    {
+      "id": "arxiv_qclfm_implicit_abstract_with_roman_intro",
+      "title": "arXiv layout with implicit abstract and explicit Roman introduction",
+      "pdf_path": "F:/research-papers/research-paper-pyx/arXiv-Quantum correlation light-field microscope with extreme depth of field.pdf",
+      "source_path": "db/arXiv-Quantum correlation light-?eld microscope with extreme depth of ?eld/arXiv-Quantum correlation light-?eld microscope with extreme depth of ?eld.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract"
+        ],
+        "must_contain_titles": [
+          "I. INTRODUCTION",
+          "II. RESULTS"
+        ],
+        "must_not_contain": [
+          "## Introduction"
+        ],
+        "ordered": [
+          "## Abstract"
+        ],
+        "ordered_titles": [
+          "I. INTRODUCTION",
+          "II. RESULTS"
+        ]
+      }
+    },
+    {
+      "id": "cvpr_2024_teaser_before_explicit_abstract",
+      "title": "CVPR paper with teaser figure before explicit abstract",
+      "pdf_path": "F:/research-papers/research-paper-pyx/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+      "source_path": "db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## 1. Introduction"
+        ],
+        "must_contain_text": [
+          "![Figure 1](./assets/page_1_fig_1.png)",
+          "**Figure 1.** Given a single snapshot compressed image"
+        ],
+        "ordered_text": [
+          "![Figure 1](./assets/page_1_fig_1.png)",
+          "## Abstract",
+          "## 1. Introduction"
+        ]
+      }
+    },
+    {
+      "id": "jopt_2016_reader_service_block_before_abstract",
+      "title": "Journal of Optics article with reader-service recommendations before the real title block",
+      "pdf_path": "F:/research-papers/research-paper-pyx/Journal of Optics-2016-3D single-pixel video.pdf",
+      "source_path": "db/Journal of Optics-2016-3D single-pixel video/Journal of Optics-2016-3D single-pixel video.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## Introduction"
+        ],
+        "must_not_contain": [
+          "## 3D single-pixel video"
+        ],
+        "must_not_contain_titles": [
+          "You may also like"
+        ],
+        "must_not_contain_text": [
+          "To cite this article:",
+          "View the [article online]",
+          "Ampheia advertisement"
+        ],
+        "must_contain_text": [
+          "Photometric stereo is an established three-dimensional (3D) imaging technique"
+        ],
+        "ordered": [
+          "## Abstract",
+          "## Introduction"
+        ]
+      }
+    },
+    {
+      "id": "lpr_2025_implicit_abstract_with_numbered_intro",
+      "title": "LPR review with implicit abstract and explicit numbered introduction",
+      "pdf_path": "F:/research-papers/research-paper-pyx/LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+      "source_path": "db/LPR-2025-Advances and Challenges of Single?Pixel Imaging Based on Deep Learning/LPR-2025-Advances and Challenges of Single?Pixel Imaging Based on Deep Learning.en.md",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## 1. Introduction",
+          "## 2. Fundamentals of Single-Pixel Imaging"
+        ],
+        "must_not_contain": [
+          "## Introduction"
+        ],
+        "ordered": [
+          "## Abstract",
+          "## 1. Introduction",
+          "## 2. Fundamentals of Single-Pixel Imaging"
+        ]
+      }
+    }
+  ]
+}

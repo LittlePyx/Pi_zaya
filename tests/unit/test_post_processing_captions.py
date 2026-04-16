@@ -218,3 +218,38 @@ def test_caption_cleanup_removes_spaces_before_punctuation_without_touching_capt
     assert "Cozy2room, Tanabata, Factory and Vender." in out
     assert "Cozy2room ," not in out
     assert "Vender ." not in out
+
+
+def test_merge_panel_continuation_paragraph_into_caption_block():
+    src = """
+![Figure 6](./assets/page_10_fig_1.png)
+
+**Figure 6.** Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging.
+
+a The workflow and structure of the reported network. b The enhancement comparison between CNN-based U-net network and the reported transformer-based network.
+
+### Shallow feature extraction
+"""
+    out = postprocess_markdown(src)
+    assert "a The workflow and structure of the reported network. b The enhancement comparison" in out
+    assert out.count("**Figure 6.**") == 1
+    assert "\n\na The workflow and structure of the reported network." not in out
+
+
+def test_lift_embedded_panel_clauses_from_body_into_following_caption():
+    src = """
+### Network structure
+
+Compared with the conventional convolutional networks, the gated fusion transformer network maintains the a The workflow and structure of the reported network. b The enhancement comparison between CNN-based U-net network and the reported transformer-based network. Benefiting from the transformer structure, our network realizes spatially varying convolution that helps pay more attention to the regions of interest. following advantages: 1) The content-based interactions between image content and attention weights can be interpreted as spatially varying convolution.
+
+![Figure 6](./assets/page_10_fig_1.png)
+
+**Figure 6.** Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging.
+"""
+    out = postprocess_markdown(src)
+    assert "maintains the following advantages: 1) The content-based interactions" in out
+    assert "following advantages: 1) The content-based interactions between image content and attention weights can be interpreted as spatially varying convolution. Benefiting from the transformer structure" in out
+    assert "**Figure 6.** Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging. a The workflow and structure of the reported network. b The enhancement comparison between CNN-based U-net network and the reported transformer-based network." in out
+    assert "maintains the a The workflow" not in out
+    assert "maintains the Benefiting from the transformer structure" not in out
+    assert "reported transformer-based network. Benefiting from the transformer structure" not in out

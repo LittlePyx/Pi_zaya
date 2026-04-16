@@ -11,6 +11,7 @@ from kb.paper_guide_retrieval_runtime import (
     _paper_guide_citation_lookup_signal_score,
     _paper_guide_deepread_heading,
     _paper_guide_has_requested_target_hits,
+    _paper_guide_retrieval_confidence_snapshot,
     _paper_guide_should_force_rescue,
     _select_paper_guide_raw_target_hits,
     _paper_guide_targeted_source_block_hits,
@@ -121,6 +122,42 @@ def test_paper_guide_targeted_source_block_hits_uses_family_seed_tokens_for_cjk_
     assert any("methods" in str((hit.get("meta") or {}).get("heading_path") or "").lower() for hit in hits)
 
 
+def test_paper_guide_targeted_source_block_hits_respects_literal_section_title_targets(tmp_path: Path):
+    source_pdf = tmp_path / "NatPhotonTradeoff.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / "NatPhotonTradeoff"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "NatPhotonTradeoff.en.md"
+    md_main.write_text(
+        (
+            "## Applications and future potential for single-pixel imaging\n\n"
+            "Single-pixel imaging supports microscopy and remote sensing applications.\n\n"
+            "## How a single-pixel camera works\n\n"
+            "The review explains a trade-off: single-pixel imaging keeps the detector architecture simple, "
+            "but detector dynamic range becomes a bottleneck when light throughput is not multiplexed efficiently.\n\n"
+            "## Acquisition and image reconstruction strategies\n\n"
+            "Compressed sensing can reduce measurements, but the reconstruction cost may grow.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_pdf),
+        prompt=(
+            "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe "
+            "between the advantages of single-pixel imaging and the detector dynamic range?"
+        ),
+        db_dir=db_root,
+        limit=3,
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {},
+    )
+    assert hits
+    assert "how a single-pixel camera works" in str((hits[0].get("meta") or {}).get("heading_path") or "").lower()
+
+
 def test_seed_query_tokens_merges_augmented_family_terms_when_prompt_has_cjk_tokens():
     tokens = retrieval_runtime._paper_guide_seed_query_tokens_for_targeted_scan(
         prompt="请解释这个方法的关键步骤",
@@ -204,6 +241,59 @@ def test_paper_guide_should_force_rescue_for_overview_when_only_reference_hits_e
         prompt="What are the core contributions of this paper?",
         prompt_family="overview",
     )
+
+
+def test_paper_guide_retrieval_confidence_snapshot_flags_low_confidence_for_broad_weak_hits():
+    hits = [
+        {
+            "score": 8.8,
+            "text": (
+                "The introduction briefly summarizes the motivation and one contribution statement, "
+                "but this paragraph does not include concrete method details, setup, metrics, or ablations."
+            ),
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "Introduction",
+                "block_id": "blk_intro",
+            },
+        }
+    ]
+
+    snapshot = _paper_guide_retrieval_confidence_snapshot(
+        scoped_hits=hits,
+        prompt="What are the core contributions of this paper?",
+        prompt_family="overview",
+    )
+
+    assert not bool(snapshot.get("force_rescue"))
+    assert bool(snapshot.get("low_confidence"))
+    assert str(snapshot.get("low_confidence_reason") or "") == "broad_family_weak_overlap"
+
+
+def test_paper_guide_retrieval_confidence_snapshot_keeps_method_force_rescue_without_targeted_support():
+    hits = [
+        {
+            "score": 12.4,
+            "text": (
+                "Implementation details discuss data loading and optimization loops, "
+                "but this snippet has no directly marked targeted block support metadata."
+            ),
+            "meta": {
+                "source_path": r"db\demo\paper.en.md",
+                "heading_path": "Method / Implementation details",
+                "block_id": "blk_impl_generic",
+            },
+        }
+    ]
+
+    snapshot = _paper_guide_retrieval_confidence_snapshot(
+        scoped_hits=hits,
+        prompt="In the Implementation details paragraph, what is the batch size?",
+        prompt_family="method",
+    )
+
+    assert bool(snapshot.get("force_rescue"))
+    assert str(snapshot.get("force_rescue_reason") or "") == "strict_family_without_targeted_support"
 
 
 def test_paper_guide_fallback_deepread_hits_merges_original_and_translated_targeted_scans(monkeypatch):
@@ -314,6 +404,15 @@ def test_paper_guide_citation_lookup_query_tokens_drops_stopwords():
     assert "paper" not in toks
 
 
+def test_paper_guide_citation_lookup_query_tokens_adds_sampling_sensing_alias():
+    toks = _paper_guide_citation_lookup_query_tokens(
+        "Which reference do they cite for single-pixel imaging via compressive sampling?"
+    )
+    assert "compressive" in toks
+    assert "sampling" in toks
+    assert "sensing" in toks
+
+
 def test_extract_paper_guide_local_citation_lookup_refs_prefers_token_adjacent_refs():
     refs = _extract_paper_guide_local_citation_lookup_refs(
         "Specifically, we use the radial variance transform (RVT)[34], which converts an interferogram into an intensity-only map.",
@@ -352,6 +451,85 @@ def test_select_paper_guide_raw_target_hits_prefers_intext_citation_lookup_hit()
     )
     assert len(out) == 1
     assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_rvt_intro"
+
+
+def test_select_paper_guide_raw_target_hits_prefers_spline_method_clause_over_higher_retrieval_score():
+    prompt = (
+        "In the Method section, they say for more complex camera motions they can exploit "
+        "a higher-order spline. Which reference do they cite for that, and where is it stated exactly?"
+    )
+    hits = [
+        {
+            "score": 92.0,
+            "text": (
+                "Implementation details. We exploit the vanilla NeRF from [26] to represent the 3D scene. "
+                "For higher performance, more recent representation can be exploited [27]."
+            ),
+            "meta": {
+                "source_path": r"db\\demo\\paper.en.md",
+                "heading_path": "4. Experiments / 4.1. Experimental Setup",
+                "block_id": "blk_impl",
+            },
+        },
+        {
+            "score": 61.0,
+            "text": (
+                "For more complex motions, we can exploit higher-order spline [17] "
+                "or directly optimize individual poses without loss of generality."
+            ),
+            "meta": {
+                "source_path": r"db\\demo\\paper.en.md",
+                "heading_path": "3. Method / 3.3. Proposed Framework",
+                "block_id": "blk_spline",
+            },
+        },
+    ]
+    out = _select_paper_guide_raw_target_hits(
+        hits_raw=hits,
+        prompt=prompt,
+        top_n=1,
+        answer_hit_score=lambda hit, *, prompt: float(hit.get("score") or 0.0),
+    )
+    assert len(out) == 1
+    assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_spline"
+
+
+def test_select_paper_guide_raw_target_hits_prefers_duarte_clause_over_lidar_false_positive():
+    prompt = "Which reference do the authors cite for single-pixel imaging via compressive sampling, and where is that stated exactly?"
+    hits = [
+        {
+            "score": 95.0,
+            "text": (
+                "In addition to providing imaging solutions at problematic wavelengths, cameras based on single-pixel detectors "
+                "have other advantages too. Such temporal resolution lends itself to direct time-of-flight ranging, that is, LiDAR$^{83}$."
+            ),
+            "meta": {
+                "source_path": r"db\\demo\\paper.en.md",
+                "heading_path": "Applications and future potential for single-pixel imaging",
+                "block_id": "blk_lidar",
+            },
+        },
+        {
+            "score": 72.0,
+            "text": (
+                "The original concept of the single-pixel imaging approach, demonstrated by Sen et al.$^{3,58}$, "
+                "was developed further in conjunction with compressive sensing$^{59}$ and reported soon after in a seminal paper by Duarte et al. at Rice University$^{4}$."
+            ),
+            "meta": {
+                "source_path": r"db\\demo\\paper.en.md",
+                "heading_path": "Acquisition and image reconstruction strategies",
+                "block_id": "blk_duarte",
+            },
+        },
+    ]
+    out = _select_paper_guide_raw_target_hits(
+        hits_raw=hits,
+        prompt=prompt,
+        top_n=1,
+        answer_hit_score=lambda hit, *, prompt: float(hit.get("score") or 0.0),
+    )
+    assert len(out) == 1
+    assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_duarte"
 
 
 def test_build_paper_guide_direct_citation_lookup_answer_uses_reference_lookup():
@@ -463,6 +641,48 @@ def test_build_paper_guide_direct_citation_lookup_answer_focuses_on_target_ref_c
     assert "[49]" not in out
 
 
+def test_build_paper_guide_direct_citation_lookup_answer_merges_targeted_scan_candidates(monkeypatch):
+    monkeypatch.setattr(
+        retrieval_runtime,
+        "_paper_guide_targeted_source_block_hits",
+        lambda **_kwargs: [
+            {
+                "text": (
+                    "For more complex motions, we can exploit higher-order spline [17] "
+                    "or directly optimize individual poses."
+                ),
+                "meta": {"heading_path": "3. Method / 3.3. Proposed Framework"},
+            }
+        ],
+    )
+    out = _build_paper_guide_direct_citation_lookup_answer(
+        prompt=(
+            "In the Method section, they say for more complex camera motions they can exploit a higher-order spline. "
+            "Which reference do they cite for that, and where is it stated exactly?"
+        ),
+        source_path=r"X:\demo.pdf",
+        answer_hits=[
+            {
+                "text": (
+                    "For higher performance, more recent representation can be exploited [27]."
+                ),
+                "meta": {"heading_path": "4. Experiments / 4.1. Experimental Setup"},
+            }
+        ],
+        special_focus_block="",
+        db_dir=Path("db"),
+        extract_special_focus_excerpt=lambda block: "",
+        reference_entry_lookup=lambda _src, ref_num, **_kwargs: {
+            "title": "USB-NeRF: Unrolling shutter bundle adjusted neural radiance fields"
+        }
+        if int(ref_num) == 17
+        else {"title": f"Reference {int(ref_num)}"},
+    )
+    assert "The paper cites [17]" in out
+    assert "higher-order spline [17]" in out
+    assert "[27]" not in out
+
+
 def test_paper_guide_citation_lookup_signal_score_penalizes_reference_list_for_intext_query():
     intext_score = _paper_guide_citation_lookup_signal_score(
         prompt="Which prior work is RVT attributed to in this paper?",
@@ -479,3 +699,30 @@ def test_paper_guide_citation_lookup_signal_score_penalizes_reference_list_for_i
         explicit_ref_list_request=False,
     )
     assert intext_score > ref_score
+
+
+def test_paper_guide_citation_lookup_signal_score_prefers_duarte_compressive_clause_over_lidar():
+    prompt = "Which reference do the authors cite for single-pixel imaging via compressive sampling, and where is that stated exactly?"
+    duarte_text = (
+        "The original concept of the single-pixel imaging approach, demonstrated by Sen et al.$^{3,58}$, "
+        "was developed further in conjunction with compressive sensing$^{59}$ and reported soon after in a seminal paper by Duarte et al. at Rice University$^{4}$."
+    )
+    lidar_text = (
+        "In addition to providing imaging solutions at problematic wavelengths, cameras based on single-pixel detectors have other advantages too. "
+        "Such temporal resolution lends itself to direct time-of-flight ranging, that is, LiDAR$^{83}$."
+    )
+    duarte_score = _paper_guide_citation_lookup_signal_score(
+        prompt=prompt,
+        heading="Acquisition and image reconstruction strategies",
+        text=duarte_text,
+        inline_refs=[3, 58, 59, 4],
+        explicit_ref_list_request=False,
+    )
+    lidar_score = _paper_guide_citation_lookup_signal_score(
+        prompt=prompt,
+        heading="Applications and future potential for single-pixel imaging",
+        text=lidar_text,
+        inline_refs=[83],
+        explicit_ref_list_request=False,
+    )
+    assert duarte_score > lidar_score

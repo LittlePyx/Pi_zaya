@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type RefObject } from 'react'
+/* eslint-disable react-hooks/set-state-in-effect */
+
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import type { ReaderSessionHighlight } from './readerTypes'
 import {
   createSessionHighlightId,
@@ -48,7 +50,7 @@ export function useReaderSelectionInteractions({
     }
   }
 
-  const syncSelectionState = () => {
+  const syncSelectionState = useCallback(() => {
     const nextRaw = selectionStateInside(contentRef.current)
     if (!nextRaw) {
       setSelection('')
@@ -62,7 +64,7 @@ export function useReaderSelectionInteractions({
     }
     setSelection(next.text || '')
     setSelectionBubble(next)
-  }
+  }, [contentRef, sessionHighlights])
 
   const queueSelectionStateSync = () => {
     if (selectionSyncRafRef.current != null) {
@@ -151,7 +153,7 @@ export function useReaderSelectionInteractions({
       window.removeEventListener('resize', handleViewportChange)
       content?.removeEventListener('scroll', handleViewportChange)
     }
-  }, [contentRef, markdown, locateRequestId, open, sessionHighlights])
+  }, [contentRef, markdown, locateRequestId, open, sessionHighlights, syncSelectionState])
 
   return {
     selection,

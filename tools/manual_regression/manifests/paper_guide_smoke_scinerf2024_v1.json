@@ -13,6 +13,26 @@
     "max_tokens": 5200,
     "temperature": 0.3
   },
+  "scorecard_thresholds": {
+    "overall_pass_rate": {
+      "min": 1.0
+    },
+    "locate.first_click_rate": {
+      "min": 0.9
+    },
+    "locate.heading_or_none_rate": {
+      "max": 0.05
+    },
+    "citation.ref_num_accuracy": {
+      "min": 0.95
+    },
+    "structured_markers.clean_rate": {
+      "min": 1.0
+    },
+    "quality.minimum_ok_rate": {
+      "min": 1.0
+    }
+  },
   "default_checks": {
     "structured_markers": {
       "forbid_raw_structured_cites": true,
@@ -43,7 +63,7 @@
               "required": true,
               "exact": true,
               "heading_includes_any": ["Abstract"],
-              "anchor_contains_any": ["video Snapshot Compressive Imaging", "snapshot compressed"]
+              "anchor_contains_any": ["Snapshot Compressive Imaging", "temporal compressed image", "compressed image"]
             }
           }
         },

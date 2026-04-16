@@ -5,6 +5,10 @@ export type ReaderRegressionScenario =
   | 'strict-quote'
   | 'evidence-nav'
   | 'candidate-fallback'
+  | 'strict-missing-exact'
+  | 'discussion-only'
+  | 'limitations-only'
+  | 'future-work-only'
   | 'equation'
   | 'figure'
   | 'multi-panel'
@@ -16,6 +20,9 @@ const INTRO_P1 = 'Our method exploits neural radiance fields (NeRF) for snapshot
 const INTRO_P2 = 'Conventional high-speed imaging systems often face challenges such as high hardware cost and storage requirements. This paragraph intentionally stays long for reader regression scrolling, expanding on memory limits, hardware bottlenecks, and the practical tradeoffs that motivate compressive capture.'
 const METHOD_P1 = 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays. This paragraph intentionally stays long for reader regression scrolling, extending the explanation with sampling behavior, density estimation, and view-dependent color prediction in the same section.'
 const CONCLUSION_P1 = 'Our method achieves stable reconstruction from a single snapshot. This paragraph intentionally stays long for reader regression scrolling, summarizing robustness, recovery quality, and the broader implications for efficient scene capture in constrained settings.'
+const DISCUSSION_P1 = 'The discussion emphasizes a practical tradeoff: faster capture is appealing, but reconstruction stability still depends on calibration quality, measurement design, and how much prior structure the pipeline assumes about the scene.'
+const LIMITATIONS_P1 = 'A current limitation is that the method still trades temporal coverage against reconstruction stability, especially when the scene departs from the static-scene assumption used by the reconstruction pipeline.'
+const FUTURE_WORK_P1 = 'Looking ahead, the most direct extension would be to combine the current pipeline with adaptive masking so dynamic scenes can be reconstructed more faithfully without increasing the hardware burden.'
 
 const FIGURE_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220"><rect width="480" height="220" fill="#eef3f8"/><rect x="28" y="36" width="180" height="128" rx="18" fill="#9bb7d4"/><rect x="234" y="58" width="218" height="26" rx="13" fill="#cbd8e6"/><rect x="234" y="98" width="184" height="20" rx="10" fill="#d6e0ea"/><rect x="234" y="130" width="146" height="20" rx="10" fill="#d6e0ea"/><circle cx="128" cy="100" r="34" fill="#f7fafc"/><text x="28" y="196" font-family="Georgia, serif" font-size="18" fill="#425466">Figure 1. SCI system pipeline.</text></svg>',
@@ -54,6 +61,18 @@ export const readerRegressionMarkdown = [
   '',
   `**Figure 2.** ${MULTI_PANEL_SNIPPET}`,
   '',
+  '## 4. Discussion',
+  '',
+  DISCUSSION_P1,
+  '',
+  '## 5. Limitations',
+  '',
+  LIMITATIONS_P1,
+  '',
+  '## 6. Future Work',
+  '',
+  FUTURE_WORK_P1,
+  '',
 ].join('\n')
 
 export const readerRegressionBlocks: ReaderDocBlock[] = [
@@ -65,10 +84,16 @@ export const readerRegressionBlocks: ReaderDocBlock[] = [
   { doc_id: 'fixture-doc', block_id: 'p-method-1', anchor_id: 'a-p-method-1', kind: 'paragraph', heading_path: 'Fixture Paper / 2. Method', text: METHOD_P1, line_start: 13, line_end: 13 },
   { doc_id: 'fixture-doc', block_id: 'eq-1', anchor_id: 'a-eq-1', kind: 'equation', heading_path: 'Fixture Paper / 2. Method', text: 'C(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt', number: 1, line_start: 15, line_end: 17 },
   { doc_id: 'fixture-doc', block_id: 'p-figure-ref', anchor_id: 'a-p-figure-ref', kind: 'paragraph', heading_path: 'Fixture Paper / 2. Method', text: 'Figure 1 shows the SCI system pipeline.', line_start: 19, line_end: 19 },
-  { doc_id: 'fixture-doc', block_id: 'fig-1', anchor_id: 'a-fig-1', kind: 'figure', heading_path: 'Fixture Paper / 2. Method', text: 'Figure 1. SCI system pipeline.', number: 1, line_start: 21, line_end: 21 },
+  { doc_id: 'fixture-doc', block_id: 'fig-1', anchor_id: 'a-fig-1', kind: 'figure', heading_path: 'Fixture Paper / 2. Method / Figure 1', text: 'Figure 1. SCI system pipeline.', number: 1, line_start: 21, line_end: 21 },
   { doc_id: 'fixture-doc', block_id: 'h-conclusion', anchor_id: 'a-h-conclusion', kind: 'heading', heading_path: 'Fixture Paper / 3. Conclusion', text: '3. Conclusion', line_start: 25, line_end: 25 },
   { doc_id: 'fixture-doc', block_id: 'p-conclusion-1', anchor_id: 'a-p-conclusion-1', kind: 'paragraph', heading_path: 'Fixture Paper / 3. Conclusion', text: CONCLUSION_P1, line_start: 27, line_end: 27 },
   { doc_id: 'fixture-doc', block_id: 'p-fig-panels', anchor_id: 'a-p-fig-panels', kind: 'paragraph', heading_path: 'Fixture Paper / 3. Conclusion', text: `Figure 2. ${MULTI_PANEL_SNIPPET}`, line_start: 29, line_end: 29 },
+  { doc_id: 'fixture-doc', block_id: 'h-discussion', anchor_id: 'a-h-discussion', kind: 'heading', heading_path: 'Fixture Paper / 4. Discussion', text: '4. Discussion', line_start: 31, line_end: 31 },
+  { doc_id: 'fixture-doc', block_id: 'p-discussion-1', anchor_id: 'a-p-discussion-1', kind: 'paragraph', heading_path: 'Fixture Paper / 4. Discussion', text: DISCUSSION_P1, line_start: 33, line_end: 33 },
+  { doc_id: 'fixture-doc', block_id: 'h-limitations', anchor_id: 'a-h-limitations', kind: 'heading', heading_path: 'Fixture Paper / 5. Limitations', text: '5. Limitations', line_start: 35, line_end: 35 },
+  { doc_id: 'fixture-doc', block_id: 'p-limitations-1', anchor_id: 'a-p-limitations-1', kind: 'paragraph', heading_path: 'Fixture Paper / 5. Limitations', text: LIMITATIONS_P1, line_start: 37, line_end: 37 },
+  { doc_id: 'fixture-doc', block_id: 'h-future-work', anchor_id: 'a-h-future-work', kind: 'heading', heading_path: 'Fixture Paper / 6. Future Work', text: '6. Future Work', line_start: 39, line_end: 39 },
+  { doc_id: 'fixture-doc', block_id: 'p-future-work-1', anchor_id: 'a-p-future-work-1', kind: 'paragraph', heading_path: 'Fixture Paper / 6. Future Work', text: FUTURE_WORK_P1, line_start: 41, line_end: 41 },
 ]
 
 export const readerRegressionAnchors: ReaderDocAnchor[] = readerRegressionBlocks.map((block) => ({
@@ -276,6 +301,90 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
     }
   }
 
+  if (scenario === 'strict-missing-exact') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 3. Conclusion',
+      snippet: 'SCI compresses a short video into one coded measurement.',
+      highlightSnippet: 'SCI compresses a short video into one coded measurement.',
+      blockId: 'missing-quote',
+      anchorId: 'missing-quote-anchor',
+      anchorKind: 'quote',
+      strictLocate: true,
+      locateTarget: {
+        segmentId: 'seg-missing-exact',
+        sourceSegmentId: 'seg-missing-exact',
+        headingPath: 'Fixture Paper / 3. Conclusion',
+        snippet: 'SCI compresses a short video into one coded measurement.',
+        highlightSnippet: 'SCI compresses a short video into one coded measurement.',
+        evidenceQuote: 'SCI compresses a short video into one coded measurement.',
+        anchorText: 'SCI compresses a short video into one coded measurement.',
+        blockId: 'missing-quote',
+        anchorId: 'missing-quote-anchor',
+        anchorKind: 'quote',
+        hitLevel: 'exact',
+        claimType: 'quote_claim',
+        locatePolicy: 'required',
+        locateSurfacePolicy: 'primary',
+      },
+    }
+  }
+
+  if (scenario === 'discussion-only') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 4. Discussion',
+      strictLocate: true,
+      locateTarget: {
+        segmentId: 'seg-discussion-heading',
+        sourceSegmentId: 'seg-discussion-heading',
+        headingPath: 'Fixture Paper / 4. Discussion',
+        hitLevel: 'heading',
+        claimType: 'section_claim',
+        locatePolicy: 'required',
+        locateSurfacePolicy: 'primary',
+      },
+    }
+  }
+
+  if (scenario === 'limitations-only') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 5. Limitations',
+      strictLocate: true,
+      locateTarget: {
+        segmentId: 'seg-limitations-heading',
+        sourceSegmentId: 'seg-limitations-heading',
+        headingPath: 'Fixture Paper / 5. Limitations',
+        hitLevel: 'heading',
+        claimType: 'section_claim',
+        locatePolicy: 'required',
+        locateSurfacePolicy: 'primary',
+      },
+    }
+  }
+
+  if (scenario === 'future-work-only') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 6. Future Work',
+      strictLocate: true,
+      locateTarget: {
+        segmentId: 'seg-future-work-heading',
+        sourceSegmentId: 'seg-future-work-heading',
+        headingPath: 'Fixture Paper / 6. Future Work',
+        hitLevel: 'heading',
+        claimType: 'section_claim',
+        locatePolicy: 'required',
+        locateSurfacePolicy: 'primary',
+      },
+    }
+  }
+
   if (scenario === 'equation') {
     return {
       sourcePath: READER_REGRESSION_SOURCE_PATH,
@@ -309,7 +418,7 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
     return {
       sourcePath: READER_REGRESSION_SOURCE_PATH,
       sourceName: READER_REGRESSION_SOURCE_NAME,
-      headingPath: 'Fixture Paper / 2. Method',
+      headingPath: 'Fixture Paper / 2. Method / Figure 1',
       snippet: 'Figure 1',
       highlightSnippet: 'Figure 1',
       blockId: 'fig-1',
@@ -320,7 +429,7 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
       locateTarget: {
         segmentId: 'seg-fig-1',
         sourceSegmentId: 'seg-fig-1',
-        headingPath: 'Fixture Paper / 2. Method',
+        headingPath: 'Fixture Paper / 2. Method / Figure 1',
         snippet: 'Figure 1',
         highlightSnippet: 'Figure 1',
         blockId: 'fig-1',

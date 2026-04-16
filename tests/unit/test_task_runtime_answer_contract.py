@@ -261,6 +261,420 @@ def test_apply_answer_contract_fallback_evidence_has_no_hardcoded_numeric_citati
     assert "引用 [1]" not in out
 
 
+def test_apply_answer_contract_builds_hit_grounded_evidence_fallback():
+    from kb import task_runtime
+
+    raw = "Dynamic supersampling reduces acquisition cost while preserving informative regions."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="How does dynamic supersampling work in this paper?",
+        has_hits=True,
+        answer_hits=[
+            {
+                "text": "Dynamic supersampling adaptively spends more patterns near edges and fewer on smooth regions.",
+                "meta": {
+                    "source_path": r"db\doc\dynamic-supersampling.en.md",
+                    "heading_path": "2.2 Dynamic supersampling",
+                    "ref_show_snippets": [
+                        "Dynamic supersampling adaptively allocates more measurements to edge-rich regions and fewer to smooth regions, reducing acquisition cost without changing the reconstruction backbone."
+                    ],
+                },
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Evidence:" in out
+    assert "dynamic-supersampling.pdf" in out
+    assert "2.2 Dynamic supersampling" in out
+    assert "allocates more measurements to edge-rich regions" in out
+    assert "Retrieved library snippets support this conclusion" not in out
+
+
+def test_apply_answer_contract_prefers_definition_like_snippet_for_definition_prompt():
+    from kb import task_runtime
+
+    raw = "This paper defines the concept."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        has_hits=True,
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
+                    "heading_path": "INTRODUCTION",
+                    "ref_show_snippets": [
+                        "Alternatively, we could reconstruct pairs of subframes with identical pixel footprints and look for changes between these to track motion. However, this strategy would reduce the supersampling rate by a factor of 2."
+                    ],
+                }
+            },
+            {
+                "meta": {
+                    "source_path": r"db\doc\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
+                    "heading_path": "Spatially variant digital supersampling",
+                    "ref_show_snippets": [
+                        "If the positions of the pixel boundaries are modified from one frame to the next, then each frame samples a different subset of the spatial information in the scene. This technique is known as digital superresolution or supersampling."
+                    ],
+                }
+            },
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "known as digital superresolution or supersampling" in out
+    assert "reduce the supersampling rate by a factor of 2" not in out
+    assert "Spatially variant digital supersampling" in out
+
+
+def test_apply_answer_contract_negative_shell_uses_non_supporting_evidence_fallback():
+    from kb import task_runtime
+
+    raw = "No direct paper snippet is available for ADMM in this library, so I cannot confirm a direct discussion."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library directly discusses ADMM?",
+        has_hits=True,
+        answer_hits=[
+            {
+                "text": "The paper discusses iterative reconstruction and phase retrieval, but does not mention ADMM by name.",
+                "meta": {
+                    "source_path": r"db\doc\iterative-reconstruction.en.md",
+                    "heading_path": "3.1 Reconstruction pipeline",
+                },
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Evidence:" in out
+    assert "support this conclusion" not in out
+    assert "none explicitly define or directly discuss ADMM" in out
+    assert "ADMM the" not in out
+    assert "Search your library for \"ADMM\"" in out
+    assert "Compare this result against one baseline paper from the same period." not in out
+
+
+def test_apply_answer_contract_repairs_structured_but_title_only_evidence():
+    from kb import task_runtime
+
+    raw = (
+        "Conclusion: The paper that most directly defines dynamic supersampling in your library is:\n\n"
+        "Evidence:\n"
+        "1. **SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling**.\n\n"
+        "Next Steps:\n"
+        "1. Check the cited section/figure to verify the definition."
+    )
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        has_hits=True,
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
+                    "heading_path": "2 Dynamic supersampling",
+                    "ref_show_snippets": [
+                        "Dynamic supersampling adapts the sampling density to the local image content, concentrating measurements where more spatial detail is required."
+                    ],
+                }
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Evidence:" in out
+    assert 'the section "2 Dynamic supersampling" directly defines dynamic supersampling' in out
+    assert "2 Dynamic supersampling" in out
+    assert "concentrating measurements where more spatial detail is required" in out
+    assert "Retrieved library snippets support this conclusion" not in out
+
+
+def test_apply_answer_contract_rewrites_single_paper_lookup_conclusion_with_source_name():
+    from kb import task_runtime
+
+    raw = "The paper that most directly defines dynamic supersampling in your library is:"
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library most directly defines dynamic supersampling?",
+        has_hits=True,
+        primary_evidence={
+            "source_name": "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+            "heading_path": "2 Dynamic supersampling",
+            "snippet": "Dynamic supersampling adapts the sampling density to the local image content.",
+        },
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
+                    "heading_path": "2 Dynamic supersampling",
+                    "ref_show_snippets": [
+                        "Dynamic supersampling adapts the sampling density to the local image content."
+                    ],
+                }
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Conclusion: The paper in your library that most directly defines dynamic supersampling is SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf." in out
+
+
+def test_apply_answer_contract_rehomes_grounded_extra_details_into_evidence_and_limits():
+    from kb import task_runtime
+
+    raw = (
+        "Conclusion: The paper that most directly defines *dynamic supersampling* in your library is:\n\n"
+        "Evidence:\n"
+        "1. **SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling**.\n\n"
+        "Next Steps:\n"
+        "1. Check the cited section/figure to verify the conclusion details.\n"
+        "2. Compare this result against one baseline paper from the same period.\n\n"
+        "- **Definition location**: Section titled **“Spatially variant digital supersampling”** in the Introduction (first paragraph).\n"
+        "- **Key definition**:\n"
+        " > “If the positions of the pixel boundaries are modified from one frame to the next, then each frame samples a different subset of the spatial information in the scene… This technique is known as digital superresolution or supersampling.”\n\n"
+        "No other retrieved document defines or uses the term “dynamic supersampling”. DOC-2 discusses visual redundancy.\n\n"
+        "**Next step**: Read the full Introduction for implementation details."
+    )
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        has_hits=True,
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
+                    "heading_path": "Spatially variant digital supersampling",
+                }
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Evidence:" in out
+    assert "Definition location" in out
+    assert "Spatially variant digital supersampling" in out
+    assert "Limits:" in out
+    assert "No other retrieved document defines or uses the term" in out
+    assert "**Next step**" not in out
+    assert "Evidence:\n1. **SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling**." not in out
+    assert "1. **Definition location**" in out
+    assert "Read the full Introduction for implementation details." in out
+
+
+def test_apply_answer_contract_cleans_compare_answer_with_embedded_labels():
+    from kb import task_runtime
+
+    raw = (
+        "Conclusion: The paper in your library that directly compares Hadamard single-pixel imaging (HSI) and Fourier single-pixel imaging (FSI) is:\n\n"
+        "Evidence:\n"
+        "1. **OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf**\n"
+        "2. Evidence:\n"
+        "Section 2.2 explicitly compares the two methods in terms of basis pattern properties: binary vs. grayscale, horizontal/vertical vs. oblique features, and periodicity.\n"
+        "Section 2.4 discusses efficiency differences based on energy concentration of the transforms.\n\n"
+        "Next Steps:\n"
+        "1. Check the cited section/figure to verify the conclusion details.\n"
+        "2. Compare this result against one baseline paper from the same period.\n\n"
+        "Limits: The retrieved context does not include full experimental results or quantitative performance metrics."
+    )
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
+        has_hits=True,
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+                    "heading_path": "2.2 Basis patterns generation",
+                    "ref_show_snippets": [
+                        "Section 2.2 explicitly compares the two methods in terms of basis pattern properties.",
+                    ],
+                }
+            }
+        ],
+        intent="compare",
+        depth="L2",
+    )
+    assert "1. **OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf**" not in out
+    assert "\n2. Evidence:" not in out
+    assert "Section 2.2 explicitly compares the two methods" in out
+    assert "Limits:\nThe retrieved context does not include full experimental results or quantitative performance metrics." in out
+    assert out.index("Limits:") < out.index("Next Steps:")
+
+
+def test_apply_answer_contract_uses_locate_specific_next_steps_for_definition_prompt():
+    from kb import task_runtime
+
+    raw = "The paper that most directly defines dynamic supersampling is the SciAdv paper."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        has_hits=True,
+        primary_evidence={
+            "source_name": "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+            "heading_path": "2 Dynamic supersampling",
+            "snippet": "Dynamic supersampling adapts the sampling density to the local image content.",
+        },
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
+                    "heading_path": "2 Dynamic supersampling",
+                    "ref_show_snippets": [
+                        "Dynamic supersampling adapts the sampling density to the local image content."
+                    ],
+                }
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Next Steps:" in out
+    assert 'Open "2 Dynamic supersampling" in SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf and verify the exact sentence that defines dynamic supersampling.' in out
+    assert 'Search your library again for "dynamic supersampling"' in out
+    assert "Compare this result against one baseline paper from the same period." not in out
+
+
+def test_apply_answer_contract_uses_locate_specific_next_steps_for_compare_prompt():
+    from kb import task_runtime
+
+    raw = "The OE paper directly compares Hadamard and Fourier single-pixel imaging."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
+        has_hits=True,
+        primary_evidence={
+            "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "2.2 Basis patterns generation",
+            "snippet": "Section 2.2 explicitly compares the two methods in terms of basis pattern properties.",
+        },
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+                    "heading_path": "2.2 Basis patterns generation",
+                    "ref_show_snippets": [
+                        "Section 2.2 explicitly compares the two methods in terms of basis pattern properties."
+                    ],
+                }
+            }
+        ],
+        intent="compare",
+        depth="L2",
+    )
+    assert "Next Steps:" in out
+    assert 'Open "2.2 Basis patterns generation" in OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf and list the exact comparison dimensions used for Hadamard single-pixel imaging and Fourier single-pixel imaging.' in out
+    assert "Build a short side-by-side note covering method differences, assumptions, efficiency or experiment deltas, and the evidence location for each point." in out
+    assert "Choose one metric where methods diverge most and run a small pilot test." not in out
+
+
+def test_apply_answer_contract_uses_relation_specific_evidence_fallback_for_compare_prompt():
+    from kb import task_runtime
+
+    raw = "The paper in your library that directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging is the OE paper."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
+        has_hits=True,
+        primary_evidence={
+            "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "2.2 Basis patterns generation",
+            "snippet": "Section 2.2 explicitly compares the two methods in terms of basis pattern properties.",
+        },
+        answer_hits=[
+            {
+                "meta": {
+                    "source_path": r"db\doc\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+                    "heading_path": "2.2 Basis patterns generation",
+                    "ref_show_snippets": [
+                        "Section 2.2 explicitly compares the two methods in terms of basis pattern properties."
+                    ],
+                }
+            }
+        ],
+        intent="compare",
+        depth="L2",
+    )
+    assert 'Evidence:\n1. In OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf, the section "2.2 Basis patterns generation" directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging:' in out
+
+
+def test_apply_answer_contract_rewrites_cross_paper_library_query_conclusion():
+    from kb import task_runtime
+
+    raw = "The retrieved context only includes one paper in your library that discusses Fourier single-pixel imaging."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+        has_hits=True,
+        answer_hits=[
+            {
+                "text": "The paper reviews Fourier single-pixel imaging and contrasts it with Hadamard sampling.",
+                "meta": {
+                    "source_path": r"db\doc\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+                    "heading_path": "2.2 Basis patterns generation",
+                    "ref_show_snippets": [
+                        "Section 2.2 reviews Fourier single-pixel imaging and compares it with Hadamard sampling."
+                    ],
+                },
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Conclusion: Besides the current paper, one additional library paper discusses Fourier single-pixel imaging:" in out
+    assert "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf" in out
+    assert "Evidence:" in out
+    assert "Section 2.2 reviews Fourier single-pixel imaging" in out
+    assert "Open the matched section in OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf and compare how it treats Fourier single-pixel imaging" in out
+    assert 'Search your library again with "Fourier single-pixel imaging"' in out
+    assert "Compare this result against one baseline paper from the same period." not in out
+
+
+def test_apply_answer_contract_uses_cross_paper_search_steps_for_negative_cross_paper_query():
+    from kb import task_runtime
+
+    raw = "None of the retrieved papers directly discuss ADMM beyond the current paper."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="Besides this paper, what other papers in my library discuss ADMM?",
+        has_hits=True,
+        answer_hits=[],
+        intent="reading",
+        depth="L2",
+    )
+    assert "Conclusion: Besides the current paper, no other retrieved library paper explicitly discusses ADMM." in out
+    assert "Among the additional retrieved library papers, none explicitly discuss ADMM." in out
+    assert "Search your library again for \"ADMM\"" in out
+    assert "Compare this result against one baseline paper from the same period." not in out
+
+
+def test_apply_answer_contract_rewrites_cross_paper_library_query_in_chinese():
+    from kb import task_runtime
+
+    raw = "当前检索结果里只看到一篇讨论 Fourier single-pixel imaging 的论文。"
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="除这篇论文外，我库里还有哪些论文讨论 Fourier single-pixel imaging？",
+        has_hits=True,
+        answer_hits=[
+            {
+                "text": "该论文在 Section 2.2 讨论了 Fourier single-pixel imaging，并与 Hadamard sampling 做了对照。",
+                "meta": {
+                    "source_path": r"db\doc\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+                    "heading_path": "2.2 Basis patterns generation",
+                    "ref_show_snippets": [
+                        "Section 2.2 讨论了 Fourier single-pixel imaging，并与 Hadamard sampling 做了对照。"
+                    ],
+                },
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "结论: 除当前论文外，库内另外命中 1 篇讨论“Fourier single-pixel imaging”的论文：" in out
+    assert "再用“Fourier single-pixel imaging”及其同义词或缩写扩检库内文献" in out
+
+
 def test_apply_answer_contract_uses_chinese_locale_for_chinese_prompt():
     from kb import task_runtime
 
@@ -275,6 +689,70 @@ def test_apply_answer_contract_uses_chinese_locale_for_chinese_prompt():
     assert "结论:" in out
     assert "下一步:" in out
     assert "general guidance" not in out
+
+
+def test_apply_answer_contract_prefers_chinese_locale_for_mixed_language_prompt_and_english_body():
+    from kb import task_runtime
+
+    raw = "This paper discusses Fourier single-pixel imaging in Section 2.2 and compares it with Hadamard sampling."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="这篇论文里是怎么讨论 Fourier single-pixel imaging 的？",
+        has_hits=True,
+        answer_hits=[
+            {
+                "text": "Section 2.2 discusses Fourier single-pixel imaging and compares it with Hadamard sampling.",
+                "meta": {
+                    "source_path": r"db\doc\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+                    "heading_path": "2.2 Basis patterns generation",
+                    "ref_show_snippets": [
+                        "Section 2.2 discusses Fourier single-pixel imaging and compares it with Hadamard sampling."
+                    ],
+                },
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "结论:" in out
+    assert "依据:" in out
+    assert "下一步:" in out
+    assert "Conclusion:" not in out
+    assert "结论: 命中的论文《OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf》在“2.2 Basis patterns generation”里直接讨论了“Fourier single-pixel imaging”。" in out
+    assert "《OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf》的“2.2 Basis patterns generation”部分直接讨论了“Fourier single-pixel imaging”；原文片段：" in out
+
+
+def test_apply_answer_contract_prefers_explicit_primary_evidence_over_weaker_answer_hits():
+    from kb import task_runtime
+
+    raw = "This paper discusses Fourier single-pixel imaging."
+    out = task_runtime._apply_answer_contract_v1(
+        raw,
+        prompt="杩欑瘒璁烘枃閲屾槸鎬庝箞璁ㄨ Fourier single-pixel imaging 鐨勶紵",
+        has_hits=True,
+        primary_evidence={
+            "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "2.2 Basis patterns generation",
+            "snippet": "Section 2.2 discusses Fourier single-pixel imaging and compares it with Hadamard sampling.",
+        },
+        answer_hits=[
+            {
+                "text": "Section 2.4 discusses efficiency differences.",
+                "meta": {
+                    "source_path": r"db\doc\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+                    "heading_path": "2.4 Efficiency",
+                    "ref_show_snippets": [
+                        "Section 2.4 discusses efficiency differences based on energy concentration of the transforms."
+                    ],
+                },
+            }
+        ],
+        intent="reading",
+        depth="L2",
+    )
+    assert "2.2 Basis patterns generation" in out
+    assert "Section 2.2 discusses Fourier single-pixel imaging" in out
+    assert "2.4 Efficiency" not in out
 
 
 def test_apply_answer_contract_avoids_over_shrinking_long_answer():

@@ -35,6 +35,10 @@ from kb.paper_guide_shared import (
     _trim_paper_guide_prompt_field,
     _trim_paper_guide_prompt_snippet,
 )
+from kb.paper_guide_structured_index_runtime import (
+    load_paper_guide_figure_index,
+    load_paper_guide_reference_index,
+)
 from kb.paper_guide_target_scope import (
     _build_paper_guide_target_scope,
     _normalize_paper_guide_target_scope,
@@ -645,6 +649,342 @@ def _extract_paper_guide_locate_anchor(text: str, *, max_chars: int = 220) -> st
     return _trim_paper_guide_prompt_snippet(src, max_chars=max_chars)
 
 
+def _compose_figure_index_caption_text(entry: dict | None) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in (
+        entry.get("locate_anchor"),
+        entry.get("caption"),
+        entry.get("caption_continuation"),
+    ):
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = normalize_match_text(text[:1200])
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append(text)
+    return " ".join(out).strip()
+
+
+def _select_grounding_figure_index_entry(
+    entries: list[dict] | None,
+    *,
+    figure_number: int,
+    panel_letters: set[str] | None = None,
+    probe: str = "",
+) -> dict:
+    try:
+        target_fig = int(figure_number or 0)
+    except Exception:
+        target_fig = 0
+    if target_fig <= 0:
+        return {}
+    target_panels = {
+        str(ch or "").strip().lower()
+        for ch in list(panel_letters or set())
+        if str(ch or "").strip()
+    }
+    best: dict = {}
+    best_score = float("-inf")
+    for raw in list(entries or []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry_fig = int(raw.get("paper_figure_number") or raw.get("fig_no") or 0)
+        except Exception:
+            entry_fig = 0
+        if entry_fig != target_fig:
+            continue
+        caption_block_id = str(raw.get("caption_block_id") or "").strip()
+        figure_block_id = str(raw.get("figure_block_id") or "").strip()
+        caption_text = _compose_figure_index_caption_text(raw)
+        heading_path = str(raw.get("heading_path") or "").strip()
+        score = 12.0
+        if caption_block_id:
+            score += 8.0
+        if figure_block_id:
+            score += 4.0
+        if heading_path:
+            score += 1.0
+        if caption_text:
+            score += 1.0
+        if probe and caption_text:
+            score += 0.32 * float(_text_token_overlap_score(probe, caption_text))
+        if target_panels:
+            entry_panels = _extract_caption_panel_letters(caption_text)
+            overlap = target_panels.intersection(entry_panels)
+            if overlap:
+                score += 2.2 + (0.35 * float(len(overlap)))
+                if overlap == target_panels:
+                    score += 1.2
+            elif entry_panels:
+                score -= 1.0
+            clause = _extract_caption_fragment_for_letters(caption_text, target_panels) if caption_text else ""
+            if clause:
+                score += 1.6
+                score += 0.42 * float(_text_token_overlap_score(probe, clause))
+        if score > best_score:
+            best_score = score
+            best = dict(raw)
+    return best
+
+
+def _resolve_figure_panel_support_from_index(
+    *,
+    md_path: Path,
+    block_lookup: dict[str, dict],
+    target_fig: int,
+    target_panel_letters: set[str],
+    target_scope: dict,
+    probe: str,
+) -> dict:
+    try:
+        figure_rows = load_paper_guide_figure_index(md_path)
+    except Exception:
+        figure_rows = []
+    indexed = _select_grounding_figure_index_entry(
+        figure_rows,
+        figure_number=target_fig,
+        panel_letters=target_panel_letters,
+        probe=probe,
+    )
+    if not indexed:
+        return {}
+
+    caption_block_id = str(indexed.get("caption_block_id") or "").strip()
+    figure_block_id = str(indexed.get("figure_block_id") or "").strip()
+    caption_block = block_lookup.get(caption_block_id) if caption_block_id else None
+    figure_block = block_lookup.get(figure_block_id) if figure_block_id else None
+    primary_block = caption_block or figure_block or {}
+    caption_text = _compose_figure_index_caption_text(indexed)
+    block_text = str((primary_block or {}).get("raw_text") or (primary_block or {}).get("text") or "").strip()
+    source_text = caption_text or block_text
+    if not source_text:
+        return {}
+
+    locate_anchor = ""
+    if target_panel_letters:
+        locate_anchor = _extract_caption_fragment_for_letters(source_text, target_panel_letters)
+        if (not locate_anchor) and block_text and block_text != source_text:
+            locate_anchor = _extract_caption_fragment_for_letters(block_text, target_panel_letters)
+    if not locate_anchor:
+        locate_anchor = source_text or _extract_paper_guide_locate_anchor(block_text)
+    if not locate_anchor:
+        return {}
+
+    figure_number = int(indexed.get("paper_figure_number") or indexed.get("fig_no") or target_fig or 0)
+    heading_path = _paper_guide_support_heading_with_figure(
+        str((primary_block or {}).get("heading_path") or indexed.get("heading_path") or "").strip(),
+        figure_number=figure_number,
+    )
+    panel_letters = (
+        sorted(target_panel_letters)
+        if target_panel_letters
+        else sorted(_extract_caption_panel_letters(locate_anchor))
+    )
+    candidate_refs = _extract_inline_reference_numbers(locate_anchor, max_candidates=4)
+    ref_spans = (
+        [{"text": locate_anchor, "nums": list(candidate_refs), "scope": "same_clause"}]
+        if candidate_refs
+        else []
+    )
+    anchor_id = (
+        str((caption_block or {}).get("anchor_id") or "").strip()
+        or str(indexed.get("caption_anchor_id") or "").strip()
+        or str((figure_block or {}).get("anchor_id") or "").strip()
+        or str(indexed.get("anchor_id") or "").strip()
+    )
+    return {
+        "md_path": str(md_path or ""),
+        "block_id": str((primary_block or {}).get("block_id") or caption_block_id or figure_block_id).strip(),
+        "anchor_id": anchor_id,
+        "heading_path": heading_path,
+        "locate_anchor": locate_anchor,
+        "block_text": block_text or source_text,
+        "snippet": locate_anchor,
+        "evidence_atom_id": f"figure_index:{int(figure_number or target_fig or 0)}:{','.join(panel_letters) if panel_letters else 'caption'}",
+        "evidence_atom_kind": "caption_clause" if target_panel_letters else "caption",
+        "evidence_atom_text": locate_anchor,
+        "figure_number": int(figure_number or 0),
+        "box_number": 0,
+        "panel_letters": panel_letters,
+        "candidate_refs": list(candidate_refs),
+        "ref_spans": ref_spans,
+        "target_scope": dict(target_scope or {}),
+    }
+
+
+def _resolve_reference_block_for_ref_num(
+    *,
+    blocks: list[dict] | None,
+    ref_num: int,
+    reference_text: str = "",
+) -> dict:
+    try:
+        target_ref = int(ref_num or 0)
+    except Exception:
+        target_ref = 0
+    if target_ref <= 0:
+        return {}
+    best: dict = {}
+    best_score = float("-inf")
+    reference_query_tokens = set(_paper_guide_cue_tokens(reference_text))
+    for raw in list(blocks or []):
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "").strip().lower()
+        if kind not in {"paragraph", "list_item", "blockquote"}:
+            continue
+        block_text = str(raw.get("raw_text") or raw.get("text") or "").strip()
+        if not block_text:
+            continue
+        heading_path = str(raw.get("heading_path") or "").strip()
+        refs = _extract_inline_reference_numbers(block_text, max_candidates=8)
+        text_starts_with_ref = bool(re.match(rf"(?i)^\s*\[\s*{int(target_ref)}\s*\]", block_text))
+        heading_is_references = "references" in heading_path.lower()
+        if (target_ref not in refs) and (not text_starts_with_ref) and (not heading_is_references):
+            continue
+        score = 0.0
+        if text_starts_with_ref:
+            score += 10.0
+        if target_ref in refs:
+            score += 6.0
+        if heading_is_references:
+            score += 4.0
+        if reference_query_tokens:
+            shared = reference_query_tokens.intersection(_paper_guide_cue_tokens(block_text))
+            score += min(4.0, 0.9 * float(len(shared)))
+        if score > best_score:
+            best_score = score
+            best = dict(raw)
+    return best
+
+
+def _resolve_reference_index_support_from_source(
+    *,
+    md_path: Path | str,
+    blocks: list[dict] | None,
+    prompt: str,
+    heading: str = "",
+    prefers_single_reference: bool | None = None,
+) -> dict:
+    q = str(prompt or "").strip()
+    if not q:
+        return {}
+    try:
+        reference_rows = load_paper_guide_reference_index(md_path)
+    except Exception:
+        reference_rows = []
+    if not reference_rows:
+        return {}
+
+    if prefers_single_reference is None:
+        q_low = q.lower()
+        prefers_single_reference = bool(
+            (("which reference" in q_low) or ("what reference" in q_low) or ("which paper" in q_low) or ("what paper" in q_low))
+            and ("which references" not in q_low)
+            and ("what references" not in q_low)
+            and ("papers" not in q_low)
+        )
+
+    explicit_ref_nums = _extract_inline_reference_numbers(q, max_candidates=6)
+    query_tokens = _paper_guide_support_focus_tokens(heading, q)
+    if not query_tokens:
+        query_tokens = set(_paper_guide_cue_tokens(q))
+    query_focus_tokens: set[str] = set()
+    for tok in re.findall(r"\b[A-Za-z]+\d{2,}\b", q):
+        query_focus_tokens.add(str(tok or "").strip().lower())
+    for tok in re.findall(r"\b[A-Z]{3,}\b", q):
+        query_focus_tokens.add(str(tok or "").strip().lower())
+    if "pascal" in q.lower():
+        query_focus_tokens.add("pascal")
+    if "voc" in q.lower():
+        query_focus_tokens.add("voc")
+    if not query_focus_tokens:
+        for tok in query_tokens:
+            if len(str(tok or "").strip()) >= 6:
+                query_focus_tokens.add(str(tok).strip().lower())
+
+    best: dict = {}
+    best_score = float("-inf")
+    for raw in list(reference_rows or []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            ref_num = int(raw.get("ref_num") or 0)
+        except Exception:
+            ref_num = 0
+        if ref_num <= 0:
+            continue
+        ref_text = str(raw.get("text") or "").strip()
+        if not ref_text:
+            continue
+        score = 4.0 + (0.4 * float(raw.get("parse_confidence") or 0.0))
+        if explicit_ref_nums:
+            if ref_num in explicit_ref_nums:
+                score += 18.0
+            else:
+                score -= 6.0
+        ref_tokens = set(_paper_guide_cue_tokens(ref_text))
+        if query_tokens:
+            shared = query_tokens.intersection(ref_tokens)
+            score += min(14.0, 2.4 * float(len(shared)))
+        ref_low = ref_text.lower()
+        focus_shared = [tok for tok in query_focus_tokens if tok and tok in ref_low]
+        if focus_shared:
+            score += min(18.0, 4.5 * float(len(focus_shared)))
+        elif query_focus_tokens:
+            score -= 4.0
+        if prefers_single_reference:
+            score += 1.2
+        if str(raw.get("doi") or "").strip() and re.search(r"(?i)\bdoi\b", q):
+            score += 3.0
+        if score > best_score:
+            best_score = score
+            best = dict(raw)
+
+    if not best:
+        return {}
+    if best_score < (9.0 if query_focus_tokens else 5.5):
+        return {}
+
+    ref_num = int(best.get("ref_num") or 0)
+    ref_text = str(best.get("text") or "").strip()
+    reference_block = _resolve_reference_block_for_ref_num(
+        blocks=blocks,
+        ref_num=ref_num,
+        reference_text=ref_text,
+    )
+    block_text = str(reference_block.get("raw_text") or reference_block.get("text") or "").strip()
+    locate_anchor = block_text or ref_text
+    if not locate_anchor:
+        return {}
+    heading_path = str(reference_block.get("heading_path") or "").strip() or "References"
+    return {
+        "md_path": str(md_path or ""),
+        "block_id": str(reference_block.get("block_id") or "").strip(),
+        "anchor_id": str(reference_block.get("anchor_id") or "").strip(),
+        "heading_path": heading_path,
+        "locate_anchor": locate_anchor,
+        "block_text": block_text or ref_text,
+        "snippet": locate_anchor,
+        "evidence_atom_id": f"reference_index:{int(ref_num)}",
+        "evidence_atom_kind": "reference_entry",
+        "evidence_atom_text": ref_text or locate_anchor,
+        "figure_number": 0,
+        "box_number": 0,
+        "panel_letters": [],
+        "candidate_refs": [int(ref_num)],
+        "ref_spans": [{"text": locate_anchor, "nums": [int(ref_num)], "scope": "reference_entry"}],
+        "target_scope": {},
+    }
+
+
 def _paper_guide_support_heading_with_figure(heading_path: str, *, figure_number: int) -> str:
     heading = str(heading_path or "").strip()
     try:
@@ -801,7 +1141,7 @@ def _paper_guide_support_claim_type(
         return "compare_result"
     if has_refs and ("reference" in heading_low or "background" in heading_low or "prior" in snippet_low):
         return "prior_work"
-    if family in {"overview", "strength_limits"} and has_refs:
+    if family == "strength_limits" and has_refs:
         return "prior_work"
     return "own_result"
 
@@ -896,6 +1236,17 @@ def _resolve_paper_guide_support_slot_block(
         for block in list(blocks or [])
         if isinstance(block, dict) and str(block.get("block_id") or "").strip()
     }
+    if claim == "figure_panel" and target_fig > 0:
+        indexed_figure = _resolve_figure_panel_support_from_index(
+            md_path=md_path,
+            block_lookup=block_lookup,
+            target_fig=int(target_fig or 0),
+            target_panel_letters=set(target_panel_letters or set()),
+            target_scope=target_scope_norm,
+            probe=probe,
+        )
+        if indexed_figure:
+            return indexed_figure
     atoms_cache_local = atom_cache if isinstance(atom_cache, dict) else None
     atoms = list(atoms_cache_local.get(src) or []) if atoms_cache_local is not None else []
     if not atoms:
@@ -982,6 +1333,15 @@ def _resolve_paper_guide_support_slot_block(
                 "matching_atoms": [dict(atom) for atom in list(selected_atoms or []) if isinstance(atom, dict)],
                 "target_scope": dict(target_scope_norm),
             }
+    if family == "citation_lookup":
+        indexed_reference = _resolve_reference_index_support_from_source(
+            md_path=md_path,
+            blocks=blocks,
+            prompt=probe,
+            heading=heading,
+        )
+        if indexed_reference:
+            return indexed_reference
     ranked_rows = [
         dict(row)
         for row in list(
@@ -1597,6 +1957,39 @@ def _paper_guide_support_rule_tokens(slot: dict) -> set[str]:
     return set(_paper_guide_cue_tokens(" ".join(cue_parts)))
 
 
+def _paper_guide_support_slot_looks_figure_like(slot: dict) -> bool:
+    if not isinstance(slot, dict):
+        return False
+    try:
+        if int(slot.get("figure_number") or 0) > 0:
+            return True
+    except Exception:
+        pass
+    if list(slot.get("panel_letters") or []):
+        return True
+    target_scope = dict(slot.get("target_scope") or {}) if isinstance(slot.get("target_scope"), dict) else {}
+    for raw_key in ("target_figure_num", "target_figure_number"):
+        try:
+            if int(target_scope.get(raw_key) or 0) > 0:
+                return True
+        except Exception:
+            continue
+    if list(target_scope.get("target_panel_letters") or []):
+        return True
+    probe = " ".join(
+        [
+            str(slot.get("heading_path") or "").strip(),
+            str(slot.get("heading") or "").strip(),
+            str(slot.get("snippet") or "").strip(),
+            str(slot.get("locate_anchor") or "").strip(),
+            str(slot.get("cue") or "").strip(),
+        ]
+    )
+    if not probe:
+        return False
+    return bool(re.search(r"\b(?:figure|fig(?:ure)?\.?|panel|caption)\b", probe, flags=re.IGNORECASE))
+
+
 def _select_paper_guide_support_slot_for_context(
     slots: list[dict],
     *,
@@ -1621,6 +2014,10 @@ def _select_paper_guide_support_slot_for_context(
         if shared.intersection(_PAPER_GUIDE_CITE_STRONG_TOKENS):
             score += 0.45
         claim_type = str(slot.get("claim_type") or "").strip().lower()
+        slot_figure_like = _paper_guide_support_slot_looks_figure_like(slot)
+        context_mentions_figure = bool(
+            re.search(r"\b(?:figure|fig(?:ure)?\.?|panel|caption)\b", surface, flags=re.IGNORECASE)
+        )
         if claim_type in {"method_detail", "borrowed_tool"} and re.search(
             r"\b(?:apr|rvt|phase correlation|registration|shift|workflow|pipeline)\b",
             surface,
@@ -1651,6 +2048,11 @@ def _select_paper_guide_support_slot_for_context(
                     score -= 0.5
             else:
                 score -= 0.65
+        elif (not context_mentions_figure) and slot_figure_like:
+            if claim_type == "figure_panel":
+                score -= 2.0
+            else:
+                score -= 1.15
         if score > best_score:
             best_score = score
             best_slot = slot
@@ -1706,6 +2108,7 @@ def _inject_paper_guide_support_markers(
                 "tokens": tokens,
                 "claim_type": str(slot.get("claim_type") or "").strip().lower(),
                 "cite_policy": str(slot.get("cite_policy") or "").strip().lower(),
+                "figure_like": _paper_guide_support_slot_looks_figure_like(slot),
                 "panel_letters": {
                     str(ch or "").strip().lower()
                     for ch in list(slot.get("panel_letters") or [])
@@ -1781,6 +2184,9 @@ def _inject_paper_guide_support_markers(
         if not line_tokens:
             continue
         line_panel_letters = _extract_caption_panel_letters(stripped)
+        line_mentions_figure = bool(
+            re.search(r"\b(?:figure|fig(?:ure)?\.?|panel|caption)\b", stripped, flags=re.IGNORECASE)
+        )
         best_rule: dict[str, object] | None = None
         best_score = 0.0
         best_shared: set[str] = set()
@@ -1791,6 +2197,8 @@ def _inject_paper_guide_support_markers(
             claim_type = str(rule.get("claim_type") or "").strip().lower()
             if not _family_compatible(claim_type, stripped):
                 continue
+            if family == "overview" and bool(rule.get("figure_like")) and (not line_mentions_figure):
+                continue
             shared = line_tokens.intersection(set(rule.get("tokens") or set()))
             if not shared:
                 continue
@@ -1800,6 +2208,11 @@ def _inject_paper_guide_support_markers(
                 score += 0.45
             if cite_policy == "prefer_ref":
                 score += 0.1
+            if bool(rule.get("figure_like")) and (not line_mentions_figure):
+                if claim_type == "figure_panel":
+                    score -= 2.2
+                else:
+                    score -= 1.2
             if family == "method":
                 if claim_type == "method_detail":
                     score += 0.35
@@ -1830,13 +2243,17 @@ def _inject_paper_guide_support_markers(
             elif family == "overview":
                 if claim_type in {"own_result", "prior_work"}:
                     score += 0.2
+                if bool(rule.get("figure_like")) and (not line_mentions_figure):
+                    score -= 1.0
             if score > best_score:
                 best_score = score
                 best_rule = rule
                 best_shared = set(shared)
         min_score = 2.0
-        if family in {"method", "compare", "figure_walkthrough", "overview"}:
+        if family in {"method", "compare", "figure_walkthrough"}:
             min_score = 1.35
+        elif family == "overview":
+            min_score = 2.2
         if best_shared.intersection(_PAPER_GUIDE_CITE_STRONG_TOKENS):
             min_score = min(min_score, 1.0)
         if not best_rule or best_score < min_score:

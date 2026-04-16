@@ -14,13 +14,22 @@ from kb.paper_guide_focus import (
     _extract_bound_paper_method_focus,
     _extract_paper_guide_method_detail_excerpt,
     _extract_paper_guide_method_focus_terms,
+    _paper_guide_focus_term_aliases,
+    _paper_guide_prompt_requests_component_role_explanation,
+    _drop_paper_guide_negative_term_lines,
     _repair_paper_guide_focus_answer_generic,
 )
-from kb.paper_guide_grounding_runtime import (
+from kb.paper_guide.grounder import (
     _extract_inline_reference_numbers,
     _inject_paper_guide_support_markers,
+    _resolve_reference_index_support_from_source,
     _resolve_paper_guide_support_markers,
     _paper_guide_cue_tokens,
+)
+from kb.paper_guide.router import (
+    PaperGuideExactSkillDeps,
+    _dispatch_paper_guide_exact_support_skill,
+    _resolve_paper_guide_intent,
 )
 from kb.paper_guide_postprocess import _sanitize_paper_guide_answer_for_user
 from kb.paper_guide_provenance import _resolve_paper_guide_md_path
@@ -30,19 +39,59 @@ from kb.paper_guide_retrieval_runtime import (
     _paper_guide_citation_lookup_fragments,
     _paper_guide_citation_lookup_query_tokens,
     _paper_guide_citation_lookup_signal_score,
+    _paper_guide_prompt_prefers_single_reference,
     _select_primary_refs_for_prompt,
     _select_paper_guide_local_citation_lookup_refs,
     _paper_guide_targeted_source_block_hits,
 )
 from kb.paper_guide_prompting import (
-    _paper_guide_prompt_family,
     _paper_guide_prompt_requests_doc_map,
     _paper_guide_prompt_requests_exact_method_support,
     _requested_figure_number,
 )
+from kb.paper_guide_structured_index_runtime import (
+    load_paper_guide_equation_index,
+    load_paper_guide_figure_index,
+)
 from kb.paper_guide_target_scope import _extract_prompt_panel_letters
 from kb.inpaper_citation_grounding import parse_ref_num_set
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_inline_markdown
+
+_PAPER_GUIDE_LOCATE_ONLY_DROP_FAMILIES = {
+    "method",
+    "reproduce",
+    "equation",
+    "figure_walkthrough",
+    "box_only",
+    "discussion_only",
+}
+
+
+def _strip_method_focus_contradictions(answer: str, *, prompt: str = "") -> str:
+    text = str(answer or "").strip()
+    if (not text) or ("Implementation detail:" not in text):
+        return text
+    focus_terms = _extract_paper_guide_method_focus_terms(prompt)
+    if not focus_terms:
+        return text
+    detail_lines = [
+        str(m.group(1) or "").strip()
+        for m in re.finditer(r"(?im)^Implementation detail:\s*(.+)$", text)
+    ]
+    detail_probe = "\n".join(line for line in detail_lines if line)
+    if not detail_probe:
+        return text
+    supported_terms = [
+        term
+        for term in focus_terms
+        if str(term or "").strip() and str(term).lower() in detail_probe.lower()
+    ]
+    if not supported_terms:
+        return text
+    return _drop_paper_guide_negative_term_lines(
+        text,
+        focus_terms=supported_terms,
+    )
 
 
 def _surface_plain_text_box_formula(answer: str, *, support_resolution: list[dict]) -> str:
@@ -67,6 +116,245 @@ def _surface_plain_text_box_formula(answer: str, *, support_resolution: list[dic
     if not match:
         return text
     return f"{text}\n\nPlain-text condition: {match.group(1)}."
+
+
+def _ground_paper_guide_answer_support(
+    answer: str,
+    *,
+    support_slots: list[dict],
+    prompt_family: str = "",
+    db_dir: Path | None = None,
+    max_injections: int = 3,
+) -> tuple[str, list[dict]]:
+    text = _inject_paper_guide_support_markers(
+        answer,
+        support_slots=support_slots,
+        prompt_family=prompt_family,
+        max_injections=max_injections,
+    )
+    return _resolve_paper_guide_support_markers(
+        text,
+        support_slots=support_slots,
+        prompt_family=prompt_family,
+        db_dir=db_dir,
+    )
+
+
+def _iter_component_role_answer_lines(answer_text: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(answer_text or "").splitlines():
+        bullet = re.sub(r"^\s*[-*]\s+", "", str(raw_line or "").strip()).strip()
+        if not bullet or bullet.lower().startswith("from the retrieved method evidence"):
+            continue
+        key = bullet.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(bullet)
+    return out
+
+
+def _select_component_role_answer_line(answer_text: str, *, term: str) -> str:
+    aliases = _paper_guide_focus_term_aliases(term)
+    if not aliases:
+        return ""
+    candidates: list[str] = []
+    for line in _iter_component_role_answer_lines(answer_text):
+        low = line.lower()
+        if any(alias in low for alias in aliases):
+            candidates.append(line)
+    if candidates:
+        candidates.sort(key=lambda item: len(item), reverse=True)
+        return candidates[0]
+    return ""
+
+
+def _split_component_role_anchor_candidates(text: str) -> list[str]:
+    clean = re.sub(r"\s+", " ", normalize_inline_markdown(str(text or "")).strip())
+    if not clean:
+        return []
+    parts = [
+        str(part or "").strip()
+        for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9(\[])", clean)
+        if str(part or "").strip()
+    ]
+    if not parts:
+        return [clean]
+    windows: list[str] = []
+    for idx, part in enumerate(parts):
+        windows.append(part)
+        if idx + 1 < len(parts):
+            windows.append(f"{part} {parts[idx + 1]}".strip())
+    return windows
+
+
+def _score_component_role_anchor(candidate: str, *, term: str) -> float:
+    low = str(candidate or "").strip().lower()
+    if not low:
+        return float("-inf")
+    aliases = _paper_guide_focus_term_aliases(term)
+    score = 0.0
+    if any(alias in low for alias in aliases):
+        score += 3.0
+    term_low = str(term or "").strip().lower()
+    if term_low == "rvt":
+        if "radial variance transform" in low:
+            score += 3.0
+        if "intensity-only map" in low:
+            score += 4.0
+        if "local degree of symmetry" in low or "radial symmetry" in low:
+            score += 3.0
+        if "registration" in low:
+            score += 0.8
+    elif term_low == "apr":
+        if "phase correlation" in low or "phase-correlation" in low:
+            score += 4.0
+        if "image registration" in low:
+            score += 2.5
+        if "shift vectors" in low:
+            score += 3.0
+        if "applied back" in low or "original iism" in low or "prior to summation" in low:
+            score += 2.2
+    score -= min(1.2, 0.002 * float(len(low)))
+    return score
+
+
+def _select_component_role_locate_anchor(block_text: str, *, term: str) -> str:
+    candidates = _split_component_role_anchor_candidates(block_text)
+    if not candidates:
+        return ""
+    best = ""
+    best_score = float("-inf")
+    for candidate in candidates:
+        score = _score_component_role_anchor(candidate, term=term)
+        if score > best_score:
+            best = candidate
+            best_score = score
+    if best_score > float("-inf"):
+        return best[:900]
+    return normalize_inline_markdown(str(block_text or "").strip())[:900]
+
+
+def _resolve_component_role_support_from_source(
+    source_path: str,
+    *,
+    prompt: str,
+    answer_text: str,
+    db_dir: Path | None,
+) -> list[dict]:
+    src = str(source_path or "").strip()
+    if not src:
+        return []
+    focus_terms = _extract_paper_guide_method_focus_terms(prompt)
+    if not focus_terms:
+        return []
+    md_path = _resolve_paper_guide_md_path(src, db_dir=db_dir)
+    if not isinstance(md_path, Path) or (not md_path.exists()):
+        return []
+    try:
+        blocks = list(load_source_blocks(md_path) or [])
+    except Exception:
+        blocks = []
+    if not blocks:
+        return []
+
+    out: list[dict] = []
+    used_segments: set[str] = set()
+    for term in focus_terms[:4]:
+        answer_line = _select_component_role_answer_line(answer_text, term=term)
+        if not answer_line:
+            continue
+        aliases = _paper_guide_focus_term_aliases(term)
+        best_block: dict | None = None
+        best_anchor = ""
+        best_score = float("-inf")
+        term_low = str(term or "").strip().lower()
+        answer_low = answer_line.lower()
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            kind = str(block.get("kind") or "").strip().lower()
+            if kind not in {"paragraph", "list_item", "blockquote"}:
+                continue
+            raw_text = str(block.get("raw_text") or block.get("text") or "").strip()
+            if not raw_text:
+                continue
+            block_text = normalize_inline_markdown(raw_text)
+            low_text = block_text.lower()
+            heading_path = str(block.get("heading_path") or "").strip()
+            low_heading = heading_path.lower()
+            if not any(alias in low_text or alias in low_heading for alias in aliases):
+                continue
+            anchor = _select_component_role_locate_anchor(block_text, term=term)
+            low_anchor = anchor.lower()
+            score = 0.0
+            if any(alias in low_heading for alias in aliases):
+                score += 3.0
+            if any(alias in low_text for alias in aliases):
+                score += 2.4
+            score += 0.6 * float(len([tok for tok in _paper_guide_cue_tokens(answer_low) if tok in low_text]))
+            score += _score_component_role_anchor(anchor, term=term)
+            if "data analysis" in low_heading:
+                score += 1.0
+            if term_low == "rvt":
+                if "radial variance transform" in low_heading:
+                    score += 1.5
+                if "intensity-only map" in low_text:
+                    score += 1.6
+            elif term_low == "apr":
+                if "adaptive pixel-reassignment" in low_heading or "(apr)" in low_heading:
+                    score += 1.8
+                if "shift vectors" in low_text and "original iism" in low_text:
+                    score += 1.6
+            if score > best_score:
+                best_block = block
+                best_anchor = anchor
+                best_score = score
+        if not isinstance(best_block, dict) or not best_anchor:
+            continue
+        seg_key = answer_line.lower()
+        if seg_key in used_segments:
+            continue
+        used_segments.add(seg_key)
+        out.append(
+            {
+                "source_path": src,
+                "block_id": str(best_block.get("block_id") or "").strip(),
+                "anchor_id": str(best_block.get("anchor_id") or "").strip(),
+                "heading_path": str(best_block.get("heading_path") or "").strip(),
+                "locate_anchor": str(best_anchor or "").strip(),
+                "claim_type": "method_detail",
+                "cite_policy": "locate_only",
+                "segment_text": answer_line,
+                "segment_index": -1,
+            }
+        )
+    return out
+
+
+def _merge_support_resolution_by_segment_text(
+    existing: list[dict] | None,
+    incoming: list[dict] | None,
+) -> list[dict]:
+    resolved = [dict(item) for item in list(incoming or []) if isinstance(item, dict)]
+    if not resolved:
+        return [dict(item) for item in list(existing or []) if isinstance(item, dict)]
+    incoming_norms = {
+        re.sub(r"\s+", " ", str(item.get("segment_text") or "").strip()).lower()
+        for item in resolved
+        if str(item.get("segment_text") or "").strip()
+    }
+    out: list[dict] = []
+    for item in list(existing or []):
+        if not isinstance(item, dict):
+            continue
+        norm = re.sub(r"\s+", " ", str(item.get("segment_text") or "").strip()).lower()
+        if norm and norm in incoming_norms:
+            continue
+        out.append(dict(item))
+    out.extend(resolved)
+    return out
 
 
 def _resolve_doc_map_records_from_source(
@@ -460,6 +748,136 @@ def _extract_exact_method_support_from_source(
     return str(rec.get("locate_anchor") or "").strip()
 
 
+def _paper_guide_block_lookup(blocks: list[dict] | None) -> tuple[dict[str, dict], dict[str, int]]:
+    block_lookup: dict[str, dict] = {}
+    block_index: dict[str, int] = {}
+    for idx, block in enumerate(list(blocks or [])):
+        if not isinstance(block, dict):
+            continue
+        block_id = str(block.get("block_id") or "").strip()
+        if not block_id:
+            continue
+        block_lookup[block_id] = block
+        block_index[block_id] = idx
+    return block_lookup, block_index
+
+
+def _select_exact_equation_index_entry(
+    entries: list[dict],
+    *,
+    equation_number: int,
+    cue_tokens: list[str],
+) -> dict:
+    best: dict = {}
+    best_score = float("-inf")
+    for raw in list(entries or []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry_number = int(raw.get("equation_number") or 0)
+        except Exception:
+            entry_number = 0
+        if entry_number != int(equation_number):
+            continue
+        heading_low = str(raw.get("heading_path") or "").strip().lower()
+        equation_low = str(raw.get("equation_markdown") or "").strip().lower()
+        before_low = str(raw.get("context_before") or "").strip().lower()
+        after_low = str(raw.get("context_after") or "").strip().lower()
+        score = 16.0
+        if str(raw.get("block_id") or "").strip():
+            score += 6.0
+        if str(raw.get("anchor_id") or "").strip():
+            score += 2.0
+        if f"\\tag{{{int(equation_number)}}}" in equation_low:
+            score += 6.0
+        if any(token in heading_low for token in ("method", "background", "equation", "formula", "derivation")):
+            score += 3.0
+        if cue_tokens:
+            score += min(
+                8.0,
+                1.6 * float(len([tok for tok in cue_tokens if tok in equation_low or tok in before_low or tok in after_low or tok in heading_low])),
+            )
+        if score > best_score:
+            best_score = score
+            best = dict(raw)
+    return best
+
+
+def _select_exact_figure_index_entry(entries: list[dict], *, figure_number: int) -> dict:
+    best: dict = {}
+    best_score = float("-inf")
+    for raw in list(entries or []):
+        if not isinstance(raw, dict):
+            continue
+        try:
+            entry_number = int(raw.get("paper_figure_number") or raw.get("fig_no") or 0)
+        except Exception:
+            entry_number = 0
+        if entry_number != int(figure_number):
+            continue
+        score = 12.0
+        if str(raw.get("caption_block_id") or "").strip():
+            score += 8.0
+        if str(raw.get("figure_block_id") or "").strip():
+            score += 4.0
+        if str(raw.get("heading_path") or "").strip():
+            score += 2.0
+        if str(raw.get("locate_anchor") or raw.get("caption") or "").strip():
+            score += 2.0
+        if score > best_score:
+            best_score = score
+            best = dict(raw)
+    return best
+
+
+def _collect_linked_figure_caption_blocks(
+    blocks: list[dict],
+    *,
+    figure_block_id: str = "",
+    caption_block_id: str = "",
+) -> list[dict]:
+    figure_id = str(figure_block_id or "").strip()
+    caption_id = str(caption_block_id or "").strip()
+    rows: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(block: dict) -> None:
+        if not isinstance(block, dict):
+            return
+        block_id = str(block.get("block_id") or "").strip()
+        if (not block_id) or (block_id in seen):
+            return
+        seen.add(block_id)
+        rows.append(block)
+
+    if figure_id:
+        linked = [
+            block
+            for block in list(blocks or [])
+            if isinstance(block, dict)
+            and str(block.get("linked_figure_block_id") or "").strip() == figure_id
+            and str(block.get("figure_role") or "").strip().lower() in {"caption", "caption_continuation"}
+        ]
+        linked.sort(key=lambda block: int(block.get("order_index") or 0))
+        for block in linked:
+            _add(block)
+
+    if caption_id:
+        direct = next(
+            (
+                block
+                for block in list(blocks or [])
+                if isinstance(block, dict) and str(block.get("block_id") or "").strip() == caption_id
+            ),
+            None,
+        )
+        if isinstance(direct, dict):
+            _add(direct)
+
+    rows.sort(key=lambda block: int(block.get("order_index") or 0))
+    return rows
+
+
 def _paper_guide_prompt_requests_exact_equation_support(prompt: str) -> bool:
     q = str(prompt or "").strip()
     if not q:
@@ -522,13 +940,38 @@ def _resolve_exact_equation_support_from_source(
         blocks = list(load_source_blocks(md_path) or [])
     except Exception:
         blocks = []
-    if not blocks:
-        return {}
-
     cue_tokens = [tok for tok in _paper_guide_cue_tokens(q) if tok not in {"equation", "formula", "variables"}]
+    block_lookup, block_index_lookup = _paper_guide_block_lookup(blocks)
+    indexed_entry = _select_exact_equation_index_entry(
+        load_paper_guide_equation_index(md_path),
+        equation_number=equation_number,
+        cue_tokens=cue_tokens,
+    )
+
     best_index = -1
     best_block: dict = {}
     best_score = float("-inf")
+    if indexed_entry:
+        indexed_block_id = str(indexed_entry.get("block_id") or "").strip()
+        indexed_anchor_id = str(indexed_entry.get("anchor_id") or "").strip()
+        indexed_heading = str(indexed_entry.get("heading_path") or "").strip()
+        indexed_markdown = str(indexed_entry.get("equation_markdown") or "").strip()
+        if indexed_block_id and indexed_block_id in block_lookup:
+            best_block = dict(block_lookup.get(indexed_block_id) or {})
+            best_index = int(block_index_lookup.get(indexed_block_id) or -1)
+        elif indexed_markdown:
+            best_block = {
+                "kind": "equation",
+                "block_id": indexed_block_id,
+                "anchor_id": indexed_anchor_id,
+                "heading_path": indexed_heading,
+                "number": int(indexed_entry.get("equation_number") or equation_number),
+                "raw_text": indexed_markdown,
+                "text": normalize_inline_markdown(indexed_markdown),
+            }
+        if best_block:
+            best_score = 32.0
+
     for idx, block in enumerate(blocks):
         if not isinstance(block, dict):
             continue
@@ -561,7 +1004,7 @@ def _resolve_exact_equation_support_from_source(
             best_score = score
             best_index = idx
             best_block = block
-    if best_index < 0 or not best_block:
+    if best_index < 0 and not best_block:
         return {}
 
     target_heading = str(best_block.get("heading_path") or "").strip()
@@ -572,75 +1015,77 @@ def _resolve_exact_equation_support_from_source(
             return heading == target_heading
         return not heading
 
-    leadin_text = ""
+    leadin_text = str(indexed_entry.get("context_before") or "").strip() if indexed_entry else ""
     leadin_block: dict = {}
-    leadin_score = float("-inf")
-    for offset in range(1, 4):
-        idx = best_index - offset
-        if idx < 0:
-            break
-        block = blocks[idx]
-        if not isinstance(block, dict):
-            continue
-        kind = str(block.get("kind") or "").strip().lower()
-        if kind not in {"paragraph", "list_item", "blockquote"}:
-            continue
-        if not _same_heading(block):
-            continue
-        raw_text = str(block.get("raw_text") or block.get("text") or "").strip()
-        if not raw_text:
-            continue
-        plain = normalize_inline_markdown(raw_text)
-        low = plain.lower()
-        score = 0.0
-        if any(token in low for token in ("can be written as", "is defined as", "is given by", "can be expressed as")):
-            score += 8.0
-        if any(token in low for token in ("the color", "ray", "rendering", "volume")):
-            score += 3.0
-        if _looks_like_equation_explanation_block(raw_text):
-            score -= 4.0
-        score -= 0.1 * float(offset)
-        if score > leadin_score:
-            leadin_score = score
-            leadin_text = raw_text
-            leadin_block = block
+    leadin_score = 4.0 if leadin_text else float("-inf")
+    if best_index >= 0:
+        for offset in range(1, 4):
+            idx = best_index - offset
+            if idx < 0:
+                break
+            block = blocks[idx]
+            if not isinstance(block, dict):
+                continue
+            kind = str(block.get("kind") or "").strip().lower()
+            if kind not in {"paragraph", "list_item", "blockquote"}:
+                continue
+            if not _same_heading(block):
+                continue
+            raw_text = str(block.get("raw_text") or block.get("text") or "").strip()
+            if not raw_text:
+                continue
+            plain = normalize_inline_markdown(raw_text)
+            low = plain.lower()
+            score = 0.0
+            if any(token in low for token in ("can be written as", "is defined as", "is given by", "can be expressed as")):
+                score += 8.0
+            if any(token in low for token in ("the color", "ray", "rendering", "volume")):
+                score += 3.0
+            if _looks_like_equation_explanation_block(raw_text):
+                score -= 4.0
+            score -= 0.1 * float(offset)
+            if score > leadin_score:
+                leadin_score = score
+                leadin_text = raw_text
+                leadin_block = block
 
-    explanation_text = ""
+    explanation_text = str(indexed_entry.get("context_after") or "").strip() if indexed_entry else ""
     explanation_block: dict = {}
-    explanation_score = float("-inf")
-    for offset in range(1, 5):
-        idx = best_index + offset
-        if idx >= len(blocks):
-            break
-        block = blocks[idx]
-        if not isinstance(block, dict):
-            continue
-        kind = str(block.get("kind") or "").strip().lower()
-        if kind == "equation":
-            break
-        if kind not in {"paragraph", "list_item", "blockquote"}:
-            continue
-        if not _same_heading(block):
-            break
-        raw_text = str(block.get("raw_text") or block.get("text") or "").strip()
-        if not raw_text:
-            continue
-        plain = normalize_inline_markdown(raw_text)
-        low = plain.lower()
-        score = 0.0
-        if _looks_like_equation_explanation_block(raw_text):
-            score += 10.0
-        if low.startswith("where "):
-            score += 8.0
-        if any(token in low for token in ("denotes", "represents", "is defined as", "near and far bounds")):
-            score += 4.0
-        if cue_tokens:
-            score += min(6.0, 1.5 * float(len([tok for tok in cue_tokens if tok in low])))
-        score -= 0.1 * float(offset)
-        if score > explanation_score:
-            explanation_score = score
-            explanation_text = raw_text
-            explanation_block = block
+    explanation_score = 5.0 if explanation_text else float("-inf")
+    if best_index >= 0:
+        for offset in range(1, 5):
+            idx = best_index + offset
+            if idx >= len(blocks):
+                break
+            block = blocks[idx]
+            if not isinstance(block, dict):
+                continue
+            kind = str(block.get("kind") or "").strip().lower()
+            if kind == "equation":
+                break
+            if kind not in {"paragraph", "list_item", "blockquote"}:
+                continue
+            if not _same_heading(block):
+                break
+            raw_text = str(block.get("raw_text") or block.get("text") or "").strip()
+            if not raw_text:
+                continue
+            plain = normalize_inline_markdown(raw_text)
+            low = plain.lower()
+            score = 0.0
+            if _looks_like_equation_explanation_block(raw_text):
+                score += 10.0
+            if low.startswith("where "):
+                score += 8.0
+            if any(token in low for token in ("denotes", "represents", "is defined as", "near and far bounds")):
+                score += 4.0
+            if cue_tokens:
+                score += min(6.0, 1.5 * float(len([tok for tok in cue_tokens if tok in low])))
+            score -= 0.1 * float(offset)
+            if score > explanation_score:
+                explanation_score = score
+                explanation_text = raw_text
+                explanation_block = block
 
     equation_markdown = str(best_block.get("raw_text") or best_block.get("text") or "").strip()
     if not equation_markdown:
@@ -771,12 +1216,12 @@ def _extract_caption_panel_clause(text: str, *, panel_letter: str) -> str:
     # - "**f** ..." (bold markdown)
     # - "f The ..." / "f ..." (plain, often after punctuation or at start)
     markers: list[tuple[int, str]] = []
-    for m in re.finditer(r"(?i)\(\s*([a-z])\s*\)", raw):
+    for m in re.finditer(r"\(\s*([A-Za-z])\s*\)", raw):
         markers.append((int(m.start()), str(m.group(1) or "").strip().lower()))
-    for m in re.finditer(r"(?i)\*\*\s*([a-z])\s*\*\*", raw):
+    for m in re.finditer(r"\*\*\s*([A-Za-z])\s*\*\*", raw):
         markers.append((int(m.start()), str(m.group(1) or "").strip().lower()))
     # Plain markers like "a The ..." at the start or after punctuation.
-    for m in re.finditer(r"(?im)(?:^|[.;:])\s*([a-z])\s+(?=[A-Z])", raw):
+    for m in re.finditer(r"(?m)(?:^|[.;:])\s*([A-Ga-g])\s+(?=[A-Z])", raw):
         markers.append((int(m.start(1)), str(m.group(1) or "").strip().lower()))
 
     if not markers:
@@ -867,13 +1312,57 @@ def _resolve_exact_figure_panel_caption_support_from_source(
     if not isinstance(md_path, Path) or (not md_path.exists()):
         return {}
 
+    blocks = list(load_source_blocks(md_path) or [])
+    figure_rows = load_paper_guide_figure_index(md_path)
+    indexed_figure = _select_exact_figure_index_entry(figure_rows, figure_number=fig_num)
+    if indexed_figure:
+        figure_block_id = str(indexed_figure.get("figure_block_id") or "").strip()
+        caption_block_id = str(indexed_figure.get("caption_block_id") or "").strip()
+        caption_anchor_id = str(indexed_figure.get("caption_anchor_id") or "").strip()
+        caption_blocks = _collect_linked_figure_caption_blocks(
+            blocks,
+            figure_block_id=figure_block_id,
+            caption_block_id=caption_block_id,
+        )
+        caption_text_parts = [
+            str(block.get("raw_text") or block.get("text") or "").strip()
+            for block in caption_blocks
+            if isinstance(block, dict) and str(block.get("raw_text") or block.get("text") or "").strip()
+        ]
+        indexed_caption = str(indexed_figure.get("locate_anchor") or indexed_figure.get("caption") or "").strip()
+        if indexed_caption:
+            caption_text_parts.append(indexed_caption)
+        combined_caption = " ".join(part for part in caption_text_parts if part).strip()
+        clause = _extract_caption_panel_clause(combined_caption, panel_letter=panel)
+        if clause:
+            heading = (
+                str(indexed_figure.get("heading_path") or "").strip()
+                or str((caption_blocks[0] if caption_blocks else {}).get("heading_path") or "").strip()
+            )
+            block_id = caption_block_id or figure_block_id
+            anchor_id = caption_anchor_id or str(indexed_figure.get("anchor_id") or "").strip()
+            if (not anchor_id) and caption_blocks:
+                anchor_id = str(caption_blocks[0].get("anchor_id") or "").strip()
+            return {
+                "source_path": src,
+                "block_id": block_id,
+                "anchor_id": anchor_id,
+                "heading_path": heading,
+                "locate_anchor": clause,
+                "claim_type": "figure_panel",
+                "cite_policy": "locate_only",
+                "segment_text": clause,
+                "segment_index": -1,
+                "figure_number": int(fig_num),
+                "panel_letters": [panel],
+            }
+
     best: dict = {}
     best_score = float("-inf")
     fig_marker_re = re.compile(rf"(?i)\b(?:figure|fig)\.?\s*{int(fig_num)}\b")
     caption_start_re = re.compile(r"(?i)^\s*(?:\*\*)?\s*(?:figure|fig)\.?\s*(\d{1,4})\b")
     scope_left = 0
     scope_heading = ""
-    blocks = list(load_source_blocks(md_path) or [])
     for block in blocks:
         if not isinstance(block, dict):
             continue
@@ -963,6 +1452,7 @@ def _resolve_exact_citation_lookup_support_from_source(
     explicit_ref_list_request = bool(
         re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
     )
+    prefers_single_reference = bool(_paper_guide_prompt_prefers_single_reference(q))
     query_tokens = set(_paper_guide_citation_lookup_query_tokens(q))
     query_focus_tokens: set[str] = set()
     for tok in re.findall(r"\b[A-Za-z]+\d{2,}\b", q):
@@ -973,6 +1463,12 @@ def _resolve_exact_citation_lookup_support_from_source(
         query_focus_tokens.add("pascal")
     if re.search(r"(?i)\bvoc\b", q):
         query_focus_tokens.add("voc")
+    if not query_focus_tokens:
+        # Generic citation questions without entity tokens (e.g. "higher-order spline")
+        # still need stronger topical focus than broad "representation" clauses.
+        for tok in query_tokens:
+            if len(str(tok or "").strip()) >= 6 and str(tok).strip().lower() not in {"method", "section"}:
+                query_focus_tokens.add(str(tok).strip().lower())
     focus_term = ""
     focus_match = re.search(r"(?i)\bcite(?:d|s)?\b[^\n]{0,80}\bfor\b\s+(?:the\s+)?([A-Za-z][A-Za-z0-9-]{1,36})", q)
     if focus_match:
@@ -991,6 +1487,7 @@ def _resolve_exact_citation_lookup_support_from_source(
     best_score = float("-inf")
     seen_fragments: set[str] = set()
     scored_fragments: list[dict] = []
+    blocks: list[dict] = []
 
     def _consider_fragment(*, heading: str, frag: str, meta: dict) -> None:
         nonlocal best_fragment, best_heading, best_refs, best_hit_meta, best_score
@@ -1008,6 +1505,11 @@ def _resolve_exact_citation_lookup_support_from_source(
             explicit_ref_list_request=explicit_ref_list_request,
         )
         score += min(6.0, 2.0 * float(len(refs)))
+        if prefers_single_reference:
+            if len(refs) == 1:
+                score += 6.0
+            else:
+                score -= min(24.0, 4.0 * float(len(refs) - 1))
         if query_tokens:
             shared = set(_paper_guide_cue_tokens(frag)).intersection(query_tokens)
             score += min(12.0, 2.4 * float(len(shared)))
@@ -1142,7 +1644,30 @@ def _resolve_exact_citation_lookup_support_from_source(
                 best_score = max(best_score, 24.0)
 
     if (not best_fragment) or (not best_refs) or best_score < 6.0:
-        return {}
+        indexed_reference = _resolve_reference_index_support_from_source(
+            md_path=md_path,
+            blocks=blocks,
+            prompt=q,
+            heading="",
+            prefers_single_reference=prefers_single_reference,
+        )
+        if not indexed_reference:
+            return {}
+        fallback_refs = [int(n) for n in list(indexed_reference.get("candidate_refs") or []) if int(n) > 0]
+        if not fallback_refs:
+            return {}
+        return {
+            "source_path": src,
+            "block_id": str(indexed_reference.get("block_id") or "").strip(),
+            "anchor_id": str(indexed_reference.get("anchor_id") or "").strip(),
+            "heading_path": str(indexed_reference.get("heading_path") or "").strip(),
+            "locate_anchor": str(indexed_reference.get("locate_anchor") or "").strip(),
+            "claim_type": "prior_work",
+            "cite_policy": "prefer_ref",
+            "segment_text": str(indexed_reference.get("locate_anchor") or "").strip(),
+            "segment_index": -1,
+            "ref_nums": list(fallback_refs[:4]),
+        }
 
     local_refs = _select_paper_guide_local_citation_lookup_refs(best_fragment, prompt=q, max_candidates=4)
     if local_refs and ((len(best_refs) <= 1) or (not focus_entity_tokens)):
@@ -1331,139 +1856,35 @@ def _apply_paper_guide_answer_postprocess(
             )
             return out, list(recs)
 
-    effective_family = family or _paper_guide_prompt_family(prompt_text)
-    if effective_family == "equation" and _paper_guide_prompt_requests_exact_equation_support(prompt_text):
-        equation_source_path = str(bound_source_path or source_path or "").strip()
-        rec = _resolve_exact_equation_support_from_source(
-            equation_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
+    resolved_intent = _resolve_paper_guide_intent(
+        prompt_text,
+        prompt_family=family,
+        answer_hits=list(answer_hits or []),
+    )
+    effective_family = str(resolved_intent.family or family or "").strip().lower()
+    exact_source_path = str(bound_source_path or source_path or "").strip()
+    exact_skill_result = _dispatch_paper_guide_exact_support_skill(
+        prompt_text=prompt_text,
+        resolved_intent=resolved_intent,
+        source_path=exact_source_path,
+        db_dir=db_dir,
+        has_hits=bool(answer_hits),
+        deps=PaperGuideExactSkillDeps(
+            resolve_exact_method_support=_resolve_exact_method_support_from_source,
+            resolve_exact_equation_support=_resolve_exact_equation_support_from_source,
+            build_exact_equation_answer=_build_exact_equation_support_answer,
+            resolve_exact_citation_lookup_support=_resolve_exact_citation_lookup_support_from_source,
+            extract_inline_reference_numbers=_extract_inline_reference_numbers,
+            resolve_exact_figure_panel_caption_support=_resolve_exact_figure_panel_caption_support_from_source,
+            extract_caption_clause_superscript_ref_nums=_extract_caption_clause_superscript_ref_nums,
+            sanitize_answer=_sanitize_paper_guide_answer_for_user,
+        ),
+    )
+    if exact_skill_result is not None:
+        return (
+            str(exact_skill_result.answer_text or "").strip(),
+            list(exact_skill_result.support_resolution or []),
         )
-        equation_markdown = str((rec or {}).get("equation_markdown") or "").strip()
-        if equation_markdown:
-            out, support_resolution = _build_exact_equation_support_answer(rec)
-            out = _sanitize_paper_guide_answer_for_user(
-                out,
-                has_hits=bool(answer_hits),
-                prompt=prompt_text,
-                prompt_family=effective_family,
-            )
-            return out, list(support_resolution or [])
-
-    if effective_family == "citation_lookup" and _paper_guide_prompt_requests_exact_citation_support(prompt_text):
-        citation_source_path = str(bound_source_path or source_path or "").strip()
-        rec = _resolve_exact_citation_lookup_support_from_source(
-            citation_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
-        )
-        locate_anchor = str((rec or {}).get("locate_anchor") or "").strip()
-        heading_path = str((rec or {}).get("heading_path") or "").strip()
-        ref_nums = [int(n) for n in list((rec or {}).get("ref_nums") or []) if int(n) > 0]
-        if locate_anchor and (not ref_nums):
-            ref_nums = _extract_inline_reference_numbers(locate_anchor, max_candidates=4)
-        if locate_anchor and ref_nums:
-            ref_label = ", ".join(f"[{int(n)}]" for n in ref_nums[:4])
-            lines = [f"The paper cites {ref_label} for this point."]
-            if heading_path:
-                lines.append(f"This is stated in {heading_path}:")
-            else:
-                lines.append("This is stated explicitly in the paper:")
-            lines.append(f"> {locate_anchor}")
-            out = "\n".join(lines).strip()
-            rec_out = dict(rec or {})
-            if ref_nums and not list(rec_out.get("candidate_refs") or []):
-                rec_out["candidate_refs"] = list(ref_nums[:4])
-            if ref_nums and int(ref_nums[0]) > 0 and int(rec_out.get("resolved_ref_num") or 0) <= 0:
-                rec_out["resolved_ref_num"] = int(ref_nums[0])
-            out = _sanitize_paper_guide_answer_for_user(
-                out,
-                has_hits=bool(answer_hits),
-                prompt=prompt_text,
-                prompt_family=effective_family,
-            )
-            return out, [rec_out]
-
-    # Exact-support figure prompts should bind the jump target to the specific caption clause (panel),
-    # not a best-effort fuzzy match to a nearby paragraph or the figure asset block.
-    if effective_family == "figure_walkthrough" and _paper_guide_prompt_requests_exact_figure_caption_support(prompt_text):
-        fig_source_path = str(bound_source_path or source_path or "").strip()
-        rec = _resolve_exact_figure_panel_caption_support_from_source(
-            fig_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
-        )
-        locate_anchor = str((rec or {}).get("locate_anchor") or "").strip()
-        heading_path = str((rec or {}).get("heading_path") or "").strip()
-        panel_letters = [
-            str(ch or "").strip().lower()
-            for ch in list((rec or {}).get("panel_letters") or [])
-            if str(ch or "").strip()
-        ]
-        try:
-            fig_num = int((rec or {}).get("figure_number") or 0)
-        except Exception:
-            fig_num = 0
-        if locate_anchor:
-            prefix = "Figure caption"
-            if fig_num > 0 and panel_letters:
-                prefix = f"Figure {int(fig_num)} caption for panel ({panel_letters[0]})"
-            elif fig_num > 0:
-                prefix = f"Figure {int(fig_num)} caption"
-            lines = [f"{prefix} states:"]
-            if heading_path:
-                lines.append(f"Section: {heading_path}")
-            lines.append(f"> {locate_anchor}")
-            # Surface obvious reference superscripts in the clause (for example SPC$^{15}$) as structured cites
-            # so the UI can show the reference entry instead of silently dropping it.
-            ref_nums = _extract_caption_clause_superscript_ref_nums(locate_anchor, max_nums=4)
-            if ref_nums:
-                # Use in-paper numeric citation format so it can be rendered into hover meta
-                # without leaking raw structured cite markers into the user-facing markdown.
-                label = ", ".join(f"[{int(n)}]" for n in ref_nums if int(n) > 0)
-                if label:
-                    lines.append(f"References in this clause: {label}")
-            out = "\n".join(lines).strip()
-            rec_out = dict(rec or {})
-            if ref_nums and not list(rec_out.get("candidate_refs") or []):
-                rec_out["candidate_refs"] = list(ref_nums)
-                if len(ref_nums) == 1:
-                    rec_out["resolved_ref_num"] = int(ref_nums[0])
-            out = _sanitize_paper_guide_answer_for_user(
-                out,
-                has_hits=bool(answer_hits),
-                prompt=prompt_text,
-                prompt_family=effective_family,
-            )
-            return out, [rec_out]
-
-    # Exact-support method prompts should not depend on model output formatting or SUPPORT marker injection.
-    # Instead, deterministically surface the best matching sentence from source blocks and return a single
-    # locate-only support record so the locate gate can bind the jump target.
-    if effective_family in {"method", "reproduce"} and _paper_guide_prompt_requests_exact_method_support(prompt_text):
-        method_source_path = str(bound_source_path or source_path or "").strip()
-        rec = _resolve_exact_method_support_from_source(
-            method_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
-        )
-        locate_anchor = str((rec or {}).get("locate_anchor") or "").strip()
-        heading_path = str((rec or {}).get("heading_path") or "").strip()
-        if locate_anchor:
-            if heading_path:
-                out = f"The paper states this explicitly in {heading_path}:\n> {locate_anchor}"
-            else:
-                out = f"The paper states this explicitly:\n> {locate_anchor}"
-            rec_out = dict(rec or {})
-            rec_out.setdefault("segment_text", locate_anchor)
-            rec_out["segment_index"] = -1
-            out = _sanitize_paper_guide_answer_for_user(
-                out,
-                has_hits=bool(answer_hits),
-                prompt=prompt_text,
-                prompt_family=effective_family,
-            )
-            return out, [rec_out]
 
     if special_focus_block:
         text = _repair_paper_guide_focus_answer_generic(
@@ -1475,7 +1896,7 @@ def _apply_paper_guide_answer_postprocess(
             db_dir=db_dir,
         )
     elif effective_family == "figure_walkthrough":
-        figure_num = _requested_figure_number(prompt_text, answer_hits)
+        figure_num = int(resolved_intent.target_figure or 0) or int(_requested_figure_number(prompt_text, answer_hits) or 0)
         if figure_num > 0:
             figure_caption = _extract_bound_paper_figure_caption(
                 source_path,
@@ -1492,17 +1913,22 @@ def _apply_paper_guide_answer_postprocess(
                     db_dir=db_dir,
                 )
 
-    text = _inject_paper_guide_support_markers(
-        text,
-        support_slots=support_slots,
-        prompt_family=effective_family,
-    )
-    text, support_resolution = _resolve_paper_guide_support_markers(
+    text, support_resolution = _ground_paper_guide_answer_support(
         text,
         support_slots=support_slots,
         prompt_family=effective_family,
         db_dir=db_dir,
     )
+    if effective_family in {"overview", "method"} and _paper_guide_prompt_requests_component_role_explanation(prompt_text):
+        support_resolution = _merge_support_resolution_by_segment_text(
+            support_resolution,
+            _resolve_component_role_support_from_source(
+                exact_source_path,
+                prompt=prompt_text,
+                answer_text=text,
+                db_dir=db_dir,
+            ),
+        )
     if effective_family == "citation_lookup":
         normalized_support: list[dict] = []
         for rec in list(support_resolution or []):
@@ -1557,10 +1983,11 @@ def _apply_paper_guide_answer_postprocess(
         cards=cards,
         prompt_family=effective_family,
     )
-    text = _drop_paper_guide_locate_only_line_citations(
-        text,
-        support_resolution=support_resolution,
-    )
+    if effective_family in _PAPER_GUIDE_LOCATE_ONLY_DROP_FAMILIES:
+        text = _drop_paper_guide_locate_only_line_citations(
+            text,
+            support_resolution=support_resolution,
+        )
     if locked_citation_source and effective_family == "method":
         text = _promote_paper_guide_numeric_reference_citations(
             text,
@@ -1586,6 +2013,10 @@ def _apply_paper_guide_answer_postprocess(
             db_dir=db_dir,
             support_resolution=support_resolution,
             support_slots=support_slots,
+        )
+        text = _strip_method_focus_contradictions(
+            text,
+            prompt=prompt_text,
         )
         if exact_source_support and not any(
             str(rec.get("locate_anchor") or "").strip()

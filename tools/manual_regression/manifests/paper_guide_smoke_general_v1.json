@@ -13,6 +13,26 @@
     "max_tokens": 2600,
     "temperature": 0.15
   },
+  "scorecard_thresholds": {
+    "overall_pass_rate": {
+      "min": 1.0
+    },
+    "locate.first_click_rate": {
+      "min": 0.9
+    },
+    "locate.heading_or_none_rate": {
+      "max": 0.05
+    },
+    "citation.ref_num_accuracy": {
+      "min": 0.95
+    },
+    "structured_markers.clean_rate": {
+      "min": 1.0
+    },
+    "quality.minimum_ok_rate": {
+      "min": 1.0
+    }
+  },
   "default_checks": {
     "structured_markers": {
       "forbid_raw_structured_cites": true,
@@ -49,6 +69,73 @@
               "exact": true,
               "heading_includes_any": ["Acquisition and image reconstruction strategies"],
               "anchor_contains_any": ["Duarte", "compressive", "seminal"]
+            }
+          }
+        },
+        {
+          "id": "GEN_NP2019_BEGINNER_OVERVIEW_APPLICATIONS_EN",
+          "title": "Beginner overview: why SPI and which applications",
+          "prompt_family": "overview",
+          "tags": ["overview", "beginner", "general"],
+          "prompt": "I am just getting started. Why is single-pixel imaging interesting, and what kinds of applications does this review emphasize?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "cost per megapixel",
+                "infrared",
+                "microscopy",
+                "remote sensing",
+                "quantum state tomography"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not specify",
+                "cannot be determined"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": [
+                "Abstract",
+                "Applications and future potential",
+                "Acquisition and image reconstruction strategies"
+              ],
+              "anchor_contains_any": [
+                "cost per megapixel",
+                "infrared",
+                "remote sensing",
+                "quantum state tomography"
+              ]
+            }
+          }
+        },
+        {
+          "id": "GEN_NP2019_STRENGTH_LIMITS_TRADEOFF_EN",
+          "title": "Trade-off in single-pixel imaging",
+          "prompt_family": "strength_limits",
+          "tags": ["strength_limits", "section_targeted", "general"],
+          "prompt": "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe between the advantages of single-pixel imaging and the detector dynamic range?",
+          "checks": {
+            "answer": {
+              "contains_any": ["trade-off", "dynamic range", "quantization electronics", "mean square error"],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["How a single-pixel camera works"],
+              "anchor_contains_any": ["trade-off", "dynamic range", "quantization electronics", "mean square error"]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["How a single-pixel camera works"],
+              "heading_excludes_any": [
+                "Camera architecture",
+                "Applications and future potential",
+                "References"
+              ]
             }
           }
         },
@@ -113,6 +200,37 @@
           }
         },
         {
+          "id": "GEN_LSA_BEGINNER_RVT_APR_ROLE_EN",
+          "title": "RVT/APR beginner role explanation",
+          "prompt_family": "overview",
+          "tags": ["overview", "beginner", "general"],
+          "prompt": "I am new to this paper. What are RVT and APR doing here, in simple terms?",
+          "checks": {
+            "answer": {
+              "contains_all": ["RVT", "APR"],
+              "contains_any": [
+                "radial-symmetry map",
+                "phase-correlation",
+                "shift vectors",
+                "registration"
+              ],
+              "not_contains_any": [
+                "not stated",
+                "does not specify",
+                "no further explanation",
+                "only mention"
+              ]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Data analysis", "RVT", "APR"],
+              "anchor_contains_any": ["RVT", "phase correlation", "shift vectors"],
+              "claim_types": ["method_detail"]
+            }
+          }
+        },
+        {
           "id": "GEN_LSA_CITATION_RVT_ZH",
           "title": "RVT cited ref (Chinese)",
           "prompt_family": "citation_lookup",
@@ -157,9 +275,49 @@
               "claim_types": ["method_detail"]
             }
           }
+        },
+        {
+          "id": "GEN_LSA_DISCUSSION_ONLY_EN",
+          "title": "Discussion-only future directions",
+          "prompt_family": "discussion_only",
+          "tags": ["discussion_only", "general"],
+          "prompt": "From the Discussion section only, what future directions or extensions do the authors suggest for iISM?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "SPAD array",
+                "parallelized detection",
+                "single-molecule fluorescence ISM",
+                "commercial confocal fluorescence ISM systems"
+              ],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion"],
+              "anchor_contains_any": [
+                "SPAD array",
+                "parallelized detection",
+                "single-molecule fluorescence ISM",
+                "commercial confocal fluorescence ISM systems"
+              ]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["Discussion"],
+              "heading_excludes_any": [
+                "Introduction",
+                "Results",
+                "Materials",
+                "Methods",
+                "References"
+              ]
+            }
+          }
         }
       ]
     }
   ]
 }
-

@@ -139,6 +139,70 @@ def test_group_hits_by_doc_for_refs_supports_latex_tagged_equation_anchor(tmp_pa
     assert meta.get("anchor_target_number") == 8
 
 
+def test_group_hits_by_doc_for_refs_boosts_exact_focus_doc_over_higher_bm25_noise(tmp_path: Path, monkeypatch):
+    target_md = tmp_path / "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md"
+    target_md.write_text(
+        "\n".join(
+            [
+                "# Adaptive foveated single-pixel imaging with dynamic supersampling",
+                "",
+                "## INTRODUCTION",
+                "Spatially variant digital supersampling is introduced as a dynamic supersampling strategy for adaptive single-pixel imaging.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    noise_md = tmp_path / "Psychological Review-1954-Some informational aspects of visual perception.en.md"
+    noise_md.write_text(
+        "\n".join(
+            [
+                "# Some informational aspects of visual perception",
+                "",
+                "## INFORMATIONAL ASPECTS OF VISUAL PERCEPTION",
+                "This transformation saves information by using a relatively simple transformation under dynamic viewing conditions.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(retrieval_engine, "_is_temp_source_path", lambda _src: False)
+
+    hits_raw = [
+        {
+            "score": 24.4,
+            "id": "noise-hit",
+            "text": "This transformation saves information by using a relatively simple transformation under dynamic viewing conditions.",
+            "meta": {
+                "source_path": str(noise_md),
+                "heading_path": "INFORMATIONAL ASPECTS OF VISUAL PERCEPTION",
+            },
+        },
+        {
+            "score": 20.1,
+            "id": "target-hit",
+            "text": "Spatially variant digital supersampling is introduced as a dynamic supersampling strategy for adaptive single-pixel imaging.",
+            "meta": {
+                "source_path": str(target_md),
+                "heading_path": "INTRODUCTION",
+            },
+        },
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits_raw,
+        prompt_text="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        top_k_docs=2,
+        deep_query="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        deep_read=False,
+        llm_rerank=False,
+        settings=None,
+    )
+
+    assert len(docs) == 2
+    top_meta = docs[0].get("meta", {}) or {}
+    assert str(top_meta.get("source_path") or "").endswith(target_md.name)
+    assert float(((top_meta.get("ref_rank") or {}).get("focus_bonus") or 0.0)) > 0.0
+
+
 def test_group_hits_by_doc_for_refs_does_not_mistake_reference_index_for_equation_anchor(tmp_path: Path, monkeypatch):
     md = tmp_path / "CVPR-2024-SCINeRF.en.md"
     md.write_text(

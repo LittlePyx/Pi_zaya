@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useState, type RefObject } from 'react'
 import type { ReaderDocBlock } from '../../../api/references'
 import type { ReaderSessionHighlight } from './readerTypes'

@@ -1,7 +1,16 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
 import type { CiteShelfItem } from './citationState'
-import { citationDisplay, citationFormats, citeMetricSummary, normalizeShelfTags, summarySourceLabel } from './citationState'
+import {
+  citationDisplay,
+  citationFormats,
+  citeMetricSummary,
+  isLikelyWeakCitationTitle,
+  normalizeShelfTags,
+  summarySourceLabel,
+} from './citationState'
 
 interface Props {
   open: boolean
@@ -18,7 +27,7 @@ interface Props {
   onRemove: (key: string) => void
   onUpdateTags: (key: string, tags: string[]) => void
   onUpdateNote: (key: string, note: string) => void
-  onRepair: (item: CiteShelfItem) => void
+  onRepair: (item: CiteShelfItem, options?: { silent?: boolean }) => void
   onSelectSnapshot: (id: string) => void
   onSaveSnapshot: () => void
   onLoadSnapshot: () => void
@@ -33,6 +42,83 @@ const GROUP_MODE_LABEL: Record<GroupMode, string> = {
   none: '不分组',
   tag: '按标签',
   source: '按来源',
+}
+
+const normalizeDoiLike = (value: string): string =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
+    .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
+    .trim()
+
+const normalizeTitle = (value: string): string =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const hasConflictingVenueSignals = (item: CiteShelfItem): boolean => {
+  const hasJournalSignal = Boolean(String(item.journalIf || item.journalQuartile || item.journalIfSource || '').trim())
+  const hasConfSignal = Boolean(
+    String(item.conferenceTier || item.conferenceCcf || item.conferenceName || item.conferenceAcronym || '').trim(),
+  )
+  const venueKind = String(item.venueKind || '').trim().toLowerCase()
+  return (
+    (venueKind === 'conference' && hasJournalSignal)
+    || (venueKind === 'journal' && hasConfSignal)
+    || (hasJournalSignal && hasConfSignal)
+  )
+}
+
+const shouldAutoRepairItem = (item: CiteShelfItem, display = citationDisplay(item)): boolean => {
+  const rawTitle = String(item.title || '').trim()
+  const visibleTitle = String(display.main || rawTitle || item.main || '').trim()
+  const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
+  const hasAuthors = Boolean(String(item.authors || '').trim())
+  const hasVenue = Boolean(String(item.venue || '').trim())
+  const unresolved = !item.bibliometricsChecked
+  const rawTitleNeedsRepair = isLikelyWeakCitationTitle(rawTitle)
+  const visibleTitleNeedsRepair = isLikelyWeakCitationTitle(visibleTitle)
+  return (
+    hasConflictingVenueSignals(item)
+    || (hasDoi && (rawTitleNeedsRepair || unresolved))
+    || (!hasDoi && unresolved && (visibleTitleNeedsRepair || !hasAuthors || !hasVenue))
+  )
+}
+
+const autoRepairFingerprint = (item: CiteShelfItem, display = citationDisplay(item)): string => [
+  normalizeDoiLike(item.doi || item.doiUrl),
+  String(item.title || '').trim(),
+  String(display.main || '').trim(),
+  String(item.authors || '').trim(),
+  String(item.venue || '').trim(),
+  String(item.year || '').trim(),
+  String(item.venueKind || '').trim(),
+  String(item.citationCount || 0),
+  item.bibliometricsChecked ? '1' : '0',
+].join('|')
+
+const paperIdentity = (item: CiteShelfItem): string => {
+  const doiKey = normalizeDoiLike(item.doi || item.doiUrl)
+  if (doiKey) return `doi:${doiKey}`
+  const titleKey = normalizeTitle(item.title || item.main)
+  const year = /^\d{4}$/.test(String(item.year || '').trim()) ? String(item.year).trim() : ''
+  if (titleKey) return `title:${titleKey}|${year}`
+  return `key:${item.key}`
+}
+
+const impactScore = (item: CiteShelfItem): number => {
+  const ifValue = Number.parseFloat(String(item.journalIf || '').replace(/[^\d.]/g, ''))
+  const ifScore = Number.isFinite(ifValue) ? ifValue : 0
+  const quartile = String(item.journalQuartile || '').toUpperCase().trim()
+  const quartileScore = quartile === 'Q1' ? 4 : quartile === 'Q2' ? 3 : quartile === 'Q3' ? 2 : quartile === 'Q4' ? 1 : 0
+  const core = String(item.conferenceTier || '').toUpperCase().trim()
+  const coreScore = core === 'A*' ? 4 : core === 'A' ? 3 : core === 'B' ? 2 : core === 'C' ? 1 : 0
+  const ccf = String(item.conferenceCcf || '').toUpperCase().trim()
+  const ccfScore = ccf === 'A' ? 3 : ccf === 'B' ? 2 : ccf === 'C' ? 1 : 0
+  return ifScore * 10 + quartileScore + coreScore + ccfScore
 }
 
 export function CiteShelf({
@@ -67,6 +153,7 @@ export function CiteShelf({
   const [editingNoteKeys, setEditingNoteKeys] = useState<Record<string, boolean>>({})
   const [copyState, setCopyState] = useState<'idle' | 'gbt' | 'bibtex' | 'error'>('idle')
   const copyStateTimerRef = useRef<number | null>(null)
+  const autoRepairFingerprintsRef = useRef<Record<string, string>>({})
 
   const splitSummary = (text: string): string[] => {
     const normalized = String(text || '').replace(/\s+/g, ' ').trim()
@@ -96,42 +183,6 @@ export function CiteShelf({
     return (chunks.length > 0 ? chunks : [normalized]).slice(0, 4)
   }
 
-  const normalizeDoiLike = (value: string): string =>
-    String(value || '')
-      .trim()
-      .toLowerCase()
-      .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-      .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
-      .trim()
-
-  const normalizeTitle = (value: string): string =>
-    String(value || '')
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-
-  const paperIdentity = (item: CiteShelfItem): string => {
-    const doiKey = normalizeDoiLike(item.doi || item.doiUrl)
-    if (doiKey) return `doi:${doiKey}`
-    const titleKey = normalizeTitle(item.title || item.main)
-    const year = /^\d{4}$/.test(String(item.year || '').trim()) ? String(item.year).trim() : ''
-    if (titleKey) return `title:${titleKey}|${year}`
-    return `key:${item.key}`
-  }
-
-  const impactScore = (item: CiteShelfItem): number => {
-    const ifValue = Number.parseFloat(String(item.journalIf || '').replace(/[^\d.]/g, ''))
-    const ifScore = Number.isFinite(ifValue) ? ifValue : 0
-    const quartile = String(item.journalQuartile || '').toUpperCase().trim()
-    const quartileScore = quartile === 'Q1' ? 4 : quartile === 'Q2' ? 3 : quartile === 'Q3' ? 2 : quartile === 'Q4' ? 1 : 0
-    const core = String(item.conferenceTier || '').toUpperCase().trim()
-    const coreScore = core === 'A*' ? 4 : core === 'A' ? 3 : core === 'B' ? 2 : core === 'C' ? 1 : 0
-    const ccf = String(item.conferenceCcf || '').toUpperCase().trim()
-    const ccfScore = ccf === 'A' ? 3 : ccf === 'B' ? 2 : ccf === 'C' ? 1 : 0
-    return ifScore * 10 + quartileScore + coreScore + ccfScore
-  }
-
   const sourceTraceLabel = (item: CiteShelfItem): { labels: string[]; debugTitle: string } => {
     const labels: string[] = []
     const answerOrder = Number(item.traceAssistantOrder || 0)
@@ -145,45 +196,51 @@ export function CiteShelf({
     return { labels, debugTitle }
   }
 
-  const qualityHints = (item: CiteShelfItem): { chips: string[]; tip: string; needsRepair: boolean } => {
+  const qualityHints = (
+    item: CiteShelfItem,
+    display: ReturnType<typeof citationDisplay>,
+  ): { chips: string[]; tip: string; needsRepair: boolean } => {
     const chips: string[] = []
-    const title = String(item.title || item.main || '').trim()
-    const hasWeakTitle = (
-      !title
-      || title.length < 10
-      || /\.\s*[A-Za-z]{2,8}$/.test(title)
-      || /\bet\s+al\.?$/i.test(title)
-    )
+    const rawTitle = String(item.title || '').trim()
+    const visibleTitle = String(display.main || rawTitle || item.main || '').trim()
+    const hasWeakTitle = isLikelyWeakCitationTitle(visibleTitle)
+    const hasWeakStoredTitle = isLikelyWeakCitationTitle(rawTitle)
     const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
     const hasAuthors = Boolean(String(item.authors || '').trim())
     const hasVenue = Boolean(String(item.venue || '').trim())
-    const hasJournalSignal = Boolean(String(item.journalIf || item.journalQuartile || item.journalIfSource || '').trim())
-    const hasConfSignal = Boolean(
-      String(item.conferenceTier || item.conferenceCcf || item.conferenceName || item.conferenceAcronym || '').trim(),
-    )
-    const venueKind = String(item.venueKind || '').trim().toLowerCase()
-    const hasMetaConflict = (
-      (venueKind === 'conference' && hasJournalSignal)
-      || (venueKind === 'journal' && hasConfSignal)
-      || (hasJournalSignal && hasConfSignal)
-    )
-    const unresolved = !item.bibliometricsChecked && (!hasDoi || hasWeakTitle)
+    const hasMetaConflict = hasConflictingVenueSignals(item)
+    const unresolved = !item.bibliometricsChecked
+    const needsRepair = shouldAutoRepairItem(item, display)
 
     if (!hasDoi) chips.push('缺 DOI')
     if (!hasAuthors) chips.push('缺作者')
     if (!hasVenue) chips.push('缺期刊/会议')
-    if (hasWeakTitle) chips.push('标题疑似不完整')
+    if (hasWeakTitle) chips.push('标题待校正')
     if (hasMetaConflict) chips.push('元数据冲突')
     if (unresolved && chips.length <= 1) chips.push('待校验')
 
-    if (!chips.length) return { chips: [], tip: '', needsRepair: false }
+    if (!chips.length) return { chips: [], tip: '', needsRepair }
 
-    let tip = '建议点击尝试修复重新匹配元数据。'
-    if (!hasDoi) tip = '当前缺少 DOI，建议先尝试自动修复；失败时可手工补 DOI。'
-    else if (hasMetaConflict) tip = '检测到期刊/会议指标冲突，建议重新匹配后复核。'
-    else if (hasWeakTitle) tip = '标题可能被截断，建议重新匹配并核对原文。'
-    return { chips: chips.slice(0, 3), tip, needsRepair: true }
+    let tip = '系统会自动校正元数据，无需手动点击。'
+    if (!hasDoi) tip = '当前缺少 DOI，系统会先按标题和参考文献串自动匹配。'
+    else if (hasMetaConflict) tip = '检测到期刊/会议信号冲突，系统会自动重新匹配并校正。'
+    else if (hasWeakStoredTitle && !hasWeakTitle) tip = '已优先展示解析出的标题，系统会继续回填规范元数据。'
+    else if (hasWeakTitle) tip = '标题信息不完整，系统会自动按 DOI 或参考文献重新校正。'
+    return { chips: chips.slice(0, 3), tip, needsRepair }
   }
+
+  useEffect(() => {
+    if (repairLoadingKey) return
+    for (const item of items) {
+      const display = citationDisplay(item)
+      if (!shouldAutoRepairItem(item, display)) continue
+      const fingerprint = autoRepairFingerprint(item, display)
+      if (autoRepairFingerprintsRef.current[item.key] === fingerprint) continue
+      autoRepairFingerprintsRef.current[item.key] = fingerprint
+      onRepair(item, { silent: true })
+      return
+    }
+  }, [items, onRepair, repairLoadingKey])
 
   const duplicateCountByIdentity = useMemo(() => {
     const counter: Record<string, number> = {}
@@ -239,7 +296,7 @@ export function CiteShelf({
       sorted.sort((a, b) => impactScore(b) - impactScore(a))
     }
     return sorted
-  }, [impactScore, items, searchText, sortKey, tagFilter])
+  }, [items, searchText, sortKey, tagFilter])
 
   const groupedVisibleItems = useMemo(() => {
     if (groupMode === 'none') {
@@ -735,7 +792,7 @@ export function CiteShelf({
                       const duplicateCount = duplicateCountByIdentity[paperIdentity(item)] || 0
                       const trace = sourceTraceLabel(item)
                       const itemTags = normalizeShelfTags(item.tags)
-                      const quality = qualityHints(item)
+                      const quality = qualityHints(item, display)
                       const noteText = String(item.note || '').trim()
                       const isFocused = item.key === focusedKey
                       const metrics = citeMetricSummary(item)
@@ -803,17 +860,11 @@ export function CiteShelf({
                                   </span>
                                 ))}
                               </div>
-                              <button
-                                type="button"
-                                className="kb-shelf-repair-btn"
-                                disabled={repairLoadingKey === item.key}
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  onRepair(item)
-                                }}
-                              >
-                                {repairLoadingKey === item.key ? '修复中...' : '尝试修复'}
-                              </button>
+                              {quality.needsRepair ? (
+                                <span className="kb-shelf-repair-btn" aria-live="polite">
+                                  {repairLoadingKey === item.key ? '自动修复中...' : '系统自动校正'}
+                                </span>
+                              ) : null}
                             </div>
                           ) : null}
                           {quality.tip ? (

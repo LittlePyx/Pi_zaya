@@ -123,12 +123,59 @@ def _gen_store_partial(task: dict, partial: str, *, chat_store_cls=ChatStore) ->
         pass
 
 
+def _gen_store_answer_quality_meta(
+    task: dict,
+    *,
+    answer_quality: dict | None,
+    chat_store_cls=ChatStore,
+) -> None:
+    quality = dict(answer_quality or {})
+    if not quality:
+        return
+    chat_db = Path(str(task.get("chat_db") or "")).expanduser()
+    chat_store = chat_store_cls(chat_db)
+    try:
+        amid = int(task.get("assistant_msg_id") or 0)
+    except Exception:
+        amid = 0
+    if amid <= 0:
+        return
+    try:
+        chat_store.merge_message_meta(amid, {"answer_quality": quality})
+    except Exception:
+        pass
+
+
+def _gen_store_paper_guide_contract_meta(
+    task: dict,
+    *,
+    paper_guide_contracts: dict | None,
+    chat_store_cls=ChatStore,
+) -> None:
+    contracts = dict(paper_guide_contracts or {})
+    if not contracts:
+        return
+    chat_db = Path(str(task.get("chat_db") or "")).expanduser()
+    chat_store = chat_store_cls(chat_db)
+    try:
+        amid = int(task.get("assistant_msg_id") or 0)
+    except Exception:
+        amid = 0
+    if amid <= 0:
+        return
+    try:
+        chat_store.merge_message_meta(amid, {"paper_guide_contracts": contracts})
+    except Exception:
+        pass
+
+
 def _gen_store_answer_provenance(
     task: dict,
     *,
     answer: str,
     answer_hits: list[dict],
     support_resolution: list[dict] | None = None,
+    primary_evidence: dict | None = None,
     chat_store_cls=ChatStore,
     build_answer_provenance=_build_paper_guide_answer_provenance,
 ) -> None:
@@ -145,15 +192,20 @@ def _gen_store_answer_provenance(
         amid = 0
     if amid <= 0:
         return
+    provenance_kwargs = {
+        "answer": answer,
+        "answer_hits": list(answer_hits or []),
+        "bound_source_path": source_path,
+        "bound_source_name": str(task.get("paper_guide_bound_source_name") or "").strip(),
+        "db_dir": task.get("db_dir"),
+        "settings_obj": task.get("settings_obj"),
+        "llm_rerank": bool(task.get("llm_rerank", True)),
+        "support_resolution": list(support_resolution or []),
+    }
+    if isinstance(primary_evidence, dict) and primary_evidence:
+        provenance_kwargs["primary_evidence"] = dict(primary_evidence)
     provenance = build_answer_provenance(
-        answer=answer,
-        answer_hits=list(answer_hits or []),
-        bound_source_path=source_path,
-        bound_source_name=str(task.get("paper_guide_bound_source_name") or "").strip(),
-        db_dir=task.get("db_dir"),
-        settings_obj=task.get("settings_obj"),
-        llm_rerank=bool(task.get("llm_rerank", True)),
-        support_resolution=list(support_resolution or []),
+        **provenance_kwargs,
     )
     if not isinstance(provenance, dict):
         return
@@ -169,6 +221,7 @@ def _gen_store_answer_provenance_fast(
     answer: str,
     answer_hits: list[dict],
     support_resolution: list[dict] | None = None,
+    primary_evidence: dict | None = None,
     store_answer_provenance=_gen_store_answer_provenance,
 ) -> None:
     task_copy = dict(task or {})
@@ -181,12 +234,14 @@ def _gen_store_answer_provenance_fast(
     settings_obj = task_copy.get("settings_obj")
     has_api_key = bool(settings_obj is not None and getattr(settings_obj, "api_key", None))
     task_copy["llm_rerank"] = bool(inline_enabled and has_api_key)
-    store_answer_provenance(
-        task_copy,
-        answer=answer,
-        answer_hits=answer_hits,
-        support_resolution=support_resolution,
-    )
+    store_kwargs = {
+        "answer": answer,
+        "answer_hits": answer_hits,
+        "support_resolution": support_resolution,
+    }
+    if isinstance(primary_evidence, dict) and primary_evidence:
+        store_kwargs["primary_evidence"] = dict(primary_evidence)
+    store_answer_provenance(task_copy, **store_kwargs)
 
 
 def _should_run_provenance_async_refine(task: dict, *, environ=None) -> bool:
@@ -223,6 +278,7 @@ def _gen_store_answer_provenance_async(
     answer: str,
     answer_hits: list[dict],
     support_resolution: list[dict] | None = None,
+    primary_evidence: dict | None = None,
     store_answer_provenance=_gen_store_answer_provenance,
     perf_log=None,
     threading_module=threading,
@@ -234,12 +290,14 @@ def _gen_store_answer_provenance_async(
     def _run() -> None:
         t0 = time_module.perf_counter()
         try:
-            store_answer_provenance(
-                task_copy,
-                answer=answer,
-                answer_hits=answer_hits,
-                support_resolution=support_resolution,
-            )
+            store_kwargs = {
+                "answer": answer,
+                "answer_hits": answer_hits,
+                "support_resolution": support_resolution,
+            }
+            if isinstance(primary_evidence, dict) and primary_evidence:
+                store_kwargs["primary_evidence"] = dict(primary_evidence)
+            store_answer_provenance(task_copy, **store_kwargs)
             if callable(perf_log):
                 perf_log("gen.provenance_async", elapsed=time_module.perf_counter() - t0, ok=1)
         except Exception as exc:

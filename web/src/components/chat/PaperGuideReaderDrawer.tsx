@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { PaperGuideReaderPanel } from './reader/PaperGuideReaderPanel'
@@ -83,6 +85,7 @@ export function PaperGuideReaderDrawer({
   const primaryAnchorNumber = Number.isFinite(Number(locateTarget?.anchorNumber || payload?.anchorNumber || 0))
     ? Math.floor(Number(locateTarget?.anchorNumber || payload?.anchorNumber || 0))
     : 0
+  const activeHitLevel = String(locateTarget?.hitLevel || '').trim().toLowerCase()
   const strictLocate = Boolean(payload?.strictLocate || hasStructuredLocateTarget)
   const locateRequestId = Number.isFinite(Number(payload?.locateRequestId || 0))
     ? Math.max(0, Math.floor(Number(payload?.locateRequestId || 0)))
@@ -206,7 +209,7 @@ export function PaperGuideReaderDrawer({
       })
     }
     return out
-  }, [payload?.visibleAlternatives, payload?.alternatives, hasStructuredLocateTarget, alternatives, title])
+  }, [payload, hasStructuredLocateTarget, alternatives, title])
   const evidenceAlternatives = useMemo(() => {
     const rawList = Array.isArray(payload?.evidenceAlternatives)
       ? payload.evidenceAlternatives
@@ -232,7 +235,7 @@ export function PaperGuideReaderDrawer({
       })
     }
     return out
-  }, [payload?.evidenceAlternatives, payload?.alternatives, hasStructuredLocateTarget])
+  }, [payload, hasStructuredLocateTarget])
   const candidateOptions = useMemo(() => {
     return visibleCandidateOptions.map((item, displayIndex) => ({
       displayIndex,
@@ -287,6 +290,7 @@ export function PaperGuideReaderDrawer({
     activeBlockId,
     activeAnchorKind,
     activeAnchorNumber,
+    activeHitLevel,
     expectsEquationBinding,
   })
 

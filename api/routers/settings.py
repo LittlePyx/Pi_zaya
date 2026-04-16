@@ -38,6 +38,8 @@ class PrefsPatch(BaseModel):
     answer_depth_auto: bool | None = None
     answer_mode_hint: str | None = None
     answer_output_mode: str | None = None
+    refs_card_locale: str | None = None
+    ui_locale: str | None = None
 
 
 @router.patch("/settings")

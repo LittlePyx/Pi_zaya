@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
-from kb.paper_guide_grounding_runtime import (
+from kb.paper_guide.grounder import (
     _build_paper_guide_support_slots,
     _build_paper_guide_support_slots_block,
     _extract_inline_reference_specs,
@@ -47,6 +48,19 @@ def test_paper_guide_support_claim_type_and_policy_for_method_refs():
 
     assert claim_type == "method_detail"
     assert _paper_guide_support_cite_policy(claim_type=claim_type, prompt_family="method") == "prefer_ref"
+
+
+def test_paper_guide_support_claim_type_does_not_force_prior_work_for_overview_with_incidental_refs():
+    claim_type = _paper_guide_support_claim_type(
+        prompt_family="overview",
+        heading="Applications and future potential for single-pixel imaging / Figure 3",
+        snippet="Figure 3 shows the cost per megapixel across wavelength bands [64] and example application thumbnails [15].",
+        candidate_refs=[64, 15],
+        ref_spans=[{"text": "cost per megapixel [64]", "nums": [64], "scope": "same_sentence"}],
+    )
+
+    assert claim_type == "own_result"
+    assert _paper_guide_support_cite_policy(claim_type=claim_type, prompt_family="overview") == "locate_only"
 
 
 def test_build_paper_guide_support_slots_assigns_unique_markers_and_block_renders(tmp_path: Path):
@@ -255,6 +269,52 @@ def test_inject_paper_guide_support_markers_skips_nested_figure_color_bullets():
     assert "[[SUPPORT:" not in lines[2]
 
 
+def test_inject_paper_guide_support_markers_skips_figure_like_overview_slot_for_generic_summary_line():
+    out = _inject_paper_guide_support_markers(
+        "This paper tackles low-light single-photon imaging and uses physics-informed deep learning to improve resolution.",
+        support_slots=[
+            {
+                "support_example": "[[SUPPORT:DOC-1]]",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "figure_number": 7,
+                "cue": "sub-pixel convolution is applied in the reconstruction block to further upsample the feature map",
+                "heading_path": "Methods / Image reconstruction",
+                "heading": "Methods / Image reconstruction",
+                "snippet": "The workflow of sub-pixel convolution reconstruction.",
+                "locate_anchor": "In addition, sub-pixel convolution is applied in the reconstruction block to further upsample the feature map for single-photon super resolution.",
+                "deepread_texts": [],
+            }
+        ],
+        prompt_family="overview",
+    )
+
+    assert "[[SUPPORT:DOC-1]]" not in out
+
+
+def test_inject_paper_guide_support_markers_keeps_figure_like_slot_when_overview_line_explicitly_mentions_figure():
+    out = _inject_paper_guide_support_markers(
+        "Figure 7 shows how the reconstruction block upsamples the feature map for super resolution.",
+        support_slots=[
+            {
+                "support_example": "[[SUPPORT:DOC-1]]",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "figure_number": 7,
+                "cue": "sub-pixel convolution is applied in the reconstruction block to further upsample the feature map",
+                "heading_path": "Methods / Image reconstruction / Figure 7",
+                "heading": "Methods / Image reconstruction / Figure 7",
+                "snippet": "Figure 7. a The workflow of sub-pixel convolution reconstruction.",
+                "locate_anchor": "In addition, sub-pixel convolution is applied in the reconstruction block to further upsample the feature map for single-photon super resolution.",
+                "deepread_texts": [],
+            }
+        ],
+        prompt_family="overview",
+    )
+
+    assert out.endswith("[[SUPPORT:DOC-1]]")
+
+
 def test_resolve_paper_guide_support_slot_block_prefers_ref_span_atom_for_citation_lookup(tmp_path: Path):
     source_pdf = tmp_path / "DemoPaper.pdf"
     source_pdf.write_bytes(b"%PDF-1.4\n")
@@ -282,6 +342,63 @@ def test_resolve_paper_guide_support_slot_block_prefers_ref_span_atom_for_citati
     assert "Duarte" in str(rec.get("locate_anchor") or "")
     assert rec.get("candidate_refs") == [4]
     assert list((rec.get("ref_spans") or [])[0].get("nums") or []) == [4]
+
+
+def test_resolve_paper_guide_support_slot_block_falls_back_to_reference_index_for_citation_lookup(
+    monkeypatch,
+    tmp_path: Path,
+):
+    import kb.paper_guide_grounding_runtime as legacy_grounding_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    assets_dir = md_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "## Introduction\n\n"
+            "This paragraph discusses adaptive sampling generally but does not contain inline references.\n"
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "reference_index.json").write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "ref_num": 31,
+                        "reference_entry_id": "ref_0031",
+                        "text": "[31] Adaptive foveated single-pixel imaging via supersampling. Optics Express, 2021.",
+                        "doi": "",
+                        "year": "2021",
+                        "parse_confidence": 0.9,
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(legacy_grounding_runtime, "_build_paper_guide_evidence_atoms", lambda _blocks: [])
+    monkeypatch.setattr(legacy_grounding_runtime, "match_source_blocks", lambda *args, **kwargs: [])
+
+    rec = legacy_grounding_runtime._resolve_paper_guide_support_slot_block(
+        source_path=str(source_pdf),
+        snippet="Which paper is cited for adaptive and smart sensing with dynamic supersampling?",
+        heading="Introduction",
+        prompt_family="citation_lookup",
+        claim_type="prior_work",
+        db_dir=tmp_path,
+    )
+
+    assert rec.get("candidate_refs") == [31]
+    assert str(rec.get("heading_path") or "") == "References"
+    assert "supersampling" in str(rec.get("locate_anchor") or "").lower()
+    assert str(rec.get("evidence_atom_kind") or "") == "reference_entry"
 
 
 def test_resolve_paper_guide_support_slot_block_appends_figure_heading_for_panel_caption(tmp_path: Path):
@@ -316,6 +433,92 @@ def test_resolve_paper_guide_support_slot_block_appends_figure_heading_for_panel
     assert str(rec.get("heading_path") or "") == "Results / Figure 3"
     assert "methane imaging using SPC" in str(rec.get("locate_anchor") or "")
     assert "f" in list(rec.get("panel_letters") or [])
+
+
+def test_resolve_paper_guide_support_slot_block_prefers_figure_index_binding_for_panel_caption(
+    monkeypatch,
+    tmp_path: Path,
+):
+    import kb.paper_guide_grounding_runtime as legacy_grounding_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    assets_dir = md_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "## Results\n\n"
+            "![Figure 3](./assets/fig3.png)\n"
+            "*Thumbnail images: (e) methane imaging using scanning laser; "
+            "(f) methane imaging using SPC; (g) methane imaging using scanning OPO.*\n\n"
+            "A nearby paragraph about methane imaging that should lose the binding race.\n"
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "fig3.png").write_bytes(b"fake")
+
+    blocks = legacy_grounding_runtime.load_source_blocks(md_main)
+    figure_block = next(block for block in blocks if str(block.get("kind") or "") == "figure")
+    caption_block = next(
+        block
+        for block in blocks
+        if str(block.get("kind") or "") == "paragraph"
+        and "methane imaging using spc" in str(block.get("text") or "").lower()
+    )
+    decoy_block = next(
+        block
+        for block in blocks
+        if str(block.get("kind") or "") == "paragraph"
+        and "should lose the binding race" in str(block.get("text") or "").lower()
+    )
+    (assets_dir / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "figures": [
+                    {
+                        "paper_figure_number": 3,
+                        "figure_block_id": str(figure_block.get("block_id") or ""),
+                        "caption_block_id": str(caption_block.get("block_id") or ""),
+                        "caption_anchor_id": str(caption_block.get("anchor_id") or ""),
+                        "heading_path": "Results / Figure 3",
+                        "locate_anchor": "Thumbnail images: (e) methane imaging using scanning laser; (f) methane imaging using SPC; (g) methane imaging using scanning OPO.",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(legacy_grounding_runtime, "_build_paper_guide_evidence_atoms", lambda _blocks: [])
+    monkeypatch.setattr(
+        legacy_grounding_runtime,
+        "match_source_blocks",
+        lambda blocks, **kwargs: [{"score": 9.0, "block": dict(decoy_block)}],
+    )
+
+    rec = legacy_grounding_runtime._resolve_paper_guide_support_slot_block(
+        source_path=str(source_pdf),
+        snippet="Panel (f) corresponds to methane imaging using SPC.",
+        heading="Results",
+        prompt_family="figure_walkthrough",
+        claim_type="figure_panel",
+        db_dir=tmp_path,
+        target_scope={
+            "prompt_family": "figure_walkthrough",
+            "target_figure_number": 3,
+            "target_panel_letters": ["f"],
+        },
+    )
+
+    assert str(rec.get("block_id") or "") == str(caption_block.get("block_id") or "")
+    assert str(rec.get("block_id") or "") != str(decoy_block.get("block_id") or "")
+    assert str(rec.get("heading_path") or "") == "Results / Figure 3"
+    assert "methane imaging using spc" in str(rec.get("locate_anchor") or "").lower()
+    assert list(rec.get("panel_letters") or []) == ["f"]
 
 
 def test_resolve_paper_guide_support_slot_block_prefers_exact_box_sentence(tmp_path: Path):

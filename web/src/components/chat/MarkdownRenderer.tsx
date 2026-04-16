@@ -1,6 +1,7 @@
 ﻿import { Children, cloneElement, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
-import { createContext, useContext } from 'react'
+import { createContext } from 'react'
 import { Fragment } from 'react'
+import type { ComponentPropsWithoutRef } from 'react'
 import { message } from 'antd'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -1166,70 +1167,76 @@ function buildMarkdownComponents(
         </span>
       )
     },
-    p: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
-      const insideBlockquote = useContext(BlockquoteLocateContext)
-      const attrs = variant === 'reader'
-        ? readerAnchorAttrs(pickReaderAnchor(node, ['paragraph']))
-        : undefined
-      const renderOrder = nextLocateRenderOrder()
-      const meta = { kind: 'paragraph' as const, order: renderOrder }
-      const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
-        ? decorateInlineLocateAnchors(children, meta)
-        : { content: children, count: 0, figureRefCount: 0 }
-      const content = inline.count > 0 ? inline.content : children
-      if (variant !== 'chat') {
-        return <p {...attrs}>{content}</p>
-      }
-      if (isFigureHostParagraph(content)) {
-        return <p {...attrs} className="kb-md-figure-host">{content}</p>
-      }
-      const figureCaptionSnippet = inline.figureRefCount > 0 ? '' : preferredFigureCaptionSnippet(content)
-      if (figureCaptionSnippet) {
-        const figureBtn = renderLocateButton(figureCaptionSnippet, {
-          force: true,
-          meta: { kind: 'figure', order: renderOrder },
-          snippetOverride: figureCaptionSnippet,
-        })
-        if (figureBtn) {
-          const tailed = appendTailButtonToContent(content, figureBtn, `figure-caption-${renderOrder}`)
-          return <p {...attrs} className="kb-md-figure-caption">{tailed}</p>
-        }
-      }
-      if (inlineTextTailLocateEnabled && !insideBlockquote && inline.count <= 0) {
-        const tailBtn = renderLocateButton(content, {
-          meta,
-        })
-        if (tailBtn) {
-          const tailed = appendTailButtonToContent(content, tailBtn, `paragraph-${renderOrder}`)
-          return <p {...attrs}>{tailed}</p>
-        }
-      }
-      return <p {...attrs}>{content}</p>
-    },
-    li: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
-      const insideBlockquote = useContext(BlockquoteLocateContext)
-      const attrs = variant === 'reader'
-        ? readerAnchorAttrs(pickReaderAnchor(node, ['list_item']))
-        : undefined
-      const renderOrder = nextLocateRenderOrder()
-      const meta = { kind: 'list_item' as const, order: renderOrder }
-      const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
-        ? decorateInlineLocateAnchors(children, meta)
-        : { content: children, count: 0, figureRefCount: 0 }
-      const content = inline.count > 0 ? inline.content : children
-      if (variant === 'chat' && inlineTextTailLocateEnabled && !insideBlockquote && inline.count <= 0) {
-        const tailBtn = renderLocateButton(content, {
-          meta,
-        })
-        if (tailBtn) {
-          const tailed = appendTailButtonToContent(content, tailBtn, `list-item-${renderOrder}`)
-          return <li {...attrs}>{tailed}</li>
-        }
-      }
-      return <li {...attrs}>{content}</li>
-    },
-    div: (props: any) => {
-      const { node, className, children, ...rest } = props || {}
+    p: ({ node, children }: { node?: unknown; children?: ReactNode }) => (
+      <BlockquoteLocateContext.Consumer>
+        {(insideBlockquote) => {
+          const attrs = variant === 'reader'
+            ? readerAnchorAttrs(pickReaderAnchor(node, ['paragraph']))
+            : undefined
+          const renderOrder = nextLocateRenderOrder()
+          const meta = { kind: 'paragraph' as const, order: renderOrder }
+          const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
+            ? decorateInlineLocateAnchors(children, meta)
+            : { content: children, count: 0, figureRefCount: 0 }
+          const content = inline.count > 0 ? inline.content : children
+          if (variant !== 'chat') {
+            return <p {...attrs}>{content}</p>
+          }
+          if (isFigureHostParagraph(content)) {
+            return <p {...attrs} className="kb-md-figure-host">{content}</p>
+          }
+          const figureCaptionSnippet = inline.figureRefCount > 0 ? '' : preferredFigureCaptionSnippet(content)
+          if (figureCaptionSnippet) {
+            const figureBtn = renderLocateButton(figureCaptionSnippet, {
+              force: true,
+              meta: { kind: 'figure', order: renderOrder },
+              snippetOverride: figureCaptionSnippet,
+            })
+            if (figureBtn) {
+              const tailed = appendTailButtonToContent(content, figureBtn, `figure-caption-${renderOrder}`)
+              return <p {...attrs} className="kb-md-figure-caption">{tailed}</p>
+            }
+          }
+          if (inlineTextTailLocateEnabled && !insideBlockquote && inline.count <= 0) {
+            const tailBtn = renderLocateButton(content, {
+              meta,
+            })
+            if (tailBtn) {
+              const tailed = appendTailButtonToContent(content, tailBtn, `paragraph-${renderOrder}`)
+              return <p {...attrs}>{tailed}</p>
+            }
+          }
+          return <p {...attrs}>{content}</p>
+        }}
+      </BlockquoteLocateContext.Consumer>
+    ),
+    li: ({ node, children }: { node?: unknown; children?: ReactNode }) => (
+      <BlockquoteLocateContext.Consumer>
+        {(insideBlockquote) => {
+          const attrs = variant === 'reader'
+            ? readerAnchorAttrs(pickReaderAnchor(node, ['list_item']))
+            : undefined
+          const renderOrder = nextLocateRenderOrder()
+          const meta = { kind: 'list_item' as const, order: renderOrder }
+          const inline = (variant === 'chat' && inlineTextLocateEnabled && !insideBlockquote)
+            ? decorateInlineLocateAnchors(children, meta)
+            : { content: children, count: 0, figureRefCount: 0 }
+          const content = inline.count > 0 ? inline.content : children
+          if (variant === 'chat' && inlineTextTailLocateEnabled && !insideBlockquote && inline.count <= 0) {
+            const tailBtn = renderLocateButton(content, {
+              meta,
+            })
+            if (tailBtn) {
+              const tailed = appendTailButtonToContent(content, tailBtn, `list-item-${renderOrder}`)
+              return <li {...attrs}>{tailed}</li>
+            }
+          }
+          return <li {...attrs}>{content}</li>
+        }}
+      </BlockquoteLocateContext.Consumer>
+    ),
+    div: (props: ComponentPropsWithoutRef<'div'> & { node?: unknown }) => {
+      const { className, children, ...rest } = props || {}
       const cls = String(className || '').trim()
       const displayMath = isDisplayMathClass(cls)
       if (!displayMath) return <div className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</div>
@@ -1253,8 +1260,8 @@ function buildMarkdownComponents(
         </div>
       )
     },
-    span: (props: any) => {
-      const { node, className, children, ...rest } = props || {}
+    span: (props: ComponentPropsWithoutRef<'span'> & { node?: unknown }) => {
+      const { className, children, ...rest } = props || {}
       const cls = String(className || '').trim()
       const displayMath = isDisplayMathClass(cls)
       if (!displayMath) return <span className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</span>
@@ -1297,7 +1304,7 @@ export function MarkdownRenderer({
     ? String(content || '')
     : normalize(content)
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
-  const toneBySource = useMemo(() => buildToneMap(citeDetails), [citeDetails])
+  const toneBySource = buildToneMap(citeDetails)
   const readerBlockResolver = useMemo(
     () => (variant === 'reader' ? createReaderBlockResolver(readerBlocks) : null),
     [variant, readerBlocks],

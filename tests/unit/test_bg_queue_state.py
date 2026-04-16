@@ -89,3 +89,19 @@ def test_remove_queued_tasks_for_pdf_preserves_done_plus_active_total():
     assert snap["total"] == 1
     assert snap["active_count"] == 1
     assert len(list(snap.get("queue") or [])) == 0
+
+
+def test_update_page_progress_allows_stage_message_after_pages_finish():
+    state = _make_state()
+    lock = Lock()
+
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+
+    update_page_progress(state, lock, 11, 11, "page 11/11", task_id="t1")
+    update_page_progress(state, lock, 11, 11, "ingesting: updating knowledge base index", task_id="t1")
+
+    snap = snapshot(state, lock)
+    assert snap["cur_page_done"] == 11
+    assert snap["cur_page_total"] == 11
+    assert snap["cur_page_msg"] == "ingesting: updating knowledge base index"

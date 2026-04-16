@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -15,6 +16,18 @@ from kb.task_runtime import (
     _gen_answer_quality_summary,
     _live_assistant_text,
 )
+
+
+def _strip_internal_structured_markers(text: str) -> str:
+    """Final safety net: never leak internal structured markers in /api/generate output."""
+    s = str(text or "")
+    if not s:
+        return s
+    s = re.sub(r"\[\[\s*SUPPORT\s*:[^\]]+\]\]", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\[\[\s*CITE\s*:[^\]]+\]\]", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"[ \t]{2,}", " ", s)
+    s = re.sub(r"\n{3,}", "\n\n", s).strip()
+    return s
 
 router = APIRouter(prefix="/api/generate", tags=["generate"])
 
@@ -116,18 +129,21 @@ async def stream_generation(session_id: str):
         t = _gen_get_task(session_id)
         if t is None:
             return {"done": True, "error": "not_found"}
+        answer = _strip_internal_structured_markers(str(t.get("answer", "") or ""))
         return {
+            "stream_schema_version": 2,
             "stage": t.get("stage", ""),
             "partial": t.get("partial", ""),
             "char_count": t.get("char_count", 0),
             "done": t.get("status") in ("done", "error", "canceled"),
             "status": t.get("status", ""),
-            "answer": t.get("answer", ""),
+            "answer": answer,
             "answer_intent": t.get("answer_intent", ""),
             "answer_depth": t.get("answer_depth", ""),
             "answer_output_mode": t.get("answer_output_mode", ""),
             "answer_contract_v1": bool(t.get("answer_contract_v1", False)),
             "answer_quality": t.get("answer_quality", {}),
+            "paper_guide_debug": t.get("paper_guide_debug", {}),
         }
 
     return sse_response(sse_generator(poll, interval=0.15))

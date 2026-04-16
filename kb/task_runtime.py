@@ -62,8 +62,10 @@ from kb.generation_message_runtime import (
 from kb.generation_state_runtime import (
     _gen_get_task as _state_gen_get_task,
     _gen_mark_cancel as _state_gen_mark_cancel,
+    _gen_store_paper_guide_contract_meta as _state_gen_store_paper_guide_contract_meta,
     _gen_should_cancel as _state_gen_should_cancel,
     _gen_store_answer as _state_gen_store_answer,
+    _gen_store_answer_quality_meta as _state_gen_store_answer_quality_meta,
     _gen_store_answer_provenance as _state_gen_store_answer_provenance,
     _gen_store_answer_provenance_async as _state_gen_store_answer_provenance_async,
     _gen_store_answer_provenance_fast as _state_gen_store_answer_provenance_fast,
@@ -221,6 +223,7 @@ from kb.paper_guide_retrieval_runtime import (
     _build_paper_guide_direct_citation_lookup_answer as _retrieval_build_direct_citation_lookup_answer,
     _filter_hits_for_paper_guide as _retrieval_filter_hits_for_paper_guide,
     _extract_paper_guide_local_citation_lookup_refs as _retrieval_extract_local_citation_lookup_refs,
+    _paper_guide_retrieval_confidence_snapshot as _retrieval_confidence_snapshot,
     _paper_guide_citation_lookup_fragments as _retrieval_citation_lookup_fragments,
     _paper_guide_citation_lookup_query_tokens as _retrieval_citation_lookup_query_tokens,
     _paper_guide_citation_lookup_signal_score as _retrieval_citation_lookup_signal_score,
@@ -228,13 +231,12 @@ from kb.paper_guide_retrieval_runtime import (
     _paper_guide_fallback_deepread_hits as _retrieval_fallback_deepread_hits,
     _paper_guide_has_requested_target_hits as _retrieval_has_requested_target_hits,
     _paper_guide_hit_matches_requested_targets as _retrieval_hit_matches_requested_targets,
-    _paper_guide_should_force_rescue as _retrieval_should_force_rescue,
     _select_paper_guide_raw_target_hits as _retrieval_select_raw_target_hits,
     _paper_guide_targeted_box_excerpt_hits as _retrieval_targeted_box_excerpt_hits,
     _paper_guide_targeted_source_block_hits as _retrieval_targeted_source_block_hits,
     _select_paper_guide_deepread_extras as _retrieval_select_deepread_extras,
 )
-from kb.paper_guide_grounding_runtime import (
+from kb.paper_guide.grounder import (
     _extract_inline_reference_numbers as _grounding_extract_inline_reference_numbers,
     _build_paper_guide_support_slots as _grounding_build_support_slots,
     _build_paper_guide_support_slots_block as _grounding_build_support_slots_block,
@@ -470,6 +472,89 @@ def _warm_refs_citation_meta_background(source_paths: list[str], *, library_db_p
         threading.Thread(target=_run, daemon=True, name="kb_refs_meta_warm").start()
     except Exception:
         pass
+
+
+def _build_precomputed_refs_render_payload(
+    *,
+    user_msg_id: int,
+    prompt: str,
+    prompt_sig: str,
+    hits: list[dict],
+    scores: list[float],
+    used_query: str,
+    used_translation: bool,
+    guide_mode: bool,
+    guide_source_path: str,
+    guide_source_name: str,
+    library_db_path: Path | str | None,
+) -> tuple[dict | None, str]:
+    mid = int(user_msg_id or 0)
+    if mid <= 0:
+        return None, ""
+    docs = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    if not docs:
+        return None, ""
+    for hit in docs:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        if str((meta or {}).get("ref_pack_state") or "").strip().lower() == "pending":
+            return None, ""
+    pack = {
+        "user_msg_id": mid,
+        "prompt": str(prompt or "").strip(),
+        "prompt_sig": str(prompt_sig or "").strip(),
+        "hits": docs,
+        "scores": list(scores or []),
+        "used_query": str(used_query or "").strip(),
+        "used_translation": bool(used_translation),
+    }
+    try:
+        from api.reference_ui import enrich_refs_payload
+        from api.routers.library import _md_dir, _pdf_dir
+        from api.routers.references import _refs_pack_render_signature
+        from kb.library_store import LibraryStore
+    except Exception:
+        return None, ""
+    try:
+        pdf_root = _pdf_dir()
+    except Exception:
+        pdf_root = None
+    try:
+        md_root = _md_dir()
+    except Exception:
+        md_root = None
+    try:
+        lib_store = LibraryStore(library_db_path) if library_db_path else None
+    except Exception:
+        lib_store = None
+    try:
+        payload_by_user = enrich_refs_payload(
+            {mid: pack},
+            pdf_root=pdf_root,
+            md_root=md_root,
+            lib_store=lib_store,
+            guide_mode=guide_mode,
+            guide_source_path=str(guide_source_path or "").strip(),
+            guide_source_name=str(guide_source_name or "").strip(),
+            render_variant="bounded_full",
+            allow_expensive_llm_for_ready=False,
+            allow_exact_locate=True,
+        )
+    except Exception:
+        return None, ""
+    payload = payload_by_user.get(mid) if isinstance(payload_by_user, dict) else None
+    if not isinstance(payload, dict) or (not payload):
+        return None, ""
+    try:
+        sig = _refs_pack_render_signature(
+            user_msg_id=mid,
+            pack=pack,
+            guide_mode=guide_mode,
+            guide_source_path=str(guide_source_path or "").strip(),
+            guide_source_name=str(guide_source_name or "").strip(),
+        )
+    except Exception:
+        sig = ""
+    return payload, str(sig or "").strip()
 
 
 _PAPER_GUIDE_PREFETCH_LOCK = threading.Lock()
@@ -883,6 +968,215 @@ def _apply_paper_guide_answer_postprocess(
     )
 
 
+def _build_paper_guide_supplement_reason_text(reason: str, *, prefer_zh: bool) -> str:
+    reason_norm = str(reason or "").strip().lower()
+    reason_map_zh = {
+        "empty_hits": "当前没有检索到能直接回答该问题的原文片段",
+        "target_miss": "检索没有直接命中你问到的具体目标位置",
+        "reference_only_hits": "当前命中内容更偏参考文献或外围片段",
+        "weak_signal": "当前原文证据信号偏弱",
+        "strict_family_without_targeted_support": "当前问题需要更定向的证据，但命中片段不够聚焦",
+        "strict_family_weak_overlap": "当前问题与命中片段的词面重叠较弱",
+        "strict_family_sparse_hits": "当前问题只命中了少量相关片段",
+        "broad_family_weak_overlap": "当前概览类问题与命中片段的重叠较弱",
+    }
+    reason_map_en = {
+        "empty_hits": "no directly answering paper excerpt was retrieved",
+        "target_miss": "retrieval did not directly hit the requested target scope",
+        "reference_only_hits": "the current hits lean toward references or peripheral snippets",
+        "weak_signal": "the current paper evidence signal is weak",
+        "strict_family_without_targeted_support": "this question needs more targeted evidence than the current hits provide",
+        "strict_family_weak_overlap": "lexical overlap between the question and evidence is weak",
+        "strict_family_sparse_hits": "only a small number of related snippets were retrieved",
+        "broad_family_weak_overlap": "overlap between this broad question and the evidence is weak",
+    }
+    if prefer_zh:
+        return reason_map_zh.get(reason_norm, "当前问题在原文中的直接支撑较少")
+    return reason_map_en.get(reason_norm, "paper support for this question is limited")
+
+
+def _build_paper_guide_supplement_evidence_digest(
+    *,
+    answer_hits: list[dict] | None,
+    support_resolution: list[dict] | None,
+    max_items: int = 2,
+) -> str:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(heading: str, snippet: str) -> None:
+        head = str(heading or "").strip()
+        text = normalize_inline_markdown(str(snippet or ""))
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return
+        if len(text) > 220:
+            text = text[:220].rsplit(" ", 1)[0].rstrip(" ,;:.") + "..."
+        label = f"{head}: {text}" if head else text
+        key = label.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(label)
+
+    for rec in list(support_resolution or []):
+        if not isinstance(rec, dict):
+            continue
+        heading = str(rec.get("heading_path") or rec.get("primary_heading_path") or "").strip()
+        snippet = (
+            rec.get("locate_anchor")
+            or rec.get("evidence_quote")
+            or rec.get("segment_text")
+            or rec.get("anchor_text")
+            or ""
+        )
+        _add(heading, str(snippet or ""))
+        if len(out) >= max(1, int(max_items or 2)):
+            break
+
+    if len(out) < max(1, int(max_items or 2)):
+        for hit in list(answer_hits or []):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta", {}) or {}
+            if not isinstance(meta, dict):
+                meta = {}
+            heading = str(meta.get("heading_path") or meta.get("top_heading") or "").strip()
+            snippet = str(hit.get("text") or "").strip()
+            _add(heading, snippet)
+            if len(out) >= max(1, int(max_items or 2)):
+                break
+
+    return "\n".join(f"- {item}" for item in out[: max(1, int(max_items or 2))])
+
+
+def _build_paper_guide_llm_supplement_lines(
+    *,
+    settings_obj,
+    answer_hits: list[dict] | None,
+    prompt_text: str,
+    grounded_answer: str,
+    prompt_family: str,
+    prefer_zh: bool,
+    retrieval_confidence_hint: dict[str, object] | None = None,
+    support_resolution: list[dict] | None = None,
+) -> str:
+    try:
+        enabled = bool(int(str(os.environ.get("KB_PAPER_GUIDE_SUPPLEMENT_LLM", "1") or "1")))
+    except Exception:
+        enabled = True
+    if not enabled:
+        return ""
+    if (not settings_obj) or (not getattr(settings_obj, "api_key", None)):
+        return ""
+
+    family = str(prompt_family or "").strip().lower()
+    if family in {"abstract", "citation_lookup"}:
+        return ""
+
+    answer_text = str(grounded_answer or "").strip()
+    if not answer_text:
+        return ""
+
+    hint = dict(retrieval_confidence_hint or {})
+    reason = _build_paper_guide_supplement_reason_text(
+        str(hint.get("low_confidence_reason") or hint.get("force_rescue_reason") or "").strip(),
+        prefer_zh=bool(prefer_zh),
+    )
+    evidence_digest = _build_paper_guide_supplement_evidence_digest(
+        answer_hits=list(answer_hits or []),
+        support_resolution=list(support_resolution or []),
+        max_items=2,
+    )
+    if not evidence_digest:
+        evidence_digest = "- (no stable excerpt digest available)"
+
+    try:
+        quick_settings = replace(
+            settings_obj,
+            timeout_s=max(6.0, min(float(getattr(settings_obj, "timeout_s", 12.0) or 12.0), 12.0)),
+            max_retries=0,
+        )
+    except Exception:
+        quick_settings = settings_obj
+
+    llm = DeepSeekChat(quick_settings)
+    family_hint_zh = {
+        "method": "补方法原理、常见适用边界或为什么会这样设计",
+        "reproduce": "补复现时常见的实现假设、依赖条件或风险点",
+        "equation": "补公式的直觉解释、变量角色或常见使用前提",
+        "figure_walkthrough": "补图示通常表示什么、该怎么读、常见误读点",
+        "overview": "补领域背景、问题设定或这类方法通常解决什么矛盾",
+        "compare": "补常见 trade-off、适用场景和边界",
+        "strength_limits": "补优劣势的通用判断框架",
+    }
+    family_hint_en = {
+        "method": "add intuitive mechanism, common applicability boundaries, or why this design is used",
+        "reproduce": "add typical implementation assumptions, dependencies, or reproduction risks",
+        "equation": "add intuitive reading of the formula, variable roles, or common prerequisites",
+        "figure_walkthrough": "add how such figures are usually read, what they typically indicate, or common misreads",
+        "overview": "add domain background, problem framing, or what tension this class of methods usually addresses",
+        "compare": "add common trade-offs, applicability range, and boundary conditions",
+        "strength_limits": "add a general lens for strengths and limitations",
+    }
+    family_hint = (
+        family_hint_zh.get(family, "补一小段有助于理解的背景、直觉或边界")
+        if prefer_zh
+        else family_hint_en.get(family, "add a small amount of background, intuition, or boundary context")
+    )
+
+    if prefer_zh:
+        system = (
+            "你只负责写一小段“AI补充理解”，用于帮助用户理解论文问题，但这段内容不是论文原文证据。\n"
+            "必须遵守：\n"
+            "- 只输出 1-2 条 markdown 列表项，每条都以 '- ' 开头。\n"
+            "- 保持中文。\n"
+            "- 不要写标题、不要写免责声明、不要写前言后语。\n"
+            "- 绝不能说“论文指出/论文证明/原文提到”。\n"
+            "- 不要输出引用号、[[CITE:...]]、DOC-k、SID、检索诊断。\n"
+            "- 重点做通用背景补充、直觉解释、常见边界，而不是重复当前答案。\n"
+        )
+        user = (
+            f"用户问题：\n{str(prompt_text or '').strip()}\n\n"
+            f"当前基于论文证据的回答：\n{answer_text[:900]}\n\n"
+            f"为什么需要补充：\n- {reason}\n\n"
+            f"当前证据摘要（只用于避免补充内容与论文证据冲突，不代表这些话要被你复述成论文结论）：\n"
+            f"{evidence_digest}\n\n"
+            f"请补 1-2 条 AI 自己的解释性内容，方向优先：{family_hint}。"
+        )
+    else:
+        system = (
+            "You only write a short AI supplemental note that helps the user understand the topic, but it is not paper-grounded evidence.\n"
+            "Requirements:\n"
+            "- Output only 1-2 markdown bullet lines, each starting with '- '.\n"
+            "- Stay in English.\n"
+            "- Do not write a title, disclaimer, or intro/outro.\n"
+            "- Never say 'the paper states', 'the paper proves', or similar evidence wording.\n"
+            "- Do not output citation numbers, [[CITE:...]], DOC-k, SID, or retrieval diagnostics.\n"
+            "- Add general context, intuition, or boundary conditions instead of repeating the grounded answer.\n"
+        )
+        user = (
+            f"User question:\n{str(prompt_text or '').strip()}\n\n"
+            f"Current paper-grounded answer:\n{answer_text[:900]}\n\n"
+            f"Why supplementation is needed:\n- {reason}\n\n"
+            f"Evidence digest for consistency only (do not present it as if the paper said your supplement):\n"
+            f"{evidence_digest}\n\n"
+            f"Write 1-2 AI supplemental bullets focused on: {family_hint}."
+        )
+
+    try:
+        return str(
+            llm.chat(
+                [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                temperature=0.3,
+                max_tokens=220,
+            )
+            or ""
+        ).strip()
+    except Exception:
+        return ""
+
+
 def _finalize_generation_answer(
     partial: str,
     *,
@@ -904,7 +1198,22 @@ def _finalize_generation_answer(
     paper_guide_candidate_refs_by_source: dict[str, list[int]] | None,
     paper_guide_support_slots: list[dict] | None,
     paper_guide_evidence_cards: list[dict] | None,
+    paper_guide_contracts_seed: dict | None = None,
+    paper_guide_retrieval_confidence_hint: dict[str, object] | None = None,
+    settings_obj=None,
 ) -> dict:
+    supplement_builder = None
+    if settings_obj and getattr(settings_obj, "api_key", None):
+        supplement_builder = lambda **kwargs: _build_paper_guide_llm_supplement_lines(
+            settings_obj=settings_obj,
+            answer_hits=list(answer_hits or []),
+            prompt_text=str(kwargs.get("prompt_text") or ""),
+            grounded_answer=str(kwargs.get("grounded_answer") or ""),
+            prompt_family=str(kwargs.get("prompt_family") or ""),
+            prefer_zh=bool(kwargs.get("prefer_zh")),
+            retrieval_confidence_hint=dict(kwargs.get("retrieval_confidence_hint") or {}),
+            support_resolution=list(kwargs.get("support_resolution") or []),
+        )
     return _finalize_runtime_finalize_generation_answer(
         partial,
         prompt=prompt,
@@ -925,9 +1234,12 @@ def _finalize_generation_answer(
         paper_guide_candidate_refs_by_source=paper_guide_candidate_refs_by_source,
         paper_guide_support_slots=paper_guide_support_slots,
         paper_guide_evidence_cards=paper_guide_evidence_cards,
+        paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
+        paper_guide_retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
         apply_paper_guide_answer_postprocess=_apply_paper_guide_answer_postprocess,
         maybe_append_library_figure_markdown=_maybe_append_library_figure_markdown,
         validate_structured_citations=_validate_structured_citations,
+        build_paper_guide_supplement_lines=supplement_builder,
     )
 
 
@@ -962,6 +1274,68 @@ def _needs_bound_source_hint(prompt: str) -> bool:
     if _DEICTIC_DOC_RE.search(q):
         return True
     return bool(_INPAPER_QUERY_RE.search(q))
+
+
+_PAPER_GUIDE_CROSS_PAPER_REFS_RE = re.compile(
+    r"(\bother papers?\b|\bwhich papers?\b|\bwhich paper\b|\bbesides this paper\b|\bin my library\b|"
+    r"哪篇|哪些论文|别的论文|其他论文|库里|文库里)",
+    flags=re.I,
+)
+
+
+def _paper_guide_requests_cross_paper_refs(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    return bool(_PAPER_GUIDE_CROSS_PAPER_REFS_RE.search(q))
+
+
+def _should_allow_refs_async_enrich(
+    *,
+    refs_async_enabled: bool,
+    paper_guide_mode: bool,
+    refs_async_in_paper_guide: bool,
+    paper_guide_cross_paper_refs: bool,
+) -> bool:
+    if not refs_async_enabled:
+        return False
+    if not paper_guide_mode:
+        return True
+    return bool(refs_async_in_paper_guide or paper_guide_cross_paper_refs)
+
+
+def _select_refs_async_rebuild_hits_raw(
+    *,
+    hits_raw: list[dict],
+    refs_unscoped_hits_raw: list[dict],
+    paper_guide_cross_paper_refs: bool,
+) -> list[dict]:
+    if paper_guide_cross_paper_refs and refs_unscoped_hits_raw:
+        return list(refs_unscoped_hits_raw)
+    return list(hits_raw)
+
+
+def _exclude_bound_source_hits_for_cross_paper_refs(
+    hits_raw: list[dict],
+    *,
+    bound_source_path: str,
+    bound_source_name: str,
+) -> list[dict]:
+    out: list[dict] = []
+    for hit in list(hits_raw or []):
+        if not isinstance(hit, dict):
+            continue
+        try:
+            if _is_hit_from_bound_source(
+                hit,
+                bound_source_path=bound_source_path,
+                bound_source_name=bound_source_name,
+            ):
+                continue
+        except Exception:
+            pass
+        out.append(hit)
+    return out
 
 
 def _pick_recent_bound_source_hints(*, conv_id: str, chat_store: ChatStore, limit: int = 2) -> list[str]:
@@ -1007,6 +1381,19 @@ def _paper_guide_hit_matches_requested_targets(hit: dict, *, prompt: str) -> boo
 
 def _paper_guide_has_requested_target_hits(hits_raw: list[dict], *, prompt: str) -> bool:
     return _retrieval_has_requested_target_hits(hits_raw, prompt=prompt)
+
+
+def _paper_guide_retrieval_confidence_snapshot(
+    *,
+    scoped_hits: list[dict],
+    prompt: str,
+    prompt_family: str = "",
+) -> dict[str, object]:
+    return _retrieval_confidence_snapshot(
+        scoped_hits=scoped_hits,
+        prompt=prompt,
+        prompt_family=prompt_family,
+    )
 
 
 def _paper_guide_targeted_box_excerpt_hits(
@@ -1132,18 +1519,36 @@ def _gen_store_partial(task: dict, partial: str) -> None:
     return _state_gen_store_partial(task, partial, chat_store_cls=ChatStore)
 
 
+def _gen_store_answer_quality_meta(task: dict, *, answer_quality: dict | None) -> None:
+    return _state_gen_store_answer_quality_meta(
+        task,
+        answer_quality=answer_quality,
+        chat_store_cls=ChatStore,
+    )
+
+
+def _gen_store_paper_guide_contract_meta(task: dict, *, paper_guide_contracts: dict | None) -> None:
+    return _state_gen_store_paper_guide_contract_meta(
+        task,
+        paper_guide_contracts=paper_guide_contracts,
+        chat_store_cls=ChatStore,
+    )
+
+
 def _gen_store_answer_provenance(
     task: dict,
     *,
     answer: str,
     answer_hits: list[dict],
     support_resolution: list[dict] | None = None,
+    primary_evidence: dict | None = None,
 ) -> None:
     return _state_gen_store_answer_provenance(
         task,
         answer=answer,
         answer_hits=answer_hits,
         support_resolution=support_resolution,
+        primary_evidence=primary_evidence,
         chat_store_cls=ChatStore,
         build_answer_provenance=_build_paper_guide_answer_provenance,
     )
@@ -1155,12 +1560,14 @@ def _gen_store_answer_provenance_fast(
     answer: str,
     answer_hits: list[dict],
     support_resolution: list[dict] | None = None,
+    primary_evidence: dict | None = None,
 ) -> None:
     return _state_gen_store_answer_provenance_fast(
         task,
         answer=answer,
         answer_hits=answer_hits,
         support_resolution=support_resolution,
+        primary_evidence=primary_evidence,
         store_answer_provenance=_gen_store_answer_provenance,
     )
 
@@ -1175,12 +1582,14 @@ def _gen_store_answer_provenance_async(
     answer: str,
     answer_hits: list[dict],
     support_resolution: list[dict] | None = None,
+    primary_evidence: dict | None = None,
 ) -> None:
     return _state_gen_store_answer_provenance_async(
         task,
         answer=answer,
         answer_hits=answer_hits,
         support_resolution=support_resolution,
+        primary_evidence=primary_evidence,
         store_answer_provenance=_gen_store_answer_provenance,
         perf_log=_perf_log,
         threading_module=threading,
@@ -1361,6 +1770,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 bound_hints = _pick_recent_bound_source_hints(conv_id=conv_id, chat_store=chat_store, limit=2)
                 for h in bound_hints:
                     retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
+        paper_guide_debug: dict[str, object] = {}
         paper_guide_prompt_family = ""
         if paper_guide_mode and paper_guide_bound_source_ready:
             paper_guide_prompt_family = _paper_guide_prompt_family(prompt, intent=answer_intent)
@@ -1369,6 +1779,17 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 family=paper_guide_prompt_family,
                 intent=answer_intent,
                 output_mode=answer_output_mode,
+            )
+            paper_guide_debug = {
+                "initial_prompt_family": str(paper_guide_prompt_family or ""),
+                "answer_intent": str(answer_intent or ""),
+                "output_mode": str(answer_output_mode or ""),
+                "bound_source_ready": bool(paper_guide_bound_source_ready),
+            }
+            _gen_update_task(
+                session_id,
+                task_id,
+                paper_guide_debug=dict(paper_guide_debug),
             )
 
         t_load0 = time.perf_counter()
@@ -1380,9 +1801,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         scores_raw: list[float] = []
         used_query = ""
         used_translation = False
+        paper_guide_retrieval_confidence_hint: dict[str, object] = {}
         hits: list[dict] = []
         grouped_docs: list[dict] = []
         answer_grouped_docs: list[dict] = []
+        refs_unscoped_hits_raw: list[dict] = []
+        paper_guide_cross_paper_refs = bool(
+            paper_guide_mode
+            and paper_guide_bound_source_ready
+            and _paper_guide_requests_cross_paper_refs(prompt or retrieval_prompt or "")
+        )
         refs_async_will_run = False
         refs_async_seed_docs: list[dict] = []
         if prompt and (not bypass_kb):
@@ -1394,6 +1822,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 top_k=top_k,
                 settings=settings_obj,
             )
+            if paper_guide_cross_paper_refs:
+                refs_unscoped_hits_raw = _exclude_bound_source_hits_for_cross_paper_refs(
+                    list(hits_raw or []),
+                    bound_source_path=paper_guide_bound_source_path,
+                    bound_source_name=paper_guide_bound_source_name,
+                )
             if paper_guide_mode and paper_guide_bound_source_ready and (paper_guide_bound_source_path or paper_guide_bound_source_name):
                 scoped_hits = _filter_hits_for_paper_guide(
                     hits_raw,
@@ -1525,19 +1959,47 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             seen_keys.add(key)
                             merged_hits.append(h)
                         scoped_hits = merged_hits
-                should_force_rescue = _retrieval_should_force_rescue(
+                confidence_snapshot = _paper_guide_retrieval_confidence_snapshot(
                     scoped_hits=scoped_hits,
                     prompt=(prompt or retrieval_prompt or ""),
                     prompt_family=paper_guide_prompt_family,
                 )
-                if should_force_rescue and paper_guide_bound_source_path:
+                should_force_rescue = bool(confidence_snapshot.get("force_rescue"))
+                force_rescue_reason = str(confidence_snapshot.get("force_rescue_reason") or "").strip()
+                should_confidence_rescue = bool(confidence_snapshot.get("low_confidence")) and (not should_force_rescue)
+                try:
+                    confidence_rescue_enabled = bool(int(str(os.environ.get("KB_PAPER_GUIDE_CONFIDENCE_RESCUE", "1") or "1")))
+                except Exception:
+                    confidence_rescue_enabled = True
+                should_confidence_rescue = bool(should_confidence_rescue and confidence_rescue_enabled)
+                _perf_log(
+                    "gen.paper_guide_scope_confidence",
+                    phase="pre_rescue",
+                    family=paper_guide_prompt_family or str(confidence_snapshot.get("family") or ""),
+                    hits=int(confidence_snapshot.get("hit_count") or 0),
+                    targeted=int(confidence_snapshot.get("targeted_hit_count") or 0),
+                    fallback=int(confidence_snapshot.get("fallback_hit_count") or 0),
+                    non_reference=int(bool(confidence_snapshot.get("non_reference_signal"))),
+                    strong=int(bool(confidence_snapshot.get("strong_signal"))),
+                    overlap=int(confidence_snapshot.get("max_overlap") or 0),
+                    max_score=float(confidence_snapshot.get("max_score") or 0.0),
+                    forced=int(should_force_rescue),
+                    low_conf=int(should_confidence_rescue),
+                    reason=force_rescue_reason or str(confidence_snapshot.get("low_confidence_reason") or ""),
+                )
+
+                should_run_fallback = bool((should_force_rescue or should_confidence_rescue) and paper_guide_bound_source_path)
+                if should_run_fallback:
+                    fallback_top_k = max(2, min(int(top_k or 4), 4))
+                    if should_confidence_rescue and (not should_force_rescue):
+                        fallback_top_k = max(2, min(int(top_k or 4), 3))
                     fallback_hits = _paper_guide_fallback_deepread_hits(
                         bound_source_path=paper_guide_bound_source_path,
                         bound_source_name=paper_guide_bound_source_name,
                         query=(used_query or retrieval_prompt or prompt or ""),
                         prompt=(prompt or retrieval_prompt or ""),
                         prompt_family=paper_guide_prompt_family,
-                        top_k=max(2, min(int(top_k or 4), 4)),
+                        top_k=fallback_top_k,
                         db_dir=db_dir,
                     )
                     if fallback_hits:
@@ -1561,13 +2023,39 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             scoped_hits = merged_hits
                         else:
                             scoped_hits = list(fallback_hits)
-                        _perf_log(
-                            "gen.paper_guide_scope_fallback",
-                            docs=len(fallback_hits),
-                            source=paper_guide_bound_source_name or paper_guide_bound_source_path,
-                            target_miss=int(prompt_targeted and (not scoped_has_target)),
-                            forced=int(should_force_rescue),
+                    _perf_log(
+                        "gen.paper_guide_scope_fallback",
+                        docs=len(fallback_hits),
+                        source=paper_guide_bound_source_name or paper_guide_bound_source_path,
+                        target_miss=int(prompt_targeted and (not scoped_has_target)),
+                        forced=int(should_force_rescue),
+                        low_confidence=int(should_confidence_rescue),
+                        applied=int(bool(fallback_hits)),
+                        reason=force_rescue_reason or str(confidence_snapshot.get("low_confidence_reason") or ""),
+                    )
+                    if fallback_hits:
+                        confidence_snapshot = _paper_guide_retrieval_confidence_snapshot(
+                            scoped_hits=scoped_hits,
+                            prompt=(prompt or retrieval_prompt or ""),
+                            prompt_family=paper_guide_prompt_family,
                         )
+                        _perf_log(
+                            "gen.paper_guide_scope_confidence",
+                            phase="post_rescue",
+                            family=paper_guide_prompt_family or str(confidence_snapshot.get("family") or ""),
+                            hits=int(confidence_snapshot.get("hit_count") or 0),
+                            targeted=int(confidence_snapshot.get("targeted_hit_count") or 0),
+                            fallback=int(confidence_snapshot.get("fallback_hit_count") or 0),
+                            non_reference=int(bool(confidence_snapshot.get("non_reference_signal"))),
+                            strong=int(bool(confidence_snapshot.get("strong_signal"))),
+                            overlap=int(confidence_snapshot.get("max_overlap") or 0),
+                            max_score=float(confidence_snapshot.get("max_score") or 0.0),
+                            forced=int(bool(confidence_snapshot.get("force_rescue"))),
+                            low_conf=int(bool(confidence_snapshot.get("low_confidence"))),
+                            reason=str(confidence_snapshot.get("force_rescue_reason") or confidence_snapshot.get("low_confidence_reason") or ""),
+                        )
+                if confidence_snapshot:
+                    paper_guide_retrieval_confidence_hint = dict(confidence_snapshot)
                 if len(scoped_hits) != len(hits_raw):
                     _perf_log(
                         "gen.paper_guide_scope",
@@ -1602,6 +2090,26 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 except Exception:
                     grouped_docs = []
             answer_grouped_docs = list(grouped_docs or [])
+            if refs_unscoped_hits_raw:
+                try:
+                    cross_paper_grouped_docs = _group_hits_by_doc_for_refs(
+                        refs_unscoped_hits_raw,
+                        prompt_text=retrieval_prompt,
+                        top_k_docs=top_k,
+                        deep_query=(used_query or retrieval_prompt or prompt or ""),
+                        deep_read=False,
+                        llm_rerank=False,
+                        settings=settings_obj,
+                    )
+                    if cross_paper_grouped_docs:
+                        grouped_docs = cross_paper_grouped_docs
+                        _perf_log(
+                            "gen.paper_guide_cross_paper_refs_seed",
+                            docs=len(grouped_docs),
+                            source=paper_guide_bound_source_name or paper_guide_bound_source_path,
+                        )
+                except Exception:
+                    pass
             answer_hit_limit = max(1, min(int(top_k), 4))
             guide_strict_mode = bool(paper_guide_mode and paper_guide_bound_source_ready)
             answer_doc_cap = max(
@@ -1650,7 +2158,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 refs_async_in_paper_guide = bool(int(str(os.environ.get("KB_REFS_ASYNC_ENRICH_IN_PAPER_GUIDE", "0") or "0")))
             except Exception:
                 refs_async_in_paper_guide = False
-            allow_refs_async = bool(refs_async_enabled and ((not paper_guide_mode) or refs_async_in_paper_guide))
+            allow_refs_async = _should_allow_refs_async_enrich(
+                refs_async_enabled=refs_async_enabled,
+                paper_guide_mode=paper_guide_mode,
+                refs_async_in_paper_guide=refs_async_in_paper_guide,
+                paper_guide_cross_paper_refs=paper_guide_cross_paper_refs,
+            )
 
             refs_async_will_run = bool(
                 allow_refs_async
@@ -1702,6 +2215,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     scores=list(scores_raw or []),
                     used_query=str(used_query or ""),
                     used_translation=bool(used_translation),
+                    render_status="pending" if refs_async_will_run else None,
+                    render_error="" if refs_async_will_run else None,
+                    render_error_detail="" if refs_async_will_run else None,
                 )
             except Exception:
                 pass
@@ -1725,6 +2241,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
 
         if refs_async_will_run and (umid > 0) and refs_async_seed_docs:
             _gen_update_task(session_id, task_id, refs_async_pending=True, refs_async_state="running")
+            try:
+                chat_store.set_message_refs_render_state(
+                    user_msg_id=umid,
+                    render_status="pending",
+                    render_error="",
+                    render_error_detail="",
+                    render_attempts=1,
+                )
+            except Exception:
+                pass
 
             def _bg_enrich_refs() -> None:
                 try:
@@ -1767,16 +2293,25 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             scores=list(scores_raw or []),
                             used_query=str(used_query or ""),
                             used_translation=bool(used_translation),
+                            render_status="pending",
+                            render_error="",
+                            render_error_detail="",
+                            render_attempts=1,
                         )
                     except Exception:
                         pass
 
                 seed_docs = list(refs_async_seed_docs)[:refs_async_top_k_docs]
                 try:
-                    if hits_raw:
+                    rebuild_hits_raw = _select_refs_async_rebuild_hits_raw(
+                        hits_raw=hits_raw,
+                        refs_unscoped_hits_raw=refs_unscoped_hits_raw,
+                        paper_guide_cross_paper_refs=paper_guide_cross_paper_refs,
+                    )
+                    if rebuild_hits_raw:
                         t_rebuild0 = time.perf_counter()
                         rebuilt_docs = _group_hits_by_doc_for_refs(
-                            hits_raw,
+                            rebuild_hits_raw,
                             prompt_text=retrieval_prompt,
                             top_k_docs=refs_async_top_k_docs,
                             deep_query=(used_query or retrieval_prompt or prompt or ""),
@@ -1827,6 +2362,42 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="canceled")
                     return
                 if enriched:
+                    rendered_payload = None
+                    rendered_payload_sig = ""
+                    render_status = "full"
+                    render_error = ""
+                    render_error_detail = ""
+                    render_built_at = time.time()
+                    render_evidence_sig = ""
+                    try:
+                        rendered_payload, rendered_payload_sig = _build_precomputed_refs_render_payload(
+                            user_msg_id=umid,
+                            prompt=prompt,
+                            prompt_sig=str(task.get("prompt_sig") or ""),
+                            hits=list(enriched or []),
+                            scores=list(scores_raw or []),
+                            used_query=str(used_query or ""),
+                            used_translation=bool(used_translation),
+                            guide_mode=bool(paper_guide_mode),
+                            guide_source_path=str(paper_guide_bound_source_path or ""),
+                            guide_source_name=str(paper_guide_bound_source_name or ""),
+                            library_db_path=getattr(settings_obj, "library_db_path", None),
+                        )
+                    except Exception as exc:
+                        rendered_payload = None
+                        rendered_payload_sig = ""
+                        render_status = "failed"
+                        render_error = "render_build_failed"
+                        render_error_detail = f"{type(exc).__name__}: {str(exc or '').strip()}"[:500]
+                        render_built_at = 0.0
+                    if render_status == "full" and ((not isinstance(rendered_payload, dict)) or (not rendered_payload) or (not str(rendered_payload_sig or "").strip())):
+                        render_status = "failed"
+                        render_error = "render_payload_empty"
+                        render_error_detail = "Precomputed refs render returned empty payload or signature."
+                        render_built_at = 0.0
+                        render_evidence_sig = ""
+                    else:
+                        render_evidence_sig = str(rendered_payload_sig or "").strip()
                     try:
                         cs = ChatStore(chat_db)
                         cs.upsert_message_refs(
@@ -1838,6 +2409,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             scores=list(scores_raw or []),
                             used_query=str(used_query or ""),
                             used_translation=bool(used_translation),
+                            rendered_payload=rendered_payload,
+                            rendered_payload_sig=rendered_payload_sig,
+                            render_status=render_status,
+                            render_error=render_error,
+                            render_error_detail=render_error_detail,
+                            render_built_at=render_built_at,
+                            render_attempts=1,
+                            render_evidence_sig=render_evidence_sig,
                         )
                     except Exception:
                         pass
@@ -1858,12 +2437,33 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     except Exception:
                         pass
                 else:
+                    try:
+                        cs = ChatStore(chat_db)
+                        cs.set_message_refs_render_state(
+                            user_msg_id=umid,
+                            render_status="failed",
+                            render_error="refs_enrich_empty",
+                            render_error_detail="Async refs enrich produced no enriched docs.",
+                            render_attempts=1,
+                        )
+                    except Exception:
+                        pass
                     _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="empty")
                 _finalize_task_after_refs_async()
 
             try:
                 threading.Thread(target=_bg_enrich_refs, daemon=True).start()
             except Exception:
+                try:
+                    chat_store.set_message_refs_render_state(
+                        user_msg_id=umid,
+                        render_status="failed",
+                        render_error="refs_async_thread_start_failed",
+                        render_error_detail="Failed to start async refs thread.",
+                        render_attempts=1,
+                    )
+                except Exception:
+                    pass
                 _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="error")
                 _finalize_task_after_refs_async()
 
@@ -1987,9 +2587,25 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_citation_grounding_block = str(paper_guide_prompt_context.get("paper_guide_citation_grounding_block") or "")
         paper_guide_candidate_refs_by_source = dict(paper_guide_prompt_context.get("paper_guide_candidate_refs_by_source") or {})
         paper_guide_support_slots = list(paper_guide_prompt_context.get("paper_guide_support_slots") or [])
+        paper_guide_contracts_seed = dict(paper_guide_prompt_context.get("paper_guide_contracts_seed") or {})
         paper_guide_support_resolution: list[dict] = []
         paper_guide_direct_source_path = str(paper_guide_prompt_context.get("paper_guide_direct_source_path") or paper_guide_bound_source_path or "")
         paper_guide_focus_source_path = str(paper_guide_prompt_context.get("paper_guide_focus_source_path") or paper_guide_bound_source_path or "")
+        if paper_guide_mode:
+            paper_guide_debug.update(
+                {
+                    "special_focus_present": bool(paper_guide_special_focus_block),
+                    "special_focus_prefix": str(paper_guide_special_focus_block or "")[:120],
+                    "support_slots_count": int(len(paper_guide_support_slots or [])),
+                    "focus_source_path": str(paper_guide_focus_source_path or ""),
+                    "direct_source_path": str(paper_guide_direct_source_path or ""),
+                }
+            )
+            _gen_update_task(
+                session_id,
+                task_id,
+                paper_guide_debug=dict(paper_guide_debug),
+            )
         prompt_bundle = _build_generation_prompt_bundle(
             prompt=prompt,
             ctx=ctx,
@@ -2046,6 +2662,19 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             db_dir=db_dir,
             llm=ds,
         )
+        if paper_guide_mode:
+            paper_guide_debug.update(
+                {
+                    "prompt_for_user": str(prompt_for_user or ""),
+                    "direct_answer_override_used": bool(str(direct_answer_override or "").strip()),
+                    "direct_answer_override_prefix": str(direct_answer_override or "").strip()[:120],
+                }
+            )
+            _gen_update_task(
+                session_id,
+                task_id,
+                paper_guide_debug=dict(paper_guide_debug),
+            )
         partial = ""
         streamed = False
         last_store_ts = 0.0
@@ -2109,12 +2738,32 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             paper_guide_candidate_refs_by_source=paper_guide_candidate_refs_by_source,
             paper_guide_support_slots=paper_guide_support_slots,
             paper_guide_evidence_cards=paper_guide_evidence_cards,
+            paper_guide_contracts_seed=paper_guide_contracts_seed,
+            paper_guide_retrieval_confidence_hint=paper_guide_retrieval_confidence_hint,
+            settings_obj=settings_obj,
         )
         answer = str(finalize_state.get("answer") or "")
         paper_guide_support_resolution = list(finalize_state.get("paper_guide_support_resolution") or [])
+        paper_guide_contracts = dict(finalize_state.get("paper_guide_contracts") or {})
+        shared_primary_evidence = (
+            dict(paper_guide_contracts.get("primary_evidence") or {})
+            if isinstance(paper_guide_contracts.get("primary_evidence"), dict)
+            else {}
+        )
         citation_validation = dict(finalize_state.get("citation_validation") or {})
         answer_quality = dict(finalize_state.get("answer_quality") or {})
+        if paper_guide_mode:
+            contract_intent = dict(paper_guide_contracts.get("intent") or {}) if isinstance(paper_guide_contracts.get("intent"), dict) else {}
+            paper_guide_debug.update(
+                {
+                    "final_answer_quality_family": str(answer_quality.get("prompt_family") or ""),
+                    "final_contract_intent_family": str(contract_intent.get("family") or ""),
+                    "final_answer_prefix": str(answer or "")[:160],
+                }
+            )
         _gen_store_answer(task, answer)
+        _gen_store_answer_quality_meta(task, answer_quality=answer_quality)
+        _gen_store_paper_guide_contract_meta(task, paper_guide_contracts=paper_guide_contracts)
         _gen_record_answer_quality(
             session_id=session_id,
             task_id=task_id,
@@ -2128,6 +2777,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer=answer,
                 answer_hits=answer_hits,
                 support_resolution=paper_guide_support_resolution,
+                primary_evidence=shared_primary_evidence,
             )
             _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=1)
         except Exception as exc:
@@ -2139,6 +2789,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     answer=answer,
                     answer_hits=answer_hits,
                     support_resolution=paper_guide_support_resolution,
+                    primary_evidence=shared_primary_evidence,
                 )
                 _perf_log("gen.provenance_async_schedule", ok=1)
             except Exception as exc:
@@ -2154,6 +2805,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer_ready=True,
             answer_output_mode=answer_output_mode,
             answer_quality=answer_quality,
+            paper_guide_debug=dict(paper_guide_debug),
             citation_validation=citation_validation,
             finished_at=time.time(),
         )
@@ -2284,7 +2936,19 @@ def _bg_worker_loop() -> None:
                 except Exception:
                     pass
 
+            last_page_done = 0
+            last_page_total = 0
+
             def _on_progress(page_done: int, page_total: int, msg: str = "") -> None:
+                nonlocal last_page_done, last_page_total
+                try:
+                    last_page_done = max(0, int(page_done or 0))
+                except Exception:
+                    pass
+                try:
+                    last_page_total = max(0, int(page_total or 0))
+                except Exception:
+                    pass
                 try:
                     bg_update_page_progress(_BG_STATE, _BG_LOCK, page_done, page_total, msg, task_id=task_id)
                 except Exception:
@@ -2318,6 +2982,11 @@ def _bg_worker_loop() -> None:
                     ingest_py = Path(__file__).resolve().parent / "ingest.py"
                     _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
                     if ingest_py.exists() and md_exists:
+                        _on_progress(
+                            last_page_done,
+                            last_page_total,
+                            "ingesting: updating knowledge base index",
+                        )
                         subprocess.run(
                             [os.sys.executable, str(ingest_py), "--src", str(md_main), "--db", str(db_dir), "--incremental"],
                             check=False,
@@ -2720,8 +3389,7 @@ def _build_paper_guide_direct_citation_lookup_answer(
         reference_entry_lookup=_reference_entry_lookup,
     )
 
-def _extract_inline_reference_numbers(text: str, *, max_candidates: int = 8) -> list[int]:
-    return _grounding_extract_inline_reference_numbers(text, max_candidates=max_candidates)
+_extract_inline_reference_numbers = _grounding_extract_inline_reference_numbers
 
 
 def _select_paper_guide_raw_target_hits(
@@ -2954,154 +3622,25 @@ def _paper_guide_evidence_card_use_hint(prompt_family: str) -> str:
 
 
 
-def _is_paper_guide_support_meta_line(text: str) -> bool:
-    return _grounding_is_support_meta_line(text)
-
-
-def _paper_guide_support_segment_spans(answer_markdown: str) -> list[dict]:
-    return _grounding_support_segment_spans(answer_markdown)
-
-
-def _paper_guide_support_focus_tokens(*parts: str, limit: int = 18) -> set[str]:
-    return _grounding_support_focus_tokens(*parts, limit=limit)
-
-
-def _extract_paper_guide_locate_anchor(text: str, *, max_chars: int = 220) -> str:
-    return _grounding_extract_locate_anchor(text, max_chars=max_chars)
-
-
-def _is_paper_guide_broad_summary_line(text: str, *, prompt_family: str = "") -> bool:
-    return _grounding_is_broad_summary_line(text, prompt_family=prompt_family)
-
-
-def _extract_paper_guide_ref_spans(text: str, *, max_spans: int = 4) -> list[dict]:
-    return _grounding_extract_ref_spans(text, max_spans=max_spans)
-
-
-def _paper_guide_support_claim_type(
-    *,
-    prompt_family: str,
-    heading: str = "",
-    snippet: str = "",
-    candidate_refs: list[int] | None = None,
-    ref_spans: list[dict] | None = None,
-) -> str:
-    return _grounding_support_claim_type(
-        prompt_family=prompt_family,
-        heading=heading,
-        snippet=snippet,
-        candidate_refs=candidate_refs,
-        ref_spans=ref_spans,
-    )
-
-
-def _paper_guide_support_cite_policy(*, claim_type: str, prompt_family: str) -> str:
-    return _grounding_support_cite_policy(claim_type=claim_type, prompt_family=prompt_family)
-
-
-def _resolve_paper_guide_support_slot_block(
-    *,
-    source_path: str,
-    snippet: str,
-    heading: str = "",
-    prompt_family: str = "",
-    claim_type: str = "",
-    db_dir: Path | None = None,
-    block_cache: dict[str, tuple[Path, list[dict]]] | None = None,
-    atom_cache: dict[str, list[dict]] | None = None,
-    target_scope: dict | None = None,
-) -> dict:
-    return _grounding_resolve_support_slot_block(
-        source_path=source_path,
-        snippet=snippet,
-        heading=heading,
-        prompt_family=prompt_family,
-        claim_type=claim_type,
-        db_dir=db_dir,
-        block_cache=block_cache,
-        atom_cache=atom_cache,
-        target_scope=target_scope,
-    )
-
-
-def _build_paper_guide_support_slots(
-    cards: list[dict],
-    *,
-    prompt: str = "",
-    prompt_family: str = "",
-    db_dir: Path | None = None,
-    max_slots: int = 4,
-    target_scope: dict | None = None,
-) -> list[dict]:
-    return _grounding_build_support_slots(
-        cards,
-        prompt=prompt,
-        prompt_family=prompt_family,
-        db_dir=db_dir,
-        max_slots=max_slots,
-        target_scope=target_scope,
-    )
-
-
-def _build_paper_guide_support_slots_block(
-    slots: list[dict],
-    *,
-    max_slots: int = 4,
-) -> str:
-    return _grounding_build_support_slots_block(slots, max_slots=max_slots)
-
-
-def _normalize_paper_guide_support_surface(text: str) -> str:
-    return _grounding_normalize_support_surface(text)
-
-
-def _paper_guide_support_rule_tokens(slot: dict) -> set[str]:
-    return _grounding_support_rule_tokens(slot)
-
-
-def _select_paper_guide_support_slot_for_context(
-    slots: list[dict],
-    *,
-    context_text: str = "",
-) -> dict | None:
-    return _grounding_select_support_slot_for_context(
-        slots,
-        context_text=context_text,
-    )
-
-
-def _inject_paper_guide_support_markers(
-    answer: str,
-    *,
-    support_slots: list[dict],
-    prompt_family: str = "",
-    max_injections: int = 3,
-) -> str:
-    return _grounding_inject_support_markers(
-        answer,
-        support_slots=support_slots,
-        prompt_family=prompt_family,
-        max_injections=max_injections,
-    )
-
-
-def _resolve_paper_guide_support_ref_num(slot: dict, *, context_text: str = "") -> tuple[int | None, str]:
-    return _grounding_resolve_support_ref_num(slot, context_text=context_text)
-
-
-def _resolve_paper_guide_support_markers(
-    answer: str,
-    *,
-    support_slots: list[dict],
-    prompt_family: str = "",
-    db_dir: Path | None = None,
-) -> tuple[str, list[dict]]:
-    return _grounding_resolve_support_markers(
-        answer,
-        support_slots=support_slots,
-        prompt_family=prompt_family,
-        db_dir=db_dir,
-    )
+# Package-grounder aliases. Keep these names stable for callers/tests while
+# avoiding another layer of one-line passthrough wrappers in task_runtime.
+_is_paper_guide_support_meta_line = _grounding_is_support_meta_line
+_paper_guide_support_segment_spans = _grounding_support_segment_spans
+_paper_guide_support_focus_tokens = _grounding_support_focus_tokens
+_extract_paper_guide_locate_anchor = _grounding_extract_locate_anchor
+_is_paper_guide_broad_summary_line = _grounding_is_broad_summary_line
+_extract_paper_guide_ref_spans = _grounding_extract_ref_spans
+_paper_guide_support_claim_type = _grounding_support_claim_type
+_paper_guide_support_cite_policy = _grounding_support_cite_policy
+_resolve_paper_guide_support_slot_block = _grounding_resolve_support_slot_block
+_build_paper_guide_support_slots = _grounding_build_support_slots
+_build_paper_guide_support_slots_block = _grounding_build_support_slots_block
+_normalize_paper_guide_support_surface = _grounding_normalize_support_surface
+_paper_guide_support_rule_tokens = _grounding_support_rule_tokens
+_select_paper_guide_support_slot_for_context = _grounding_select_support_slot_for_context
+_inject_paper_guide_support_markers = _grounding_inject_support_markers
+_resolve_paper_guide_support_ref_num = _grounding_resolve_support_ref_num
+_resolve_paper_guide_support_markers = _grounding_resolve_support_markers
 
 
 def _build_paper_guide_evidence_cards_block(

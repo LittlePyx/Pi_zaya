@@ -1,4 +1,4 @@
-from kb.converter.heuristics import _is_non_body_metadata_text
+from kb.converter.heuristics import _is_non_body_metadata_text, _looks_like_author_name_line
 
 
 def test_detect_affiliation_contact_block_as_metadata():
@@ -61,4 +61,24 @@ def test_keep_reference_entries_on_references_page():
         max_font_size=10.5,
         body_font_size=10.5,
         is_references_page=True,
+    )
+
+
+def test_detect_first_page_author_name_line_as_metadata():
+    text = "David B. Phillips, 1 * Ming-Jie Sun, 1,2 * Jonathan M. Taylor, 1 Matthew P. Edgar, 1"
+    assert _looks_like_author_name_line(
+        text,
+        page_index=0,
+        y0=120.0,
+        page_height=792.0,
+    )
+    assert _is_non_body_metadata_text(
+        text,
+        page_index=0,
+        y0=120.0,
+        y1=135.0,
+        page_height=792.0,
+        max_font_size=10.0,
+        body_font_size=9.0,
+        is_references_page=False,
     )

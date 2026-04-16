@@ -179,7 +179,7 @@ export function ChatInput({
     window.setTimeout(() => {
       ref.current?.focus()
     }, 0)
-  }, [appendSignal?.token])
+  }, [appendSignal])
 
   const uploadSelectedFiles = async (files: File[]) => {
     const { accepted, rejected } = collectAcceptedFiles(files)

@@ -872,15 +872,30 @@ def delete_conversation(conv_id: str):
 
 
 @router.get("/conversations/{conv_id}/messages")
-def get_messages(conv_id: str, limit: int | None = None):
+def get_messages(conv_id: str, limit: int | None = None, render_packet_only: int | None = None):
     store = get_chat_store()
     messages = [_normalize_message_attachments(msg) for msg in store.get_messages(conv_id, limit=limit)]
     refs_by_user = store.list_message_refs(conv_id) or {}
-    return enrich_messages_with_reference_render(messages, refs_by_user, conv_id=conv_id, chat_store=store)
+    conv = store.get_conversation(conv_id) or {}
+    mode = str(conv.get("mode") or "").strip().lower()
+    # Default: enable in paper-guide conversations so frontend can exercise contract-first mode.
+    # If query param is provided, it is treated as an explicit override (0 disables).
+    render_packet_flag = (
+        bool(int(render_packet_only or 0))
+        if render_packet_only is not None
+        else (mode == "paper_guide")
+    )
+    return enrich_messages_with_reference_render(
+        messages,
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+        render_packet_only=render_packet_flag,
+    )
 
 
 @router.get("/conversations/{conv_id}/messages_page")
-def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = None):
+def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = None, render_packet_only: int | None = None):
     store = get_chat_store()
     messages, has_more_before, oldest_loaded_id, newest_loaded_id = store.get_messages_page(
         conv_id,
@@ -888,11 +903,19 @@ def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = Non
         before_id=before_id,
     )
     refs_by_user = store.list_message_refs(conv_id) or {}
+    conv = store.get_conversation(conv_id) or {}
+    mode = str(conv.get("mode") or "").strip().lower()
+    render_packet_flag = (
+        bool(int(render_packet_only or 0))
+        if render_packet_only is not None
+        else (mode == "paper_guide")
+    )
     rendered = enrich_messages_with_reference_render(
         [_normalize_message_attachments(msg) for msg in messages],
         refs_by_user,
         conv_id=conv_id,
         chat_store=store,
+        render_packet_only=render_packet_flag,
     )
     return {
         "messages": rendered,

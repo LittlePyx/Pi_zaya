@@ -1,5 +1,5 @@
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Upload,
   AutoComplete,
@@ -207,6 +207,14 @@ function derivePageProgress(done0: number, total0: number, msg0: string) {
     return { done: 0, total: 0 }
   }
   return { done: Math.max(0, parsedDone), total: Math.max(0, parsedTotal) }
+}
+
+function deriveConvertStageLabel(msg0: string) {
+  const msg = String(msg0 || '').trim().toLowerCase()
+  if (!msg) return ''
+  if (msg.includes('ingesting')) return '正在更新知识库索引...'
+  if (msg.includes('cancel')) return '正在取消转换...'
+  return ''
 }
 
 function matchesKeyword(name: string, keyword: string) {
@@ -463,7 +471,14 @@ export default function LibraryPage() {
         activeFraction = Math.min(0.999, fallback.done / Math.max(1, fallback.total))
       }
     }
-    return Math.min(100, Math.round(((store.progress.completed + activeFraction) / Math.max(1, store.progress.total)) * 100))
+    const rawPercent = Math.min(100, Math.round(((store.progress.completed + activeFraction) / Math.max(1, store.progress.total)) * 100))
+    const stillRunning = store.progress.completed < store.progress.total
+      && (
+        Number(store.progress.activeCount || 0) > 0
+        || tasks.length > 0
+        || Boolean(String(store.progress.current || '').trim())
+      )
+    return stillRunning ? Math.min(rawPercent, 99) : rawPercent
   }, [store.progress])
   const convertPageProgress = useMemo(() => (
     derivePageProgress(
@@ -487,6 +502,10 @@ export default function LibraryPage() {
     const suffix = names.length > 3 ? ' ...' : ''
     return `\u5e76\u884c\u4e2d ${tasks.length} \u7bc7\uff1a${preview}${suffix}`
   }, [store.progress])
+  const convertStageLabel = useMemo(
+    () => deriveConvertStageLabel(String(store.progress?.curPageMsg || '')),
+    [store.progress],
+  )
   const refSyncPercent = useMemo(
     () => (store.refSync && store.refSync.docsTotal > 0
       ? Math.round((store.refSync.docsDone / Math.max(1, store.refSync.docsTotal)) * 100)
@@ -567,48 +586,51 @@ export default function LibraryPage() {
     onlySuggested ? 'onlySuggested' : '',
   ].filter(Boolean).length
 
-  const filterFiles = (items: LibraryFileItem[], options: FilterFilesOptions = {}) =>
-    items.filter((item) => {
-      const keywordText = [
-        item.name,
-        item.paper_category,
-        item.reading_status,
-        item.note,
-        item.suggested_category,
-        ...(item.user_tags || []),
-        ...(item.suggested_tags || []),
-      ]
-        .map((part) => String(part || '').toLowerCase())
-        .join(' ')
-      if (!matchesKeyword(keywordText, normalizedKeyword)) return false
-      if (!options.ignoreCategoryFilter && paperCategoryFilter && String(item.paper_category || '') !== paperCategoryFilter) return false
-      if (!options.ignoreTagFilter && paperTagFilter && !(item.user_tags || []).some((tag) => String(tag || '').toLowerCase() === paperTagFilter.toLowerCase())) return false
-      if (readingStatusFilter && String(item.reading_status || '') !== readingStatusFilter) return false
-      if (onlyUnread && String(item.reading_status || '') !== 'unread') return false
-      if (onlyUnclassified && String(item.paper_category || '').trim()) return false
-      if (onlySuggested && !item.has_suggestions) return false
-      return true
-    })
+  const filterFiles = useCallback(
+    (items: LibraryFileItem[], options: FilterFilesOptions = {}) =>
+      items.filter((item) => {
+        const keywordText = [
+          item.name,
+          item.paper_category,
+          item.reading_status,
+          item.note,
+          item.suggested_category,
+          ...(item.user_tags || []),
+          ...(item.suggested_tags || []),
+        ]
+          .map((part) => String(part || '').toLowerCase())
+          .join(' ')
+        if (!matchesKeyword(keywordText, normalizedKeyword)) return false
+        if (!options.ignoreCategoryFilter && paperCategoryFilter && String(item.paper_category || '') !== paperCategoryFilter) return false
+        if (!options.ignoreTagFilter && paperTagFilter && !(item.user_tags || []).some((tag) => String(tag || '').toLowerCase() === paperTagFilter.toLowerCase())) return false
+        if (readingStatusFilter && String(item.reading_status || '') !== readingStatusFilter) return false
+        if (onlyUnread && String(item.reading_status || '') !== 'unread') return false
+        if (onlyUnclassified && String(item.paper_category || '').trim()) return false
+        if (onlySuggested && !item.has_suggestions) return false
+        return true
+      }),
+    [normalizedKeyword, onlySuggested, onlyUnclassified, onlyUnread, paperCategoryFilter, paperTagFilter, readingStatusFilter],
+  )
 
   const visiblePending = useMemo(
     () => filterFiles(pendingFiles),
-    [pendingFiles, normalizedKeyword, paperCategoryFilter, paperTagFilter, readingStatusFilter, onlyUnread, onlyUnclassified, onlySuggested],
+    [filterFiles, pendingFiles],
   )
   const visibleConverted = useMemo(
     () => filterFiles(convertedFiles),
-    [convertedFiles, normalizedKeyword, paperCategoryFilter, paperTagFilter, readingStatusFilter, onlyUnread, onlyUnclassified, onlySuggested],
+    [convertedFiles, filterFiles],
   )
   const visibleAll = useMemo(
     () => filterFiles(store.files),
-    [store.files, normalizedKeyword, paperCategoryFilter, paperTagFilter, readingStatusFilter, onlyUnread, onlyUnclassified, onlySuggested],
+    [filterFiles, store.files],
   )
   const visibleAllWithoutCategory = useMemo(
     () => filterFiles(store.files, { ignoreCategoryFilter: true }),
-    [store.files, normalizedKeyword, paperTagFilter, readingStatusFilter, onlyUnread, onlyUnclassified, onlySuggested],
+    [filterFiles, store.files],
   )
   const visibleAllWithoutTag = useMemo(
     () => filterFiles(store.files, { ignoreTagFilter: true }),
-    [store.files, normalizedKeyword, paperCategoryFilter, readingStatusFilter, onlyUnread, onlyUnclassified, onlySuggested],
+    [filterFiles, store.files],
   )
 
   const categoryCards = useMemo<CategoryCardItem[]>(() => {
@@ -762,7 +784,7 @@ export default function LibraryPage() {
     })
   }, [store.files])
 
-  const saveDirs = async () => {
+  const saveDirs = useCallback(async () => {
     if (!pdfDirDraft.trim() || !mdDirDraft.trim()) {
       message.warning('PDF/MD 目录不能为空')
       return false
@@ -781,12 +803,12 @@ export default function LibraryPage() {
     } finally {
       setSavingDirs(false)
     }
-  }
+  }, [mdDirDraft, pdfDirDraft, scope, store, updateSettings])
 
-  const ensureDirsReady = async () => {
+  const ensureDirsReady = useCallback(async () => {
     if (!dirDirty) return true
     return saveDirs()
-  }
+  }, [dirDirty, saveDirs])
 
   const openFolder = async (target: 'pdf_dir' | 'md_dir') => {
     const ready = await ensureDirsReady()
@@ -844,7 +866,7 @@ export default function LibraryPage() {
     })
   }
 
-  const inspectDraft = async (key: string) => {
+  const inspectDraft = useCallback(async (key: string) => {
     const ready = await ensureDirsReady()
     if (!ready) return
     const target = uploadDrafts.find((x) => x.key === key)
@@ -873,7 +895,7 @@ export default function LibraryPage() {
           : x
       )))
     }
-  }
+  }, [ensureDirsReady, uploadDrafts, uploadUseLlm])
 
   const inspectSelectedDrafts = async () => {
     const selected = uploadDrafts.filter((x) => x.selected && x.status !== 'inspecting')
@@ -884,7 +906,6 @@ export default function LibraryPage() {
     setUploadInspecting(true)
     try {
       for (const x of selected) {
-        // eslint-disable-next-line no-await-in-loop
         await inspectDraft(x.key)
       }
       message.success(`已扫描 ${selected.length} 个文件`)
@@ -995,7 +1016,6 @@ export default function LibraryPage() {
     try {
       let anyEnqueued = false
       for (const x of selected) {
-        // eslint-disable-next-line no-await-in-loop
         const result = await saveDraft(x.key, convertNow, { syncUi: false })
         anyEnqueued = anyEnqueued || Boolean(result.enqueued)
       }
@@ -1058,7 +1078,6 @@ export default function LibraryPage() {
     try {
       let anyEnqueued = false
       for (const x of failed) {
-        // eslint-disable-next-line no-await-in-loop
         const result = await saveDraft(x.key, convertNow, { syncUi: false })
         anyEnqueued = anyEnqueued || Boolean(result.enqueued)
       }
@@ -2207,6 +2226,7 @@ export default function LibraryPage() {
                   <Text className="kb-lib-sticky-title">转换中 {store.progress.completed}/{store.progress.total}</Text>
                   {store.progress.current ? <Text type="secondary" className="kb-lib-sticky-sub">{store.progress.current}</Text> : null}
                   {convertActiveSummary ? <Text type="secondary" className="kb-lib-sticky-sub">{convertActiveSummary}</Text> : null}
+                  {convertStageLabel ? <Text type="secondary" className="kb-lib-sticky-sub">{convertStageLabel}</Text> : null}
                   {convertPageProgress.total > 0 ? (
                     <Text type="secondary" className="kb-lib-sticky-sub">
                       篇内进度 {convertPageProgress.done}/{convertPageProgress.total}

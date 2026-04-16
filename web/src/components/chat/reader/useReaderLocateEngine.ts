@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { ReaderDocBlock } from '../../../api/references'
 import type { ReaderLocateCandidate } from './readerTypes'
@@ -61,6 +63,7 @@ interface UseReaderLocateEngineArgs {
   activeBlockId: string
   activeAnchorKind: string
   activeAnchorNumber: number
+  activeHitLevel: string
   expectsEquationBinding: boolean
 }
 
@@ -84,6 +87,7 @@ export function useReaderLocateEngine({
   activeBlockId,
   activeAnchorKind,
   activeAnchorNumber,
+  activeHitLevel,
   expectsEquationBinding,
 }: UseReaderLocateEngineArgs) {
   const stickyLocateHighlightRef = useRef<StickyLocateHighlight | null>(null)
@@ -101,7 +105,7 @@ export function useReaderLocateEngine({
     if (!root) return
     clearReaderFocusClasses(root)
     clearReaderInlineHits(root)
-  }, [open, locateRequestId, sourcePath, clearReaderFocusClasses, clearReaderInlineHits, contentRef])
+  }, [open, locateRequestId, sourcePath, contentRef])
 
   useEffect(() => {
     if (!open || !drawerReady || !markdown) return
@@ -136,12 +140,6 @@ export function useReaderLocateEngine({
     readerBlocks,
     equationBindingReady,
     contentRef,
-    clearReaderFocusClasses,
-    resolveStickyHighlightTarget,
-    closestReadableBlock,
-    resolveInlineFormulaTarget,
-    resolveRelatedTargetNodes,
-    highlightExactTextInContainer,
   ])
 
   useEffect(() => {
@@ -258,8 +256,6 @@ export function useReaderLocateEngine({
     strictLocate,
     locateRequestId,
     contentRef,
-    orderedEquationReaderBlocks,
-    bindVisibleEquationAnchors,
   ])
 
   useEffect(() => {
@@ -323,6 +319,13 @@ export function useReaderLocateEngine({
         || String(readerBlockHint?.block_id || '').trim()
         || String(readerBlockHint?.anchor_id || '').trim(),
       )
+      const hitLevel = String(activeHitLevel || '').trim().toLowerCase()
+      const hasHitLevelContract = hitLevel === 'exact' || hitLevel === 'block' || hitLevel === 'heading'
+      const allowHeadingOnlyFallback = Boolean(strictLocate && hitLevel === 'heading')
+      const allowFuzzyFallback = !strictLocate
+      // If strict locate already resolves the explicit identity (block/anchor),
+      // keep primary focus pinned to that block instead of drifting to neighbors.
+      const lockPrimaryToDirectIdentity = Boolean(strictLocate && target && hasDirectIdentityHint)
       if (!target && hasDirectIdentityHint && alternatives.length > 1) {
         let resolvedAltIndex = -1
         for (let idx = 0; idx < alternatives.length; idx += 1) {
@@ -349,30 +352,56 @@ export function useReaderLocateEngine({
       }
       if (!target && hasDirectIdentityHint) {
         if (retryLocate()) return
-        setLocateHint('Exact evidence block not found. Falling back to fuzzy locate.')
+        setLocateHint(
+          strictLocate && allowHeadingOnlyFallback
+            ? 'Exact evidence block not found. Falling back to heading locate.'
+            : strictLocate
+              ? 'Exact evidence block not found. Strict locate stopped before heading fallback.'
+              : 'Exact evidence block not found. Falling back to fuzzy locate.',
+        )
       }
-      if (!target && strictLocate) {
+      if (!target && strictLocate && !allowHeadingOnlyFallback) {
         if (retryLocate()) return
         setLocateHint(hasDirectIdentityHint
-          ? 'Exact evidence block not found. Strict locate stopped before fuzzy fallback.'
+          ? (
+            hasHitLevelContract
+              ? 'Exact evidence block not found. Strict locate stopped before heading fallback.'
+              : 'Exact evidence block not found. Strict locate stopped before fuzzy fallback.'
+          )
           : 'Strict locate could not resolve an exact evidence block.')
         finishLocate()
         return
       }
+      let usedHeadingFallback = false
       if (!target) {
         const hintHeadingPath = String(readerBlockHint?.heading_path || '').trim()
-        const headingNeedles = headingCandidates(activeHeadingPath || hintHeadingPath).map(normalizeText).filter(Boolean)
+        const rawHeadingPath = String(activeHeadingPath || hintHeadingPath).trim()
+        const headingNeedles = headingCandidates(rawHeadingPath).map(normalizeText).filter(Boolean)
         if (headingNeedles.length > 0) {
           const headings = Array.from(root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6'))
-          let bestHeading: HTMLElement | null = null
-          let bestHeadingScore = 0
-          for (const heading of headings) {
-            const text = String(heading.textContent || '').trim()
-            for (const needle of headingNeedles) {
-              const score = headingMatchScore(needle, text)
-              if (score > bestHeadingScore) {
-                bestHeading = heading
-                bestHeadingScore = score
+          const headingParts = rawHeadingPath
+            .split(' / ')
+            .map((item) => item.trim())
+            .filter(Boolean)
+          const exactHeadingNeedles = Array.from(new Set([
+            headingParts[headingParts.length - 1] || '',
+            headingParts.length > 2 ? headingParts.slice(-2).join(' / ') : '',
+          ].map(normalizeText).filter(Boolean)))
+          const exactHeading = headings.find((heading) => {
+            const text = normalizeText(String(heading.textContent || '').trim())
+            return exactHeadingNeedles.some((needle) => text === needle)
+          }) || null
+          let bestHeading: HTMLElement | null = exactHeading
+          let bestHeadingScore = exactHeading ? Number.POSITIVE_INFINITY : 0
+          if (!exactHeading) {
+            for (const heading of headings) {
+              const text = String(heading.textContent || '').trim()
+              for (const needle of headingNeedles) {
+                const score = headingMatchScore(needle, text)
+                if (score > bestHeadingScore) {
+                  bestHeading = heading
+                  bestHeadingScore = score
+                }
               }
             }
           }
@@ -382,7 +411,7 @@ export function useReaderLocateEngine({
         }
           const hintBlockText = String(readerBlockHint?.text || '').trim()
           const focusSeed = String(activeHighlightSnippet || activeFocusSnippet || hintBlockText).trim()
-          if (focusSeed) {
+          if (focusSeed && allowFuzzyFallback) {
             const probe = snippetProbeText(focusSeed)
             const hintKind = String(readerBlockHint?.kind || '').trim().toLowerCase()
             const activeAnchorNum = Number.isFinite(Number(activeAnchorNumber || 0))
@@ -540,8 +569,11 @@ export function useReaderLocateEngine({
           }
         }
       }
-      if (!target && headingTarget) target = headingTarget
-      if (!target) {
+      if (!target && (headingTarget && (allowHeadingOnlyFallback || !strictLocate))) {
+        target = headingTarget
+        usedHeadingFallback = true
+      }
+      if (!target && allowFuzzyFallback) {
         const anyReadable = root.querySelector<HTMLElement>('h1,h2,h3,p,li,blockquote,.katex-display,[data-kb-anchor-kind="equation"],[data-kb-anchor-kind="figure"]')
         if (anyReadable) {
           target = anyReadable
@@ -550,7 +582,11 @@ export function useReaderLocateEngine({
       }
       if (!target) {
         if (retryLocate()) return
-        if (activeFocusSnippet || activeHeadingPath) {
+        if (strictLocate && allowHeadingOnlyFallback) {
+          setLocateHint(hasDirectIdentityHint
+            ? 'Exact and block locate failed. Heading fallback was not found.'
+            : 'Heading fallback was not found.')
+        } else if (activeFocusSnippet || activeHeadingPath) {
           setLocateHint('Exact snippet not found. Ask again to generate a finer mapping.')
         }
         finishLocate()
@@ -582,7 +618,7 @@ export function useReaderLocateEngine({
       let usedNeighbor = false
       if (anchorKindForLocate === 'inline_formula') {
         inlineFormulaHit = resolveInlineFormulaTarget(focusedBlock, highlightSeed)
-        if (!inlineFormulaHit && strictLocate) {
+        if (!inlineFormulaHit && strictLocate && !lockPrimaryToDirectIdentity) {
           for (const neighbor of nearbyReadableBlocks(root, focusedBlock, 1)) {
             const candidate = resolveInlineFormulaTarget(neighbor, highlightSeed)
             if (!candidate) continue
@@ -594,7 +630,7 @@ export function useReaderLocateEngine({
         }
       } else if (anchorKindForLocate !== 'figure' && anchorKindForLocate !== 'equation' && highlightQueries.length > 0) {
         exactHit = tryExactHighlight(focusedBlock)
-        if (!exactHit && strictLocate) {
+        if (!exactHit && strictLocate && !lockPrimaryToDirectIdentity) {
           const maxDistance = anchorKindForLocate === 'equation' ? 1 : 2
           for (const neighbor of nearbyReadableBlocks(root, focusedBlock, maxDistance)) {
             const hit = tryExactHighlight(neighbor)
@@ -637,7 +673,9 @@ export function useReaderLocateEngine({
       }
 
       if (strictLocate) {
-        if (exactHit) {
+        if (usedHeadingFallback) {
+          nextLocateHint = 'Heading-level fallback matched.'
+        } else if (exactHit) {
           if (anchorKindForLocate === 'figure') {
             nextLocateHint = 'Exact figure block match.'
           } else {
@@ -696,6 +734,7 @@ export function useReaderLocateEngine({
     activeBlockId,
     activeAnchorKind,
     activeAnchorNumber,
+    activeHitLevel,
     readerBlocks,
     alternatives,
     relatedBlockIds,
@@ -704,29 +743,6 @@ export function useReaderLocateEngine({
     equationBindingReady,
     contentRef,
     setActiveAltIndex,
-    bindVisibleEquationAnchors,
-    clearReaderFocusClasses,
-    clearReaderInlineHits,
-    resolveDirectTargetNode,
-    headingCandidates,
-    normalizeText,
-    headingMatchScore,
-    snippetProbeText,
-    extractEquationNumbers,
-    extractFigureNumbers,
-    hasFormulaSignal,
-    equationNumberMatchScore,
-    visibleEquationBlocks,
-    snippetMatchScore,
-    formulaOverlapScore,
-    tokenizeText,
-    nearbyReadableBlocks,
-    buildHighlightQueries,
-    highlightExactTextInContainer,
-    closestReadableBlock,
-    resolveInlineFormulaTarget,
-    resolveRelatedTargetNodes,
-    scrollReaderTargetIntoView,
   ])
 
   return {

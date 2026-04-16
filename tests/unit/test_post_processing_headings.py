@@ -320,3 +320,173 @@ Body text.
     assert heading_levels["Confocal measurement"] == heading_levels["Data analysis"] + 1
     assert heading_levels["Contrast-to-noise ratio (CNR)"] == heading_levels["Data analysis"] + 1
     assert heading_levels["Resolution"] == heading_levels["Data analysis"] + 1
+
+
+def test_insert_missing_abstract_and_introduction_for_natcommun_like_frontmatter():
+    src = """
+# ARTICLE
+
+## Imaging biological tissue with high-throughput single-pixel compressive holography
+
+Daixuan Wu$^{1,2}$, Jiawei Luo$^{1,2}$, Yuecheng Shen$^{1,2}$ & Zhaohui Li$^{1,2}$
+
+Single-pixel holography is capable of generating holographic images with rich spatial information by employing only a single-pixel detector. Thanks to the relatively low dark-noise production, high sensitivity, large bandwidth, and cheap price of single-pixel detectors in comparison to pixel-array detectors, this system becomes attractive for biophotonics and related applications.
+
+Pixel-array detectors, such as CCD and CMOS cameras, were commonly used in the traditional imaging scheme. However, these detectors are only cost-effective and maintain good performance within a certain spectrum range. In contrast, single-pixel detectors have lower dark-noise production, higher sensitivity, faster response time, and a much cheaper price, motivating the broader introduction to the field.
+
+## Results
+
+Body text.
+"""
+    out = postprocess_markdown(src)
+    assert "## Abstract" in out
+    assert "## Introduction" in out
+    assert out.index("## Abstract") < out.index("Single-pixel holography is capable")
+    assert out.index("## Introduction") < out.index("Pixel-array detectors, such as CCD")
+    assert out.index("## Introduction") < out.index("## Results")
+
+
+def test_insert_missing_abstract_before_explicit_roman_introduction_for_arxiv_like_layout():
+    src = """
+# Quantum correlation light-field microscope with extreme depth of field
+
+Yingwen Zhang, Duncan England, Antony Orth, Ebrahim Karimi, and Benjamin Sussman
+
+Light-field microscopy is a 3D microscopy technique whereby volumetric information of a sample is gained in a single shot by simultaneously capturing both position and angular information of light emanating from a sample. In this work, we demonstrate a design that does not require the conventional depth-resolution trade-off.
+
+### I. INTRODUCTION
+
+Utilizing the properties of quantum entangled photons to enhance the performance of sensing and imaging techniques has been an active area of research in recent decades.
+"""
+    out = postprocess_markdown(src)
+    assert "## Abstract" in out
+    assert "### I. INTRODUCTION" in out
+    assert "## Introduction" not in out
+    assert out.index("## Abstract") < out.index("### I. INTRODUCTION")
+
+
+def test_normalize_spaced_abstract_heading_from_elsevier_like_front_page():
+    src = """
+# Optics and Laser Technology
+
+## Part-based image-loop network for single-pixel imaging
+
+## A B S T R A C T
+
+In this study, we proposed a self-supervised image-loop neural network with a part-based model for single-pixel imaging.
+
+## 1. Introduction
+
+Single-pixel imaging utilizes the second-order correlation of classical or quantum light to reconstruct one-dimensional intensity signals into two-dimensional images.
+"""
+    out = postprocess_markdown(src)
+    assert "## A B S T R A C T" not in out
+    assert "## Abstract" in out
+    assert "## 1. Introduction" in out
+
+
+def test_preserve_optica_like_implicit_abstract_with_copyright_tail():
+    src = """
+# Frequency-division-multiplexed single-pixel imaging with metamaterials
+
+**CLAIRE M. WATTS,**$^{1}$ **CHRISTIAN C. NADELL,**$^{2}$ **JOHN MONTOYA,**$^{2,3}$ **SANJAY KRISHNA,**$^{3}$ **AND WILLIE J. PADILLA**$^{1,2,*}$
+
+We propose and experimentally realize the concept of frequency-division-multiplexed single-pixel imaging. Our technique relies entirely on metamaterial spatial light modulators, the advent of which has permitted advanced modulation techniques difficult to achieve with alternative approaches. So far, implementations of single-pixel imaging have used a single encoding frequency, making them sensitive to narrowband noise. Here, we implement frequency-division methods to parallelize the single-pixel imaging process at 3.2 THz. Our technique enables a trade-off between signal-to-noise ratio and acquisition speed without altering detector integration time, thus realizing a key development due to the limitations imposed by slow thermal detectors in terahertz and far IR. In addition, our technique yields high image fidelity and marries communications concepts to single-pixel imaging, opening a new path forward for future imaging systems. © 2016 Optical Society of America
+
+*OCIS codes:* (110.1758) Computational imaging; (110.6795) Terahertz imaging; (160.3918) Metamaterials; (060.4230) Multiplexing; (060.5060) Phase modulation.
+
+## 1. INTRODUCTION
+
+Imaging with a single pixel was first shown in 1976, when a hyperspectral imager was fashioned using a mechanically scanned coded aperture wheel.
+"""
+    out = postprocess_markdown(src)
+    assert "## Abstract" in out
+    assert "## 1. INTRODUCTION" in out
+    assert "We propose and experimentally realize the concept of frequency-division-multiplexed single-pixel imaging." in out
+    assert out.index("## Abstract") < out.index("We propose and experimentally realize")
+    assert out.index("## Abstract") < out.index("## 1. INTRODUCTION")
+
+
+def test_do_not_insert_introduction_for_nature_like_multi_paragraph_abstract_only():
+    src = """
+# Electrically driven lasing from a dual-cavity perovskite device
+
+Chen Zou, Zhixiang Ren, Kangshuo Hui, Zixiang Wang, Yangning Fan, Yichen Yang, Bo Yuan, Baodan Zhao & Dawei Di
+
+Solution-processed semiconductor lasers promise lightweight, wearable and scalable optoelectronic applications. Among the gain media for solution-processed lasers, metal halide perovskites stand out as an exceptional class because of their ability to achieve wavelength-adjustable, low-threshold lasing under optical pumping.
+
+Metal halide perovskites are an emerging class of semiconductors combining remarkable optoelectronic properties with cost-effective solution processability. Apart from the rapid advances in solar cells and LEDs, the unique attributes of high gain coefficients, long carrier lifetimes and tunable emission wavelengths have made perovskites excellent optical gain media for lasing applications.
+
+The success of conventional semiconductor lasers builds on the ability of electrically driving the lasing action, allowing them to be easily integrated with a range of optoelectronic device platforms. However, for halide perovskites, the realization of electrically driven lasing remains a great challenge because of the inability to achieve intense electrical injection into high-quality perovskite resonant cavities.
+
+In this work, we demonstrate electrically driven lasing from a dual-cavity perovskite device, which integrates a low-threshold perovskite single-crystal microcavity sub-unit with a high-power microcavity PeLED sub-unit to form a vertically stacked multi-layer structure.
+
+## Structure of the integrated dual-cavity perovskite laser
+
+The structure of the integrated dual-cavity device is shown in Fig. 1a.
+"""
+    out = postprocess_markdown(src)
+    assert "## Abstract" in out
+    assert "## Introduction" not in out
+    assert out.index("## Abstract") < out.index("Solution-processed semiconductor lasers promise")
+    assert out.index("## Structure of the integrated dual-cavity perovskite laser") > out.index("In this work, we demonstrate electrically driven lasing")
+
+
+def test_strip_jopt_like_reader_service_block_before_real_title_and_abstract():
+    src = """
+# 3D single-pixel video
+
+To cite this article: Yiwei Zhang et al 2016 J. Opt. 18 035203
+
+View the [article online](https://doi.org/10.1088/2040-8978/18/3/035203) for updates and enhancements.
+
+## You may also like
+
+- Design and modeling of an acoustically excited double-paddle scanner
+Khaled M Ahmida and Luiz Otavio S Ferreira
+
+- Graphene hydrate: theoretical prediction of a new insulating form of graphene
+Wei L Wang and Efthimios Kaxiras
+
+![Ampheia advertisement](./assets/page_1_fig_2.png)
+
+## 3D single-pixel video
+
+Yiwei Zhang, Matthew P Edgar, Baoqing Sun, Neal Radwell, Graham M Gibson and Miles J Padgett
+
+## Abstract
+
+Photometric stereo is an established three-dimensional imaging technique for estimating surface shape and reflectivity using multiple images.
+
+## Introduction
+
+Three-dimensional imaging is a heavily explored research field.
+"""
+    out = postprocess_markdown(src)
+    assert "To cite this article:" not in out
+    assert "View the [article online]" not in out
+    assert "## You may also like" not in out
+    assert "Ampheia advertisement" not in out
+    assert out.count("# 3D single-pixel video") == 1
+    assert "## Abstract" in out
+    assert "## Introduction" in out
+
+
+def test_strip_author_frontmatter_lines_and_insert_abstract_for_sciadv_like_first_page():
+    src = """
+# Adaptive foveated single-pixel imaging with dynamic supersampling
+
+David B. Phillips, 1 * Ming-Jie Sun, 1,2 * Jonathan M. Taylor, 1 Matthew P. Edgar, 1
+
+Stephen M. Barnett, 1 Graham M. Gibson, 1 Miles J. Padgett 1
+
+In contrast to conventional multipixel cameras, single-pixel cameras capture images using a single detector that measures the correlations between the scene and a set of patterns. However, these systems typically exhibit low frame rates, because to fully sample a scene in this way requires at least the same number of correlation measurements as the number of pixels in the reconstructed image.
+
+## RESULTS
+"""
+    out = postprocess_markdown(src)
+    assert "David B. Phillips" not in out
+    assert "Stephen M. Barnett" not in out
+    assert "## Abstract" in out
+    assert out.index("## Abstract") < out.index("In contrast to conventional multipixel cameras")
+    assert out.index("## Abstract") < out.index("## RESULTS")

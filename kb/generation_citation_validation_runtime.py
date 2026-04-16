@@ -3,10 +3,65 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from kb.inpaper_citation_grounding import parse_ref_num_set
 from kb.paper_guide_contracts import (
     _normalize_paper_guide_support_resolution,
     _normalize_paper_guide_support_slot,
 )
+from kb.paper_guide_structured_index_runtime import (
+    load_paper_guide_anchor_index,
+    load_paper_guide_reference_index,
+)
+
+_INLINE_REFERENCE_PATTERNS = (
+    r"(?<![A-Za-z0-9])\[(\d{1,4}(?:\s*(?:[\-\u2013\u2014\u2212,])\s*\d{1,4})*)\](?![A-Za-z])",
+    r"\$\^\{(\d{1,4}(?:\s*(?:[\-\u2013\u2014\u2212,])\s*\d{1,4})*)\}\$",
+    r"\^\{(\d{1,4}(?:\s*(?:[\-\u2013\u2014\u2212,])\s*\d{1,4})*)\}",
+)
+
+
+def _extract_inline_reference_numbers_local(text: str, *, max_candidates: int = 8) -> list[int]:
+    src = str(text or "").strip()
+    if not src:
+        return []
+    try:
+        limit = max(1, int(max_candidates))
+    except Exception:
+        limit = 8
+    out: list[int] = []
+    seen: set[int] = set()
+    for pattern in _INLINE_REFERENCE_PATTERNS:
+        for spec in re.findall(pattern, src):
+            for item in parse_ref_num_set(str(spec or "").strip(), max_items=max(8, limit * 2)):
+                try:
+                    n = int(item)
+                except Exception:
+                    continue
+                if n <= 0 or n in seen:
+                    continue
+                seen.add(n)
+                out.append(n)
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def _structured_reference_row_to_ref(raw: dict | None) -> dict:
+    row = dict(raw or {}) if isinstance(raw, dict) else {}
+    text = str(row.get("text") or "").strip()
+    if not text:
+        return {}
+    out = {"raw": text}
+    doi = str(row.get("doi") or "").strip()
+    if doi:
+        out["doi"] = doi
+    year = str(row.get("year") or "").strip()
+    if year:
+        out["year"] = year
+    title = str(row.get("title") or "").strip()
+    if title:
+        out["title"] = title
+    return out
 
 
 def _source_refs_from_index(
@@ -152,6 +207,7 @@ def _validate_structured_citations(
             sha_by_source[locked_source_path] = locked_source_sha1
 
     candidate_ref_nums_by_source: dict[str, list[int]] = {}
+    focused_candidate_ref_nums_by_source: dict[str, list[int]] = {}
     if paper_guide_mode:
         for src in list(dict.fromkeys([hit_source_path(h) for h in answer_hits or []])):
             src_norm = str(src or "").strip()
@@ -168,6 +224,19 @@ def _validate_structured_citations(
             src_norm = str(src or "").strip()
             if not src_norm:
                 continue
+            focused_bucket: list[int] = []
+            focused_seen: set[int] = set()
+            for item in list(nums or []):
+                try:
+                    n = int(item)
+                except Exception:
+                    continue
+                if n <= 0 or n in focused_seen:
+                    continue
+                focused_seen.add(n)
+                focused_bucket.append(n)
+            if focused_bucket:
+                focused_candidate_ref_nums_by_source[src_norm] = focused_bucket
             merged = list(candidate_ref_nums_by_source.get(src_norm) or [])
             seen = set(int(n) for n in merged if int(n) > 0)
             for item in list(nums or []):
@@ -217,21 +286,87 @@ def _validate_structured_citations(
 
     resolved_ref_cache: dict[tuple[str, int], dict | None] = {}
     source_refs_cache: dict[str, dict[int, dict]] = {}
+    structured_source_refs_cache: dict[str, dict[int, dict]] = {}
+    anchor_lookup_cache: dict[str, tuple[dict[str, dict], dict[str, dict]]] = {}
+
+    def _structured_source_refs(sp: str) -> dict[int, dict]:
+        src = str(sp or "").strip()
+        if not src or (not paper_guide_mode):
+            return {}
+        cached = structured_source_refs_cache.get(src)
+        if isinstance(cached, dict):
+            return cached
+        try:
+            reference_rows = load_paper_guide_reference_index(src)
+        except Exception:
+            reference_rows = []
+        out: dict[int, dict] = {}
+        for raw in list(reference_rows or []):
+            if not isinstance(raw, dict):
+                continue
+            try:
+                ref_num = int(raw.get("ref_num") or 0)
+            except Exception:
+                ref_num = 0
+            if ref_num <= 0:
+                continue
+            ref = _structured_reference_row_to_ref(raw)
+            if not ref:
+                continue
+            out[int(ref_num)] = ref
+        structured_source_refs_cache[src] = out
+        return out
+
+    def _anchor_lookup_for_source(sp: str) -> tuple[dict[str, dict], dict[str, dict]]:
+        src = str(sp or "").strip()
+        if not src or (not paper_guide_mode):
+            return {}, {}
+        cached = anchor_lookup_cache.get(src)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            return cached
+        try:
+            anchor_rows = load_paper_guide_anchor_index(src)
+        except Exception:
+            anchor_rows = []
+        by_block: dict[str, dict] = {}
+        by_anchor: dict[str, dict] = {}
+        for raw in list(anchor_rows or []):
+            if not isinstance(raw, dict):
+                continue
+            row = dict(raw)
+            block_id = str(row.get("block_id") or "").strip()
+            anchor_id = str(row.get("anchor_id") or "").strip()
+            if block_id and block_id not in by_block:
+                by_block[block_id] = row
+            if anchor_id and anchor_id not in by_anchor:
+                by_anchor[anchor_id] = row
+        out = (by_block, by_anchor)
+        anchor_lookup_cache[src] = out
+        return out
+
+    def _anchor_text_for_source(sp: str, *, block_id: str = "", anchor_id: str = "") -> str:
+        src = str(sp or "").strip()
+        if not src:
+            return ""
+        by_block, by_anchor = _anchor_lookup_for_source(src)
+        row = by_block.get(str(block_id or "").strip()) if str(block_id or "").strip() else None
+        if not isinstance(row, dict) and str(anchor_id or "").strip():
+            row = by_anchor.get(str(anchor_id or "").strip())
+        return str((row or {}).get("text") or "").strip()
+
+    def _append_local_candidate_nums(bucket: list[int], seen: set[int], *texts: str) -> None:
+        for raw_text in texts:
+            for n in _extract_inline_reference_numbers_local(str(raw_text or "").strip(), max_candidates=4):
+                if n <= 0 or n in seen:
+                    continue
+                seen.add(n)
+                bucket.append(n)
 
     def _resolves(sid: str, ref_num: int) -> bool:
         sp = sid_to_source.get(str(sid or "").strip().lower())
         if (not sp) or (int(ref_num) <= 0):
             return False
-        try:
-            got = resolve_reference_entry(
-                index_data,
-                sp,
-                int(ref_num),
-                source_sha1=sha_by_source.get(sp, ""),
-            )
-        except Exception:
-            got = None
-        return bool(isinstance(got, dict) and isinstance(got.get("ref"), dict))
+        return bool(isinstance(_resolve_ref(sp, int(ref_num)), dict))
 
     def _resolve_ref(sp: str, ref_num: int) -> dict | None:
         src = str(sp or "").strip()
@@ -254,6 +389,8 @@ def _validate_structured_citations(
         except Exception:
             got = None
         ref = got.get("ref") if isinstance(got, dict) and isinstance(got.get("ref"), dict) else None
+        if not isinstance(ref, dict):
+            ref = _structured_source_refs(src).get(int(n))
         resolved_ref_cache[key] = ref
         return ref
 
@@ -265,8 +402,11 @@ def _validate_structured_citations(
         if isinstance(cached, dict):
             return cached
         refs = source_refs_from_index(index_data, src, source_sha1=sha_by_source.get(src, ""))
-        source_refs_cache[src] = refs
-        return refs
+        structured_refs = _structured_source_refs(src)
+        merged = dict(refs or {})
+        merged.update(structured_refs)
+        source_refs_cache[src] = merged
+        return merged
 
     stats = {
         "raw_count": int(len(raw_tokens)),
@@ -305,6 +445,7 @@ def _validate_structured_citations(
 
         current_ref = _resolve_ref(src, int(current_ref_num))
         candidate_nums = list(candidate_ref_nums_by_source.get(src) or [])
+        focused_candidate_nums = list(focused_candidate_ref_nums_by_source.get(src) or [])
         context_line = _citation_context_line(token_start=token_start, token_end=token_end)
         line_index = _citation_line_index(token_start=token_start)
         hints = extract_citation_context_hints(cleaned, token_start=token_start, token_end=token_end)
@@ -367,6 +508,18 @@ def _validate_structured_citations(
             if resolved_local > 0 and resolved_local not in local_seen:
                 local_seen.add(resolved_local)
                 local_candidate_nums.insert(0, resolved_local)
+            _append_local_candidate_nums(
+                local_candidate_nums,
+                local_seen,
+                _anchor_text_for_source(
+                    src,
+                    block_id=str(local_resolution.get("block_id") or "").strip(),
+                    anchor_id=str(local_resolution.get("anchor_id") or "").strip(),
+                ),
+                str(local_resolution.get("locate_anchor") or "").strip(),
+                str(local_resolution.get("segment_text") or "").strip(),
+                str(local_resolution.get("evidence_atom_text") or "").strip(),
+            )
             if local_cite_policy == "locate_only" and (not has_strong_hints):
                 return None
         if isinstance(local_slot, dict):
@@ -393,10 +546,31 @@ def _validate_structured_citations(
                         continue
                     local_seen.add(n)
                     local_candidate_nums.append(n)
+            _append_local_candidate_nums(
+                local_candidate_nums,
+                local_seen,
+                _anchor_text_for_source(
+                    src,
+                    block_id=str(local_slot.get("block_id") or "").strip(),
+                    anchor_id=str(local_slot.get("anchor_id") or "").strip(),
+                ),
+                str(local_slot.get("locate_anchor") or "").strip(),
+                str(local_slot.get("snippet") or "").strip(),
+                str(local_slot.get("evidence_atom_text") or "").strip(),
+            )
         if local_candidate_nums:
             candidate_nums = list(local_candidate_nums)
         elif local_cite_policy == "locate_only" and (not has_strong_hints):
             return None
+        elif (not has_strong_hints):
+            # Do not preserve broad, answer-hit-derived candidate refs on generic synthesis
+            # lines unless we have an explicitly focused candidate list for this source.
+            # This avoids keeping model-emitted cites that merely happen to resolve globally
+            # but were not grounded to the local sentence.
+            if not focused_candidate_nums:
+                return None
+            if int(current_ref_num) not in focused_candidate_nums:
+                return None
 
         if current_ref and (not candidate_nums) and has_strong_hints and (not current_conflict):
             return int(current_ref_num)

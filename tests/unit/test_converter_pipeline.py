@@ -4,6 +4,7 @@ import pytest
 import fitz
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from kb.converter.pipeline import PDFConverter
 from kb.converter.config import ConvertConfig
 from kb.converter.page_figure_metadata import persist_page_figure_metadata
@@ -68,6 +69,9 @@ def test_convert_pipeline_fast_mode(sample_pdf, output_dir):
     
     # Check that assets dir was created
     assert (output_dir / "assets").exists()
+    assert (output_dir / "assets" / "anchor_index.json").exists()
+    assert (output_dir / "assets" / "equation_index.json").exists()
+    assert (output_dir / "assets" / "reference_index.json").exists()
 
 def test_convert_pipeline_missing_file(output_dir):
     """Test error handling for missing file."""
@@ -85,6 +89,97 @@ def test_convert_pipeline_missing_file(output_dir):
     
     with pytest.raises(Exception): # fitz.open might raise exception or pipeline checks
         converter.convert("non_existent.pdf", str(output_dir))
+
+
+def test_collect_non_body_metadata_rects_uses_line_boxes_so_title_is_not_masked(tmp_path):
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+
+    class _DummyPage:
+        rect = SimpleNamespace(width=612.0, height=792.0)
+
+        def get_text(self, mode: str):
+            assert mode == "dict"
+            return {
+                "blocks": [
+                    {
+                        "bbox": (35.9, 59.8, 556.1, 148.6),
+                        "lines": [
+                            {
+                                "bbox": (35.9, 59.8, 556.1, 73.5),
+                                "spans": [
+                                    {
+                                        "text": "A P P L I E D O P T I C S 2017 © The Authors, some rights reserved.",
+                                        "size": 9.0,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "bbox": (35.9, 77.3, 385.9, 115.2),
+                        "lines": [
+                            {
+                                "bbox": (35.9, 77.3, 385.9, 115.2),
+                                "spans": [
+                                    {
+                                        "text": "Adaptive foveated single-pixel imaging with dynamic supersampling",
+                                        "size": 18.0,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "bbox": (35.9, 120.8, 386.6, 135.3),
+                        "lines": [
+                            {
+                                "bbox": (35.9, 120.8, 386.6, 135.3),
+                                "spans": [
+                                    {
+                                        "text": "David B. Phillips, 1 * Ming-Jie Sun, 1,2 * Jonathan M. Taylor, 1 Matthew P. Edgar, 1",
+                                        "size": 10.0,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "bbox": (35.9, 132.8, 303.7, 147.2),
+                        "lines": [
+                            {
+                                "bbox": (35.9, 132.8, 303.7, 147.2),
+                                "spans": [
+                                    {
+                                        "text": "Stephen M. Barnett, 1 Graham M. Gibson, 1 Miles J. Padgett 1",
+                                        "size": 10.0,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                ]
+            }
+
+    rects = converter._collect_non_body_metadata_rects(
+        _DummyPage(),
+        page_index=0,
+        is_references_page=False,
+    )
+
+    title_rect = fitz.Rect(35.9, 77.3, 385.9, 115.2)
+    assert len(rects) >= 1
+    assert all(not fitz.Rect(r).intersects(title_rect) for r in rects)
+    assert any(fitz.Rect(r).y0 >= 120.0 for r in rects)
 
 
 def test_cleanup_unreferenced_assets_removes_unused_files_and_rewrites_index(tmp_path):

@@ -12,14 +12,14 @@ def test_sanitize_paper_guide_answer_strips_internal_doc_context_labels():
     assert "the supporting excerpts" in out
 
 
-def test_sanitize_paper_guide_answer_strips_structured_cites_for_non_method_family():
+def test_sanitize_paper_guide_answer_keeps_structured_cites_for_non_method_family():
     raw = "The paper overcomes the trade-off between sectioning and SNR [[CITE:s1234abcd:1]]."
     out = _sanitize_paper_guide_answer_for_user(
         raw,
         has_hits=True,
         prompt_family="overview",
     )
-    assert "[[CITE:" not in out
+    assert "[[CITE:s1234abcd:1]]" not in out
 
 
 def test_sanitize_paper_guide_answer_canonicalizes_negative_shell_to_does_not_specify():

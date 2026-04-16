@@ -11,8 +11,13 @@ from kb.inpaper_citation_grounding import (
 from kb.paper_guide_citation_surfacing import (
     _collect_paper_guide_candidate_refs_by_source,
 )
+from kb.paper_guide_contracts import (
+    _build_paper_guide_retrieval_bundle_model,
+    _build_paper_guide_support_pack_model,
+    _paper_guide_model_dump,
+)
 from kb.paper_guide_focus import _build_paper_guide_special_focus_block
-from kb.paper_guide_grounding_runtime import (
+from kb.paper_guide.grounder import (
     _build_paper_guide_support_slots,
     _build_paper_guide_support_slots_block,
 )
@@ -22,6 +27,7 @@ from kb.paper_guide_prompting import (
     _merge_paper_guide_deepread_context,
     _paper_guide_allows_citeless_answer,
 )
+from kb.paper_guide.router import _resolve_paper_guide_intent
 from kb.paper_guide_retrieval_runtime import _select_paper_guide_deepread_extras
 from kb.paper_guide_shared import _cite_source_id, _source_name_from_md_path
 from kb.paper_guide_target_scope import _build_paper_guide_target_scope
@@ -34,6 +40,79 @@ def _hit_source_path(hit: dict) -> str:
         return ""
     meta = hit.get("meta", {}) or {}
     return str(meta.get("source_path") or "").strip()
+
+
+def _positive_int(value) -> int | None:
+    try:
+        iv = int(value)
+    except Exception:
+        return None
+    return iv if iv > 0 else None
+
+
+def _first_answer_hit_snippet(hit: dict) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    meta = hit.get("meta", {}) or {}
+    for key in ("ref_show_snippets", "ref_snippets"):
+        raw = meta.get(key)
+        if not isinstance(raw, list):
+            continue
+        for item in raw:
+            text = str(item or "").strip()
+            if text:
+                return text
+    for key in ("text", "snippet"):
+        text = str(hit.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _build_answer_hit_primary_evidence(
+    hit: dict,
+    *,
+    source_path: str,
+    source_name: str,
+    heading: str,
+    snippet: str = "",
+) -> dict:
+    if not isinstance(hit, dict):
+        return {}
+    meta = hit.get("meta", {}) or {}
+    snippet_text = str(snippet or "").strip() or _first_answer_hit_snippet(hit)
+    out = {
+        "source_path": str(source_path or "").strip() or None,
+        "source_name": str(source_name or "").strip() or None,
+        "block_id": str(meta.get("block_id") or meta.get("ref_block_id") or "").strip() or None,
+        "anchor_id": str(meta.get("anchor_id") or meta.get("ref_anchor_id") or "").strip() or None,
+        "heading_path": str(
+            heading
+            or meta.get("ref_best_heading_path")
+            or meta.get("heading_path")
+            or meta.get("top_heading")
+            or ""
+        ).strip() or None,
+        "snippet": snippet_text or None,
+        "anchor_kind": str(meta.get("anchor_target_kind") or meta.get("anchor_kind") or "").strip().lower() or None,
+        "anchor_number": _positive_int(meta.get("anchor_target_number") or meta.get("anchor_number")),
+        "selection_reason": "answer_hit_top",
+    }
+    return {
+        key: value
+        for key, value in out.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _select_seed_primary_evidence(evidence_cards: list[dict] | None) -> dict:
+    for card in list(evidence_cards or []):
+        if not isinstance(card, dict):
+            continue
+        primary = card.get("primary_evidence")
+        if isinstance(primary, dict) and primary:
+            return dict(primary)
+    return {}
 
 
 def _build_paper_guide_context_records(
@@ -92,7 +171,19 @@ def _build_paper_guide_context_records(
             body = str(hit.get("text") or "")
 
         ctx_parts.append(header + "\n" + body)
-        if paper_guide_mode and src:
+        if src:
+            primary_evidence = _build_answer_hit_primary_evidence(
+                hit,
+                source_path=src,
+                source_name=src_name,
+                heading=(
+                    str(meta.get("ref_best_heading_path") or "").strip()
+                    or str(meta.get("heading_path") or "").strip()
+                    or focus_heading
+                    or top
+                ),
+                snippet=body,
+            )
             card = {
                 "doc_idx": int(i),
                 "sid": sid,
@@ -103,6 +194,8 @@ def _build_paper_guide_context_records(
                 "snippet": body,
                 "deepread_texts": [],
             }
+            if primary_evidence:
+                card["primary_evidence"] = dict(primary_evidence)
             paper_guide_evidence_cards.append(card)
             paper_guide_card_by_doc_idx[int(i)] = card
 
@@ -281,6 +374,51 @@ def _prepare_paper_guide_prompt_context(
     ):
         paper_guide_citation_grounding_block = _build_paper_guide_citation_grounding_block(answer_hits)
 
+    prompt_text = prompt or retrieval_prompt or used_query
+    paper_guide_contracts_seed = {}
+    if paper_guide_mode:
+        resolved_intent = _resolve_paper_guide_intent(
+            prompt_text,
+            prompt_family=prompt_family,
+            answer_hits=answer_hits,
+        )
+        support_pack_model = _build_paper_guide_support_pack_model(
+            family=str(getattr(resolved_intent, "family", "") or "").strip(),
+            answer_markdown="",
+            support_records=list(paper_guide_support_slots or []),
+            needs_supplement=False,
+        )
+        prompt_context = {
+            "target_scope": dict(paper_guide_target_scope or {}) if isinstance(paper_guide_target_scope, dict) else {},
+            "direct_source_path": paper_guide_direct_source_path,
+            "focus_source_path": paper_guide_focus_source_path,
+            "bound_source_path": str(paper_guide_bound_source_path or "").strip(),
+        }
+        paper_guide_contracts_seed = {
+            "version": 1,
+            "intent": _paper_guide_model_dump(resolved_intent),
+            "retrieval_bundle": _paper_guide_model_dump(
+                _build_paper_guide_retrieval_bundle_model(
+                    prompt_family=str(getattr(resolved_intent, "family", "") or "").strip(),
+                    target_scope=paper_guide_target_scope,
+                    evidence_cards=list(paper_guide_evidence_cards or []),
+                    candidate_refs_by_source=dict(paper_guide_candidate_refs_by_source or {}),
+                    direct_source_path=paper_guide_direct_source_path,
+                    focus_source_path=paper_guide_focus_source_path,
+                    bound_source_path=str(paper_guide_bound_source_path or "").strip(),
+                )
+            ),
+            "support_pack": _paper_guide_model_dump(support_pack_model),
+            "prompt_context": {
+                key: value
+                for key, value in prompt_context.items()
+                if value not in (None, "", [], {})
+            },
+        }
+        seed_primary_evidence = _select_seed_primary_evidence(paper_guide_evidence_cards)
+        if seed_primary_evidence:
+            paper_guide_contracts_seed["primary_evidence"] = dict(seed_primary_evidence)
+
     return {
         "paper_guide_evidence_cards_block": paper_guide_evidence_cards_block,
         "paper_guide_support_slots_block": paper_guide_support_slots_block,
@@ -291,4 +429,5 @@ def _prepare_paper_guide_prompt_context(
         "paper_guide_target_scope": paper_guide_target_scope,
         "paper_guide_direct_source_path": paper_guide_direct_source_path,
         "paper_guide_focus_source_path": paper_guide_focus_source_path,
+        "paper_guide_contracts_seed": paper_guide_contracts_seed,
     }

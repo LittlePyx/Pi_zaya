@@ -21,6 +21,8 @@ export interface SettingsPatch {
   answerDepthAuto?: boolean
   answerModeHint?: string
   answerOutputMode?: string
+  refsCardLocale?: 'auto' | 'zh' | 'en'
+  uiLocale?: 'zh' | 'en'
 }
 
 export interface PickDirResponse {
@@ -42,6 +44,8 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.answerDepthAuto !== undefined) out.answer_depth_auto = patch.answerDepthAuto
   if (patch.answerModeHint !== undefined) out.answer_mode_hint = patch.answerModeHint
   if (patch.answerOutputMode !== undefined) out.answer_output_mode = patch.answerOutputMode
+  if (patch.refsCardLocale !== undefined) out.refs_card_locale = patch.refsCardLocale
+  if (patch.uiLocale !== undefined) out.ui_locale = patch.uiLocale
   return out
 }
 

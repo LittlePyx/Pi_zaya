@@ -141,6 +141,18 @@ _PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN = re.compile(
     r"\u600e\u4e48\u5de5\u4f5c|\u600e\u4e48\u5b9e\u73b0|\u539f\u7406|\u673a\u5236|\u7b97\u6cd5)",
     flags=re.IGNORECASE,
 )
+_PAPER_GUIDE_METHOD_DETAIL_FAMILY_RE = re.compile(
+    r"(\bnetwork training\b|\btrain(?:ing)?\s+the\s+network\b|\bhow\s+they\s+train\b|"
+    r"\boptimizer\b|\blearning rate\b|\bbatch size\b|\bepoch(?:s)?\b|\bpytorch\b|"
+    r"\bhyperparameter(?:s)?\b|\bimplementation details?\b|\btraining details?\b)",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_BROAD_OVERVIEW_HINT_RE = re.compile(
+    r"(\bproblem is this paper solving\b|\bwhat problem\b|\bwhat is the basic idea\b|\bbasic idea\b|"
+    r"\bplain language\b|\bwhy is\b.*\binteresting\b|\bwhat kinds? of applications\b|\bapplications?\b|\breview emphasize\b|"
+    r"\bwhat\s+(?:is|are)\b.{0,80}\bdoing here\b|\bin simple terms\b)",
+    flags=re.IGNORECASE,
+)
 _PAPER_GUIDE_FIGURE_PROMPT_RE = re.compile(
     r"(\bfig(?:ure)?\b|\bpanel\b|\bcaption\b|\blegend\b|\bwalk me through\b.*\bfig(?:ure)?\b|"
     r"图\s*\d+|图注|配图|面板|讲解.*图|解释.*图)",
@@ -177,6 +189,25 @@ def _paper_guide_requested_box_numbers(prompt: str) -> list[int]:
     return out
 
 
+def _paper_guide_requested_literal_section_titles(prompt: str) -> list[str]:
+    q = str(prompt or "").strip()
+    if not q:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(
+        r"(?i)\b(?:from|in)\s+(?:the\s+)?[\"'“”‘’]([^\"'“”‘’\n]{3,120}?)['\"“”‘’]\s+section(?:\s+only)?\b",
+        q,
+    ):
+        title = re.sub(r"\s+", " ", str(match.group(1) or "")).strip(" \t\r\n\"'“”‘’.:;,-")
+        key = title.lower()
+        if (not title) or (key in seen):
+            continue
+        seen.add(key)
+        out.append(title)
+    return out
+
+
 def _paper_guide_requested_section_targets(prompt: str) -> list[str]:
     q = str(prompt or "").strip()
     if not q:
@@ -194,6 +225,12 @@ def _paper_guide_requested_section_targets(prompt: str) -> list[str]:
 
     if re.search(r"(?i)\bdiscussion(?:\s+section)?\b", q_low):
         _add("discussion")
+    if re.search(r"(?i)\b(?:limitations?|strengths?\s+and\s+limitations?)\b", q_low):
+        _add("limitations")
+    if re.search(r"(?i)\b(?:future\s+work|future\s+direction(?:s)?|future\s+extension(?:s)?)\b", q_low):
+        _add("future_work")
+    if re.search(r"(?i)\bconclusions?(?:\s+section)?\b", q_low):
+        _add("conclusion")
     if re.search(r"(?i)\b(?:materials?\s+and\s+methods?|methods?|methodology)\b", q_low):
         _add("methods")
     if re.search(r"(?i)\bresults?(?:\s+section)?\b", q_low):
@@ -206,6 +243,8 @@ def _paper_guide_requested_section_targets(prompt: str) -> list[str]:
         _add("abstract")
     if re.search(r"(?i)\b(?:references?|reference\s+list|works?\s+cited|bibliography)\b", q_low):
         _add("references")
+    for title in _paper_guide_requested_literal_section_titles(q):
+        _add(title)
     return out
 
 
@@ -226,9 +265,13 @@ def _paper_guide_requested_heading_hints(prompt: str) -> list[str]:
 
     section_aliases = {
         "discussion": ["discussion", "discussion section"],
+        "limitations": ["limitations", "limitation", "strengths and limitations"],
+        "future_work": ["future work", "future directions", "future direction"],
+        "conclusion": ["conclusion", "conclusions"],
         "methods": ["methods", "materials and methods", "methodology"],
         "results": ["results", "results section"],
         "introduction": ["introduction"],
+        "acquisition_strategy": ["acquisition and image reconstruction strategies", "acquisition strategy"],
         "abstract": ["abstract"],
         "references": ["references", "reference list", "works cited"],
     }
@@ -253,6 +296,9 @@ def _paper_guide_text_matches_requested_section(text: str, section_name: str) ->
         return False
     aliases = {
         "discussion": ("discussion",),
+        "limitations": ("limitations", "limitation", "strengths and limitations"),
+        "future_work": ("future work", "future direction", "future directions", "future extension", "future extensions"),
+        "conclusion": ("conclusion", "conclusions"),
         "methods": ("materials and methods", "methods", "methodology"),
         "results": ("results", "result"),
         "introduction": ("introduction",),
@@ -311,6 +357,10 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         return ""
     if _PAPER_GUIDE_BOX_ONLY_PROMPT_RE.search(q):
         return "box_only"
+    if _PAPER_GUIDE_DISCUSSION_ONLY_PROMPT_RE.search(q) and (
+        _PAPER_GUIDE_STRENGTH_PROMPT_RE.search(q) or _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN.search(q)
+    ):
+        return "strength_limits"
     if _PAPER_GUIDE_DISCUSSION_ONLY_PROMPT_RE.search(q):
         return "discussion_only"
     if _PAPER_GUIDE_FIGURE_PROMPT_RE.search(q):
@@ -324,10 +374,26 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         return "equation"
     if _PAPER_GUIDE_REPRO_PROMPT_RE.search(q) or _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN.search(q) or intent == "experiment":
         return "reproduce"
+    tradeoff_without_explicit_comparison = bool(
+        re.search(r"(?i)\btrade[\s-]?off\b", q)
+        and not re.search(
+            r"(?i)\b(?:compared with|versus|vs\.?|open[-\s]?pinhole|closed[-\s]?pinhole|baseline|same incident illumination power)\b",
+            q,
+        )
+    )
     if _PAPER_GUIDE_STRENGTH_PROMPT_RE.search(q) or _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN.search(q):
+        return "strength_limits"
+    if tradeoff_without_explicit_comparison and (
+        _paper_guide_requested_section_targets(q)
+        or re.search(r"(?i)\b(?:dynamic range|quantization electronics|mean square error|bottleneck|limitation|limitations|weakness)\b", q)
+    ):
         return "strength_limits"
     if _PAPER_GUIDE_COMPARE_PROMPT_RE.search(q) or _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN.search(q) or intent == "compare":
         return "compare"
+    if _PAPER_GUIDE_METHOD_DETAIL_FAMILY_RE.search(q):
+        return "method"
+    if _PAPER_GUIDE_BROAD_OVERVIEW_HINT_RE.search(q):
+        return "overview"
     if _PAPER_GUIDE_METHOD_PROMPT_RE.search(q) or _PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN.search(q):
         return "method"
     if _PAPER_GUIDE_OVERVIEW_PROMPT_RE.search(q) or _PAPER_GUIDE_OVERVIEW_PROMPT_RE_CLEAN.search(q):

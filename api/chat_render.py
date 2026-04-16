@@ -2,12 +2,32 @@
 
 import hashlib
 import json
+import os
 import re
 from functools import lru_cache
 from pathlib import Path
 
 from kb import task_runtime
-from kb.paper_guide_provenance import _canonicalize_support_segment_heading
+from kb.paper_guide_contracts import (
+    _build_paper_guide_render_packet_model,
+    _paper_guide_model_dump,
+)
+from kb.paper_guide.grounder import (
+    _build_paper_guide_segment_locate_target,
+    _build_paper_guide_segment_reader_open,
+    _resolve_paper_guide_panel_clause_snippet,
+)
+from kb.paper_guide_provenance import (
+    _annotate_provenance_hit_levels,
+    _backfill_segment_primary_blocks_from_anchor_lookup,
+    _build_anchor_provenance_lookup,
+    _canonicalize_support_segment_heading,
+)
+from kb.paper_guide_structured_index_runtime import (
+    load_paper_guide_anchor_index,
+    load_paper_guide_equation_index,
+    load_paper_guide_figure_index,
+)
 from kb.citation_meta import extract_first_doi
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
@@ -34,7 +54,19 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
-_RENDER_CACHE_SCHEMA_VERSION = 1
+_RENDER_CACHE_SCHEMA_VERSION = 3
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    raw = str(os.environ.get(str(name or "").strip(), default) or "").strip()
+    if not raw:
+        return False
+    if raw.lower() in {"1", "true", "yes", "on"}:
+        return True
+    try:
+        return bool(int(raw))
+    except Exception:
+        return False
 
 
 def _extract_box_number_for_display(seg: dict) -> int:
@@ -199,6 +231,58 @@ def _normalize_chat_markdown_for_display(md: str) -> str:
     return _normalize_math_markdown(_strip_structured_cite_tokens_for_display(md))
 
 
+_FREEFORM_NUMERIC_CITE_RE = re.compile(
+    r"(?<![!\\])\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\](?!\()"
+)
+
+
+def _message_intent_family(rec: dict | None) -> str:
+    if not isinstance(rec, dict):
+        return ""
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+    intent = dict(contracts.get("intent") or {}) if isinstance(contracts.get("intent"), dict) else {}
+    return str(intent.get("family") or "").strip().lower()
+
+
+def _message_answer_prompt_family(rec: dict | None) -> str:
+    if not isinstance(rec, dict):
+        return ""
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    answer_quality = dict(meta.get("answer_quality") or {}) if isinstance(meta.get("answer_quality"), dict) else {}
+    return str(answer_quality.get("prompt_family") or "").strip().lower()
+
+
+def _message_answer_output_mode(rec: dict | None) -> str:
+    if not isinstance(rec, dict):
+        return ""
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    answer_quality = dict(meta.get("answer_quality") or {}) if isinstance(meta.get("answer_quality"), dict) else {}
+    return str(answer_quality.get("output_mode") or "").strip().lower()
+
+
+def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str) -> bool:
+    raw = str(content or "")
+    if not raw:
+        return False
+    if _message_intent_family(rec) == "citation_lookup":
+        return True
+    if _message_answer_prompt_family(rec) == "citation_lookup":
+        return True
+    return "citation" in _message_answer_output_mode(rec)
+
+
+def _strip_freeform_numeric_citation_markers(md: str) -> str:
+    text = str(md or "")
+    if (not text) or ("[" not in text):
+        return text
+    out = _FREEFORM_NUMERIC_CITE_RE.sub("", text)
+    out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
+    out = re.sub(r"(?m)[ \t]{2,}", " ", out)
+    out = re.sub(r"[ \t]+\n", "\n", out)
+    return out.strip()
+
+
 def _should_retry_structured_cite_fallback(*, raw_body: str, rendered_body: str, cite_details: list[dict]) -> bool:
     if cite_details:
         return False
@@ -272,6 +356,9 @@ def _extract_render_cache(meta: dict | None, *, expected_key: str) -> dict | Non
     cite_details = cache.get("cite_details")
     if not isinstance(cite_details, list):
         cite_details = []
+    render_packet = cache.get("render_packet")
+    if not isinstance(render_packet, dict):
+        render_packet = {}
     return {
         "notice": str(cache.get("notice") or ""),
         "rendered_body": str(cache.get("rendered_body") or ""),
@@ -280,6 +367,7 @@ def _extract_render_cache(meta: dict | None, *, expected_key: str) -> dict | Non
         "copy_text": str(cache.get("copy_text") or ""),
         "cite_details": [dict(item) for item in cite_details if isinstance(item, dict)],
         "refs_user_msg_id": int(cache.get("refs_user_msg_id") or 0),
+        "render_packet": dict(render_packet),
     }
 
 
@@ -293,6 +381,7 @@ def _build_render_cache_payload(
     copy_text: str,
     cite_details: list[dict],
     refs_user_msg_id: int,
+    render_packet: dict | None = None,
 ) -> dict:
     return {
         "schema": _RENDER_CACHE_SCHEMA_VERSION,
@@ -304,7 +393,267 @@ def _build_render_cache_payload(
         "copy_text": str(copy_text or ""),
         "cite_details": [dict(item) for item in (cite_details or []) if isinstance(item, dict)],
         "refs_user_msg_id": int(refs_user_msg_id or 0),
+        "render_packet": dict(render_packet or {}) if isinstance(render_packet, dict) else {},
     }
+
+
+def _merge_render_packet_contract_meta(
+    *,
+    rec: dict,
+    msg_id: int,
+    enriched_provenance: dict | None,
+    chat_store=None,
+) -> None:
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+    if not contracts:
+        return
+    existing_packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
+    existing_cite_details = [
+        dict(item)
+        for item in list(existing_packet.get("cite_details") or [])
+        if isinstance(item, dict)
+    ]
+    current_cite_details = [
+        dict(item)
+        for item in list(rec.get("cite_details") or [])
+        if isinstance(item, dict)
+    ]
+    allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
+        rec=rec,
+        content=str(rec.get("content") or ""),
+    )
+    preserve_existing_render = bool(allow_inpaper_citation_linking and existing_cite_details and (not current_cite_details))
+    rendered_body = (
+        str(existing_packet.get("rendered_body") or "").strip()
+        if preserve_existing_render
+        else str(rec.get("rendered_body") or "").strip()
+    )
+    rendered_content = (
+        str(existing_packet.get("rendered_content") or "").strip()
+        if preserve_existing_render
+        else str(rec.get("rendered_content") or "").strip()
+    )
+    copy_markdown = (
+        str(existing_packet.get("copy_markdown") or "").strip()
+        if preserve_existing_render
+        else str(rec.get("copy_markdown") or "").strip()
+    )
+    copy_text = (
+        str(existing_packet.get("copy_text") or "").strip()
+        if preserve_existing_render
+        else str(rec.get("copy_text") or "").strip()
+    )
+    existing_notice = str(existing_packet.get("notice") or "").strip()
+    current_notice = str(rec.get("notice") or "").strip()
+    provenance_segments = list((enriched_provenance or {}).get("segments") or [])
+    provenance_primary_evidence = (
+        dict((enriched_provenance or {}).get("primary_evidence") or {})
+        if isinstance((enriched_provenance or {}).get("primary_evidence"), dict)
+        else {}
+    )
+    if not provenance_primary_evidence:
+        provenance_primary_evidence = (
+            dict(existing_packet.get("primary_evidence") or {})
+            if isinstance(existing_packet.get("primary_evidence"), dict)
+            else {}
+        )
+    if not provenance_primary_evidence:
+        provenance_primary_evidence = (
+            dict(contracts.get("primary_evidence") or {})
+            if isinstance(contracts.get("primary_evidence"), dict)
+            else {}
+        )
+    has_current_locate_identity = any(
+        isinstance(item, dict)
+        and (
+            isinstance(item.get("locate_target"), dict)
+            or isinstance(item.get("reader_open"), dict)
+        )
+        for item in provenance_segments
+    )
+    # When we preserve existing cite details/rendered output (because the current
+    # render degraded), do not accidentally drop a newly-detected notice (e.g.
+    # KB-miss) just because the existing packet had no notice.
+    notice = existing_notice if (preserve_existing_render and existing_notice) else current_notice
+    render_packet_model = _build_paper_guide_render_packet_model(
+        answer_markdown=str(rec.get("content") or "").strip(),
+        notice=notice,
+        rendered_body=rendered_body,
+        rendered_content=rendered_content,
+        copy_markdown=copy_markdown,
+        copy_text=copy_text,
+        cite_details=existing_cite_details if preserve_existing_render else current_cite_details,
+        citation_validation=(
+            existing_packet.get("citation_validation")
+            if isinstance(existing_packet.get("citation_validation"), dict)
+            else {}
+        ),
+        locate_target=(
+            existing_packet.get("locate_target")
+            if ((not has_current_locate_identity) and isinstance(existing_packet.get("locate_target"), dict))
+            else {}
+        ),
+        reader_open=(
+            existing_packet.get("reader_open")
+            if ((not has_current_locate_identity) and isinstance(existing_packet.get("reader_open"), dict))
+            else {}
+        ),
+        provenance_segments=provenance_segments,
+        primary_evidence=provenance_primary_evidence,
+    )
+    render_packet = _paper_guide_model_dump(render_packet_model)
+    if existing_packet == render_packet:
+        rec["meta"] = meta
+        return
+    contracts["render_packet"] = render_packet
+    meta["paper_guide_contracts"] = contracts
+    rec["meta"] = meta
+    if chat_store is not None and msg_id > 0:
+        try:
+            chat_store.merge_message_meta(msg_id, {"paper_guide_contracts": contracts})
+        except Exception:
+            pass
+
+
+def _project_render_packet_compat_fields(rec: dict) -> None:
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+    packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
+    if not packet:
+        return
+    rec["notice"] = str(packet.get("notice") or "")
+    rec["rendered_body"] = str(packet.get("rendered_body") or "")
+    rec["rendered_content"] = str(packet.get("rendered_content") or "")
+    rec["copy_markdown"] = str(packet.get("copy_markdown") or "")
+    rec["copy_text"] = str(packet.get("copy_text") or "")
+    rec["cite_details"] = [
+        dict(item)
+        for item in list(packet.get("cite_details") or [])
+        if isinstance(item, dict)
+    ]
+    rec["meta"] = meta
+
+
+def _maybe_strip_legacy_render_fields(rec: dict, *, enabled: bool) -> None:
+    if not enabled and not _env_flag("KB_CHAT_RENDER_PACKET_ONLY", "0"):
+        return
+    # Keep core identity fields; strip legacy render projections from response payload.
+    for key in (
+        "notice",
+        "rendered_body",
+        "rendered_content",
+        "copy_markdown",
+        "copy_text",
+        "cite_details",
+    ):
+        rec.pop(key, None)
+
+
+def _restore_render_packet_contract_from_cache(rec: dict, cached: dict | None) -> None:
+    if not isinstance(cached, dict):
+        return
+    render_packet = cached.get("render_packet")
+    if not isinstance(render_packet, dict) or not render_packet:
+        return
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+    contracts["render_packet"] = dict(render_packet)
+    meta["paper_guide_contracts"] = contracts
+    rec["meta"] = meta
+
+
+def _reader_open_candidate_key(candidate: dict | None) -> str:
+    cand = dict(candidate or {})
+    return "::".join(
+        [
+            str(cand.get("blockId") or "").strip().lower(),
+            str(cand.get("anchorId") or "").strip().lower(),
+            str(cand.get("anchorKind") or "").strip().lower(),
+            str(cand.get("anchorNumber") or "").strip().lower(),
+            str(cand.get("headingPath") or "").strip().lower(),
+            str(cand.get("highlightSnippet") or "").strip().lower()[:180],
+            str(cand.get("snippet") or "").strip().lower()[:180],
+        ]
+    )
+
+
+def _build_reader_open_alternative_candidates(
+    seg: dict,
+    *,
+    block_lookup: dict[str, dict],
+    locate_target: dict,
+    anchor_number: int,
+) -> list[dict]:
+    primary_block_id = str(seg.get("primary_block_id") or locate_target.get("blockId") or "").strip()
+    primary_anchor_id = str(seg.get("primary_anchor_id") or locate_target.get("anchorId") or "").strip()
+    block_id_order: list[str] = []
+    for raw_block_id in (
+        [primary_block_id]
+        + list(seg.get("evidence_block_ids") or [])
+        + list(seg.get("support_block_ids") or [])
+        + list(seg.get("related_block_ids") or [])
+    ):
+        block_id = str(raw_block_id or "").strip()
+        if block_id:
+            block_id_order.append(block_id)
+    if not block_id_order:
+        return []
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    primary_key = ""
+    for block_id in block_id_order[:8]:
+        block = block_lookup.get(block_id)
+        if not isinstance(block, dict):
+            continue
+        block_text = str(block.get("text") or "").strip()
+        heading_path = str(block.get("heading_path") or "").strip()
+        anchor_id = str(block.get("anchor_id") or "").strip()
+        block_kind = str(block.get("kind") or "").strip().lower()
+        is_primary = bool(primary_block_id and block_id == primary_block_id) or bool(primary_anchor_id and anchor_id and anchor_id == primary_anchor_id)
+        anchor_kind = (
+            str(locate_target.get("anchorKind") or seg.get("anchor_kind") or "").strip()
+            if is_primary
+            else ("equation" if block_kind == "equation" else "figure" if block_kind == "figure" else block_kind)
+        )
+        try:
+            block_number = int(block.get("number") or 0)
+        except Exception:
+            block_number = 0
+        candidate_anchor_number = block_number if block_number > 0 else (int(anchor_number or 0) if is_primary else 0)
+        snippet = (
+            str(locate_target.get("snippet") or "").strip()
+            if is_primary
+            else block_text
+        ) or block_text or heading_path or str(seg.get("text") or "").strip()
+        highlight_snippet = (
+            str(locate_target.get("highlightSnippet") or "").strip()
+            if is_primary
+            else block_text
+        ) or snippet
+        candidate = {
+            "headingPath": heading_path or None,
+            "snippet": snippet or None,
+            "highlightSnippet": highlight_snippet or None,
+            "blockId": block_id or None,
+            "anchorId": anchor_id or None,
+            "anchorKind": anchor_kind or None,
+            "anchorNumber": candidate_anchor_number or None,
+        }
+        key = _reader_open_candidate_key(candidate)
+        if (not key) or (key in seen):
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+        if is_primary and not primary_key:
+            primary_key = key
+    if not candidates:
+        return []
+    return [
+        candidate
+        for candidate in candidates
+        if _reader_open_candidate_key(candidate) != primary_key
+    ][:4]
 
 
 def _enrich_provenance_segments_for_display(
@@ -323,6 +672,9 @@ def _enrich_provenance_segments_for_display(
         if str(block_id or "").strip() and isinstance(block, dict)
     }
     md_path_raw = str(provenance.get("md_path") or "").strip()
+    anchor_lookup_by_anchor_id: dict[str, dict] = {}
+    equation_index_rows: list[dict] = []
+    figure_index_rows: list[dict] = []
     if md_path_raw:
         try:
             for block in task_runtime.load_source_blocks(Path(md_path_raw)):
@@ -334,11 +686,38 @@ def _enrich_provenance_segments_for_display(
                 lookup[block_id] = dict(block)
         except Exception:
             pass
+        try:
+            anchor_index_rows = load_paper_guide_anchor_index(Path(md_path_raw))
+        except Exception:
+            anchor_index_rows = []
+        try:
+            anchor_block_lookup, anchor_lookup_by_anchor_id = _build_anchor_provenance_lookup(anchor_index_rows)
+        except Exception:
+            anchor_block_lookup, anchor_lookup_by_anchor_id = {}, {}
+        for block_id, block in dict(anchor_block_lookup or {}).items():
+            block_id_str = str(block_id or "").strip()
+            if block_id_str and isinstance(block, dict):
+                lookup[block_id_str] = dict(block)
+        try:
+            equation_index_rows = load_paper_guide_equation_index(Path(md_path_raw))
+        except Exception:
+            equation_index_rows = []
+        try:
+            figure_index_rows = load_paper_guide_figure_index(Path(md_path_raw))
+        except Exception:
+            figure_index_rows = []
     if lookup:
         try:
             hardened_segments = task_runtime._apply_provenance_required_coverage_contract(
                 provenance.get("segments"),
                 block_lookup=lookup,
+                equation_index_rows=equation_index_rows,
+                figure_index_rows=figure_index_rows,
+            )
+            hardened_segments = _backfill_segment_primary_blocks_from_anchor_lookup(
+                hardened_segments,
+                block_lookup=lookup,
+                anchor_lookup_by_anchor_id=anchor_lookup_by_anchor_id,
             )
             hardened_segments, contract_meta = task_runtime._apply_provenance_strict_identity_contract(hardened_segments)
             provenance = dict(provenance)
@@ -373,9 +752,20 @@ def _enrich_provenance_segments_for_display(
             for seg in list(provenance.get("segments") or [])
         ]
         provenance["segments"] = _propagate_box_scope_for_display(provenance.get("segments") or [])
+        provenance["segments"] = _annotate_provenance_hit_levels(provenance.get("segments") or [])
     segments_raw = provenance.get("segments")
     if not isinstance(segments_raw, list):
         return provenance
+    display_block_map_raw = provenance.get("block_map")
+    display_block_map = {
+        str(block_id): dict(block)
+        for block_id, block in dict(display_block_map_raw or {}).items()
+        if str(block_id or "").strip() and isinstance(block, dict)
+    }
+    source_path = str(provenance.get("source_path") or "").strip()
+    source_name = str(provenance.get("source_name") or "").strip()
+    if (not source_name) and source_path:
+        source_name = _source_name_from_path(source_path)
     segments_out: list[dict] = []
     for idx, seg0 in enumerate(segments_raw, start=1):
         if not isinstance(seg0, dict):
@@ -404,6 +794,43 @@ def _enrich_provenance_segments_for_display(
                 )
         seg["display_markdown"] = _normalize_chat_markdown_for_display(rendered_segment or raw_markdown or str(seg.get("text") or ""))
         seg["cite_details"] = cite_details
+        panel_clause_snippet = _resolve_paper_guide_panel_clause_snippet(
+            seg,
+            block_lookup=display_block_map,
+            md_path=str(provenance.get("md_path") or "").strip(),
+        )
+        locate_target = _build_paper_guide_segment_locate_target(
+            seg,
+            panel_clause_snippet=panel_clause_snippet,
+        )
+        if locate_target:
+            seg["locate_target"] = locate_target
+        try:
+            claim_group_distance = int(seg.get("claim_group_target_distance") or 0)
+        except Exception:
+            claim_group_distance = 0
+        claim_group = {
+            "id": str(seg.get("claim_group_id") or "").strip() or None,
+            "kind": str(seg.get("claim_group_kind") or "").strip() or None,
+            "leadText": str(seg.get("claim_group_lead_text") or "").strip() or None,
+            "distance": claim_group_distance or None,
+        }
+        alternative_candidates = _build_reader_open_alternative_candidates(
+            seg,
+            block_lookup=display_block_map,
+            locate_target=locate_target,
+            anchor_number=int(locate_target.get("anchorNumber") or 0),
+        )
+        reader_open = _build_paper_guide_segment_reader_open(
+            seg,
+            source_path=source_path,
+            source_name=source_name,
+            locate_target=locate_target,
+            alternative_candidates=alternative_candidates,
+            claim_group=claim_group,
+        )
+        if reader_open:
+            seg["reader_open"] = reader_open
         segments_out.append(seg)
     out = dict(provenance)
     out["segments"] = segments_out
@@ -552,6 +979,7 @@ def enrich_messages_with_reference_render(
     *,
     conv_id: str,
     chat_store=None,
+    render_packet_only: bool = False,
 ) -> list[dict]:
     out: list[dict] = []
     last_user_msg_id = 0
@@ -587,6 +1015,7 @@ def enrich_messages_with_reference_render(
             expected_key=render_cache_key,
         )
         if cached:
+            _restore_render_packet_contract_from_cache(rec, cached)
             rec["cite_details"] = list(cached.get("cite_details") or [])
             rec["copy_markdown"] = str(cached.get("copy_markdown") or "")
             rec["copy_text"] = str(cached.get("copy_text") or "")
@@ -602,24 +1031,32 @@ def enrich_messages_with_reference_render(
             cite_details: list[dict] = []
             rendered_body = str(body or "")
             raw_body = rendered_body
+            allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
+                rec=rec,
+                content=content,
+            )
             if rendered_body.strip():
                 rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
                 rendered_body = _normalize_equation_source_notes(rendered_body)
-                rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
-                    rendered_body,
-                    hits,
-                    anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
-                )
-                if _should_retry_structured_cite_fallback(
-                    raw_body=raw_body,
-                    rendered_body=rendered_body,
-                    cite_details=cite_details,
-                ):
-                    rendered_body, cite_details = _fallback_render_structured_citations(
-                        raw_body,
+                if allow_inpaper_citation_linking:
+                    rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                        rendered_body,
                         hits,
                         anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
                     )
+                    if _should_retry_structured_cite_fallback(
+                        raw_body=raw_body,
+                        rendered_body=rendered_body,
+                        cite_details=cite_details,
+                    ):
+                        rendered_body, cite_details = _fallback_render_structured_citations(
+                            raw_body,
+                            hits,
+                            anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+                        )
+                else:
+                    rendered_body = _strip_structured_cite_tokens_for_display(rendered_body)
+                    rendered_body = _strip_freeform_numeric_citation_markers(rendered_body)
 
             rendered_full = ""
             if notice and rendered_body:
@@ -644,23 +1081,6 @@ def enrich_messages_with_reference_render(
             rec["notice"] = notice
             rec["rendered_body"] = rendered_body_norm
             rec["refs_user_msg_id"] = int(last_user_msg_id or 0)
-            if chat_store is not None and msg_id > 0:
-                try:
-                    chat_store.set_message_render_cache(
-                        msg_id,
-                        _build_render_cache_payload(
-                            cache_key=render_cache_key,
-                            notice=notice,
-                            rendered_body=rendered_body_norm,
-                            rendered_content=rendered_markdown,
-                            copy_markdown=copy_markdown,
-                            copy_text=copy_text,
-                            cite_details=cite_details,
-                            refs_user_msg_id=int(last_user_msg_id or 0),
-                        ),
-                    )
-                except Exception:
-                    pass
         enriched_provenance = _enrich_provenance_segments_for_display(
             provenance_raw if isinstance(provenance_raw, dict) else None,
             hits,
@@ -671,6 +1091,39 @@ def enrich_messages_with_reference_render(
             if isinstance(rec.get("meta"), dict):
                 rec["meta"] = dict(rec.get("meta") or {})
                 rec["meta"]["provenance"] = enriched_provenance
+        _merge_render_packet_contract_meta(
+            rec=rec,
+            msg_id=msg_id,
+            enriched_provenance=enriched_provenance if isinstance(enriched_provenance, dict) else None,
+            chat_store=chat_store,
+        )
+        _project_render_packet_compat_fields(rec)
+        _maybe_strip_legacy_render_fields(rec, enabled=bool(render_packet_only))
+        if chat_store is not None and msg_id > 0 and not cached:
+            try:
+                meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+                contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+                render_packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
+                chat_store.set_message_render_cache(
+                    msg_id,
+                    _build_render_cache_payload(
+                        cache_key=render_cache_key,
+                        notice=str(rec.get("notice") or ""),
+                        rendered_body=str(rec.get("rendered_body") or ""),
+                        rendered_content=str(rec.get("rendered_content") or ""),
+                        copy_markdown=str(rec.get("copy_markdown") or ""),
+                        copy_text=str(rec.get("copy_text") or ""),
+                        cite_details=[
+                            dict(item)
+                            for item in list(rec.get("cite_details") or [])
+                            if isinstance(item, dict)
+                        ],
+                        refs_user_msg_id=int(rec.get("refs_user_msg_id") or last_user_msg_id or 0),
+                        render_packet=render_packet,
+                    ),
+                )
+            except Exception:
+                pass
         rec["render_cache_key"] = str(render_cache_key or "")[:12]
         out.append(rec)
 

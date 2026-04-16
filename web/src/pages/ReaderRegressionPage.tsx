@@ -11,6 +11,10 @@ function parseScenario(input: string | null): ReaderRegressionScenario {
   const raw = String(input || '').trim().toLowerCase()
   if (raw === 'evidence-nav') return 'evidence-nav'
   if (raw === 'candidate-fallback') return 'candidate-fallback'
+  if (raw === 'strict-missing-exact') return 'strict-missing-exact'
+  if (raw === 'discussion-only') return 'discussion-only'
+  if (raw === 'limitations-only') return 'limitations-only'
+  if (raw === 'future-work-only') return 'future-work-only'
   if (raw === 'equation') return 'equation'
   if (raw === 'figure') return 'figure'
   if (raw === 'multi-panel') return 'multi-panel'

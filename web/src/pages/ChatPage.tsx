@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { startTransition, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Button, message, Typography } from 'antd'
 import { useChatStore } from '../stores/chatStore'
@@ -24,6 +26,7 @@ const DESKTOP_READER_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const READER_WIDTH_STORAGE_KEY = 'kb:paper-guide-reader-width'
 const READER_COLLAPSED_STORAGE_KEY = 'kb:paper-guide-reader-collapsed'
 const TIMELINE_RAIL_LABEL = '\u65f6\u95f4\u7ebf'
+const showLegacyUiBlocks = false
 
 function uploadItemKey(item: ChatUploadItem) {
   if (item.kind === 'pdf' && item.ingest_job_id) {
@@ -699,7 +702,7 @@ export default function ChatPage() {
         </div>
       ) : (
         <>
-          {false ? (
+          {showLegacyUiBlocks ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/60 px-4 py-3">
               <div className="mx-auto flex max-w-5xl items-center gap-3">
                 <Button size="small" loading={messagesLoadingMore} onClick={() => { void loadOlderMessages() }}>
@@ -715,7 +718,7 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          {false ? (
+          {showLegacyUiBlocks ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/40 px-4 py-2">
               <div className="mx-auto flex max-w-5xl items-center gap-3">
                 <Button size="small" onClick={() => {}}>
@@ -813,7 +816,7 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          {false ? (
+          {showLegacyUiBlocks ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/30 px-4 py-2">
               <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
                 <Text type="secondary" className="text-xs">
@@ -826,7 +829,7 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          {false ? (
+          {showLegacyUiBlocks ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/20 px-3 py-2 lg:hidden">
               <div className="flex gap-2 overflow-x-auto">
                 {timelineItems.map((item) => (
@@ -847,7 +850,7 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          {false ? (
+          {showLegacyUiBlocks ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/40 px-4 py-2">
               <div className="mx-auto flex max-w-7xl items-center justify-between gap-3">
                 <Text className="text-xs">

@@ -57,6 +57,50 @@ def test_select_paper_guide_answer_hits_prefers_box_target_over_generic_sections
     assert "Box 1" in str(out[0].get("text") or "")
 
 
+def test_select_paper_guide_answer_hits_prefers_target_paragraph_over_heading_only_shell():
+    src = r"db\demo\paper.en.md"
+    hits = [
+        {
+            "score": 42.0,
+            "text": "How a single-pixel camera works",
+            "meta": {
+                "source_path": src,
+                "heading_path": "Abstract / How a single-pixel camera works",
+                "block_id": "blk_heading",
+                "kind": "heading",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 42.0,
+            "text": (
+                "A detailed comparison shows that there is a trade-off between the advantages of "
+                "single-pixel imaging and the dynamic range of the detector and associated quantization electronics."
+            ),
+            "meta": {
+                "source_path": src,
+                "heading_path": "Abstract / How a single-pixel camera works",
+                "block_id": "blk_para",
+                "kind": "paragraph",
+                "paper_guide_targeted_block": True,
+            },
+        },
+    ]
+
+    out = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=hits,
+        prompt=(
+            "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe "
+            "between the advantages of single-pixel imaging and the detector dynamic range?"
+        ),
+        top_n=1,
+    )
+
+    assert len(out) == 1
+    assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_para"
+
+
 def test_select_paper_guide_answer_hits_prefers_intext_attribution_over_reference_list():
     src = r"db\demo\paper.en.md"
     hits = [

@@ -30,11 +30,75 @@ def test_paper_guide_prompt_family_detects_core_families():
     )
 
 
+def test_paper_guide_prompt_family_prefers_overview_for_beginner_problem_and_application_questions():
+    assert (
+        _paper_guide_prompt_family(
+            "I am a beginner. What problem is this paper solving, and what is the basic idea of the method?"
+        )
+        == "overview"
+    )
+    assert (
+        _paper_guide_prompt_family(
+            "I am just getting started. Why is single-pixel imaging interesting, and what kinds of applications does this review emphasize?"
+        )
+        == "overview"
+    )
+    assert (
+        _paper_guide_prompt_family(
+            "I am new to this paper. What are RVT and APR doing here, in simple terms?"
+        )
+        == "overview"
+    )
+
+
+def test_paper_guide_prompt_family_prefers_method_for_training_summary_questions():
+    assert (
+        _paper_guide_prompt_family(
+            "If I wanted a beginner-level summary of how they train the network, what should I pay attention to first?"
+        )
+        == "method"
+    )
+
+
+def test_paper_guide_prompt_family_prefers_strength_limits_for_section_tradeoff_prompt():
+    assert (
+        _paper_guide_prompt_family(
+            "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe between the advantages of single-pixel imaging and the detector dynamic range?"
+        )
+        == "strength_limits"
+    )
+
+
+def test_paper_guide_prompt_family_prefers_strength_limits_for_discussion_limitation_prompt():
+    assert (
+        _paper_guide_prompt_family(
+            "From the Discussion section only, what limitation do the authors note about calibrating different SPAD arrays, and what follow-up do they suggest?"
+        )
+        == "strength_limits"
+    )
+
+
+def test_paper_guide_prompt_family_keeps_explicit_comparison_tradeoff_as_compare():
+    assert (
+        _paper_guide_prompt_family(
+            "Compared with the open-pinhole condition, what trade-off do the authors report for iISM-APR in terms of CNR versus resolution?"
+        )
+        == "compare"
+    )
+
+
 def test_paper_guide_requested_heading_hints_include_figure_targets():
     hints = _paper_guide_requested_heading_hints("Explain Figure 3 panels (c) and (d).")
     assert "figure 3" in [item.lower() for item in hints]
     assert "caption" in [item.lower() for item in hints]
     assert "panel" in [item.lower() for item in hints]
+
+
+def test_paper_guide_requested_heading_hints_include_literal_section_title():
+    hints = _paper_guide_requested_heading_hints(
+        "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe?"
+    )
+    assert "how a single-pixel camera works" in [item.lower() for item in hints]
 
 
 def test_augment_paper_guide_retrieval_prompt_avoids_reference_list_bias_for_citation_lookup():
@@ -66,6 +130,20 @@ def test_paper_guide_text_matches_requested_targets_for_box_and_section():
     assert _paper_guide_text_matches_requested_targets(
         "Discussion. The authors suggest future extensions to faster hardware.",
         prompt="From the Discussion only, what future directions do the authors suggest?",
+    )
+
+
+def test_paper_guide_text_matches_requested_targets_for_future_work_and_literal_section_title():
+    assert _paper_guide_text_matches_requested_targets(
+        "### Future Work\nThe authors suggest adaptive masking for dynamic scenes.",
+        prompt="From the Future Work section only, what extension do the authors suggest next?",
+    )
+    assert _paper_guide_text_matches_requested_targets(
+        "### How a single-pixel camera works\nThe trade-off is that the detector stays simple while dynamic range becomes the bottleneck.",
+        prompt=(
+            "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe "
+            "between the advantages of single-pixel imaging and the detector dynamic range?"
+        ),
     )
 
 

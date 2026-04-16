@@ -77,6 +77,24 @@ def test_build_paper_guide_direct_abstract_answer_uses_titles_and_translation():
     assert "这是一段中文翻译" in out
 
 
+def test_build_paper_guide_direct_abstract_answer_adds_anchor_sentence_when_requested():
+    out = _build_paper_guide_direct_abstract_answer(
+        prompt="Please provide the abstract text and point me to one exact supporting sentence for locate jump.",
+        source_path="demo.pdf",
+        db_dir=None,
+        llm=None,
+        prefer_zh_locale=lambda _a, _b: False,
+        extract_bound_paper_abstract=lambda source_path, db_dir=None: (
+            "In this paper, we explore the potential of Snapshot Compressive Imaging (SCI) technique "
+            "for recovering the underlying 3D scene representation from a single temporal compressed image. "
+            "SCI is a cost-effective method that enables recording high-dimensional data."
+        ),
+    )
+    assert "Abstract text" in out
+    assert "Anchor sentence for locate jump" in out
+    assert "Snapshot Compressive Imaging" in out
+
+
 def test_paper_guide_abstract_requests_translation_detects_english_and_chinese():
     assert _paper_guide_abstract_requests_translation("Translate the abstract into Chinese.")
     assert _paper_guide_abstract_requests_translation("把摘要翻译成中文")
@@ -105,6 +123,60 @@ def test_extract_bound_paper_method_focus_prefers_methods_block_with_phase_corre
     low = out.lower()
     assert "phase correlation" in low
     assert "original iism dataset" in low
+
+
+def test_extract_bound_paper_method_focus_combines_multiple_focus_terms_when_they_live_in_different_blocks(tmp_path: Path):
+    doc_dir = tmp_path / "paper"
+    doc_dir.mkdir()
+    md = doc_dir / "paper.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Data analysis",
+                "",
+                "## Radial variance transform (RVT)",
+                "",
+                "Specifically, we use the radial variance transform (RVT), which converts an interferogram into an intensity-only map.",
+                "",
+                "## Adaptive pixel-reassignment (APR)",
+                "",
+                "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    out = _extract_bound_paper_method_focus(str(md), db_dir=tmp_path, focus_terms=["RVT", "APR"])
+    low = out.lower()
+    assert "radial variance transform" in low
+    assert "phase correlation" in low
+
+
+def test_extract_bound_paper_method_focus_prefers_term_specific_heading_for_single_focus_term(tmp_path: Path):
+    doc_dir = tmp_path / "paper"
+    doc_dir.mkdir()
+    md = doc_dir / "paper.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Results",
+                "",
+                "We modified the workflow to account for phase information before APR can be applied.",
+                "",
+                "### Radial variance transform (RVT)",
+                "",
+                "Specifically, we use the radial variance transform (RVT), which converts an interferogram into an intensity-only map that reflects the local degree of symmetry.",
+                "",
+                "### Adaptive pixel-reassignment (APR)",
+                "",
+                "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    out = _extract_bound_paper_method_focus(str(md), db_dir=tmp_path, focus_terms=["RVT"])
+    low = out.lower()
+    assert "intensity-only map" in low
+    assert "phase correlation" not in low
 
 
 def test_extract_bound_paper_figure_caption_returns_matching_caption(tmp_path: Path):
@@ -163,6 +235,17 @@ def test_extract_paper_guide_method_detail_excerpt_prefers_applied_back_sentence
     assert "original iism dataset" in low
 
 
+def test_extract_paper_guide_method_detail_excerpt_prefers_direct_apr_implementation_sentence():
+    excerpt = (
+        "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one. "
+        "Image registration of the RVT pinhole stack yielded shift vectors for each off-axis pinhole image relative to the central one."
+    )
+    out = _extract_paper_guide_method_detail_excerpt(excerpt, focus_terms=["RVT", "APR"])
+    low = out.lower()
+    assert low.startswith("apr was performed")
+    assert "phase correlation" in low
+
+
 def test_extract_paper_guide_special_focus_excerpt_unwraps_focus_snippet():
     block = "Paper-guide method focus:\n- Keep names exact.\n- Focus snippet:\nAPR was performed using phase correlation."
     out = _extract_paper_guide_special_focus_excerpt(block)
@@ -187,6 +270,42 @@ def test_build_paper_guide_special_focus_block_for_method_prefers_bound_focus():
     )
     assert "Paper-guide method focus:" in out
     assert "phase correlation" in out
+
+
+def test_build_paper_guide_special_focus_block_for_overview_role_prompt_uses_bound_method_focus():
+    out = _build_paper_guide_special_focus_block(
+        [],
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="overview",
+        source_path="demo.pdf",
+        extract_bound_paper_method_focus=lambda source_path, db_dir=None, focus_terms=None: (
+            "Specifically, we use the radial variance transform (RVT), which converts an interferogram into an intensity-only map that reflects the local degree of symmetry.\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one. "
+            "The obtained shift vectors were then applied back to the original iISM dataset."
+        ),
+    )
+    low = out.lower()
+    assert "paper-guide overview role focus" in low
+    assert "intensity-only map" in low
+    assert "phase correlation" in low
+
+
+def test_build_paper_guide_special_focus_block_for_method_role_prompt_uses_overview_role_focus():
+    out = _build_paper_guide_special_focus_block(
+        [],
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="method",
+        source_path="demo.pdf",
+        extract_bound_paper_method_focus=lambda source_path, db_dir=None, focus_terms=None: (
+            "Specifically, we use the radial variance transform (RVT), which converts an interferogram into an intensity-only map that reflects the local degree of symmetry.\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one. "
+            "The obtained shift vectors were then applied back to the original iISM dataset."
+        ),
+    )
+    low = out.lower()
+    assert "paper-guide overview role focus" in low
+    assert "intensity-only map" in low
+    assert "phase correlation" in low
 
 
 def test_build_paper_guide_special_focus_block_for_figure_uses_injected_caption():
@@ -229,3 +348,103 @@ def test_repair_paper_guide_focus_answer_generic_overrides_not_stated_for_exact_
     low = out.lower()
     assert "retrieved method evidence" in low
     assert "applied back to the original iism dataset" in low
+
+
+def test_repair_paper_guide_focus_answer_generic_drops_contradicted_negative_focus_line():
+    out = _repair_paper_guide_focus_answer_generic(
+        (
+            "RVT is named, but its function is not explained in the given excerpts.\n"
+            "APR is not mentioned at all in the provided snippets.\n"
+            "APR does not appear in the retrieved context."
+        ),
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="method",
+        special_focus_block=(
+            "Paper-guide method focus:\n"
+            "- Focus snippet:\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one."
+        ),
+        source_path="demo.pdf",
+        db_dir=None,
+        extract_bound_paper_method_focus=lambda source_path, **kwargs: (
+            "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one."
+        ),
+    )
+    low = out.lower()
+    assert "apr is not mentioned" not in low
+    assert "apr does not appear" not in low
+    assert "apr is not found" not in low
+    assert "apr is not referenced" not in low
+    assert "implementation detail:" in low
+    assert "phase correlation" in low
+
+
+def test_repair_paper_guide_focus_answer_generic_replaces_overview_role_not_stated_shell():
+    out = _repair_paper_guide_focus_answer_generic(
+        (
+            "RVT is introduced as a data-analysis step, but its purpose is not explained in the retrieved text.\n"
+            "APR is not mentioned at all in the provided snippets."
+        ),
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="overview",
+        special_focus_block=(
+            "Paper-guide overview role focus:\n"
+            "- Focus snippet:\n"
+            "Specifically, we use the radial variance transform (RVT), which converts an interferogram into an intensity-only map that reflects the local degree of symmetry.\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one. "
+            "Image registration of the RVT pinhole stack yielded shift vectors. "
+            "These vectors were then applied back to the original iISM dataset."
+        ),
+    )
+    low = out.lower()
+    assert "retrieved method evidence" in low
+    assert "rvt turns the interferometric image into an intensity-only map" in low
+    assert "apr uses phase-correlation registration to estimate shift vectors" in low
+    assert "not explained" not in low
+    assert "not mentioned" not in low
+
+
+def test_repair_paper_guide_focus_answer_generic_treats_markdown_does_not_explain_as_not_stated_shell():
+    out = _repair_paper_guide_focus_answer_generic(
+        (
+            "RVT is named explicitly in the Data analysis section, but the provided snippet does *not* explain what it does.\n"
+            "Its function is not described in the given text."
+        ),
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="overview",
+        special_focus_block=(
+            "Paper-guide overview role focus:\n"
+            "- Focus snippet:\n"
+            "To enable robust registration of the iISM pinhole stack independent of the interferometric phase, we applied RVT to it. "
+            "RVT computes, for each pixel, the variance of intensity values along concentric circular areas of increasing radius and generates a new image in which pixel intensity encodes the degree of radial symmetry."
+        ),
+    )
+    low = out.lower()
+    assert "retrieved method evidence" in low
+    assert "rvt converts each pinhole image into a radial-symmetry map" in low
+    assert "does *not* explain" not in low
+    assert "not described" not in low
+
+
+def test_repair_paper_guide_focus_answer_generic_replaces_method_family_role_prompt_when_two_roles_are_grounded():
+    out = _repair_paper_guide_focus_answer_generic(
+        (
+            "RVT is named but its function is not described.\n"
+            "APR is not mentioned at all in the provided snippets."
+        ),
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="method",
+        special_focus_block=(
+            "Paper-guide overview role focus:\n"
+            "- Focus snippet:\n"
+            "To enable robust registration of the iISM pinhole stack independent of the interferometric phase, we applied RVT to it. "
+            "RVT computes, for each pixel, the variance of intensity values along concentric circular areas of increasing radius and generates a new image in which pixel intensity encodes the degree of radial symmetry.\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one. "
+            "Image registration of the RVT pinhole stack yielded shift vectors. "
+            "These vectors were then applied back to the original iISM dataset."
+        ),
+    )
+    low = out.lower()
+    assert "retrieved method evidence" in low
+    assert "rvt converts each pinhole image into a radial-symmetry map" in low
+    assert "apr uses phase-correlation registration to estimate shift vectors" in low

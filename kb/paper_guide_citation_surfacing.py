@@ -9,7 +9,7 @@ from kb.paper_guide_focus import (
     _extract_paper_guide_method_focus_terms,
     _extract_paper_guide_special_focus_excerpt,
 )
-from kb.paper_guide_grounding_runtime import (
+from kb.paper_guide.grounder import (
     _PAPER_GUIDE_CITE_STRONG_TOKENS,
     _extract_inline_reference_numbers,
     _paper_guide_cue_tokens,

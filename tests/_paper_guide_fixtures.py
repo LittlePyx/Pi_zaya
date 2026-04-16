@@ -16,6 +16,12 @@ def build_scinerf_like_fixture(tmp_path: Path) -> dict[str, object]:
             "We render $x_i$ to synthesize the compressed image $y$ for the SCI observation model.\n\n"
             "# Background on NeRF\n\n"
             "$$Y = \\sum_{i=1}^{N} X_i \\odot M_i + Z \\tag{3}$$\n\n"
+            "# Discussion\n\n"
+            "Looking ahead, a practical next step is to extend the method to dynamic scenes while keeping the storage and hardware burden low through software-based SCI implementations.\n\n"
+            "# Limitations\n\n"
+            "A current limitation is that the method trades temporal coverage against reconstruction stability when the captured scene deviates too far from the static-scene assumption.\n\n"
+            "# Future Work\n\n"
+            "A direct future extension is to combine the method with adaptive masking so dynamic scenes can be reconstructed more faithfully without increasing the hardware budget.\n\n"
             "# Conclusion\n\n"
             "SCINeRF exploits neural radiance fields as its underlying scene representation. "
             "Physical image formation process of an SCI image is exploited to formulate the training objective "
@@ -46,6 +52,21 @@ def build_scinerf_like_fixture(tmp_path: Path) -> dict[str, object]:
         for block in blocks
         if str(block.get("kind") or "") == "equation" and int(block.get("number") or 0) == 3
     )
+    discussion_block = next(
+        block
+        for block in blocks
+        if "extend the method to dynamic scenes" in str(block.get("text") or "").lower()
+    )
+    limitations_block = next(
+        block
+        for block in blocks
+        if "trades temporal coverage against reconstruction stability" in str(block.get("text") or "").lower()
+    )
+    future_work_block = next(
+        block
+        for block in blocks
+        if "combine the method with adaptive masking" in str(block.get("text") or "").lower()
+    )
     return {
         "md_main": md_main,
         "blocks": blocks,
@@ -53,6 +74,9 @@ def build_scinerf_like_fixture(tmp_path: Path) -> dict[str, object]:
         "wrong_method_block": wrong_method_block,
         "conclusion_block": conclusion_block,
         "eq3_block": eq3_block,
+        "discussion_block": discussion_block,
+        "limitations_block": limitations_block,
+        "future_work_block": future_work_block,
     }
 
 

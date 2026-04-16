@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Select, Switch, Typography } from 'antd'
 import { generateApi, type AnswerQualitySummary } from '../../api/generate'
 
@@ -12,7 +12,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
   const [depthFilter, setDepthFilter] = useState('')
   const [onlyFailed, setOnlyFailed] = useState(false)
 
-  const loadQualitySummary = async () => {
+  const loadQualitySummary = useCallback(async () => {
     setQualityLoading(true)
     setQualityError('')
     try {
@@ -28,12 +28,12 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
     } finally {
       setQualityLoading(false)
     }
-  }
+  }, [depthFilter, intentFilter, onlyFailed])
 
   useEffect(() => {
     if (!open) return
     void loadQualitySummary()
-  }, [open, intentFilter, depthFilter, onlyFailed])
+  }, [open, loadQualitySummary])
 
   const qualityIntentRows = useMemo(
     () =>
@@ -149,4 +149,3 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
     </div>
   )
 }
-

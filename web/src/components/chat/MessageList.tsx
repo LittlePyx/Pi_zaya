@@ -11,7 +11,9 @@ import type {
   ReaderLocateTarget,
   ReaderOpenPayload,
 } from './reader/readerTypes'
+import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
+  isLikelyWeakCitationTitle,
   mergeCiteMeta,
   normalizeCiteDetail,
   normalizeShelfNote,
@@ -25,6 +27,15 @@ import { RefsPanel } from '../refs/RefsPanel'
 import type { ChatImageAttachment, Message } from '../../api/chat'
 import { referencesApi, type ReaderDocAnchor } from '../../api/references'
 import { useChatStore } from '../../stores/chatStore'
+import {
+  getMessageCiteDetailRecords,
+  getMessageCopyMarkdownValue,
+  getMessageCopyTextValue,
+  getMessageNoticeValue,
+  getMessageRenderedBodyContent,
+  getMessageRenderPacket,
+  type MessageRenderPacketLite,
+} from './messageRenderPacket'
 
 const { Text } = Typography
 const SHELF_MAX_ITEMS = 120
@@ -135,6 +146,13 @@ interface RefEntryLite {
   hits?: RefHitLite[]
 }
 
+interface LowConfidenceMetaLite {
+  isZh: boolean
+  reasonCode: string
+  reasonText: string
+  candidateRefs: number[]
+}
+
 interface AssistantLocatePrep {
   bodyContent: string
   refsUserMsgId: number
@@ -217,6 +235,9 @@ interface ProvenanceLocateEntry {
   label: string
   segmentText: string
   evidenceQuote: string
+  locateTarget?: ReaderLocateTarget
+  readerOpen?: ReaderOpenPayload
+  hitLevel?: string
   claimType?: string
   mustLocate?: boolean
   locatePolicy?: string
@@ -227,6 +248,8 @@ interface ProvenanceLocateEntry {
   anchorKind?: string
   anchorText?: string
   equationNumber?: number
+  supportFigureNumber?: number
+  supportPanelLetters?: string[]
   snippetKey: string
   snippetAliases: string[]
   primary: LocateCandidate
@@ -252,6 +275,7 @@ interface StructuredProvenanceSegment {
   kind: string
   segmentType: string
   evidenceMode: string
+  hitLevel: string
   claimType: string
   mustLocate: boolean
   locatePolicy: string
@@ -293,6 +317,26 @@ interface LocateRenderMetaLite {
 
 const GUIDE_LOCATE_CANDIDATE_LIMIT = 1600
 const REF_LOCATE_CANDIDATE_LIMIT = 900
+const LOW_CONF_REASON_MAP_EN: Record<string, string> = {
+  empty_hits: 'no scoped evidence was retrieved',
+  target_miss: 'the requested target section was not matched directly',
+  reference_only_hits: 'retrieval mostly returned reference-like snippets',
+  weak_signal: 'retrieval signal is weak for the requested claim',
+  strict_family_without_targeted_support: 'strict question type lacks targeted support',
+  strict_family_weak_overlap: 'strict question type has weak lexical overlap',
+  strict_family_sparse_hits: 'strict question type has sparse evidence hits',
+  broad_family_weak_overlap: 'broad summary question has weak evidence overlap',
+}
+const LOW_CONF_REASON_MAP_ZH: Record<string, string> = {
+  empty_hits: '未检索到同文证据片段',
+  target_miss: '未直接命中你指定的目标段落',
+  reference_only_hits: '检索结果主要是参考文献样式片段',
+  weak_signal: '针对该问题的证据信号偏弱',
+  strict_family_without_targeted_support: '严格问题类型缺少定向证据支撑',
+  strict_family_weak_overlap: '严格问题类型与证据词重叠较弱',
+  strict_family_sparse_hits: '严格问题类型命中证据过少',
+  broad_family_weak_overlap: '概览类问题与证据重叠较弱',
+}
 
 function stripMarkdownInline(input: string): string {
   return String(input || '')
@@ -323,7 +367,7 @@ function inferStrictAnchorKind(
   if (claim === 'formula_claim' || claim === 'inline_formula_claim' || claim === 'equation_explanation_claim') {
     return 'equation'
   }
-  if (claim === 'figure_claim') return 'figure'
+  if (claim === 'figure_claim' || claim === 'figure_panel') return 'figure'
   if (claim === 'quote_claim') return 'quote'
   if (claim === 'blockquote_claim') return 'blockquote'
   if (
@@ -342,21 +386,26 @@ function hasSegmentStrictLocateIdentity(
   segment: Record<string, unknown> | null | undefined,
   currentSegment?: StructuredProvenanceSegment | null,
 ): boolean {
-  const primaryBlockId = String(segment?.primary_block_id || '').trim()
+  const readerOpen = coerceReaderOpenPayload(segment?.reader_open)
+  const locateTarget = coerceReaderLocateTarget(segment?.locate_target) || readerOpen?.locateTarget || null
+  const primaryBlockId = String(segment?.primary_block_id || locateTarget?.blockId || '').trim()
   const evidenceBlockIds = Array.isArray(segment?.evidence_block_ids)
     ? segment?.evidence_block_ids.map((item) => String(item || '').trim()).filter(Boolean)
     : []
-  const anchorKindRaw = String(segment?.anchor_kind || currentSegment?.anchorKind || '').trim().toLowerCase()
+  const effectiveEvidenceBlockIds = evidenceBlockIds.length > 0
+    ? evidenceBlockIds
+    : coerceStringArray(locateTarget?.blockId, 1, 120)
+  const anchorKindRaw = String(segment?.anchor_kind || locateTarget?.anchorKind || currentSegment?.anchorKind || '').trim().toLowerCase()
   const claimType = String(segment?.claim_type || currentSegment?.claimType || '').trim().toLowerCase()
   const anchorKind = inferStrictAnchorKind(anchorKindRaw, claimType)
-  const anchorText = normalizeStrictAnchorText(String(segment?.anchor_text || currentSegment?.anchorText || ''))
-  const evidenceQuote = normalizeStrictAnchorText(String(segment?.evidence_quote || ''))
-  if (!(primaryBlockId && evidenceBlockIds.length > 0)) return false
+  const anchorText = normalizeStrictAnchorText(String(segment?.anchor_text || locateTarget?.anchorText || currentSegment?.anchorText || ''))
+  const evidenceQuote = normalizeStrictAnchorText(String(segment?.evidence_quote || locateTarget?.evidenceQuote || ''))
+  if (!(primaryBlockId && effectiveEvidenceBlockIds.length > 0)) return false
   if (anchorKindRaw && (anchorText || evidenceQuote)) return true
   const locatePolicy = String(segment?.locate_policy || currentSegment?.locatePolicy || '').trim().toLowerCase()
   const mustLocate = Boolean(segment?.must_locate ?? currentSegment?.mustLocate)
   if (!(mustLocate || locatePolicy === 'required')) return false
-  const segmentText = normalizeStrictAnchorText(String(segment?.text || currentSegment?.text || ''))
+  const segmentText = normalizeStrictAnchorText(String(segment?.text || locateTarget?.snippet || currentSegment?.text || ''))
   return Boolean(anchorKind && (anchorText || evidenceQuote || segmentText))
 }
 
@@ -412,17 +461,18 @@ function buildGuideLocateCandidates(
   const pushCandidate = (
     headingPathRaw: string,
     snippetRaw: string,
-    extra?: { anchorId?: string; anchorKind?: string; anchorNumber?: number },
+    extra?: { blockId?: string; anchorId?: string; anchorKind?: string; anchorNumber?: number },
   ) => {
     const headingPath = stripMarkdownInline(headingPathRaw)
     const text = stripMarkdownInline(snippetRaw)
     const formulaLike = hasFormulaSignal(text)
     if (text.length < 24 && !formulaLike) return
     if (formulaLike && text.length < 6) return
+    const blockId = String(extra?.blockId || '').trim()
     const anchorId = String(extra?.anchorId || '').trim()
     const anchorKind = String(extra?.anchorKind || '').trim().toLowerCase()
     const anchorNumber = Number(extra?.anchorNumber || 0)
-    const key = `${normalizeLocateText(sourcePath)}::${anchorId.toLowerCase()}::${normalizeLocateText(headingPath)}::${normalizeLocateText(text).slice(0, 260)}`
+    const key = `${normalizeLocateText(sourcePath)}::${blockId.toLowerCase()}::${anchorId.toLowerCase()}::${normalizeLocateText(headingPath)}::${normalizeLocateText(text).slice(0, 260)}`
     if (seen.has(key)) return
     seen.add(key)
     out.push({
@@ -432,6 +482,7 @@ function buildGuideLocateCandidates(
       focusSnippet: text,
       matchText: [headingPath, text].filter(Boolean).join('\n'),
       sourceType,
+      blockId: blockId || undefined,
       anchorId: anchorId || undefined,
       anchorKind: anchorKind || undefined,
       anchorNumber: Number.isFinite(anchorNumber) && anchorNumber > 0 ? Math.floor(anchorNumber) : undefined,
@@ -441,7 +492,7 @@ function buildGuideLocateCandidates(
   const pushSentenceCandidates = (
     headingPath: string,
     text: string,
-    extra?: { anchorId?: string; anchorKind?: string; anchorNumber?: number },
+    extra?: { blockId?: string; anchorId?: string; anchorKind?: string; anchorNumber?: number },
   ) => {
     const src = stripMarkdownInline(text)
     if (src.length < 24 && !hasFormulaSignal(src)) return
@@ -463,6 +514,7 @@ function buildGuideLocateCandidates(
   const anchorList = Array.isArray(readerAnchors) ? readerAnchors : []
   if (anchorList.length > 0) {
     for (const item of anchorList) {
+      const blockId = String(item?.block_id || '').trim()
       const anchorId = String(item?.anchor_id || '').trim()
       const headingPath = String(item?.heading_path || '').trim()
       const kind = String(item?.kind || '').trim().toLowerCase()
@@ -470,11 +522,13 @@ function buildGuideLocateCandidates(
       const text = String(item?.text || '').trim()
       if (!text) continue
       pushCandidate(headingPath, text, {
+        blockId,
         anchorId,
         anchorKind: kind,
         anchorNumber: number,
       })
       pushSentenceCandidates(headingPath, text, {
+        blockId,
         anchorId,
         anchorKind: kind,
         anchorNumber: number,
@@ -540,11 +594,120 @@ function buildGuideLocateCandidates(
 function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
   const entry = refs[String(msgId)] as {
     hits?: Array<{ meta?: Record<string, unknown> }>
-    guide_filter?: { hidden_self_source?: boolean }
+    guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
   } | undefined
   if (!entry) return false
   const hits = Array.isArray(entry.hits) ? entry.hits : []
-  return hits.length > 0
+  const filteredCount = Number((entry.guide_filter || {}).filtered_hit_count || 0)
+  return hits.length > 0 || Boolean((entry.guide_filter || {}).hidden_self_source) || filteredCount > 0
+}
+
+function toPositiveInt(input: unknown): number {
+  const n = Number(input)
+  if (!Number.isFinite(n)) return 0
+  const out = Math.floor(n)
+  return out > 0 ? out : 0
+}
+
+function hasCjkText(input: string): boolean {
+  return /[\u4e00-\u9fff]/.test(String(input || ''))
+}
+
+function isNegativeLocateSurfaceText(input: string): boolean {
+  const raw = String(input || '').trim()
+  if (!raw) return false
+  return /\b(?:not stated|not mentioned|does not mention|doesn't mention|does not specify|doesn't specify|cannot be determined|not found|no external paper matched|no other papers matched|does not include)\b/i.test(raw)
+}
+
+function shouldSuppressNegativeLocateSurface(input: {
+  claimType?: string
+  anchorKind?: string
+  segmentText?: string
+  evidenceQuote?: string
+  anchorText?: string
+  snippet?: string
+  highlightSnippet?: string
+}): boolean {
+  const anchorKind = String(input.anchorKind || '').trim().toLowerCase()
+  if (anchorKind === 'equation' || anchorKind === 'figure' || anchorKind === 'quote' || anchorKind === 'blockquote' || anchorKind === 'inline_formula') {
+    return false
+  }
+  const claimType = String(input.claimType || '').trim().toLowerCase()
+  const texts = [
+    String(input.snippet || '').trim(),
+    String(input.highlightSnippet || '').trim(),
+    String(input.evidenceQuote || '').trim(),
+    String(input.anchorText || '').trim(),
+    String(input.segmentText || '').trim(),
+  ].filter(Boolean)
+  const hasNegativeSurface = texts.some((text) => isNegativeLocateSurfaceText(text))
+  if (!hasNegativeSurface) return false
+  return (
+    !claimType
+    || claimType === 'evidence_note_claim'
+    || claimType === 'shell_sentence'
+    || claimType === 'critical_fact_claim'
+  )
+}
+
+function resolveLowConfidenceMeta(
+  metaRaw: Record<string, unknown> | null | undefined,
+  localeHintText: string,
+): LowConfidenceMetaLite | null {
+  const meta = metaRaw && typeof metaRaw === 'object' ? metaRaw : null
+  if (!meta) return null
+  const answerQuality = meta.answer_quality
+  if (!answerQuality || typeof answerQuality !== 'object') return null
+  const retrieval = (answerQuality as Record<string, unknown>).retrieval_confidence
+  if (!retrieval || typeof retrieval !== 'object') return null
+  const retrievalRecord = retrieval as Record<string, unknown>
+  const lowRaw = retrievalRecord.low_confidence
+  const lowConfidence = lowRaw === true || lowRaw === 1 || String(lowRaw || '').trim().toLowerCase() === 'true'
+  if (!lowConfidence) return null
+  const reasonCode = String(
+    retrievalRecord.low_confidence_reason
+    || retrievalRecord.force_rescue_reason
+    || '',
+  ).trim()
+  const reasonNorm = reasonCode.toLowerCase()
+  const isZh = hasCjkText(localeHintText)
+  const reasonText = isZh
+    ? (LOW_CONF_REASON_MAP_ZH[reasonNorm] || reasonNorm || '证据匹配置信度偏低')
+    : (LOW_CONF_REASON_MAP_EN[reasonNorm] || (reasonNorm ? reasonNorm.replace(/_/g, ' ') : 'evidence matching is lower confidence'))
+  const refsRaw = Array.isArray(retrievalRecord.candidate_refs_for_notice)
+    ? retrievalRecord.candidate_refs_for_notice
+    : (Array.isArray(retrievalRecord.candidate_refs) ? retrievalRecord.candidate_refs : [])
+  const candidateRefs: number[] = []
+  const seen = new Set<number>()
+  for (const item of refsRaw) {
+    const num = toPositiveInt(item)
+    if (num <= 0 || seen.has(num)) continue
+    seen.add(num)
+    candidateRefs.push(num)
+    if (candidateRefs.length >= 8) break
+  }
+  return {
+    isZh,
+    reasonCode: reasonNorm,
+    reasonText,
+    candidateRefs,
+  }
+}
+
+function stripLeadingLowConfidenceNotice(body: string): string {
+  const text = String(body || '')
+  if (!text.trim()) return text
+  const normalized = text.trimStart()
+  const split = normalized.split(/\n\s*\n/, 2)
+  if (split.length < 2) return text
+  const lead = String(split[0] || '').trim()
+  const leadLower = lead.toLowerCase()
+  const looksLowConfidenceNotice = (
+    leadLower.startsWith('note: this answer is based on lower-confidence evidence matching')
+    || (lead.includes('低置信') && lead.includes('证据'))
+  )
+  if (!looksLowConfidenceNotice) return text
+  return String(split[1] || '').trimStart()
 }
 
 function normalizeLocateText(input: string): string {
@@ -798,6 +961,222 @@ function coerceStringArray(input: unknown, maxItems = 8, maxChars = 2200): strin
   return out
 }
 
+function coerceReaderLocateTarget(input: unknown): ReaderLocateTarget | null {
+  if (!input || typeof input !== 'object') return null
+  const raw = input as Record<string, unknown>
+  const anchorNumberRaw = Number(raw.anchorNumber || 0)
+  const target: ReaderLocateTarget = {
+    segmentId: String(raw.segmentId || '').trim() || undefined,
+    sourceSegmentId: String(raw.sourceSegmentId || '').trim() || undefined,
+    headingPath: String(raw.headingPath || '').trim() || undefined,
+    snippet: String(raw.snippet || '').trim() || undefined,
+    highlightSnippet: String(raw.highlightSnippet || '').trim() || undefined,
+    evidenceQuote: String(raw.evidenceQuote || '').trim() || undefined,
+    anchorText: String(raw.anchorText || '').trim() || undefined,
+    hitLevel: String(raw.hitLevel || '').trim().toLowerCase() || undefined,
+    blockId: String(raw.blockId || '').trim() || undefined,
+    anchorId: String(raw.anchorId || '').trim() || undefined,
+    anchorKind: String(raw.anchorKind || '').trim().toLowerCase() || undefined,
+    anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
+      ? Math.floor(anchorNumberRaw)
+      : undefined,
+    claimType: String(raw.claimType || '').trim() || undefined,
+    locatePolicy: String(raw.locatePolicy || '').trim() || undefined,
+    locateSurfacePolicy: String(raw.locateSurfacePolicy || '').trim() || undefined,
+    snippetAliases: coerceStringArray(raw.snippetAliases, 8, 360),
+    relatedBlockIds: coerceStringArray(raw.relatedBlockIds, 8, 180),
+  }
+  if (!Object.values(target).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))) {
+    return null
+  }
+  return target
+}
+
+function coerceReaderLocateClaimGroup(input: unknown): ReaderLocateClaimGroup | null {
+  if (!input || typeof input !== 'object') return null
+  const raw = input as Record<string, unknown>
+  const distanceRaw = Number(raw.distance || 0)
+  const claimGroup: ReaderLocateClaimGroup = {
+    id: String(raw.id || '').trim() || undefined,
+    kind: String(raw.kind || '').trim() || undefined,
+    leadText: String(raw.leadText || '').trim() || undefined,
+    distance: Number.isFinite(distanceRaw) && distanceRaw > 0
+      ? Math.floor(distanceRaw)
+      : undefined,
+  }
+  if (!Object.values(claimGroup).some(Boolean)) return null
+  return claimGroup
+}
+
+function coerceReaderLocateCandidateArray(input: unknown, maxItems = 6): ReaderLocateCandidate[] {
+  if (!Array.isArray(input) || input.length <= 0) return []
+  const out: ReaderLocateCandidate[] = []
+  const seen = new Set<string>()
+  for (const item of input) {
+    if (!item || typeof item !== 'object') continue
+    const raw = item as Record<string, unknown>
+    const anchorNumberRaw = Number(raw.anchorNumber || 0)
+    const candidate: ReaderLocateCandidate = {
+      headingPath: String(raw.headingPath || '').trim() || undefined,
+      snippet: String(raw.snippet || '').trim() || undefined,
+      highlightSnippet: String(raw.highlightSnippet || '').trim() || undefined,
+      anchorId: String(raw.anchorId || '').trim() || undefined,
+      blockId: String(raw.blockId || '').trim() || undefined,
+      anchorKind: String(raw.anchorKind || '').trim().toLowerCase() || undefined,
+      anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
+        ? Math.floor(anchorNumberRaw)
+        : undefined,
+    }
+    const key = [
+      String(candidate.blockId || '').trim().toLowerCase(),
+      String(candidate.anchorId || '').trim().toLowerCase(),
+      String(candidate.anchorKind || '').trim().toLowerCase(),
+      Number.isFinite(Number(candidate.anchorNumber || 0)) ? Math.floor(Number(candidate.anchorNumber || 0)) : 0,
+      String(candidate.headingPath || '').trim().toLowerCase(),
+      String(candidate.highlightSnippet || '').trim().toLowerCase().slice(0, 180),
+      String(candidate.snippet || '').trim().toLowerCase().slice(0, 180),
+    ].join('::')
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(candidate)
+    if (out.length >= maxItems) break
+  }
+  return out
+}
+
+function readerLocateCandidateIdentityKey(item: Partial<ReaderLocateCandidate> | null | undefined): string {
+  return [
+    String(item?.blockId || '').trim().toLowerCase(),
+    String(item?.anchorId || '').trim().toLowerCase(),
+    String(item?.anchorKind || '').trim().toLowerCase(),
+    Number.isFinite(Number(item?.anchorNumber || 0)) ? Math.floor(Number(item?.anchorNumber || 0)) : 0,
+    String(item?.headingPath || '').trim().toLowerCase(),
+    String(item?.highlightSnippet || '').trim().toLowerCase().slice(0, 180),
+    String(item?.snippet || '').trim().toLowerCase().slice(0, 180),
+  ].join('::')
+}
+
+function toPositiveIntOrUndefined(value: unknown): number | undefined {
+  const n = Number(value || 0)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined
+}
+
+function dedupeReaderLocateCandidates(
+  candidates: Array<ReaderLocateCandidate | null | undefined>,
+  maxItems = 6,
+): ReaderLocateCandidate[] {
+  const out: ReaderLocateCandidate[] = []
+  const seen = new Set<string>()
+  for (const item of candidates) {
+    if (!item || typeof item !== 'object') continue
+    const key = readerLocateCandidateIdentityKey(item)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push(item)
+    if (out.length >= maxItems) break
+  }
+  return out
+}
+
+function buildReaderLocateCandidateFromLocateCandidate(
+  cand: LocateCandidate | null | undefined,
+  opts: {
+    snippet: string
+    highlightSnippet: string
+    anchorKind?: string
+    anchorNumber?: number
+  },
+): ReaderLocateCandidate | null {
+  if (!cand) return null
+  const snippet = String(opts.snippet || cand.focusSnippet || '').trim()
+  const highlightSnippet = String(opts.highlightSnippet || snippet || cand.focusSnippet || '').trim()
+  const anchorNumber = toPositiveIntOrUndefined(opts.anchorNumber || cand.anchorNumber || 0)
+  const candidate: ReaderLocateCandidate = {
+    headingPath: String(cand.headingPath || '').trim() || undefined,
+    snippet: snippet || undefined,
+    highlightSnippet: highlightSnippet || undefined,
+    blockId: String(cand.blockId || '').trim() || undefined,
+    anchorId: String(cand.anchorId || '').trim() || undefined,
+    anchorKind: String(opts.anchorKind || cand.anchorKind || '').trim().toLowerCase() || undefined,
+    anchorNumber,
+  }
+  return readerLocateCandidateIdentityKey(candidate) ? candidate : null
+}
+
+function buildReaderCandidateCollections(
+  primaryCandidate: ReaderLocateCandidate | null,
+  secondaryCandidates: Array<ReaderLocateCandidate | null | undefined>,
+  opts?: {
+    visibleCandidates?: Array<ReaderLocateCandidate | null | undefined>
+    evidenceCandidates?: Array<ReaderLocateCandidate | null | undefined>
+    maxItems?: number
+  },
+): Pick<ReaderOpenPayload, 'alternatives' | 'visibleAlternatives' | 'evidenceAlternatives'> {
+  const maxItems = Number.isFinite(Number(opts?.maxItems || 6))
+    ? Math.max(1, Math.floor(Number(opts?.maxItems || 6)))
+    : 6
+  const alternatives = dedupeReaderLocateCandidates(secondaryCandidates, maxItems)
+  const visibleAlternatives = dedupeReaderLocateCandidates(
+    [
+      primaryCandidate,
+      ...((opts?.visibleCandidates && opts.visibleCandidates.length > 0)
+        ? opts.visibleCandidates
+        : alternatives),
+    ],
+    maxItems,
+  )
+  const evidenceAlternatives = dedupeReaderLocateCandidates(
+    [
+      primaryCandidate,
+      ...((opts?.evidenceCandidates && opts.evidenceCandidates.length > 0)
+        ? opts.evidenceCandidates
+        : alternatives),
+    ],
+    maxItems,
+  )
+  return {
+    alternatives: alternatives.length > 0 ? alternatives : undefined,
+    visibleAlternatives: visibleAlternatives.length > 1 ? visibleAlternatives : undefined,
+    evidenceAlternatives: evidenceAlternatives.length > 1 ? evidenceAlternatives : undefined,
+  }
+}
+
+function coerceReaderOpenPayload(input: unknown): ReaderOpenPayload | null {
+  if (!input || typeof input !== 'object') return null
+  const raw = input as Record<string, unknown>
+  const anchorNumberRaw = Number(raw.anchorNumber || 0)
+  const initialAltIndexRaw = Number(raw.initialAltIndex || 0)
+  const locateTarget = coerceReaderLocateTarget(raw.locateTarget)
+  const claimGroup = coerceReaderLocateClaimGroup(raw.claimGroup)
+  const payload: ReaderOpenPayload = {
+    sourcePath: String(raw.sourcePath || '').trim(),
+    sourceName: String(raw.sourceName || '').trim() || undefined,
+    headingPath: String(raw.headingPath || '').trim() || undefined,
+    snippet: String(raw.snippet || '').trim() || undefined,
+    highlightSnippet: String(raw.highlightSnippet || '').trim() || undefined,
+    anchorId: String(raw.anchorId || '').trim() || undefined,
+    blockId: String(raw.blockId || '').trim() || undefined,
+    relatedBlockIds: coerceStringArray(raw.relatedBlockIds, 8, 180),
+    anchorKind: String(raw.anchorKind || '').trim().toLowerCase() || undefined,
+    anchorNumber: Number.isFinite(anchorNumberRaw) && anchorNumberRaw > 0
+      ? Math.floor(anchorNumberRaw)
+      : undefined,
+    strictLocate: raw.strictLocate === undefined ? undefined : Boolean(raw.strictLocate),
+    locateTarget: locateTarget || undefined,
+    claimGroup: claimGroup || undefined,
+    alternatives: coerceReaderLocateCandidateArray(raw.alternatives, 6),
+    visibleAlternatives: coerceReaderLocateCandidateArray(raw.visibleAlternatives, 6),
+    evidenceAlternatives: coerceReaderLocateCandidateArray(raw.evidenceAlternatives, 6),
+    initialAltIndex: Number.isFinite(initialAltIndexRaw)
+      ? Math.max(0, Math.floor(initialAltIndexRaw))
+      : undefined,
+  }
+  if (!Object.values(payload).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))) {
+    return null
+  }
+  return payload
+}
+
 function pickFirstRefText(loc: Record<string, unknown>): string {
   const keys = ['snippet', 'text', 'quote', 'content', 'summary', 'why']
   for (const key of keys) {
@@ -932,9 +1311,13 @@ function buildStructuredProvenanceLocateEntries(
     if (!segment || typeof segment !== 'object') continue
     const currentSegment = segmentsAll[idx] || null
     if (!currentSegment) continue
+    const rawReaderOpen = coerceReaderOpenPayload((segment as Record<string, unknown>).reader_open)
+    const rawLocateTarget = coerceReaderLocateTarget((segment as Record<string, unknown>).locate_target)
+      || rawReaderOpen?.locateTarget
+      || null
     const evidenceMode = String(segment.evidence_mode || '').trim().toLowerCase()
-    const primaryBlockId = String(segment.primary_block_id || '').trim()
-    const primaryAnchorId = String(segment.primary_anchor_id || '').trim()
+    const primaryBlockId = String(segment.primary_block_id || rawLocateTarget?.blockId || '').trim()
+    const primaryAnchorId = String(segment.primary_anchor_id || rawLocateTarget?.anchorId || '').trim()
     const supportBlockIdsRaw = Array.isArray(segment.support_block_ids) ? segment.support_block_ids : []
     const evidenceBlockIdsRaw = Array.isArray(segment.evidence_block_ids) ? segment.evidence_block_ids : []
     const claimType = String(segment.claim_type || currentSegment.claimType || '').trim().toLowerCase()
@@ -942,26 +1325,57 @@ function buildStructuredProvenanceLocateEntries(
     const locatePolicy = String(segment.locate_policy || currentSegment.locatePolicy || '').trim().toLowerCase()
     const locateSurfacePolicy = String(segment.locate_surface_policy || currentSegment.locateSurfacePolicy || '').trim().toLowerCase()
     if (locatePolicy === 'hidden') continue
-    const claimGroupId = String(segment.claim_group_id || currentSegment.claimGroupId || '').trim()
-    const claimGroupKind = String(segment.claim_group_kind || currentSegment.claimGroupKind || '').trim().toLowerCase()
+    const claimGroupId = String(segment.claim_group_id || rawReaderOpen?.claimGroup?.id || currentSegment.claimGroupId || '').trim()
+    const claimGroupKind = String(segment.claim_group_kind || rawReaderOpen?.claimGroup?.kind || currentSegment.claimGroupKind || '').trim().toLowerCase()
     const formulaOrigin = String(segment.formula_origin || currentSegment.formulaOrigin || '').trim().toLowerCase()
-    const segmentAnchorKind = String(segment.anchor_kind || currentSegment.anchorKind || '').trim().toLowerCase()
+    const segmentAnchorKind = String(segment.anchor_kind || rawLocateTarget?.anchorKind || currentSegment.anchorKind || '').trim().toLowerCase()
     const segmentAnchorText = normalizeStrictAnchorText(
-      String(segment.anchor_text || currentSegment.anchorText || ''),
+      String(segment.anchor_text || rawLocateTarget?.anchorText || currentSegment.anchorText || ''),
     )
-    const segmentEquationNumber = Number.isFinite(Number(segment.equation_number || currentSegment.equationNumber || 0))
-      ? Math.max(0, Math.floor(Number(segment.equation_number || currentSegment.equationNumber || 0)))
+    const segmentEquationNumber = Number.isFinite(Number(
+      segment.equation_number
+      || (segmentAnchorKind === 'equation' ? rawLocateTarget?.anchorNumber : 0)
+      || currentSegment.equationNumber
+      || 0,
+    ))
+      ? Math.max(0, Math.floor(Number(
+        segment.equation_number
+        || (segmentAnchorKind === 'equation' ? rawLocateTarget?.anchorNumber : 0)
+        || currentSegment.equationNumber
+        || 0,
+      )))
       : 0
+    const supportFigureNumber = Number.isFinite(Number(
+      segment.support_slot_figure_number
+      || (segmentAnchorKind === 'figure' ? rawLocateTarget?.anchorNumber : 0)
+      || 0,
+    ))
+      ? Math.max(0, Math.floor(Number(
+        segment.support_slot_figure_number
+        || (segmentAnchorKind === 'figure' ? rawLocateTarget?.anchorNumber : 0)
+        || 0,
+      )))
+      : 0
+    const supportPanelLetters = Array.isArray(segment.support_slot_panel_letters)
+      ? Array.from(
+        new Set(
+          segment.support_slot_panel_letters
+            .map((item) => String(item || '').trim().toLowerCase())
+            .filter((item) => /^[a-z]$/.test(item)),
+        ),
+      )
+      : []
     const blockIdsRaw = [
       ...[primaryBlockId].filter(Boolean),
       ...supportBlockIdsRaw.map((item) => String(item || '').trim()).filter(Boolean),
       ...evidenceBlockIdsRaw.map((item) => String(item || '').trim()).filter(Boolean),
+      ...coerceStringArray(rawLocateTarget?.blockId, 1, 120),
     ]
     if (evidenceMode !== 'direct' || blockIdsRaw.length <= 0) continue
     if (claimType === 'shell_sentence' && !mustLocate) continue
 
     const sourceSegmentId = String(segment.segment_id || '').trim() || `seg_${idx + 1}`
-    const evidenceQuote = normalizeStrictAnchorText(String(segment.evidence_quote || segmentAnchorText || ''))
+    const evidenceQuote = normalizeStrictAnchorText(String(segment.evidence_quote || rawLocateTarget?.evidenceQuote || segmentAnchorText || ''))
     const headingLikeQuote = claimType === 'quote_claim' && isHeadingLikeQuotedAnchor(segmentAnchorText || evidenceQuote || currentSegment.text)
     if (headingLikeQuote) continue
     const hasStrictIdentity = hasSegmentStrictLocateIdentity(segment, currentSegment)
@@ -971,7 +1385,7 @@ function buildStructuredProvenanceLocateEntries(
     if (claimGroupKind === 'formula_bundle' && (locateSurfacePolicy === 'hidden' || formulaOrigin === 'derived')) {
       continue
     }
-    const keepSelfTarget = effectiveMustLocate || ['quote_claim', 'blockquote_claim', 'formula_claim', 'inline_formula_claim', 'equation_explanation_claim', 'figure_claim'].includes(claimType)
+    const keepSelfTarget = effectiveMustLocate || ['quote_claim', 'blockquote_claim', 'formula_claim', 'inline_formula_claim', 'equation_explanation_claim', 'figure_claim', 'figure_panel'].includes(claimType)
     const targetSegmentId = String(
       segment.claim_group_target_segment_id
       || currentSegment.claimGroupTargetSegmentId
@@ -980,6 +1394,7 @@ function buildStructuredProvenanceLocateEntries(
     ).trim() || sourceSegmentId
     const targetDistanceRaw = Number(
       segment.claim_group_target_distance
+      ?? rawReaderOpen?.claimGroup?.distance
       ?? currentSegment.claimGroupTargetDistance
       ?? 0,
     )
@@ -994,6 +1409,7 @@ function buildStructuredProvenanceLocateEntries(
     const segmentText = stripMarkdownInline(
       String(
         (keepSelfTarget && segmentAnchorText)
+        || rawLocateTarget?.snippet
         || targetSegment.anchorText
         || targetSegment.text
         || sourceSegmentText
@@ -1006,13 +1422,13 @@ function buildStructuredProvenanceLocateEntries(
       ? segment.snippet_aliases.map((item) => String(item || ''))
       : []
     const snippetKey = normalizeStructuredLocateSnippet(
-      String(targetSegment.snippetKey || segment.snippet_key || segmentText).trim(),
+      String(targetSegment.snippetKey || segment.snippet_key || rawLocateTarget?.snippet || segmentText).trim(),
     )
     const snippetAliases = mergeStructuredSnippetAliases(
       targetSnippetAliases,
-      sourceSnippetAliases,
+      [...sourceSnippetAliases, ...coerceStringArray(rawLocateTarget?.snippetAliases, 8, 360)],
       [segmentAnchorText],
-      [segmentText],
+      [segmentText, String(rawLocateTarget?.snippet || '')],
     )
     const candidates: LocateCandidate[] = []
     const seenBlock = new Set<string>()
@@ -1029,8 +1445,14 @@ function buildStructuredProvenanceLocateEntries(
       let anchorKind = String(segmentAnchorKind || blockKind || '').trim().toLowerCase()
       if (blockKind === 'equation') anchorKind = 'equation'
       if (blockKind === 'figure') anchorKind = 'figure'
-      const anchorNumberRaw = Number(segmentEquationNumber || block.number || 0)
-      const focusSnippet = segmentAnchorText || evidenceQuote || blockText || segmentText || headingPath
+      const anchorNumberRaw = Number(
+        segmentEquationNumber
+        || supportFigureNumber
+        || rawLocateTarget?.anchorNumber
+        || block.number
+        || 0,
+      )
+      const focusSnippet = segmentAnchorText || evidenceQuote || rawLocateTarget?.highlightSnippet || blockText || segmentText || headingPath
       if (!focusSnippet) continue
       candidates.push({
         sourcePath,
@@ -1057,6 +1479,7 @@ function buildStructuredProvenanceLocateEntries(
         evidenceQuote,
         segmentText,
         equationNumber: segmentEquationNumber,
+        supportFigureNumber,
         primaryBlockId,
         primaryAnchorId,
       })
@@ -1067,6 +1490,7 @@ function buildStructuredProvenanceLocateEntries(
         evidenceQuote,
         segmentText,
         equationNumber: segmentEquationNumber,
+        supportFigureNumber,
         primaryBlockId,
         primaryAnchorId,
       })
@@ -1084,6 +1508,9 @@ function buildStructuredProvenanceLocateEntries(
       label: shortSegmentLabel(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet),
       segmentText,
       evidenceQuote,
+      readerOpen: rawReaderOpen || undefined,
+      locateTarget: rawLocateTarget || undefined,
+      hitLevel: String(segment.hit_level || rawLocateTarget?.hitLevel || currentSegment.hitLevel || '').trim().toLowerCase(),
       claimType,
       mustLocate: effectiveMustLocate,
       locatePolicy: locatePolicy || (effectiveMustLocate ? 'required' : ''),
@@ -1094,16 +1521,32 @@ function buildStructuredProvenanceLocateEntries(
       anchorKind: segmentAnchorKind || primary.anchorKind || '',
       anchorText: segmentAnchorText || evidenceQuote || '',
       equationNumber: segmentEquationNumber || primary.anchorNumber || 0,
+      supportFigureNumber,
+      supportPanelLetters,
       snippetKey,
       snippetAliases,
       primary,
       alternatives,
-      relatedBlockIds: coerceStringArray((segment as Record<string, unknown>).related_block_ids, 8, 180),
-      sourceSegmentId,
+      relatedBlockIds: Array.from(new Set([
+        ...coerceStringArray((segment as Record<string, unknown>).related_block_ids, 8, 180),
+        ...coerceStringArray(rawLocateTarget?.relatedBlockIds, 8, 180),
+      ])),
+      sourceSegmentId: String(rawLocateTarget?.sourceSegmentId || sourceSegmentId).trim() || sourceSegmentId,
       groupLeadText: targetDistance > 0
-        ? String(segment.claim_group_lead_text || currentSegment.claimGroupLeadText || sourceSegmentText || '').trim() || undefined
+        ? String(segment.claim_group_lead_text || rawReaderOpen?.claimGroup?.leadText || currentSegment.claimGroupLeadText || sourceSegmentText || '').trim() || undefined
         : undefined,
       groupDistance: targetDistance,
+    }
+    if (shouldSuppressNegativeLocateSurface({
+      claimType,
+      anchorKind: segmentAnchorKind || primary.anchorKind || '',
+      segmentText,
+      evidenceQuote,
+      anchorText: segmentAnchorText || '',
+      snippet: primary.focusSnippet || segmentText,
+      highlightSnippet: primary.focusSnippet || evidenceQuote || segmentText,
+    })) {
+      continue
     }
     const contentKey = normalizeLocateText(segmentAnchorText || evidenceQuote || segmentText || primary.focusSnippet).slice(0, 220)
     if (contentKey && seenContent.has(contentKey)) continue
@@ -1125,6 +1568,7 @@ function buildStructuredProvenanceLocateEntries(
       + (claimType === 'inline_formula_claim' ? 0.17 : 0)
       + (claimType === 'equation_explanation_claim' ? 0.16 : 0)
       + (claimType === 'figure_claim' ? 0.16 : 0)
+      + (claimType === 'figure_panel' ? 0.2 : 0)
       + ((claimType === 'quote_claim' || claimType === 'blockquote_claim') ? 0.14 : 0)
       + (locateSurfacePolicy === 'primary' ? 0.18 : 0)
       + (locateSurfacePolicy === 'secondary' ? 0.08 : 0)
@@ -1391,6 +1835,12 @@ function scoreStructuredAnchorCompatibility(
     if (renderKind === 'equation') return 0.86
     return -1.05
   }
+  if (claimType === 'figure_panel') {
+    if (renderKind === 'figure') return 0.86
+    if (renderKind === 'blockquote') return 0.64
+    if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.52
+    return -0.54
+  }
   if (anchorKind === 'figure' || claimType === 'figure_claim') {
     if (renderKind === 'figure') return 0.8
     if (renderKind === 'paragraph' || renderKind === 'list_item') return 0.08
@@ -1557,6 +2007,7 @@ function listStructuredProvenanceSegments(
       kind: String(segment.kind || '').trim().toLowerCase(),
       segmentType: String(segment.segment_type || '').trim().toLowerCase(),
       evidenceMode: String(segment.evidence_mode || '').trim().toLowerCase(),
+      hitLevel: String(segment.hit_level || '').trim().toLowerCase(),
       claimType: String(segment.claim_type || '').trim().toLowerCase(),
       mustLocate: Boolean(segment.must_locate),
       locatePolicy: String(segment.locate_policy || '').trim().toLowerCase(),
@@ -1671,8 +2122,9 @@ function buildStructuredRenderLocateSlotMap(
     const { entry, provenanceSegment } = item
     const targetOrder = Number(renderableOrdinalBySegmentId.get(entry.segmentId) || 0)
     const formulaQuery = hasFormulaSignal(entry.segmentText || provenanceSegment?.text || '')
-    const figureQuery = String(entry.anchorKind || '').trim().toLowerCase() === 'figure'
+  const figureQuery = String(entry.anchorKind || '').trim().toLowerCase() === 'figure'
       || String(entry.claimType || '').trim().toLowerCase() === 'figure_claim'
+      || String(entry.claimType || '').trim().toLowerCase() === 'figure_panel'
     let bestSegment: StructuredRenderSegment | null = null
     let bestScore = Number.NEGATIVE_INFINITY
     for (const renderSegment of renderSegments) {
@@ -1838,6 +2290,173 @@ function normalizeStructuredLocateSnippet(input: string): string {
   return normalizeLocateText(trimmed)
 }
 
+function buildLocateCandidateFromReaderLocateCandidate(
+  raw: Partial<ReaderLocateCandidate> | null | undefined,
+  opts: {
+    sourcePath: string
+    sourceName: string
+    sourceType?: 'guide' | 'refs'
+  },
+): LocateCandidate | null {
+  if (!raw) return null
+  const sourcePath = String(opts.sourcePath || '').trim()
+  if (!sourcePath) return null
+  const snippet = String(raw.snippet || raw.highlightSnippet || '').trim()
+  const highlightSnippet = String(raw.highlightSnippet || snippet).trim()
+  const headingPath = String(raw.headingPath || '').trim()
+  const blockId = String(raw.blockId || '').trim()
+  const anchorId = String(raw.anchorId || '').trim()
+  const anchorKind = String(raw.anchorKind || '').trim().toLowerCase()
+  const anchorNumber = toPositiveIntOrUndefined(raw.anchorNumber || 0)
+  const focusSnippet = String(highlightSnippet || snippet || headingPath).trim()
+  if (!(focusSnippet || blockId || anchorId || headingPath)) return null
+  return {
+    sourcePath,
+    sourceName: String(opts.sourceName || '').trim(),
+    headingPath,
+    focusSnippet,
+    matchText: [headingPath, snippet || highlightSnippet].filter(Boolean).join('\n') || focusSnippet,
+    sourceType: opts.sourceType || 'guide',
+    blockId: blockId || undefined,
+    anchorId: anchorId || undefined,
+    anchorKind: anchorKind || undefined,
+    anchorNumber,
+  }
+}
+
+function buildRenderPacketLocateEntry(
+  message: Message,
+  packet: MessageRenderPacketLite | null,
+  opts: {
+    fallbackSourcePath?: string
+    fallbackSourceName?: string
+  },
+): ProvenanceLocateEntry | null {
+  if (!packet) return null
+  const readerOpen = coerceReaderOpenPayload(packet.readerOpen)
+  const locateTarget = coerceReaderLocateTarget(packet.locateTarget) || readerOpen?.locateTarget || null
+  const locatePolicyNorm = String(locateTarget?.locatePolicy || '').trim().toLowerCase()
+  const locateSurfacePolicyNorm = String(locateTarget?.locateSurfacePolicy || '').trim().toLowerCase()
+  if (locatePolicyNorm === 'hidden' || locateSurfacePolicyNorm === 'hidden') {
+    return null
+  }
+  const sourcePath = String(readerOpen?.sourcePath || opts.fallbackSourcePath || '').trim()
+  if (!sourcePath) return null
+  const sourceName = String(
+    readerOpen?.sourceName
+    || opts.fallbackSourceName
+    || sourcePath.split(/[\\/]/).pop()
+    || 'paper',
+  ).trim()
+  const snippet = String(
+    locateTarget?.snippet
+    || readerOpen?.snippet
+    || packet.renderedBody
+    || packet.answerMarkdown
+    || message.content
+    || '',
+  ).trim()
+  const highlightSnippet = String(
+    locateTarget?.highlightSnippet
+    || readerOpen?.highlightSnippet
+    || locateTarget?.evidenceQuote
+    || snippet,
+  ).trim()
+  const primary = buildLocateCandidateFromReaderLocateCandidate(
+    {
+      headingPath: locateTarget?.headingPath || readerOpen?.headingPath,
+      snippet,
+      highlightSnippet,
+      blockId: locateTarget?.blockId || readerOpen?.blockId,
+      anchorId: locateTarget?.anchorId || readerOpen?.anchorId,
+      anchorKind: locateTarget?.anchorKind || readerOpen?.anchorKind,
+      anchorNumber: locateTarget?.anchorNumber || readerOpen?.anchorNumber,
+    },
+    {
+      sourcePath,
+      sourceName,
+      sourceType: 'guide',
+    },
+  )
+  if (!primary) return null
+  const alternatives = dedupeLocateCandidates(
+    [
+      ...(readerOpen?.alternatives || []),
+      ...(readerOpen?.visibleAlternatives || []),
+      ...(readerOpen?.evidenceAlternatives || []),
+    ]
+      .map((candidate) => buildLocateCandidateFromReaderLocateCandidate(candidate, {
+        sourcePath,
+        sourceName,
+        sourceType: 'guide',
+      }))
+      .filter((candidate): candidate is LocateCandidate => Boolean(candidate)),
+  )
+  const claimGroup = readerOpen?.claimGroup || null
+  const anchorKind = String(locateTarget?.anchorKind || readerOpen?.anchorKind || '').trim().toLowerCase()
+  const anchorNumber = toPositiveIntOrUndefined(
+    locateTarget?.anchorNumber
+    || readerOpen?.anchorNumber
+    || 0,
+  )
+  const evidenceQuote = String(locateTarget?.evidenceQuote || highlightSnippet || '').trim()
+  const segmentText = stripMarkdownInline(String(packet.renderedBody || packet.answerMarkdown || snippet || '')).trim()
+  if (shouldSuppressNegativeLocateSurface({
+    claimType: String(locateTarget?.claimType || '').trim(),
+    anchorKind: String(locateTarget?.anchorKind || readerOpen?.anchorKind || '').trim(),
+    segmentText,
+    evidenceQuote,
+    anchorText: String(locateTarget?.anchorText || '').trim(),
+    snippet,
+    highlightSnippet,
+  })) {
+    return null
+  }
+  const snippetAliases = mergeStructuredSnippetAliases(
+    coerceStringArray(locateTarget?.snippetAliases, 8, 360),
+    [snippet, highlightSnippet, String(locateTarget?.anchorText || '').trim()],
+  )
+  const snippetKey = normalizeStructuredLocateSnippet(
+    snippet
+    || packet.renderedBody
+    || packet.answerMarkdown,
+  ) || normalizeLocateText(segmentText || evidenceQuote || primary.focusSnippet).slice(0, 360)
+  const relatedBlockIds = Array.isArray(locateTarget?.relatedBlockIds)
+    ? locateTarget.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
+    : (Array.isArray(readerOpen?.relatedBlockIds)
+      ? readerOpen.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
+      : undefined)
+  return {
+    segmentId: String(locateTarget?.segmentId || locateTarget?.sourceSegmentId || `render-packet-${message.id}`).trim(),
+    label: shortSegmentLabel(highlightSnippet || snippet || packet.renderedBody || '原文证据'),
+    segmentText,
+    evidenceQuote,
+    locateTarget: locateTarget || undefined,
+    readerOpen: readerOpen || undefined,
+    hitLevel: String(locateTarget?.hitLevel || '').trim(),
+    claimType: String(locateTarget?.claimType || '').trim(),
+    mustLocate: locatePolicyNorm === 'required' || Boolean(readerOpen?.strictLocate),
+    locatePolicy: String(locateTarget?.locatePolicy || (readerOpen?.strictLocate ? 'required' : '')).trim(),
+    locateSurfacePolicy: String(locateTarget?.locateSurfacePolicy || '').trim(),
+    claimGroupId: String(claimGroup?.id || '').trim(),
+    claimGroupKind: String(claimGroup?.kind || '').trim(),
+    formulaOrigin: '',
+    anchorKind,
+    anchorText: String(locateTarget?.anchorText || '').trim(),
+    equationNumber: anchorKind === 'equation' ? (anchorNumber || 0) : 0,
+    supportFigureNumber: anchorKind === 'figure' ? (anchorNumber || 0) : 0,
+    supportPanelLetters: [],
+    snippetKey,
+    snippetAliases,
+    primary,
+    alternatives,
+    relatedBlockIds,
+    sourceSegmentId: String(locateTarget?.sourceSegmentId || locateTarget?.segmentId || '').trim(),
+    groupLeadText: String(claimGroup?.leadText || '').trim(),
+    groupDistance: toPositiveIntOrUndefined(claimGroup?.distance || 0),
+  }
+}
+
 function extractFigureNumbersFromText(text: string): number[] {
   const src = String(text || '')
   if (!src) return []
@@ -1855,6 +2474,42 @@ function extractFigureNumbersFromText(text: string): number[] {
     push(String(m[1] || m[2] || ''))
   }
   return out
+}
+
+function extractPanelLettersFromText(text: string): string[] {
+  const src = String(text || '')
+  if (!src) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  const push = (raw: string) => {
+    const ch = String(raw || '').trim().toLowerCase()
+    if (!/^[a-z]$/.test(ch)) return
+    if (seen.has(ch)) return
+    seen.add(ch)
+    out.push(ch)
+  }
+  for (const m of src.matchAll(/\bpanel\s*[\(\[]?\s*([a-z])\s*[\)\]]?/gi)) {
+    push(String(m[1] || ''))
+  }
+  for (const m of src.matchAll(/(?:^|[\s,;:])\(\s*([a-z])\s*\)(?=[\s,;:.]|$)/gi)) {
+    push(String(m[1] || ''))
+  }
+  const lead = src.match(/^\s*([a-z])\s+(?:the|an|a)\b/i)
+  if (lead) push(String(lead[1] || ''))
+  return out
+}
+
+function panelLetterMatchScore(text: string, letters: string[]): number {
+  const target = Array.from(new Set((letters || []).map((item) => String(item || '').trim().toLowerCase()).filter((item) => /^[a-z]$/.test(item))))
+  if (target.length <= 0) return 0
+  const candidate = new Set(extractPanelLettersFromText(text))
+  if (candidate.size <= 0) return 0
+  let overlap = 0
+  for (const item of target) {
+    if (candidate.has(item)) overlap += 1
+  }
+  if (overlap <= 0) return 0
+  return overlap / Math.max(1, target.length)
 }
 
 function figureNumberMatchScore(text: string, numbers: number[]): number {
@@ -1993,6 +2648,7 @@ function scoreStructuredPrimaryCandidate(
     evidenceQuote?: string
     segmentText?: string
     equationNumber?: number
+    supportFigureNumber?: number
     primaryBlockId?: string
     primaryAnchorId?: string
   },
@@ -2012,6 +2668,9 @@ function scoreStructuredPrimaryCandidate(
     : 0
   const equationNumber = Number.isFinite(Number(opts.equationNumber || 0))
     ? Math.max(0, Math.floor(Number(opts.equationNumber || 0)))
+    : 0
+  const figureNumber = Number.isFinite(Number(opts.supportFigureNumber || 0))
+    ? Math.max(0, Math.floor(Number(opts.supportFigureNumber || 0)))
     : 0
 
   if (opts.primaryBlockId && String(cand.blockId || '').trim() === String(opts.primaryBlockId || '').trim()) {
@@ -2033,12 +2692,28 @@ function scoreStructuredPrimaryCandidate(
     if (candKind === 'equation') score += 1.1
     else if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.58
   } else if (claimType === 'equation_explanation_claim') {
-    if (candKind === 'equation') score -= 0.62
-    if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.74
-    if (equationNumber > 0 && candNumber === equationNumber) score += 0.08
+    const equationScoped = anchorKind === 'equation' || equationNumber > 0
+    if (equationScoped) {
+      if (candKind === 'equation') score += 0.96
+      else if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.26
+      else if (candKind) score -= 0.24
+    } else {
+      if (candKind === 'equation') score -= 0.62
+      if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.74
+    }
+    if (equationNumber > 0 && candNumber === equationNumber) score += 0.18
   } else if (claimType === 'figure_claim') {
     if (candKind === 'figure') score += 1.18
     else if (candKind) score -= 0.34
+    if (figureNumber > 0 && candNumber === figureNumber) score += 0.88
+    else if (figureNumber > 0 && candNumber > 0) score -= 0.22
+  } else if (claimType === 'figure_panel') {
+    if (candKind === 'figure') score += 1.36
+    else if (candKind === 'paragraph' || candKind === 'list_item' || candKind === 'blockquote') score += 0.34
+    else if (candKind) score -= 0.24
+    if (candHeading.includes('figure')) score += 0.22
+    if (figureNumber > 0 && candNumber === figureNumber) score += 1.04
+    else if (figureNumber > 0 && candNumber > 0) score -= 0.3
   } else if (claimType === 'quote_claim') {
     if (candKind === 'quote') score += 1.02
     else if (candKind === 'blockquote') score += 0.48
@@ -2053,6 +2728,442 @@ function scoreStructuredPrimaryCandidate(
   }
 
   return score
+}
+
+function dedupeLocateCandidates(candidates: LocateCandidate[]): LocateCandidate[] {
+  const out: LocateCandidate[] = []
+  const seen = new Set<string>()
+  for (const cand of candidates) {
+    if (!cand || typeof cand !== 'object') continue
+    const sourcePath = String(cand.sourcePath || '').trim()
+    const blockId = String(cand.blockId || '').trim()
+    const anchorId = String(cand.anchorId || '').trim()
+    const headingPath = normalizeLocateText(String(cand.headingPath || ''))
+    const snippet = normalizeLocateText(String(cand.focusSnippet || cand.matchText || '')).slice(0, 220)
+    const key = `${normalizeLocateText(sourcePath)}::${blockId.toLowerCase()}::${anchorId.toLowerCase()}::${headingPath}::${snippet}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(cand)
+  }
+  return out
+}
+
+function getStructuredEntryRemapTarget(
+  entry: ProvenanceLocateEntry,
+  primary: LocateCandidate,
+): {
+  targetKind: 'equation' | 'figure' | ''
+  targetNumber: number
+  panelLetters: string[]
+  seed: string
+} {
+  const claimType = String(entry.claimType || '').trim().toLowerCase()
+  const targetKind: 'equation' | 'figure' | '' = (() => {
+    if (claimType === 'formula_claim' || claimType === 'inline_formula_claim' || claimType === 'equation_explanation_claim') {
+      return 'equation'
+    }
+    if (claimType === 'figure_claim' || claimType === 'figure_panel') {
+      return 'figure'
+    }
+    const rawKind = normalizeStructuredLocateKind(String(entry.anchorKind || primary.anchorKind || ''))
+    return rawKind === 'equation' || rawKind === 'figure' ? rawKind : ''
+  })()
+  const targetNumber = (() => {
+    if (targetKind === 'equation') {
+      const eqNumbers = extractEquationNumbersFromText(
+        `${entry.anchorText || ''} ${entry.evidenceQuote || ''} ${entry.segmentText || ''} ${primary.headingPath || ''}`,
+      )
+      const merged = [
+        Number(entry.equationNumber || 0),
+        Number(primary.anchorNumber || 0),
+        ...eqNumbers,
+      ].filter((item) => Number.isFinite(item) && Number(item) > 0)
+      return merged.length > 0 ? Math.floor(Number(merged[0])) : 0
+    }
+    const figNumbers = extractFigureNumbersFromText(
+      `${entry.anchorText || ''} ${entry.evidenceQuote || ''} ${entry.segmentText || ''} ${primary.headingPath || ''}`,
+    )
+    const merged = [
+      Number(entry.supportFigureNumber || 0),
+      Number(primary.anchorNumber || 0),
+      ...figNumbers,
+    ].filter((item) => Number.isFinite(item) && Number(item) > 0)
+    return merged.length > 0 ? Math.floor(Number(merged[0])) : 0
+  })()
+  const panelLetters = Array.isArray(entry.supportPanelLetters)
+    ? entry.supportPanelLetters.map((item) => String(item || '').trim().toLowerCase()).filter((item) => /^[a-z]$/.test(item))
+    : []
+  const seed = stripProvenanceNoise(
+    stripMarkdownInline(String(entry.anchorText || entry.evidenceQuote || entry.segmentText || primary.focusSnippet || '')),
+  ).trim()
+  return {
+    targetKind,
+    targetNumber,
+    panelLetters,
+    seed,
+  }
+}
+
+function getScopedGuideCandidatesForRemap(
+  primary: LocateCandidate,
+  guideCandidates: LocateCandidate[],
+): LocateCandidate[] {
+  const sourcePath = String(primary.sourcePath || '').trim()
+  return (guideCandidates || []).filter((cand) => {
+    if (!cand || typeof cand !== 'object') return false
+    if (String(cand.sourceType || '').trim().toLowerCase() !== 'guide') return false
+    const candSourcePath = String(cand.sourcePath || '').trim()
+    if (sourcePath && candSourcePath && normalizeSourcePathForMatch(sourcePath) !== normalizeSourcePathForMatch(candSourcePath)) {
+      return false
+    }
+    return Boolean(String(cand.blockId || cand.anchorId || '').trim())
+  })
+}
+
+function findGuideCandidateIdentityMatch(
+  primary: LocateCandidate,
+  guideCandidates: LocateCandidate[],
+): LocateCandidate | null {
+  const primaryBlockId = String(primary.blockId || '').trim()
+  const primaryAnchorId = String(primary.anchorId || '').trim()
+  if (!(primaryBlockId || primaryAnchorId)) return null
+  for (const cand of guideCandidates) {
+    if (!cand || typeof cand !== 'object') continue
+    const candBlockId = String(cand.blockId || '').trim()
+    const candAnchorId = String(cand.anchorId || '').trim()
+    if (primaryBlockId && candBlockId && candBlockId === primaryBlockId) return cand
+    if (primaryAnchorId && candAnchorId && candAnchorId === primaryAnchorId) return cand
+  }
+  return null
+}
+
+function inferLocateCandidateTargetNumber(
+  cand: LocateCandidate,
+  targetKind: 'equation' | 'figure',
+): number {
+  const anchorNumber = Number(cand.anchorNumber || 0)
+  if (Number.isFinite(anchorNumber) && anchorNumber > 0) {
+    return Math.floor(anchorNumber)
+  }
+  const raw = `${cand.headingPath || ''} ${cand.focusSnippet || ''} ${cand.matchText || ''}`
+  const nums = targetKind === 'equation'
+    ? extractEquationNumbersFromText(raw)
+    : extractFigureNumbersFromText(raw)
+  return nums.length > 0 ? Math.floor(Number(nums[0])) : 0
+}
+
+function isGuideCandidateCanonicalForEntry(
+  cand: LocateCandidate | null,
+  opts: {
+    targetKind: 'equation' | 'figure'
+    targetNumber: number
+  },
+): boolean {
+  if (!cand) return false
+  const targetKind = opts.targetKind
+  const targetNumber = opts.targetNumber
+  const candKind = normalizeStructuredLocateKind(String(cand.anchorKind || ''))
+  if (candKind !== targetKind) return false
+  if (targetNumber > 0) {
+    const candNumber = inferLocateCandidateTargetNumber(cand, targetKind)
+    if (candNumber !== targetNumber) return false
+  }
+  return true
+}
+
+function remapStructuredEntryToGuideAnchors(
+  entry: ProvenanceLocateEntry,
+  guideCandidates: LocateCandidate[],
+): ProvenanceLocateEntry {
+  const primary = entry.primary
+  if (!primary) return entry
+  const scoped = getScopedGuideCandidatesForRemap(primary, guideCandidates)
+  if (scoped.length <= 0) return entry
+
+  const { targetKind, targetNumber, panelLetters, seed } = getStructuredEntryRemapTarget(entry, primary)
+  if (!targetKind) return entry
+  const primaryIdentityMatch = findGuideCandidateIdentityMatch(primary, scoped)
+  if (isGuideCandidateCanonicalForEntry(primaryIdentityMatch, { targetKind, targetNumber })) {
+    return entry
+  }
+
+  let best: LocateCandidate | null = null
+  let bestScore = Number.NEGATIVE_INFINITY
+  for (const cand of scoped) {
+    const candKind = normalizeStructuredLocateKind(String(cand.anchorKind || ''))
+    let score = scoreLocateCandidate(seed || String(primary.focusSnippet || ''), cand)
+    if (candKind === targetKind) score += 1.22
+    else if (candKind) score -= 1.08
+    if (targetNumber > 0) {
+      const candNumber = Number.isFinite(Number(cand.anchorNumber || 0))
+        ? Math.floor(Number(cand.anchorNumber || 0))
+        : 0
+      if (candNumber === targetNumber) score += 1.48
+      else if (candNumber > 0) score -= 0.46
+    }
+    if (targetKind === 'figure') {
+      if (String(cand.headingPath || '').toLowerCase().includes('figure')) score += 0.22
+      if (panelLetters.length > 0) {
+        score += 0.28 * panelLetterMatchScore(
+          `${cand.headingPath || ''} ${cand.focusSnippet || ''} ${cand.matchText || ''}`,
+          panelLetters,
+        )
+      }
+    }
+    if (targetKind === 'equation' && hasFormulaSignal(String(cand.focusSnippet || cand.matchText || ''))) {
+      score += 0.2
+    }
+    if (String(cand.blockId || '').trim() === String(primary.blockId || '').trim()) score += 0.08
+    if (String(cand.anchorId || '').trim() === String(primary.anchorId || '').trim()) score += 0.06
+    if (score > bestScore) {
+      best = cand
+      bestScore = score
+    }
+  }
+
+  const acceptFloor = targetNumber > 0 ? 0.48 : 0.7
+  if (!best || bestScore < acceptFloor) return entry
+  const sameIdentity = (
+    String(best.blockId || '').trim() === String(primary.blockId || '').trim()
+    && String(best.anchorId || '').trim() === String(primary.anchorId || '').trim()
+  )
+  if (sameIdentity) return entry
+
+  const relatedBlockIds = Array.from(new Set([
+    ...((entry.relatedBlockIds || []).map((item) => String(item || '').trim()).filter(Boolean)),
+    ...((String(primary.blockId || '').trim() && String(primary.blockId || '').trim() !== String(best.blockId || '').trim())
+      ? [String(primary.blockId || '').trim()]
+      : []),
+  ]))
+  const remappedAnchorKind = String(best.anchorKind || entry.anchorKind || entry.locateTarget?.anchorKind || entry.readerOpen?.anchorKind || '').trim().toLowerCase() || undefined
+  const remappedAnchorNumber = toPositiveIntOrUndefined(
+    best.anchorNumber
+    || entry.equationNumber
+    || entry.supportFigureNumber
+    || entry.locateTarget?.anchorNumber
+    || entry.readerOpen?.anchorNumber
+    || 0,
+  )
+  const remappedLocateTarget = (() => {
+    const baseLocateTarget = entry.locateTarget || entry.readerOpen?.locateTarget || null
+    if (!baseLocateTarget) return entry.locateTarget
+    return {
+      ...baseLocateTarget,
+      headingPath: String(best.headingPath || baseLocateTarget.headingPath || '').trim() || undefined,
+      blockId: String(best.blockId || baseLocateTarget.blockId || '').trim() || undefined,
+      anchorId: String(best.anchorId || baseLocateTarget.anchorId || '').trim() || undefined,
+      anchorKind: remappedAnchorKind || baseLocateTarget.anchorKind,
+      anchorNumber: remappedAnchorNumber ?? baseLocateTarget.anchorNumber,
+      relatedBlockIds: relatedBlockIds.length > 0 ? relatedBlockIds : baseLocateTarget.relatedBlockIds,
+    }
+  })()
+  const remappedReaderOpen = (() => {
+    if (!entry.readerOpen) return entry.readerOpen
+    return {
+      ...entry.readerOpen,
+      headingPath: String(best.headingPath || entry.readerOpen.headingPath || '').trim() || undefined,
+      blockId: String(best.blockId || entry.readerOpen.blockId || '').trim() || undefined,
+      anchorId: String(best.anchorId || entry.readerOpen.anchorId || '').trim() || undefined,
+      relatedBlockIds: relatedBlockIds.length > 0 ? relatedBlockIds : entry.readerOpen.relatedBlockIds,
+      anchorKind: remappedAnchorKind || entry.readerOpen.anchorKind,
+      anchorNumber: remappedAnchorNumber ?? entry.readerOpen.anchorNumber,
+      locateTarget: remappedLocateTarget || entry.readerOpen.locateTarget,
+    }
+  })()
+  return {
+    ...entry,
+    primary: best,
+    alternatives: dedupeLocateCandidates([best, primary, ...(entry.alternatives || [])]),
+    relatedBlockIds: relatedBlockIds.length > 0 ? relatedBlockIds : entry.relatedBlockIds,
+    locateTarget: remappedLocateTarget || entry.locateTarget,
+    readerOpen: remappedReaderOpen || entry.readerOpen,
+  }
+}
+
+function buildStructuredEntryReaderOpenPayload(
+  entry: ProvenanceLocateEntry,
+  fallbackSnippet: string,
+): ReaderOpenPayload | null {
+  const primary = entry.primary
+  if (!primary) return null
+  const baseReaderOpen = entry.readerOpen || null
+  const baseLocateTarget = entry.locateTarget || baseReaderOpen?.locateTarget || null
+  const sourcePath = String(baseReaderOpen?.sourcePath || primary.sourcePath || '').trim()
+  if (!sourcePath) return null
+  const queryRaw = stripProvenanceNoise(
+    stripMarkdownInline(String(entry.evidenceQuote || fallbackSnippet || entry.segmentText || entry.label || '')),
+  ).trim()
+  const structuredSnippet = String(
+    queryRaw
+    || baseReaderOpen?.snippet
+    || baseLocateTarget?.snippet
+    || primary.focusSnippet
+    || fallbackSnippet,
+  ).trim()
+  const structuredHighlight = String(
+    entry.evidenceQuote
+    || baseReaderOpen?.highlightSnippet
+    || baseLocateTarget?.highlightSnippet
+    || queryRaw
+    || primary.focusSnippet
+    || fallbackSnippet,
+  ).trim()
+  const structuredAnchorKind = String(
+    entry.anchorKind
+    || baseReaderOpen?.anchorKind
+    || primary.anchorKind
+    || '',
+  ).trim()
+  const structuredAnchorNumber = toPositiveIntOrUndefined(
+    entry.equationNumber
+    || entry.supportFigureNumber
+    || baseReaderOpen?.anchorNumber
+    || primary.anchorNumber
+    || 0,
+  )
+  const groupDistance = toPositiveIntOrUndefined(entry.groupDistance || 0)
+  const baseClaimGroup = baseReaderOpen?.claimGroup || null
+  const locateTarget: ReaderLocateTarget = {
+    ...baseLocateTarget,
+    segmentId: String(entry.segmentId || baseLocateTarget?.segmentId || '').trim() || undefined,
+    sourceSegmentId: String(entry.sourceSegmentId || baseLocateTarget?.sourceSegmentId || '').trim() || undefined,
+    headingPath: String(primary.headingPath || baseReaderOpen?.headingPath || baseLocateTarget?.headingPath || '').trim() || undefined,
+    snippet: structuredSnippet || undefined,
+    highlightSnippet: structuredHighlight || undefined,
+    evidenceQuote: String(entry.evidenceQuote || '').trim() || undefined,
+    anchorText: String(entry.anchorText || '').trim() || undefined,
+    hitLevel: String(entry.hitLevel || '').trim() || undefined,
+    blockId: String(primary.blockId || '').trim() || undefined,
+    anchorId: String(primary.anchorId || '').trim() || undefined,
+    anchorKind: structuredAnchorKind || undefined,
+    anchorNumber: structuredAnchorNumber,
+    claimType: String(entry.claimType || '').trim() || undefined,
+    locatePolicy: String(entry.locatePolicy || '').trim() || undefined,
+    locateSurfacePolicy: String(entry.locateSurfacePolicy || '').trim() || undefined,
+    snippetAliases: Array.isArray(entry.snippetAliases)
+      ? entry.snippetAliases.map((item) => String(item || '').trim()).filter(Boolean)
+      : undefined,
+    relatedBlockIds: Array.isArray(entry.relatedBlockIds)
+      ? entry.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
+      : undefined,
+  }
+  const claimGroup: ReaderLocateClaimGroup | undefined = (
+    entry.claimGroupId
+    || entry.claimGroupKind
+    || baseClaimGroup?.id
+    || baseClaimGroup?.kind
+    || entry.groupLeadText
+    || baseClaimGroup?.leadText
+    || groupDistance
+    || toPositiveIntOrUndefined(baseClaimGroup?.distance || 0)
+  )
+    ? {
+      id: String(entry.claimGroupId || baseClaimGroup?.id || '').trim() || undefined,
+      kind: String(entry.claimGroupKind || baseClaimGroup?.kind || '').trim() || undefined,
+      leadText: String(entry.groupLeadText || baseClaimGroup?.leadText || '').trim() || undefined,
+      distance: groupDistance || toPositiveIntOrUndefined(baseClaimGroup?.distance || 0),
+    }
+    : undefined
+  const primaryReaderCandidate = buildReaderLocateCandidateFromLocateCandidate(primary, {
+    snippet: structuredSnippet,
+    highlightSnippet: structuredHighlight,
+    anchorKind: structuredAnchorKind,
+    anchorNumber: structuredAnchorNumber,
+  })
+  const primaryCandidateIdentity = readerLocateCandidateIdentityKey(primaryReaderCandidate)
+  const filterWithoutPrimary = (items: ReaderLocateCandidate[] | undefined): ReaderLocateCandidate[] => {
+    return dedupeReaderLocateCandidates(
+      (items || []).filter((item) => readerLocateCandidateIdentityKey(item) !== primaryCandidateIdentity),
+      6,
+    )
+  }
+  const backendAlternatives = filterWithoutPrimary(baseReaderOpen?.alternatives)
+  const backendVisibleAlternatives = filterWithoutPrimary(baseReaderOpen?.visibleAlternatives)
+  const backendEvidenceAlternatives = filterWithoutPrimary(baseReaderOpen?.evidenceAlternatives)
+  const fallbackAlternatives = dedupeReaderLocateCandidates(
+    (entry.alternatives || [])
+      .filter((item) => Boolean(item) && item !== primary)
+      .map((item) => buildReaderLocateCandidateFromLocateCandidate(item, {
+        snippet: String(item.focusSnippet || structuredSnippet).trim(),
+        highlightSnippet: structuredHighlight || String(item.focusSnippet || structuredSnippet).trim(),
+        anchorKind: String(item.anchorKind || structuredAnchorKind).trim(),
+        anchorNumber: toPositiveIntOrUndefined(item.anchorNumber || structuredAnchorNumber || 0),
+      })),
+    6,
+  )
+  const openAlternatives = backendAlternatives.length > 0 ? backendAlternatives : fallbackAlternatives
+  const candidateCollections = buildReaderCandidateCollections(
+    primaryReaderCandidate,
+    openAlternatives,
+    {
+      visibleCandidates: backendVisibleAlternatives.length > 0 ? backendVisibleAlternatives : undefined,
+      evidenceCandidates: backendEvidenceAlternatives.length > 0 ? backendEvidenceAlternatives : undefined,
+    },
+  )
+  return {
+    sourcePath,
+    sourceName: String(baseReaderOpen?.sourceName || primary.sourceName || '').trim() || undefined,
+    headingPath: String(primary.headingPath || baseReaderOpen?.headingPath || '').trim() || undefined,
+    snippet: structuredSnippet || undefined,
+    highlightSnippet: structuredHighlight || undefined,
+    blockId: String(primary.blockId || '').trim() || undefined,
+    anchorId: String(primary.anchorId || '').trim() || undefined,
+    relatedBlockIds: locateTarget.relatedBlockIds || baseReaderOpen?.relatedBlockIds,
+    anchorKind: structuredAnchorKind || undefined,
+    anchorNumber: structuredAnchorNumber,
+    strictLocate: baseReaderOpen?.strictLocate ?? true,
+    locateTarget,
+    claimGroup,
+    ...candidateCollections,
+    initialAltIndex: Number.isFinite(Number(baseReaderOpen?.initialAltIndex))
+      ? Math.max(0, Math.floor(Number(baseReaderOpen?.initialAltIndex)))
+      : 0,
+  }
+}
+
+function buildHeuristicReaderOpenPayload(
+  pickedList: LocateCandidate[],
+  snippet: string,
+  opts?: { strictLocate?: boolean; highlightSnippet?: string; relatedBlockIds?: string[] },
+): ReaderOpenPayload | null {
+  const picked = pickedList[0] || null
+  if (!picked) return null
+  const sourcePath = String(picked.sourcePath || '').trim()
+  if (!sourcePath) return null
+  const highlightSnippet = String(opts?.highlightSnippet || snippet).trim()
+  const primarySnippet = String(picked.focusSnippet || snippet).trim()
+  const primaryHighlight = String(highlightSnippet || picked.focusSnippet || snippet).trim()
+  const primaryCandidate = buildReaderLocateCandidateFromLocateCandidate(picked, {
+    snippet: primarySnippet,
+    highlightSnippet: primaryHighlight,
+    anchorKind: picked.anchorKind,
+    anchorNumber: picked.anchorNumber,
+  })
+  const secondaryCandidates = pickedList.slice(1).map((item) => buildReaderLocateCandidateFromLocateCandidate(item, {
+    snippet: String(item.focusSnippet || snippet).trim(),
+    highlightSnippet: String(highlightSnippet || item.focusSnippet || snippet).trim(),
+    anchorKind: item.anchorKind,
+    anchorNumber: item.anchorNumber,
+  }))
+  const candidateCollections = buildReaderCandidateCollections(primaryCandidate, secondaryCandidates)
+  return {
+    sourcePath,
+    sourceName: String(picked.sourceName || '').trim() || undefined,
+    headingPath: String(picked.headingPath || '').trim() || undefined,
+    snippet: primarySnippet || undefined,
+    highlightSnippet: primaryHighlight || undefined,
+    blockId: String(picked.blockId || '').trim() || undefined,
+    anchorId: String(picked.anchorId || '').trim() || undefined,
+    anchorKind: String(picked.anchorKind || '').trim() || undefined,
+    anchorNumber: toPositiveIntOrUndefined(picked.anchorNumber || 0),
+    strictLocate: Boolean(opts?.strictLocate),
+    locateMode: 'heuristic',
+    relatedBlockIds: Array.isArray(opts?.relatedBlockIds)
+      ? opts.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
+      : undefined,
+    ...candidateCollections,
+    initialAltIndex: 0,
+  }
 }
 
 function isImageOnlyPlaceholder(content: string) {
@@ -2365,10 +3476,8 @@ function persistSavedShelfSnapshots(storageKey: string, snapshots: ShelfSavedSna
 function isWeakTitle(text: string): boolean {
   const t = String(text || '').trim()
   if (!t) return true
-  if (/(?:\bet\s+al\b|doi[:\s]|^https?:\/\/)/i.test(t)) return true
   if (/\bIn\s+[A-Z]/.test(t)) return true
-  const tokens = t.match(/[A-Za-z0-9\u4e00-\u9fff]+/g) || []
-  return tokens.length <= 2
+  return isLikelyWeakCitationTitle(t)
 }
 
 function isWeakAuthors(text: string): boolean {
@@ -2914,9 +4023,10 @@ export function MessageList({
     }
     if (prevStorageKey !== nextStorageKey) {
       const prevRevision = Number(shelfRevisionByKeyRef.current[prevStorageKey] || 0)
+      const latest = latestShelfStateRef.current
       const flushedRevision = persistShelfSnapshot(
         prevStorageKey,
-        { open: shelfOpen, items: shelfItems },
+        { open: latest.open, items: latest.items },
         prevRevision,
       )
       shelfRevisionByKeyRef.current[prevStorageKey] = flushedRevision
@@ -3124,9 +4234,11 @@ export function MessageList({
     const map = new Map<string, CiteShelfItem>()
     const convTraceId = String(activeConvId || '')
     for (const message of messages) {
-      if (message.role !== 'assistant' || !Array.isArray(message.cite_details)) continue
+      if (message.role !== 'assistant') continue
+      const rawCiteDetails = getMessageCiteDetailRecords(message)
+      if (rawCiteDetails.length <= 0) continue
       const trace = assistantTraceByMsgId.get(message.id)
-      for (const rawDetail of message.cite_details) {
+      for (const rawDetail of rawCiteDetails) {
         const detail = normalizeCiteDetail(rawDetail)
         if (!detail) continue
         const tracedDetail: CiteDetail = {
@@ -3186,8 +4298,9 @@ export function MessageList({
       })
   }
 
-  const repairShelfItemMeta = (item: CiteShelfItem) => {
+  const repairShelfItemMeta = (item: CiteShelfItem, options?: { silent?: boolean }) => {
     if (shelfRepairLoadingKey === item.key) return
+    const silent = Boolean(options?.silent)
     setShelfRepairLoadingKey(item.key)
     const basePayload = item as unknown as Record<string, unknown>
     const strictTitlePayload: Record<string, unknown> = {
@@ -3216,11 +4329,13 @@ export function MessageList({
           }
           return entry
         }))
-        if (didUpdate) message.success('Metadata repaired with strict rules')
-        else message.info('Strict match did not pass; original metadata kept')
+        if (!silent) {
+          if (didUpdate) message.success('Metadata repaired with strict rules')
+          else message.info('Strict match did not pass; original metadata kept')
+        }
       })
       .catch(() => {
-        message.error('Repair failed, please retry.')
+        if (!silent) message.error('Repair failed, please retry.')
       })
       .finally(() => {
         setShelfRepairLoadingKey((current) => (current === item.key ? '' : current))
@@ -3345,13 +4460,13 @@ export function MessageList({
       message.info('Current citation has no bindable source path')
       return
     }
-    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
-    const snippet = String(detail.summaryLine || detail.title || detail.raw || '').trim()
-    onOpenReader({
+    const payload = buildBasicReaderOpenPayload({
       sourcePath,
-      sourceName,
-      snippet,
+      sourceName: String(detail.sourceName || detail.title || '').trim(),
+      snippet: String(detail.summaryLine || detail.title || detail.raw || '').trim(),
     })
+    if (!payload) return
+    onOpenReader(payload)
   }
 
   const selectedSavedSnapshot = useMemo(
@@ -3401,17 +4516,30 @@ export function MessageList({
       if (message.role !== 'assistant') continue
       assistantCount += 1
       const trace = assistantTraceByMsgId.get(message.id)
-      const bodyContent = message.rendered_body || message.rendered_content || message.content
+      const renderPacket = getMessageRenderPacket(message)
+      const rawBodyContent = getMessageRenderedBodyContent(message)
+      const lowConfidenceMeta = resolveLowConfidenceMeta(
+        (message.meta && typeof message.meta === 'object')
+          ? message.meta as Record<string, unknown>
+          : null,
+        String(rawBodyContent || ''),
+      )
+      const bodyContent = lowConfidenceMeta
+        ? stripLeadingLowConfidenceNotice(rawBodyContent)
+        : rawBodyContent
       const refsUserMsgId = Number(message.refs_user_msg_id || trace?.userMsgId || 0)
       const refEntry = refsUserMsgId > 0 ? (refs[String(refsUserMsgId)] as RefEntryLite | undefined) : undefined
       const refHits = Array.isArray(refEntry?.hits) ? refEntry.hits : []
-      const hasRawCiteDetails = Array.isArray(message.cite_details) && message.cite_details.length > 0
+      const rawCiteDetails = getMessageCiteDetailRecords(message)
+      const hasRawCiteDetails = rawCiteDetails.length > 0
       const hasProvenancePayload = Boolean(message.provenance && typeof message.provenance === 'object')
+      const hasRenderPacketLocate = Boolean(renderPacket?.readerOpen || renderPacket?.locateTarget)
       const shouldBuildLocatePrep = Boolean(onOpenReader) && (
         Boolean(guideSourcePath)
         || hasRawCiteDetails
         || refHits.length > 0
         || hasProvenancePayload
+        || hasRenderPacketLocate
       )
       if (!shouldBuildLocatePrep) {
         const prepKey = [
@@ -3433,18 +4561,16 @@ export function MessageList({
         out.set(message.id, prep)
         continue
       }
-      const citeDetails = Array.isArray(message.cite_details)
-        ? message.cite_details
-          .map(normalizeCiteDetail)
-          .filter((detail): detail is CiteDetail => Boolean(detail))
-          .map((detail) => ({
-            ...detail,
-            traceConvId: String(activeConvId || ''),
-            traceAssistantMsgId: message.id,
-            traceAssistantOrder: Number(trace?.answerOrder || 0),
-            traceUserMsgId: Number(trace?.userMsgId || 0),
-          }))
-        : []
+      const citeDetails = rawCiteDetails
+        .map(normalizeCiteDetail)
+        .filter((detail): detail is CiteDetail => Boolean(detail))
+        .map((detail) => ({
+          ...detail,
+          traceConvId: String(activeConvId || ''),
+          traceAssistantMsgId: message.id,
+          traceAssistantOrder: Number(trace?.answerOrder || 0),
+          traceUserMsgId: Number(trace?.userMsgId || 0),
+        }))
       const uniqueSourcePaths = Array.from(
         new Set(
           citeDetails
@@ -3453,6 +4579,9 @@ export function MessageList({
         ),
       )
       const guideDocAvailable = Boolean(guideSourcePath && guideSourcePathSet.has(guideSourcePath))
+      const guideCandidateCount = guideSourcePath
+        ? (guideDocCandidatesBySourcePath.get(guideSourcePath) || []).length
+        : 0
       const locateSourcePath = (
         guideSourcePath && guideDocAvailable
           ? guideSourcePath
@@ -3468,6 +4597,7 @@ export function MessageList({
         message.id,
         String(message.render_cache_key || ''),
         guideSourcePath,
+        guideCandidateCount,
         locateSourcePath,
         refSig,
       ].join('::')
@@ -3480,7 +4610,7 @@ export function MessageList({
       }
 
       const refsLocateCandidatesAll = buildRefsLocateCandidatesAll(refHits)
-      const guideLocateCandidates = guideSourcePath
+      const guideSourceCandidates = guideSourcePath
         ? (guideDocCandidatesBySourcePath.get(guideSourcePath) || [])
         : []
       const refsScopedCandidates = guideSourcePath
@@ -3516,6 +4646,13 @@ export function MessageList({
       ).trim()
       const strictProvenanceLocate = Boolean(effectiveGuideSourcePath)
       const structuredLocateButtonCap = 12
+      const effectiveGuideCandidates = effectiveGuideSourcePath
+        ? (guideDocCandidatesBySourcePath.get(effectiveGuideSourcePath) || [])
+        : []
+      const renderPacketLocateEntry = buildRenderPacketLocateEntry(message, renderPacket, {
+        fallbackSourcePath: effectiveGuideSourcePath || provenanceSourcePath || locateSourcePath || '',
+        fallbackSourceName: locateSourceName || provenanceSourceName || guideSourceName,
+      })
       const provenanceLocateEntries = buildStructuredProvenanceLocateEntries(
         messageProvenance,
         {
@@ -3524,7 +4661,10 @@ export function MessageList({
           maxEntries: structuredLocateButtonCap,
           minConfidence: 0.62,
         },
-      )
+      ).map((entry) => remapStructuredEntryToGuideAnchors(entry, effectiveGuideCandidates))
+      if (provenanceLocateEntries.length <= 0 && renderPacketLocateEntry) {
+        provenanceLocateEntries.push(renderPacketLocateEntry)
+      }
       const structuredProvenanceSegmentsAll = messageProvenance
         ? listStructuredProvenanceSegments(messageProvenance)
         : []
@@ -3582,7 +4722,7 @@ export function MessageList({
         return allowed
       })()
       const locateCandidates = (() => {
-        if (guideLocateCandidates.length > 0) return [...guideLocateCandidates, ...refsScopedCandidates]
+        if (guideSourceCandidates.length > 0) return [...guideSourceCandidates, ...refsScopedCandidates]
         if (refsScopedCandidates.length > 0) return refsScopedCandidates
         if (refsLocateCandidatesAll.length > 0) return refsLocateCandidatesAll
         if (guideSourcePath) return guideDocCandidates
@@ -3595,7 +4735,7 @@ export function MessageList({
         locateSourcePath,
         locateSourceName,
         refsLocateCandidatesAll,
-        guideLocateCandidates,
+        guideLocateCandidates: guideSourceCandidates,
         refsScopedCandidates,
         messageProvenance,
         provenanceSourcePath,
@@ -3723,23 +4863,32 @@ export function MessageList({
             const message = row.message
             const isUser = message.role === 'user'
             const trace = assistantTraceByMsgId.get(message.id)
-            const citeDetails = Array.isArray(message.cite_details)
-              ? message.cite_details
-                .map(normalizeCiteDetail)
-                .filter((detail): detail is CiteDetail => Boolean(detail))
-                .map((detail) => ({
-                  ...detail,
-                  traceConvId: String(activeConvId || ''),
-                  traceAssistantMsgId: message.id,
-                  traceAssistantOrder: Number(trace?.answerOrder || 0),
-                  traceUserMsgId: Number(trace?.userMsgId || 0),
-                }))
-              : []
+            const citeDetails = getMessageCiteDetailRecords(message)
+              .map(normalizeCiteDetail)
+              .filter((detail): detail is CiteDetail => Boolean(detail))
+              .map((detail) => ({
+                ...detail,
+                traceConvId: String(activeConvId || ''),
+                traceAssistantMsgId: message.id,
+                traceAssistantOrder: Number(trace?.answerOrder || 0),
+                traceUserMsgId: Number(trace?.userMsgId || 0),
+              }))
             const imageAttachments = imageAttachmentsOf(message)
             const showUserText = !(isUser && imageAttachments.length > 0 && isImageOnlyPlaceholder(message.content))
             const isImageOnlyUserMessage = isUser && imageAttachments.length > 0 && !showUserText
             const prep = !isUser ? assistantLocatePrepByMsgId.get(message.id) : undefined
-            const bodyContent = prep?.bodyContent || message.rendered_body || message.rendered_content || message.content
+            const rawBodyContent = prep?.bodyContent || getMessageRenderedBodyContent(message)
+            const lowConfidenceMeta = !isUser
+              ? resolveLowConfidenceMeta(
+                (message.meta && typeof message.meta === 'object')
+                  ? message.meta as Record<string, unknown>
+                  : null,
+                String(rawBodyContent || ''),
+              )
+              : null
+            const bodyContent = lowConfidenceMeta
+              ? stripLeadingLowConfidenceNotice(rawBodyContent)
+              : rawBodyContent
             const guideSourcePath = String(paperGuideSourcePath || '').trim()
             const locateSourceName = prep?.locateSourceName || String(paperGuideSourceName || '').trim()
             const messageProvenance = prep?.messageProvenance || (
@@ -3773,21 +4922,69 @@ export function MessageList({
             const resolveStructuredFigureEntry = (snippet: string): ProvenanceLocateEntry | null => {
               const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
               const figureNumbers = extractFigureNumbersFromText(raw)
+              const panelLetters = extractPanelLettersFromText(raw)
+              const pureFigureRef = isPreferredStrictFigureRefSnippet(raw) && panelLetters.length <= 0
               const figureEntries = provenanceLocateEntries.filter((entry) => {
                 const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
                 const claimType = String(entry.claimType || '').trim().toLowerCase()
-                return anchorKind === 'figure' || claimType === 'figure_claim'
+                return anchorKind === 'figure' || claimType === 'figure_claim' || claimType === 'figure_panel'
               })
               if (!raw || figureEntries.length <= 0) return null
+              const hasFigurePanelEntries = figureEntries.some((entry) => (
+                String(entry.claimType || '').trim().toLowerCase() === 'figure_panel'
+              ))
               let best: ProvenanceLocateEntry | null = null
               let bestScore = Number.NEGATIVE_INFINITY
+              let bestFigureClaim: ProvenanceLocateEntry | null = null
+              let bestFigureClaimScore = Number.NEGATIVE_INFINITY
               for (const entry of figureEntries) {
+                const claimType = String(entry.claimType || '').trim().toLowerCase()
+                const primaryAnchorKind = String(entry.primary?.anchorKind || '').trim().toLowerCase()
+                const entryFigureText = `${entry.primary?.headingPath || ''} ${entry.anchorText || ''} ${entry.segmentText || ''}`
+                const entryFigureNumbers = Array.from(new Set([
+                  ...extractFigureNumbersFromText(entryFigureText),
+                  ...(Number.isFinite(Number(entry.supportFigureNumber || 0)) && Number(entry.supportFigureNumber || 0) > 0
+                    ? [Math.floor(Number(entry.supportFigureNumber || 0))]
+                    : []),
+                ]))
+                const entryPanelLetters = Array.from(new Set([
+                  ...((Array.isArray(entry.supportPanelLetters) ? entry.supportPanelLetters : [])
+                    .map((item) => String(item || '').trim().toLowerCase())
+                    .filter((item) => /^[a-z]$/.test(item))),
+                  ...extractPanelLettersFromText(`${entry.anchorText || ''} ${entry.segmentText || ''}`),
+                ]))
                 let score = Math.max(
                   scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
                   overlapScore(raw, entry.anchorText || entry.segmentText),
                 )
                 if (figureNumbers.length > 0) {
-                  score += 0.84 * figureNumberMatchScore(`${entry.anchorText} ${entry.segmentText}`, figureNumbers)
+                  score += 0.92 * figureNumberMatchScore(entryFigureText, figureNumbers)
+                  const entryHasFigureMatch = entryFigureNumbers.some((num) => figureNumbers.includes(num))
+                  if (entryFigureNumbers.length > 0 && !entryHasFigureMatch) {
+                    score -= 0.42
+                  }
+                }
+                if (panelLetters.length > 0) {
+                  const panelScore = panelLetterMatchScore(
+                    `${entry.anchorText || ''} ${entry.segmentText || ''} ${entry.primary?.headingPath || ''} ${entryPanelLetters.join(' ')}`,
+                    panelLetters,
+                  )
+                  if (panelScore > 0) {
+                    score += 1.34 * panelScore
+                  } else if (entryPanelLetters.length > 0) {
+                    score -= 1.18
+                  } else if (claimType === 'figure_claim') {
+                    score -= 0.56
+                  }
+                }
+                if (pureFigureRef) {
+                  if (claimType === 'figure_claim') score += 1.12
+                  else if (claimType === 'figure_panel') score -= 1.02
+                  if (primaryAnchorKind === 'figure') score += 0.24
+                  else if (primaryAnchorKind) score -= 0.28
+                } else if (hasFigurePanelEntries) {
+                  if (claimType === 'figure_panel') score += 0.2
+                  else if (claimType === 'figure_claim') score -= 0.18
                 }
                 if (entry.mustLocate || entry.locatePolicy === 'required') {
                   score += 0.08
@@ -3796,19 +4993,35 @@ export function MessageList({
                   best = entry
                   bestScore = score
                 }
+                if (claimType === 'figure_claim' && score > bestFigureClaimScore) {
+                  bestFigureClaim = entry
+                  bestFigureClaimScore = score
+                }
+              }
+              if (
+                pureFigureRef
+                && best
+                && String(best.claimType || '').trim().toLowerCase() === 'figure_panel'
+                && bestFigureClaim
+                && bestFigureClaimScore >= (bestScore - 0.38)
+              ) {
+                best = bestFigureClaim
+                bestScore = bestFigureClaimScore
               }
               if (bestScore >= 0.26) return best
               if (!messageProvenance || !Array.isArray(messageProvenance?.segments)) return null
               const rawSegments = Array.isArray(messageProvenance.segments) ? messageProvenance.segments : []
               let rawBest: ProvenanceLocateEntry | null = null
               let rawBestScore = Number.NEGATIVE_INFINITY
+              let rawBestFigureClaim: ProvenanceLocateEntry | null = null
+              let rawBestFigureClaimScore = Number.NEGATIVE_INFINITY
               for (let idx = 0; idx < rawSegments.length; idx += 1) {
                 const segment = rawSegments[idx] as unknown as Record<string, unknown> | null
                 const currentSegment = structuredProvenanceSegmentsAll[idx] || null
                 if (!segment || !currentSegment) continue
                 const claimType = String(segment.claim_type || currentSegment.claimType || '').trim().toLowerCase()
                 const locatePolicy = String(segment.locate_policy || currentSegment.locatePolicy || '').trim().toLowerCase()
-                if (claimType !== 'figure_claim' || locatePolicy === 'hidden') continue
+                if ((claimType !== 'figure_claim' && claimType !== 'figure_panel') || locatePolicy === 'hidden') continue
                 if (!hasSegmentStrictLocateIdentity(segment, currentSegment)) continue
                 const primaryBlockId = String(segment.primary_block_id || '').trim()
                 const supportBlockIds = Array.isArray(segment.support_block_ids) ? segment.support_block_ids : []
@@ -3851,6 +5064,7 @@ export function MessageList({
                   label: shortSegmentLabel(String(segment.anchor_text || currentSegment.anchorText || currentSegment.text || '')),
                   segmentText: String(currentSegment.text || '').trim(),
                   evidenceQuote: normalizeStrictAnchorText(String(segment.evidence_quote || segment.anchor_text || '')),
+                  hitLevel: String(segment.hit_level || currentSegment.hitLevel || '').trim().toLowerCase(),
                   claimType,
                   mustLocate: Boolean(segment.must_locate || locatePolicy === 'required'),
                   locatePolicy,
@@ -3859,6 +5073,16 @@ export function MessageList({
                   anchorKind: 'figure',
                   anchorText: normalizeStrictAnchorText(String(segment.anchor_text || currentSegment.anchorText || '')),
                   equationNumber: 0,
+                  supportFigureNumber: Number.isFinite(Number(segment.support_slot_figure_number || 0))
+                    ? Math.max(0, Math.floor(Number(segment.support_slot_figure_number || 0)))
+                    : 0,
+                  supportPanelLetters: Array.isArray(segment.support_slot_panel_letters)
+                    ? Array.from(new Set(
+                      segment.support_slot_panel_letters
+                        .map((item) => String(item || '').trim().toLowerCase())
+                        .filter((item) => /^[a-z]$/.test(item)),
+                    ))
+                    : [],
                   snippetKey: normalizeStructuredLocateSnippet(String(currentSegment.snippetKey || currentSegment.text || '').trim()),
                   snippetAliases: Array.isArray(currentSegment.snippetAliases) ? currentSegment.snippetAliases : [],
                   primary: candidates[0],
@@ -3872,10 +5096,36 @@ export function MessageList({
                 if (figureNumbers.length > 0) {
                   score += 0.92 * figureNumberMatchScore(`${entry.anchorText} ${entry.segmentText}`, figureNumbers)
                 }
+                if (panelLetters.length > 0) {
+                  const panelScore = panelLetterMatchScore(
+                    `${entry.anchorText || ''} ${entry.segmentText || ''} ${entry.primary?.headingPath || ''} ${(entry.supportPanelLetters || []).join(' ')}`,
+                    panelLetters,
+                  )
+                  if (panelScore > 0) score += 1.28 * panelScore
+                  else if (Array.isArray(entry.supportPanelLetters) && entry.supportPanelLetters.length > 0) score -= 1.05
+                }
+                if (pureFigureRef) {
+                  if (claimType === 'figure_claim') score += 1.08
+                  else if (claimType === 'figure_panel') score -= 0.92
+                }
                 if (score > rawBestScore) {
                   rawBest = entry
                   rawBestScore = score
                 }
+                if (claimType === 'figure_claim' && score > rawBestFigureClaimScore) {
+                  rawBestFigureClaim = entry
+                  rawBestFigureClaimScore = score
+                }
+              }
+              if (
+                pureFigureRef
+                && rawBest
+                && String(rawBest.claimType || '').trim().toLowerCase() === 'figure_panel'
+                && rawBestFigureClaim
+                && rawBestFigureClaimScore >= (rawBestScore - 0.38)
+              ) {
+                rawBest = rawBestFigureClaim
+                rawBestScore = rawBestFigureClaimScore
               }
               return rawBestScore >= 0.26 ? rawBest : null
             }
@@ -3952,7 +5202,7 @@ export function MessageList({
                 return anchorKind === 'blockquote' || claimType === 'blockquote_claim' || claimType === 'quote_claim'
               }
               if (targetKind === 'figure') {
-                return anchorKind === 'figure' || claimType === 'figure_claim'
+                return anchorKind === 'figure' || claimType === 'figure_claim' || claimType === 'figure_panel'
               }
               if (targetKind === 'equation') {
                 return anchorKind === 'equation' && claimType === 'formula_claim'
@@ -3969,6 +5219,18 @@ export function MessageList({
                 ? resolveStructuredQuoteEntry(snippet, targetKind)
                 : null
               if (quoteEntry) return quoteEntry
+              if (targetKind === 'figure') {
+                const figureEntry = resolveStructuredFigureEntry(snippet)
+                if (!figureEntry || !isStrictStructuredTargetCompatible(figureEntry, targetKind)) return null
+                const order = Number(structuredLocateOrderBySegmentId.get(String(figureEntry.segmentId || '').trim()) || 0)
+                return {
+                  entry: figureEntry,
+                  order: order > 0
+                    ? order
+                    : 10000 + Math.max(0, provenanceLocateEntries.findIndex((item) => item.segmentId === figureEntry.segmentId)),
+                  fallback: !(order > 0),
+                }
+              }
               const slot = resolveStructuredRenderLocateSlot(snippet, meta, structuredRenderSlotMap)
               if (slot && isStrictStructuredTargetCompatible(slot.entry, targetKind)) {
                 return {
@@ -3979,8 +5241,7 @@ export function MessageList({
               }
               if (targetKind === 'equation') return null
               const fallbackEntry = resolveStructuredFallbackLocateEntry(snippet, meta, provenanceLocateEntries)
-              const figureEntry = targetKind === 'figure' ? resolveStructuredFigureEntry(snippet) : null
-              const finalEntry = figureEntry || fallbackEntry
+              const finalEntry = fallbackEntry
               if (!finalEntry || !isStrictStructuredTargetCompatible(finalEntry, targetKind)) return null
               return {
                 entry: finalEntry,
@@ -3992,8 +5253,10 @@ export function MessageList({
               snippet: string,
               meta?: LocateRenderMetaLite,
             ): StructuredLocateResolution | null => {
+              const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
               const resolved = resolveStructuredInlineResolution(snippet, meta)
-              if (!resolved || resolved.fallback) return null
+              if (!resolved) return null
+              if (resolved.fallback && targetKind !== 'figure') return null
               return resolved
             }
             const resolveProvenanceLocateCandidates = (snippet: string, limit = 4): LocateCandidate[] => {
@@ -4285,142 +5548,22 @@ export function MessageList({
               opts?: { strictLocate?: boolean; highlightSnippet?: string; relatedBlockIds?: string[] },
             ) => {
               if (!onOpenReader) return
-              const picked = pickedList[0] || null
-              if (!picked) return
-              const highlightSnippet = String(opts?.highlightSnippet || snippet).trim()
-              onOpenReader({
-                sourcePath: picked.sourcePath,
-                sourceName: picked.sourceName,
-                headingPath: picked.headingPath,
-                snippet: picked.focusSnippet || snippet,
-                highlightSnippet: highlightSnippet || picked.focusSnippet || snippet,
-                blockId: picked.blockId,
-                anchorId: picked.anchorId,
-                anchorKind: picked.anchorKind,
-                anchorNumber: picked.anchorNumber,
-                strictLocate: Boolean(opts?.strictLocate),
-                locateMode: 'heuristic',
-                relatedBlockIds: Array.isArray(opts?.relatedBlockIds)
-                  ? opts.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-                  : undefined,
-                alternatives: pickedList.map((item) => ({
-                  headingPath: item.headingPath,
-                  snippet: item.focusSnippet || snippet,
-                  highlightSnippet: highlightSnippet || item.focusSnippet || snippet,
-                  blockId: item.blockId,
-                  anchorId: item.anchorId,
-                  anchorKind: item.anchorKind,
-                  anchorNumber: item.anchorNumber,
-                })),
-                evidenceAlternatives: pickedList.map((item) => ({
-                  headingPath: item.headingPath,
-                  snippet: item.focusSnippet || snippet,
-                  highlightSnippet: highlightSnippet || item.focusSnippet || snippet,
-                  blockId: item.blockId,
-                  anchorId: item.anchorId,
-                  anchorKind: item.anchorKind,
-                  anchorNumber: item.anchorNumber,
-                })),
-                visibleAlternatives: pickedList.map((item) => ({
-                  headingPath: item.headingPath,
-                  snippet: item.focusSnippet || snippet,
-                  highlightSnippet: highlightSnippet || item.focusSnippet || snippet,
-                  blockId: item.blockId,
-                  anchorId: item.anchorId,
-                  anchorKind: item.anchorKind,
-                  anchorNumber: item.anchorNumber,
-                })),
-                initialAltIndex: 0,
-              })
+              const payload = buildHeuristicReaderOpenPayload(pickedList, snippet, opts)
+              if (!payload) return
+              onOpenReader(payload)
             }
             const openReaderByStructuredEntry = (entry: ProvenanceLocateEntry, snippet: string) => {
               if (!onOpenReader) return
-              const queryRaw = stripProvenanceNoise(
-                stripMarkdownInline(String(entry.evidenceQuote || snippet || entry.segmentText || entry.label || '')),
-              ).trim()
-              const primary = entry.primary
-              if (!primary) return
-              const structuredSnippet = String(queryRaw || primary.focusSnippet || snippet).trim()
-              const structuredHighlight = String(
-                entry.evidenceQuote
-                || queryRaw
-                || primary.focusSnippet
-                || snippet,
-              ).trim()
-              const structuredAnchorKind = String(entry.anchorKind || primary.anchorKind || '').trim()
-              const structuredAnchorNumber = Number.isFinite(Number(entry.equationNumber || primary.anchorNumber || 0))
-                ? Math.floor(Number(entry.equationNumber || primary.anchorNumber || 0))
-                : undefined
-              const groupDistance = Number.isFinite(Number(entry.groupDistance || 0))
-                ? Math.max(0, Math.floor(Number(entry.groupDistance || 0)))
-                : 0
-              const locateTarget: ReaderLocateTarget = {
-                segmentId: String(entry.segmentId || '').trim() || undefined,
-                sourceSegmentId: String(entry.sourceSegmentId || '').trim() || undefined,
-                headingPath: String(primary.headingPath || '').trim() || undefined,
-                snippet: structuredSnippet || undefined,
-                highlightSnippet: structuredHighlight || undefined,
-                evidenceQuote: String(entry.evidenceQuote || '').trim() || undefined,
-                anchorText: String(entry.anchorText || '').trim() || undefined,
-                blockId: String(primary.blockId || '').trim() || undefined,
-                anchorId: String(primary.anchorId || '').trim() || undefined,
-                anchorKind: structuredAnchorKind || undefined,
-                anchorNumber: structuredAnchorNumber,
-                claimType: String(entry.claimType || '').trim() || undefined,
-                locatePolicy: String(entry.locatePolicy || '').trim() || undefined,
-                locateSurfacePolicy: String(entry.locateSurfacePolicy || '').trim() || undefined,
-                snippetAliases: Array.isArray(entry.snippetAliases)
-                  ? entry.snippetAliases.map((item) => String(item || '').trim()).filter(Boolean)
-                  : undefined,
-                relatedBlockIds: Array.isArray(entry.relatedBlockIds)
-                  ? entry.relatedBlockIds.map((item) => String(item || '').trim()).filter(Boolean)
-                  : undefined,
-              }
-              const claimGroup: ReaderLocateClaimGroup | undefined = (
-                entry.claimGroupId
-                || entry.claimGroupKind
-                || entry.groupLeadText
-                || groupDistance > 0
+              const sourcePath = String(entry.primary?.sourcePath || '').trim()
+              const resolvedEntry = remapStructuredEntryToGuideAnchors(
+                entry,
+                sourcePath
+                  ? (guideDocCandidatesBySourcePath.get(sourcePath) || [])
+                  : [],
               )
-                ? {
-                  id: String(entry.claimGroupId || '').trim() || undefined,
-                  kind: String(entry.claimGroupKind || '').trim() || undefined,
-                  leadText: String(entry.groupLeadText || '').trim() || undefined,
-                  distance: groupDistance > 0 ? groupDistance : undefined,
-                }
-                : undefined
-              const fallbackAlternatives: ReaderLocateCandidate[] = (entry.alternatives || [])
-                .filter((item) => Boolean(item) && item !== primary)
-                .map((item) => ({
-                  headingPath: String(item.headingPath || '').trim() || undefined,
-                  snippet: String(item.focusSnippet || structuredSnippet).trim() || undefined,
-                  highlightSnippet: structuredHighlight || String(item.focusSnippet || structuredSnippet).trim() || undefined,
-                  blockId: String(item.blockId || '').trim() || undefined,
-                  anchorId: String(item.anchorId || '').trim() || undefined,
-                  anchorKind: String(item.anchorKind || structuredAnchorKind).trim() || undefined,
-                  anchorNumber: Number.isFinite(Number(item.anchorNumber || structuredAnchorNumber || 0))
-                    ? Math.floor(Number(item.anchorNumber || structuredAnchorNumber || 0))
-                    : undefined,
-                }))
-              onOpenReader({
-                sourcePath: primary.sourcePath,
-                sourceName: primary.sourceName,
-                headingPath: String(primary.headingPath || '').trim() || undefined,
-                snippet: structuredSnippet || undefined,
-                highlightSnippet: structuredHighlight || undefined,
-                blockId: String(primary.blockId || '').trim() || undefined,
-                anchorId: String(primary.anchorId || '').trim() || undefined,
-                relatedBlockIds: locateTarget.relatedBlockIds,
-                anchorKind: structuredAnchorKind || undefined,
-                anchorNumber: structuredAnchorNumber,
-                strictLocate: true,
-                locateTarget,
-                claimGroup,
-                alternatives: fallbackAlternatives.length > 0 ? fallbackAlternatives : undefined,
-                visibleAlternatives: undefined,
-                evidenceAlternatives: undefined,
-                initialAltIndex: 0,
-              })
+              const payload = buildStructuredEntryReaderOpenPayload(resolvedEntry, snippet)
+              if (!payload) return
+              onOpenReader(payload)
             }
             const bubbleClass = isUser
               ? (isImageOnlyUserMessage ? 'w-fit max-w-[22rem]' : 'w-fit max-w-[88%]')
@@ -4487,9 +5630,31 @@ export function MessageList({
                     </>
                   ) : (
                     <>
-                      {message.notice ? (
-                        <div className="mb-4 rounded-2xl border border-[var(--border)] bg-black/[0.03] px-4 py-3 text-sm text-black/70 dark:bg-white/[0.04] dark:text-white/70">
-                          {message.notice}
+                      {(() => {
+                        const noticeText = getMessageNoticeValue(message)
+                        return noticeText ? (
+                          <div className="mb-4 rounded-2xl border border-[var(--border)] bg-black/[0.03] px-4 py-3 text-sm text-black/70 dark:bg-white/[0.04] dark:text-white/70">
+                            {noticeText}
+                          </div>
+                        ) : null
+                      })()}
+                      {lowConfidenceMeta ? (
+                        <div className="mb-4 rounded-2xl border border-amber-300/70 bg-amber-50/80 px-4 py-3 text-sm text-amber-900 dark:border-amber-300/50 dark:bg-amber-300/10 dark:text-amber-100">
+                          <div className="font-medium">
+                            {lowConfidenceMeta.isZh ? '检索置信度较低' : 'Lower retrieval confidence'}
+                          </div>
+                          <div className="mt-1">
+                            {lowConfidenceMeta.isZh
+                              ? `原因：${lowConfidenceMeta.reasonText}`
+                              : `Reason: ${lowConfidenceMeta.reasonText}.`}
+                          </div>
+                          {lowConfidenceMeta.candidateRefs.length > 0 ? (
+                            <div className="mt-1">
+                              {lowConfidenceMeta.isZh
+                                ? `候选参考文献：${lowConfidenceMeta.candidateRefs.map((num) => `[${num}]`).join(', ')}（供交叉核对）`
+                                : `Candidate refs for cross-check: ${lowConfidenceMeta.candidateRefs.map((num) => `[${num}]`).join(', ')}.`}
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
                       {provenanceModeLabel ? (
@@ -4517,15 +5682,15 @@ export function MessageList({
                         canLocateSnippet={enableLocateUi ? ((snippet, meta) => {
                           if (strictStructuredLocateOnly) {
                             if (!strictStructuredInlineLocate) return false
-                            const resolved = resolveExactStructuredInlineResolution(snippet, meta)
-                            const entry = resolved?.entry || null
-                            if (!entry) return false
-                            const order = Number(resolved?.order || 0)
-                            if (!allowedStructuredRenderOrders.has(order)) return false
                             const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
                             if (!['quote', 'blockquote', 'equation', 'figure'].includes(targetKind)) {
                               return false
                             }
+                            const resolved = resolveExactStructuredInlineResolution(snippet, meta)
+                            const entry = resolved?.entry || null
+                            if (!entry) return false
+                            const order = Number(resolved?.order || 0)
+                            if (targetKind !== 'figure' && !allowedStructuredRenderOrders.has(order)) return false
                             if (!isStrictStructuredTargetCompatible(entry, targetKind)) {
                               return false
                             }
@@ -4539,7 +5704,7 @@ export function MessageList({
                             if ((anchorKind === 'blockquote' || claimType === 'blockquote_claim') && targetKind !== 'blockquote') {
                               return false
                             }
-                            if ((anchorKind === 'figure' || claimType === 'figure_claim') && targetKind !== 'figure') {
+                            if ((anchorKind === 'figure' || claimType === 'figure_claim' || claimType === 'figure_panel') && targetKind !== 'figure') {
                               return false
                             }
                             if (targetKind === 'equation') {
@@ -4585,10 +5750,11 @@ export function MessageList({
                           ? (snippet, meta) => {
                             if (strictStructuredLocateOnly) {
                               if (!strictStructuredInlineLocate) return
+                              const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
                               const resolved = resolveExactStructuredInlineResolution(snippet, meta)
                               const entry = resolved?.entry || null
                               if (!entry) return
-                              if (!allowedStructuredRenderOrders.has(Number(resolved?.order || 0))) return
+                              if (targetKind !== 'figure' && !allowedStructuredRenderOrders.has(Number(resolved?.order || 0))) return
                               openReaderByStructuredEntry(entry, snippet)
                               return
                             }
@@ -4608,6 +5774,9 @@ export function MessageList({
                         locateTitleResolver={enableLocateUi ? ((snippet) => {
                           if (strictStructuredLocateOnly) {
                             const resolved = resolveExactStructuredInlineResolution(snippet)
+                              || (isPreferredStrictFigureRefSnippet(snippet)
+                                ? resolveExactStructuredInlineResolution(snippet, { kind: 'figure', order: 0 })
+                                : null)
                             const entry = resolved?.entry || null
                             if (entry) {
                               const heading = String(entry.primary.headingPath || '').trim()
@@ -4669,8 +5838,8 @@ export function MessageList({
                         </div>
                       ) : null}
                       <CopyBar
-                        text={message.copy_text || message.content}
-                        markdown={message.copy_markdown}
+                        text={getMessageCopyTextValue(message)}
+                        markdown={getMessageCopyMarkdownValue(message)}
                       />
                     </>
                   )}
@@ -4765,8 +5934,8 @@ export function MessageList({
             item.key === key ? { ...item, note: nextNote } : item
           )))
         }}
-        onRepair={(item) => {
-          repairShelfItemMeta(item)
+        onRepair={(item, options) => {
+          repairShelfItemMeta(item, options)
         }}
         onSelectSnapshot={setSelectedSavedSnapshotId}
         onSaveSnapshot={saveShelfSnapshot}

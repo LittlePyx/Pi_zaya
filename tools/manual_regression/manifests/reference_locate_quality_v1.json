@@ -1,0 +1,173 @@
+{
+  "suite_id": "reference_locate_quality_v1",
+  "title": "Reference Locate Quality Benchmark",
+  "generate_body": {
+    "top_k": 6,
+    "deep_read": true,
+    "max_tokens": 1400,
+    "temperature": 0.15
+  },
+  "cases": [
+    {
+      "id": "NORMAL_DYNAMIC_SUPERSAMPLING_DEFINE",
+      "title": "Dynamic supersampling definition should return the SciAdv paper only",
+      "mode": "normal",
+      "prompt": "Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+      "checks": {
+        "hits": {
+          "min": 1,
+          "max": 1
+        },
+        "top_hit": {
+          "source_contains_any": [
+            "SciAdv-2017",
+            "dynamic supersampling"
+          ],
+          "source_not_contains_any": [
+            "SCIGS",
+            "Psychological Review"
+          ],
+          "summary_contains_any": [
+            "dynamic supersampling"
+          ],
+          "why_contains_any": [
+            "dynamic supersampling"
+          ],
+          "summary_basis_contains_any": [
+            "LLM",
+            "matched section"
+          ],
+          "why_basis_contains_any": [
+            "LLM",
+            "matched section"
+          ]
+        },
+        "evidence_identity": {
+          "require_pack_primary": true,
+          "require_hit_reader_sync": true,
+          "require_assistant_primary": true
+        },
+        "pipeline_debug": {
+          "require_raw_hits": true,
+          "require_post_focus_hits": true
+        }
+      }
+    },
+    {
+      "id": "NORMAL_HADAMARD_FOURIER_COMPARE",
+      "title": "Hadamard vs Fourier comparison should return the OE comparison paper",
+      "mode": "normal",
+      "prompt": "Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
+      "checks": {
+        "hits": {
+          "min": 1,
+          "max": 1
+        },
+        "top_hit": {
+          "source_contains_any": [
+            "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+            "Fourier single-pixel imaging"
+          ],
+          "summary_contains_any": [
+            "Hadamard",
+            "Fourier"
+          ],
+          "why_contains_any": [
+            "compare",
+            "comparison",
+            "Hadamard",
+            "Fourier"
+          ],
+          "summary_basis_contains_any": [
+            "LLM",
+            "matched section"
+          ],
+          "why_basis_contains_any": [
+            "LLM",
+            "matched section"
+          ]
+        },
+        "evidence_identity": {
+          "require_pack_primary": true,
+          "require_hit_reader_sync": true,
+          "require_assistant_primary": true
+        },
+        "pipeline_debug": {
+          "require_raw_hits": true,
+          "require_post_focus_hits": true
+        }
+      }
+    },
+    {
+      "id": "NORMAL_ADMM_NEGATIVE",
+      "title": "ADMM should not return a misleading library card",
+      "mode": "normal",
+      "prompt": "Which paper in my library most directly discusses ADMM? Please point me to the source section.",
+      "checks": {
+        "hits": {
+          "min": 0,
+          "max": 0
+        }
+      }
+    },
+    {
+      "id": "GUIDE_OTHER_PAPERS_FOURIER",
+      "title": "Paper Guide should still surface a strong external Fourier paper",
+      "mode": "paper_guide",
+      "bound_source_path": "db/NatPhoton-2019-Principles and prospects for single-pixel imaging/NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+      "bound_source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+      "prompt": "Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+      "checks": {
+        "hits": {
+          "min": 1,
+          "max": 1
+        },
+        "top_hit": {
+          "source_contains_any": [
+            "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+            "Fourier single-pixel imaging"
+          ],
+          "source_not_contains_any": [
+            "NatPhoton-2019"
+          ],
+          "summary_contains_any": [
+            "Fourier"
+          ],
+          "why_contains_any": [
+            "Fourier"
+          ]
+        },
+        "evidence_identity": {
+          "require_pack_primary": true,
+          "require_hit_reader_sync": true,
+          "require_assistant_primary": true
+        },
+        "pipeline_debug": {
+          "require_raw_hits": true,
+          "require_post_focus_hits": true
+        },
+        "guide_filter": {
+          "active": true
+        }
+      }
+    },
+    {
+      "id": "GUIDE_OTHER_PAPERS_ADMM_NEGATIVE",
+      "title": "Paper Guide should not invent external ADMM cards",
+      "mode": "paper_guide",
+      "bound_source_path": "db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "bound_source_name": "2024 IEEE-CVF Conference on Computer Vision and Pattern Recognition (CVPR)-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+      "prompt": "Besides this paper, what other papers in my library discuss ADMM?",
+      "checks": {
+        "hits": {
+          "min": 0,
+          "max": 0
+        },
+        "guide_filter": {
+          "active": true,
+          "hidden_self_source": true
+        }
+      }
+    }
+  ]
+}

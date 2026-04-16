@@ -13,6 +13,26 @@
     "max_tokens": 4200,
     "temperature": 0.35
   },
+  "scorecard_thresholds": {
+    "overall_pass_rate": {
+      "min": 1.0
+    },
+    "locate.first_click_rate": {
+      "min": 0.9
+    },
+    "locate.heading_or_none_rate": {
+      "max": 0.05
+    },
+    "citation.ref_num_accuracy": {
+      "min": 0.95
+    },
+    "structured_markers.clean_rate": {
+      "min": 1.0
+    },
+    "quality.minimum_ok_rate": {
+      "min": 1.0
+    }
+  },
   "default_checks": {
     "structured_markers": {
       "forbid_raw_structured_cites": true,
@@ -50,6 +70,30 @@
               "anchor_contains_any": [
                 "High-resolution single-photon imaging remains a big challenge",
                 "introduce deep learning into SPAD"
+              ]
+            }
+          }
+        },
+        {
+          "id": "NC2023_BEGINNER_OVERVIEW_PIPELINE_EN",
+          "title": "Beginner overview of the enhancement pipeline",
+          "prompt_family": "overview",
+          "tags": ["overview", "beginner", "general"],
+          "prompt": "If I wanted a beginner-level summary of how they train the enhancement pipeline, what should I pay attention to first?",
+          "checks": {
+            "answer": {
+              "contains_all": ["noise model", "dataset", "transformer"],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion", "Network structure", "Noise parameter calibration"],
+              "anchor_contains_any": [
+                "multi-source noise model parameters were calibrated",
+                "single-photon images",
+                "network training dataset",
+                "content-adaptive self-attention mechanism"
               ]
             }
           }
@@ -143,6 +187,89 @@
             },
             "jump": {
               "required": true
+            }
+          }
+        },
+        {
+          "id": "NC2023_DISCUSSION_LIMITATION_FPM_EN",
+          "title": "Discussion-only limitation on calibrating different SPAD arrays",
+          "prompt_family": "strength_limits",
+          "tags": ["strength_limits", "discussion_only", "general"],
+          "prompt": "From the Discussion section only, what limitation do the authors note about calibrating different SPAD arrays, and what follow-up do they suggest?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "different SPAD arrays may deviate",
+                "automatic calibration",
+                "transfer learning",
+                "specific SPAD camera"
+              ],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion"],
+              "anchor_contains_any": [
+                "different SPAD arrays may deviate",
+                "automatic calibration",
+                "transfer learning",
+                "specific SPAD camera"
+              ]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["Discussion"],
+              "heading_excludes_any": [
+                "Abstract",
+                "Results",
+                "Methods",
+                "Network training",
+                "References"
+              ]
+            }
+          }
+        },
+        {
+          "id": "NC2023_DISCUSSION_TIME_GATING_EN",
+          "title": "Discussion-only future work on time gating",
+          "prompt_family": "discussion_only",
+          "tags": ["discussion_only", "general"],
+          "prompt": "From the Discussion section only, what future work do the authors propose around time gating or depth-selective applications?",
+          "checks": {
+            "answer": {
+              "contains_any": [
+                "time gating",
+                "time stamp",
+                "depth-selective resolution",
+                "LiDAR",
+                "fluorescence lifetime imaging"
+              ],
+              "not_contains_any": ["not stated", "does not specify", "cannot be determined"]
+            },
+            "locate": {
+              "required": true,
+              "exact": true,
+              "heading_includes_any": ["Discussion"],
+              "anchor_contains_any": [
+                "time gating",
+                "time stamp",
+                "depth-selective resolution",
+                "LiDAR"
+              ]
+            },
+            "section_target": {
+              "required": true,
+              "exclusive": true,
+              "heading_includes_any": ["Discussion"],
+              "heading_excludes_any": [
+                "Abstract",
+                "Results",
+                "Methods",
+                "Network training",
+                "References"
+              ]
             }
           }
         }

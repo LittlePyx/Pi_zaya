@@ -1,3 +1,5 @@
+import json
+
 import kb.paper_guide_answer_post_runtime as answer_post_runtime
 
 
@@ -174,6 +176,53 @@ def test_resolve_exact_citation_lookup_support_from_source_keeps_multi_refs_for_
     assert set(rec["ref_nums"]) == {33, 34}
 
 
+def test_resolve_exact_citation_lookup_support_from_source_falls_back_to_reference_index(tmp_path, monkeypatch):
+    md_path = tmp_path / "paper.en.md"
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    md_path.write_text("placeholder", encoding="utf-8")
+    (assets_dir / "reference_index.json").write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "ref_num": 7,
+                        "reference_entry_id": "ref_0007",
+                        "text": "[7] A. Other. Unrelated sensing pipeline. Journal, 2023.",
+                        "doi": "",
+                        "year": "2023",
+                        "parse_confidence": 0.7,
+                    },
+                    {
+                        "ref_num": 31,
+                        "reference_entry_id": "ref_0031",
+                        "text": "[31] Adaptive foveated single-pixel imaging via supersampling. Optics Express, 2021.",
+                        "doi": "",
+                        "year": "2021",
+                        "parse_confidence": 0.9,
+                    },
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(answer_post_runtime, "_paper_guide_targeted_source_block_hits", lambda **_kwargs: [])
+    monkeypatch.setattr(answer_post_runtime, "load_source_blocks", lambda _path: [])
+
+    rec = answer_post_runtime._resolve_exact_citation_lookup_support_from_source(
+        "demo.pdf",
+        prompt="Which reference do the authors cite for adaptive and smart sensing with dynamic supersampling, and where is that stated exactly?",
+        db_dir=tmp_path,
+    )
+
+    assert rec["heading_path"] == "References"
+    assert rec["ref_nums"] == [31]
+    assert "supersampling" in rec["locate_anchor"].lower()
+
+
 def test_resolve_exact_equation_support_from_source_picks_equation_and_neighbor_explanation(tmp_path, monkeypatch):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text("placeholder", encoding="utf-8")
@@ -223,6 +272,49 @@ def test_resolve_exact_equation_support_from_source_picks_equation_and_neighbor_
     assert "where $t_n$ and $t_f$" in rec["explanation_text"]
 
 
+def test_resolve_exact_equation_support_from_source_uses_equation_index_when_blocks_missing(tmp_path, monkeypatch):
+    doc_dir = tmp_path / "DemoEquation"
+    assets_dir = doc_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_path = doc_dir / "DemoEquation.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    (assets_dir / "equation_index.json").write_text(
+        json.dumps(
+            {
+                "equations": [
+                    {
+                        "equation_number": 3,
+                        "equation_markdown": "$$Y = \\\\sum_i X_i \\\\odot M_i + Z \\\\tag{3}$$",
+                        "context_before": "The SCI measurement can be written as follows.",
+                        "context_after": "where Y is the measurement, X_i are frames, and M_i are masks.",
+                        "block_id": "blk_eq3",
+                        "anchor_id": "eq_00003",
+                        "heading_path": "Method / SCI formulation",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(answer_post_runtime, "load_source_blocks", lambda _path: [])
+
+    rec = answer_post_runtime._resolve_exact_equation_support_from_source(
+        "demo.pdf",
+        prompt="Where do the authors define the variables in equation (3)? Point me to the exact supporting part.",
+        db_dir=tmp_path,
+    )
+
+    assert rec["heading_path"] == "Method / SCI formulation"
+    assert rec["equation_block_id"] == "blk_eq3"
+    assert rec["equation_anchor_id"] == "eq_00003"
+    assert "\\tag{3}" in rec["equation_markdown"]
+    assert "SCI measurement can be written" in rec["leadin_text"]
+    assert "where Y is the measurement" in rec["explanation_text"]
+
+
 def test_apply_paper_guide_answer_postprocess_runs_focus_support_and_sanitize(monkeypatch):
     calls = []
 
@@ -266,6 +358,48 @@ def test_apply_paper_guide_answer_postprocess_runs_focus_support_and_sanitize(mo
         "drop_locate",
         "sanitize",
     ]
+
+
+def test_apply_paper_guide_answer_postprocess_skips_locate_only_drop_for_overview(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_support_markers", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "_resolve_paper_guide_support_markers",
+        lambda answer, **kwargs: (
+            answer + " [[CITE:s1234abcd:26]]",
+            [{"line_index": 0, "cite_policy": "locate_only", "resolved_ref_num": 0}],
+        ),
+    )
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_focus_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_card_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "_drop_paper_guide_locate_only_line_citations",
+        lambda answer, **kwargs: calls.append("drop_locate") or answer.replace("[[CITE:s1234abcd:26]]", ""),
+    )
+    monkeypatch.setattr(answer_post_runtime, "_sanitize_paper_guide_answer_for_user", lambda answer, **kwargs: answer)
+
+    out, _support_resolution = answer_post_runtime._apply_paper_guide_answer_postprocess(
+        "Overview answer",
+        paper_guide_mode=True,
+        prompt="What does this paper do?",
+        prompt_for_user="What does this paper do?",
+        prompt_family="overview",
+        special_focus_block="",
+        focus_source_path="focus.md",
+        direct_source_path="direct.md",
+        bound_source_path="bound.md",
+        db_dir="db",
+        answer_hits=[{"meta": {"source_path": "focus.md"}}],
+        support_slots=[],
+        cards=[],
+        locked_citation_source=None,
+    )
+
+    assert calls == []
+    assert "[[CITE:s1234abcd:26]]" in out
 
 
 def test_apply_paper_guide_answer_postprocess_forces_exact_equation_surface(monkeypatch):
@@ -748,6 +882,139 @@ def test_extract_caption_panel_clause_supports_plain_and_bold_markers():
     assert "visible" in clause2.lower()
 
 
+def test_resolve_exact_figure_panel_caption_support_from_source_uses_caption_continuation_heading(tmp_path, monkeypatch):
+    doc_dir = tmp_path / "DemoFigure"
+    assets_dir = doc_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_path = doc_dir / "DemoFigure.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Demo",
+                "",
+                "## Results",
+                "",
+                "![Figure 6](./assets/page_10_fig_1.png)",
+                "",
+                "**Figure 6.** Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging.",
+                "",
+                "a The workflow and structure of the reported network. b The enhancement comparison between CNN-based U-net network and the reported transformer-based network.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "figures": [
+                    {
+                        "page": 10,
+                        "index": 1,
+                        "asset_name": "page_10_fig_1.png",
+                        "asset_name_raw": "page_10_fig_1.png",
+                        "asset_name_alias": "fig_6.png",
+                        "figure_id": "fig_006",
+                        "figure_ident": "6",
+                        "paper_figure_number": 6,
+                        "caption": "Figure 6. Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging.",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+
+    rec = answer_post_runtime._resolve_exact_figure_panel_caption_support_from_source(
+        "demo.pdf",
+        prompt="In Figure 6 panel (b), where is the enhancement comparison between the CNN-based U-net and the reported transformer-based network stated exactly?",
+        db_dir=tmp_path,
+    )
+
+    assert rec["heading_path"] == "Demo / Results / Figure 6"
+    assert rec["claim_type"] == "figure_panel"
+    assert rec["panel_letters"] == ["b"]
+    assert "enhancement comparison" in rec["locate_anchor"].lower()
+
+
+def test_resolve_exact_figure_panel_caption_support_from_source_prefers_figure_index_binding(tmp_path, monkeypatch):
+    doc_dir = tmp_path / "DemoFigureIndex"
+    assets_dir = doc_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_path = doc_dir / "DemoFigureIndex.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    (assets_dir / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "figures": [
+                    {
+                        "paper_figure_number": 6,
+                        "figure_id": "fig_006",
+                        "figure_block_id": "blk_fig6",
+                        "caption_block_id": "blk_cap6",
+                        "caption_anchor_id": "p_00098",
+                        "anchor_id": "fg_00006",
+                        "heading_path": "Demo / Results / Figure 6",
+                        "caption": "Illustration of the reported deep transformer network.",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "load_source_blocks",
+        lambda _path: [
+            {
+                "kind": "figure",
+                "block_id": "blk_fig6",
+                "anchor_id": "fg_00006",
+                "heading_path": "Demo / Results / Figure 6",
+                "figure_id": "fig_006",
+                "paper_figure_number": 6,
+                "text": "Figure 6",
+            },
+            {
+                "kind": "paragraph",
+                "block_id": "blk_cap6",
+                "anchor_id": "p_00098",
+                "heading_path": "Demo / Results / Figure 6",
+                "figure_role": "caption",
+                "linked_figure_block_id": "blk_fig6",
+                "text": "Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging.",
+            },
+            {
+                "kind": "paragraph",
+                "block_id": "blk_cap6b",
+                "anchor_id": "p_00099",
+                "heading_path": "Demo / Results / Figure 6",
+                "figure_role": "caption_continuation",
+                "linked_figure_block_id": "blk_fig6",
+                "text": "a The workflow and structure of the reported network. b The enhancement comparison between CNN-based U-net network and the reported transformer-based network.",
+            },
+        ],
+    )
+
+    rec = answer_post_runtime._resolve_exact_figure_panel_caption_support_from_source(
+        "demo.pdf",
+        prompt="In Figure 6 panel (b), where is the enhancement comparison between the CNN-based U-net and the reported transformer-based network stated exactly?",
+        db_dir=tmp_path,
+    )
+
+    assert rec["heading_path"] == "Demo / Results / Figure 6"
+    assert rec["block_id"] == "blk_cap6"
+    assert rec["anchor_id"] == "p_00098"
+    assert rec["claim_type"] == "figure_panel"
+    assert rec["panel_letters"] == ["b"]
+    assert "enhancement comparison" in rec["locate_anchor"].lower()
+
+
 def test_apply_paper_guide_answer_postprocess_promotes_numeric_cites_for_method(monkeypatch):
     monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_support_markers", lambda answer, **kwargs: answer)
     monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_support_markers", lambda answer, **kwargs: (answer, []))
@@ -934,3 +1201,112 @@ def test_apply_paper_guide_answer_postprocess_surfaces_plain_text_box_formula(mo
     )
 
     assert "M >= O(K log(N/K))" in out
+
+
+def test_apply_paper_guide_answer_postprocess_strips_contradicted_method_focus_line(monkeypatch):
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_support_markers", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_support_markers", lambda answer, **kwargs: (answer, []))
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_focus_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_card_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_drop_paper_guide_locate_only_line_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_sanitize_paper_guide_answer_for_user", lambda answer, **kwargs: answer)
+
+    out, _ = answer_post_runtime._apply_paper_guide_answer_postprocess(
+        (
+            "APR is not mentioned in the retrieved context.\n\n"
+            "Implementation detail: APR was performed using image registration based on phase correlation of the off-axis raw images with respect to the central one."
+        ),
+        paper_guide_mode=True,
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_for_user="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="method",
+        special_focus_block="",
+        focus_source_path="focus.md",
+        direct_source_path="direct.md",
+        bound_source_path="bound.md",
+        db_dir="db",
+        answer_hits=[],
+        support_slots=[],
+        cards=[],
+        locked_citation_source=None,
+    )
+
+    low = out.lower()
+    assert "apr is not mentioned" not in low
+    assert "implementation detail:" in low
+
+
+def test_apply_paper_guide_answer_postprocess_adds_component_role_support_resolution(monkeypatch, tmp_path):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_md_path", lambda *_args, **_kwargs: md_path)
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_support_markers", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_resolve_paper_guide_support_markers", lambda answer, **kwargs: (answer, []))
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_focus_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_inject_paper_guide_card_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_drop_paper_guide_locate_only_line_citations", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(answer_post_runtime, "_sanitize_paper_guide_answer_for_user", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "load_source_blocks",
+        lambda _path: [
+            {
+                "kind": "paragraph",
+                "block_id": "blk_rvt",
+                "anchor_id": "anc_rvt",
+                "heading_path": "Methods / Data analysis / Radial variance transform (RVT)",
+                "text": (
+                    "RVT computes, for each pixel, the variance of intensity values along concentric circular areas "
+                    "of increasing radius and generates a new image in which pixel intensity encodes the degree of radial symmetry. "
+                    "The RVT output can therefore be used for subsequent pixel-reassignment analysis."
+                ),
+            },
+            {
+                "kind": "paragraph",
+                "block_id": "blk_apr",
+                "anchor_id": "anc_apr",
+                "heading_path": "Methods / Data analysis / Adaptive pixel-reassignment (APR)",
+                "text": (
+                    "APR was performed using image registration based on phase correlation of the off-axis raw images "
+                    "with respect to the central one. Image registration of the RVT pinhole stack yielded shift vectors. "
+                    "These vectors were then applied to the original iISM pinhole stack prior to summation."
+                ),
+            },
+        ],
+    )
+
+    answer = (
+        "From the retrieved method evidence, in simple terms:\n"
+        "- RVT converts each pinhole image into a radial-symmetry map so the registration step is more robust to interferometric phase.\n"
+        "- APR uses phase-correlation registration to estimate shift vectors, then applies those shifts back to the original iISM data before summation."
+    )
+    out, support = answer_post_runtime._apply_paper_guide_answer_postprocess(
+        answer,
+        paper_guide_mode=True,
+        prompt="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_for_user="I am new to this paper. What are RVT and APR doing here, in simple terms?",
+        prompt_family="overview",
+        special_focus_block="",
+        focus_source_path="focus.md",
+        direct_source_path="direct.md",
+        bound_source_path="demo.pdf",
+        db_dir=tmp_path,
+        answer_hits=[],
+        support_slots=[],
+        cards=[],
+        locked_citation_source=None,
+    )
+
+    assert out == answer
+    assert len(support) == 2
+    by_segment = {str(item.get("segment_text") or ""): item for item in support}
+    rvt_seg = by_segment[
+        "RVT converts each pinhole image into a radial-symmetry map so the registration step is more robust to interferometric phase."
+    ]
+    apr_seg = by_segment[
+        "APR uses phase-correlation registration to estimate shift vectors, then applies those shifts back to the original iISM data before summation."
+    ]
+    assert "RVT" in rvt_seg["heading_path"]
+    assert "radial symmetry" in rvt_seg["locate_anchor"].lower()
+    assert "APR" in apr_seg["heading_path"]
+    assert "phase correlation" in apr_seg["locate_anchor"].lower()

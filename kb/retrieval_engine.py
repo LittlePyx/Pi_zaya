@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,6 +56,19 @@ def _is_temp_source_path(source_path: str) -> bool:
     s = (source_path or "").strip()
     if not s:
         return True
+    # If the caller explicitly points KB_DB_DIR to a directory that happens to
+    # contain "tmp_*" in its path, we still must treat its documents as eligible
+    # for retrieval. The temp filter is meant to exclude converter artifacts
+    # under an otherwise "real" DB, not to break an intentional DB root switch.
+    try:
+        raw_db_dir = str(os.environ.get("KB_DB_DIR", "") or "").strip()
+        if raw_db_dir:
+            db_dir = Path(raw_db_dir).expanduser().resolve()
+            src = Path(s).expanduser().resolve()
+            if src.is_relative_to(db_dir):
+                return False
+    except Exception:
+        pass
     if is_excluded_source_path(s):
         return True
     p = Path(s)
@@ -520,6 +534,146 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
             if ratio >= 0.55:
                 score += 2.0
     return float(score)
+
+
+def _clean_doc_focus_phrase(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"\b(?:please\s+point\s+me(?:\s+to)?|point\s+me(?:\s+to)?|show\s+me|source\s+section(?:s)?|those\s+sources)\b.*$",
+        "",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"^(?:the|a|an)\s+", "", text, flags=re.I)
+    return text.strip(" \t\r\n\"'“”‘’?,;:!?()[]{}")
+
+
+def _looks_informative_doc_focus_phrase(raw: str) -> bool:
+    norm = _norm_text_for_match(raw)
+    if not norm:
+        return False
+    toks = [t for t in tokenize(norm) if len(t) >= 3 and t not in _DOC_HINT_STOP_TOKENS]
+    if len(toks) >= 2:
+        return True
+    if len(toks) == 1:
+        tok = toks[0]
+        return len(tok) >= 6 or any(ch.isdigit() for ch in tok) or ("-" in tok)
+    return False
+
+
+def _extract_doc_focus_phrases(prompt_text: str) -> tuple[str, ...]:
+    text = str(prompt_text or "").strip()
+    if not text:
+        return ()
+    patterns = (
+        re.compile(
+            r"\bwhere\s+(?:in\s+the\s+[^?.!,]{1,80}\s+)?is\s+(.+?)\s+(?:discussed|mentioned|defined|introduced)\b",
+            flags=re.I,
+        ),
+        re.compile(
+            r"\b(?:which|what)\s+(?:other\s+)?papers?[^?.!]{0,120}?\b(?:discuss(?:es|ed)?|mention(?:s|ed)?|cover(?:s|ed)?|address(?:es|ed)?|describe(?:s|d)?|use(?:s|d)?|introduce(?:s|d)?|define(?:s|d)?|compare(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
+            flags=re.I,
+        ),
+        re.compile(
+            r"\bbesides\s+this\s+paper[^?.!]{0,120}?\b(?:discuss(?:es|ed)?|mention(?:s|ed)?|cover(?:s|ed)?|address(?:es|ed)?|describe(?:s|d)?|use(?:s|d)?|introduce(?:s|d)?|define(?:s|d)?|compare(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
+            flags=re.I,
+        ),
+        re.compile(
+            r"\b(?:which|what)\s+papers?[^?.!]{0,120}?\b(?:directly\s+|most\s+directly\s+)?(?:compare(?:s|d)?|define(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
+            flags=re.I,
+        ),
+        re.compile(
+            r"\bbesides\s+this\s+paper[^?.!]{0,120}?\b(?:directly\s+|most\s+directly\s+)?(?:compare(?:s|d)?|define(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
+            flags=re.I,
+        ),
+    )
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push(raw: str) -> None:
+        cleaned = _clean_doc_focus_phrase(raw)
+        if not _looks_informative_doc_focus_phrase(cleaned):
+            return
+        norm = _norm_text_for_match(cleaned)
+        if len(norm) < 3 or norm in seen:
+            return
+        seen.add(norm)
+        out.append(norm)
+
+    for quoted in re.findall(r"[\"“”‘’]([^\"“”‘’]{2,120})[\"“”‘’]", text):
+        _push(str(quoted or ""))
+    for pattern in patterns:
+        m = pattern.search(text)
+        if not m:
+            continue
+        raw = str(m.group(1) or "")
+        _push(raw)
+        if re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", text, flags=re.I):
+            for part in re.split(r"\b(?:and|vs\.?|versus)\b", raw, flags=re.I):
+                _push(part)
+    return tuple(out[:6])
+
+
+def _focus_phrase_matches_doc_surface(phrase: str, surface_text: str) -> bool:
+    norm_phrase = _norm_text_for_match(phrase)
+    norm_surface = _norm_text_for_match(surface_text)
+    if not norm_phrase or not norm_surface:
+        return False
+    if norm_phrase in norm_surface:
+        return True
+    phrase_toks = [t for t in tokenize(norm_phrase) if len(t) >= 4 and t not in _DOC_HINT_STOP_TOKENS]
+    if len(phrase_toks) < 2:
+        return False
+    surface_tokens = set(tokenize(norm_surface))
+    overlap = [tok for tok in phrase_toks if tok in surface_tokens]
+    if len(overlap) >= min(2, len(phrase_toks)):
+        return True
+    if len(phrase_toks) >= 3 and len(overlap) >= max(2, len(phrase_toks) - 1):
+        return True
+    return False
+
+
+def _doc_focus_match_score(
+    *,
+    prompt_text: str,
+    source_path: str,
+    snippets: list[str],
+    headings: list[str],
+) -> float:
+    phrases = _extract_doc_focus_phrases(prompt_text)
+    if not phrases:
+        return 0.0
+    p = Path(str(source_path or "").strip())
+    title_surface = " ".join(
+        str(x or "")
+        for x in (p.name, p.stem, re.sub(r"^[A-Za-z]+-\d{4}[-_ ]*", "", p.stem))
+        if str(x or "").strip()
+    )
+    body_surface = " ".join(str(x or "") for x in list(headings or [])[:8] + list(snippets or [])[:4] if str(x or "").strip())
+    prompt_low = str(prompt_text or "").lower()
+    is_compare = bool(re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", prompt_low))
+    is_define = bool(re.search(r"\b(defin(?:e|es|ed|ition)|what\s+is|introduced?\s+as)\b", prompt_low))
+    explain_surface = body_surface
+    score = 0.0
+    matched = 0
+    for phrase in phrases:
+        title_hit = _focus_phrase_matches_doc_surface(phrase, title_surface)
+        body_hit = _focus_phrase_matches_doc_surface(phrase, body_surface)
+        if title_hit:
+            score += 5.2
+        if body_hit:
+            score += 4.1
+        if title_hit or body_hit:
+            matched += 1
+        if is_define and body_hit and re.search(r"\b(defin(?:e|es|ed|ition)|refers?\s+to|introduced?\s+as|is\s+defined\s+as)\b", explain_surface, flags=re.I):
+            score += 1.8
+    if is_compare and matched >= 2 and re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", f"{title_surface}\n{body_surface}", flags=re.I):
+        score += 4.6
+    if matched >= 1 and len(phrases) == 1:
+        score += 1.2
+    return float(min(score, 18.0))
 
 
 def _build_doc_anchor_focus_query(prompt_text: str, source_path: str, anchor_hint: dict[str, object]) -> str:
@@ -1206,6 +1360,7 @@ def _group_hits_by_doc_for_refs(
     # Pre-sort docs by best lexical hit; later stages can override with deep-read/LLM semantics.
     doc_order: list[tuple[float, str]] = []
     doc_hint_scores: dict[str, float] = {}
+    doc_focus_scores: dict[str, float] = {}
     anchor_hint = _extract_explicit_anchor_hint(prompt_text or deep_query or "")
     for src, hs in by_doc.items():
         try:
@@ -1213,8 +1368,19 @@ def _group_hits_by_doc_for_refs(
         except Exception:
             best_score = 0.0
         doc_hint_score = _source_prompt_match_score(prompt_text or deep_query or "", src)
+        doc_focus_score = _doc_focus_match_score(
+            prompt_text=(prompt_text or deep_query or ""),
+            source_path=src,
+            snippets=[str((h.get("text") or "")).strip() for h in hs[:6] if str((h.get("text") or "")).strip()],
+            headings=[
+                str(((h.get("meta", {}) or {}).get("heading_path") or (h.get("meta", {}) or {}).get("top_heading") or "")).strip()
+                for h in hs[:6]
+                if isinstance(h.get("meta"), dict)
+            ],
+        )
         doc_hint_scores[src] = float(doc_hint_score)
-        doc_order.append((best_score + (1.6 * doc_hint_score), src))
+        doc_focus_scores[src] = float(doc_focus_score)
+        doc_order.append((best_score + (1.6 * doc_hint_score) + (1.05 * doc_focus_score), src))
     doc_order.sort(key=lambda x: x[0], reverse=True)
 
     docs: list[dict] = []
@@ -1229,6 +1395,7 @@ def _group_hits_by_doc_for_refs(
         hs2 = sorted(hs, key=lambda x: float(x.get("score", 0.0) or 0.0), reverse=True)
         best_score = float(hs2[0].get("score", 0.0) or 0.0) if hs2 else 0.0
         doc_hint_score = float(doc_hint_scores.get(src, 0.0) or 0.0)
+        doc_focus_score = float(doc_focus_scores.get(src, 0.0) or 0.0)
         force_anchor_focus = bool(anchor_hint) and (doc_hint_score >= 6.0)
         anchor_focus_query = (
             _build_doc_anchor_focus_query(prompt_text or deep_query or "", src, anchor_hint)
@@ -1570,6 +1737,7 @@ def _group_hits_by_doc_for_refs(
             + (0.25 * deep_scaled)
             + term_bonus
             + (1.5 * doc_hint_score)
+            + (1.15 * doc_focus_score)
             + (0.35 * anchor_best)
         )
 
@@ -1623,8 +1791,9 @@ def _group_hits_by_doc_for_refs(
         meta_out["ref_rank"] = {
             "bm25": best_score,
             "deep": deep_best,
-            "term_bonus": term_bonus,
-            "llm": 0.0,
+                "term_bonus": term_bonus,
+                "focus_bonus": doc_focus_score,
+                "llm": 0.0,
             "why": "",
             "score": combined,
             "display_score": combined,
@@ -2679,6 +2848,13 @@ def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict], 
     except Exception:
         settings_fast = settings
 
+    try:
+        base_docwise_timeout_s = float(getattr(settings_fast, "timeout_s", 18.0) or 18.0)
+    except Exception:
+        base_docwise_timeout_s = 18.0
+    base_docwise_timeout_s = max(6.0, min(18.0, base_docwise_timeout_s))
+    retry_docwise_timeout_s = max(base_docwise_timeout_s, min(24.0, max(base_docwise_timeout_s + 4.0, base_docwise_timeout_s * 1.25)))
+
     sys = (
         "You are an academic paper summarizer for retrieval references.\n"
         "Return JSON ONLY with keys: score, what, why, section.\n"
@@ -2753,10 +2929,10 @@ def _llm_refs_pack_docwise_items(settings, *, question: str, items: list[dict], 
         }
 
     def _one_doc(it: dict) -> dict | None:
-        rec = _run_docwise_once(it, timeout_s=18.0, max_tokens=280)
+        rec = _run_docwise_once(it, timeout_s=base_docwise_timeout_s, max_tokens=280)
         if _is_usable_docwise_result(rec or {}):
             return rec
-        rec_retry = _run_docwise_once(it, timeout_s=24.0, max_tokens=420)
+        rec_retry = _run_docwise_once(it, timeout_s=retry_docwise_timeout_s, max_tokens=420)
         if _is_usable_docwise_result(rec_retry or {}):
             return rec_retry
         return rec if _is_usable_docwise_result(rec or {}) else None

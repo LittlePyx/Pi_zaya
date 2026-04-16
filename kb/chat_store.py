@@ -29,12 +29,21 @@ class ChatStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self, *, timeout_s: float | None = None) -> sqlite3.Connection:
         # WAL helps concurrent reads while Streamlit reruns.
-        conn = sqlite3.connect(str(self._db_path), timeout=30, check_same_thread=False)
+        try:
+            timeout_final = float(timeout_s if timeout_s is not None else 30.0)
+        except Exception:
+            timeout_final = 30.0
+        timeout_final = max(0.05, timeout_final)
+        conn = sqlite3.connect(str(self._db_path), timeout=timeout_final, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
+        try:
+            conn.execute(f"PRAGMA busy_timeout={int(timeout_final * 1000)};")
+        except Exception:
+            pass
         return conn
 
     def _init_db(self) -> None:
@@ -81,6 +90,15 @@ class ChatStore:
                   prompt_sig TEXT NOT NULL,
                   hits_json TEXT NOT NULL,
                   scores_json TEXT NOT NULL,
+                  rendered_payload_json TEXT NOT NULL DEFAULT '',
+                  rendered_payload_sig TEXT NOT NULL DEFAULT '',
+                  render_status TEXT NOT NULL DEFAULT '',
+                  render_error TEXT NOT NULL DEFAULT '',
+                  render_error_detail TEXT NOT NULL DEFAULT '',
+                  render_built_at REAL NOT NULL DEFAULT 0,
+                  render_attempts INTEGER NOT NULL DEFAULT 0,
+                  render_evidence_sig TEXT NOT NULL DEFAULT '',
+                  render_locale TEXT NOT NULL DEFAULT '',
                   used_query TEXT NOT NULL,
                   used_translation INTEGER NOT NULL DEFAULT 0,
                   created_at REAL NOT NULL,
@@ -88,6 +106,42 @@ class ChatStore:
                 );
                 """
             )
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN rendered_payload_json TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN rendered_payload_sig TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN render_status TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN render_error TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN render_error_detail TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN render_built_at REAL NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN render_attempts INTEGER NOT NULL DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN render_evidence_sig TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN render_locale TEXT NOT NULL DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_message_refs_conv_id ON message_refs(conv_id);")
             # Projects (ChatGPT-style): optional grouping for conversations
             conn.execute(
@@ -335,11 +389,11 @@ class ChatStore:
                 ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_conversation(self, conv_id: str) -> dict | None:
+    def get_conversation(self, conv_id: str, *, timeout_s: float | None = None) -> dict | None:
         conv_id = (conv_id or "").strip()
         if not conv_id:
             return None
-        with self._connect() as conn:
+        with self._connect(timeout_s=timeout_s) as conn:
             row = conn.execute(
                 "SELECT id, title, created_at, updated_at, project_id, "
                 "COALESCE(archived, 0) AS archived, archived_at, "
@@ -724,6 +778,15 @@ class ChatStore:
         scores: list[float],
         used_query: str,
         used_translation: bool,
+        rendered_payload: dict | None = None,
+        rendered_payload_sig: str = "",
+        render_status: str | None = None,
+        render_error: str | None = None,
+        render_error_detail: str | None = None,
+        render_built_at: float | None = None,
+        render_attempts: int | None = None,
+        render_evidence_sig: str | None = None,
+        render_locale: str | None = None,
     ) -> bool:
         mid = int(user_msg_id or 0)
         if mid <= 0:
@@ -741,14 +804,60 @@ class ChatStore:
             scores_json = json.dumps(list(scores or []), ensure_ascii=False, default=str)
         except Exception:
             scores_json = "[]"
+        try:
+            rendered_payload_json = (
+                json.dumps(dict(rendered_payload or {}), ensure_ascii=False, default=str)
+                if isinstance(rendered_payload, dict)
+                else ""
+            )
+        except Exception:
+            rendered_payload_json = ""
+        rendered_sig = str(rendered_payload_sig or "").strip() if rendered_payload_json else ""
         with self._connect() as conn:
-            row = conn.execute("SELECT user_msg_id, created_at FROM message_refs WHERE user_msg_id = ?", (mid,)).fetchone()
+            row = conn.execute(
+                """
+                SELECT user_msg_id, created_at, render_status, render_error, render_error_detail,
+                       render_built_at, render_attempts, render_evidence_sig, render_locale
+                FROM message_refs
+                WHERE user_msg_id = ?
+                """,
+                (mid,),
+            ).fetchone()
+            next_render_status = str(render_status).strip() if render_status is not None else str((row["render_status"] if row else "") or "").strip()
+            next_render_error = str(render_error).strip() if render_error is not None else str((row["render_error"] if row else "") or "").strip()
+            next_render_error_detail = (
+                str(render_error_detail).strip()
+                if render_error_detail is not None
+                else str((row["render_error_detail"] if row else "") or "").strip()
+            )
+            try:
+                next_render_built_at = float(render_built_at) if render_built_at is not None else float((row["render_built_at"] if row else 0.0) or 0.0)
+            except Exception:
+                next_render_built_at = 0.0
+            try:
+                next_render_attempts = int(render_attempts) if render_attempts is not None else int((row["render_attempts"] if row else 0) or 0)
+            except Exception:
+                next_render_attempts = 0
+            next_render_attempts = max(0, next_render_attempts)
+            next_render_evidence_sig = (
+                str(render_evidence_sig).strip()
+                if render_evidence_sig is not None
+                else str((row["render_evidence_sig"] if row else "") or "").strip()
+            )
+            next_render_locale = (
+                str(render_locale).strip()
+                if render_locale is not None
+                else str((row["render_locale"] if row else "") or "").strip()
+            )
             if row:
                 created_at = float(row["created_at"] or now)
                 conn.execute(
                     """
                     UPDATE message_refs
                     SET conv_id = ?, prompt = ?, prompt_sig = ?, hits_json = ?, scores_json = ?,
+                        rendered_payload_json = ?, rendered_payload_sig = ?,
+                        render_status = ?, render_error = ?, render_error_detail = ?,
+                        render_built_at = ?, render_attempts = ?, render_evidence_sig = ?, render_locale = ?,
                         used_query = ?, used_translation = ?, updated_at = ?
                     WHERE user_msg_id = ?
                     """,
@@ -758,6 +867,15 @@ class ChatStore:
                         prompt_sig,
                         hits_json,
                         scores_json,
+                        rendered_payload_json,
+                        rendered_sig,
+                        next_render_status,
+                        next_render_error,
+                        next_render_error_detail,
+                        next_render_built_at,
+                        next_render_attempts,
+                        next_render_evidence_sig,
+                        next_render_locale,
                         used_query,
                         1 if bool(used_translation) else 0,
                         now,
@@ -769,8 +887,14 @@ class ChatStore:
                 conn.execute(
                     """
                     INSERT INTO message_refs
-                    (user_msg_id, conv_id, prompt, prompt_sig, hits_json, scores_json, used_query, used_translation, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (
+                        user_msg_id, conv_id, prompt, prompt_sig, hits_json, scores_json,
+                        rendered_payload_json, rendered_payload_sig,
+                        render_status, render_error, render_error_detail,
+                        render_built_at, render_attempts, render_evidence_sig, render_locale,
+                        used_query, used_translation, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mid,
@@ -779,6 +903,15 @@ class ChatStore:
                         prompt_sig,
                         hits_json,
                         scores_json,
+                        rendered_payload_json,
+                        rendered_sig,
+                        next_render_status,
+                        next_render_error,
+                        next_render_error_detail,
+                        next_render_built_at,
+                        next_render_attempts,
+                        next_render_evidence_sig,
+                        next_render_locale,
                         used_query,
                         1 if bool(used_translation) else 0,
                         created_at,
@@ -787,12 +920,175 @@ class ChatStore:
                 )
         return True
 
-    def list_message_refs(self, conv_id: str) -> dict[int, dict]:
+    def set_message_refs_rendered_payload(
+        self,
+        *,
+        user_msg_id: int,
+        rendered_payload: dict | None,
+        rendered_payload_sig: str = "",
+        render_status: str | None = None,
+        render_error: str | None = None,
+        render_error_detail: str | None = None,
+        render_built_at: float | None = None,
+        render_attempts: int | None = None,
+        render_evidence_sig: str | None = None,
+        render_locale: str | None = None,
+    ) -> bool:
+        mid = int(user_msg_id or 0)
+        if mid <= 0:
+            return False
+        try:
+            rendered_payload_json = (
+                json.dumps(dict(rendered_payload or {}), ensure_ascii=False, default=str)
+                if isinstance(rendered_payload, dict)
+                else ""
+            )
+        except Exception:
+            rendered_payload_json = ""
+        rendered_sig = str(rendered_payload_sig or "").strip() if rendered_payload_json else ""
         with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT user_msg_id, render_status, render_error, render_error_detail,
+                       render_built_at, render_attempts, render_evidence_sig, render_locale
+                FROM message_refs
+                WHERE user_msg_id = ?
+                """,
+                (mid,),
+            ).fetchone()
+            if not row:
+                return False
+            next_render_status = str(render_status).strip() if render_status is not None else str(row["render_status"] or "").strip()
+            next_render_error = str(render_error).strip() if render_error is not None else str(row["render_error"] or "").strip()
+            next_render_error_detail = (
+                str(render_error_detail).strip()
+                if render_error_detail is not None
+                else str(row["render_error_detail"] or "").strip()
+            )
+            try:
+                next_render_built_at = float(render_built_at) if render_built_at is not None else float(row["render_built_at"] or 0.0)
+            except Exception:
+                next_render_built_at = 0.0
+            try:
+                next_render_attempts = int(render_attempts) if render_attempts is not None else int(row["render_attempts"] or 0)
+            except Exception:
+                next_render_attempts = 0
+            next_render_attempts = max(0, next_render_attempts)
+            next_render_evidence_sig = (
+                str(render_evidence_sig).strip()
+                if render_evidence_sig is not None
+                else str(row["render_evidence_sig"] or "").strip()
+            )
+            next_render_locale = (
+                str(render_locale).strip()
+                if render_locale is not None
+                else str(row["render_locale"] or "").strip()
+            )
+            conn.execute(
+                """
+                UPDATE message_refs
+                SET rendered_payload_json = ?, rendered_payload_sig = ?,
+                    render_status = ?, render_error = ?, render_error_detail = ?,
+                    render_built_at = ?, render_attempts = ?, render_evidence_sig = ?, render_locale = ?
+                WHERE user_msg_id = ?
+                """,
+                (
+                    rendered_payload_json,
+                    rendered_sig,
+                    next_render_status,
+                    next_render_error,
+                    next_render_error_detail,
+                    next_render_built_at,
+                    next_render_attempts,
+                    next_render_evidence_sig,
+                    next_render_locale,
+                    mid,
+                ),
+            )
+        return True
+
+    def set_message_refs_render_state(
+        self,
+        *,
+        user_msg_id: int,
+        render_status: str | None = None,
+        render_error: str | None = None,
+        render_error_detail: str | None = None,
+        render_built_at: float | None = None,
+        render_attempts: int | None = None,
+        render_evidence_sig: str | None = None,
+        render_locale: str | None = None,
+    ) -> bool:
+        mid = int(user_msg_id or 0)
+        if mid <= 0:
+            return False
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT user_msg_id, render_status, render_error, render_error_detail,
+                       render_built_at, render_attempts, render_evidence_sig, render_locale
+                FROM message_refs
+                WHERE user_msg_id = ?
+                """,
+                (mid,),
+            ).fetchone()
+            if not row:
+                return False
+            next_render_status = str(render_status).strip() if render_status is not None else str(row["render_status"] or "").strip()
+            next_render_error = str(render_error).strip() if render_error is not None else str(row["render_error"] or "").strip()
+            next_render_error_detail = (
+                str(render_error_detail).strip()
+                if render_error_detail is not None
+                else str(row["render_error_detail"] or "").strip()
+            )
+            try:
+                next_render_built_at = float(render_built_at) if render_built_at is not None else float(row["render_built_at"] or 0.0)
+            except Exception:
+                next_render_built_at = 0.0
+            try:
+                next_render_attempts = int(render_attempts) if render_attempts is not None else int(row["render_attempts"] or 0)
+            except Exception:
+                next_render_attempts = 0
+            next_render_attempts = max(0, next_render_attempts)
+            next_render_evidence_sig = (
+                str(render_evidence_sig).strip()
+                if render_evidence_sig is not None
+                else str(row["render_evidence_sig"] or "").strip()
+            )
+            next_render_locale = (
+                str(render_locale).strip()
+                if render_locale is not None
+                else str(row["render_locale"] or "").strip()
+            )
+            conn.execute(
+                """
+                UPDATE message_refs
+                SET render_status = ?, render_error = ?, render_error_detail = ?,
+                    render_built_at = ?, render_attempts = ?, render_evidence_sig = ?, render_locale = ?
+                WHERE user_msg_id = ?
+                """,
+                (
+                    next_render_status,
+                    next_render_error,
+                    next_render_error_detail,
+                    next_render_built_at,
+                    next_render_attempts,
+                    next_render_evidence_sig,
+                    next_render_locale,
+                    mid,
+                ),
+            )
+        return True
+
+    def list_message_refs(self, conv_id: str, *, timeout_s: float | None = None) -> dict[int, dict]:
+        with self._connect(timeout_s=timeout_s) as conn:
             rows = conn.execute(
                 """
-                SELECT user_msg_id, conv_id, prompt, prompt_sig, hits_json, scores_json, used_query,
-                       used_translation, created_at, updated_at
+                SELECT user_msg_id, conv_id, prompt, prompt_sig, hits_json, scores_json,
+                       rendered_payload_json, rendered_payload_sig,
+                       render_status, render_error, render_error_detail,
+                       render_built_at, render_attempts, render_evidence_sig, render_locale,
+                       used_query, used_translation, created_at, updated_at
                 FROM message_refs
                 WHERE conv_id = ?
                 ORDER BY user_msg_id ASC
@@ -819,6 +1115,12 @@ class ChatStore:
                 scores = []
             if not isinstance(scores, list):
                 scores = []
+            try:
+                rendered_payload = json.loads(r["rendered_payload_json"] or "{}")
+            except Exception:
+                rendered_payload = {}
+            if not isinstance(rendered_payload, dict):
+                rendered_payload = {}
             out[mid] = {
                 "user_msg_id": mid,
                 "conv_id": str(r["conv_id"] or ""),
@@ -826,6 +1128,15 @@ class ChatStore:
                 "prompt_sig": str(r["prompt_sig"] or ""),
                 "hits": hits,
                 "scores": scores,
+                "rendered_payload": rendered_payload,
+                "rendered_payload_sig": str(r["rendered_payload_sig"] or ""),
+                "render_status": str(r["render_status"] or ""),
+                "render_error": str(r["render_error"] or ""),
+                "render_error_detail": str(r["render_error_detail"] or ""),
+                "render_built_at": float(r["render_built_at"] or 0.0),
+                "render_attempts": int(r["render_attempts"] or 0),
+                "render_evidence_sig": str(r["render_evidence_sig"] or ""),
+                "render_locale": str(r["render_locale"] or ""),
                 "used_query": str(r["used_query"] or ""),
                 "used_translation": bool(int(r["used_translation"] or 0)),
                 "created_at": float(r["created_at"] or 0.0),

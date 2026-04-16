@@ -107,6 +107,33 @@ test('multi-panel caption locate highlights the combined target snippet', async 
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('g Line profiles of the iPSF')
 })
 
+test('discussion-only locate can open the reader at section level without an exact block id', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 })
+  await openHarness(page, 'discussion-only')
+  await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
+  await expect(page.locator('.kb-reader-focus')).toContainText('4. Discussion')
+  await expect(page.getByRole('heading', { name: '4. Discussion' })).toBeInViewport()
+  await expect(page.getByTestId('reader-outline-item-3')).toContainText('4. Discussion')
+})
+
+test('limitations-only locate can open the reader at section level without an exact block id', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 })
+  await openHarness(page, 'limitations-only')
+  await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
+  await expect(page.locator('.kb-reader-focus')).toContainText('5. Limitations')
+  await expect(page.getByRole('heading', { name: '5. Limitations' })).toBeInViewport()
+  await expect(page.getByTestId('reader-outline-item-4')).toContainText('5. Limitations')
+})
+
+test('future-work-only locate can open the reader at section level without an exact block id', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 })
+  await openHarness(page, 'future-work-only')
+  await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
+  await expect(page.locator('.kb-reader-focus')).toContainText('6. Future Work')
+  await expect(page.getByRole('heading', { name: '6. Future Work' })).toBeInViewport()
+  await expect(page.getByTestId('reader-outline-item-5')).toContainText('6. Future Work')
+})
+
 test('outline jump lands on the selected section heading', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 560 })
   await openHarness(page, 'strict-quote')
@@ -131,7 +158,7 @@ test('outline active section follows reader scroll position', async ({ page }) =
   await reader.evaluate((node) => {
     ;(node as HTMLDivElement).scrollTop = (node as HTMLDivElement).scrollHeight
   })
-  await expect(page.getByTestId('reader-outline-item-2')).toHaveClass(/is-active/)
+  await expect(page.getByTestId('reader-outline-item-5')).toHaveClass(/is-active/)
 
   await reader.evaluate((node) => {
     ;(node as HTMLDivElement).scrollTop = 0
@@ -143,7 +170,14 @@ test('structured fallback switches to the resolved alternative instead of re-ran
   await openHarness(page, 'candidate-fallback')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
   await expect(page.getByTestId('reader-candidate-chip-1')).toHaveClass(/is-active/)
+  await expect(page.getByTestId('reader-candidate-chip-2')).toBeVisible()
   await expect(page.getByTestId('reader-evidence-nav')).toHaveCount(0)
+})
+
+test('strict exact locate does not degrade to heading fallback when direct identity is missing', async ({ page }) => {
+  await openHarness(page, 'strict-missing-exact')
+  await expect(page.getByTestId('reader-locate-status')).toHaveText('Strict stopped')
+  await expect(page.locator('.kb-reader-focus')).toHaveCount(0)
 })
 
 test('ask bubble appends the selected source text back to the session input log', async ({ page }) => {
@@ -182,7 +216,7 @@ test('highlights workspace can jump back to a saved session highlight', async ({
   await reader.evaluate((node) => {
     ;(node as HTMLDivElement).scrollTop = (node as HTMLDivElement).scrollHeight
   })
-  await selectText(page, 'Our method achieves stable reconstruction from a single snapshot.')
+  await selectText(page, 'Looking ahead, the most direct extension would be to combine the current pipeline with adaptive masking')
   await page.getByTestId('reader-selection-highlight').click()
   await expect(page.getByTestId('reader-highlights-toggle')).toContainText('1 highlight')
 

@@ -234,6 +234,35 @@ def fix_math_markdown(md: str) -> str:
                 return True
         return False
 
+    def _looks_like_sentence_style_math_block(block: str) -> bool:
+        """
+        Detect display-math blocks that are really sentence fragments with a little
+        inline math mixed in, for example:
+          about 1.4 \\text{ Airy units ... } 1\\,\\text{AU} = ...
+        These should be unwrapped back to prose instead of preserved as equations.
+        """
+        t = (block or "").strip()
+        if not t:
+            return False
+        plain = _latex_text_to_plain(t)
+        plain_norm = re.sub(r"\s+", " ", plain).strip()
+        if not plain_norm:
+            return False
+        word_n = len(re.findall(r"\b[A-Za-z]{2,}\b", plain_norm))
+        if word_n < 8:
+            return False
+        text_macro_n = len(re.findall(r"\\text\{", t))
+        if text_macro_n <= 0:
+            return False
+        if re.search(r"\\(?:sum|int|prod|frac|sqrt|begin\{(?:equation|align|gather|multline))", t, flags=re.IGNORECASE):
+            return False
+        first_eq = t.find("=")
+        if first_eq >= 0 and first_eq <= 12:
+            return False
+        if re.match(r"(?i)^(?:about|where|with|for|which|when|the|this|these|those)\b", plain_norm):
+            return True
+        return plain_norm[:1].islower()
+
     # Normalize single-line display math to fenced form:
     #   $$ ... $$ -> $$\n...\n$$
     # This prevents later inline-math regex from collapsing it into $...$.
@@ -325,7 +354,13 @@ def fix_math_markdown(md: str) -> str:
         # CRITICAL: Be very conservative - only unwrap if it's clearly prose/citation
         # Since we improved the LLM prompt, most $$ blocks should be real formulas
         # Only unwrap if it's OBVIOUSLY not math (e.g., full sentences with no math symbols)
-        if _looks_like_not_math(raw):
+        sentence_style_math = _looks_like_sentence_style_math_block(raw)
+        if sentence_style_math or _looks_like_not_math(raw):
+            if sentence_style_math:
+                if raw:
+                    out.append(_normalize_text(_latex_text_to_plain(raw)))
+                out.append("")
+                continue
             # Keep as math only when strong equation anchors remain after stripping text wrappers.
             raw_probe = _strip_text_macros(raw)
             if _has_hard_math_anchors(raw_probe):

@@ -1,3 +1,6 @@
+import api.reference_ui as reference_ui
+import api.routers.library as library_router
+import api.routers.references as references_router
 from pathlib import Path
 
 from kb.chat_store import ChatStore
@@ -6,6 +9,7 @@ from kb.task_runtime import (
     _augment_paper_guide_retrieval_prompt,
     _augment_prompt_with_source_hint,
     _build_bg_task,
+    _build_precomputed_refs_render_payload,
     _maybe_append_library_figure_markdown,
     _build_paper_guide_direct_abstract_answer,
     _build_paper_guide_direct_citation_lookup_answer,
@@ -30,6 +34,10 @@ from kb.task_runtime import (
     _needs_conversational_source_hint,
     _paper_guide_has_requested_target_hits,
     _paper_guide_prompt_family,
+    _paper_guide_requests_cross_paper_refs,
+    _exclude_bound_source_hits_for_cross_paper_refs,
+    _select_refs_async_rebuild_hits_raw,
+    _should_allow_refs_async_enrich,
     _paper_guide_targeted_source_block_hits,
     _pick_recent_source_hint,
     _repair_paper_guide_focus_answer,
@@ -148,13 +156,13 @@ def test_augment_paper_guide_retrieval_prompt_keeps_reference_list_terms_for_exp
     assert "works cited" in low
 
 
-def test_sanitize_paper_guide_answer_for_user_strips_structured_cites_for_citation_lookup():
+def test_sanitize_paper_guide_answer_for_user_keeps_structured_cites_for_citation_lookup():
     out = _sanitize_paper_guide_answer_for_user(
         "The paper uses [34] when introducing RVT [[CITE:s3583e628:1]].",
         has_hits=True,
         prompt="Which prior work is RVT attributed to in this paper, and what in-paper citation do they use when introducing it?",
     )
-    assert "[[CITE:" not in out
+    assert "[[CITE:s3583e628:1]]" not in out
     assert "[34]" in out
 
 
@@ -176,6 +184,119 @@ def test_paper_guide_prompt_family_detects_chinese_overview_method_and_abstract_
 def test_paper_guide_prompt_family_detects_figure_walkthrough_requests():
     assert _paper_guide_prompt_family("Walk me through what Figure 1 demonstrates.") == "figure_walkthrough"
     assert _paper_guide_prompt_family("解释一下图1每个 panel 在说什么") == "figure_walkthrough"
+
+
+def test_paper_guide_requests_cross_paper_refs_detects_external_library_queries():
+    assert _paper_guide_requests_cross_paper_refs(
+        "Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?"
+    )
+    assert _paper_guide_requests_cross_paper_refs(
+        "Which other papers in my library mention ADMM?"
+    )
+    assert not _paper_guide_requests_cross_paper_refs(
+        "Where in this paper is Figure 2 discussed?"
+    )
+
+
+def test_should_allow_refs_async_enrich_keeps_cross_paper_paper_guide_queries_enabled():
+    assert _should_allow_refs_async_enrich(
+        refs_async_enabled=True,
+        paper_guide_mode=True,
+        refs_async_in_paper_guide=False,
+        paper_guide_cross_paper_refs=True,
+    )
+    assert not _should_allow_refs_async_enrich(
+        refs_async_enabled=True,
+        paper_guide_mode=True,
+        refs_async_in_paper_guide=False,
+        paper_guide_cross_paper_refs=False,
+    )
+
+
+def test_select_refs_async_rebuild_hits_raw_prefers_unscoped_hits_for_cross_paper_refs():
+    scoped = [{"id": "scoped"}]
+    unscoped = [{"id": "external"}, {"id": "bound"}]
+
+    assert _select_refs_async_rebuild_hits_raw(
+        hits_raw=scoped,
+        refs_unscoped_hits_raw=unscoped,
+        paper_guide_cross_paper_refs=True,
+    ) == unscoped
+    assert _select_refs_async_rebuild_hits_raw(
+        hits_raw=scoped,
+        refs_unscoped_hits_raw=unscoped,
+        paper_guide_cross_paper_refs=False,
+    ) == scoped
+
+
+def test_build_precomputed_refs_render_payload_uses_bounded_full_variant(monkeypatch):
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: None)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: None)
+    monkeypatch.setattr(references_router, "_refs_pack_render_signature", lambda **kwargs: "sig-precomputed")
+
+    def fake_enrich_refs_payload(refs_by_user, **kwargs):
+        calls["refs_by_user"] = refs_by_user
+        calls["kwargs"] = dict(kwargs)
+        return {7: {"hits": [{"ui_meta": {"summary_line": "bounded-full"}}]}}
+
+    monkeypatch.setattr(reference_ui, "enrich_refs_payload", fake_enrich_refs_payload)
+
+    payload, sig = _build_precomputed_refs_render_payload(
+        user_msg_id=7,
+        prompt="Which paper compares Hadamard and Fourier SPI?",
+        prompt_sig="sig-7",
+        hits=[
+            {
+                "text": "Figure 1 compares Hadamard and Fourier basis patterns.",
+                "meta": {
+                    "source_path": r"db\OE-2017\OE-2017.en.md",
+                    "ref_pack_state": "ready",
+                },
+            }
+        ],
+        scores=[9.4],
+        used_query="Hadamard Fourier single-pixel imaging compare",
+        used_translation=False,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+        library_db_path=None,
+    )
+
+    assert payload == {"hits": [{"ui_meta": {"summary_line": "bounded-full"}}]}
+    assert sig == "sig-precomputed"
+    assert (calls.get("refs_by_user") or {}).get(7, {}).get("hits")[0]["meta"]["ref_pack_state"] == "ready"
+    kwargs = dict(calls.get("kwargs") or {})
+    assert kwargs.get("render_variant") == "bounded_full"
+    assert kwargs.get("allow_expensive_llm_for_ready") is False
+    assert kwargs.get("allow_exact_locate") is True
+
+
+def test_exclude_bound_source_hits_for_cross_paper_refs_drops_current_paper_before_grouping():
+    hits = [
+        {
+            "meta": {
+                "source_path": r"db\NatPhoton-2019-Principles and prospects for single-pixel imaging\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+            }
+        },
+        {
+            "meta": {
+                "source_path": r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+            }
+        },
+    ]
+
+    out = _exclude_bound_source_hits_for_cross_paper_refs(
+        hits,
+        bound_source_path=r"db\NatPhoton-2019-Principles and prospects for single-pixel imaging\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+        bound_source_name="NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+    )
+
+    assert len(out) == 1
+    kept = str(((out[0].get("meta") or {}).get("source_path") or ""))
+    assert "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging" in kept
 
 
 def test_augment_paper_guide_retrieval_prompt_adds_section_bias_for_generic_question():

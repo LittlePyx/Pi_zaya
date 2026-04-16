@@ -7,7 +7,7 @@ from pathlib import Path
 
 from kb.paper_guide_evidence_atoms import _build_paper_guide_evidence_atoms
 from kb.paper_guide_focus import _extract_caption_panel_letters
-from kb.paper_guide_grounding_runtime import (
+from kb.paper_guide.grounder import (
     _extract_inline_reference_numbers,
     _paper_guide_cue_tokens,
 )
@@ -412,6 +412,62 @@ def _paper_guide_targeted_source_block_hits(
     q = str(prompt or "").strip()
     if not q:
         return []
+    # Index-first targeted hits: for figure panel requests, use figure_index.json caption clauses
+    # rather than scanning generic blocks. This improves stability and panel-specific locate.
+    try:
+        family0 = str(_paper_guide_prompt_family(q) or "").strip().lower()
+    except Exception:
+        family0 = ""
+    try:
+        target_fig0 = int(_requested_figure_number(q, []) or 0)
+    except Exception:
+        target_fig0 = 0
+    target_panels0 = _extract_caption_panel_letters(q)
+    if family0 == "figure_walkthrough" and target_fig0 > 0 and target_panels0:
+        try:
+            from kb.paper_guide_structured_index_runtime import load_paper_guide_figure_index
+            from kb.paper_guide.grounder import _extract_caption_fragment_for_letters
+
+            for row in load_paper_guide_figure_index(md_path):
+                try:
+                    fig_no = int(row.get("paper_figure_number") or 0)
+                except Exception:
+                    fig_no = 0
+                if fig_no != int(target_fig0):
+                    continue
+                caption = str(row.get("caption") or "").strip()
+                frag = _extract_caption_fragment_for_letters(caption, set(target_panels0))
+                if not frag:
+                    continue
+                caption_block_id = str(row.get("caption_block_id") or "").strip()
+                caption_anchor_id = str(row.get("caption_anchor_id") or "").strip()
+                # Use caption block/anchor if available; otherwise fall back to figure placeholder.
+                if not caption_block_id:
+                    caption_block_id = str(row.get("figure_block_id") or "").strip()
+                if not caption_anchor_id:
+                    caption_anchor_id = str(row.get("anchor_id") or "").strip()
+                meta = {
+                    "source_path": str(md_path),
+                    "source_sha1": compute_file_sha1(md_path),
+                    "top_heading": "",
+                    "heading_path": str(row.get("heading_path") or "").strip(),
+                    "block_id": caption_block_id,
+                    "anchor_id": caption_anchor_id,
+                    "kind": "paper_guide_figure_index_clause",
+                    "paper_guide_targeted_block": True,
+                    "paper_guide_target_scope": "figure_panel",
+                    "figure_number": int(target_fig0),
+                    "panel_letters": sorted(target_panels0),
+                }
+                return [
+                    {
+                        "text": str(frag).strip()[:1200],
+                        "score": 999.0,
+                        "meta": meta,
+                    }
+                ]
+        except Exception:
+            pass
     box_excerpt_hits = _paper_guide_targeted_box_excerpt_hits(
         md_path=md_path,
         bound_source_path=bound_source_path,
@@ -573,10 +629,21 @@ def _paper_guide_should_force_rescue(
     prompt: str,
     prompt_family: str = "",
 ) -> bool:
-    hits = [hit for hit in list(scoped_hits or []) if isinstance(hit, dict)]
-    if not hits:
-        return True
+    snapshot = _paper_guide_retrieval_confidence_snapshot(
+        scoped_hits=scoped_hits,
+        prompt=prompt,
+        prompt_family=prompt_family,
+    )
+    return bool(snapshot.get("force_rescue"))
 
+
+def _paper_guide_retrieval_confidence_snapshot(
+    *,
+    scoped_hits: list[dict],
+    prompt: str,
+    prompt_family: str = "",
+) -> dict[str, object]:
+    hits = [hit for hit in list(scoped_hits or []) if isinstance(hit, dict)]
     q = str(prompt or "").strip()
     family = str(prompt_family or _paper_guide_prompt_family(q)).strip().lower()
     method_exact_support = bool(
@@ -588,9 +655,9 @@ def _paper_guide_should_force_rescue(
         or (_extract_figure_number(q) > 0)
         or method_exact_support
     )
-
-    if explicit_targeting and (not _paper_guide_has_requested_target_hits(hits, prompt=q)):
-        return True
+    has_requested_target_hits = True
+    if explicit_targeting:
+        has_requested_target_hits = _paper_guide_has_requested_target_hits(hits, prompt=q)
 
     explicit_ref_list_request = bool(
         re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
@@ -602,9 +669,24 @@ def _paper_guide_should_force_rescue(
     )
     strong_signal = False
     non_reference_signal = False
+    targeted_hit_count = 0
+    fallback_hit_count = 0
+    reference_like_hit_count = 0
+    max_overlap = 0
+    max_score = 0.0
     for hit in hits:
         meta = hit.get("meta", {}) or {}
-        if bool(meta.get("paper_guide_targeted_block")) or bool(meta.get("paper_guide_fallback")):
+        try:
+            max_score = max(max_score, float(hit.get("score") or 0.0))
+        except Exception:
+            max_score = max_score
+        is_targeted = bool(meta.get("paper_guide_targeted_block"))
+        is_fallback = bool(meta.get("paper_guide_fallback"))
+        if is_targeted:
+            targeted_hit_count += 1
+        if is_fallback:
+            fallback_hit_count += 1
+        if is_targeted or is_fallback:
             strong_signal = True
             non_reference_signal = True
             continue
@@ -614,6 +696,7 @@ def _paper_guide_should_force_rescue(
             continue
         looks_reference = bool(_PAPER_GUIDE_REF_SECTION_RE.search(heading) or _looks_like_reference_list_snippet_local(text))
         if looks_reference:
+            reference_like_hit_count += 1
             if family == "citation_lookup" or explicit_ref_list_request:
                 non_reference_signal = True
             else:
@@ -623,26 +706,71 @@ def _paper_guide_should_force_rescue(
         overlap = 0
         if query_tokens:
             overlap = len(set(_paper_guide_cue_tokens("\n".join(part for part in (heading, text[:1200]) if part))).intersection(query_tokens))
+        if overlap > max_overlap:
+            max_overlap = overlap
         if overlap >= 2:
             strong_signal = True
-            break
-        if overlap >= 1 and len(text) >= 120:
+        elif overlap >= 1 and len(text) >= 120:
             strong_signal = True
-            break
 
-    if (family != "citation_lookup") and (not explicit_ref_list_request) and (not non_reference_signal):
-        return True
-    if not strong_signal:
-        return True
+    force_rescue = False
+    force_rescue_reason = ""
+    if not hits:
+        force_rescue = True
+        force_rescue_reason = "empty_hits"
+    elif explicit_targeting and (not has_requested_target_hits):
+        force_rescue = True
+        force_rescue_reason = "target_miss"
+    elif (family != "citation_lookup") and (not explicit_ref_list_request) and (not non_reference_signal):
+        force_rescue = True
+        force_rescue_reason = "reference_only_hits"
+    elif not strong_signal:
+        force_rescue = True
+        force_rescue_reason = "weak_signal"
+    elif family in {"citation_lookup", "method", "figure_walkthrough", "reproduce"}:
+        if (targeted_hit_count + fallback_hit_count) <= 0:
+            force_rescue = True
+            force_rescue_reason = "strict_family_without_targeted_support"
 
-    if family not in {"citation_lookup", "method", "figure_walkthrough", "reproduce"}:
-        return False
+    low_confidence = False
+    low_confidence_reason = ""
+    if force_rescue:
+        low_confidence = True
+        low_confidence_reason = force_rescue_reason or "force_rescue"
+    else:
+        strict_family = family in {"citation_lookup", "method", "reproduce", "equation", "figure_walkthrough"}
+        broad_family = family in {"overview", "compare", "strength_limits", "abstract"}
+        has_strong_targeted_hit = (targeted_hit_count + fallback_hit_count) > 0
+        if (not has_strong_targeted_hit) and strict_family:
+            if max_overlap <= 1 and max_score < 11.0:
+                low_confidence = True
+                low_confidence_reason = "strict_family_weak_overlap"
+            elif len(hits) < 3 and max_overlap < 2:
+                low_confidence = True
+                low_confidence_reason = "strict_family_sparse_hits"
+        elif (not has_strong_targeted_hit) and broad_family:
+            if (max_overlap <= 1) and (max_score < 9.5) and (len(hits) < 8):
+                low_confidence = True
+                low_confidence_reason = "broad_family_weak_overlap"
 
-    for hit in hits:
-        meta = hit.get("meta", {}) or {}
-        if bool(meta.get("paper_guide_targeted_block")) or bool(meta.get("paper_guide_fallback")):
-            return False
-    return True
+    return {
+        "hit_count": len(hits),
+        "family": family,
+        "explicit_targeting": explicit_targeting,
+        "explicit_ref_list_request": explicit_ref_list_request,
+        "has_requested_target_hits": has_requested_target_hits,
+        "targeted_hit_count": targeted_hit_count,
+        "fallback_hit_count": fallback_hit_count,
+        "reference_like_hit_count": reference_like_hit_count,
+        "non_reference_signal": non_reference_signal,
+        "strong_signal": strong_signal,
+        "max_overlap": max_overlap,
+        "max_score": max_score,
+        "force_rescue": force_rescue,
+        "force_rescue_reason": force_rescue_reason,
+        "low_confidence": low_confidence,
+        "low_confidence_reason": low_confidence_reason,
+    }
 
 
 def _paper_guide_fallback_deepread_hits(
@@ -853,6 +981,20 @@ def _paper_guide_citation_lookup_query_tokens(prompt: str) -> list[str]:
             continue
         seen.add(tok)
         out.append(tok)
+    # Lightweight semantic expansion for citation lookup prompts:
+    # converted papers often use "compressive sensing" while user asks "compressive sampling" (or vice versa).
+    alias_map: dict[str, tuple[str, ...]] = {
+        "sampling": ("sensing",),
+        "sensing": ("sampling",),
+    }
+    for tok in list(out):
+        for alt in alias_map.get(tok, ()):
+            if (not alt) or (alt in _PAPER_GUIDE_CITATION_LOOKUP_QUERY_STOPWORDS):
+                continue
+            if alt in seen:
+                continue
+            seen.add(alt)
+            out.append(alt)
     return out
 
 
@@ -989,31 +1131,52 @@ def _paper_guide_citation_lookup_signal_score(
     text_low = str(text or "").strip().lower()
     score = 0.0
     topic_tokens = _paper_guide_citation_lookup_query_tokens(prompt)
-    shared_topics = [tok for tok in topic_tokens if tok in text_low or tok in heading_leaf_low]
-    if shared_topics:
-        score += min(10.0, 3.0 * float(len(shared_topics)))
+    shared_topics_text = [tok for tok in topic_tokens if tok in text_low]
+    shared_topics_heading = [tok for tok in topic_tokens if (tok not in shared_topics_text) and (tok in heading_leaf_low)]
+    if shared_topics_text:
+        score += min(12.0, 3.2 * float(len(shared_topics_text)))
+    if shared_topics_heading:
+        # Heading-only lexical overlap is weaker evidence than direct text overlap.
+        score += min(2.4, 0.8 * float(len(shared_topics_heading)))
 
     # Heuristic: for citation-lookup questions phrased like "cite for X", strongly prefer fragments
     # that actually contain X (so we don't pick a nearby sentence with many refs but missing the target term).
-    focus = ""
-    m = re.search(r"(?i)\bcite(?:d|s)?\b[^\n]{0,80}\bfor\b\s+(?:the\s+)?([A-Za-z][A-Za-z0-9-]{1,36})", prompt)
+    focus_tokens: list[str] = []
+    m = re.search(r"(?i)\bcite(?:d|s)?\b[^\n]{0,80}\bfor\b\s+([^?.!,;\n]{1,120})", prompt)
     if m:
-        cand = str(m.group(1) or "").strip()
-        if cand and cand.lower() not in {"the", "a", "an", "this", "that", "it"}:
-            focus = cand.lower()
-    if focus:
-        if focus in text_low or focus in heading_leaf_low:
-            score += 14.0
+        raw_focus = str(m.group(1) or "").strip().lower()
+        generic_focus_tokens = {"single", "pixel", "imaging", "authors", "method", "methods", "approach"}
+        cand = [
+            tok
+            for tok in _paper_guide_citation_lookup_query_tokens(raw_focus)
+            if tok and (tok not in generic_focus_tokens)
+        ]
+        for tok in cand:
+            if tok not in focus_tokens:
+                focus_tokens.append(tok)
+        if not focus_tokens:
+            for tok in _paper_guide_citation_lookup_query_tokens(raw_focus):
+                if tok and tok not in focus_tokens:
+                    focus_tokens.append(tok)
+        focus_tokens = focus_tokens[:4]
+    if focus_tokens:
+        focus_text_overlap = [tok for tok in focus_tokens if tok in text_low]
+        focus_heading_overlap = [tok for tok in focus_tokens if (tok not in focus_text_overlap) and (tok in heading_leaf_low)]
+        if focus_text_overlap:
+            score += min(14.0, 6.0 * float(len(focus_text_overlap)))
+        elif focus_heading_overlap:
+            score += min(4.0, 2.0 * float(len(focus_heading_overlap)))
         elif inline_refs:
             score -= 10.0
     has_inline_refs = bool(inline_refs)
     # Guardrail: "citation-like" sentences with many refs are common (e.g., listing optimization priors).
     # If the fragment does not match the question's topical tokens at all, down-rank it even if it contains refs.
-    if has_inline_refs and (not shared_topics):
+    shared_topics = list(shared_topics_text) + list(shared_topics_heading)
+    if has_inline_refs and (not shared_topics_text):
         score -= 6.0
-    if has_inline_refs and len(shared_topics) >= 2:
+    if has_inline_refs and len(shared_topics_text) >= 2:
         score += 10.0
-    elif has_inline_refs and shared_topics:
+    elif has_inline_refs and shared_topics_text:
         score += 4.0
     if _PAPER_GUIDE_CITATION_LOOKUP_ATTRIBUTION_RE.search(text):
         score += 8.0 if has_inline_refs else 3.0
@@ -1147,6 +1310,7 @@ def _select_paper_guide_raw_target_hits(
         meta = hit.get("meta", {}) or {}
         text = str(hit.get("text") or "").strip()
         heading = str(meta.get("heading_path") or "").strip()
+        signal_score = 0.0
         if family == "citation_lookup":
             inline_refs = _extract_inline_reference_numbers(text, max_candidates=6)
             signal_score = _paper_guide_citation_lookup_signal_score(
@@ -1173,7 +1337,15 @@ def _select_paper_guide_raw_target_hits(
         if key in seen:
             continue
         seen.add(key)
-        ranked.append((float(score_fn(hit, prompt=prompt)), hit))
+        base_score = float(score_fn(hit, prompt=prompt))
+        rank_score = base_score
+        if family == "citation_lookup":
+            # For citation lookup, prioritize semantic/attribution signal over raw retrieval rank.
+            # This avoids selecting nearby but off-topic citation sentences.
+            rank_score = (12.0 * float(signal_score)) + (0.25 * base_score)
+            if bool(meta.get("paper_guide_targeted_block")):
+                rank_score += 0.8
+        ranked.append((rank_score, hit))
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [dict(hit) for _score, hit in ranked[:limit]]
 
@@ -1213,39 +1385,111 @@ def _build_paper_guide_direct_citation_lookup_answer(
     focus_excerpt = str(extract_focus(special_focus_block) or "").strip()
     if focus_excerpt:
         candidates.append({"text": focus_excerpt, "heading": ""})
-    best_fragment = ""
-    best_heading = ""
-    best_score = float("-inf")
-    best_refs: list[int] = []
-    for cand in candidates:
-        heading = str(cand.get("heading") or "").strip()
-        for frag in _paper_guide_citation_lookup_fragments(str(cand.get("text") or "")):
-            refs = _extract_inline_reference_numbers(frag, max_candidates=6)
-            if not refs:
-                continue
-            heading_norm = str(heading or "").strip()
-            is_reference_like = (
-                _paper_guide_text_matches_requested_section(heading_norm, "references")
-                or bool(re.match(r"(?i)^\s*\[\d{1,4}\]", frag))
-            )
-            score = _paper_guide_citation_lookup_signal_score(
+    targeted_candidates: list[dict[str, str]] = []
+    if src:
+        # Fallback pool: when grouped answer hits are off-target, add a small targeted scan.
+        try:
+            targeted_hits = _paper_guide_targeted_source_block_hits(
+                bound_source_path=src,
                 prompt=q,
-                heading=heading_norm,
-                text=frag,
-                inline_refs=refs,
-                explicit_ref_list_request=explicit_ref_list_request,
+                db_dir=db_dir,
+                limit=6,
+                citation_lookup_query_tokens=_paper_guide_citation_lookup_query_tokens,
+                citation_lookup_signal_score=_paper_guide_citation_lookup_signal_score,
+                resolve_support_slot_block=lambda **_kwargs: {},
             )
-            score += min(6.0, 2.0 * float(len(refs)))
-            if explicit_ref_list_request:
-                if is_reference_like:
-                    score += 6.0
-            else:
-                score += 6.0 if not is_reference_like else -8.0
-            if score > best_score:
-                best_score = score
-                best_fragment = frag
-                best_heading = heading
-                best_refs = refs
+        except Exception:
+            targeted_hits = []
+        for hit in list(targeted_hits or []):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta", {}) or {}
+            text = str(hit.get("text") or "").strip()
+            if not text:
+                continue
+            targeted_candidates.append(
+                {
+                    "text": text,
+                    "heading": str(meta.get("heading_path") or "").strip(),
+                }
+            )
+
+    focus_query_tokens = {
+        tok
+        for tok in _paper_guide_citation_lookup_query_tokens(q)
+        if len(str(tok or "").strip()) >= 6
+    }
+    if not focus_query_tokens:
+        focus_query_tokens = set(_paper_guide_citation_lookup_query_tokens(q))
+
+    def _best_from(candidate_rows: list[dict[str, str]]) -> dict:
+        best_fragment_local = ""
+        best_heading_local = ""
+        best_score_local = float("-inf")
+        best_refs_local: list[int] = []
+        best_focus_overlap = 0
+        for cand in list(candidate_rows or []):
+            heading = str(cand.get("heading") or "").strip()
+            for frag in _paper_guide_citation_lookup_fragments(str(cand.get("text") or "")):
+                refs = _extract_inline_reference_numbers(frag, max_candidates=6)
+                if not refs:
+                    continue
+                heading_norm = str(heading or "").strip()
+                is_reference_like = (
+                    _paper_guide_text_matches_requested_section(heading_norm, "references")
+                    or bool(re.match(r"(?i)^\s*\[\d{1,4}\]", frag))
+                )
+                score = _paper_guide_citation_lookup_signal_score(
+                    prompt=q,
+                    heading=heading_norm,
+                    text=frag,
+                    inline_refs=refs,
+                    explicit_ref_list_request=explicit_ref_list_request,
+                )
+                score += min(6.0, 2.0 * float(len(refs)))
+                if explicit_ref_list_request:
+                    if is_reference_like:
+                        score += 6.0
+                else:
+                    score += 6.0 if not is_reference_like else -8.0
+                focus_overlap = 0
+                if focus_query_tokens:
+                    low = str(frag or "").strip().lower()
+                    focus_overlap = sum(1 for tok in focus_query_tokens if tok and tok in low)
+                    score += min(8.0, 2.0 * float(focus_overlap))
+                if score > best_score_local:
+                    best_score_local = score
+                    best_fragment_local = frag
+                    best_heading_local = heading
+                    best_refs_local = refs
+                    best_focus_overlap = focus_overlap
+        return {
+            "fragment": best_fragment_local,
+            "heading": best_heading_local,
+            "score": float(best_score_local),
+            "refs": list(best_refs_local),
+            "focus_overlap": int(best_focus_overlap),
+        }
+
+    best_row = _best_from(candidates)
+    rescue_row = _best_from(targeted_candidates)
+    if str(rescue_row.get("fragment") or "").strip():
+        if not str(best_row.get("fragment") or "").strip():
+            best_row = rescue_row
+        else:
+            base_score = float(best_row.get("score") or 0.0)
+            rescue_score = float(rescue_row.get("score") or 0.0)
+            base_focus = int(best_row.get("focus_overlap") or 0)
+            rescue_focus = int(rescue_row.get("focus_overlap") or 0)
+            # Prefer rescue snippets when they clearly carry more query-specific focus terms.
+            if (rescue_focus > base_focus and rescue_score >= (base_score - 1.5)) or (
+                base_score < 8.0 and rescue_score > base_score
+            ):
+                best_row = rescue_row
+    best_fragment = str(best_row.get("fragment") or "").strip()
+    best_heading = str(best_row.get("heading") or "").strip()
+    best_score = float(best_row.get("score") or float("-inf"))
+    best_refs = [int(n) for n in list(best_row.get("refs") or []) if int(n) > 0]
     if (not best_fragment) or (not best_refs) or best_score < 6.0:
         return ""
     local_refs = _select_paper_guide_local_citation_lookup_refs(best_fragment, prompt=q, max_candidates=4)

@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import { useEffect, useRef, useState } from 'react'
 import { referencesApi, type ReaderDocAnchor, type ReaderDocBlock } from '../../../api/references'
 

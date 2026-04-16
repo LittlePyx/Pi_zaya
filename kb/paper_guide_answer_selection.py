@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 
-from kb.paper_guide_grounding_runtime import _extract_inline_reference_numbers
+from kb.paper_guide.grounder import _extract_inline_reference_numbers
 from kb.paper_guide_prompting import (
     _paper_guide_box_header_number,
     _paper_guide_prompt_family,
@@ -97,6 +97,23 @@ def _looks_like_title_only_hit(hit: dict) -> bool:
     return False
 
 
+def _looks_like_heading_only_hit(hit: dict) -> bool:
+    if not isinstance(hit, dict):
+        return False
+    meta = hit.get("meta", {}) or {}
+    kind = str(meta.get("kind") or "").strip().lower()
+    if kind == "heading":
+        return True
+    text = str(hit.get("text") or "").strip()
+    if not text:
+        return False
+    focus_heading = _paper_guide_focus_heading(hit)
+    heading_leaf = str((focus_heading or str(meta.get("heading_path") or "").strip()).split(" / ")[-1] or "").strip()
+    if not heading_leaf:
+        return False
+    return normalize_match_text(text) == normalize_match_text(heading_leaf)
+
+
 def _paper_guide_answer_hit_score(hit: dict, *, prompt: str) -> float:
     if not isinstance(hit, dict):
         return float("-inf")
@@ -127,6 +144,8 @@ def _paper_guide_answer_hit_score(hit: dict, *, prompt: str) -> float:
 
     if _looks_like_title_only_hit(hit):
         score -= 18.0
+    if _looks_like_heading_only_hit(hit):
+        score -= 14.0
     if _paper_guide_box_header_number(text) > 0 and len(text.strip()) <= 96:
         score -= 12.0
     if _is_generic_heading_path(heading_path):
@@ -253,6 +272,8 @@ def _paper_guide_answer_hit_score(hit: dict, *, prompt: str) -> float:
             score += 3.4
         if any(token in text_norm for token in ("not stated", "good agreement", "remaining difference", "could be improved", "quantified")):
             score += 2.0
+        if str(meta.get("kind") or "").strip().lower() in {"paragraph", "list_item", "blockquote"}:
+            score += 1.8
 
     if _CLAIM_METHOD_HINT_RE.search(prompt):
         if any(token in heading_norm for token in _METHOD_HEADING_HINTS):

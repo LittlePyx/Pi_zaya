@@ -104,7 +104,7 @@ function mergeLatestMessagePage(
 
 async function getMessagesPageWithFallback(
   convId: string,
-  opts?: { limit?: number; beforeId?: number | null },
+  opts?: { limit?: number; beforeId?: number | null; renderPacketOnly?: boolean },
 ): Promise<{ page: MessagePage; usedFallback: boolean }> {
   try {
     const page = await chatApi.getMessagesPage(convId, opts)
@@ -114,7 +114,7 @@ async function getMessagesPageWithFallback(
     if (beforeId > 0) {
       throw error
     }
-    const messages = await chatApi.getMessages(convId)
+    const messages = await chatApi.getMessages(convId, { renderPacketOnly: opts?.renderPacketOnly })
     return {
       page: buildFullMessagePage(Array.isArray(messages) ? messages : []),
       usedFallback: true,
@@ -211,7 +211,18 @@ function stopUploadPolling() {
 
 function needsRefsEnrichment(refs: Record<string, unknown>) {
   for (const value of Object.values(refs || {})) {
-    const rec = value as { hits?: Array<{ ui_meta?: Record<string, unknown>; meta?: Record<string, unknown> }> }
+    const rec = value as {
+      hits?: Array<{ ui_meta?: Record<string, unknown>; meta?: Record<string, unknown> }>
+      enrichment_pending?: boolean
+      payload_mode?: string
+    }
+    if (Boolean(rec?.enrichment_pending)) {
+      return true
+    }
+    const payloadMode = String(rec?.payload_mode || '').trim().toLowerCase()
+    if (payloadMode === 'fast' || payloadMode === 'pending') {
+      return true
+    }
     const hits = Array.isArray(rec?.hits) ? rec.hits : []
     for (const hit of hits) {
       const meta = hit?.meta || {}
@@ -344,12 +355,35 @@ async function loadRefsForConversation(
   } catch {
     if (getActiveConvId() === convId) {
       set((state) => ({
-        refs: {},
+        refs: state.activeConvId === convId
+          ? (
+            state.refs && typeof state.refs === 'object'
+              ? state.refs
+              : (
+                state.conversationCacheById[convId]?.refs
+                && typeof state.conversationCacheById[convId]?.refs === 'object'
+              )
+                ? state.conversationCacheById[convId]?.refs
+                : {}
+          )
+          : {},
         conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
-          refs: {},
+          refs: state.activeConvId === convId
+            ? (
+              state.refs && typeof state.refs === 'object'
+                ? state.refs
+                : (
+                  state.conversationCacheById[convId]?.refs
+                  && typeof state.conversationCacheById[convId]?.refs === 'object'
+                )
+                  ? state.conversationCacheById[convId]?.refs
+                  : {}
+            )
+            : {},
           cachedAt: Date.now(),
         }),
       }))
+      void startRefsPolling(convId, set)
     }
   }
 }
@@ -694,7 +728,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       const [conv, pageResult] = await Promise.all([
         cachedConv ? Promise.resolve(cachedConv) : chatApi.getConversation(convId).catch(() => null),
-        getMessagesPageWithFallback(convId, { limit: MESSAGE_PAGE_SIZE }),
+        getMessagesPageWithFallback(convId, {
+          limit: MESSAGE_PAGE_SIZE,
+          renderPacketOnly: cachedConv?.mode === 'paper_guide' ? true : undefined,
+        }),
       ])
       pushConversationOpenPhase({
         ts: Date.now(),
@@ -951,6 +988,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const page = await chatApi.getMessagesPage(convId, {
         limit: MESSAGE_PAGE_SIZE,
         beforeId,
+        renderPacketOnly: state.activeConversation?.mode === 'paper_guide' ? true : undefined,
       })
       if (get().activeConvId !== convId) return
       const olderMessages = Array.isArray(page?.messages) ? page.messages : []
@@ -1187,7 +1225,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
               },
             })
             if (data.done) {
-              const { page } = await getMessagesPageWithFallback(convId!, { limit: MESSAGE_PAGE_SIZE })
+              const { page } = await getMessagesPageWithFallback(convId!, {
+                limit: MESSAGE_PAGE_SIZE,
+                renderPacketOnly: get().activeConversation?.mode === 'paper_guide' ? true : undefined,
+              })
               set((state) => {
                 const merged = mergeLatestMessagePage(
                   state.messages,

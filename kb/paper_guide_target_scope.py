@@ -73,7 +73,7 @@ def _normalize_paper_guide_target_scope(scope: dict | None) -> dict:
         boxes.append(value)
 
     try:
-        target_figure_num = int(raw.get("target_figure_num") or 0)
+        target_figure_num = int(raw.get("target_figure_num") or raw.get("target_figure_number") or 0)
     except Exception:
         target_figure_num = 0
 

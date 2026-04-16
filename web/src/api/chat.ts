@@ -27,7 +27,7 @@ export interface Message {
   content: string
   created_at: number
   attachments?: ChatImageAttachment[]
-  meta?: Record<string, unknown>
+  meta?: MessageMeta
   provenance?: MessageProvenance
   rendered_content?: string
   rendered_body?: string
@@ -37,6 +37,62 @@ export interface Message {
   copy_markdown?: string
   refs_user_msg_id?: number
   render_cache_key?: string
+}
+
+export interface MessageMeta {
+  provenance?: MessageProvenance
+  answer_quality?: Record<string, unknown>
+  paper_guide_contracts?: MessagePaperGuideContracts
+  render_cache?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface MessagePaperGuideContracts {
+  version?: number
+  intent?: Record<string, unknown>
+  prompt_context?: Record<string, unknown>
+  retrieval_bundle?: Record<string, unknown>
+  support_pack?: Record<string, unknown>
+  grounding_trace?: Array<Record<string, unknown>>
+  render_packet?: MessageRenderPacket
+  [key: string]: unknown
+}
+
+export interface MessageCitationDetail {
+  num?: number
+  anchor?: string
+  source_name?: string
+  source_path?: string
+  raw?: string
+  title?: string
+  authors?: string
+  venue?: string
+  year?: string
+  volume?: string
+  issue?: string
+  pages?: string
+  doi?: string
+  doi_url?: string
+  cite_fmt?: string
+  [key: string]: unknown
+}
+
+export interface MessageRenderPacket {
+  answer_markdown?: string
+  notice?: string
+  rendered_body?: string
+  rendered_content?: string
+  copy_markdown?: string
+  copy_text?: string
+  cite_details?: MessageCitationDetail[]
+  citation_validation?: Record<string, unknown>
+  locate_target?: MessageProvenanceLocateTarget
+  reader_open?: MessageProvenanceReaderOpen
+  segment_ids?: string[]
+  visible_segment_ids?: string[]
+  provenance_segment_count?: number
+  visible_segment_count?: number
+  [key: string]: unknown
 }
 
 export interface MessagePage {
@@ -55,6 +111,63 @@ export interface MessageProvenanceBlock {
   line_start?: number
   line_end?: number
   number?: number
+}
+
+export interface MessageProvenanceLocateTarget {
+  segmentId?: string
+  sourceSegmentId?: string
+  headingPath?: string
+  snippet?: string
+  highlightSnippet?: string
+  evidenceQuote?: string
+  anchorText?: string
+  hitLevel?: 'exact' | 'block' | 'heading' | 'none' | string
+  blockId?: string
+  anchorId?: string
+  anchorKind?: string
+  anchorNumber?: number
+  claimType?: string
+  locatePolicy?: string
+  locateSurfacePolicy?: string
+  snippetAliases?: string[]
+  relatedBlockIds?: string[]
+}
+
+export interface MessageProvenanceClaimGroup {
+  id?: string
+  kind?: string
+  leadText?: string
+  distance?: number
+}
+
+export interface MessageProvenanceReaderOpenCandidate {
+  headingPath?: string
+  snippet?: string
+  highlightSnippet?: string
+  anchorId?: string
+  blockId?: string
+  anchorKind?: string
+  anchorNumber?: number
+}
+
+export interface MessageProvenanceReaderOpen {
+  sourcePath?: string
+  sourceName?: string
+  headingPath?: string
+  snippet?: string
+  highlightSnippet?: string
+  anchorId?: string
+  blockId?: string
+  relatedBlockIds?: string[]
+  anchorKind?: string
+  anchorNumber?: number
+  strictLocate?: boolean
+  locateTarget?: MessageProvenanceLocateTarget
+  claimGroup?: MessageProvenanceClaimGroup
+  alternatives?: MessageProvenanceReaderOpenCandidate[]
+  visibleAlternatives?: MessageProvenanceReaderOpenCandidate[]
+  evidenceAlternatives?: MessageProvenanceReaderOpenCandidate[]
+  initialAltIndex?: number
 }
 
 export interface MessageProvenanceSegment {
@@ -79,6 +192,7 @@ export interface MessageProvenanceSegment {
   snippet_key?: string
   snippet_aliases?: string[]
   evidence_mode?: 'direct' | 'synthesis' | 'none' | string
+  hit_level?: 'exact' | 'block' | 'heading' | 'none' | string
   evidence_block_ids?: string[]
   primary_block_id?: string
   primary_anchor_id?: string
@@ -92,7 +206,11 @@ export interface MessageProvenanceSegment {
   anchor_kind?: 'quote' | 'blockquote' | 'equation' | 'inline_formula' | 'figure' | 'sentence' | string
   anchor_text?: string
   equation_number?: number
+  support_slot_figure_number?: number
+  support_slot_panel_letters?: string[]
   strict_identity_missing_reasons?: string[]
+  locate_target?: MessageProvenanceLocateTarget
+  reader_open?: MessageProvenanceReaderOpen
 }
 
 export interface MessageProvenance {
@@ -181,12 +299,20 @@ export const chatApi = {
     }),
   deleteConversation: (id: string) =>
     api.delete(`/api/conversations/${id}`),
-  getMessages: (convId: string) =>
-    api.get<Message[]>(`/api/conversations/${convId}/messages`),
-  getMessagesPage: (convId: string, opts?: { limit?: number; beforeId?: number | null }) =>
+  getMessages: (convId: string, opts?: { renderPacketOnly?: boolean }) =>
+    api.get<Message[]>(
+      `/api/conversations/${convId}/messages`
+      + `${typeof opts?.renderPacketOnly === 'boolean' ? `?render_packet_only=${opts.renderPacketOnly ? 1 : 0}` : ''}`,
+    ),
+  getMessagesPage: (convId: string, opts?: { limit?: number; beforeId?: number | null; renderPacketOnly?: boolean }) =>
     api.get<MessagePage>(
-      `/api/conversations/${convId}/messages_page?limit=${Math.max(1, Math.floor(Number(opts?.limit || 24)))}`
-      + `${Number.isFinite(Number(opts?.beforeId)) && Number(opts?.beforeId) > 0 ? `&before_id=${Math.floor(Number(opts?.beforeId))}` : ''}`,
+      (() => {
+        const limit = Math.max(1, Math.floor(Number(opts?.limit || 24)))
+        const beforeId = Number(opts?.beforeId || 0)
+        const beforePart = Number.isFinite(beforeId) && beforeId > 0 ? `&before_id=${Math.floor(beforeId)}` : ''
+        const packetPart = typeof opts?.renderPacketOnly === 'boolean' ? `&render_packet_only=${opts.renderPacketOnly ? 1 : 0}` : ''
+        return `/api/conversations/${convId}/messages_page?limit=${limit}${beforePart}${packetPart}`
+      })(),
     ),
   appendMessage: (convId: string, role: string, content: string) =>
     api.post<{ id: number }>(`/api/conversations/${convId}/messages`, { role, content }),

@@ -68,6 +68,16 @@ _PAPER_GUIDE_FOCUS_PHRASE_HINTS = (
     "applied back",
     "central pixel image",
 )
+_PAPER_GUIDE_COMPONENT_ROLE_PROMPT_RE = re.compile(
+    r"(?i)("
+    r"\bwhat\s+(?:is|are)\b.{0,80}\bdoing here\b|"
+    r"\bwhat does\b.{0,80}\bdo here\b|"
+    r"\bwhat role\b.{0,80}\bplay\b|"
+    r"\brole do(?:es)?\b.{0,80}\bplay\b|"
+    r"\bin simple terms\b|"
+    r"\bplain language\b"
+    r")"
+)
 
 
 def _trim_paper_guide_prompt_field(text: str, *, max_chars: int = 160) -> str:
@@ -251,6 +261,81 @@ def _paper_guide_abstract_requests_translation(prompt: str) -> bool:
     )
 
 
+_PAPER_GUIDE_ABSTRACT_ANCHOR_REQUEST_RE = re.compile(
+    r"(?i)("
+    r"\banchor\b|\blocate\b|\bjump(?:\s+target)?\b|"
+    r"exact\s+supporting\s+sentence(?:s)?|exact\s+sentence(?:s)?|point\s+me\s+to|"
+    r"verbatim\s+sentence|full\s+sentence|"
+    r"\u951a\u70b9|\u5b9a\u4f4d|\u8df3\u8f6c|\u539f\u53e5|\u5b8c\u6574\u53e5\u5b50|\u53ef\u5b9a\u4f4d|\u652f\u6301\u53e5"
+    r")"
+)
+
+
+def _paper_guide_abstract_requests_anchor(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    return bool(_PAPER_GUIDE_ABSTRACT_ANCHOR_REQUEST_RE.search(q))
+
+
+def _split_paper_guide_abstract_sentences(text: str) -> list[str]:
+    src = re.sub(r"\s+", " ", str(text or "").replace("\r\n", "\n").replace("\r", "\n")).strip()
+    if not src:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])|(?<=[.!?])\s+", src)
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in parts:
+        sent = re.sub(r"\s+", " ", str(raw or "").strip()).strip(" \"'")
+        if len(sent) < 24:
+            continue
+        key = normalize_match_text(sent)
+        if (not key) or (key in seen):
+            continue
+        seen.add(key)
+        out.append(sent)
+    if not out and src:
+        return [src]
+    return out
+
+
+def _select_paper_guide_abstract_anchor_sentence(abstract_text: str, *, prompt: str) -> str:
+    candidates = _split_paper_guide_abstract_sentences(abstract_text)
+    if not candidates:
+        return ""
+    query_tokens = set(_paper_guide_cue_tokens(prompt))
+    query_tokens = {
+        tok
+        for tok in query_tokens
+        if tok not in {"abstract", "sentence", "supporting", "exact", "stated", "where", "paper", "authors"}
+    }
+    best = candidates[0]
+    best_score = float("-inf")
+    for idx, sent in enumerate(candidates):
+        low = sent.lower()
+        sent_tokens = set(_paper_guide_cue_tokens(sent))
+        overlap = sent_tokens.intersection(query_tokens) if query_tokens else set()
+        score = 0.0
+        score += min(8.0, 2.0 * float(len(overlap)))
+        if "snapshot compressive imaging" in low:
+            score += 3.5
+        if re.search(r"\bsci\b", low):
+            score += 1.8
+        if re.search(r"\bnerf\b", low):
+            score += 1.4
+        if "compressed image" in low:
+            score += 1.2
+        if "cost-effective" in low:
+            score += 0.4
+        # Prefer earlier abstract sentences and avoid very long anchors.
+        score -= 0.2 * float(idx)
+        score -= min(2.5, 0.004 * float(len(sent)))
+        if score > best_score:
+            best_score = score
+            best = sent
+    return str(best or "").strip()
+
+
 def _build_paper_guide_direct_abstract_answer(
     *,
     prompt: str,
@@ -267,6 +352,13 @@ def _build_paper_guide_direct_abstract_answer(
     prefer_zh = bool(prefer_zh_locale(prompt, prompt)) if callable(prefer_zh_locale) else False
     text_title = "摘要原文" if prefer_zh else "Abstract text"
     answer = f"{text_title}:\n{abstract_text}".strip()
+    if _paper_guide_abstract_requests_anchor(prompt):
+        anchor_sentence = _select_paper_guide_abstract_anchor_sentence(
+            abstract_text,
+            prompt=prompt,
+        )
+        if anchor_sentence:
+            answer = f"{answer}\n\nAnchor sentence for locate jump:\n> {anchor_sentence}"
     if not _paper_guide_abstract_requests_translation(prompt):
         return answer
     trans_title = "中文翻译" if prefer_zh else "Chinese translation"
@@ -314,7 +406,7 @@ def _extract_bound_paper_method_focus(
         blocks = []
 
     term_lows = [str(term or "").strip().lower() for term in list(focus_terms or []) if str(term or "").strip()]
-    scored: list[tuple[float, str]] = []
+    scored: list[dict[str, object]] = []
     for block in blocks or []:
         if not isinstance(block, dict):
             continue
@@ -337,12 +429,33 @@ def _extract_bound_paper_method_focus(
         score = 0.0
         if "materials and methods" in heading or heading.startswith("methods"):
             score += 3.5
+        elif any(token in heading for token in ("data analysis", "adaptive pixel-reassignment", "radial variance transform")):
+            score += 3.0
         elif any(token in heading for token in _PAPER_GUIDE_METHOD_HEADING_TOKENS):
             score += 1.2
+        heading_focus_hits = 0
+        exact_heading_focus_hits = 0
+        for term in term_lows:
+            aliases = _paper_guide_focus_term_aliases(term)
+            if not aliases:
+                continue
+            if any(alias in heading for alias in aliases):
+                heading_focus_hits += 1
+                if any(
+                    re.search(rf"\b{re.escape(alias)}\b", heading, flags=re.IGNORECASE)
+                    for alias in aliases
+                ):
+                    exact_heading_focus_hits += 1
+        if heading_focus_hits:
+            score += 2.0 * float(heading_focus_hits)
+            if len(term_lows) == 1:
+                score += 2.8 * float(exact_heading_focus_hits or heading_focus_hits)
         if "results" in heading and ("methods" not in heading):
             score -= 1.4
         if has_focus_term:
             score += 1.8 + min(4.0, 1.1 * float(len(matched_terms)))
+            if len(matched_terms) >= 2:
+                score += 2.8
         if term_lows and any(term in heading for term in term_lows):
             score += 1.5
         if has_strong_detail:
@@ -367,13 +480,68 @@ def _extract_bound_paper_method_focus(
             score += 1.6
         if "radial variance transform" in text_norm or re.search(r"\brvt\b", text_norm):
             score += 0.8
+        detail_strength = _paper_guide_method_detail_strength(text)
+        score += min(4.0, 0.45 * max(0.0, float(detail_strength)))
         snippet = _trim_paper_guide_prompt_snippet(text, max_chars=520)
         if snippet:
             score -= min(len(snippet), 520) / 4000.0
-            scored.append((score, snippet))
+            scored.append(
+                {
+                    "score": score,
+                    "snippet": snippet,
+                    "matched_terms": list(matched_terms),
+                    "detail_strength": float(detail_strength),
+                }
+            )
     if scored:
-        scored.sort(key=lambda item: (-float(item[0]), len(item[1])))
-        return scored[0][1]
+        scored.sort(
+            key=lambda item: (
+                -float(item.get("score") or 0.0),
+                -len(list(item.get("matched_terms") or [])),
+                -float(item.get("detail_strength") or 0.0),
+                len(str(item.get("snippet") or "")),
+            )
+        )
+        if len(term_lows) >= 2:
+            wanted = {term for term in term_lows if term}
+            chosen: list[dict[str, object]] = []
+            covered: set[str] = set()
+            for item in scored:
+                item_terms = {
+                    str(term or "").strip().lower()
+                    for term in list(item.get("matched_terms") or [])
+                    if str(term or "").strip()
+                }
+                if item_terms and not item_terms.issubset(covered):
+                    chosen.append(item)
+                    covered.update(item_terms)
+                if len(chosen) >= 2 or covered >= wanted:
+                    break
+            if not chosen:
+                chosen = [scored[0]]
+            elif len(chosen) == 1:
+                for item in scored:
+                    if str(item.get("snippet") or "") == str(chosen[0].get("snippet") or ""):
+                        continue
+                    item_terms = {
+                        str(term or "").strip().lower()
+                        for term in list(item.get("matched_terms") or [])
+                        if str(term or "").strip()
+                    }
+                    if (item_terms - covered) or float(item.get("detail_strength") or 0.0) >= 3.2:
+                        chosen.append(item)
+                        break
+            parts: list[str] = []
+            seen_snippets: set[str] = set()
+            for item in chosen:
+                snippet = str(item.get("snippet") or "").strip()
+                if (not snippet) or (snippet in seen_snippets):
+                    continue
+                seen_snippets.add(snippet)
+                parts.append(snippet)
+            if parts:
+                return "\n\n".join(parts[:2]).strip()
+        return str(scored[0].get("snippet") or "").strip()
 
     try:
         raw_text = md_path.read_text(encoding="utf-8", errors="ignore")
@@ -547,12 +715,18 @@ def _extract_paper_guide_method_detail_excerpt(excerpt: str, *, focus_terms: lis
         score = 0.0
         if terms and has_focus_term:
             score += 2.4 + min(4.2, 1.15 * float(len(matched_terms)))
+            if any(low.startswith(term) for term in matched_terms):
+                score += 1.35
         if terms and (not has_focus_term) and (not has_strong_detail):
             continue
         if has_strong_detail:
             score += 2.5
         if _PAPER_GUIDE_METHOD_DETAIL_RE.search(frag):
             score += 1.0
+        if "phase correlation" in low:
+            score += 1.35
+        if "image registration" in low:
+            score += 0.95
         if re.search(r"\b(?:applied back|original iism dataset|shift vectors?)\b", low, flags=re.IGNORECASE):
             score += 2.4
         if re.search(r"\bappl(?:ied|y)\b", low, flags=re.IGNORECASE) and "original iism" in low:
@@ -567,6 +741,219 @@ def _extract_paper_guide_method_detail_excerpt(excerpt: str, *, focus_terms: lis
     if best_score > float("-inf"):
         return best
     return _trim_paper_guide_prompt_snippet(text, max_chars=320)
+
+
+def _paper_guide_prompt_requests_component_role_explanation(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    if not _PAPER_GUIDE_COMPONENT_ROLE_PROMPT_RE.search(q):
+        return False
+    return bool(_extract_paper_guide_method_focus_terms(q))
+
+
+def _paper_guide_focus_term_aliases(term: str) -> list[str]:
+    src = str(term or "").strip()
+    if not src:
+        return []
+    low = src.lower()
+    aliases = [low]
+    if low == "rvt":
+        aliases.append("radial variance transform")
+    elif low == "apr":
+        aliases.extend(["adaptive pixel-reassignment", "adaptive pixel reassignment"])
+    return aliases
+
+
+def _build_paper_guide_overview_role_lines(excerpt: str, *, focus_terms: list[str] | None = None) -> list[str]:
+    text = re.sub(r"\s+", " ", str(excerpt or "").strip())
+    if not text:
+        return []
+    role_lines: list[str] = []
+    seen: set[str] = set()
+    focus_list = [str(term or "").strip() for term in list(focus_terms or []) if str(term or "").strip()]
+    low_text = text.lower()
+    for term in focus_list:
+        aliases = _paper_guide_focus_term_aliases(term)
+        if not aliases or not any(alias in low_text for alias in aliases):
+            continue
+        label = term.upper() if len(term) <= 5 else term
+        line = ""
+        if "rvt" in aliases and (
+            "intensity-only map" in low_text
+            or "degree of radial symmetry" in low_text
+            or "radial symmetry" in low_text
+        ):
+            if "intensity-only map" in low_text:
+                line = (
+                    f"{label} turns the interferometric image into an intensity-only map that reflects local symmetry."
+                )
+            else:
+                line = (
+                    f"{label} converts each pinhole image into a radial-symmetry map so the registration step is more robust to interferometric phase."
+                )
+        elif "apr" in aliases and "phase correlation" in low_text:
+            if "shift vectors" in low_text and (
+                "applied back" in low_text
+                or "applied to the original" in low_text
+                or "prior to summation" in low_text
+                or "aligned iism pinhole stack" in low_text
+            ):
+                line = (
+                    f"{label} uses phase-correlation registration to estimate shift vectors, "
+                    "then applies those shifts back to the original iISM data before summation."
+                )
+            else:
+                line = f"{label} uses phase-correlation registration to estimate alignment shifts."
+        if not line:
+            best = ""
+            best_score = float("-inf")
+            for frag in re.split(r"(?<=[.;:])\s+|\n+", text):
+                clean = re.sub(r"\s+", " ", str(frag or "").strip()).strip(" -:;,.")
+                if len(clean) < 24:
+                    continue
+                low = clean.lower()
+                if not any(alias in low for alias in aliases):
+                    continue
+                score = 0.0
+                if "converts" in low and "into" in low:
+                    score += 3.0
+                if "phase correlation" in low:
+                    score += 3.0
+                if "shift vectors" in low:
+                    score += 2.0
+                if "applied back" in low or "applied to the original" in low or "prior to summation" in low:
+                    score += 1.8
+                if "intensity-only map" in low or "local degree of symmetry" in low:
+                    score += 2.2
+                if "used for subsequent" in low or "enabling" in low:
+                    score += 0.8
+                score -= min(1.2, 0.003 * float(len(clean)))
+                if score > best_score:
+                    best = clean
+                    best_score = score
+            if best:
+                best = re.sub(r"\[(?:\d{1,4}(?:\s*(?:[-,])\s*\d{1,4})*)\]", "", best).strip(" -:;,.")
+                line = f"{label}: {best}"
+        key = str(line or "").strip().lower()
+        if (not key) or (key in seen):
+            continue
+        seen.add(key)
+        role_lines.append(line)
+    return role_lines
+
+
+def _paper_guide_focus_snippet_supports_role(snippet: str, term: str) -> bool:
+    low = str(snippet or "").strip().lower()
+    if not low:
+        return False
+    aliases = _paper_guide_focus_term_aliases(term)
+    if not any(alias in low for alias in aliases):
+        return False
+    term_low = str(term or "").strip().lower()
+    if term_low == "rvt":
+        return any(token in low for token in ("intensity-only map", "radial symmetry", "interferogram", "phase modulations"))
+    if term_low == "apr":
+        return any(
+            token in low
+            for token in ("phase correlation", "shift vectors", "image registration", "applied back", "prior to summation")
+        )
+    return bool(_PAPER_GUIDE_METHOD_DETAIL_RE.search(snippet))
+
+
+def _extract_bound_paper_role_focus_section(
+    source_path: str,
+    *,
+    db_dir: Path | None,
+    focus_term: str,
+) -> str:
+    src = str(source_path or "").strip()
+    term = str(focus_term or "").strip()
+    if (not src) or (not term):
+        return ""
+    md_path = _resolve_paper_guide_md_path(src, db_dir=db_dir)
+    if not isinstance(md_path, Path) or (not md_path.exists()):
+        return ""
+    try:
+        raw_text = md_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+    term_low = term.lower()
+    best = ""
+    best_score = float("-inf")
+    for alias in _paper_guide_focus_term_aliases(term):
+        pattern = (
+            rf"(?ims)^(?P<heading>\s*#{{1,6}}\s*[^\n]*{re.escape(alias)}[^\n]*$)"
+            rf"\s*(?P<body>.+?)(?=^\s*#{{1,6}}\s+|\Z)"
+        )
+        for match in re.finditer(pattern, raw_text):
+            heading = str(match.group("heading") or "").strip().lower()
+            body = _trim_paper_guide_prompt_snippet(str(match.group("body") or "").strip(), max_chars=720)
+            if not body:
+                continue
+            low = body.lower()
+            score = _paper_guide_method_detail_strength(body)
+            if "data analysis" in heading:
+                score += 1.5
+            if term_low == "rvt":
+                if "intensity-only map" in low:
+                    score += 4.0
+                if "degree of radial symmetry" in low or "radial symmetry" in low:
+                    score += 2.4
+                if "interferometric phase" in low:
+                    score += 1.6
+            elif term_low == "apr":
+                if "phase correlation" in low:
+                    score += 4.0
+                if "shift vectors" in low:
+                    score += 2.6
+                if "image registration" in low:
+                    score += 2.0
+                if "original iism" in low or "prior to summation" in low:
+                    score += 1.4
+            if score > best_score:
+                best = body
+                best_score = score
+    return best
+
+
+def _extract_bound_paper_component_role_focus(
+    source_path: str,
+    *,
+    db_dir: Path | None,
+    focus_terms: list[str] | None = None,
+    extract_bound_paper_method_focus: Callable[..., str] | None = None,
+) -> str:
+    extractor = extract_bound_paper_method_focus or _extract_bound_paper_method_focus
+    terms = [str(term or "").strip() for term in list(focus_terms or []) if str(term or "").strip()]
+    if not terms:
+        return ""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for term in terms[:4]:
+        try:
+            snippet = str(extractor(source_path, db_dir=db_dir, focus_terms=[term]) or "").strip()
+        except Exception:
+            snippet = ""
+        if not _paper_guide_focus_snippet_supports_role(snippet, term):
+            fallback = _extract_bound_paper_role_focus_section(
+                source_path,
+                db_dir=db_dir,
+                focus_term=term,
+            )
+            if fallback:
+                snippet = fallback
+        if (not snippet) or (snippet in seen):
+            continue
+        seen.add(snippet)
+        parts.append(snippet)
+    try:
+        combined = str(extractor(source_path, db_dir=db_dir, focus_terms=terms) or "").strip()
+    except Exception:
+        combined = ""
+    if combined and combined not in seen and len(parts) < max(1, min(2, len(terms))):
+        parts.append(combined)
+    return "\n\n".join(parts[:4]).strip()
 
 
 def _extract_paper_guide_method_detail_signals(text: str, *, max_signals: int = 6) -> list[str]:
@@ -654,12 +1041,67 @@ def _paper_guide_answer_has_not_stated_shell(text: str) -> bool:
     src = str(text or "").strip()
     if not src:
         return False
+    src = re.sub(r"[*_`]+", "", src)
     return bool(
         re.search(
-            r"(?i)\b(?:not stated|does not state|does not explicitly state|does not specify|does not mention|is not stated|cannot be determined from the retrieved|no part of the provided excerpts describes)\b",
+            r"(?i)\b(?:not stated|does not state|does not explicitly state|does not specify|does not mention|"
+            r"does not explain|not explained|not described|not mentioned at all|does not appear|not found|"
+            r"not referenced|is not stated|cannot be determined from the retrieved|"
+            r"no part of the provided excerpts describes)\b",
             src,
         )
     )
+
+
+def _drop_paper_guide_negative_term_lines(text: str, *, focus_terms: list[str]) -> str:
+    src = str(text or "").strip()
+    if (not src) or (not focus_terms):
+        return src
+    neg_re = re.compile(
+        r"(?i)\b(?:not stated|does not state|does not explicitly state|does not specify|"
+        r"does not mention|is not stated|cannot be determined from the retrieved|"
+        r"not mentioned at all|not present|does not appear|not found|not referenced)\b"
+    )
+    term_lows = [str(term or "").strip().lower() for term in list(focus_terms or []) if str(term or "").strip()]
+    if not term_lows:
+        return src
+    kept: list[str] = []
+    removed = False
+    for raw_line in src.splitlines():
+        line = str(raw_line or "")
+        low = line.lower()
+        term_hit = any(term in low for term in term_lows)
+        generic_missing = bool(
+            re.search(r"\b(?:not|no)\b", low)
+            and any(
+                token in low
+                for token in (
+                    "mention",
+                    "stated",
+                    "state",
+                    "specify",
+                    "specified",
+                    "explain",
+                    "explained",
+                    "describe",
+                    "described",
+                    "reference",
+                    "referenced",
+                    "appear",
+                    "appears",
+                    "found",
+                )
+            )
+        )
+        if term_hit and (neg_re.search(low) or generic_missing):
+            removed = True
+            continue
+        kept.append(line)
+    if not removed:
+        return src
+    out = "\n".join(kept)
+    out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out
 
 
 def _extract_caption_panel_letters(text: str) -> set[str]:
@@ -687,7 +1129,7 @@ def _extract_caption_panel_letters(text: str) -> set[str]:
         )
     for m in re.finditer(r"\(([a-g](?:\s*[/,&-]\s*[a-g])*)\)", s, flags=re.IGNORECASE):
         letters.update(ch.lower() for ch in re.findall(r"[a-g]", str(m.group(1) or ""), flags=re.IGNORECASE))
-    for m in re.finditer(r"(?:^|[.;:]\s*)([a-g])\s+(?=[A-Z])", s, flags=re.IGNORECASE | re.MULTILINE):
+    for m in re.finditer(r"(?:^|[.;:]\s*)([A-Ga-g])\s+(?=[A-Z])", s, flags=re.MULTILINE):
         letters.add(str(m.group(1) or "").lower())
     for m in re.finditer(r"(?:^|[.;:]\s*)([a-z])\s*,", s, flags=re.IGNORECASE | re.MULTILINE):
         letters.add(str(m.group(1) or "").lower())
@@ -701,9 +1143,9 @@ def _extract_caption_panel_clauses(text: str) -> list[tuple[str, str]]:
     clauses: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for match in re.finditer(
-        r"(?:^|(?<=[.;:]))\s*([a-g])\s+(.+?)(?=(?:[.;:]\s*[a-g]\s+)|$)",
+        r"(?:^|(?<=[.;:]))\s*([A-Ga-g])\s+(?=[A-Z])(.+?)(?=(?:[.;:]\s*[A-Ga-g]\s+(?=[A-Z]))|$)",
         src,
-        flags=re.IGNORECASE | re.DOTALL,
+        flags=re.DOTALL,
     ):
         letter = str(match.group(1) or "").strip().lower()
         body = re.sub(r"\s+", " ", str(match.group(2) or "")).strip(" -:;,.")
@@ -841,6 +1283,7 @@ def _build_paper_guide_special_focus_block(
 ) -> str:
     family = str(prompt_family or "").strip().lower() or _paper_guide_prompt_family(prompt)
     q = str(prompt or "").strip()
+    role_explanation_requested = _paper_guide_prompt_requests_component_role_explanation(q)
     source_resolver = hit_source_path or (lambda hit: str((((hit or {}).get("meta") or {}).get("source_path") or "")).strip())
     figure_number_resolver = requested_figure_number or (lambda _prompt, _hits: _extract_figure_number(_prompt))
     ref_extractor = extract_inline_reference_numbers or (lambda _text: [])
@@ -911,8 +1354,23 @@ def _build_paper_guide_special_focus_block(
                 "- If the span already contains explicit refs, do not answer 'not stated'.\n"
                 f"- Focus snippet:\n{best_snippet}"
             )
+    focus_terms = _extract_paper_guide_method_focus_terms(q)
+    if family in {"overview", "method"} and role_explanation_requested and len(focus_terms) >= 2:
+        snippet = _extract_bound_paper_component_role_focus(
+            resolved_source_path,
+            db_dir=db_dir,
+            focus_terms=focus_terms,
+            extract_bound_paper_method_focus=bound_method_focus,
+        )
+        if snippet:
+            return (
+                "Paper-guide overview role focus:\n"
+                "- The user is asking what named method components are doing in the pipeline, in simple terms.\n"
+                "- Explain each named component's role in plain language, grounded in this snippet.\n"
+                "- If the snippet already explains the role, do not answer 'not stated'.\n"
+                f"- Focus snippet:\n{snippet}"
+            )
     if family == "method":
-        focus_terms = _extract_paper_guide_method_focus_terms(q)
         focus_requested = bool(
             focus_terms
             or re.search(r"\b(?:especially|specifically|particularly)\b", q, flags=re.IGNORECASE)
@@ -974,6 +1432,22 @@ def _build_paper_guide_special_focus_block(
                 "- Keep algorithm, transform, registration, and pipeline names exact when they appear in the snippet.\n"
                 f"- Focus snippet:\n{best_snippet}"
             )
+    if family == "overview" and role_explanation_requested:
+        if focus_terms:
+            snippet = _extract_bound_paper_component_role_focus(
+                resolved_source_path,
+                db_dir=db_dir,
+                focus_terms=focus_terms,
+                extract_bound_paper_method_focus=bound_method_focus,
+            )
+            if snippet:
+                return (
+                    "Paper-guide overview role focus:\n"
+                    "- The user is asking what named method components are doing in the pipeline, in simple terms.\n"
+                    "- Explain each named component's role in plain language, grounded in this snippet.\n"
+                    "- If the snippet already explains the role, do not answer 'not stated'.\n"
+                    f"- Focus snippet:\n{snippet}"
+                )
     if family == "figure_walkthrough":
         figure_num = figure_number_resolver(q, list(answer_hits or []))
         if figure_num > 0:
@@ -1210,6 +1684,36 @@ def _repair_paper_guide_focus_answer_generic(
             "The paper states this explicitly in the retrieved evidence: "
             + _trim_paper_guide_prompt_snippet(excerpt, max_chars=420)
         ).strip()
+    if family in {"overview", "method"} and _paper_guide_prompt_requests_component_role_explanation(prompt):
+        focus_terms = _extract_paper_guide_method_focus_terms(prompt)
+        src = str(source_path or "").strip()
+        bound_focus_extractor = extract_bound_paper_method_focus or _extract_bound_paper_method_focus
+        bound_excerpt = (
+            _extract_bound_paper_component_role_focus(
+                src,
+                db_dir=db_dir,
+                focus_terms=focus_terms,
+                extract_bound_paper_method_focus=bound_focus_extractor,
+            )
+            if src
+            else ""
+        )
+        combined_excerpt = excerpt
+        if bound_excerpt and bound_excerpt not in combined_excerpt:
+            combined_excerpt = "\n\n".join(part for part in (combined_excerpt, bound_excerpt) if part).strip()
+        role_lines = _build_paper_guide_overview_role_lines(
+            combined_excerpt,
+            focus_terms=focus_terms,
+        )
+        if role_lines and _paper_guide_answer_has_not_stated_shell(text) and (
+            family == "overview" or len(role_lines) >= 2
+        ):
+            return (
+                "From the retrieved method evidence, in simple terms:\n- "
+                + "\n- ".join(role_lines)
+            ).strip()
+        if family == "overview":
+            return text
     if family == "method":
         focus_terms = _extract_paper_guide_method_focus_terms(prompt)
         detail = _extract_paper_guide_method_detail_excerpt(
@@ -1230,6 +1734,16 @@ def _repair_paper_guide_focus_answer_generic(
             detail = bound_detail
         if not detail:
             return text
+        supported_focus_terms = [
+            term
+            for term in focus_terms
+            if str(term or "").strip() and str(term).lower() in f"{detail}\n{bound_detail}".lower()
+        ]
+        if supported_focus_terms and _paper_guide_answer_has_not_stated_shell(text):
+            text = _drop_paper_guide_negative_term_lines(
+                text,
+                focus_terms=supported_focus_terms,
+            )
         if (
             _paper_guide_prompt_requests_exact_method_support(prompt)
             and _paper_guide_answer_has_not_stated_shell(text)

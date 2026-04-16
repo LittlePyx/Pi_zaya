@@ -422,6 +422,65 @@ def _looks_like_body_prose_block(text: str, *, word_n: int = 0, verb_n: int = 0)
     return word_n >= 60 and stop_n >= 6 and verb_n >= 2 and sentence_punct_n >= 2
 
 
+def _looks_like_author_name_line(
+    text: str,
+    *,
+    page_index: int = 0,
+    y0: float = 0.0,
+    page_height: float = 0.0,
+) -> bool:
+    t = _normalize_text(text or "").strip()
+    if not t:
+        return False
+    if page_index > 1:
+        return False
+    if page_height > 0 and y0 > page_height * 0.34:
+        return False
+    if len(t) > 220:
+        return False
+    low = t.lower()
+    if re.search(r"[@]|https?://|doi\.org/|^doi:", low):
+        return False
+    if re.search(
+        r"\b(?:abstract|introduction|results|discussion|methods?|references|appendix|supplementary)\b",
+        low,
+    ):
+        return False
+    if re.search(r"[;:!?]", t):
+        return False
+
+    word_n = len(re.findall(r"[A-Za-z]{2,}", t))
+    if word_n < 4 or word_n > 30:
+        return False
+
+    lower_word_n = len(re.findall(r"\b[a-z]{2,}\b", t))
+    if lower_word_n > 2:
+        return False
+
+    verb_n = len(
+        re.findall(
+            r"\b(?:is|are|was|were|be|been|being|have|has|had|can|may|will|would|should|could|do|does|did|show|shows|shown|propose|proposed|present|presents|discuss|discusses|demonstrate|improve|use|used)\b",
+            low,
+        )
+    )
+    if verb_n >= 2:
+        return False
+
+    person_name_n = len(
+        re.findall(
+            r"\b[A-Z][a-z]{1,24}(?:-[A-Z][a-z]{1,24})?(?:\s+[A-Z]\.)?\s+[A-Z][a-z]{1,24}(?:-[A-Z][a-z]{1,24})?\b",
+            t,
+        )
+    )
+    if person_name_n < 2:
+        return False
+
+    has_author_marker = bool(re.search(r"[*†‡§]|,\s*\d|\b\d+(?:,\d+)?\b", t)) or t.count(",") >= 1
+    if not has_author_marker and person_name_n < 3:
+        return False
+    return True
+
+
 def _is_non_body_metadata_text(
     text: str,
     *,
@@ -465,6 +524,13 @@ def _is_non_body_metadata_text(
     has_page_counter = bool(re.search(r"\(\s*\d+\s+of\s+\d+\s*\)", low))
 
     if has_email or has_orcid:
+        return True
+    if _looks_like_author_name_line(
+        t,
+        page_index=page_index,
+        y0=y0,
+        page_height=page_height,
+    ):
         return True
     if has_page_counter:
         return True

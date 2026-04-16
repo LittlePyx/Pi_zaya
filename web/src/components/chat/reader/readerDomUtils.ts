@@ -250,12 +250,15 @@ export function compactLocateHintLabel(input: string): string {
     [/^Exact figure block match\.?$/i, 'Figure exact'],
     [/^Figure block matched\.?$/i, 'Figure block'],
     [/^Equation block matched\.?$/i, 'Equation block'],
+    [/^Exact evidence block not found\. Strict locate stopped before heading fallback\.?$/i, 'Strict stopped'],
+    [/^Exact evidence block not found\. Strict locate stopped before fuzzy fallback\.?$/i, 'Strict stopped'],
     [/^Inline formula match\.?$/i, 'Inline formula'],
     [/^Neighbor inline formula match\.?$/i, 'Neighbor formula'],
     [/^Explanation block matched, but inline formula was not found\.?$/i, 'Formula missing'],
     [/^Neighbor evidence block matched, but exact inline phrase was not found\.?$/i, 'Neighbor block'],
     [/^Evidence block matched, but exact inline phrase was not found\.?$/i, 'Block only'],
     [/^Evidence block matched\.?$/i, 'Evidence block'],
+    [/^Heading-level fallback matched\.?$/i, 'Heading match'],
     [/^Located by heading\.?$/i, 'Heading match'],
   ]
   for (const [pattern, label] of rules) {
@@ -540,7 +543,10 @@ export function rawOffsetsFromRange(container: HTMLElement, range: Range): { sta
 }
 
 export function supportsCustomHighlights(): boolean {
-  const scope = globalThis as { CSS?: { highlights?: { set?: Function; delete?: Function } }; Highlight?: new (...ranges: Range[]) => unknown }
+  const scope = globalThis as {
+    CSS?: { highlights?: { set?: (...args: unknown[]) => unknown; delete?: (...args: unknown[]) => unknown } }
+    Highlight?: new (...ranges: Range[]) => unknown
+  }
   return Boolean(scope.CSS?.highlights && typeof scope.Highlight === 'function')
 }
 

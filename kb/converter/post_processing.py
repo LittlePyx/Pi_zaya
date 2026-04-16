@@ -27,6 +27,7 @@ from .post_layout_repairs import (
     _repair_dangling_heading_continuations,
 )
 from .tables import normalize_markdown_table_block
+from .heuristics import _looks_like_author_name_line
 from .text_utils import _looks_like_body_figure_reference_sentence, _normalize_text
 
 
@@ -1016,12 +1017,138 @@ def _demote_formulaish_headings(md: str) -> str:
     return "\n".join(out)
 
 
+def _repair_common_ocr_word_splits(text: str) -> str:
+    if not text:
+        return ""
+    out = str(text)
+    
+    def _with_preserved_case(match_text: str, replacement: str) -> str:
+        alpha = next((ch for ch in match_text if ch.isalpha()), "")
+        if match_text.isupper():
+            return replacement.upper()
+        if alpha and alpha.isupper():
+            return replacement[:1].upper() + replacement[1:]
+        return replacement
+
+    out = re.sub(
+        r"\bfl\s+at-\s*fi\s+eld(ed|ing|s)?\b",
+        lambda m: _with_preserved_case(m.group(0), "flat-field" + str(m.group(1) or "")),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bflatfi\s+eld(ed|ing|s)?\b",
+        lambda m: _with_preserved_case(m.group(0), "flat-field" + str(m.group(1) or "")),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bflatfield(ed|ing|s)?\b",
+        lambda m: _with_preserved_case(m.group(0), "flat-field" + str(m.group(1) or "")),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bsacri\s+fi\s+c(e|es|ed|ing)\b",
+        lambda m: _with_preserved_case(m.group(0), "sacrific" + str(m.group(1) or "")),
+        out,
+        flags=re.IGNORECASE,
+    )
+
+    out = re.sub(
+        r"\bfl\s+ip\b",
+        lambda m: _with_preserved_case(m.group(0), "flip"),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bfi\s+lter(s?)\b",
+        lambda m: _with_preserved_case(m.group(0), "filter" + str(m.group(1) or "")),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bfi\s+ber(s?)\b",
+        lambda m: _with_preserved_case(m.group(0), "fiber" + str(m.group(1) or "")),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bfi\s+eld(ed|ing|s)?\b",
+        lambda m: _with_preserved_case(m.group(0), "field" + str(m.group(1) or "")),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bside-by-\s+side\b",
+        lambda m: _with_preserved_case(m.group(0), "side-by-side"),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bpolysterene\b",
+        lambda m: _with_preserved_case(m.group(0), "polystyrene"),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"\bcondensor\b",
+        lambda m: _with_preserved_case(m.group(0), "condenser"),
+        out,
+        flags=re.IGNORECASE,
+    )
+
+    out = re.sub(
+        r"\b([a-z]{2,4})\s+fi\s+([a-z]{2,})\b",
+        lambda m: m.group(1) + "fi" + m.group(2),
+        out,
+    )
+    out = re.sub(
+        r"\b([a-z]{2,4})\s+fl\s+([a-z]{2,})\b",
+        lambda m: m.group(1) + "fl" + m.group(2),
+        out,
+    )
+    out = re.sub(
+        r"\b([A-Za-z]{2,})-\s*fi\s+([a-z]{2,})\b",
+        lambda m: m.group(1) + "-fi" + m.group(2),
+        out,
+    )
+    out = re.sub(
+        r"\b([A-Za-z]{2,})-\s*fl\s+([a-z]{2,})\b",
+        lambda m: m.group(1) + "-fl" + m.group(2),
+        out,
+    )
+    return out
+
+
+def _normalize_caption_panel_ranges(text: str) -> str:
+    if not text:
+        return ""
+    out = str(text)
+    out = re.sub(
+        r"\(\s*([A-Za-z])\s*(\d+)\s*[-–—?]+\s*([A-Za-z])\s*(\d+)\s*\)",
+        lambda m: (
+            f"({m.group(1)}{m.group(2)}-{m.group(3)}{m.group(4)})"
+            if m.group(1).lower() == m.group(3).lower()
+            else m.group(0)
+        ),
+        out,
+    )
+    out = re.sub(
+        r"\b([a-z])\s*[-–—]\s*([a-z])(?=\s+(?:at|and|,|\.|\)|$))",
+        lambda m: f"{m.group(1)}-{m.group(2)}",
+        out,
+    )
+    return out
+
+
 def _normalize_common_rendering_artifacts(md: str) -> str:
     if not md:
         return md
     lines = md.splitlines()
     out: list[str] = []
     in_fence = False
+    caption_line_re = re.compile(r"^\s*\*\*(?:Figure|Table)\s+[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)?\.\*\*", re.IGNORECASE)
     unit_letters = "mWlLsSA"
     for ln in lines:
         if re.match(r"^\s*```", ln):
@@ -1071,10 +1198,7 @@ def _normalize_common_rendering_artifacts(md: str) -> str:
         )
         t = re.sub(r"\biISM-\s+APR\b", "iISM-APR", t)
         t = re.sub(r"\b([A-Za-z]{3,})-\s+([a-z]{2,})\b", lambda m: m.group(1) + m.group(2), t)
-        t = re.sub(r"\b([A-Za-z]{2,})\s+fi\s+([A-Za-z]{2,})\b", lambda m: m.group(1) + "fi" + m.group(2), t)
-        t = re.sub(r"\b([A-Za-z]{2,})\s+fl\s+([A-Za-z]{2,})\b", lambda m: m.group(1) + "fl" + m.group(2), t)
-        t = re.sub(r"\b([A-Za-z]{2,})-\s*fi\s+([A-Za-z]{2,})\b", lambda m: m.group(1) + "-fi" + m.group(2), t)
-        t = re.sub(r"\b([A-Za-z]{2,})-\s*fl\s+([A-Za-z]{2,})\b", lambda m: m.group(1) + "-fl" + m.group(2), t)
+        t = _repair_common_ocr_word_splits(t)
         t = re.sub(r"\bonflat-fielded\b", "on flat-fielded", t)
         t = re.sub(r"\b(Fig\.|Figure)\s+(\d+)\s+([a-z])\b", r"\1 \2\3", t)
         t = re.sub(r"\biISM\s+[’']\s+s\b", "iISM's", t)
@@ -1548,6 +1672,172 @@ def _pull_images_to_matching_previous_captions(md: str) -> str:
     return "\n".join(lines)
 
 
+def _merge_figure_panel_continuations_into_captions(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    image_re = re.compile(r"^\s*!\[[^\]]*\]\([^)]+\)\s*$")
+    caption_re = re.compile(r"^\s*\*\*(Figure|Table)\s+([A-Za-z0-9]+)\.\*\*\s*(.*)$", re.IGNORECASE)
+    heading_re = re.compile(r"^\s*#{1,6}\s+")
+    table_re = re.compile(r"^\s*\|")
+    panel_marker_re = re.compile(r"(?<![A-Za-z0-9])([A-Ga-g])\s+(?=[A-Z])")
+    panel_prefix_re = re.compile(r"^(?:\(?\s*[A-Ga-g]\s*\)?|\*\*\s*[A-Ga-g]\s*\*\*)\s+(?=[A-Z])")
+    suffix_re = re.compile(
+        r"\b(?:the\s+following|following|these|such)\s+"
+        r"(?:advantages|benefits|features|properties|steps|modules|equations?|operations|results)\b",
+        re.IGNORECASE,
+    )
+    trailing_body_re = re.compile(
+        r"(?<=[.?!])\s+(?=(?:Benefiting|Compared|Consequently|Therefore|Thus|Here|Our|We|This|These|Accordingly|Meanwhile|Finally|Notably|Specifically)\b)"
+    )
+
+    def _is_body_line(raw: str) -> bool:
+        st = (raw or "").strip()
+        if not st:
+            return False
+        if image_re.match(st) or caption_re.match(st) or heading_re.match(st) or table_re.match(st):
+            return False
+        if re.match(r"^\s*```", st) or st == "$$":
+            return False
+        return True
+
+    def _next_non_empty(start: int) -> int:
+        idx = start
+        while idx < len(lines):
+            if str(lines[idx] or "").strip():
+                return idx
+            idx += 1
+        return len(lines)
+
+    def _append_to_caption(caption_line: str, continuation: str) -> str:
+        cap = str(caption_line or "").rstrip()
+        cont = re.sub(r"\s+", " ", _normalize_text(continuation or "")).strip(" -")
+        if not cap or not cont:
+            return cap or cont
+        cap_norm = _normalize_text(cap).lower()
+        cont_norm = cont.lower()
+        if cont_norm and cont_norm in cap_norm:
+            return cap
+        joiner = " " if cap.endswith((".", "!", "?", ";", ":")) else ". "
+        return f"{cap}{joiner}{cont}".rstrip()
+
+    def _join_body_parts(prefix: str, suffix: str) -> str:
+        left = re.sub(r"\s+", " ", _normalize_text(prefix or "")).strip()
+        right = re.sub(r"\s+", " ", _normalize_text(suffix or "")).strip(" ,;:")
+        if not left:
+            body = right
+        elif not right:
+            body = left
+        elif left.endswith("-"):
+            body = left[:-1] + right
+        else:
+            body = f"{left} {right}"
+        body = re.sub(r"\s+([,.;:])", r"\1", body)
+        return body.strip()
+
+    def _looks_like_panel_continuation(raw: str) -> bool:
+        text = re.sub(r"\s+", " ", _normalize_text(raw or "")).strip()
+        if len(text) < 16:
+            return False
+        if panel_prefix_re.match(text):
+            return True
+        letters = [str(m.group(1) or "").lower() for m in panel_marker_re.finditer(text)]
+        return len(set(letter for letter in letters if letter)) >= 2
+
+    def _extract_embedded_panel_segment(raw: str) -> tuple[str, str, str] | None:
+        text = re.sub(r"\s+", " ", _normalize_text(raw or "")).strip()
+        if len(text) < 24:
+            return None
+        markers = list(panel_marker_re.finditer(text))
+        marker_letters = [str(m.group(1) or "").lower() for m in markers if str(m.group(1) or "").strip()]
+        if len(set(marker_letters)) < 2:
+            return None
+        start = int(markers[0].start())
+        second_pos = int(markers[1].start())
+        suffix_match = suffix_re.search(text[second_pos:])
+        segment_end = len(text)
+        if suffix_match:
+            segment_end = second_pos + int(suffix_match.start())
+        prefix = text[:start].rstrip()
+        segment = text[start:segment_end].strip(" -:;,")
+        suffix = text[segment_end:].lstrip(" ,;:")
+        if len(segment) < 20:
+            return None
+        segment_letters = [
+            str(m.group(1) or "").lower()
+            for m in panel_marker_re.finditer(segment)
+            if str(m.group(1) or "").strip()
+        ]
+        if len(set(segment_letters)) < 2:
+            return None
+        last_marker = list(panel_marker_re.finditer(segment))[-1]
+        last_tail = segment[int(last_marker.start()) :]
+        trailing_match = trailing_body_re.search(last_tail)
+        if trailing_match:
+            split_at = int(last_marker.start()) + int(trailing_match.start())
+            trailing = segment[split_at:].strip()
+            segment = segment[:split_at].rstrip()
+            if suffix and re.match(r"(?i)^(?:the\s+following|following)\b", suffix):
+                suffix = f"{suffix} {trailing}".strip()
+            else:
+                suffix = f"{trailing} {suffix}".strip() if suffix else trailing
+        if prefix and (not suffix) and (not re.search(r"[.!?:;]$", prefix)):
+            return None
+        return prefix, segment, suffix
+
+    changed = False
+
+    for idx, raw in enumerate(lines):
+        if not caption_re.match((raw or "").strip()):
+            continue
+        next_idx = _next_non_empty(idx + 1)
+        if next_idx >= len(lines) or not _is_body_line(lines[next_idx]):
+            continue
+        if not _looks_like_panel_continuation(lines[next_idx]):
+            continue
+        merged = _append_to_caption(lines[idx], lines[next_idx])
+        if merged == lines[idx]:
+            continue
+        lines[idx] = merged
+        lines[next_idx] = ""
+        changed = True
+
+    for idx, raw in enumerate(lines):
+        if not _is_body_line(raw):
+            continue
+        image_idx = _next_non_empty(idx + 1)
+        if image_idx >= len(lines) or not image_re.match((lines[image_idx] or "").strip()):
+            continue
+        caption_idx = _next_non_empty(image_idx + 1)
+        if caption_idx >= len(lines) or not caption_re.match((lines[caption_idx] or "").strip()):
+            continue
+        extracted = _extract_embedded_panel_segment(raw)
+        if not extracted:
+            continue
+        prefix, segment, suffix = extracted
+        merged = _append_to_caption(lines[caption_idx], segment)
+        if merged == lines[caption_idx]:
+            continue
+        lines[idx] = _join_body_parts(prefix, suffix)
+        lines[caption_idx] = merged
+        changed = True
+
+    if not changed:
+        return md
+
+    out: list[str] = []
+    blank_run = 0
+    for line in lines:
+        if str(line or "").strip():
+            blank_run = 0
+            out.append(line)
+            continue
+        blank_run += 1
+        if blank_run <= 2:
+            out.append("")
+    return "\n".join(out)
+
+
 def _normalize_structural_labels(md: str) -> str:
     if not md:
         return md
@@ -1562,34 +1852,67 @@ def _normalize_structural_labels(md: str) -> str:
     return out
 
 
+def _strip_early_reader_service_blocks(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    out: list[str] = []
+    main_title = ""
+    title_seen = False
+    i = 0
+    while i < len(lines):
+        st = str(lines[i] or "").strip()
+        if not main_title and re.match(r"^#\s+\S", st):
+            main_title = _normalize_text(_strip_heading_marks(st)).strip().lower()
+
+        if i < 40 and re.match(r"(?i)^to\s+cite\s+this\s+article:", st):
+            i += 1
+            continue
+        if i < 40 and re.match(r"(?i)^view\s+the\s+\[?article\s+online\]?", st):
+            i += 1
+            continue
+        if i < 40 and st.startswith("![") and ("advertisement" in st.lower() or "ampheia" in st.lower()):
+            i += 1
+            continue
+
+        if i < 40 and re.match(r"(?i)^#{1,6}\s+you\s+may\s+also\s+like\s*$", st):
+            i += 1
+            while i < len(lines):
+                cur = str(lines[i] or "").strip()
+                if not cur:
+                    i += 1
+                    continue
+                if cur.startswith("![") and ("advertisement" in cur.lower() or "ampheia" in cur.lower()):
+                    i += 1
+                    continue
+                if re.match(r"^#{1,6}\s+", cur):
+                    title = _normalize_text(_strip_heading_marks(cur)).strip().lower()
+                    if (main_title and title == main_title) or _looks_like_real_section_heading(cur):
+                        break
+                i += 1
+            continue
+
+        if re.match(r"^#{1,6}\s+\S", st):
+            norm_title = _normalize_text(_strip_heading_marks(st)).strip().lower()
+            if main_title and norm_title == main_title:
+                if title_seen and i < 40:
+                    i += 1
+                    continue
+                title_seen = True
+
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
 def _strip_frontmatter_metadata_lines(md: str) -> str:
     if not md:
         return md
     lines = md.splitlines()
     out: list[str] = []
-    heading_seen = False
-    heading_re = re.compile(r"^\s*#{1,6}\s+\S")
-    drop_frontmatter_re = re.compile(
-        r"^(?:"
-        r"Article|"
-        r"https?://doi\.org/\S+|"
-        r"doi:\S+|"
-        r"Published online:.*|"
-        r"Received:\s+.*|"
-        r"Accepted:\s+.*|"
-        r"Check for updates|"
-        r"Optics\s*&\s*Laser\s*Technology\s+\d+\s*\(\d{4}\)\s*\d+|"
-        r"Vol\.\s*\d+\s*,\s*No\.\s*\d+\s*\|.*OPTICS\s+EXPRESS.*|"
-        r".*Optical Society of America.*|"
-        r".*\bOCIS codes:\b.*"
-        r")$",
-        flags=re.IGNORECASE,
-    )
     for idx, line in enumerate(lines):
         st = line.strip()
-        if heading_re.match(st):
-            heading_seen = True
-        if idx < 30 and drop_frontmatter_re.match(st):
+        if idx < 30 and _looks_like_frontmatter_metadata_line(st) and not _looks_like_substantial_body_paragraph(st):
             continue
         if idx < 30 and st == "---":
             continue
@@ -1763,6 +2086,140 @@ def _cleanup_author_superscript_noise(md: str) -> str:
     return out
 
 
+def _strip_heading_marks(line: str) -> str:
+    return re.sub(r"^\s*#{1,6}\s+", "", str(line or "").strip()).strip()
+
+
+def _normalize_spaced_abstract_heading(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    out: list[str] = []
+    spaced_abstract_re = re.compile(r"^(?:#\s*){0,6}A\s*B\s*S\s*T\s*R\s*A\s*C\s*T$", re.IGNORECASE)
+    for line in lines:
+        st = str(line or "").strip()
+        if spaced_abstract_re.match(st):
+            out.append("## Abstract")
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def _looks_like_frontmatter_label(text: str) -> bool:
+    low = _normalize_text(text or "").strip().lower()
+    if not low:
+        return False
+    return low in {
+        "article",
+        "review",
+        "letter",
+        "full length article",
+        "research article",
+        "brief communication",
+        "article info",
+    }
+
+
+def _looks_like_title_shell_heading(line: str) -> bool:
+    title = _strip_heading_marks(line)
+    if not title:
+        return False
+    if _looks_like_frontmatter_label(title):
+        return True
+    if _is_journal_metadata_heading(title):
+        return True
+    if _is_common_section_heading(title):
+        return False
+    if _parse_numbered_heading_level(title) is not None:
+        return False
+    if _parse_appendix_heading_level(title) is not None:
+        return False
+    if re.match(r"^(?:[IVXLC]+)\.\s+[A-Z]", title):
+        return False
+    if re.match(r"^(?:figure|table)\b", title, flags=re.IGNORECASE):
+        return False
+    words = re.findall(r"[A-Za-z]{3,}", title)
+    return bool(len(words) >= 5 and len(title) >= 40)
+
+
+def _looks_like_real_section_heading(line: str) -> bool:
+    title = _strip_heading_marks(line)
+    if not title:
+        return False
+    if _is_common_section_heading(title):
+        return True
+    if _parse_numbered_heading_level(title) is not None:
+        return True
+    if _parse_appendix_heading_level(title) is not None:
+        return True
+    if re.match(r"^(?:[IVXLC]+)\.\s+[A-Z]", title):
+        return True
+    return False
+
+
+def _looks_like_substantial_body_paragraph(text: str) -> bool:
+    st = _normalize_text(text or "").strip()
+    if len(st) < 120:
+        return False
+    if st.startswith("![") or st.startswith("|"):
+        return False
+    return bool(re.search(r"[A-Za-z]{4,}", st))
+
+
+def _section_heading_core(line: str) -> str:
+    title = _strip_heading_marks(line)
+    title = re.sub(r"^\d+(?:\.\d+)*\.?\s+", "", title)
+    title = re.sub(r"^[IVXLC]+\.\s+", "", title, flags=re.IGNORECASE)
+    return _normalize_text(title).strip().lower()
+
+
+def _looks_like_post_intro_section_heading(line: str) -> bool:
+    core = _section_heading_core(line)
+    if not core:
+        return False
+    generic_patterns = (
+        r"^background$",
+        r"^related work$",
+        r"^preliminar(?:y|ies)$",
+        r"^methods?$",
+        r"^materials?\s+and\s+methods?$",
+        r"^methodology$",
+        r"^experimental(?:\s+setup)?$",
+        r"^experiments?$",
+        r"^results?(?:\s+and\s+discussion)?$",
+        r"^discussion$",
+        r"^implementation details$",
+        r"^theoretical analysis$",
+    )
+    return any(re.match(pattern, core, flags=re.IGNORECASE) for pattern in generic_patterns)
+
+
+def _looks_like_frontmatter_metadata_line(text: str) -> bool:
+    st = _normalize_text(text or "").strip()
+    if not st:
+        return False
+    if _looks_like_author_name_line(st, page_index=0, y0=0.0, page_height=1000.0):
+        return True
+    low = st.lower()
+    if re.match(r"^https?://doi\.org/\S+$", st, flags=re.IGNORECASE):
+        return True
+    if re.match(r"^doi:\S+$", st, flags=re.IGNORECASE):
+        return True
+    if re.match(r"^(?:published online|received|accepted):\s+.+$", st, flags=re.IGNORECASE):
+        return True
+    if low == "article" or low == "check for updates":
+        return True
+    if low.startswith("*ocis codes:*") or low.startswith("ocis codes:"):
+        return True
+    if re.match(r"^(?:©\s*)?\d{4}\s+optical society of america\.?$", st, flags=re.IGNORECASE):
+        return True
+    if re.match(r"^optics\s*&\s*laser\s*technology\s+\d+\s*\(\d{4}\)\s*\d+$", st, flags=re.IGNORECASE):
+        return True
+    if re.match(r"^vol\.\s*\d+\s*,\s*no\.\s*\d+\s*\|.*optics\s+express.*$", st, flags=re.IGNORECASE):
+        return True
+    return False
+
+
 def _insert_missing_abstract_heading(md: str) -> str:
     if not md:
         return md
@@ -1771,15 +2228,15 @@ def _insert_missing_abstract_heading(md: str) -> str:
     lines = md.splitlines()
     out: list[str] = []
     inserted = False
-    first_h2_seen = False
+    first_real_section_seen = False
     long_para_re = re.compile(r"[A-Za-z]{4,}")
     for idx, line in enumerate(lines):
         st = line.strip()
-        if re.match(r"^##\s+", st):
-            first_h2_seen = True
+        if re.match(r"^#{1,6}\s+", st) and _looks_like_real_section_heading(st) and (not _looks_like_title_shell_heading(st)):
+            first_real_section_seen = True
         if (
             (not inserted)
-            and (not first_h2_seen)
+            and (not first_real_section_seen)
             and idx > 0
             and len(st) >= 240
             and long_para_re.search(st)
@@ -1788,11 +2245,75 @@ def _insert_missing_abstract_heading(md: str) -> str:
             and not st.startswith("**Figure")
         ):
             prev_nonempty = next((x.strip() for x in reversed(out) if x.strip()), "")
-            if prev_nonempty and re.match(r"^(?:#\s+.+|.+\$\^\{?.+|.+&.+|Published online:.*)$", prev_nonempty):
+            if prev_nonempty and (
+                re.match(r"^(?:#\s+.+|.+\$\^\{?.+|.+&.+|Published online:.*)$", prev_nonempty)
+                or _looks_like_title_shell_heading(prev_nonempty)
+                or _looks_like_frontmatter_label(prev_nonempty)
+                or _looks_like_frontmatter_metadata_line(prev_nonempty)
+            ):
                 out.append("## Abstract")
                 out.append("")
                 inserted = True
         out.append(line)
+    return "\n".join(out)
+
+
+def _insert_missing_introduction_heading(md: str) -> str:
+    if not md:
+        return md
+    if re.search(r"(?mi)^#{1,6}\s*(?:\d+(?:\.\d+)*\.?\s+|[IVXLC]+\.\s+)?Introduction\s*$", md):
+        return md
+    lines = md.splitlines()
+    abstract_idx = -1
+    for idx, line in enumerate(lines):
+        if re.match(r"(?i)^\s*#{1,6}\s+Abstract\s*$", str(line or "").strip()):
+            abstract_idx = idx
+            break
+    if abstract_idx < 0:
+        return md
+
+    first_real_section_idx = -1
+    for idx in range(abstract_idx + 1, len(lines)):
+        st = str(lines[idx] or "").strip()
+        if re.match(r"^#{1,6}\s+", st) and _looks_like_real_section_heading(st):
+            first_real_section_idx = idx
+            break
+    if first_real_section_idx < 0:
+        return md
+    if not _looks_like_post_intro_section_heading(lines[first_real_section_idx]):
+        return md
+
+    paras: list[tuple[int, str]] = []
+    i = abstract_idx + 1
+    while i < first_real_section_idx:
+        st = str(lines[i] or "").strip()
+        if (not st) or re.match(r"^#{1,6}\s+", st):
+            i += 1
+            continue
+        start_idx = i
+        buf: list[str] = []
+        while i < first_real_section_idx:
+            cur = str(lines[i] or "").strip()
+            if not cur or re.match(r"^#{1,6}\s+", cur):
+                break
+            if cur.startswith("![") or cur.startswith("|") or cur.startswith("**Figure"):
+                break
+            buf.append(cur)
+            i += 1
+        para = re.sub(r"\s+", " ", " ".join(buf)).strip()
+        if _looks_like_substantial_body_paragraph(para):
+            paras.append((start_idx, para))
+        i += 1
+    if len(paras) < 2:
+        return md
+
+    intro_idx = paras[1][0]
+    out = list(lines)
+    insertion: list[str] = []
+    if intro_idx > 0 and str(out[intro_idx - 1] or "").strip():
+        insertion.append("")
+    insertion.extend(["## Introduction", ""])
+    out[intro_idx:intro_idx] = insertion
     return "\n".join(out)
 
 
@@ -2007,7 +2528,9 @@ def _fix_known_safe_ocr_terms(md: str) -> str:
         for src, dst in replacements.items():
             fixed = fixed.replace(src, dst)
         fixed = _fix_safe_split_prefix_words(fixed)
+        fixed = _repair_common_ocr_word_splits(fixed)
         if caption_line_re.match(fixed.strip()):
+            fixed = _normalize_caption_panel_ranges(fixed)
             fixed = re.sub(r"\s+([,.;:])", r"\1", fixed)
         out.append(fixed)
 
@@ -2030,10 +2553,13 @@ def postprocess_markdown(md: str) -> str:
     md = _promote_bare_numbered_headings(md)
     md = _unwrap_math_wrapped_headings(md)
     md = _normalize_structural_labels(md)
+    md = _strip_early_reader_service_blocks(md)
+    md = _normalize_spaced_abstract_heading(md)
     md = _strip_frontmatter_metadata_lines(md)
     md = _cleanup_author_superscript_noise(md)
     md = _insert_missing_abstract_heading(md)
     md = _drop_abstract_leading_metadata_lines(md)
+    md = _insert_missing_introduction_heading(md)
     md = _promote_known_plain_subheadings(md)
     md = _enforce_heading_policy(md)
     md = _demote_formulaish_headings(md)
@@ -2051,6 +2577,7 @@ def postprocess_markdown(md: str) -> str:
     md = _dedupe_nearby_repeated_captions(md)
     md = _pull_images_to_matching_previous_captions(md)
     md = _tighten_image_caption_spacing(md)
+    md = _merge_figure_panel_continuations_into_captions(md)
     md = _merge_obvious_body_continuation_lines(md)
     md = _repair_sentence_split_by_figure_blocks(md)
     md = _normalize_plural_figure_reference_lines(md)

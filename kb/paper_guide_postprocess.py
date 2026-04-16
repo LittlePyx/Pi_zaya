@@ -33,9 +33,6 @@ _SID_HEADER_LINE_RE = re.compile(
     r"(?im)^\s*(?:\[\d{1,3}\]|DOC-\d{1,3})\s*\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\][^\n]*\n?",
     re.IGNORECASE,
 )
-_PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE = re.compile(
-    r"(?i)\b(?:which\s+(?:paper|prior work|reference)|what\s+reference|what\s+citation|cited\s+as\s+reference|attributed\s+to|which\s+reference\s+number)\b"
-)
 _PAPER_GUIDE_INTERNAL_POLICY_LINE_RE = re.compile(
     r"(?im)^\s*(?:"
     r"根据规则.*|"
@@ -78,7 +75,7 @@ def _canonicalize_negative_shell(answer: str) -> str:
     if not text:
         return text
     text = re.sub(
-        r"(?i)\b(the retrieved (?:paper|context)|the paper|the context)\s+does not state\b",
+        r"(?i)\b(the retrieved (?:paper|paper evidence|paper evidence|paper context|paper evidence is insufficient|paper evidence|paper evidence)|the retrieved paper evidence|the retrieved paper|the retrieved context|the paper|the context)\s+does not state\b",
         lambda m: f"{str(m.group(1) or '').strip()} does not specify",
         text,
     )
@@ -95,6 +92,10 @@ def _sanitize_paper_guide_answer_for_user(
     text = str(answer or "").strip()
     if not text:
         return text
+
+    # Normalize and strip internal structured markers. The user-facing answer should never
+    # leak raw tokens like [[CITE:sid:12]] or [[SUPPORT:DOC-1]]. Rendering uses cite_details/locate_target.
+    text = _sanitize_structured_cite_tokens(text)
 
     if "未命中知识库片段" in text:
         if has_hits:
@@ -134,17 +135,41 @@ def _sanitize_paper_guide_answer_for_user(
 
     out = "\n\n".join(kept).strip()
     if out:
-        family = str(prompt_family or "").strip().lower()
-        if family and family != "method":
-            out = _CITE_CANON_RE.sub("", out)
-        if _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE.search(str(prompt or "").strip()):
-            out = _CITE_CANON_RE.sub("", out)
         out = _SUPPORT_MARKER_RE.sub("", out)
+        out = _CITE_CANON_RE.sub("", out)
         out = _DOC_CONTEXT_LABEL_RE.sub("the supporting excerpts", out)
         out = re.sub(r"\s+([,.;:!?])", r"\1", out)
         out = re.sub(r"[ \t]{2,}", " ", out)
         out = re.sub(r"\(\s*the supporting excerpts\s*\)", "(supporting excerpts)", out)
         out = re.sub(r"\n{3,}", "\n\n", out).strip()
+
+    # If the answer is a short negative-shell ("does not specify ..."), add a tiny next-step hint.
+    # This improves user experience without inventing paper facts.
+    if out:
+        family = str(prompt_family or "").strip().lower()
+        if family != "citation_lookup":
+            out_norm = normalize_inline_markdown(out).lower()
+            is_negative = bool(
+                re.search(
+                    r"(?i)\b(?:does not specify|does not mention|not stated|cannot be determined)\b",
+                    out_norm,
+                )
+            )
+            if is_negative and len(out.strip()) <= 240:
+                q = str(prompt or "").strip().lower()
+                if not q:
+                    # If the caller didn't pass the original prompt, fall back to the answer text.
+                    q = out_norm
+                if any(tok in q for tok in ("gpu", "cuda", "nvidia", "rtx", "a100", "v100", "3090", "4090", "hardware")):
+                    out = (
+                        out
+                        + "\n\nNext steps (paper-only): search within the paper for `GPU`, `CUDA`, `NVIDIA`, `RTX`, `hardware`, and check the Methods / Implementation / Experimental setup sections."
+                    ).strip()
+                elif any(tok in q for tok in ("cpu", "ram", "memory", "os", "ubuntu", "windows", "pytorch", "tensorflow", "environment")):
+                    out = (
+                        out
+                        + "\n\nNext steps (paper-only): search within the paper for `implementation`, `code`, `training`, `environment`, and check Methods / Supplementary / Appendix for compute details."
+                    ).strip()
     if out:
         return out
     if has_hits:

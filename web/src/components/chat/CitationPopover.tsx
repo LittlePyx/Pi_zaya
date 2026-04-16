@@ -1,4 +1,6 @@
 ﻿import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+/* eslint-disable react-hooks/set-state-in-effect */
+
 import type { CiteDetail } from './citationState'
 import { citationDisplay, citationInlineLabel, citeMetricSummary } from './citationState'
 

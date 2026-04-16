@@ -106,15 +106,47 @@ function pickNumber(rec: Record<string, unknown>, ...keys: string[]): number {
   return 0
 }
 
+function stripLeadCitationLabel(value: string): string {
+  return String(value || '')
+    .replace(/^\s*(?:\[\s*\d{1,4}\s*\]\s*){1,3}/, '')
+    .replace(/^\s*\d{1,4}\s*[.)]\s*/, '')
+    .trim()
+}
+
+function looksCitationLine(text: string): boolean {
+  const s = stripLeadCitationLabel(String(text || '').replace(/\*+/g, '').replace(/\s+/g, ' ').trim())
+  if (s.length < 24) return false
+  const hasYear = /\b(?:19|20)\d{2}\b/.test(s)
+  const hasVolumePagesTail = /,\s*\d{1,4}\s*,\s*\d{1,6}\.?$/.test(s)
+  const hasVenueToken = /\b(?:Nat\.?|IEEE|ACM|Opt\.?|Phys\.?|Commun\.?|Journal|Proceedings|CVPR|ICCV|ICML|NeurIPS)\b/i.test(s)
+  const startsLikeAuthors = /^(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})(?:,\s*[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})*/.test(s)
+  if (hasYear && hasVolumePagesTail) return true
+  if (startsLikeAuthors && hasYear && hasVenueToken) return true
+  return false
+}
+
+export function isLikelyWeakCitationTitle(value: string): boolean {
+  const s = stripLeadCitationLabel(String(value || '').replace(/\*+/g, '').replace(/\s+/g, ' ').trim())
+  if (!s) return true
+  if (looksCitationLine(s)) return true
+  if (/^(?:doi[:\s]|https?:\/\/|arxiv:)/i.test(s)) return true
+  if (/^[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.?)(?:\s*[A-Z]\.?)?$/i.test(s)) return true
+  if (/^[A-Z][A-Za-z'`-]+(?:\s+[A-Z][A-Za-z'`-]+){0,2},\s*(?:[A-Z]\.?\s*){1,3}$/i.test(s)) return true
+  const tokens = s.match(/[A-Za-z0-9\u4e00-\u9fff]+/g) || []
+  if (/\bet\s+al\.?$/i.test(s) && tokens.length <= 4) return true
+  if (tokens.length <= 0) return true
+  if (tokens.length === 1) {
+    const token = tokens[0]
+    if (token.length <= 2) return true
+    if (/^(?:vol|no|pp|doi|arxiv|misc)$/i.test(token)) return true
+  }
+  return false
+}
+
 function isWeakField(key: string, value: string): boolean {
   const s = String(value || '').trim()
   if (!s) return true
-  if (key === 'title') {
-    if (s.length <= 4 || (s.match(/[A-Za-z0-9\u4e00-\u9fff]+/g)?.length || 0) <= 1) return true
-    if (/^[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.?)(?:\s*[A-Z]\.?)?$/i.test(s)) return true
-    if (/^[A-Z][A-Za-z'`-]+(?:\s+[A-Z][A-Za-z'`-]+){0,2},\s*(?:[A-Z]\.?\s*){1,3}$/i.test(s)) return true
-    if (/\bet\s+al\.?$/i.test(s) && (s.match(/[A-Za-z\u4e00-\u9fff]+/g)?.length || 0) <= 4) return true
-  }
+  if (key === 'title') return isLikelyWeakCitationTitle(s)
   if (key === 'authors') return s.length <= 3 || (s.match(/[A-Za-z\u4e00-\u9fff]+/g)?.length || 0) <= 1
   if (key === 'venue') return s.length <= 1
   return false
@@ -166,16 +198,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
 }
 
 export function citationMain(detail: CiteDetail): string {
-  const stripLeadLabel = (value: string) =>
-    String(value || '')
-      .replace(/^\s*(?:\[\s*\d{1,4}\s*\]\s*){1,3}/, '')
-      .replace(/^\s*\d{1,4}\s*[.)]\s*/, '')
-      .trim()
-
-  if (detail.citeFmt) return stripLeadLabel(detail.citeFmt)
+  if (detail.citeFmt) return stripLeadCitationLabel(detail.citeFmt)
   const parts = [detail.authors, detail.title, detail.venue, detail.year].filter(Boolean)
   if (parts.length > 0) return parts.join('. ')
-  return stripLeadLabel(detail.raw) || `[${detail.num || '?'}]`
+  return stripLeadCitationLabel(detail.raw) || `[${detail.num || '?'}]`
 }
 
 export function toShelfItem(detail: CiteDetail): CiteShelfItem {
@@ -317,16 +343,27 @@ function titleFromSourceName(sourceName: string, sourcePath: string): string {
   return isWeakField('title', candidate) ? '' : candidate
 }
 
-function looksCitationLine(text: string): boolean {
-  const s = String(text || '').replace(/\*+/g, '').replace(/\s+/g, ' ').trim()
-  if (s.length < 24) return false
-  const hasYear = /\b(?:19|20)\d{2}\b/.test(s)
-  const hasVolumePagesTail = /,\s*\d{1,4}\s*,\s*\d{1,6}\.?$/.test(s)
-  const hasVenueToken = /\b(?:Nat\.?|IEEE|ACM|Opt\.?|Phys\.?|Commun\.?|Journal|Proceedings|CVPR|ICCV|ICML|NeurIPS)\b/i.test(s)
-  const startsLikeAuthors = /^(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})(?:,\s*[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})*/.test(s)
-  if (hasYear && hasVolumePagesTail) return true
-  if (startsLikeAuthors && hasYear && hasVenueToken) return true
-  return false
+function looksLikeAuthorSegment(value: string): boolean {
+  const s = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!s) return false
+  if (/\bet\s+al\.?$/i.test(s)) return true
+  return /^(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})(?:,\s*[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.\s*){1,3})*/.test(s)
+}
+
+function extractTitleFromCitationText(value: string): string {
+  const cleaned = stripLeadCitationLabel(String(value || '').replace(/\*+/g, '').replace(/\s+/g, ' ').trim())
+    .replace(/\s+(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)\S+.*$/i, '')
+    .trim()
+  if (!cleaned) return ''
+  const parts = cleaned
+    .split(/\.\s+/)
+    .map((part) => part.trim().replace(/[.]+$/g, '').trim())
+    .filter(Boolean)
+  if (parts.length >= 2 && looksLikeAuthorSegment(parts[0])) {
+    const candidate = parts[1]
+    if (!isLikelyWeakCitationTitle(candidate)) return candidate
+  }
+  return ''
 }
 
 export function citationSourceLabel(detail: CiteDetail): string {
@@ -382,6 +419,8 @@ export function citationDisplay(detail: CiteDetail) {
   const main = (() => {
     const title = String(detail.title || '').trim()
     if (!isWeakField('title', title)) return title
+    const parsedTitle = extractTitleFromCitationText(detail.citeFmt || detail.raw || title)
+    if (!isLikelyWeakCitationTitle(parsedTitle)) return parsedTitle
     const sourceDerived = titleFromSourceName(detail.sourceName, detail.sourcePath)
     const fallbackMain = citationMain(detail)
     if (sourceDerived && (isWeakField('title', fallbackMain) || looksCitationLine(fallbackMain))) {
@@ -428,7 +467,7 @@ export function buildCiteDetailFromMeta(
 }
 
 export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: string; ris: string } {
-  const title = asText(detail.title) || citationMain(detail)
+  const title = isWeakField('title', asText(detail.title)) ? citationDisplay(detail).main : asText(detail.title)
   const authors = asText(detail.authors) || '[Unknown Authors]'
   const venue =
     asText(detail.conferenceName) ||

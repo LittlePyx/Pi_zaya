@@ -156,6 +156,57 @@ def test_enrich_citation_detail_meta_title_only_fallback_recovers_doi(monkeypatc
     assert str(out.get("doi_url") or "").startswith("https://doi.org/10.1364/oe.25.002998")
 
 
+def test_enrich_citation_detail_meta_backfills_arxiv_doi_from_raw(monkeypatch):
+    monkeypatch.setattr(reference_ui, "fetch_crossref_meta", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "_openalex_arxiv_meta_by_title", lambda title: {})
+    monkeypatch.setattr(reference_ui, "_enrich_bibliometrics", lambda meta: dict(meta or {}))
+
+    out = enrich_citation_detail_meta(
+        {
+            "title": "Neural reflectance fields for appearance acquisition",
+            "venue": "arXiv preprint",
+            "raw": "[2] Miloš Hašan et al. Neural reflectance fields for appearance acquisition. arXiv preprint arXiv:2008.03824, 2020.",
+            "doi": "",
+            "doi_url": "",
+        }
+    )
+
+    assert str(out.get("doi") or "") == "10.48550/arXiv.2008.03824"
+    assert str(out.get("doi_url") or "") == "https://doi.org/10.48550/arXiv.2008.03824"
+
+
+def test_enrich_citation_detail_meta_openalex_arxiv_title_fallback(monkeypatch):
+    monkeypatch.setattr(reference_ui, "fetch_crossref_meta", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
+    monkeypatch.setattr(
+        reference_ui,
+        "_openalex_arxiv_meta_by_title",
+        lambda title: {
+            "doi": "10.48550/arXiv.2008.03824",
+            "doi_url": "https://doi.org/10.48550/arXiv.2008.03824",
+            "year": "2020",
+            "venue": "arXiv",
+        },
+    )
+    monkeypatch.setattr(reference_ui, "_enrich_bibliometrics", lambda meta: dict(meta or {}))
+
+    out = enrich_citation_detail_meta(
+        {
+            "title": "Neural reflectance fields for appearance acquisition",
+            "venue": "arXiv preprint",
+            "raw": "[2] Miloš Hašan et al. Neural reflectance fields for appearance acquisition. arXiv preprint, 2020.",
+            "doi": "",
+            "doi_url": "",
+        }
+    )
+
+    assert str(out.get("doi") or "") == "10.48550/arXiv.2008.03824"
+    assert str(out.get("doi_url") or "").startswith("https://doi.org/10.48550/arXiv.2008.03824")
+
+
 def test_enrich_citation_detail_meta_uses_crossref_abstract_summary(monkeypatch):
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)

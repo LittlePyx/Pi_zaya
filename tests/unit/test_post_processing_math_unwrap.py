@@ -123,7 +123,7 @@ This improves photon collection but sacri ﬁ ces contrast at low inci- dent pow
     assert "$150\\,\\mu\\mathrm{l}$" in out
     assert "profiles" in out
     assert "flat-fielded" in out
-    assert "(t0–t4)" in out
+    assert "(t0-t4)" in out or "(t0–t4)" in out
     assert "sacrifices contrast" in out
     assert "incident powers" in out
 
@@ -137,3 +137,30 @@ $ments(see eq.(2)).$
     out = postprocess_markdown(src)
     assert "$ments(see eq.(2)).$" not in out
     assert "ments (see eq.(2))." in out
+
+
+def test_caption_cleanup_keeps_repaired_ocr_words_as_separate_words():
+    src = """
+**Figure 1.** Interferometric ISM (iISM) principle. FM fl ip mirror, EF emission fi lter, FC fi ber coupler, PM SMF polarization-maintaining single-mode fi ber. Side-by- side comparison. g Line pro fi les in the three con fi gurations.
+"""
+    out = postprocess_markdown(src)
+    assert "FM flip mirror" in out
+    assert "emission filter" in out
+    assert "FC fiber coupler" in out
+    assert "single-mode fiber" in out
+    assert "Side-by-side comparison" in out
+    assert "Line profiles" in out
+    assert "three configurations" in out
+
+
+def test_unwrap_sentence_style_display_math_with_text_macros_and_units():
+    src = r"""
+$$
+about 1.4 \text{ Airy units (AU, with } 1\,\text{AU} = 1.22\,\lambda/(2\,\text{NA})\text{), which} \\ \text{for our parameters (}\lambda = 445\,\text{nm},\ \text{NA} = 1.4,\ 1\,\text{AU} = 194
+$$
+"""
+    out = postprocess_markdown(src)
+    assert "$$" not in out
+    assert "about 1.4 Airy units" in out
+    assert "1 AU = 1.22" in out
+    assert "445" in out

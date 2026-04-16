@@ -9,6 +9,7 @@ import { AppLayout } from './components/layout/AppSider'
 import ChatPage from './pages/ChatPage'
 import LibraryPage from './pages/LibraryPage'
 import MessageListRegressionPage from './pages/MessageListRegressionPage'
+import RefsPanelRegressionPage from './pages/RefsPanelRegressionPage'
 import ReaderRegressionPage from './pages/ReaderRegressionPage'
 import ReaderSplitRegressionPage from './pages/ReaderSplitRegressionPage'
 
@@ -28,6 +29,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/__message_list_test__" element={<MessageListRegressionPage />} />
+          <Route path="/__refs_panel_test__" element={<RefsPanelRegressionPage />} />
           <Route path="/__reader_test__" element={<ReaderRegressionPage />} />
           <Route path="/__reader_split_test__" element={<ReaderSplitRegressionPage />} />
           <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />

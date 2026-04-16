@@ -37,6 +37,7 @@ interface SettingsState {
   answerOutputMode: string
   pdfDir: string
   mdDir: string
+  uiLocale: 'zh' | 'en'
   theme: 'light' | 'dark'
   model: string
   hasApiKey: boolean
@@ -58,6 +59,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   answerOutputMode: '',
   pdfDir: '',
   mdDir: '',
+  uiLocale: 'zh',
   theme: readInitialTheme(),
   model: '',
   hasApiKey: false,
@@ -68,6 +70,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const data = await settingsApi.get()
       const p = data.prefs || {}
       const nextTheme = (p.theme as 'light' | 'dark') || 'dark'
+      const nextUiLocale = ((p.ui_locale as 'zh' | 'en') || 'zh')
       persistTheme(nextTheme)
       set({
         model: data.model,
@@ -83,9 +86,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         answerOutputMode: String(p.answer_output_mode || ''),
         pdfDir: String(p.pdf_dir || ''),
         mdDir: String(p.md_dir || ''),
+        uiLocale: nextUiLocale,
         theme: nextTheme,
         loaded: true,
       })
+      if (!String((p as Record<string, unknown>).ui_locale || '').trim()) {
+        settingsApi.update({ uiLocale: nextUiLocale }).catch(() => {})
+      }
     } catch { /* ignore */ }
   },
 
@@ -111,6 +118,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
     if (patch.pdfDir !== undefined) localPatch.pdfDir = patch.pdfDir
     if (patch.mdDir !== undefined) localPatch.mdDir = patch.mdDir
+    if (patch.uiLocale !== undefined) localPatch.uiLocale = patch.uiLocale
     set(localPatch)
     await settingsApi.update(patchToSend).catch(() => {})
   },

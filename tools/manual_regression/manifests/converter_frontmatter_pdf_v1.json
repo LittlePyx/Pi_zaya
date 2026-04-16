@@ -1,0 +1,84 @@
+{
+  "suite_id": "converter_frontmatter_pdf_v1",
+  "description": "Real-PDF end-to-end converter regression suite for first-page title, abstract, and frontmatter recovery.",
+  "defaults": {
+    "page_limit": 2
+  },
+  "cases": [
+    {
+      "id": "SCIADV_2017_TITLE_ABSTRACT_RECOVERY",
+      "title": "Science Advances 2017 title and abstract should survive frontmatter masking",
+      "pdf_path": "F:/research-papers/research-paper-pyx/SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## RESULTS"
+        ],
+        "must_contain_text": [
+          "Adaptive foveated single-pixel imaging with dynamic supersampling",
+          "In contrast to conventional multipixel cameras, single-pixel cameras capture images using a single detector"
+        ],
+        "must_not_contain_text": [
+          "David B. Phillips",
+          "Stephen M. Barnett"
+        ],
+        "must_not_start_with": [
+          "# INTRODUCTION"
+        ],
+        "ordered_text": [
+          "Adaptive foveated single-pixel imaging with dynamic supersampling",
+          "## Abstract",
+          "## RESULTS"
+        ]
+      }
+    },
+    {
+      "id": "NATCOMM_2021_IMPLICIT_ABSTRACT_INTRO",
+      "title": "NatCommun 2021 should recover abstract and introduction from title-shell frontmatter",
+      "pdf_path": "F:/research-papers/research-paper-pyx/NatCommun-2021-Imaging biological tissue with...pixel compressive holography.pdf",
+      "checks": {
+        "must_contain": [
+          "## Abstract"
+        ],
+        "must_contain_text": [
+          "Imaging biological tissue with high-throughput single-pixel compressive holography",
+          "Single-pixel holography (SPH) is capable of generating holographic images with rich spatial information"
+        ],
+        "must_not_contain_text": [
+          "Daixuan Wu",
+          "Jiawei Luo",
+          "Yuecheng Shen"
+        ],
+        "ordered_text": [
+          "Imaging biological tissue with high-throughput single-pixel compressive holography",
+          "## Abstract"
+        ]
+      }
+    },
+    {
+      "id": "JOPT_2016_READER_SERVICE_CLEANUP",
+      "title": "Journal of Optics article should drop reader-service noise before the real abstract",
+      "pdf_path": "F:/research-papers/research-paper-pyx/Journal of Optics-2016-3D single-pixel video.pdf",
+      "checks": {
+        "must_contain": [
+          "## Abstract",
+          "## Introduction"
+        ],
+        "must_contain_text": [
+          "3D single-pixel video"
+        ],
+        "must_not_contain_text": [
+          "To cite this article:",
+          "View the [article online]",
+          "You may also like",
+          "Ampheia advertisement"
+        ],
+        "ordered_text": [
+          "3D single-pixel video",
+          "## Abstract",
+          "## Introduction"
+        ]
+      }
+    }
+  ]
+}

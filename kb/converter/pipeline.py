@@ -102,6 +102,7 @@ from .geometry_utils import _bbox_width
 from .heuristics import (
     _suggest_heading_level,
     _is_non_body_metadata_text,
+    _looks_like_author_name_line,
 )
 from .tables import _is_markdown_table_sane, table_text_to_markdown
 from .block_classifier import _looks_like_math_block, _looks_like_code_block
@@ -131,6 +132,7 @@ from .page_figure_metadata import (
     build_page_figure_mapping_hint,
     reconcile_figure_metadata_from_markdown,
 )
+from .structured_indices import rebuild_structured_indices_for_markdown
 from .page_table_fallback import detect_table_rects_for_fallback, inject_table_image_fallbacks
 from .page_layout_crops import (
     convert_page_with_layout_crops,
@@ -318,6 +320,10 @@ class PDFConverter:
         # Write output
         out_file = save_dir / "output.md"
         out_file.write_text(final_md, encoding="utf-8")
+        try:
+            rebuild_structured_indices_for_markdown(out_file, md_text=final_md, assets_dir=assets_dir)
+        except Exception as e:
+            print(f"[WARN] structured index build skipped: {e}", flush=True)
         print(f"Saved to {out_file}", flush=True)
         print(f"Conversion completed successfully!", flush=True)
         
@@ -414,10 +420,12 @@ class PDFConverter:
                 continue
 
             lines: list[str] = []
+            line_items: list[tuple[fitz.Rect, str, float]] = []
             max_size = 0.0
             for l in (b.get("lines", []) or []):
                 spans = l.get("spans", []) or []
                 parts: list[str] = []
+                line_max_size = 0.0
                 for s in spans:
                     t = (s.get("text") or "")
                     if t and t.strip():
@@ -428,15 +436,23 @@ class PDFConverter:
                         sz = 0.0
                     if sz > max_size:
                         max_size = sz
+                    if sz > line_max_size:
+                        line_max_size = sz
                 if parts:
-                    lines.append(" ".join(parts).strip())
+                    line_text = " ".join(parts).strip()
+                    lines.append(line_text)
+                    try:
+                        line_rect = fitz.Rect(l.get("bbox"))
+                    except Exception:
+                        line_rect = fitz.Rect(rect)
+                    line_items.append((line_rect, line_text, float(line_max_size or max_size or 0.0)))
             if not lines:
                 continue
             txt = _normalize_text(" ".join(lines)).strip()
             if not txt:
                 continue
 
-            if _is_non_body_metadata_text(
+            block_is_metadata = _is_non_body_metadata_text(
                 txt,
                 page_index=page_index,
                 y0=float(rect.y0),
@@ -445,7 +461,30 @@ class PDFConverter:
                 max_font_size=float(max_size),
                 body_font_size=float(body_size_hint),
                 is_references_page=bool(is_references_page),
-            ):
+            )
+            matched_line_rects: list[fitz.Rect] = []
+            for line_rect, line_text, line_size in line_items:
+                if _is_non_body_metadata_text(
+                    line_text,
+                    page_index=page_index,
+                    y0=float(line_rect.y0),
+                    y1=float(line_rect.y1),
+                    page_height=page_h,
+                    max_font_size=float(line_size),
+                    body_font_size=float(body_size_hint),
+                    is_references_page=bool(is_references_page),
+                ) or _looks_like_author_name_line(
+                    line_text,
+                    page_index=page_index,
+                    y0=float(line_rect.y0),
+                    page_height=page_h,
+                ):
+                    matched_line_rects.append(line_rect)
+            if matched_line_rects:
+                rects.extend(matched_line_rects)
+            elif block_is_metadata and line_items:
+                rects.extend(line_rect for line_rect, _, _ in line_items)
+            elif block_is_metadata:
                 rects.append(rect)
 
         if len(rects) <= 1:

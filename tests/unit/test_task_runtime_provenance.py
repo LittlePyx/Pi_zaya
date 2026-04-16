@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from tests._paper_guide_fixtures import build_scinerf_like_fixture
@@ -91,6 +92,42 @@ def test_is_explicit_non_source_segment_detects_negative_discussion_summary():
     assert _is_explicit_non_source_segment(
         "The authors do not discuss integrating the iISM approach into commercial fluorescence ISM systems in the Discussion section."
     )
+
+
+def test_infer_segment_hit_level_contract_levels():
+    from kb.paper_guide_provenance import _infer_segment_hit_level
+
+    assert _infer_segment_hit_level(
+        {
+            "evidence_mode": "direct",
+            "primary_block_id": "blk_1",
+            "primary_anchor_id": "anc_1",
+            "anchor_kind": "sentence",
+        }
+    ) == "exact"
+    assert _infer_segment_hit_level(
+        {
+            "evidence_mode": "direct",
+            "primary_block_id": "blk_2",
+            "primary_anchor_id": "",
+            "anchor_kind": "sentence",
+        }
+    ) == "block"
+    assert _infer_segment_hit_level(
+        {
+            "evidence_mode": "direct",
+            "primary_block_id": "",
+            "primary_heading_path": "Method / Details",
+        }
+    ) == "heading"
+    assert _infer_segment_hit_level(
+        {
+            "evidence_mode": "synthesis",
+            "primary_block_id": "blk_3",
+            "primary_anchor_id": "anc_3",
+            "anchor_kind": "sentence",
+        }
+    ) == "none"
 
 
 def test_annotate_segments_with_support_resolution_promotes_figure_panel_anchor():
@@ -193,6 +230,64 @@ def test_select_figure_claim_binding_prefers_caption_with_matching_figure_identi
     assert str((caption_block or {}).get("block_id") or "") == "blk_caption_good"
 
 
+def test_select_figure_claim_binding_uses_figure_index_caption_binding():
+    from kb.paper_guide_provenance import _select_figure_claim_binding
+
+    segment = {
+        "segment_id": "seg_1",
+        "text": "Figure 4 compares the reconstruction outputs.",
+        "raw_markdown": "Figure 4 compares the reconstruction outputs.",
+        "anchor_text": "Figure 4 compares the reconstruction outputs.",
+        "evidence_quote": "Figure 4 compares the reconstruction outputs.",
+        "primary_block_id": "blk_result",
+    }
+    block_lookup = {
+        "blk_result": {
+            "block_id": "blk_result",
+            "kind": "paragraph",
+            "text": "Nearby discussion of Figure 4.",
+            "order_index": 30,
+        },
+        "blk_figure": {
+            "block_id": "blk_figure",
+            "kind": "figure",
+            "number": 4,
+            "paper_figure_number": 4,
+            "order_index": 10,
+        },
+        "blk_caption_indexed": {
+            "block_id": "blk_caption_indexed",
+            "kind": "paragraph",
+            "text": "Comparison of reconstruction outputs across baselines.",
+            "raw_text": "Comparison of reconstruction outputs across baselines.",
+            "figure_role": "caption",
+            "linked_figure_block_id": "blk_figure",
+            "order_index": 11,
+        },
+    }
+
+    figure_block_plain, caption_block_plain = _select_figure_claim_binding(segment, block_lookup)
+    assert str((figure_block_plain or {}).get("block_id") or "") == "blk_figure"
+    assert caption_block_plain is None
+
+    figure_block, caption_block = _select_figure_claim_binding(
+        segment,
+        block_lookup,
+        figure_index_rows=[
+            {
+                "paper_figure_number": 4,
+                "figure_block_id": "blk_figure",
+                "caption_block_id": "blk_caption_indexed",
+                "heading_path": "Results / Figure 4",
+                "locate_anchor": "Comparison of reconstruction outputs across baselines.",
+            }
+        ],
+    )
+
+    assert str((figure_block or {}).get("block_id") or "") == "blk_figure"
+    assert str((caption_block or {}).get("block_id") or "") == "blk_caption_indexed"
+
+
 def test_annotate_segments_with_support_resolution_negative_segment_index_falls_back_to_surface_match():
     from kb.paper_guide_provenance import _annotate_segments_with_support_resolution
 
@@ -258,6 +353,111 @@ def test_annotate_segments_with_support_resolution_negative_segment_index_falls_
     assert str(out[1].get("anchor_text") or "").startswith("Finally, these RVT-APR shift vectors")
     assert str(out[1].get("support_locate_anchor") or "").startswith("Finally, these RVT-APR shift vectors")
     assert str(out[1].get("locate_policy") or "") == "required"
+
+
+def test_annotate_segments_with_support_resolution_preserves_broad_overview_anchor_when_overlap_is_low():
+    from kb.paper_guide_provenance import _annotate_segments_with_support_resolution
+
+    segments = [
+        {
+            "segment_id": "seg_1",
+            "text": "Single-pixel imaging is interesting because it offers a more constant cost per megapixel across a broad wavelength range, especially in infrared bands.",
+            "raw_markdown": "Single-pixel imaging is interesting because it offers a more constant cost per megapixel across a broad wavelength range, especially in infrared bands.",
+            "evidence_mode": "direct",
+            "claim_type": "critical_fact_claim",
+            "anchor_kind": "sentence",
+            "anchor_text": "Single-pixel imaging is interesting because it offers a more constant cost per megapixel across a broad wavelength range, especially in infrared bands.",
+            "primary_block_id": "blk_overview",
+            "primary_heading_path": "Principles and prospects for single-pixel imaging / Abstract",
+            "evidence_block_ids": ["blk_overview"],
+            "support_block_ids": [],
+        }
+    ]
+    support_resolution = [
+        {
+            "segment_index": 0,
+            "doc_idx": 1,
+            "claim_type": "overview",
+            "cite_policy": "locate_only",
+            "candidate_refs": [64, 65],
+            "locate_anchor": "An alternative approach is to perform sampling using a basis that is not necessarily incoherent with the spatial properties of the image, for example by using the Hadamard basis.",
+            "block_id": "blk_strategy",
+            "heading_path": "Principles and prospects for single-pixel imaging / Acquisition and image reconstruction strategies / Figure 3",
+        }
+    ]
+    block_lookup = {
+        "blk_strategy": {
+            "block_id": "blk_strategy",
+            "anchor_id": "anc_strategy",
+            "heading_path": "Principles and prospects for single-pixel imaging / Acquisition and image reconstruction strategies / Figure 3",
+            "text": "An alternative approach is to perform sampling using a basis that is not necessarily incoherent with the spatial properties of the image, for example by using the Hadamard basis.",
+        }
+    }
+
+    out = _annotate_segments_with_support_resolution(
+        segments,
+        support_resolution=support_resolution,
+        block_lookup=block_lookup,
+    )
+
+    assert str(out[0].get("mapping_source") or "") != "support_slot"
+    assert str(out[0].get("primary_block_id") or "") == "blk_overview"
+    assert str(out[0].get("primary_heading_path") or "") == "Principles and prospects for single-pixel imaging / Abstract"
+    assert str(out[0].get("anchor_text") or "").startswith("Single-pixel imaging is interesting because it offers a more constant cost per megapixel")
+    assert str(out[0].get("support_locate_anchor") or "") == ""
+
+
+def test_annotate_segments_with_support_resolution_skips_figure_caption_rebind_for_non_figure_method_text():
+    from kb.paper_guide_provenance import _annotate_segments_with_support_resolution
+
+    segments = [
+        {
+            "segment_id": "seg_1",
+            "text": "A separate network training dataset is synthesized to supervise the deep learning model.",
+            "raw_markdown": "A separate network training dataset is synthesized to supervise the deep learning model.",
+            "evidence_mode": "direct",
+            "claim_type": "method_detail",
+            "anchor_kind": "sentence",
+            "anchor_text": "A separate network training dataset is synthesized to supervise the deep learning model.",
+            "primary_block_id": "blk_discussion",
+            "primary_heading_path": "High-resolution single-photon imaging with physics-informed deep learning / Discussion",
+            "evidence_block_ids": ["blk_discussion"],
+            "support_block_ids": [],
+        }
+    ]
+    support_resolution = [
+        {
+            "segment_index": 0,
+            "doc_idx": 1,
+            "claim_type": "method_detail",
+            "cite_policy": "locate_only",
+            "locate_anchor": "Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging. a The workflow and structure of the reported network.",
+            "block_id": "blk_fig6_caption",
+            "heading_path": "High-resolution single-photon imaging with physics-informed deep learning / Methods / Network structure / Figure 6",
+            "figure_number": 6,
+        }
+    ]
+    block_lookup = {
+        "blk_fig6_caption": {
+            "block_id": "blk_fig6_caption",
+            "anchor_id": "p_fig6",
+            "heading_path": "High-resolution single-photon imaging with physics-informed deep learning / Methods / Network structure / Figure 6",
+            "kind": "paragraph",
+            "text": "Illustration of the reported deep transformer network for high-fidelity large-scale single-photon imaging. a The workflow and structure of the reported network.",
+            "number": 6,
+        }
+    }
+
+    out = _annotate_segments_with_support_resolution(
+        segments,
+        support_resolution=support_resolution,
+        block_lookup=block_lookup,
+    )
+
+    assert str(out[0].get("mapping_source") or "") != "support_slot"
+    assert str(out[0].get("primary_block_id") or "") == "blk_discussion"
+    assert str(out[0].get("primary_heading_path") or "") == "High-resolution single-photon imaging with physics-informed deep learning / Discussion"
+    assert str(out[0].get("support_locate_anchor") or "") == ""
 
 
 def test_canonicalize_support_segment_heading_appends_figure_number():
@@ -366,6 +566,55 @@ def test_build_paper_guide_answer_provenance_contains_snippet_aliases(tmp_path: 
     assert str(direct_segment.get("primary_block_id") or "").strip()
     assert isinstance(direct_segment.get("support_block_ids"), list)
     assert str(direct_segment.get("evidence_quote") or "").strip()
+    assert str(direct_segment.get("hit_level") or "").strip().lower() in {"exact", "block"}
+
+
+def test_build_paper_guide_answer_provenance_preserves_shared_primary_evidence(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    md_dir = tmp_path / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    block_text = "APR uses phase correlation for registration."
+    md_main.write_text(f"# Methods\n\n## APR\n\n{block_text}\n", encoding="utf-8")
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=block_text,
+        answer_hits=[
+            {
+                "text": block_text,
+                "meta": {
+                    "source_path": str(source_pdf),
+                    "ref_show_snippets": [block_text],
+                    "ref_best_heading_path": "Methods / APR",
+                },
+            }
+        ],
+        bound_source_path=str(source_pdf),
+        bound_source_name="DemoPaper.pdf",
+        db_dir=None,
+        llm_rerank=False,
+        primary_evidence={
+            "source_path": str(source_pdf),
+            "source_name": "DemoPaper.pdf",
+            "block_id": "blk_apr",
+            "anchor_id": "a_apr",
+            "heading_path": "Methods / APR",
+            "snippet": block_text,
+            "anchor_kind": "sentence",
+            "selection_reason": "shared_contract_seed",
+            "strict_locate": True,
+        },
+    )
+
+    assert isinstance(provenance, dict)
+    primary = provenance.get("primary_evidence") or {}
+    assert primary["source_name"] == "DemoPaper.pdf"
+    assert primary["block_id"] == "blk_apr"
+    assert primary["heading_path"] == "Methods / APR"
+    assert primary["selection_reason"] == "shared_contract_seed"
+    assert primary["strict_locate"] is True
 
 
 def test_build_paper_guide_answer_provenance_prefers_supported_experiment_block_over_abstract(monkeypatch, tmp_path: Path):
@@ -741,6 +990,24 @@ def test_segment_claim_meta_does_not_upgrade_explicit_generic_formula_supplement
     assert str(claim.get("anchor_kind") or "") == ""
 
 
+def test_segment_claim_meta_keeps_explicit_panel_claim_as_figure_panel():
+    from kb import task_runtime
+
+    claim = task_runtime._segment_claim_meta(
+        segment_text="Figure 3 panel (a) shows: (see caption and the paper).",
+        raw_markdown="Figure 3 panel (a) shows: (see caption and the paper).",
+        segment_kind="paragraph",
+        evidence_mode="direct",
+        primary_block={"block_id": "blk_fig3", "kind": "figure", "number": 3},
+        evidence_quote="Figure 3. (a) Input. (b) Output. (c) Error map.",
+        mapping_quality=0.91,
+    )
+
+    assert str(claim.get("claim_type") or "") == "figure_panel"
+    assert "a" in set([str(x).strip().lower() for x in list(claim.get("panel_letters") or []) if str(x).strip()])
+    assert int(claim.get("figure_number") or 0) == 3
+
+
 def test_apply_provenance_required_coverage_contract_hides_explicit_generic_formula_segment():
     from kb import task_runtime
 
@@ -1063,8 +1330,9 @@ def test_build_paper_guide_answer_provenance_rebinds_figure_claim_to_figure_bloc
     fig_seg = next(seg for seg in segments if str(seg.get("claim_type") or "") == "figure_claim")
     evidence_block_ids = [str(item or "") for item in list(fig_seg.get("evidence_block_ids") or [])]
 
-    assert str(fig_seg.get("primary_block_id") or "") == str(figure_block.get("block_id") or "")
-    assert str(fig_seg.get("primary_anchor_id") or "") == str(figure_block.get("anchor_id") or "")
+    # Prefer landing on the caption when present (more informative than the figure placeholder).
+    assert str(fig_seg.get("primary_block_id") or "") == str(caption_block.get("block_id") or "")
+    assert str(fig_seg.get("primary_anchor_id") or "") == str(caption_block.get("anchor_id") or "")
     assert str(fig_seg.get("primary_block_id") or "") != str(method_block.get("block_id") or "")
     assert str(caption_block.get("block_id") or "") in evidence_block_ids
     assert "single snapshot compressed image" in str(fig_seg.get("anchor_text") or "").lower()
@@ -1201,6 +1469,115 @@ def test_build_paper_guide_answer_provenance_groups_formula_explanation_as_requi
     assert str(formula_block.get("block_id") or "") in evidence_ids
     assert str(explanation_block.get("block_id") or "") in evidence_ids
     assert list(explanation_seg.get("related_block_ids") or []) == [str(formula_block.get("block_id") or "")]
+
+
+def test_build_paper_guide_answer_provenance_uses_equation_index_seed_for_formula_binding(
+    monkeypatch,
+    tmp_path: Path,
+):
+    import kb.paper_guide_provenance as provenance_runtime
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "IndexedFormulaPaper.pdf"
+    md_dir = tmp_path / "IndexedFormulaPaper"
+    assets_dir = md_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "IndexedFormulaPaper.en.md"
+    formula = "$$Y = \\sum_{i=1}^{N} X_i \\odot M_i + Z \\tag{3}$$"
+    decoy = "Equation (3) is central to the method, but this sentence is not the display formula block."
+    md_main.write_text(
+        (
+            "# Method\n\n"
+            f"{decoy}\n\n"
+            f"{formula}\n"
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = task_runtime.load_source_blocks(md_main)
+    formula_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "") == "equation"
+        and int(block.get("number") or 0) == 3
+    )
+    decoy_block = next(
+        block for block in blocks
+        if str(block.get("kind") or "") == "paragraph"
+        and "central to the method" in str(block.get("text") or "").lower()
+    )
+    (assets_dir / "equation_index.json").write_text(
+        json.dumps(
+            {
+                "equations": [
+                    {
+                        "equation_number": 3,
+                        "equation_markdown": formula,
+                        "block_id": str(formula_block.get("block_id") or ""),
+                        "anchor_id": str(formula_block.get("anchor_id") or ""),
+                        "heading_path": str(formula_block.get("heading_path") or ""),
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    real_match_source_blocks = provenance_runtime.match_source_blocks
+
+    def _fake_match_source_blocks(
+        blocks,
+        *,
+        snippet="",
+        heading_path="",
+        prefer_kind="",
+        target_number=0,
+        limit=3,
+        score_floor=None,
+    ):
+        if str(prefer_kind or "").strip().lower() == "equation" and int(target_number or 0) == 3:
+            return [{"score": 2.4, "block": dict(decoy_block)}]
+        return real_match_source_blocks(
+            blocks,
+            snippet=snippet,
+            heading_path=heading_path,
+            prefer_kind=prefer_kind,
+            target_number=target_number,
+            limit=limit,
+            score_floor=score_floor,
+        )
+
+    monkeypatch.setattr(provenance_runtime, "match_source_blocks", _fake_match_source_blocks)
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer=formula,
+        answer_hits=[
+            {
+                "text": decoy,
+                "meta": {
+                    "source_path": str(source_pdf),
+                    "ref_show_snippets": [decoy],
+                    "ref_best_heading_path": "Method",
+                    "anchor_target_kind": "equation",
+                    "anchor_target_number": 3,
+                },
+            }
+        ],
+        bound_source_path=str(source_pdf),
+        bound_source_name="IndexedFormulaPaper.pdf",
+        db_dir=None,
+        llm_rerank=False,
+    )
+
+    segments = provenance.get("segments") or []
+    formula_seg = next(seg for seg in segments if str(seg.get("claim_type") or "") == "formula_claim")
+
+    assert str(formula_seg.get("primary_block_id") or "") == str(formula_block.get("block_id") or "")
+    assert str(formula_seg.get("primary_block_id") or "") != str(decoy_block.get("block_id") or "")
+    assert str(formula_seg.get("anchor_kind") or "") == "equation"
+    assert bool(formula_seg.get("must_locate")) is True
+    assert str(formula_block.get("block_id") or "") in list(formula_seg.get("evidence_block_ids") or [])
 
 
 def test_apply_provenance_required_coverage_contract_rebinds_display_formula_to_source_inline_formula(tmp_path: Path):
@@ -2088,6 +2465,176 @@ def test_build_paper_guide_answer_provenance_prefers_support_resolution_heading_
     assert list(seg.get("support_slot_panel_letters") or []) == ["f"]
     assert str(seg.get("support_locate_anchor") or "") == "(f) methane imaging using SPC."
     assert str(seg.get("locate_policy") or "") == "required"
+
+
+def test_build_paper_guide_answer_provenance_backfills_anchor_only_support_resolution_from_anchor_index(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    assets_dir = md_dir / "assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "# Abstract\n\n"
+            "APR improves coherent reconstruction quality.\n\n"
+            "# Methods\n\n"
+            "APR was performed using image registration based on phase correlation of the off-axis raw images.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = task_runtime.load_source_blocks(md_main)
+    abstract_block = next(
+        block for block in blocks
+        if "coherent reconstruction quality" in str(block.get("text") or "").lower()
+    )
+    method_block = next(
+        block for block in blocks
+        if "phase correlation" in str(block.get("text") or "").lower()
+    )
+    (assets_dir / "anchor_index.json").write_text(
+        json.dumps(
+            {
+                "anchors": [
+                    {
+                        "anchor_id": str(method_block.get("anchor_id") or ""),
+                        "block_id": str(method_block.get("block_id") or ""),
+                        "kind": str(method_block.get("kind") or ""),
+                        "heading_path": str(method_block.get("heading_path") or ""),
+                        "order_index": int(method_block.get("order_index") or 0),
+                        "line_start": int(method_block.get("line_start") or 0),
+                        "line_end": int(method_block.get("line_end") or 0),
+                        "text": str(method_block.get("text") or ""),
+                    }
+                ]
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer="APR uses phase correlation to align the off-axis raw images.",
+        answer_hits=[
+            {
+                "text": str(abstract_block.get("text") or ""),
+                "meta": {
+                    "source_path": str(source_pdf),
+                    "heading_path": str(abstract_block.get("heading_path") or ""),
+                    "block_id": str(abstract_block.get("block_id") or ""),
+                    "anchor_id": str(abstract_block.get("anchor_id") or ""),
+                },
+            }
+        ],
+        bound_source_path=str(source_pdf),
+        bound_source_name="DemoPaper.pdf",
+        db_dir=tmp_path,
+        llm_rerank=False,
+        support_resolution=[
+            {
+                "doc_idx": 1,
+                "sid": "s-apr",
+                "source_path": str(source_pdf),
+                "block_id": "",
+                "anchor_id": str(method_block.get("anchor_id") or ""),
+                "heading_path": str(method_block.get("heading_path") or ""),
+                "locate_anchor": "APR was performed using image registration based on phase correlation of the off-axis raw images.",
+                "claim_type": "method_detail",
+                "cite_policy": "locate_only",
+                "segment_text": "APR uses phase correlation to align the off-axis raw images.",
+            }
+        ],
+    )
+
+    segments = provenance.get("segments") or []
+    assert len(segments) == 1
+    seg = segments[0]
+    assert str(seg.get("primary_block_id") or "") == str(method_block.get("block_id") or "")
+    assert str(seg.get("primary_anchor_id") or "") == str(method_block.get("anchor_id") or "")
+    assert str(seg.get("primary_heading_path") or "") == str(method_block.get("heading_path") or "")
+    assert str(seg.get("mapping_source") or "") == "support_slot"
+    assert str(seg.get("hit_level") or "") == "exact"
+    assert bool(seg.get("must_locate")) is True
+    assert bool(provenance.get("strict_identity_ready")) is True
+    block_map = provenance.get("block_map") or {}
+    method_entry = block_map.get(str(method_block.get("block_id") or ""))
+    assert isinstance(method_entry, dict)
+    assert str(method_entry.get("heading_path") or "") == str(method_block.get("heading_path") or "")
+
+
+def test_build_paper_guide_answer_provenance_does_not_rebind_broad_overview_to_figure_like_support_slot(tmp_path: Path):
+    from kb import task_runtime
+
+    source_pdf = tmp_path / "DemoPaper.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    md_dir = tmp_path / "DemoPaper"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "DemoPaper.en.md"
+    md_main.write_text(
+        (
+            "# Introduction\n\n"
+            "This paper tackles low-quality imaging in single-photon regimes.\n\n"
+            "# Methods / Image reconstruction\n\n"
+            "In addition, sub-pixel convolution is applied in the reconstruction block to further upsample the feature map for single-photon super resolution.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    blocks = task_runtime.load_source_blocks(md_main)
+    intro_block = next(
+        block for block in blocks
+        if "single-photon regimes" in str(block.get("text") or "").lower()
+    )
+    recon_block = next(
+        block for block in blocks
+        if "sub-pixel convolution" in str(block.get("text") or "").lower()
+    )
+
+    provenance = task_runtime._build_paper_guide_answer_provenance(
+        answer="This paper tackles low-quality imaging in single-photon regimes.",
+        answer_hits=[
+            {
+                "text": str(intro_block.get("text") or ""),
+                "meta": {
+                    "source_path": str(source_pdf),
+                    "heading_path": str(intro_block.get("heading_path") or ""),
+                    "block_id": str(intro_block.get("block_id") or ""),
+                    "anchor_id": str(intro_block.get("anchor_id") or ""),
+                },
+            }
+        ],
+        bound_source_path=str(source_pdf),
+        bound_source_name="DemoPaper.pdf",
+        db_dir=tmp_path,
+        llm_rerank=False,
+        support_resolution=[
+            {
+                "doc_idx": 1,
+                "sid": "s-fig",
+                "source_path": str(source_pdf),
+                "block_id": str(recon_block.get("block_id") or ""),
+                "anchor_id": str(recon_block.get("anchor_id") or ""),
+                "heading_path": "Methods / Image reconstruction / Figure 7",
+                "locate_anchor": "In addition, sub-pixel convolution is applied in the reconstruction block to further upsample the feature map for single-photon super resolution.",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "segment_text": "This paper tackles low-quality imaging in single-photon regimes.",
+                "segment_index": 1,
+                "segment_kind": "paragraph",
+                "figure_number": 7,
+            }
+        ],
+    )
+
+    segments = provenance.get("segments") or []
+    assert len(segments) == 1
+    seg = segments[0]
+    assert str(seg.get("mapping_source") or "") != "support_slot"
+    assert str(seg.get("primary_heading_path") or "") == str(intro_block.get("heading_path") or "")
 
 
 def test_build_paper_guide_answer_provenance_adds_box_heading_and_visible_locate(tmp_path: Path):
