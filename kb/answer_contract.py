@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from kb.paper_guide_shared import _source_name_from_md_path
+
 
 def _split_kb_miss_notice(text: str) -> tuple[str, str]:
     s = str(text or "").lstrip()
@@ -910,10 +912,7 @@ def _contract_source_name_from_hit(hit: dict) -> str:
     source_path = str((meta or {}).get("source_path") or "").strip()
     if not source_path:
         return ""
-    name = Path(source_path).name
-    if name.endswith(".en.md"):
-        return name[:-6] + ".pdf"
-    return name
+    return _source_name_from_md_path(source_path)
 
 
 def _contract_heading_from_hit(hit: dict) -> str:
@@ -944,10 +943,7 @@ def _contract_source_name_from_primary_evidence(primary_evidence: dict | None) -
     ).strip()
     if not source_path:
         return ""
-    name = Path(source_path).name
-    if name.endswith(".en.md"):
-        return name[:-6] + ".pdf"
-    return name
+    return _source_name_from_md_path(source_path)
 
 
 def _contract_heading_from_primary_evidence(primary_evidence: dict | None) -> str:

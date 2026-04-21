@@ -5,6 +5,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,10 +27,25 @@ def _resolve_repo_path(path_str: str | Path) -> Path:
     return ROOT / path
 
 
+def _wsl_mount_path_for_windows_path(path_str: str | Path) -> Path | None:
+    text = str(path_str or "").strip()
+    if not text:
+        return None
+    match = re.match(r"^(?P<drive>[A-Za-z]):[\\/](?P<rest>.+)$", text)
+    if not match:
+        return None
+    drive = str(match.group("drive") or "").lower()
+    rest = str(match.group("rest") or "").replace("\\", "/").lstrip("/")
+    return Path("/mnt") / drive / Path(rest)
+
+
 def _resolve_existing_path(path_str: str | Path) -> Path:
     resolved = _resolve_repo_path(path_str)
     if resolved.exists():
         return resolved
+    wsl_mount = _wsl_mount_path_for_windows_path(path_str)
+    if wsl_mount is not None and wsl_mount.exists():
+        return wsl_mount
     path = Path(path_str)
     if path.is_absolute():
         return resolved

@@ -35,6 +35,7 @@ from kb.reference_query_family import (
     prompt_explicitly_requests_multi_paper_list,
     prompt_reference_focus_action,
 )
+from kb.paper_guide_shared import _source_name_from_md_path
 from kb.source_blocks import load_source_blocks, source_blocks_to_reader_anchors
 from api.sse import sse_generator, sse_response
 from kb.reference_sync import (
@@ -575,7 +576,7 @@ def _build_pending_conversation_refs_payload(
             meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
             source_path = str((meta or {}).get("source_path") or "").strip()
             heading_path = str((meta or {}).get("ref_best_heading_path") or (meta or {}).get("top_heading") or "").strip()
-            display_name = Path(source_path).name.replace(".en.md", ".pdf") if source_path else "Reference"
+            display_name = _source_name_from_md_path(source_path) if source_path else "Reference"
             snippet_seed = ""
             for key in ("ref_show_snippets", "ref_snippets", "ref_overview_snippets"):
                 raw = (meta or {}).get(key)

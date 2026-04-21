@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from kb.file_ops import _resolve_md_output_paths
 from kb.llm import DeepSeekChat
@@ -135,7 +135,10 @@ def _cite_source_id(source_path: str) -> str:
 
 
 def _source_name_from_md_path(source_path: str) -> str:
-    src = Path(str(source_path or "").strip())
+    raw = str(source_path or "").strip()
+    if not raw:
+        return "unknown-source"
+    src = PureWindowsPath(raw)
     name = src.name or src.stem or "unknown-source"
     if name.lower().endswith(".en.md"):
         return re.sub(r"\.en\.md$", ".pdf", name, flags=re.IGNORECASE)
