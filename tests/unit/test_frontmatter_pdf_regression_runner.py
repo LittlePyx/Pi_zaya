@@ -1,10 +1,19 @@
 from pathlib import Path
 
+import pytest
+
 from tools.manual_regression import frontmatter_pdf_regression as runner
 
 
-def test_load_manifest_converter_frontmatter_pdf_v1_resolves_real_pdf_paths():
+def _load_real_sample_suite_or_skip():
     suite = runner.load_suite("tools/manual_regression/manifests/converter_frontmatter_pdf_v1.json")
+    if not all(Path(case["_pdf_abspath"]).exists() for case in suite["cases"]):
+        pytest.skip("real frontmatter regression PDFs are unavailable in this environment")
+    return suite
+
+
+def test_load_manifest_converter_frontmatter_pdf_v1_resolves_real_pdf_paths():
+    suite = _load_real_sample_suite_or_skip()
 
     assert suite["suite_id"] == "converter_frontmatter_pdf_v1"
     case_ids = {case["id"] for case in suite["cases"]}
