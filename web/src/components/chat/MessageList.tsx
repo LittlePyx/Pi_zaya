@@ -144,6 +144,9 @@ interface RefHitLite {
 
 interface RefEntryLite {
   hits?: RefHitLite[]
+  display_state?: string
+  suppression_reason?: string
+  guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
 }
 
 interface LowConfidenceMetaLite {
@@ -594,9 +597,17 @@ function buildGuideLocateCandidates(
 function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
   const entry = refs[String(msgId)] as {
     hits?: Array<{ meta?: Record<string, unknown> }>
+    display_state?: string
     guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
   } | undefined
   if (!entry) return false
+  const displayState = String(entry.display_state || '').trim().toLowerCase()
+  if (displayState === 'pending' || displayState === 'ready' || displayState === 'hidden_by_guide' || displayState === 'suppressed') {
+    return true
+  }
+  if (displayState === 'empty') {
+    return false
+  }
   const hits = Array.isArray(entry.hits) ? entry.hits : []
   const filteredCount = Number((entry.guide_filter || {}).filtered_hit_count || 0)
   return hits.length > 0 || Boolean((entry.guide_filter || {}).hidden_self_source) || filteredCount > 0

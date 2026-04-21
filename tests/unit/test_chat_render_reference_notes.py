@@ -203,6 +203,70 @@ def test_non_paper_guide_message_preserves_minimal_primary_evidence_contract():
     assert packet["primary_evidence"]["heading_path"] == "2. Comparison of theory / 2.2 Basis patterns generation"
 
 
+def test_enrich_messages_uses_rendered_payload_primary_evidence_from_stored_refs_row():
+    messages = [
+        {"id": 1, "role": "user", "content": "Besides this paper, what other papers discuss Fourier single-pixel imaging?"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "A coarse answer seeded from the bound paper.",
+            "meta": {
+                "paper_guide_contracts": {
+                    "version": 1,
+                    "primary_evidence": {
+                        "source_name": "NatPhoton-2019.pdf",
+                        "heading_path": "Abstract / Camera architecture",
+                        "selection_reason": "answer_hit_top",
+                    },
+                    "render_packet": {},
+                }
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [],
+            "rendered_payload": {
+                "hits": [
+                    {
+                        "ui_meta": {
+                            "reader_open": {
+                                "sourcePath": "oe2017.md",
+                                "headingPath": "2. Comparison of theory / 2.2 Basis patterns generation",
+                                "blockId": "blk_22",
+                            }
+                        }
+                    }
+                ],
+                "primary_evidence": {
+                    "source_path": "oe2017.md",
+                    "source_name": "OE-2017.pdf",
+                    "block_id": "blk_22",
+                    "anchor_id": "a_22",
+                    "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                    "selection_reason": "prompt_aligned",
+                },
+                "render_status": "full",
+            },
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(
+        messages,
+        refs_by_user=refs_by_user,
+        conv_id="conv-cross-paper",
+        render_packet_only=True,
+    )
+    msg = rendered[-1]
+    contracts = (((msg.get("meta") or {}).get("paper_guide_contracts")) or {})
+    packet = contracts.get("render_packet") or {}
+
+    assert (contracts.get("primary_evidence") or {}).get("source_name") == "OE-2017.pdf"
+    assert (contracts.get("primary_evidence") or {}).get("block_id") == "blk_22"
+    assert (packet.get("primary_evidence") or {}).get("source_name") == "OE-2017.pdf"
+    assert (packet.get("primary_evidence") or {}).get("heading_path") == "2. Comparison of theory / 2.2 Basis patterns generation"
+
+
 def test_existing_render_packet_preserves_compat_render_fields_when_current_render_degrades():
     messages = [
         {"id": 1, "role": "user", "content": "explain this"},
@@ -1568,6 +1632,172 @@ def test_merge_render_packet_contract_meta_surfaces_primary_evidence_from_proven
     assert packet.get("primary_evidence", {}).get("block_id") == "b-7"
     assert packet.get("primary_evidence", {}).get("heading_path") == "Methods / APR"
     assert packet.get("reader_open", {}).get("blockId") == "b-7"
+
+
+def test_merge_render_packet_contract_meta_prefers_shared_primary_identity_over_drifting_provenance():
+    from api import chat_render
+
+    rec = {
+        "content": "Grounded answer.",
+        "rendered_body": "Grounded answer.",
+        "rendered_content": "Grounded answer.",
+        "copy_markdown": "Grounded answer.",
+        "copy_text": "Grounded answer.",
+        "notice": "",
+        "cite_details": [],
+        "meta": {
+            "paper_guide_contracts": {
+                "primary_evidence": {
+                    "source_path": "oe.md",
+                    "source_name": "OE-2017.pdf",
+                    "block_id": "b-22",
+                    "anchor_id": "a-22",
+                    "heading_path": "2. Comparison / 2.2 Basis patterns generation",
+                    "snippet": "Fourier basis patterns are strictly periodical.",
+                },
+                "render_packet": {},
+            }
+        },
+    }
+
+    chat_render._merge_render_packet_contract_meta(
+        rec=rec,
+        msg_id=3,
+        enriched_provenance={
+            "segments": [
+                {
+                    "segment_id": "seg-1",
+                    "locate_policy": "required",
+                    "locate_target": {
+                        "segmentId": "seg-1",
+                        "headingPath": "2. Comparison / 2.2 Basis patterns generation",
+                        "blockId": "b-22",
+                    },
+                    "reader_open": {
+                        "sourcePath": "oe.md",
+                        "headingPath": "2. Comparison / 2.2 Basis patterns generation",
+                        "blockId": "b-22",
+                    },
+                }
+            ],
+            "primary_evidence": {
+                "source_path": "natphoton.md",
+                "source_name": "NatPhoton-2019.pdf",
+                "block_id": "b-nat",
+                "anchor_id": "a-nat",
+                "heading_path": "Abstract / Acquisition and image reconstruction strategies.",
+                "snippet": "A broader overview paragraph.",
+                "selection_reason": "provenance_segment",
+            },
+        },
+        chat_store=None,
+    )
+
+    packet = (((rec.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    assert packet.get("primary_evidence", {}).get("source_name") == "OE-2017.pdf"
+    assert packet.get("primary_evidence", {}).get("block_id") == "b-22"
+    assert packet.get("primary_evidence", {}).get("heading_path") == "2. Comparison / 2.2 Basis patterns generation"
+
+
+def test_merge_render_packet_contract_meta_refreshes_contract_primary_from_refs_pack():
+    from api import chat_render
+
+    rec = {
+        "content": "Grounded answer.",
+        "rendered_body": "Grounded answer.",
+        "rendered_content": "Grounded answer.",
+        "copy_markdown": "Grounded answer.",
+        "copy_text": "Grounded answer.",
+        "notice": "",
+        "cite_details": [],
+        "meta": {
+            "paper_guide_contracts": {
+                "primary_evidence": {
+                    "source_path": "sciadv.md",
+                    "source_name": "SciAdv-2017.pdf",
+                    "heading_path": "INTRODUCTION",
+                    "snippet": "A broad answer-hit snippet.",
+                    "selection_reason": "answer_hit_top",
+                },
+                "render_packet": {},
+            }
+        },
+    }
+
+    chat_render._merge_render_packet_contract_meta(
+        rec=rec,
+        msg_id=4,
+        enriched_provenance={"segments": []},
+        ref_pack={
+            "primary_evidence": {
+                "source_path": "sciadv.md",
+                "source_name": "SciAdv-2017.pdf",
+                "block_id": "blk_30",
+                "anchor_id": "a_30",
+                "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+                "snippet": "dynamic supersampling is defined here.",
+                "selection_reason": "prompt_aligned",
+            }
+        },
+        chat_store=None,
+    )
+
+    contracts = ((rec.get("meta") or {}).get("paper_guide_contracts") or {})
+    packet = contracts.get("render_packet") or {}
+    assert (contracts.get("primary_evidence") or {}).get("block_id") == "blk_30"
+    assert (contracts.get("primary_evidence") or {}).get("heading_path") == "INTRODUCTION / Spatially variant digital supersampling"
+    assert (packet.get("primary_evidence") or {}).get("block_id") == "blk_30"
+
+
+def test_merge_render_packet_contract_meta_allows_refs_pack_to_replace_coarse_cross_paper_seed():
+    from api import chat_render
+
+    rec = {
+        "content": "Grounded answer.",
+        "rendered_body": "Grounded answer.",
+        "rendered_content": "Grounded answer.",
+        "copy_markdown": "Grounded answer.",
+        "copy_text": "Grounded answer.",
+        "notice": "",
+        "cite_details": [],
+        "meta": {
+            "paper_guide_contracts": {
+                "primary_evidence": {
+                    "source_path": "natphoton.md",
+                    "source_name": "NatPhoton-2019.pdf",
+                    "heading_path": "Abstract / Acquisition and image reconstruction strategies.",
+                    "snippet": "A broad answer-hit snippet.",
+                    "selection_reason": "answer_hit_top",
+                },
+                "render_packet": {},
+            }
+        },
+    }
+
+    chat_render._merge_render_packet_contract_meta(
+        rec=rec,
+        msg_id=5,
+        enriched_provenance={"segments": []},
+        ref_pack={
+            "primary_evidence": {
+                "source_path": "oe2017.md",
+                "source_name": "OE-2017.pdf",
+                "block_id": "blk_22",
+                "anchor_id": "a_22",
+                "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                "snippet": "Section 2.2 explicitly compares Hadamard and Fourier basis patterns.",
+                "selection_reason": "prompt_aligned",
+            }
+        },
+        chat_store=None,
+    )
+
+    contracts = ((rec.get("meta") or {}).get("paper_guide_contracts") or {})
+    packet = contracts.get("render_packet") or {}
+    assert (contracts.get("primary_evidence") or {}).get("source_name") == "OE-2017.pdf"
+    assert (contracts.get("primary_evidence") or {}).get("block_id") == "blk_22"
+    assert (packet.get("primary_evidence") or {}).get("source_name") == "OE-2017.pdf"
+    assert (packet.get("primary_evidence") or {}).get("heading_path") == "2. Comparison of theory / 2.2 Basis patterns generation"
 
 
 def test_enrich_messages_invalidates_render_cache_when_refs_change(monkeypatch, tmp_path: Path):

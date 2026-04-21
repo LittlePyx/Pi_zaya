@@ -52,7 +52,11 @@ from kb.generation_citation_validation_runtime import (
     _validate_structured_citations as _citation_validation_validate_structured_citations,
 )
 from kb.generation_answer_finalize_runtime import (
+    _build_multi_paper_doc_list_contract as _finalize_runtime_build_multi_paper_doc_list_contract,
+    _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
+    _filter_multi_paper_doc_list_contract as _finalize_runtime_filter_multi_paper_doc_list_contract,
     _finalize_generation_answer as _finalize_runtime_finalize_generation_answer,
+    _format_multi_paper_list_answer as _finalize_runtime_format_multi_paper_list_answer,
 )
 from kb.generation_message_runtime import (
     _build_generation_messages as _generation_build_messages,
@@ -194,6 +198,7 @@ from kb.paper_guide_shared import (
     _trim_paper_guide_prompt_field,
     _trim_paper_guide_prompt_snippet,
 )
+from kb.reference_query_family import prompt_explicitly_requests_multi_paper_list
 from kb.pdf_tools import run_pdf_to_md
 from kb.paper_guide_postprocess import (
     _sanitize_paper_guide_answer_for_user,
@@ -409,6 +414,35 @@ def _perf_log(stage: str, **metrics) -> None:
         pass
 
 
+def _llm_provider_label(settings_obj: object | None) -> str:
+    settings = settings_obj if settings_obj is not None else None
+    base_url = str(getattr(settings, "base_url", "") or "").strip().lower()
+    model = str(getattr(settings, "model", "") or "").strip()
+    if ("dashscope" in base_url) or ("qwen" in model.lower()):
+        return "Qwen"
+    if "deepseek" in base_url or "deepseek" in model.lower():
+        return "DeepSeek"
+    if model:
+        return model
+    if base_url:
+        return base_url
+    return "current provider"
+
+
+def _format_llm_failure_message(*, err: object, settings_obj: object | None) -> str:
+    base = S["llm_fail"].format(err=str(err))
+    provider = _llm_provider_label(settings_obj)
+    detail = []
+    if provider:
+        detail.append(f"当前 provider：{provider}")
+    model = str(getattr(settings_obj, "model", "") or "").strip()
+    if model and model != provider:
+        detail.append(f"model：{model}")
+    if not detail:
+        return base
+    return f"{base}\n\n" + "；".join(detail) + "。"
+
+
 def _warm_refs_citation_meta_background(source_paths: list[str], *, library_db_path: Path | str | None) -> None:
     uniq_paths: list[str] = []
     seen: set[str] = set()
@@ -555,6 +589,556 @@ def _build_precomputed_refs_render_payload(
     except Exception:
         sig = ""
     return payload, str(sig or "").strip()
+
+
+def _extract_doc_list_contract(paper_guide_contracts: dict | None) -> list[dict]:
+    contracts = dict(paper_guide_contracts or {})
+    rows = [dict(item) for item in list(contracts.get("doc_list") or []) if isinstance(item, dict)]
+    return rows
+
+
+def _load_stored_doc_list_contract(
+    *,
+    chat_db: Path | str,
+    conv_id: str,
+    assistant_msg_id: int,
+) -> list[dict]:
+    amid = int(assistant_msg_id or 0)
+    if amid <= 0:
+        return []
+    try:
+        chat_store = ChatStore(Path(str(chat_db or "")).expanduser())
+        messages = chat_store.get_messages(str(conv_id or "").strip())
+    except Exception:
+        return []
+    for rec in list(messages or []):
+        try:
+            mid = int(rec.get("id") or 0)
+        except Exception:
+            mid = 0
+        if mid != amid:
+            continue
+        meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
+        contracts = meta.get("paper_guide_contracts") if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+        return _extract_doc_list_contract(contracts)
+    return []
+
+
+def _await_stored_doc_list_contract(
+    *,
+    chat_db: Path | str,
+    conv_id: str,
+    assistant_msg_id: int,
+    wait_timeout_s: float = 0.0,
+    poll_interval_s: float = 0.1,
+) -> list[dict]:
+    timeout_s = max(0.0, float(wait_timeout_s or 0.0))
+    deadline = time.time() + timeout_s
+    while True:
+        rows = _load_stored_doc_list_contract(
+            chat_db=chat_db,
+            conv_id=conv_id,
+            assistant_msg_id=assistant_msg_id,
+        )
+        if rows or time.time() >= deadline:
+            return rows
+        time.sleep(max(0.02, min(0.25, float(poll_interval_s or 0.1))))
+
+
+def _build_doc_list_refs_render_payload(
+    *,
+    user_msg_id: int,
+    prompt: str,
+    prompt_sig: str,
+    hits: list[dict],
+    scores: list[float],
+    used_query: str,
+    used_translation: bool,
+    doc_list: list[dict] | None,
+    guide_mode: bool = False,
+    guide_source_path: str = "",
+    guide_source_name: str = "",
+) -> tuple[dict | None, str]:
+    mid = int(user_msg_id or 0)
+    docs = [dict(item) for item in list(doc_list or []) if isinstance(item, dict)]
+    if mid <= 0:
+        return None, ""
+    pack = {
+        "user_msg_id": mid,
+        "prompt": str(prompt or "").strip(),
+        "prompt_sig": str(prompt_sig or "").strip(),
+        "hits": [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)],
+        "scores": list(scores or []),
+        "used_query": str(used_query or "").strip(),
+        "used_translation": bool(used_translation),
+    }
+    try:
+        from api.reference_ui import build_doc_list_refs_payload
+        from api.routers.references import _refs_pack_render_signature
+    except Exception:
+        return None, ""
+    try:
+        payload = build_doc_list_refs_payload(
+            user_msg_id=mid,
+            pack=pack,
+            doc_list=docs,
+            allow_expensive_llm=False,
+            allow_exact_locate=True,
+            guide_mode=bool(guide_mode),
+            guide_source_path=str(guide_source_path or "").strip(),
+            guide_source_name=str(guide_source_name or "").strip(),
+        )
+    except Exception:
+        return None, ""
+    if not isinstance(payload, dict) or (not payload):
+        return None, ""
+    try:
+        sig = _refs_pack_render_signature(
+            user_msg_id=mid,
+            pack=pack,
+            guide_mode=bool(guide_mode),
+            guide_source_path=str(guide_source_path or "").strip(),
+            guide_source_name=str(guide_source_name or "").strip(),
+        )
+    except Exception:
+        sig = ""
+    return payload, str(sig or "").strip()
+
+
+def _compact_doc_list_surface_text(text: str) -> str:
+    return " ".join(str(text or "").strip().split())
+
+
+def _rendered_primary_precision_score(primary_evidence: dict | None) -> tuple[int, int, int, int, int, int]:
+    if not isinstance(primary_evidence, dict) or not primary_evidence:
+        return (0, 0, 0, 0, 0, 0)
+    reason = str(
+        primary_evidence.get("selection_reason")
+        or primary_evidence.get("selectionReason")
+        or ""
+    ).strip().lower()
+    reason_rank = {
+        "prompt_aligned_block": 7,
+        "prompt_aligned": 6,
+        "shared_refs_pack": 5,
+        "reader_open": 5,
+        "strict_locate": 5,
+        "pending_section_seed": 2,
+        "shared_contract_seed": 1,
+        "answer_hit_top": 0,
+    }.get(reason, 3 if reason else 0)
+    return (
+        reason_rank,
+        1 if bool(primary_evidence.get("strict_locate") or primary_evidence.get("strictLocate")) else 0,
+        1 if str(primary_evidence.get("block_id") or primary_evidence.get("blockId") or "").strip() else 0,
+        1 if str(primary_evidence.get("anchor_id") or primary_evidence.get("anchorId") or "").strip() else 0,
+        1 if str(primary_evidence.get("heading_path") or primary_evidence.get("headingPath") or "").strip() else 0,
+        1
+        if _compact_doc_list_surface_text(
+            str(
+                primary_evidence.get("highlight_snippet")
+                or primary_evidence.get("highlightSnippet")
+                or primary_evidence.get("snippet")
+                or ""
+            )
+        )
+        else 0,
+    )
+
+
+def _normalize_rendered_primary_evidence(
+    *,
+    candidate: dict | None,
+    source_path: str = "",
+    source_name: str = "",
+    reader_open: dict | None = None,
+) -> dict:
+    if not isinstance(candidate, dict):
+        candidate = {}
+    out = {
+        key: value
+        for key, value in dict(candidate or {}).items()
+        if value not in ("", None, [], {})
+    }
+    if not out and not isinstance(reader_open, dict):
+        return {}
+    source_path = str(source_path or "").strip()
+    source_name = str(source_name or "").strip()
+    reader = dict(reader_open or {}) if isinstance(reader_open, dict) else {}
+
+    alias_pairs = (
+        ("source_path", ("source_path", "sourcePath")),
+        ("source_name", ("source_name", "sourceName")),
+        ("block_id", ("block_id", "blockId")),
+        ("anchor_id", ("anchor_id", "anchorId")),
+        ("heading_path", ("heading_path", "headingPath")),
+        ("snippet", ("snippet",)),
+        ("highlight_snippet", ("highlight_snippet", "highlightSnippet")),
+        ("anchor_kind", ("anchor_kind", "anchorKind")),
+        ("selection_reason", ("selection_reason", "selectionReason")),
+    )
+    for canonical_key, aliases in alias_pairs:
+        if str(out.get(canonical_key) or "").strip():
+            continue
+        for alias in aliases:
+            value = str(out.get(alias) or "").strip()
+            if value:
+                out[canonical_key] = value
+                break
+
+    if not str(out.get("source_path") or "").strip() and source_path:
+        out["source_path"] = source_path
+    if not str(out.get("source_name") or "").strip() and source_name:
+        out["source_name"] = source_name
+
+    if reader:
+        if not str(out.get("heading_path") or "").strip() and str(reader.get("headingPath") or "").strip():
+            out["heading_path"] = str(reader.get("headingPath") or "").strip()
+        if not str(out.get("snippet") or "").strip() and _compact_doc_list_surface_text(str(reader.get("snippet") or "").strip()):
+            out["snippet"] = _compact_doc_list_surface_text(str(reader.get("snippet") or "").strip())
+        if not str(out.get("highlight_snippet") or "").strip() and _compact_doc_list_surface_text(str(reader.get("highlightSnippet") or "").strip()):
+            out["highlight_snippet"] = _compact_doc_list_surface_text(str(reader.get("highlightSnippet") or "").strip())
+        if not str(out.get("block_id") or "").strip() and str(reader.get("blockId") or "").strip():
+            out["block_id"] = str(reader.get("blockId") or "").strip()
+        if not str(out.get("anchor_id") or "").strip() and str(reader.get("anchorId") or "").strip():
+            out["anchor_id"] = str(reader.get("anchorId") or "").strip()
+        if not str(out.get("anchor_kind") or "").strip() and str(reader.get("anchorKind") or "").strip():
+            out["anchor_kind"] = str(reader.get("anchorKind") or "").strip().lower()
+        anchor_number = reader.get("anchorNumber")
+        if ("anchor_number" not in out) and anchor_number not in ("", None):
+            out["anchor_number"] = anchor_number
+        if "strict_locate" not in out and "strictLocate" in reader:
+            out["strict_locate"] = bool(reader.get("strictLocate"))
+
+    anchor_number = out.get("anchor_number")
+    if anchor_number not in ("", None):
+        try:
+            out["anchor_number"] = int(anchor_number)
+        except Exception:
+            out.pop("anchor_number", None)
+    if "strictLocate" in out and "strict_locate" not in out:
+        out["strict_locate"] = bool(out.get("strictLocate"))
+    return {
+        key: value
+        for key, value in out.items()
+        if value not in ("", None, [], {})
+    }
+
+
+def _extract_rendered_hit_primary_evidence(*, hit: dict, base_row: dict | None = None) -> dict:
+    hit_dict = dict(hit or {}) if isinstance(hit, dict) else {}
+    row = dict(base_row or {}) if isinstance(base_row, dict) else {}
+    meta = hit_dict.get("meta") if isinstance(hit_dict.get("meta"), dict) else {}
+    ui_meta = hit_dict.get("ui_meta") if isinstance(hit_dict.get("ui_meta"), dict) else {}
+    reader_open = ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {}
+    source_path = str(
+        ui_meta.get("source_path")
+        or meta.get("source_path")
+        or row.get("source_path")
+        or ""
+    ).strip()
+    source_name = str(
+        ui_meta.get("display_name")
+        or meta.get("source_name")
+        or row.get("source_name")
+        or ""
+    ).strip()
+
+    candidates: list[dict] = []
+    for raw_candidate in (
+        ui_meta.get("primary_evidence") if isinstance(ui_meta.get("primary_evidence"), dict) else {},
+        (reader_open.get("primaryEvidence") if isinstance(reader_open, dict) else {}),
+        (ui_meta.get("authoritative_primary_evidence") if isinstance(ui_meta.get("authoritative_primary_evidence"), dict) else {}),
+        (row.get("primary_evidence") if isinstance(row.get("primary_evidence"), dict) else {}),
+    ):
+        candidate = _normalize_rendered_primary_evidence(
+            candidate=raw_candidate if isinstance(raw_candidate, dict) else {},
+            source_path=source_path,
+            source_name=source_name,
+            reader_open=reader_open,
+        )
+        if candidate:
+            candidates.append(candidate)
+
+    best: dict = {}
+    best_score = (0, 0, 0, 0, 0, 0)
+    for candidate in candidates:
+        score = _rendered_primary_precision_score(candidate)
+        if (not best) or score > best_score:
+            best = dict(candidate)
+            best_score = score
+    return best
+
+
+def _pick_doc_list_contract_primary_evidence(doc_list_contract: list[dict] | None) -> dict:
+    for raw_item in list(doc_list_contract or []):
+        if not isinstance(raw_item, dict):
+            continue
+        primary = _normalize_rendered_primary_evidence(
+            candidate=raw_item.get("primary_evidence") if isinstance(raw_item.get("primary_evidence"), dict) else {},
+            source_path=str(raw_item.get("source_path") or "").strip(),
+            source_name=str(raw_item.get("source_name") or "").strip(),
+        )
+        if primary:
+            return primary
+    return {}
+
+
+def _sync_multi_paper_primary_evidence_into_contracts(
+    *,
+    paper_guide_contracts: dict | None,
+    doc_list_contract: list[dict] | None,
+) -> dict:
+    contracts = dict(paper_guide_contracts or {}) if isinstance(paper_guide_contracts, dict) else {}
+    doc_list_primary = _pick_doc_list_contract_primary_evidence(doc_list_contract)
+    if not doc_list_primary:
+        return contracts
+    current_primary = (
+        dict(contracts.get("primary_evidence") or {})
+        if isinstance(contracts.get("primary_evidence"), dict)
+        else {}
+    )
+    if current_primary != doc_list_primary:
+        contracts["primary_evidence"] = dict(doc_list_primary)
+    render_packet = (
+        dict(contracts.get("render_packet") or {})
+        if isinstance(contracts.get("render_packet"), dict)
+        else {}
+    )
+    if render_packet:
+        render_packet_primary = (
+            dict(render_packet.get("primary_evidence") or {})
+            if isinstance(render_packet.get("primary_evidence"), dict)
+            else {}
+        )
+        if render_packet_primary != doc_list_primary:
+            render_packet["primary_evidence"] = dict(doc_list_primary)
+            contracts["render_packet"] = render_packet
+    return contracts
+
+
+def _build_doc_list_contract_from_rendered_payload(
+    *,
+    doc_list_contract: list[dict] | None,
+    rendered_payload: dict | None,
+) -> list[dict]:
+    rows = [dict(item) for item in list(doc_list_contract or []) if isinstance(item, dict)]
+    payload = dict(rendered_payload or {}) if isinstance(rendered_payload, dict) else {}
+    hits = [dict(item) for item in list(payload.get("hits") or []) if isinstance(item, dict)]
+    if not rows or not hits:
+        return rows
+
+    rows_by_source: dict[str, dict] = {}
+    row_order: list[str] = []
+    for row in rows:
+        source_path = str(row.get("source_path") or "").strip()
+        if (not source_path) or (source_path in rows_by_source):
+            continue
+        rows_by_source[source_path] = dict(row)
+        row_order.append(source_path)
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for hit in hits:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        source_path = str(
+            ui_meta.get("source_path")
+            or meta.get("source_path")
+            or ""
+        ).strip()
+        if (not source_path) or (source_path in seen):
+            continue
+        base = dict(rows_by_source.get(source_path) or {})
+        row = {
+            key: value
+            for key, value in base.items()
+            if value not in ("", None, [], {})
+        }
+        source_name = str(
+            ui_meta.get("display_name")
+            or row.get("source_name")
+            or meta.get("source_name")
+            or ""
+        ).strip()
+        if source_path:
+            row["source_path"] = source_path
+        if source_name:
+            row["source_name"] = source_name
+        primary_evidence = _extract_rendered_hit_primary_evidence(
+            hit=hit,
+            base_row=row,
+        )
+        heading_path = str(
+            ui_meta.get("heading_path")
+            or primary_evidence.get("heading_path")
+            or row.get("heading_path")
+            or meta.get("ref_best_heading_path")
+            or ""
+        ).strip()
+        if heading_path:
+            row["heading_path"] = heading_path
+        summary_line = str(
+            ui_meta.get("summary_line")
+            or primary_evidence.get("highlight_snippet")
+            or primary_evidence.get("snippet")
+            or row.get("summary_line")
+            or ""
+        ).strip()
+        if summary_line:
+            row["summary_line"] = _compact_doc_list_surface_text(summary_line)
+        else:
+            row.pop("summary_line", None)
+        if primary_evidence:
+            row["primary_evidence"] = {
+                key: value
+                for key, value in primary_evidence.items()
+                if value not in ("", None, [], {})
+            }
+        topic_match_kind = str(
+            ui_meta.get("topic_match_kind")
+            or row.get("topic_match_kind")
+            or ""
+        ).strip()
+        if topic_match_kind:
+            row["topic_match_kind"] = topic_match_kind
+        out.append(row)
+        seen.add(source_path)
+
+    for source_path in row_order:
+        if source_path in seen:
+            continue
+        out.append(dict(rows_by_source.get(source_path) or {}))
+    return out or rows
+
+
+def _filter_multi_paper_seed_docs_for_display(
+    *,
+    prompt: str,
+    seed_docs: list[dict] | None,
+) -> list[dict]:
+    docs = [dict(item) for item in list(seed_docs or []) if isinstance(item, dict)]
+    if not docs:
+        return []
+    try:
+        doc_list_seed = _finalize_runtime_build_multi_paper_doc_list_contract(
+            prompt=prompt,
+            seed_docs=list(docs),
+            answer_hits=list(docs),
+            evidence_cards=[],
+        )
+    except Exception:
+        return docs
+    try:
+        filtered_doc_list_seed = _finalize_runtime_filter_multi_paper_doc_list_contract(
+            prompt=prompt,
+            doc_list=list(doc_list_seed or []),
+        )
+    except Exception:
+        filtered_doc_list_seed = list(doc_list_seed or [])
+    effective_doc_list_seed = list(filtered_doc_list_seed or doc_list_seed or [])
+    source_order = [
+        str(item.get("source_path") or "").strip()
+        for item in effective_doc_list_seed
+        if isinstance(item, dict) and str(item.get("source_path") or "").strip()
+    ]
+    if not source_order:
+        return docs
+    docs_by_source: dict[str, dict] = {}
+    for doc in docs:
+        meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        if source_path and source_path not in docs_by_source:
+            docs_by_source[source_path] = doc
+    filtered: list[dict] = []
+    seen: set[str] = set()
+    for source_path in source_order:
+        doc = docs_by_source.get(source_path)
+        if not isinstance(doc, dict) or source_path in seen:
+            continue
+        filtered.append(doc)
+        seen.add(source_path)
+    target_count = min(len(source_order), len(docs))
+    if len(filtered) < target_count:
+        for doc in docs:
+            meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+            source_path = str((meta or {}).get("source_path") or "").strip()
+            if (not source_path) or source_path in seen:
+                continue
+            filtered.append(doc)
+            seen.add(source_path)
+            if len(filtered) >= target_count:
+                break
+    return filtered or docs
+
+
+def _select_multi_paper_seed_docs_for_display(
+    *,
+    prompt_multi_paper_list: bool,
+    paper_guide_cross_paper_refs: bool,
+    answer_grouped_docs: list[dict] | None,
+    grouped_docs: list[dict] | None,
+) -> list[dict]:
+    if not prompt_multi_paper_list:
+        return [dict(item) for item in list(grouped_docs or []) if isinstance(item, dict)]
+    if paper_guide_cross_paper_refs and grouped_docs:
+        return [dict(item) for item in list(grouped_docs or []) if isinstance(item, dict)]
+    return [
+        dict(item)
+        for item in list(answer_grouped_docs or grouped_docs or [])
+        if isinstance(item, dict)
+    ]
+
+
+def _select_answer_seed_for_generation(
+    *,
+    paper_guide_cross_paper_refs: bool,
+    answer_grouped_docs: list[dict] | None,
+    grouped_docs: list[dict] | None,
+    heading_hits: list[dict] | None,
+) -> list[dict]:
+    if paper_guide_cross_paper_refs and grouped_docs:
+        return [dict(item) for item in list(grouped_docs or []) if isinstance(item, dict)]
+    return [
+        dict(item)
+        for item in list(answer_grouped_docs or grouped_docs or heading_hits or [])
+        if isinstance(item, dict)
+    ]
+
+
+def _should_sync_deep_seed_for_display(
+    *,
+    hits_raw: list[dict] | None,
+    guide_strict_mode: bool,
+    prompt: str,
+    retrieval_prompt: str,
+) -> bool:
+    if not list(hits_raw or []):
+        return False
+    prompt_text = str(prompt or retrieval_prompt or "").strip()
+    return bool(
+        guide_strict_mode
+        or _needs_bound_source_hint(prompt_text)
+        or prompt_explicitly_requests_multi_paper_list(prompt_text)
+    )
+
+
+def _set_refs_hit_pack_state(hits: list[dict] | None, *, state: str) -> list[dict]:
+    out: list[dict] = []
+    state_norm = str(state or "").strip().lower()
+    for raw_hit in list(hits or []):
+        if not isinstance(raw_hit, dict):
+            continue
+        hit = copy.deepcopy(raw_hit)
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        meta2 = dict(meta or {})
+        if state_norm:
+            meta2["ref_pack_state"] = state_norm
+        else:
+            meta2.pop("ref_pack_state", None)
+        hit["meta"] = meta2
+        out.append(hit)
+    return out
 
 
 _PAPER_GUIDE_PREFETCH_LOCK = threading.Lock()
@@ -1805,6 +2389,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         hits: list[dict] = []
         grouped_docs: list[dict] = []
         answer_grouped_docs: list[dict] = []
+        refs_seed_docs_for_display: list[dict] = []
         refs_unscoped_hits_raw: list[dict] = []
         paper_guide_cross_paper_refs = bool(
             paper_guide_mode
@@ -2150,6 +2735,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             # deferred to async so it does not block first answer latency.
             _perf_log("gen.answer_refs_enrich", elapsed=0.0, docs=len(answer_grouped_docs), mode="async_only")
 
+            prompt_multi_paper_list = bool(prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or ""))
             try:
                 refs_async_enabled = bool(int(str(os.environ.get("KB_REFS_ASYNC_ENRICH", "1") or "1")))
             except Exception:
@@ -2164,18 +2750,31 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 refs_async_in_paper_guide=refs_async_in_paper_guide,
                 paper_guide_cross_paper_refs=paper_guide_cross_paper_refs,
             )
+            refs_seed_docs_for_display = _select_multi_paper_seed_docs_for_display(
+                prompt_multi_paper_list=bool(prompt_multi_paper_list),
+                paper_guide_cross_paper_refs=bool(paper_guide_cross_paper_refs),
+                answer_grouped_docs=list(answer_grouped_docs or []),
+                grouped_docs=list(grouped_docs or []),
+            )
+            if prompt_multi_paper_list and refs_seed_docs_for_display:
+                refs_seed_docs_for_display = _filter_multi_paper_seed_docs_for_display(
+                    prompt=prompt or retrieval_prompt or "",
+                    seed_docs=refs_seed_docs_for_display,
+                )
 
             refs_async_will_run = bool(
                 allow_refs_async
                 and llm_rerank
                 and prompt
-                and grouped_docs
+                and refs_seed_docs_for_display
                 and settings_obj
                 and getattr(settings_obj, "api_key", None)
             )
-            if refs_async_will_run and grouped_docs:
+
+            seed_refs_should_stay_pending = bool(prompt_multi_paper_list or refs_async_will_run)
+            if seed_refs_should_stay_pending and refs_seed_docs_for_display:
                 try:
-                    for d in grouped_docs:
+                    for d in refs_seed_docs_for_display:
                         if not isinstance(d, dict):
                             continue
                         meta_d = d.get("meta", {}) or {}
@@ -2186,9 +2785,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 except Exception:
                     pass
                 try:
-                    refs_async_seed_docs = copy.deepcopy(grouped_docs)
+                    refs_async_seed_docs = copy.deepcopy(refs_seed_docs_for_display)
                 except Exception:
-                    refs_async_seed_docs = list(grouped_docs)
+                    refs_async_seed_docs = list(refs_seed_docs_for_display)
         else:
             _gen_update_task(
                 session_id,
@@ -2211,13 +2810,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     conv_id=conv_id,
                     prompt=prompt,
                     prompt_sig=str(task.get("prompt_sig") or ""),
-                    hits=list(grouped_docs or []),
+                    hits=list(refs_seed_docs_for_display or []),
                     scores=list(scores_raw or []),
                     used_query=str(used_query or ""),
                     used_translation=bool(used_translation),
-                    render_status="pending" if refs_async_will_run else None,
-                    render_error="" if refs_async_will_run else None,
-                    render_error_detail="" if refs_async_will_run else None,
+                    render_status="pending" if seed_refs_should_stay_pending else None,
+                    render_error="" if seed_refs_should_stay_pending else None,
+                    render_error_detail="" if seed_refs_should_stay_pending else None,
                 )
             except Exception:
                 pass
@@ -2320,16 +2919,17 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             settings=settings_obj,
                         )
                         if rebuilt_docs:
-                            seed_docs = rebuilt_docs
-                            for d in seed_docs:
-                                if not isinstance(d, dict):
-                                    continue
-                                meta_d = d.get("meta", {}) or {}
-                                if not isinstance(meta_d, dict):
-                                    meta_d = {}
-                                meta_d["ref_pack_state"] = "pending"
-                                d["meta"] = meta_d
-                            _push_partial(seed_docs)
+                            if not prompt_multi_paper_list:
+                                seed_docs = rebuilt_docs
+                                for d in seed_docs:
+                                    if not isinstance(d, dict):
+                                        continue
+                                    meta_d = d.get("meta", {}) or {}
+                                    if not isinstance(meta_d, dict):
+                                        meta_d = {}
+                                    meta_d["ref_pack_state"] = "pending"
+                                    d["meta"] = meta_d
+                                _push_partial(seed_docs)
                         _perf_log("gen.refs_rebuild", elapsed=time.perf_counter() - t_rebuild0, docs=len(seed_docs))
                 except Exception:
                     seed_docs = list(refs_async_seed_docs)
@@ -2370,19 +2970,57 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     render_built_at = time.time()
                     render_evidence_sig = ""
                     try:
-                        rendered_payload, rendered_payload_sig = _build_precomputed_refs_render_payload(
-                            user_msg_id=umid,
-                            prompt=prompt,
-                            prompt_sig=str(task.get("prompt_sig") or ""),
-                            hits=list(enriched or []),
-                            scores=list(scores_raw or []),
-                            used_query=str(used_query or ""),
-                            used_translation=bool(used_translation),
-                            guide_mode=bool(paper_guide_mode),
-                            guide_source_path=str(paper_guide_bound_source_path or ""),
-                            guide_source_name=str(paper_guide_bound_source_name or ""),
-                            library_db_path=getattr(settings_obj, "library_db_path", None),
-                        )
+                        authoritative_doc_list = []
+                        if prompt_multi_paper_list:
+                            authoritative_doc_list = _await_stored_doc_list_contract(
+                                chat_db=chat_db,
+                                conv_id=conv_id,
+                                assistant_msg_id=int(task.get("assistant_msg_id") or 0),
+                                wait_timeout_s=0.0,
+                            )
+                            if not authoritative_doc_list:
+                                authoritative_doc_list = _await_stored_doc_list_contract(
+                                    chat_db=chat_db,
+                                    conv_id=conv_id,
+                                    assistant_msg_id=int(task.get("assistant_msg_id") or 0),
+                                    wait_timeout_s=1.6,
+                                )
+                        if authoritative_doc_list:
+                            rendered_payload, rendered_payload_sig = _build_doc_list_refs_render_payload(
+                                user_msg_id=umid,
+                                prompt=prompt,
+                                prompt_sig=str(task.get("prompt_sig") or ""),
+                                hits=list(enriched or []),
+                                scores=list(scores_raw or []),
+                                used_query=str(used_query or ""),
+                                used_translation=bool(used_translation),
+                                doc_list=list(authoritative_doc_list or []),
+                                guide_mode=bool(paper_guide_mode),
+                                guide_source_path=str(paper_guide_bound_source_path or ""),
+                                guide_source_name=str(paper_guide_bound_source_name or ""),
+                            )
+                        elif prompt_multi_paper_list:
+                            render_status = "pending"
+                            render_error = ""
+                            render_error_detail = ""
+                            render_built_at = 0.0
+                            rendered_payload = None
+                            rendered_payload_sig = ""
+                            render_evidence_sig = ""
+                        else:
+                            rendered_payload, rendered_payload_sig = _build_precomputed_refs_render_payload(
+                                user_msg_id=umid,
+                                prompt=prompt,
+                                prompt_sig=str(task.get("prompt_sig") or ""),
+                                hits=list(enriched or []),
+                                scores=list(scores_raw or []),
+                                used_query=str(used_query or ""),
+                                used_translation=bool(used_translation),
+                                guide_mode=bool(paper_guide_mode),
+                                guide_source_path=str(paper_guide_bound_source_path or ""),
+                                guide_source_name=str(paper_guide_bound_source_name or ""),
+                                library_db_path=getattr(settings_obj, "library_db_path", None),
+                            )
                     except Exception as exc:
                         rendered_payload = None
                         rendered_payload_sig = ""
@@ -2390,6 +3028,31 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         render_error = "render_build_failed"
                         render_error_detail = f"{type(exc).__name__}: {str(exc or '').strip()}"[:500]
                         render_built_at = 0.0
+                    if prompt_multi_paper_list and render_status != "full":
+                        authoritative_doc_list = _await_stored_doc_list_contract(
+                            chat_db=chat_db,
+                            conv_id=conv_id,
+                            assistant_msg_id=int(task.get("assistant_msg_id") or 0),
+                            wait_timeout_s=0.4,
+                        )
+                        if authoritative_doc_list:
+                            rendered_payload, rendered_payload_sig = _build_doc_list_refs_render_payload(
+                                user_msg_id=umid,
+                                prompt=prompt,
+                                prompt_sig=str(task.get("prompt_sig") or ""),
+                                hits=list(enriched or []),
+                                scores=list(scores_raw or []),
+                                used_query=str(used_query or ""),
+                                used_translation=bool(used_translation),
+                                doc_list=list(authoritative_doc_list or []),
+                                guide_mode=bool(paper_guide_mode),
+                                guide_source_path=str(paper_guide_bound_source_path or ""),
+                                guide_source_name=str(paper_guide_bound_source_name or ""),
+                            )
+                            render_status = "full"
+                            render_error = ""
+                            render_error_detail = ""
+                            render_built_at = time.time()
                     if render_status == "full" and ((not isinstance(rendered_payload, dict)) or (not rendered_payload) or (not str(rendered_payload_sig or "").strip())):
                         render_status = "failed"
                         render_error = "render_payload_empty"
@@ -2420,7 +3083,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         )
                     except Exception:
                         pass
-                    _gen_update_task(session_id, task_id, refs_async_pending=False, refs_async_state="done", refs_async_docs=int(len(enriched)))
+                    refs_async_state = "done" if render_status == "full" else ("awaiting_authoritative_doc_list" if render_status == "pending" else "failed")
+                    _gen_update_task(
+                        session_id,
+                        task_id,
+                        refs_async_pending=False,
+                        refs_async_state=refs_async_state,
+                        refs_async_docs=int(len(enriched)),
+                    )
                     try:
                         warm_paths: list[str] = []
                         for d in list(enriched or []):
@@ -2477,15 +3147,22 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 5 if (paper_guide_mode and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough", "citation_lookup"}) else 4,
             ),
         )
-        answer_seed = answer_grouped_docs or grouped_docs or hits
+        answer_seed = _select_answer_seed_for_generation(
+            paper_guide_cross_paper_refs=bool(paper_guide_cross_paper_refs),
+            answer_grouped_docs=list(answer_grouped_docs or []),
+            grouped_docs=list(grouped_docs or []),
+            heading_hits=list(hits or []),
+        )
         if paper_guide_mode and paper_guide_bound_source_ready:
-            heading_hits_for_answer = list(hits or [])
+            heading_hits_for_answer = list(grouped_docs or []) if paper_guide_cross_paper_refs else list(hits or [])
             grouped_hits_for_answer = list(answer_seed or [])
-            raw_target_hits = _select_paper_guide_raw_target_hits(
-                hits_raw=list(hits_raw or []),
-                prompt=(prompt or retrieval_prompt or ""),
-                top_n=answer_hit_limit,
-            )
+            raw_target_hits = []
+            if not paper_guide_cross_paper_refs:
+                raw_target_hits = _select_paper_guide_raw_target_hits(
+                    hits_raw=list(hits_raw or []),
+                    prompt=(prompt or retrieval_prompt or ""),
+                    top_n=answer_hit_limit,
+                )
             if raw_target_hits:
                 heading_hits_for_answer = raw_target_hits
                 if paper_guide_prompt_family == "citation_lookup":
@@ -2588,6 +3265,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_candidate_refs_by_source = dict(paper_guide_prompt_context.get("paper_guide_candidate_refs_by_source") or {})
         paper_guide_support_slots = list(paper_guide_prompt_context.get("paper_guide_support_slots") or [])
         paper_guide_contracts_seed = dict(paper_guide_prompt_context.get("paper_guide_contracts_seed") or {})
+        if prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or "") and refs_seed_docs_for_display:
+            paper_guide_contracts_seed["doc_list_seed"] = [dict(item) for item in list(refs_seed_docs_for_display or []) if isinstance(item, dict)]
         paper_guide_support_resolution: list[dict] = []
         paper_guide_direct_source_path = str(paper_guide_prompt_context.get("paper_guide_direct_source_path") or paper_guide_bound_source_path or "")
         paper_guide_focus_source_path = str(paper_guide_prompt_context.get("paper_guide_focus_source_path") or paper_guide_bound_source_path or "")
@@ -2745,6 +3424,75 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         answer = str(finalize_state.get("answer") or "")
         paper_guide_support_resolution = list(finalize_state.get("paper_guide_support_resolution") or [])
         paper_guide_contracts = dict(finalize_state.get("paper_guide_contracts") or {})
+        doc_list_rendered_payload = None
+        doc_list_rendered_payload_sig = ""
+        if prompt_multi_paper_list:
+            had_doc_list_contract_key = "doc_list" in paper_guide_contracts
+            doc_list_contract = _extract_doc_list_contract(paper_guide_contracts)
+            if paper_guide_cross_paper_refs:
+                doc_list_contract = _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract(
+                    doc_list=doc_list_contract,
+                    bound_source_path=str(paper_guide_bound_source_path or ""),
+                    bound_source_name=str(paper_guide_bound_source_name or ""),
+                )
+            filtered_doc_list_contract = _finalize_runtime_filter_multi_paper_doc_list_contract(
+                prompt=prompt or prompt_for_user or "",
+                doc_list=doc_list_contract,
+            )
+            doc_list_contract_changed = (filtered_doc_list_contract != doc_list_contract) or (not had_doc_list_contract_key)
+            doc_list_contract = list(filtered_doc_list_contract)
+            if doc_list_contract_changed:
+                paper_guide_contracts["doc_list"] = list(doc_list_contract)
+            if umid > 0:
+                try:
+                    doc_list_rendered_payload, doc_list_rendered_payload_sig = _build_doc_list_refs_render_payload(
+                        user_msg_id=umid,
+                        prompt=prompt,
+                        prompt_sig=str(task.get("prompt_sig") or ""),
+                        hits=list(refs_seed_docs_for_display or []),
+                        scores=list(scores_raw or []),
+                        used_query=str(used_query or ""),
+                        used_translation=bool(used_translation),
+                        doc_list=list(doc_list_contract or []),
+                        guide_mode=bool(paper_guide_mode),
+                        guide_source_path=str(paper_guide_bound_source_path or ""),
+                        guide_source_name=str(paper_guide_bound_source_name or ""),
+                    )
+                except Exception:
+                    doc_list_rendered_payload = None
+                    doc_list_rendered_payload_sig = ""
+                if isinstance(doc_list_rendered_payload, dict) and doc_list_rendered_payload and str(doc_list_rendered_payload_sig or "").strip():
+                    rendered_doc_list_contract = _build_doc_list_contract_from_rendered_payload(
+                        doc_list_contract=list(doc_list_contract or []),
+                        rendered_payload=doc_list_rendered_payload,
+                    )
+                    if rendered_doc_list_contract != doc_list_contract:
+                        doc_list_contract = list(rendered_doc_list_contract)
+                        paper_guide_contracts["doc_list"] = list(doc_list_contract)
+                        doc_list_contract_changed = True
+            if doc_list_contract_changed and doc_list_contract:
+                reformatted_answer = _finalize_runtime_format_multi_paper_list_answer(
+                    prompt=prompt or prompt_for_user or "",
+                    docs=list(doc_list_contract),
+                )
+                if str(reformatted_answer or "").strip():
+                    answer = str(reformatted_answer or "").strip()
+                    render_packet = (
+                        dict(paper_guide_contracts.get("render_packet") or {})
+                        if isinstance(paper_guide_contracts.get("render_packet"), dict)
+                        else {}
+                    )
+                    if render_packet:
+                        render_packet["answer_markdown"] = answer
+                        render_packet["rendered_body"] = answer
+                        render_packet["rendered_content"] = answer
+                        render_packet["copy_markdown"] = answer
+                        render_packet["copy_text"] = answer
+                        paper_guide_contracts["render_packet"] = render_packet
+            paper_guide_contracts = _sync_multi_paper_primary_evidence_into_contracts(
+                paper_guide_contracts=paper_guide_contracts,
+                doc_list_contract=doc_list_contract,
+            )
         shared_primary_evidence = (
             dict(paper_guide_contracts.get("primary_evidence") or {})
             if isinstance(paper_guide_contracts.get("primary_evidence"), dict)
@@ -2764,6 +3512,50 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         _gen_store_answer(task, answer)
         _gen_store_answer_quality_meta(task, answer_quality=answer_quality)
         _gen_store_paper_guide_contract_meta(task, paper_guide_contracts=paper_guide_contracts)
+        if prompt_multi_paper_list and umid > 0:
+            doc_list_contract = _extract_doc_list_contract(paper_guide_contracts)
+            try:
+                rendered_payload = doc_list_rendered_payload
+                rendered_payload_sig = doc_list_rendered_payload_sig
+                if (not isinstance(rendered_payload, dict)) or (not rendered_payload) or (not str(rendered_payload_sig or "").strip()):
+                    rendered_payload, rendered_payload_sig = _build_doc_list_refs_render_payload(
+                        user_msg_id=umid,
+                        prompt=prompt,
+                        prompt_sig=str(task.get("prompt_sig") or ""),
+                        hits=list(refs_seed_docs_for_display or []),
+                        scores=list(scores_raw or []),
+                        used_query=str(used_query or ""),
+                        used_translation=bool(used_translation),
+                        doc_list=list(doc_list_contract or []),
+                        guide_mode=bool(paper_guide_mode),
+                        guide_source_path=str(paper_guide_bound_source_path or ""),
+                        guide_source_name=str(paper_guide_bound_source_name or ""),
+                    )
+                if isinstance(rendered_payload, dict) and rendered_payload and str(rendered_payload_sig or "").strip():
+                    ready_seed_hits = _set_refs_hit_pack_state(
+                        list(refs_seed_docs_for_display or []),
+                        state="ready",
+                    )
+                    chat_store.upsert_message_refs(
+                        user_msg_id=umid,
+                        conv_id=conv_id,
+                        prompt=prompt,
+                        prompt_sig=str(task.get("prompt_sig") or ""),
+                        hits=ready_seed_hits,
+                        scores=list(scores_raw or []),
+                        used_query=str(used_query or ""),
+                        used_translation=bool(used_translation),
+                        rendered_payload=rendered_payload,
+                        rendered_payload_sig=rendered_payload_sig,
+                        render_status="full",
+                        render_error="",
+                        render_error_detail="",
+                        render_built_at=time.time(),
+                        render_attempts=1,
+                        render_evidence_sig=str(rendered_payload_sig or "").strip(),
+                    )
+            except Exception:
+                pass
         _gen_record_answer_quality(
             session_id=session_id,
             task_id=task_id,
@@ -2824,7 +3616,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             _gen_update_task(session_id, task_id, status="canceled", stage="canceled", answer=answer, partial=answer, char_count=len(answer), finished_at=time.time())
             return
 
-        err = S["llm_fail"].format(err=str(e))
+        err = _format_llm_failure_message(err=e, settings_obj=settings_obj)
         try:
             _gen_store_answer(task, err)
         except Exception:

@@ -4,6 +4,8 @@ import type { ReaderOpenPayload } from '../components/chat/reader/readerTypes'
 export type ReaderRegressionScenario =
   | 'strict-quote'
   | 'evidence-nav'
+  | 'duplicate-sections'
+  | 'duplicate-images'
   | 'candidate-fallback'
   | 'strict-missing-exact'
   | 'discussion-only'
@@ -24,9 +26,7 @@ const DISCUSSION_P1 = 'The discussion emphasizes a practical tradeoff: faster ca
 const LIMITATIONS_P1 = 'A current limitation is that the method still trades temporal coverage against reconstruction stability, especially when the scene departs from the static-scene assumption used by the reconstruction pipeline.'
 const FUTURE_WORK_P1 = 'Looking ahead, the most direct extension would be to combine the current pipeline with adaptive masking so dynamic scenes can be reconstructed more faithfully without increasing the hardware burden.'
 
-const FIGURE_DATA_URI = `data:image/svg+xml;utf8,${encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220"><rect width="480" height="220" fill="#eef3f8"/><rect x="28" y="36" width="180" height="128" rx="18" fill="#9bb7d4"/><rect x="234" y="58" width="218" height="26" rx="13" fill="#cbd8e6"/><rect x="234" y="98" width="184" height="20" rx="10" fill="#d6e0ea"/><rect x="234" y="130" width="146" height="20" rx="10" fill="#d6e0ea"/><circle cx="128" cy="100" r="34" fill="#f7fafc"/><text x="28" y="196" font-family="Georgia, serif" font-size="18" fill="#425466">Figure 1. SCI system pipeline.</text></svg>',
-)}`
+const FIGURE_DATA_URI = '/reader-regression-figure.svg'
 
 const MULTI_PANEL_SNIPPET = 'f Resulting iPSF from iISM after adaptive pixel-reassignment (APR), with same incident illumination power and number of detected photons. g Line profiles of the iPSF in the three configurations as indicated in d-f.'
 
@@ -117,7 +117,50 @@ export const readerRegressionDocResponse = {
   blocks: readerRegressionBlocks,
 }
 
+const readerRegressionDuplicateImageMarkdown = [
+  '# Fixture Paper',
+  '',
+  '## 2. Method',
+  '',
+  'Figure 1 shows the SCI system pipeline.',
+  '',
+  `![Figure 1](${FIGURE_DATA_URI})`,
+  '',
+  `![Figure 1](${FIGURE_DATA_URI})`,
+  '',
+  `![Figure 1](${FIGURE_DATA_URI})`,
+  '',
+  '*Figure 1. SCI system pipeline.*',
+  '',
+].join('\n')
+
+export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScenario) {
+  if (scenario === 'duplicate-images') {
+    return {
+      ok: true,
+      source_path: READER_REGRESSION_SOURCE_PATH,
+      source_name: READER_REGRESSION_SOURCE_NAME,
+      md_path: 'fixture-duplicate-images.md',
+      markdown: readerRegressionDuplicateImageMarkdown,
+      anchors: [] as ReaderDocAnchor[],
+      blocks: [] as ReaderDocBlock[],
+    }
+  }
+  return readerRegressionDocResponse
+}
+
 export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario): ReaderOpenPayload {
+  if (scenario === 'duplicate-images') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 2. Method',
+      snippet: 'Figure 1 shows the SCI system pipeline.',
+      highlightSnippet: 'Figure 1 shows the SCI system pipeline.',
+      strictLocate: false,
+    }
+  }
+
   if (scenario === 'multi-panel') {
     return {
       sourcePath: READER_REGRESSION_SOURCE_PATH,
@@ -219,6 +262,184 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
           anchorId: 'a-fig-1',
           anchorKind: 'figure',
           anchorNumber: 1,
+        },
+      ],
+      initialAltIndex: 0,
+    }
+  }
+
+  if (scenario === 'duplicate-sections') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 2. Method',
+      snippet: METHOD_P1,
+      highlightSnippet: METHOD_P1,
+      blockId: 'p-method-1',
+      anchorId: 'a-p-method-1',
+      anchorKind: 'paragraph',
+      strictLocate: true,
+      locateTarget: {
+        segmentId: 'seg-method-1',
+        sourceSegmentId: 'seg-method-1',
+        headingPath: 'Fixture Paper / 2. Method',
+        snippet: METHOD_P1,
+        highlightSnippet: METHOD_P1,
+        evidenceQuote: METHOD_P1,
+        anchorText: METHOD_P1,
+        blockId: 'p-method-1',
+        anchorId: 'a-p-method-1',
+        anchorKind: 'paragraph',
+        claimType: 'quote_claim',
+        locatePolicy: 'required',
+        locateSurfacePolicy: 'primary',
+      },
+      evidenceAlternatives: [
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: METHOD_P1,
+          highlightSnippet: METHOD_P1,
+          blockId: 'p-method-1',
+          anchorId: 'a-p-method-1',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'The method section keeps extending the discussion with another supporting paragraph.',
+          highlightSnippet: 'The method section keeps extending the discussion with another supporting paragraph.',
+          blockId: 'p-method-dup-1',
+          anchorId: 'a-p-method-dup-1',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'A third method paragraph would otherwise create another identical-looking list item.',
+          highlightSnippet: 'A third method paragraph would otherwise create another identical-looking list item.',
+          blockId: 'p-method-dup-2',
+          anchorId: 'a-p-method-dup-2',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'C(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt',
+          highlightSnippet: 'C(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt',
+          blockId: 'eq-1',
+          anchorId: 'a-eq-1',
+          anchorKind: 'equation',
+          anchorNumber: 1,
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'Figure 1',
+          highlightSnippet: 'Figure 1',
+          blockId: 'fig-1',
+          anchorId: 'a-fig-1',
+          anchorKind: 'figure',
+          anchorNumber: 1,
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'Figure 1 shows the SCI system pipeline.',
+          highlightSnippet: 'Figure 1 shows the SCI system pipeline.',
+          blockId: 'p-figure-ref',
+          anchorId: 'a-p-figure-ref',
+          anchorKind: 'paragraph',
+        },
+      ],
+      alternatives: [
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'The method section keeps extending the discussion with another supporting paragraph.',
+          highlightSnippet: 'The method section keeps extending the discussion with another supporting paragraph.',
+          blockId: 'p-method-dup-1',
+          anchorId: 'a-p-method-dup-1',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'A third method paragraph would otherwise create another identical-looking list item.',
+          highlightSnippet: 'A third method paragraph would otherwise create another identical-looking list item.',
+          blockId: 'p-method-dup-2',
+          anchorId: 'a-p-method-dup-2',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'C(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt',
+          highlightSnippet: 'C(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt',
+          blockId: 'eq-1',
+          anchorId: 'a-eq-1',
+          anchorKind: 'equation',
+          anchorNumber: 1,
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'Figure 1',
+          highlightSnippet: 'Figure 1',
+          blockId: 'fig-1',
+          anchorId: 'a-fig-1',
+          anchorKind: 'figure',
+          anchorNumber: 1,
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'Figure 1 shows the SCI system pipeline.',
+          highlightSnippet: 'Figure 1 shows the SCI system pipeline.',
+          blockId: 'p-figure-ref',
+          anchorId: 'a-p-figure-ref',
+          anchorKind: 'paragraph',
+        },
+      ],
+      visibleAlternatives: [
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: METHOD_P1,
+          highlightSnippet: METHOD_P1,
+          blockId: 'p-method-1',
+          anchorId: 'a-p-method-1',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'The method section keeps extending the discussion with another supporting paragraph.',
+          highlightSnippet: 'The method section keeps extending the discussion with another supporting paragraph.',
+          blockId: 'p-method-dup-1',
+          anchorId: 'a-p-method-dup-1',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'A third method paragraph would otherwise create another identical-looking list item.',
+          highlightSnippet: 'A third method paragraph would otherwise create another identical-looking list item.',
+          blockId: 'p-method-dup-2',
+          anchorId: 'a-p-method-dup-2',
+          anchorKind: 'paragraph',
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'C(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt',
+          highlightSnippet: 'C(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt',
+          blockId: 'eq-1',
+          anchorId: 'a-eq-1',
+          anchorKind: 'equation',
+          anchorNumber: 1,
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'Figure 1',
+          highlightSnippet: 'Figure 1',
+          blockId: 'fig-1',
+          anchorId: 'a-fig-1',
+          anchorKind: 'figure',
+          anchorNumber: 1,
+        },
+        {
+          headingPath: 'Fixture Paper / 2. Method',
+          snippet: 'Figure 1 shows the SCI system pipeline.',
+          highlightSnippet: 'Figure 1 shows the SCI system pipeline.',
+          blockId: 'p-figure-ref',
+          anchorId: 'a-p-figure-ref',
+          anchorKind: 'paragraph',
         },
       ],
       initialAltIndex: 0,

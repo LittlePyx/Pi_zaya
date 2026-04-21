@@ -8,7 +8,11 @@ from kb.task_runtime import (
     _apply_bound_source_hints,
     _augment_paper_guide_retrieval_prompt,
     _augment_prompt_with_source_hint,
+    _await_stored_doc_list_contract,
     _build_bg_task,
+    _build_doc_list_contract_from_rendered_payload,
+    _build_doc_list_refs_render_payload,
+    _filter_multi_paper_seed_docs_for_display,
     _build_precomputed_refs_render_payload,
     _maybe_append_library_figure_markdown,
     _build_paper_guide_direct_abstract_answer,
@@ -36,6 +40,8 @@ from kb.task_runtime import (
     _paper_guide_prompt_family,
     _paper_guide_requests_cross_paper_refs,
     _exclude_bound_source_hits_for_cross_paper_refs,
+    _select_answer_seed_for_generation,
+    _select_multi_paper_seed_docs_for_display,
     _select_refs_async_rebuild_hits_raw,
     _should_allow_refs_async_enrich,
     _paper_guide_targeted_source_block_hits,
@@ -50,6 +56,7 @@ from kb.task_runtime import (
     _select_paper_guide_deepread_extras,
     _select_paper_guide_answer_hits,
     _select_paper_guide_raw_target_hits,
+    _should_sync_deep_seed_for_display,
     _stabilize_paper_guide_output_mode,
 )
 from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
@@ -229,6 +236,132 @@ def test_select_refs_async_rebuild_hits_raw_prefers_unscoped_hits_for_cross_pape
     ) == scoped
 
 
+def test_select_multi_paper_seed_docs_for_display_prefers_cross_paper_grouped_docs():
+    bound_docs = [{"meta": {"source_path": r"db\NatPhoton-2019\NatPhoton-2019.en.md"}}]
+    external_docs = [{"meta": {"source_path": r"db\OE-2017\OE-2017.en.md"}}]
+
+    out = _select_multi_paper_seed_docs_for_display(
+        prompt_multi_paper_list=True,
+        paper_guide_cross_paper_refs=True,
+        answer_grouped_docs=bound_docs,
+        grouped_docs=external_docs,
+    )
+
+    assert [str((item.get("meta") or {}).get("source_path") or "") for item in out] == [
+        r"db\OE-2017\OE-2017.en.md"
+    ]
+
+
+def test_select_answer_seed_for_generation_prefers_cross_paper_grouped_docs():
+    bound_docs = [{"meta": {"source_path": r"db\NatPhoton-2019\NatPhoton-2019.en.md"}}]
+    external_docs = [{"meta": {"source_path": r"db\OE-2017\OE-2017.en.md"}}]
+    heading_hits = [{"meta": {"source_path": r"db\NatPhoton-2019\NatPhoton-2019.en.md"}}]
+
+    out = _select_answer_seed_for_generation(
+        paper_guide_cross_paper_refs=True,
+        answer_grouped_docs=bound_docs,
+        grouped_docs=external_docs,
+        heading_hits=heading_hits,
+    )
+
+    assert [str((item.get("meta") or {}).get("source_path") or "") for item in out] == [
+        r"db\OE-2017\OE-2017.en.md"
+    ]
+
+
+def test_build_doc_list_refs_render_payload_forwards_guide_filter_and_allows_empty_doc_list(monkeypatch):
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(references_router, "_refs_pack_render_signature", lambda **kwargs: "sig-doc-list")
+
+    def fake_build_doc_list_refs_payload(*, user_msg_id, pack, doc_list, **kwargs):
+        calls["user_msg_id"] = int(user_msg_id)
+        calls["prompt"] = str(pack.get("prompt") or "")
+        calls["doc_list"] = list(doc_list or [])
+        calls["kwargs"] = dict(kwargs)
+        return {
+            "user_msg_id": int(user_msg_id),
+            "payload_mode": "full",
+            "guide_filter": {"active": True, "hidden_self_source": True, "filtered_hit_count": 1},
+            "hits": [],
+            "pipeline_debug": {"doc_list_authoritative": True, "raw_hit_count": 0, "final_hit_count": 0},
+        }
+
+    monkeypatch.setattr(reference_ui, "build_doc_list_refs_payload", fake_build_doc_list_refs_payload)
+
+    payload, sig = _build_doc_list_refs_render_payload(
+        user_msg_id=17,
+        prompt="Besides this paper, what other papers in my library discuss ADMM?",
+        prompt_sig="sig-17",
+        hits=[],
+        scores=[],
+        used_query="ADMM",
+        used_translation=False,
+        doc_list=[],
+        guide_mode=True,
+        guide_source_path=r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+        guide_source_name="CVPR-2024-SCINeRF.pdf",
+    )
+
+    assert payload is not None
+    assert sig == "sig-doc-list"
+    assert calls["doc_list"] == []
+    assert dict(calls.get("kwargs") or {}).get("guide_mode") is True
+    assert dict(calls.get("kwargs") or {}).get("guide_source_name") == "CVPR-2024-SCINeRF.pdf"
+
+
+def test_build_doc_list_contract_from_rendered_payload_upgrades_surface_but_keeps_topic_match_kind():
+    doc_list_contract = [
+        {
+            "source_path": r"db\Frontiers-2024\Frontiers-2024.en.md",
+            "source_name": "Frontiers-2024.pdf",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "topic_match_kind": "topic_aligned",
+        }
+    ]
+    rendered_payload = {
+        "hits": [
+            {
+                "meta": {
+                    "source_path": r"db\Frontiers-2024\Frontiers-2024.en.md",
+                    "source_name": "Frontiers-2024.pdf",
+                    "ref_best_heading_path": "5 Application / 5.1 Optical imaging",
+                },
+                "ui_meta": {
+                    "source_path": r"db\Frontiers-2024\Frontiers-2024.en.md",
+                    "display_name": "Frontiers-2024.pdf",
+                    "heading_path": "5 Application / 5.1 Optical imaging",
+                    "summary_line": "Single-photon imaging can exploit photon counting and statistical reconstruction for low-light scenes.",
+                    "primary_evidence": {
+                        "selection_reason": "prompt_aligned_block",
+                        "quote": "Single-photon imaging can exploit photon counting and statistical reconstruction.",
+                    },
+                },
+            }
+        ]
+    }
+
+    out = _build_doc_list_contract_from_rendered_payload(
+        doc_list_contract=doc_list_contract,
+        rendered_payload=rendered_payload,
+    )
+
+    assert len(out) == 1
+    row = out[0]
+
+    assert row["source_path"] == r"db\Frontiers-2024\Frontiers-2024.en.md"
+    assert row["source_name"] == "Frontiers-2024.pdf"
+    assert row["heading_path"] == "5 Application / 5.1 Optical imaging"
+    assert row["summary_line"] == "Single-photon imaging can exploit photon counting and statistical reconstruction for low-light scenes."
+    assert row["topic_match_kind"] == "topic_aligned"
+
+    primary_evidence = dict(row.get("primary_evidence") or {})
+    assert primary_evidence["selection_reason"] == "prompt_aligned_block"
+    assert primary_evidence["quote"] == "Single-photon imaging can exploit photon counting and statistical reconstruction."
+    assert primary_evidence["source_path"] == r"db\Frontiers-2024\Frontiers-2024.en.md"
+    assert primary_evidence["source_name"] == "Frontiers-2024.pdf"
+
+
 def test_build_precomputed_refs_render_payload_uses_bounded_full_variant(monkeypatch):
     calls: dict[str, object] = {}
 
@@ -390,6 +523,164 @@ def test_pick_recent_source_hint_from_message_refs(tmp_path: Path):
     user2 = store.append_message(conv_id, "user", "那这篇文章里的公式8写的是什么")
     hint = _pick_recent_source_hint(conv_id=conv_id, user_msg_id=user2, chat_store=store)
     assert hint == "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf"
+
+
+def test_await_stored_doc_list_contract_waits_for_assistant_meta(tmp_path: Path):
+    import threading
+    import time
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("refs")
+    store.append_message(conv_id, "user", "Which papers mention SCI?")
+    assistant_msg_id = store.append_message(conv_id, "assistant", "...")
+
+    def _writer() -> None:
+        time.sleep(0.05)
+        store.merge_message_meta(
+            assistant_msg_id,
+            {
+                "paper_guide_contracts": {
+                    "doc_list": [
+                        {
+                            "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+                            "source_name": "ICIP-2025-SCIGS.pdf",
+                        }
+                    ]
+                }
+            },
+        )
+
+    t = threading.Thread(target=_writer, daemon=True)
+    t.start()
+    out = _await_stored_doc_list_contract(
+        chat_db=tmp_path / "chat.sqlite3",
+        conv_id=conv_id,
+        assistant_msg_id=assistant_msg_id,
+        wait_timeout_s=0.4,
+        poll_interval_s=0.02,
+    )
+    t.join(timeout=1.0)
+
+    assert out == [
+        {
+            "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+            "source_name": "ICIP-2025-SCIGS.pdf",
+        }
+    ]
+
+
+def test_filter_multi_paper_seed_docs_for_display_keeps_prompt_aligned_sci_docs():
+    prompt = "有哪几篇文章提到了SCI（单次曝光压缩成像）"
+    seed_docs = [
+        {
+            "text": "single-shot compressive spectral imaging predecessor to snapshot compressive imaging",
+            "meta": {
+                "source_path": r"db\OE-2007\OE-2007.en.md",
+                "ref_best_heading_path": "5. Conclusions",
+                "ref_show_snippets": [
+                    "This paper describes a single-shot spectral imaging approach based on compressive sensing, an early predecessor to snapshot compressive imaging (SCI)."
+                ],
+            },
+        },
+        {
+            "text": "SCI title match",
+            "meta": {
+                "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+                "ref_best_heading_path": "1. Introduction",
+                "ref_show_snippets": ["Video Snapshot Compressive Imaging (SCI) technology has been developed for high-speed imaging."],
+            },
+        },
+        {
+            "text": "irrelevant quantum light-field microscopy hit",
+            "meta": {
+                "source_path": r"db\arXiv-Quantum correlation light-field microscope\arXiv-Quantum correlation light-field microscope.en.md",
+                "ref_best_heading_path": "Abstract",
+                "ref_show_snippets": ["Quantum correlation light-field microscope with extreme depth of field."],
+            },
+        },
+        {
+            "text": "SCI NeRF library hit",
+            "meta": {
+                "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+                "ref_best_heading_path": "2. Related Work",
+                "ref_show_snippets": ["In this paper, we explore the potential of Snapshot Compressive Imaging (SCI)."],
+            },
+        },
+        {
+            "text": "broad single-pixel review",
+            "meta": {
+                "source_path": r"db\NatPhoton-2019\NatPhoton-2019.en.md",
+                "ref_best_heading_path": "Abstract",
+                "ref_show_snippets": ["Single-pixel imaging systems can be implemented in many spectral bands."],
+            },
+        },
+    ]
+
+    out = _filter_multi_paper_seed_docs_for_display(
+        prompt=prompt,
+        seed_docs=seed_docs,
+    )
+
+    titles = [str(((doc.get("meta") if isinstance(doc.get("meta"), dict) else {}) or {}).get("source_path") or "").strip() for doc in out]
+    assert set(titles) == {
+        r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+        r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+        r"db\OE-2007\OE-2007.en.md",
+    }
+    assert len(titles) == 3
+
+
+def test_filter_multi_paper_seed_docs_for_display_does_not_pad_broad_fourier_seed_hits():
+    prompt = "Which papers in my library discuss Fourier single-pixel imaging?"
+    seed_docs = [
+        {
+            "text": "Fourier single-pixel imaging basis patterns and Fourier coefficients.",
+            "meta": {
+                "source_path": r"db\OE-2017\OE-2017.en.md",
+                "ref_best_heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                "ref_show_snippets": [
+                    "Fourier single-pixel imaging uses Fourier basis patterns and reconstructs the object from Fourier coefficients."
+                ],
+            },
+        },
+        {
+            "text": "Single-pixel imaging based on deep learning overview.",
+            "meta": {
+                "source_path": r"db\LPR-2025\LPR-2025.en.md",
+                "ref_best_heading_path": "1. Introduction",
+                "ref_show_snippets": [
+                    "Single-pixel imaging technology can capture images at wavelengths outside the reach of conventional focal plane detectors."
+                ],
+            },
+        },
+        {
+            "text": "Acquisition and image reconstruction strategies for single-pixel imaging.",
+            "meta": {
+                "source_path": r"db\NatPhoton-2019\NatPhoton-2019.en.md",
+                "ref_best_heading_path": "Abstract / Acquisition and image reconstruction strategies.",
+                "ref_show_snippets": [
+                    "Compressive sensing and acquisition strategies provide benefits to various imaging applications."
+                ],
+            },
+        },
+    ]
+
+    out = _filter_multi_paper_seed_docs_for_display(
+        prompt=prompt,
+        seed_docs=seed_docs,
+    )
+
+    titles = [str(((doc.get("meta") if isinstance(doc.get("meta"), dict) else {}) or {}).get("source_path") or "").strip() for doc in out]
+    assert titles == [r"db\OE-2017\OE-2017.en.md"]
+
+
+def test_should_sync_deep_seed_for_display_enables_multi_paper_sci_prompt():
+    assert _should_sync_deep_seed_for_display(
+        hits_raw=[{"text": "hit"}],
+        guide_strict_mode=False,
+        prompt="有哪几篇文章提到了SCI（单次曝光压缩成像）",
+        retrieval_prompt="Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
+    ) is True
 
 
 def test_has_anchor_grounded_answer_hits_detects_numbered_item_match():

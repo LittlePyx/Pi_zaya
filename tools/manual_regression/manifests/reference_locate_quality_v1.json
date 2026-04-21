@@ -47,6 +47,11 @@
           "require_hit_reader_sync": true,
           "require_assistant_primary": true
         },
+        "consistency_metrics": {
+          "require_summary_heading_consistent": true,
+          "require_heading_reader_open_consistent": true,
+          "require_fast_to_full_primary_block_same": true
+        },
         "pipeline_debug": {
           "require_raw_hits": true,
           "require_post_focus_hits": true
@@ -91,6 +96,11 @@
           "require_pack_primary": true,
           "require_hit_reader_sync": true,
           "require_assistant_primary": true
+        },
+        "consistency_metrics": {
+          "require_summary_heading_consistent": true,
+          "require_heading_reader_open_consistent": true,
+          "require_fast_to_full_primary_block_same": true
         },
         "pipeline_debug": {
           "require_raw_hits": true,
@@ -141,6 +151,11 @@
           "require_pack_primary": true,
           "require_hit_reader_sync": true,
           "require_assistant_primary": true
+        },
+        "consistency_metrics": {
+          "require_summary_heading_consistent": true,
+          "require_heading_reader_open_consistent": true,
+          "require_fast_to_full_primary_block_same": true
         },
         "pipeline_debug": {
           "require_raw_hits": true,

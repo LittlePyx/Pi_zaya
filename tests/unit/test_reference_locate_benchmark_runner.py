@@ -377,3 +377,173 @@ def test_evaluate_case_skips_missing_assistant_primary_when_answer_is_model_fail
     assert out["gate_results"]["evidence_identity"]["status"] == "PASS"
     assert out["gate_results"]["evidence_identity"]["assistant_model_failure"] is True
     assert out["gate_results"]["evidence_identity"]["assistant_primary"] == {}
+
+
+def test_evaluate_case_passes_consistency_metrics_when_heading_and_primary_surfaces_align():
+    case = {
+        "id": "consistency-pass",
+        "checks": {
+            "hits": {"min": 1, "max": 1},
+            "consistency_metrics": {
+                "require_summary_heading_consistent": True,
+                "require_heading_reader_open_consistent": True,
+                "require_fast_to_full_primary_block_same": True,
+            },
+        },
+    }
+    refs_pack = {
+        "render_status": "full",
+        "primary_evidence": {
+            "source_name": "OE-2017.pdf",
+            "block_id": "blk_22",
+            "anchor_id": "a_22",
+            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+        },
+        "hits": [
+            {
+                "ui_meta": {
+                    "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                    "summary_line": "Section 2.2 directly compares Hadamard and Fourier basis patterns.",
+                    "primary_evidence": {
+                        "source_name": "OE-2017.pdf",
+                        "block_id": "blk_22",
+                        "anchor_id": "a_22",
+                        "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                    },
+                    "reader_open": {
+                        "headingPath": "2. Comparison of theory / 2.2 Basis patterns generation",
+                        "primaryEvidence": {
+                            "source_name": "OE-2017.pdf",
+                            "block_id": "blk_22",
+                            "anchor_id": "a_22",
+                            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                        },
+                    },
+                }
+            }
+        ],
+    }
+    first_refs_pack = {
+        "render_status": "fast",
+        "primary_evidence": {
+            "source_name": "OE-2017.pdf",
+            "block_id": "blk_22",
+            "anchor_id": "a_22",
+            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+        },
+    }
+
+    out = runner._evaluate_case(
+        case,
+        refs_pack=refs_pack,
+        first_refs_pack=first_refs_pack,
+        final_refs_pack=refs_pack,
+    )
+
+    assert out["status"] == "PASS"
+    gate = out["gate_results"]["consistency_metrics"]
+    assert gate["status"] == "PASS"
+    assert gate["summary_heading_consistent"] is True
+    assert gate["heading_reader_open_consistent"] is True
+    assert gate["fast_to_full_primary_block_same"] is True
+
+
+def test_evaluate_case_fails_consistency_metrics_when_heading_and_fast_full_drift():
+    case = {
+        "id": "consistency-fail",
+        "checks": {
+            "hits": {"min": 1, "max": 1},
+            "consistency_metrics": {
+                "require_summary_heading_consistent": True,
+                "require_heading_reader_open_consistent": True,
+                "require_fast_to_full_primary_block_same": True,
+            },
+        },
+    }
+    refs_pack = {
+        "render_status": "full",
+        "primary_evidence": {
+            "source_name": "OE-2017.pdf",
+            "block_id": "blk_24",
+            "anchor_id": "a_24",
+            "heading_path": "2. Comparison of theory / 2.4 Efficiency",
+        },
+        "hits": [
+            {
+                "ui_meta": {
+                    "heading_path": "2. Comparison of theory / 2.4 Efficiency",
+                    "summary_line": "Section 2.2 directly compares Hadamard and Fourier basis patterns.",
+                    "primary_evidence": {
+                        "source_name": "OE-2017.pdf",
+                        "block_id": "blk_22",
+                        "anchor_id": "a_22",
+                        "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                    },
+                    "reader_open": {
+                        "headingPath": "2. Comparison of theory / 2.2 Basis patterns generation",
+                        "primaryEvidence": {
+                            "source_name": "OE-2017.pdf",
+                            "block_id": "blk_22",
+                            "anchor_id": "a_22",
+                            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                        },
+                    },
+                }
+            }
+        ],
+    }
+    first_refs_pack = {
+        "render_status": "fast",
+        "primary_evidence": {
+            "source_name": "OE-2017.pdf",
+            "block_id": "blk_22",
+            "anchor_id": "a_22",
+            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+        },
+    }
+
+    out = runner._evaluate_case(
+        case,
+        refs_pack=refs_pack,
+        first_refs_pack=first_refs_pack,
+        final_refs_pack=refs_pack,
+    )
+
+    assert out["status"] == "FAIL"
+    gate = out["gate_results"]["consistency_metrics"]
+    assert gate["status"] == "FAIL"
+    assert gate["summary_heading_consistent"] is False
+    assert gate["heading_reader_open_consistent"] is False
+    assert gate["fast_to_full_primary_block_same"] is False
+    assert "summary_heading_inconsistent" in out["failures"]
+    assert "heading_reader_open_inconsistent" in out["failures"]
+    assert "fast_to_full_primary_block_drift" in out["failures"]
+
+
+def test_assistant_primary_evidence_prefers_contract_snapshot_over_render_packet_surface():
+    message = {
+        "id": 21,
+        "role": "assistant",
+        "meta": {
+            "paper_guide_contracts": {
+                "primary_evidence": {
+                    "source_name": "OE-2017.pdf",
+                    "block_id": "blk_22",
+                    "anchor_id": "a_22",
+                    "heading_path": "2. Comparison / 2.2 Basis patterns generation",
+                },
+                "render_packet": {
+                    "primary_evidence": {
+                        "source_name": "NatPhoton-2019.pdf",
+                        "heading_path": "Abstract / Acquisition and image reconstruction strategies.",
+                    }
+                },
+            }
+        },
+    }
+
+    out = runner._assistant_primary_evidence(message)
+
+    assert out["source_name"] == "OE-2017.pdf"
+    assert out["block_id"] == "blk_22"
+    assert out["heading_path"] == "2. Comparison / 2.2 Basis patterns generation"

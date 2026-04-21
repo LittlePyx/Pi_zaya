@@ -45,7 +45,7 @@ interface PaperGuideReaderPanelProps {
   highlightsToggleLabel: string
   candidateToggleLabel: string
   candidateOptions: ReaderCandidateOption[]
-  activeAltIndex: number
+  activeCandidateDistinctKey: string
   onToggleOutline: () => void
   onSelectOutline: (item: ReaderOutlineItem) => void
   onToggleHighlights: () => void
@@ -93,7 +93,7 @@ export function PaperGuideReaderPanel({
   highlightsToggleLabel,
   candidateToggleLabel,
   candidateOptions,
-  activeAltIndex,
+  activeCandidateDistinctKey,
   onToggleOutline,
   onSelectOutline,
   onToggleHighlights,
@@ -186,7 +186,7 @@ export function PaperGuideReaderPanel({
         {candidatePickerExpanded && hasDistinctAlternatives ? (
           <div className="kb-reader-candidate-list">
             {candidateOptions.map((option) => {
-              const isActive = option.targetIndex === activeAltIndex
+              const isActive = option.distinctKey === activeCandidateDistinctKey
               return (
                 <button
                   key={`${option.displayIndex}:${option.targetIndex}:${option.distinctKey}`}

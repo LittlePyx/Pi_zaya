@@ -1,10 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
 import {
   READER_REGRESSION_SOURCE_PATH,
-  readerRegressionDocResponse,
+  buildReaderRegressionDocResponse,
+  type ReaderRegressionScenario,
 } from '../../src/testing/readerRegressionFixtures'
 
-async function mockReaderDoc(page: Page) {
+async function mockReaderDoc(page: Page, scenario: ReaderRegressionScenario = 'strict-quote') {
   await page.route('**/api/references/reader/doc', async (route) => {
     const req = route.request()
     const payload = req.postDataJSON() as { source_path?: string } | undefined
@@ -19,13 +20,13 @@ async function mockReaderDoc(page: Page) {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(readerRegressionDocResponse),
+      body: JSON.stringify(buildReaderRegressionDocResponse(scenario)),
     })
   })
 }
 
-async function openHarness(page: Page, scenario: string) {
-  await mockReaderDoc(page)
+async function openHarness(page: Page, scenario: ReaderRegressionScenario) {
+  await mockReaderDoc(page, scenario)
   await page.goto(`/__reader_test__?scenario=${scenario}`)
   await expect(page.getByTestId('reader-content')).toContainText('Fixture Paper')
 }
@@ -250,6 +251,24 @@ test('evidence navigation walks a stable ordered list under strict locate', asyn
   await page.getByTestId('reader-evidence-prev').click()
   await expect(page.getByTestId('reader-evidence-position')).toHaveText('2 / 3')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Equation block')
+})
+
+test('duplicate section alternatives collapse to distinct visible entries', async ({ page }) => {
+  await openHarness(page, 'duplicate-sections')
+  await expect(page.getByTestId('reader-evidence-nav')).toBeVisible()
+  await expect(page.getByTestId('reader-evidence-position')).toHaveText('1 / 3')
+  await expect(page.getByRole('button', { name: '3 candidates' })).toBeVisible()
+
+  await page.getByRole('button', { name: '3 candidates' }).click()
+  await expect(page.getByTestId('reader-candidate-chip-0')).toContainText('2. Method')
+  await expect(page.getByTestId('reader-candidate-chip-1')).toContainText('Eq. (1)')
+  await expect(page.getByTestId('reader-candidate-chip-2')).toContainText('Figure 1')
+  await expect(page.getByTestId('reader-candidate-chip-3')).toHaveCount(0)
+})
+
+test('reader suppresses repeated identical figure assets in the same document render', async ({ page }) => {
+  await openHarness(page, 'duplicate-images')
+  await expect(page.locator('.kb-md-image')).toHaveCount(1)
 })
 
 test('equation and figure fixtures resolve through the same structured target contract', async ({ page }) => {

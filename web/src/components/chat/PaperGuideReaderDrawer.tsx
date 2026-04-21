@@ -191,21 +191,22 @@ export function PaperGuideReaderDrawer({
       internalIndexByKey.set(candidateIdentityKey(item), idx)
     })
     const out: Array<{ targetIndex: number; label: string; distinctKey: string }> = []
-    const seenTarget = new Set<number>()
+    const seenDistinct = new Set<string>()
     for (const raw of rawList) {
       if (!raw || typeof raw !== 'object') continue
       const key = candidateIdentityKey(raw)
       const targetIndex = internalIndexByKey.get(key)
       if (!Number.isFinite(targetIndex)) continue
       const safeIndex = Number(targetIndex)
-      if (seenTarget.has(safeIndex)) continue
-      seenTarget.add(safeIndex)
       const item = alternatives[safeIndex]
       if (!item) continue
+      const distinctKey = candidateVisibilityKey(item, title) || `alt:${safeIndex + 1}`
+      if (seenDistinct.has(distinctKey)) continue
+      seenDistinct.add(distinctKey)
       out.push({
         targetIndex: safeIndex,
         label: candidateDisplayLabel(item, title) || `Candidate ${safeIndex + 1}`,
-        distinctKey: candidateVisibilityKey(item, title) || `alt:${safeIndex + 1}`,
+        distinctKey,
       })
     }
     return out
@@ -251,6 +252,10 @@ export function PaperGuideReaderDrawer({
   }, [candidateOptions])
 
   const activeAlt = alternatives[activeAltIndex] || null
+  const activeCandidateDistinctKey = useMemo(() => {
+    if (!activeAlt) return ''
+    return candidateVisibilityKey(activeAlt, title) || candidateIdentityKey(activeAlt)
+  }, [activeAlt, title])
   const activeHeadingPath = String(activeAlt?.headingPath || primaryHeadingPath).trim()
   const activeFocusSnippet = String(activeAlt?.snippet || primaryFocusSnippet).trim()
   const activeHighlightSnippet = String(activeAlt?.highlightSnippet || primaryHighlightSnippet || activeFocusSnippet).trim()
@@ -313,7 +318,7 @@ export function PaperGuideReaderDrawer({
       ? (candidatePickerExpanded
       ? 'Hide list'
       : activeAltIndex > 0
-        ? `Alt ${Math.max(1, candidateOptions.findIndex((item) => item.targetIndex === activeAltIndex) + 1)}/${candidateOptions.length}`
+        ? `Alt ${Math.max(1, candidateOptions.findIndex((item) => item.distinctKey === activeCandidateDistinctKey) + 1)}/${candidateOptions.length}`
         : `${candidateOptions.length} candidates`)
     : ''
 
@@ -468,7 +473,7 @@ export function PaperGuideReaderDrawer({
       highlightsToggleLabel={highlightsOpen ? 'Hide highlights' : `${sessionHighlights.length} highlights`}
       candidateToggleLabel={candidateToggleLabel}
       candidateOptions={candidateOptions}
-      activeAltIndex={activeAltIndex}
+      activeCandidateDistinctKey={activeCandidateDistinctKey}
       onToggleOutline={toggleOutline}
       onSelectOutline={jumpToOutlineItem}
       onToggleHighlights={toggleHighlights}

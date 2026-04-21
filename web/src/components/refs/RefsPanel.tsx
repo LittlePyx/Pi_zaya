@@ -56,6 +56,8 @@ interface RefHit {
 interface RefEntry {
   prompt?: string
   hits?: RefHit[]
+  display_state?: string
+  suppression_reason?: string
   guide_filter?: {
     active?: boolean
     hidden_self_source?: boolean
@@ -232,19 +234,37 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
   const nav = useNavigate()
   const entry = refs[String(msgId)] as RefEntry | undefined
   const prompt = String(entry?.prompt || '').trim()
+  const displayState = String(entry?.display_state || '').trim().toLowerCase()
+  const suppressionReason = String(entry?.suppression_reason || '').trim().toLowerCase()
+  const hasBackendDisplayState = Boolean(displayState)
   const rawHits = entry?.hits
   const hits = useMemo(() => (Array.isArray(rawHits) ? rawHits : []), [rawHits])
   const visibleHits = useMemo(
-    () => hits.filter((hit) => !shouldSuppressRefHitCard(prompt, hit)),
-    [hits, prompt],
+    () => (hasBackendDisplayState ? hits : hits.filter((hit) => !shouldSuppressRefHitCard(prompt, hit))),
+    [hasBackendDisplayState, hits, prompt],
   )
   const suppressedHitCount = Math.max(0, hits.length - visibleHits.length)
   const guideFilter = entry?.guide_filter || {}
   const pendingCount = visibleHits.filter((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending').length
-  const hasPending = pendingCount > 0
+  const hasPending = displayState === 'pending' || pendingCount > 0
   const filteredSelfCount = positiveNumber(guideFilter.filtered_hit_count)
-  const shouldShowGuideFilterNote = !hasPending && hits.length === 0 && Boolean(guideFilter.hidden_self_source)
-  const shouldShowNegativeSuppressedNote = !hasPending && visibleHits.length === 0 && suppressedHitCount > 0
+  const shouldShowGuideFilterNote = !hasPending && (
+    displayState === 'hidden_by_guide'
+    || ((!hasBackendDisplayState) && hits.length === 0 && Boolean(guideFilter.hidden_self_source))
+  )
+  const shouldShowNegativeSuppressedNote = !hasPending && (
+    displayState === 'suppressed'
+    || ((!hasBackendDisplayState) && visibleHits.length === 0 && suppressedHitCount > 0)
+  )
+  const suppressionNoteText = suppressionReason === 'focus_filter_removed_all'
+    ? '后端在焦点过滤后没有保留足够可靠的参考定位卡片。'
+    : suppressionReason === 'llm_filter_removed_all'
+      ? '后端在语义筛选后没有保留足够可靠的参考定位卡片。'
+      : suppressionReason === 'score_gate_removed_all'
+        ? '后端在相关性分数筛选后没有保留足够可靠的参考定位卡片。'
+        : suppressionReason === 'render_failed'
+          ? '后端在生成参考定位卡片时失败，当前没有可安全展示的结果。'
+          : '当前没有足够可靠、能直接支撑这个问题的定位切口可供打开。'
   const [citeIndex, setCiteIndex] = useState<number | null>(null)
   const [loadingIndex, setLoadingIndex] = useState<number | null>(null)
   const [guideLoadingIndex, setGuideLoadingIndex] = useState<number | null>(null)
@@ -361,7 +381,7 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
               >
                 <div className="font-medium">已隐藏可能误导的参考定位卡片。</div>
                 <div className="mt-1 text-[13px] opacity-80">
-                  当前没有足够可靠、能直接支撑这个问题的定位切口可供打开。
+                  {suppressionNoteText}
                 </div>
               </div>
             ) : (

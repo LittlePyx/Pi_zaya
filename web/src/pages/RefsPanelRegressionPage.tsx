@@ -9,6 +9,7 @@ import {
 const REFS_PANEL_PAYLOAD: Record<string, unknown> = {
   7: {
     prompt: 'Where is Equation (1) introduced in the paper?',
+    display_state: 'ready',
     hits: [
       {
         meta: {
@@ -128,6 +129,8 @@ const REFS_PANEL_PAYLOAD: Record<string, unknown> = {
 const REFS_PANEL_GUIDE_FILTER_ONLY_PAYLOAD: Record<string, unknown> = {
   7: {
     prompt: 'Besides this paper, what other papers in my library discuss ADMM?',
+    display_state: 'hidden_by_guide',
+    suppression_reason: 'guide_self_source_only',
     hits: [],
     guide_filter: {
       active: true,
@@ -141,6 +144,8 @@ const REFS_PANEL_GUIDE_FILTER_ONLY_PAYLOAD: Record<string, unknown> = {
 const REFS_PANEL_NEGATIVE_SUPPRESSED_PAYLOAD: Record<string, unknown> = {
   7: {
     prompt: 'In the SCINeRF paper, where is ADMM discussed? Please point me to the source section.',
+    display_state: 'suppressed',
+    suppression_reason: 'focus_filter_removed_all',
     hits: [
       {
         text: 'Volume rendering equation used for neural field optimization.',

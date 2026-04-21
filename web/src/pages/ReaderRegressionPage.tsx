@@ -10,6 +10,8 @@ import {
 function parseScenario(input: string | null): ReaderRegressionScenario {
   const raw = String(input || '').trim().toLowerCase()
   if (raw === 'evidence-nav') return 'evidence-nav'
+  if (raw === 'duplicate-sections') return 'duplicate-sections'
+  if (raw === 'duplicate-images') return 'duplicate-images'
   if (raw === 'candidate-fallback') return 'candidate-fallback'
   if (raw === 'strict-missing-exact') return 'strict-missing-exact'
   if (raw === 'discussion-only') return 'discussion-only'

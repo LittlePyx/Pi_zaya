@@ -1,10 +1,15 @@
 import { useEffect, useMemo } from 'react'
 import type { ReaderLocateCandidate } from './readerTypes'
-import { candidateDisplayLabel, candidateIdentityKey } from './readerDomUtils'
+import {
+  candidateDisplayLabel,
+  candidateIdentityKey,
+  candidateVisibilityKey,
+} from './readerDomUtils'
 
 export interface ReaderEvidenceNavItem {
   id: string
   label: string
+  distinctKey: string
   headingPath: string
   blockId: string
   anchorId: string
@@ -43,12 +48,18 @@ export function useReaderEvidenceNavigator({
   }, [alternatives])
 
   const evidenceItems = useMemo<ReaderEvidenceNavItem[]>(() => {
-    return evidenceAlternatives.flatMap((item, index) => {
+    const out: ReaderEvidenceNavItem[] = []
+    const seenDistinct = new Set<string>()
+    evidenceAlternatives.forEach((item, index) => {
       const targetIndex = internalIndexByKey.get(candidateIdentityKey(item))
-      if (!Number.isFinite(targetIndex)) return []
-      return [{
+      if (!Number.isFinite(targetIndex)) return
+      const distinctKey = candidateVisibilityKey(item, title) || candidateIdentityKey(item)
+      if (!distinctKey || seenDistinct.has(distinctKey)) return
+      seenDistinct.add(distinctKey)
+      out.push({
         id: String(item.blockId || item.anchorId || `evidence-${index + 1}`).trim(),
         label: candidateDisplayLabel(item, title) || `Evidence ${index + 1}`,
+        distinctKey,
         headingPath: String(item.headingPath || '').trim(),
         blockId: String(item.blockId || '').trim(),
         anchorId: String(item.anchorId || '').trim(),
@@ -59,14 +70,25 @@ export function useReaderEvidenceNavigator({
         snippet: String(item.highlightSnippet || item.snippet || '').trim(),
         index,
         targetIndex: Number(targetIndex),
-      }]
+      })
     })
+    return out
   }, [evidenceAlternatives, internalIndexByKey, title])
+
+  const activeEvidenceDistinctKey = useMemo(() => {
+    const activeItem = alternatives[activeAltIndex]
+    if (!activeItem) return ''
+    return candidateVisibilityKey(activeItem, title) || candidateIdentityKey(activeItem)
+  }, [alternatives, activeAltIndex, title])
 
   const activeEvidenceIndex = useMemo(() => {
     if (evidenceItems.length <= 0) return -1
+    if (activeEvidenceDistinctKey) {
+      const distinctIndex = evidenceItems.findIndex((item) => item.distinctKey === activeEvidenceDistinctKey)
+      if (distinctIndex >= 0) return distinctIndex
+    }
     return evidenceItems.findIndex((item) => item.targetIndex === activeAltIndex)
-  }, [evidenceItems, activeAltIndex])
+  }, [evidenceItems, activeAltIndex, activeEvidenceDistinctKey])
 
   useEffect(() => {
     if (!open) return

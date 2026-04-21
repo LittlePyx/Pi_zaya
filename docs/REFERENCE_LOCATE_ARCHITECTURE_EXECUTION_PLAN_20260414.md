@@ -396,6 +396,29 @@ Make refs card language consistent with user/UI preference and stop frontend sem
 - cache invalidation respects locale changes
 - frontend no longer needs to suppress obviously wrong cards by re-guessing semantics in common paths
 
+### Progress Update 2026-04-16
+
+- locale persistence and locale-aware cache invalidation are already active in the refs render path
+- refs packs now emit a backend display contract for common states:
+  - `display_state`
+  - `suppression_reason`
+  - existing `guide_filter`
+- pending, ready, guide-hidden, stored-full, and suppressed packs now all pass through the same contract attachment path in:
+  - `api/reference_ui.py`
+  - `api/routers/references.py`
+- `RefsPanel` and `MessageList` now prefer backend `display_state` over locally re-deriving suppression semantics; legacy frontend heuristics remain only as a fallback for older payload shapes
+- regression fixtures for the refs panel now cover:
+  - normal ready payload
+  - guide-hidden payload
+  - suppressed payload
+- verification completed on 2026-04-16:
+  - `python -m pytest -q tests/unit/test_reference_ui_score_calibration.py tests/unit/test_references_router_cache.py tests/unit/test_reference_locate_benchmark_runner.py` -> `95 passed`
+  - `cd web && npm run test:e2e -- tests/e2e/refs-panel-regression.spec.ts` -> `3 passed`
+  - `cd web && npm run build` -> success
+- remaining tail for Phase D:
+  - fold any leftover frontend-only suppression branches into explicit backend reasons where practical
+  - extend locale-focused frontend coverage beyond refs panel regression if additional mixed-language UI drift reappears
+
 ## Phase E. Benchmark And Visual Verification Harness
 
 ### Objective
@@ -446,11 +469,22 @@ Make the feature continuously verifiable, not just manually arguable.
 - unit coverage added in `tests/unit/test_reference_locate_benchmark_runner.py` for both aligned and drifting evidence identities
 - definition-style locate prompts now suppress synthetic `focus_term: ...` summary candidates when the underlying sentence only loosely matches a partial token such as `dynamic`
 - definition-style why-lines now require the explicit focus term itself, not just a nearby section heading, before they are treated as specific enough
-- latest fresh in-process benchmark run: `tmp/reference_locate_benchmark/20260416_113329/summary.json` -> `overall_status=PASS`, `fail_count=0`, `case_count=5`
+- benchmark output now records the planned named consistency metrics directly:
+  - `summary_heading_consistent`
+  - `heading_reader_open_consistent`
+  - `fast_to_full_primary_block_same`
+- assistant-side `primary_evidence` now refreshes from the stored refs `rendered_payload`, so the message render path consumes the same authoritative pack-level identity as `/api/references/conversation/{conv_id}`
+- latest fresh in-process benchmark run: `tmp/reference_locate_benchmark/20260416_173103/summary.json` -> `overall_status=PASS`, `fail_count=0`, `case_count=5`
 - positive normal-locate answers now generate evidence-aware `Next Steps` from the same locate target, so definition and comparison prompts point users back to the matched section/source instead of falling back to generic reading templates
 - positive normal-locate `Conclusion / Evidence` now also reuse the same locate target more explicitly: paper-identity prompts are rewritten to name the matched paper, and evidence fallback uses relation-specific phrasing such as `directly defines` / `directly compares` instead of generic `states`
 - mixed-language positive locate answers now align `Conclusion` and `Evidence` on the same `source + heading + relation`: Chinese bridge conclusions name the matched paper explicitly, while Chinese evidence keeps the grounded original snippet instead of repeating a generic summary sentence
 - refs payloads now include `pipeline_debug` counters (`raw_hit_count`, `post_score_gate_hit_count`, `post_focus_filter_hit_count`, `post_llm_filter_hit_count`, `final_hit_count`), and the benchmark suite uses them to distinguish `retrieval_empty_before_ui_filters` from later-stage suppression
+- frontend verification now passes on the core locate UI regression pages:
+  - `npm run test:e2e -- tests/e2e/refs-panel-regression.spec.ts tests/e2e/message-list-locate-primary.spec.ts` -> `11 passed`
+  - `npm run test:e2e -- tests/e2e/reader-regression.spec.ts` -> `16 passed`
+  - `npm run build` -> success
+- remaining tail for Phase E:
+  - run the manual reader landing/highlight checklist as the final product-level acceptance sweep
 
 ## 6. Test Plan
 

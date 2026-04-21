@@ -125,6 +125,29 @@ function normalize(text: string) {
     .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$')
 }
 
+function dedupeRepeatedReaderImageMarkdown(text: string): string {
+  const srcRe = /^\s*!\[[^\]]*\]\((.+?)\)\s*$/
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = String(rawLine || '')
+    const m = line.match(srcRe)
+    if (!m) {
+      out.push(line)
+      continue
+    }
+    const src = String(m[1] || '').trim()
+    if (!src) {
+      out.push(line)
+      continue
+    }
+    if (seen.has(src)) continue
+    seen.add(src)
+    out.push(line)
+  }
+  return out.join('\n')
+}
+
 interface Props {
   content: string
   citeDetails?: CiteDetail[]
@@ -1301,7 +1324,7 @@ export function MarkdownRenderer({
   readerBlocks,
 }: Props) {
   const renderContent = variant === 'reader'
-    ? String(content || '')
+    ? dedupeRepeatedReaderImageMarkdown(String(content || ''))
     : normalize(content)
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
   const toneBySource = buildToneMap(citeDetails)

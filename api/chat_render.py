@@ -138,6 +138,146 @@ def _propagate_box_scope_for_display(segments: list[dict]) -> list[dict]:
     return out
 
 
+def _render_primary_source_identity(raw: dict | None) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    for key in ("source_name", "sourceName", "source_path", "sourcePath"):
+        text = str(raw.get(key) or "").strip().lower()
+        if not text:
+            continue
+        name = Path(text).name or text
+        for suffix in (".en.md", ".md", ".pdf"):
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        return " ".join(name.replace("_", " ").replace("-", " ").split())
+    return ""
+
+
+def _render_primary_heading_identity(raw: dict | None) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    return str(raw.get("heading_path") or raw.get("headingPath") or "").strip().lower()
+
+
+def _primary_evidence_is_compatible(base: dict | None, candidate: dict | None) -> bool:
+    if not isinstance(base, dict) or not isinstance(candidate, dict):
+        return False
+    base_source = _render_primary_source_identity(base)
+    cand_source = _render_primary_source_identity(candidate)
+    if base_source and cand_source and base_source != cand_source:
+        return False
+    base_heading = _render_primary_heading_identity(base)
+    cand_heading = _render_primary_heading_identity(candidate)
+    if base_heading and cand_heading and base_heading != cand_heading:
+        return False
+    return True
+
+
+def _primary_evidence_precision_score(raw: dict | None) -> tuple[int, int, int, int, int, int]:
+    if not isinstance(raw, dict) or not raw:
+        return (0, 0, 0, 0, 0, 0)
+    reason = str(raw.get("selection_reason") or raw.get("selectionReason") or "").strip().lower()
+    reason_rank = {
+        "prompt_aligned": 6,
+        "reader_open": 5,
+        "strict_locate": 5,
+        "provenance_segment": 5,
+        "shared_refs_pack": 5,
+        "pending_section_seed": 2,
+        "shared_contract_seed": 1,
+        "answer_hit_top": 0,
+    }.get(reason, 3 if reason else 0)
+    strict_locate = raw.get("strict_locate")
+    if strict_locate is None:
+        strict_locate = raw.get("strictLocate")
+    return (
+        reason_rank,
+        1 if str(raw.get("block_id") or raw.get("blockId") or "").strip() else 0,
+        1 if str(raw.get("anchor_id") or raw.get("anchorId") or "").strip() else 0,
+        1 if _render_primary_heading_identity(raw) else 0,
+        1 if bool(strict_locate) else 0,
+        1 if str(raw.get("source_path") or raw.get("sourcePath") or raw.get("source_name") or raw.get("sourceName") or "").strip() else 0,
+    )
+
+
+def _should_adopt_refs_primary(contract_primary: dict | None, refs_primary: dict | None) -> bool:
+    if not isinstance(refs_primary, dict) or not refs_primary:
+        return False
+    if not isinstance(contract_primary, dict) or not contract_primary:
+        return True
+    current_score = _primary_evidence_precision_score(contract_primary)
+    refs_score = _primary_evidence_precision_score(refs_primary)
+    if refs_score <= current_score:
+        return False
+    current_reason = str(contract_primary.get("selection_reason") or contract_primary.get("selectionReason") or "").strip().lower()
+    if current_reason in {"answer_hit_top", "shared_contract_seed", "pending_section_seed"}:
+        return True
+    if not _primary_evidence_is_compatible(contract_primary, refs_primary):
+        return True
+    return refs_score > current_score
+
+
+def _merge_render_packet_primary_evidence(
+    *,
+    contract_primary: dict | None,
+    provenance_primary: dict | None,
+    existing_primary: dict | None,
+) -> dict:
+    base = dict(contract_primary or {}) if isinstance(contract_primary, dict) and contract_primary else {}
+    if not base:
+        if isinstance(provenance_primary, dict) and provenance_primary:
+            base = dict(provenance_primary)
+        elif isinstance(existing_primary, dict) and existing_primary:
+            base = dict(existing_primary)
+    for candidate in (provenance_primary, existing_primary):
+        if not isinstance(candidate, dict) or not candidate:
+            continue
+        if not base:
+            base = dict(candidate)
+            continue
+        if not _primary_evidence_is_compatible(base, candidate):
+            continue
+        for key, value in dict(candidate).items():
+            if base.get(key) in (None, "", [], {}):
+                base[key] = value
+    return base
+
+
+def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
+    if not isinstance(raw_pack, dict):
+        return {}
+    pack = dict(raw_pack)
+    rendered_payload = dict(raw_pack.get("rendered_payload") or {}) if isinstance(raw_pack.get("rendered_payload"), dict) else {}
+    if not rendered_payload:
+        return pack
+    merged = dict(rendered_payload)
+    for key in (
+        "user_msg_id",
+        "conv_id",
+        "prompt",
+        "prompt_sig",
+        "hits",
+        "scores",
+        "render_status",
+        "render_error",
+        "render_error_detail",
+        "render_built_at",
+        "render_attempts",
+        "render_evidence_sig",
+        "render_locale",
+        "used_query",
+        "used_translation",
+        "created_at",
+        "updated_at",
+    ):
+        if merged.get(key) in (None, "", [], {}):
+            value = pack.get(key)
+            if value not in (None, "", [], {}):
+                merged[key] = value
+    return merged
+
+
 @lru_cache(maxsize=1)
 def _load_reference_index_cached() -> dict:
     try:
@@ -402,12 +542,40 @@ def _merge_render_packet_contract_meta(
     rec: dict,
     msg_id: int,
     enriched_provenance: dict | None,
+    ref_pack: dict | None = None,
     chat_store=None,
 ) -> None:
     meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
     contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
     if not contracts:
         return
+    contracts_changed = False
+    if isinstance(ref_pack, dict):
+        refs_primary = dict(ref_pack.get("primary_evidence") or {}) if isinstance(ref_pack.get("primary_evidence"), dict) else {}
+        if refs_primary:
+            current_contract_primary = (
+                dict(contracts.get("primary_evidence") or {})
+                if isinstance(contracts.get("primary_evidence"), dict)
+                else {}
+            )
+            if _should_adopt_refs_primary(current_contract_primary, refs_primary):
+                merged_contract_primary = dict(refs_primary)
+                if _primary_evidence_is_compatible(merged_contract_primary, current_contract_primary):
+                    merged_contract_primary = _merge_render_packet_primary_evidence(
+                        contract_primary=merged_contract_primary,
+                        provenance_primary=current_contract_primary,
+                        existing_primary={},
+                    )
+            else:
+                merged_contract_primary = _merge_render_packet_primary_evidence(
+                    contract_primary=refs_primary,
+                    provenance_primary=current_contract_primary,
+                    existing_primary={},
+                )
+            if merged_contract_primary:
+                if dict(contracts.get("primary_evidence") or {}) != merged_contract_primary:
+                    contracts["primary_evidence"] = merged_contract_primary
+                    contracts_changed = True
     existing_packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
     existing_cite_details = [
         dict(item)
@@ -447,23 +615,23 @@ def _merge_render_packet_contract_meta(
     existing_notice = str(existing_packet.get("notice") or "").strip()
     current_notice = str(rec.get("notice") or "").strip()
     provenance_segments = list((enriched_provenance or {}).get("segments") or [])
-    provenance_primary_evidence = (
-        dict((enriched_provenance or {}).get("primary_evidence") or {})
-        if isinstance((enriched_provenance or {}).get("primary_evidence"), dict)
-        else {}
-    )
-    if not provenance_primary_evidence:
-        provenance_primary_evidence = (
-            dict(existing_packet.get("primary_evidence") or {})
-            if isinstance(existing_packet.get("primary_evidence"), dict)
-            else {}
-        )
-    if not provenance_primary_evidence:
-        provenance_primary_evidence = (
+    provenance_primary_evidence = _merge_render_packet_primary_evidence(
+        contract_primary=(
             dict(contracts.get("primary_evidence") or {})
             if isinstance(contracts.get("primary_evidence"), dict)
             else {}
-        )
+        ),
+        provenance_primary=(
+            dict((enriched_provenance or {}).get("primary_evidence") or {})
+            if isinstance((enriched_provenance or {}).get("primary_evidence"), dict)
+            else {}
+        ),
+        existing_primary=(
+            dict(existing_packet.get("primary_evidence") or {})
+            if isinstance(existing_packet.get("primary_evidence"), dict)
+            else {}
+        ),
+    )
     has_current_locate_identity = any(
         isinstance(item, dict)
         and (
@@ -504,7 +672,16 @@ def _merge_render_packet_contract_meta(
     )
     render_packet = _paper_guide_model_dump(render_packet_model)
     if existing_packet == render_packet:
-        rec["meta"] = meta
+        if contracts_changed:
+            meta["paper_guide_contracts"] = contracts
+            rec["meta"] = meta
+            if chat_store is not None and msg_id > 0:
+                try:
+                    chat_store.merge_message_meta(msg_id, {"paper_guide_contracts": contracts})
+                except Exception:
+                    pass
+        else:
+            rec["meta"] = meta
         return
     contracts["render_packet"] = render_packet
     meta["paper_guide_contracts"] = contracts
@@ -998,7 +1175,8 @@ def enrich_messages_with_reference_render(
             out.append(rec)
             continue
 
-        ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
+        raw_ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
+        ref_pack = _effective_reference_render_pack(raw_ref_pack if isinstance(raw_ref_pack, dict) else None)
         hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
         provenance_raw = rec.get("provenance") if isinstance(rec.get("provenance"), dict) else None
         render_cache_key = _build_message_render_cache_key(
@@ -1095,6 +1273,7 @@ def enrich_messages_with_reference_render(
             rec=rec,
             msg_id=msg_id,
             enriched_provenance=enriched_provenance if isinstance(enriched_provenance, dict) else None,
+            ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
             chat_store=chat_store,
         )
         _project_render_packet_compat_fields(rec)

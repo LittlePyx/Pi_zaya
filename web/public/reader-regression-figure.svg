@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220" viewBox="0 0 480 220">
+  <rect width="480" height="220" fill="#eef3f8"/>
+  <rect x="28" y="36" width="180" height="128" rx="18" fill="#9bb7d4"/>
+  <rect x="234" y="58" width="218" height="26" rx="13" fill="#cbd8e6"/>
+  <rect x="234" y="98" width="184" height="20" rx="10" fill="#d6e0ea"/>
+  <rect x="234" y="130" width="146" height="20" rx="10" fill="#d6e0ea"/>
+  <circle cx="128" cy="100" r="34" fill="#f7fafc"/>
+  <text x="28" y="196" font-family="Georgia, serif" font-size="18" fill="#425466">Figure 1. SCI system pipeline.</text>
+</svg>

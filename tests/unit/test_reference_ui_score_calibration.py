@@ -2,8 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 import api.reference_ui as reference_ui
 from api.reference_ui import _effective_ui_score, build_hit_ui_meta, enrich_refs_payload, ensure_source_citation_meta
+
+
+@pytest.fixture(autouse=True)
+def _disable_remote_summary_translation(monkeypatch):
+    # Keep this suite deterministic and prevent accidental live translation calls from dragging test time.
+    cache_clear = getattr(reference_ui._translate_summary_to_zh, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
+    monkeypatch.setenv("KB_CITE_SUMMARY_TRANSLATE_ZH", "0")
+    yield
+    cache_clear = getattr(reference_ui._translate_summary_to_zh, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
 
 
 def test_effective_ui_score_penalizes_weak_evidence_high_llm_score():
@@ -65,6 +80,8 @@ def test_enrich_refs_payload_filters_bound_source_by_guide_name_without_bound_pa
     assert guide_filter.get("active") is True
     assert guide_filter.get("hidden_self_source") is True
     assert int(guide_filter.get("filtered_hit_count") or 0) == 1
+    assert str(entry.get("display_state") or "") == "hidden_by_guide"
+    assert str(entry.get("suppression_reason") or "") == "guide_self_source_only"
     pipeline_debug = entry.get("pipeline_debug", {}) or {}
     assert int(pipeline_debug.get("raw_hit_count") or 0) == 0
     assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 1
@@ -961,7 +978,7 @@ def test_enrich_refs_payload_sorts_hits_by_ui_score_for_display(monkeypatch):
     assert str((((hits[1].get("meta") if isinstance(hits[1].get("meta"), dict) else {}) or {}).get("source_path") or "")).endswith(r"A\A.en.md")
 
 
-def test_enrich_refs_payload_llm_can_rerank_ambiguous_top_hits(monkeypatch):
+def test_enrich_refs_payload_drops_ambiguous_admm_hits_before_llm_rerank(monkeypatch):
     refs = {
         32: {
             "prompt": "Which paper in my library most directly discusses ADMM?",
@@ -993,6 +1010,7 @@ def test_enrich_refs_payload_llm_can_rerank_ambiguous_top_hits(monkeypatch):
             ],
         }
     }
+    rerank_calls: list[int] = []
 
     def fake_build_hit_ui_meta(hit, **kwargs):
         del kwargs
@@ -1021,16 +1039,22 @@ def test_enrich_refs_payload_llm_can_rerank_ambiguous_top_hits(monkeypatch):
     monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
     monkeypatch.setattr(reference_ui, "_prefetch_refs_citation_meta", lambda *args, **kwargs: {})
     monkeypatch.setattr(reference_ui, "_should_try_refs_hit_rerank", lambda prompt, hits: True)
-    monkeypatch.setattr(reference_ui, "_llm_rerank_refs_hit_order", lambda **kwargs: (2, 1, 3))
+    monkeypatch.setattr(
+        reference_ui,
+        "_llm_rerank_refs_hit_order",
+        lambda **kwargs: rerank_calls.append(len(list(kwargs.get("hits") or []))) or (2, 1, 3),
+    )
     monkeypatch.setattr(reference_ui, "_maybe_llm_filter_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
     monkeypatch.setattr(reference_ui, "_maybe_polish_refs_card_copy", lambda **kwargs: list(kwargs.get("hits") or []))
 
     out = enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
     hits = list((out.get(32) or {}).get("hits") or [])
+    entry = out.get(32) or {}
 
-    assert len(hits) == 3
-    assert str((((hits[0].get("meta") if isinstance(hits[0].get("meta"), dict) else {}) or {}).get("source_path") or "")).endswith(r"RelatedWorkPaper\RelatedWorkPaper.en.md")
-    assert str((((hits[1].get("meta") if isinstance(hits[1].get("meta"), dict) else {}) or {}).get("source_path") or "")).endswith(r"MethodPaper\MethodPaper.en.md")
+    assert hits == []
+    assert rerank_calls == []
+    assert str(entry.get("display_state") or "") == "suppressed"
+    assert str(entry.get("suppression_reason") or "") == "focus_filter_removed_all"
 
 
 def test_enrich_refs_payload_filters_irrelevant_hits_for_explicit_term_prompt(monkeypatch):
@@ -1079,9 +1103,11 @@ def test_enrich_refs_payload_filters_irrelevant_hits_for_explicit_term_prompt(mo
 
     out = enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
     hits = list((out.get(33) or {}).get("hits") or [])
+    entry = out.get(33) or {}
 
-    assert len(hits) == 1
-    assert str((((hits[0].get("meta") if isinstance(hits[0].get("meta"), dict) else {}) or {}).get("source_path") or "")).endswith(r"RelatedWorkPaper\RelatedWorkPaper.en.md")
+    assert hits == []
+    assert str(entry.get("display_state") or "") == "suppressed"
+    assert str(entry.get("suppression_reason") or "") == "focus_filter_removed_all"
 
 
 def test_enrich_refs_payload_prefers_prompt_named_source_even_if_raw_score_is_lower(monkeypatch):
@@ -1183,8 +1209,14 @@ def test_enrich_refs_payload_drops_single_negative_reason_hit_for_explicit_term_
 
     out = enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
     hits = list((out.get(34) or {}).get("hits") or [])
+    entry = out.get(34) or {}
 
     assert hits == []
+    assert str(entry.get("display_state") or "") == "suppressed"
+    assert str(entry.get("suppression_reason") or "") == "score_gate_removed_all"
+    pipeline_debug = entry.get("pipeline_debug", {}) or {}
+    assert int(pipeline_debug.get("raw_hit_count") or 0) == 1
+    assert int(pipeline_debug.get("post_score_gate_hit_count") or 0) == 0
 
 
 def test_enrich_refs_payload_filters_pending_hits_by_prompt_focus_too(monkeypatch):
@@ -1238,6 +1270,73 @@ def test_enrich_refs_payload_filters_pending_hits_by_prompt_focus_too(monkeypatc
     assert len(hits) == 1
     assert observed_sources == [r"db\PendingB\PendingB.en.md"]
     assert str((((hits[0].get("meta") if isinstance(hits[0].get("meta"), dict) else {}) or {}).get("source_path") or "")).endswith(r"PendingB\PendingB.en.md")
+
+
+def test_filter_pending_refs_hits_by_prompt_focus_drops_related_work_only_admm_hit():
+    prompt = "Which paper in my library most directly discusses ADMM? Please point me to the source section."
+    hits = [
+        {
+            "text": "Most of the existing methods employ alternating direction method of multipliers (ADMM) [4].",
+            "meta": {
+                "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+                "ref_best_heading_path": "2. Related Work",
+                "ref_section": "2. Related Work",
+                "ref_show_snippets": [
+                    "Most of the existing methods employ alternating direction method of multipliers (ADMM) [4].",
+                ],
+            },
+        }
+    ]
+
+    filtered = reference_ui._filter_pending_refs_hits_by_prompt_focus(prompt, hits)
+
+    assert filtered == []
+
+
+def test_filter_pending_refs_hits_by_prompt_focus_compare_prefers_explicit_versus_paper():
+    prompt = "Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?"
+    hits = [
+        {
+            "text": (
+                "Instead of using random patterns, basis-scanning single-pixel imaging techniques use deterministic basis "
+                "patterns for illumination. Figure 1 shows the comparison between the Hadamard and Fourier basis patterns."
+            ),
+            "meta": {
+                "source_path": (
+                    r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+                ),
+                "ref_best_heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                "ref_section": "2. Comparison of theory",
+                "ref_show_snippets": [
+                    "Figure 1 shows the comparison between the Hadamard and Fourier basis patterns."
+                ],
+            },
+        },
+        {
+            "text": (
+                "In the case of Fourier single-pixel imaging, it is possible to employ three-step phase-shifting. "
+                "When using the Hadamard basis, one typically requires differential measurements."
+            ),
+            "meta": {
+                "source_path": (
+                    r"db\NatPhoton-2019-Principles and prospects for single-pixel imaging"
+                    r"\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md"
+                ),
+                "ref_best_heading_path": "Abstract / Acquisition and image reconstruction strategies.",
+                "ref_section": "Acquisition and image reconstruction strategies",
+                "ref_show_snippets": [
+                    "In the case of Fourier single-pixel imaging, it is possible to employ three-step phase-shifting."
+                ],
+            },
+        },
+    ]
+
+    filtered = reference_ui._filter_pending_refs_hits_by_prompt_focus(prompt, hits)
+
+    assert len(filtered) == 1
+    source_path = str((((filtered[0].get("meta") if isinstance(filtered[0].get("meta"), dict) else {}) or {}).get("source_path") or "")).strip()
+    assert "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging" in source_path
 
 
 def test_enrich_refs_payload_named_source_prompt_still_requires_non_source_focus_term(monkeypatch):
@@ -1313,6 +1412,81 @@ def test_refs_prompt_focus_terms_extracts_compare_phrase_for_library_query():
     assert "hadamard single pixel imaging and fourier single pixel imaging" in terms
     assert "hadamard single pixel imaging" in terms
     assert "fourier single pixel imaging" in terms
+
+
+def test_focus_term_matches_surface_requires_compound_phrase_not_scattered_tokens():
+    assert not reference_ui._focus_term_matches_surface(
+        "physics informed deep learning",
+        "Developing more precise forward physics models is a promising approach for deep learning in SPI.",
+    )
+    assert reference_ui._focus_term_matches_surface(
+        "deep learning for single pixel imaging",
+        "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+    )
+
+
+def test_enrich_refs_payload_direct_focus_query_drops_scattered_token_false_positive(monkeypatch):
+    refs = {
+        381: {
+            "prompt": "Which paper in my library most directly discusses physics-informed deep learning?",
+            "hits": [
+                {
+                    "text": "We introduce physics-informed deep learning into SPAD imaging to model multiple physical noise sources.",
+                    "meta": {
+                        "source_path": r"db\NatCommun-2023\NatCommun-2023.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {"llm": 83.0, "bm25": 4.7, "deep": 1.6, "term_bonus": 0.4, "semantic_score": 7.8},
+                    },
+                },
+                {
+                    "text": "Developing more precise forward physics models is a promising approach for deep learning in SPI.",
+                    "meta": {
+                        "source_path": r"db\LPR-2025\LPR-2025.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_best_heading_path": "4.1.2. Model-Driven Strategy",
+                        "ref_rank": {"llm": 86.0, "bm25": 5.0, "deep": 1.8, "term_bonus": 0.5, "semantic_score": 8.0},
+                    },
+                },
+            ],
+        }
+    }
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        heading_path = (
+            "Abstract"
+            if "NatCommun-2023" in source_path
+            else "4.1.2. Model-Driven Strategy"
+        )
+        return {
+            "display_name": source_path,
+            "heading_path": heading_path,
+            "summary_line": str(hit.get("text") or "").strip(),
+            "why_line": "candidate",
+            "score": 8.8 if "LPR-2025" in source_path else 8.2,
+            "anchor_match_score": 0.0,
+            "explicit_doc_match_score": 0.0,
+            "reader_open": {"sourcePath": source_path},
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_prefetch_refs_citation_meta", lambda *args, **kwargs: {})
+
+    out = enrich_refs_payload(
+        refs,
+        pdf_root=None,
+        md_root=None,
+        lib_store=None,
+        allow_expensive_llm_for_ready=False,
+    )
+    hits = list((out.get(381) or {}).get("hits") or [])
+
+    assert len(hits) == 1
+    assert str((((hits[0].get("meta") if isinstance(hits[0].get("meta"), dict) else {}) or {}).get("source_path") or "")).endswith(
+        r"NatCommun-2023\NatCommun-2023.en.md"
+    )
 
 
 def test_basis_meta_auto_uses_existing_card_language_even_for_english_prompt(monkeypatch):
@@ -2019,6 +2193,361 @@ def test_select_primary_ref_evidence_prefers_prompt_aligned_heading_over_fallbac
     assert str(out.get("subsection_label") or "") == "2.2 Basis patterns generation"
 
 
+def test_build_hit_ui_meta_recovers_prompt_aligned_block_summary_when_meta_has_no_snippets(tmp_path, monkeypatch):
+    md_path = tmp_path / "frontiers_fixture.en.md"
+    md_path.write_text("# Demo\n", encoding="utf-8")
+
+    blocks = [
+        {
+            "block_id": "blk_qc_ref",
+            "anchor_id": "a_qc_ref",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "kind": "paragraph",
+            "text": "Hong, C. Yu, J. Zhang, Q. Zhang, C. Z. Peng, F. Xu, and J. W. Pan, Single-photon imaging over 200 km, Optica 8(3), 344 (2021)",
+        },
+        {
+            "block_id": "blk_optical",
+            "anchor_id": "a_optical",
+            "heading_path": "5 Application / 5.1 Optical imaging",
+            "kind": "paragraph",
+            "text": (
+                "A photon is the smallest energy unit of light that can be detected. Traditional cameras realize object imaging "
+                "by detecting light intensity at different positions, while single-photon imaging can reconstruct the image of "
+                "the object by detecting the three-dimensional space position and time information of each photon."
+            ),
+        },
+        {
+            "block_id": "blk_qc_body",
+            "anchor_id": "a_qc_body",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "kind": "paragraph",
+            "text": (
+                "Single-photon ranging and detection both require single-photon sensitivity and picosecond timing resolution "
+                "for ultra-long distance 3D imaging."
+            ),
+        },
+    ]
+
+    def fake_match_source_blocks(_blocks, *, snippet="", heading_path="", **kwargs):
+        del snippet, heading_path, kwargs
+        return [
+            {"score": 0.94, "block": blocks[1]},
+            {"score": 0.62, "block": blocks[2]},
+        ]
+
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_ref_navigation",
+        lambda *args, **kwargs: {
+            "what": "",
+            "summary_line": "",
+            "why": "",
+            "find": [],
+        },
+    )
+    monkeypatch.setattr(reference_ui, "_choose_prompt_aligned_ref_summary_candidate", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_fallback_ref_ui_summary_line", lambda *args, **kwargs: "")
+    monkeypatch.setattr(reference_ui, "load_source_blocks", lambda _path: blocks)
+    monkeypatch.setattr(reference_ui, "match_source_blocks", fake_match_source_blocks)
+
+    ui = build_hit_ui_meta(
+        {
+            "text": "",
+            "meta": {
+                "source_path": str(md_path),
+                "ref_pack_state": "ready",
+                "ref_best_heading_path": "5 Application / 5.3 Quantum communication",
+                "ref_section": "5 Application",
+                "ref_subsection": "5.3 Quantum communication",
+                "ref_rank": {"llm": 84.0, "bm25": 4.7, "deep": 1.5, "term_bonus": 0.4, "semantic_score": 7.8},
+            },
+        },
+        prompt="Which papers in my library discuss single-photon imaging?",
+        pdf_root=None,
+        lib_store=None,
+        preloaded_citation_meta={
+            str(md_path): {
+                "title": "Emerging single-photon detection technique for high-performance photodetector",
+            }
+        },
+        allow_expensive_llm=False,
+        allow_exact_locate=True,
+    )
+
+    assert str(ui.get("heading_path") or "") == "5 Application / 5.1 Optical imaging"
+    assert "single-photon imaging" in str(ui.get("summary_line") or "").lower()
+    assert "over 200 km" not in str(ui.get("summary_line") or "").lower()
+    primary_evidence = ui.get("primary_evidence") or {}
+    assert str(primary_evidence.get("heading_path") or "") == "5 Application / 5.1 Optical imaging"
+    assert str(primary_evidence.get("selection_reason") or "") == "prompt_aligned_block"
+
+
+def test_build_hit_ui_meta_pending_can_rescue_prompt_aligned_block_summary_without_strict_locate(tmp_path, monkeypatch):
+    md_path = tmp_path / "frontiers_pending_fixture.en.md"
+    md_path.write_text("# Demo\n", encoding="utf-8")
+
+    blocks = [
+        {
+            "block_id": "blk_qc_ref",
+            "anchor_id": "a_qc_ref",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "kind": "paragraph",
+            "text": "Hong, C. Yu, J. Zhang, Q. Zhang, C. Z. Peng, F. Xu, and J. W. Pan, Single-photon imaging over 200 km, Optica 8(3), 344 (2021)",
+        },
+        {
+            "block_id": "blk_optical",
+            "anchor_id": "a_optical",
+            "heading_path": "5 Application / 5.1 Optical imaging",
+            "kind": "paragraph",
+            "text": (
+                "Traditional cameras realize object imaging by detecting light intensity at different positions, while "
+                "single-photon imaging can reconstruct the image of the object by detecting the three-dimensional space "
+                "position and time information of each photon."
+            ),
+        },
+    ]
+
+    def fake_match_source_blocks(_blocks, *, snippet="", heading_path="", **kwargs):
+        del snippet, heading_path, kwargs
+        return [{"score": 0.94, "block": blocks[1]}]
+
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_ref_navigation",
+        lambda *args, **kwargs: {
+            "what": "",
+            "summary_line": "",
+            "why": "",
+            "find": [],
+        },
+    )
+    monkeypatch.setattr(reference_ui, "_choose_prompt_aligned_ref_summary_candidate", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_fallback_ref_ui_summary_line", lambda *args, **kwargs: "")
+    monkeypatch.setattr(reference_ui, "load_source_blocks", lambda _path: blocks)
+    monkeypatch.setattr(reference_ui, "match_source_blocks", fake_match_source_blocks)
+
+    ui = build_hit_ui_meta(
+        {
+            "text": "",
+            "meta": {
+                "source_path": str(md_path),
+                "ref_pack_state": "pending",
+                "ref_best_heading_path": "5 Application / 5.3 Quantum communication",
+                "ref_section": "5 Application",
+                "ref_subsection": "5.3 Quantum communication",
+                "ref_rank": {"llm": 0.0, "bm25": 4.7, "deep": 1.5, "term_bonus": 0.4, "semantic_score": 7.8},
+            },
+        },
+        prompt="Which papers in my library discuss single-photon imaging?",
+        pdf_root=None,
+        lib_store=None,
+        preloaded_citation_meta={
+            str(md_path): {
+                "title": "Emerging single-photon detection technique for high-performance photodetector",
+            }
+        },
+        allow_expensive_llm=False,
+        allow_exact_locate=False,
+    )
+
+    assert str(ui.get("heading_path") or "") == "5 Application / 5.1 Optical imaging"
+    assert "single-photon imaging" in str(ui.get("summary_line") or "").lower()
+    primary_evidence = ui.get("primary_evidence") or {}
+    assert str(primary_evidence.get("heading_path") or "") == "5 Application / 5.1 Optical imaging"
+    assert str(primary_evidence.get("selection_reason") or "") == "prompt_aligned_block"
+    reader_open = dict(ui.get("reader_open") or {})
+    assert str(reader_open.get("headingPath") or "") == "5 Application / 5.1 Optical imaging"
+    assert reader_open.get("strictLocate") is False
+
+
+def test_build_hit_ui_meta_prefers_block_summary_over_prefixed_abstract_shell(tmp_path, monkeypatch):
+    md_path = tmp_path / "frontiers_prefixed_shell_fixture.en.md"
+    md_path.write_text("# Demo\n", encoding="utf-8")
+
+    prefixed_shell = (
+        "single-photon imaging: ABSTRACT Single-photon detections (SPDs) represent a highly sensitive light "
+        "detection technique capable of detecting individual photons at extremely low light intensity levels."
+    )
+    assert reference_ui._is_ref_card_summary_acceptable(
+        prompt="Which papers in my library discuss single-photon imaging?",
+        title="Emerging single-photon detection technique for high-performance photodetector",
+        summary_line=prefixed_shell,
+    ) is False
+
+    blocks = [
+        {
+            "block_id": "blk_qc",
+            "anchor_id": "a_qc",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "kind": "paragraph",
+            "text": (
+                "Single-photon ranging and detection both require single-photon sensitivity and picosecond timing resolution "
+                "for ultra-long distance 3D imaging."
+            ),
+        },
+        {
+            "block_id": "blk_optical",
+            "anchor_id": "a_optical",
+            "heading_path": "5 Application / 5.1 Optical imaging",
+            "kind": "paragraph",
+            "text": (
+                "Traditional cameras realize object imaging by detecting light intensity at different positions, while "
+                "single-photon imaging can reconstruct the image of the object by detecting the three-dimensional space "
+                "position and time information of each photon."
+            ),
+        },
+    ]
+
+    def fake_match_source_blocks(_blocks, *, snippet="", heading_path="", **kwargs):
+        del snippet, heading_path, kwargs
+        return [{"score": 0.94, "block": blocks[1]}]
+
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_ref_navigation",
+        lambda *args, **kwargs: {
+            "what": "",
+            "summary_line": "",
+            "why": "",
+            "find": [],
+        },
+    )
+    monkeypatch.setattr(
+        reference_ui,
+        "_fallback_ref_ui_summary_line",
+        lambda *args, **kwargs: prefixed_shell,
+    )
+    monkeypatch.setattr(reference_ui, "load_source_blocks", lambda _path: blocks)
+    monkeypatch.setattr(reference_ui, "match_source_blocks", fake_match_source_blocks)
+
+    ui = build_hit_ui_meta(
+        {
+            "text": "",
+            "meta": {
+                "source_path": str(md_path),
+                "ref_pack_state": "ready",
+                "ref_best_heading_path": "5 Application / 5.3 Quantum communication",
+                "ref_section": "5 Application",
+                "ref_subsection": "5.3 Quantum communication",
+                "ref_overview_snippets": [
+                    "ABSTRACT Single-photon detections (SPDs) represent a highly sensitive light detection technique capable of detecting individual photons at extremely low light intensity levels."
+                ],
+                "ref_rank": {"llm": 84.0, "bm25": 4.7, "deep": 1.5, "term_bonus": 0.4, "semantic_score": 7.8},
+            },
+        },
+        prompt="Which papers in my library discuss single-photon imaging?",
+        pdf_root=None,
+        lib_store=None,
+        preloaded_citation_meta={
+            str(md_path): {
+                "title": "Emerging single-photon detection technique for high-performance photodetector",
+            }
+        },
+        allow_expensive_llm=False,
+        allow_exact_locate=True,
+    )
+
+    assert str(ui.get("heading_path") or "") == "5 Application / 5.1 Optical imaging"
+    summary_line = str(ui.get("summary_line") or "")
+    assert summary_line.startswith("Traditional cameras realize object imaging")
+    assert not summary_line.lower().startswith("single-photon imaging:")
+    primary_evidence = ui.get("primary_evidence") or {}
+    assert str(primary_evidence.get("heading_path") or "") == "5 Application / 5.1 Optical imaging"
+    assert str(primary_evidence.get("selection_reason") or "") == "prompt_aligned_block"
+
+
+def test_build_hit_ui_meta_focus_prefixed_fallback_still_triggers_block_rescue(tmp_path, monkeypatch):
+    md_path = tmp_path / "frontiers_focus_prefix_fixture.en.md"
+    md_path.write_text("# Demo\n", encoding="utf-8")
+
+    fallback_summary = (
+        "single-photon imaging: This technology mainly relies on the mainstream SPDs, such as photomultiplier tubes "
+        "(PMTs), avalanche photodiodes (SAPD), superconducting nanowire single-photon detectors (SNSPDs)."
+    )
+    assert reference_ui._looks_focus_prefixed_ref_summary(
+        "Which papers in my library discuss single-photon imaging?",
+        fallback_summary,
+    ) is True
+
+    blocks = [
+        {
+            "block_id": "blk_qc",
+            "anchor_id": "a_qc",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "kind": "paragraph",
+            "text": (
+                "Single-photon ranging and detection both require single-photon sensitivity and picosecond timing resolution "
+                "for ultra-long distance 3D imaging."
+            ),
+        },
+        {
+            "block_id": "blk_optical",
+            "anchor_id": "a_optical",
+            "heading_path": "5 Application / 5.1 Optical imaging",
+            "kind": "paragraph",
+            "text": (
+                "Traditional cameras realize object imaging by detecting light intensity at different positions, while "
+                "single-photon imaging can reconstruct the image of the object by detecting the three-dimensional space "
+                "position and time information of each photon."
+            ),
+        },
+    ]
+
+    def fake_match_source_blocks(_blocks, *, snippet="", heading_path="", **kwargs):
+        del snippet, heading_path, kwargs
+        return [{"score": 0.94, "block": blocks[1]}]
+
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_ref_navigation",
+        lambda *args, **kwargs: {
+            "what": "",
+            "summary_line": "",
+            "why": "",
+            "find": [],
+        },
+    )
+    monkeypatch.setattr(
+        reference_ui,
+        "_fallback_ref_ui_summary_line",
+        lambda *args, **kwargs: fallback_summary,
+    )
+    monkeypatch.setattr(reference_ui, "load_source_blocks", lambda _path: blocks)
+    monkeypatch.setattr(reference_ui, "match_source_blocks", fake_match_source_blocks)
+
+    ui = build_hit_ui_meta(
+        {
+            "text": "",
+            "meta": {
+                "source_path": str(md_path),
+                "ref_pack_state": "ready",
+                "ref_best_heading_path": "5 Application / 5.3 Quantum communication",
+                "ref_section": "5 Application",
+                "ref_subsection": "5.3 Quantum communication",
+                "ref_overview_snippets": [
+                    "ABSTRACT Single-photon detections (SPDs) represent a highly sensitive light detection technique capable of detecting individual photons at extremely low light intensity levels."
+                ],
+                "ref_rank": {"llm": 84.0, "bm25": 4.7, "deep": 1.5, "term_bonus": 0.4, "semantic_score": 7.8},
+            },
+        },
+        prompt="Which papers in my library discuss single-photon imaging?",
+        pdf_root=None,
+        lib_store=None,
+        preloaded_citation_meta={
+            str(md_path): {
+                "title": "Emerging single-photon detection technique for high-performance photodetector",
+            }
+        },
+        allow_expensive_llm=False,
+        allow_exact_locate=True,
+    )
+
+    assert str(ui.get("heading_path") or "") == "5 Application / 5.1 Optical imaging"
+    assert str(ui.get("summary_line") or "").startswith("Traditional cameras realize object imaging")
+    primary_evidence = ui.get("primary_evidence") or {}
+    assert str(primary_evidence.get("selection_reason") or "") == "prompt_aligned_block"
+
+
 def test_build_hit_ui_meta_infers_heading_from_source_blocks_for_body_only_compare_snippet(tmp_path, monkeypatch):
     monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
 
@@ -2225,6 +2754,21 @@ def test_choose_prompt_aligned_ref_summary_prefers_fourier_specific_sentence(mon
     assert ("hadamard" in out_low) or ("comparison" in out_low)
 
 
+def test_expand_ref_summary_candidates_does_not_prefix_physics_informed_focus_without_informative_hit(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    out = reference_ui._expand_ref_summary_candidates(
+        "### 4.1.2. Model-Driven Strategy\nAdvances and Challenges of Single-Pixel Imaging Based on Deep Learning. However, the limited image quality and lengthy computational times for iterative reconstruction still hinder its practical application.",
+        prompt="Which paper in my library most directly discusses physics-informed deep learning? Please point me to the source section.",
+        title="Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+        prefer_zh=False,
+    )
+
+    lowered = [str(item or "").lower() for item in out]
+    assert not any(item.startswith("physics-informed deep learning:") for item in lowered)
+    assert not any(item.startswith("physics informed deep learning:") for item in lowered)
+
+
 def test_enrich_refs_payload_prefers_descriptive_summary_candidate_without_llm(monkeypatch):
     refs = {
         41: {
@@ -2420,6 +2964,17 @@ def test_filter_refs_hits_by_prompt_focus_compare_prefers_explicit_versus_title_
                 "why_line": "This hit mentions both Hadamard and Fourier methods.",
             },
         },
+        {
+            "meta": {
+                "source_path": r"db\Journal of Optics-2016-3D single-pixel video\Journal of Optics-2016-3D single-pixel video.en.md",
+            },
+            "ui_meta": {
+                "display_name": "Journal of Optics-2016-3D single-pixel video.pdf",
+                "heading_path": "Results",
+                "summary_line": "As used in other work with single-pixel cameras, the Hadamard basis yields better quality results compared to raster scanning techniques that suffer from poorer signal-to-noise.",
+                "why_line": "This hit compares Hadamard measurements with a different scanning baseline rather than directly comparing Hadamard and Fourier single-pixel imaging.",
+            },
+        },
     ]
 
     filtered = reference_ui._filter_refs_hits_by_prompt_focus(prompt, hits)
@@ -2469,6 +3024,789 @@ def test_filter_refs_hits_by_prompt_focus_drops_focus_term_that_only_appears_neg
     filtered = reference_ui._filter_refs_hits_by_prompt_focus(prompt, hits)
 
     assert filtered == []
+
+
+def test_filter_refs_hits_by_prompt_focus_keeps_multiple_hits_for_multi_paper_list_query():
+    prompt = "有哪几篇文章提到了SCI（单次曝光压缩成像）？"
+    hits = [
+        {
+            "meta": {
+                "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+            },
+            "ui_meta": {
+                "display_name": "ICIP-2025-SCIGS.pdf",
+                "heading_path": "Introduction",
+                "summary_line": "The paper explicitly introduces Snapshot Compressive Imaging (SCI) and builds on that setting.",
+                "why_line": "This hit directly discusses Snapshot Compressive Imaging (SCI).",
+            },
+        },
+        {
+            "meta": {
+                "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            },
+            "ui_meta": {
+                "display_name": "CVPR-2024-SCINeRF.pdf",
+                "heading_path": "Abstract",
+                "summary_line": "The paper repeatedly mentions Snapshot Compressive Imaging (SCI) in the abstract and introduction.",
+                "why_line": "This hit directly discusses Snapshot Compressive Imaging (SCI).",
+            },
+        },
+        {
+            "meta": {
+                "source_path": r"db\OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture\OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture.en.md",
+            },
+            "ui_meta": {
+                "display_name": "OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture.pdf",
+                "heading_path": "5. Conclusions",
+                "summary_line": "This early single-shot compressive spectral imaging paper is treated as an SCI predecessor in the retrieved evidence.",
+                "why_line": "This hit is directly relevant to the SCI question in the library-wide list query.",
+            },
+        },
+    ]
+
+    filtered = reference_ui._filter_refs_hits_by_prompt_focus(prompt, hits)
+
+    assert len(filtered) == 3
+
+
+def test_should_try_refs_hit_relevance_gate_skips_llm_for_multi_paper_list_query():
+    prompt = "Which papers in my library mention SCI?"
+    hits = [
+        {"meta": {"source_path": "doc1.md"}},
+        {"meta": {"source_path": "doc2.md"}},
+    ]
+
+    assert reference_ui._should_try_refs_hit_relevance_gate(prompt, hits, guide_mode=False) is False
+
+
+def test_enrich_refs_payload_keeps_multiple_hits_for_multi_paper_list_despite_large_score_gap(monkeypatch):
+    refs = {
+        314: {
+            "prompt": "有哪几篇文章提到了SCI（单次曝光压缩成像）",
+            "hits": [
+                {
+                    "text": "Snapshot Compressive Imaging (SCI) is introduced in the abstract.",
+                    "score": 8.9,
+                    "meta": {
+                        "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+                        "ref_pack_state": "ready",
+                    },
+                },
+                {
+                    "text": "The paper repeatedly mentions Snapshot Compressive Imaging (SCI).",
+                    "score": 3.2,
+                    "meta": {
+                        "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+                        "ref_pack_state": "ready",
+                    },
+                },
+                {
+                    "text": "This early single-shot compressive spectral imaging paper is treated as an SCI predecessor.",
+                    "score": 3.2,
+                    "meta": {
+                        "source_path": r"db\OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture\OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture.en.md",
+                        "ref_pack_state": "ready",
+                    },
+                },
+            ],
+        }
+    }
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        source = str(((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get("source_path") or "")
+        name = source.split("\\")[-1].replace(".en.md", ".pdf")
+        return {
+            "display_name": name,
+            "heading_path": "Abstract",
+            "summary_line": str(hit.get("text") or ""),
+            "why_line": "This hit directly discusses SCI.",
+            "score": float(hit.get("score") or 0.0),
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_prefetch_refs_citation_meta", lambda *args, **kwargs: {})
+
+    out = enrich_refs_payload(
+        refs,
+        pdf_root=None,
+        md_root=None,
+        lib_store=None,
+        render_variant="bounded_full",
+    )
+
+    pack = dict(out.get(314) or {})
+    hits = list(pack.get("hits") or [])
+    assert len(hits) == 3
+    debug = dict(pack.get("pipeline_debug") or {})
+    assert debug.get("prompt_explicitly_requests_multi_paper_list") is True
+
+
+def test_build_doc_list_refs_payload_reuses_mature_card_pipeline_for_doc_list_docs(monkeypatch):
+    pack = {
+        "prompt": "Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+            "source_name": "ICIP-2025-SCIGS.pdf",
+            "heading_path": "1. Introduction",
+            "summary_line": "The paper introduces Snapshot Compressive Imaging (SCI) in the introduction.",
+        }
+    ]
+    calls: dict[str, object] = {}
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        calls["hit"] = hit
+        return {
+            "display_name": "ICIP-2025-SCIGS.pdf",
+            "heading_path": "1. Introduction",
+            "summary_line": "This paper introduces Snapshot Compressive Imaging for high-speed video recovery.",
+            "summary_kind": "guide",
+            "summary_label": "Guide",
+            "summary_title": "What This Matched Section Covers",
+            "summary_generation": "section_grounded",
+            "summary_basis": "Section-grounded summary",
+            "why_line": "This hit directly discusses Snapshot Compressive Imaging (SCI).",
+            "why_generation": "deterministic_grounded",
+            "why_basis": "Prompt-aligned relevance",
+            "score": 8.9,
+            "score_pending": False,
+            "score_tier": "high",
+            "reader_open": {"sourcePath": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md"},
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(
+        reference_ui,
+        "_maybe_polish_single_ref_hit_card",
+        lambda **kwargs: dict(kwargs["ui_meta"]),
+    )
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=314,
+        pack=pack,
+        doc_list=doc_list,
+    )
+
+    hit = list(out.get("hits") or [])[0]
+    ui = dict(hit.get("ui_meta") or {})
+    assert "hit" in calls
+    assert ui.get("summary_line") == "This paper introduces Snapshot Compressive Imaging for high-speed video recovery."
+    assert ui.get("why_line") == "This hit directly discusses Snapshot Compressive Imaging (SCI)."
+    assert ui.get("summary_generation") == "section_grounded"
+    assert ui.get("why_generation") == "deterministic_grounded"
+    assert "direct library matches" not in str(ui.get("why_line") or "")
+
+
+def test_build_doc_list_refs_payload_prefers_stronger_synthesized_primary_over_weak_answer_hit_top(monkeypatch):
+    pack = {
+        "prompt": "Which papers in my library mention single-photon imaging?",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\Frontiers-2024\Frontiers-2024.en.md",
+            "source_name": "Frontiers-2024-single-photon.pdf",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "summary_line": "",
+            "primary_evidence": {
+                "source_path": r"db\Frontiers-2024\Frontiers-2024.en.md",
+                "source_name": "Frontiers-2024-single-photon.pdf",
+                "heading_path": "5 Application / 5.3 Quantum communication",
+                "selection_reason": "answer_hit_top",
+            },
+        }
+    ]
+    calls: dict[str, object] = {}
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        calls["allow_exact_locate"] = kwargs.get("allow_exact_locate")
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        snippet = (
+            "This optical imaging section explains how single-photon imaging reconstructs object "
+            "images under extremely low-light conditions."
+        )
+        return {
+            "display_name": str(meta.get("source_name") or "Reference"),
+            "heading_path": "5 Application / 5.1 Optical imaging",
+            "summary_line": snippet,
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "This hit directly discusses single-photon imaging in an optical imaging application section.",
+            "why_generation": "deterministic_grounded",
+            "score": 8.7,
+            "score_pending": False,
+            "score_tier": "high",
+            "primary_evidence": {
+                "source_path": str(meta.get("source_path") or ""),
+                "source_name": str(meta.get("source_name") or ""),
+                "heading_path": "5 Application / 5.1 Optical imaging",
+                "snippet": snippet,
+                "highlight_snippet": snippet,
+                "block_id": "blk-optical-imaging",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
+            "reader_open": {
+                "sourcePath": str(meta.get("source_path") or ""),
+                "sourceName": str(meta.get("source_name") or ""),
+                "headingPath": "5 Application / 5.1 Optical imaging",
+                "snippet": snippet,
+                "highlightSnippet": snippet,
+                "blockId": "blk-optical-imaging",
+                "strictLocate": True,
+            },
+            "primary_evidence_source": "prompt_aligned_block",
+            "source_path": str(meta.get("source_path") or ""),
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", lambda **kwargs: dict(kwargs["ui_meta"]))
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=315,
+        pack=pack,
+        doc_list=doc_list,
+    )
+
+    hit = list(out.get("hits") or [])[0]
+    ui = dict(hit.get("ui_meta") or {})
+    reader_primary = dict(((ui.get("reader_open") or {}).get("primaryEvidence")) or {})
+
+    assert calls.get("allow_exact_locate") is True
+    assert ui.get("heading_path") == "5 Application / 5.1 Optical imaging"
+    assert "single-photon imaging" in str(ui.get("summary_line") or "")
+    assert str((ui.get("primary_evidence") or {}).get("selection_reason") or "") == "prompt_aligned_block"
+    assert str((ui.get("primary_evidence") or {}).get("block_id") or "") == "blk-optical-imaging"
+    assert str((ui.get("authoritative_primary_evidence") or {}).get("selection_reason") or "") == "answer_hit_top"
+    assert str(((ui.get("reader_open") or {}).get("headingPath")) or "") == "5 Application / 5.1 Optical imaging"
+    assert str(reader_primary.get("selection_reason") or "") == "prompt_aligned_block"
+
+
+def test_build_doc_list_refs_payload_keeps_strong_authoritative_primary_when_synthesized_points_elsewhere(monkeypatch):
+    pack = {
+        "prompt": "Which papers in my library mention single-photon imaging?",
+    }
+    authoritative_snippet = (
+        "This section explains how single-photon imaging reconstructs object images from photon timing signals "
+        "in a quantum communication setting."
+    )
+    doc_list = [
+        {
+            "source_path": r"db\Frontiers-2024\Frontiers-2024.en.md",
+            "source_name": "Frontiers-2024-single-photon.pdf",
+            "heading_path": "5 Application / 5.3 Quantum communication",
+            "summary_line": authoritative_snippet,
+            "primary_evidence": {
+                "source_path": r"db\Frontiers-2024\Frontiers-2024.en.md",
+                "source_name": "Frontiers-2024-single-photon.pdf",
+                "heading_path": "5 Application / 5.3 Quantum communication",
+                "snippet": authoritative_snippet,
+                "highlight_snippet": authoritative_snippet,
+                "block_id": "blk-quantum-communication",
+                "selection_reason": "shared_refs_pack",
+                "strict_locate": True,
+            },
+        }
+    ]
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        snippet = (
+            "This optical imaging section describes low-light image reconstruction for biological sensing."
+        )
+        return {
+            "display_name": str(meta.get("source_name") or "Reference"),
+            "heading_path": "5 Application / 5.1 Optical imaging",
+            "summary_line": snippet,
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "This hit directly discusses single-photon imaging in an optical imaging application section.",
+            "why_generation": "deterministic_grounded",
+            "score": 8.7,
+            "score_pending": False,
+            "score_tier": "high",
+            "primary_evidence": {
+                "source_path": str(meta.get("source_path") or ""),
+                "source_name": str(meta.get("source_name") or ""),
+                "heading_path": "5 Application / 5.1 Optical imaging",
+                "snippet": snippet,
+                "highlight_snippet": snippet,
+                "block_id": "blk-optical-imaging",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
+            "reader_open": {
+                "sourcePath": str(meta.get("source_path") or ""),
+                "sourceName": str(meta.get("source_name") or ""),
+                "headingPath": "5 Application / 5.1 Optical imaging",
+                "snippet": snippet,
+                "highlightSnippet": snippet,
+                "blockId": "blk-optical-imaging",
+                "strictLocate": True,
+            },
+            "primary_evidence_source": "prompt_aligned_block",
+            "source_path": str(meta.get("source_path") or ""),
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", lambda **kwargs: dict(kwargs["ui_meta"]))
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=316,
+        pack=pack,
+        doc_list=doc_list,
+    )
+
+    hit = list(out.get("hits") or [])[0]
+    ui = dict(hit.get("ui_meta") or {})
+    reader_open = dict(ui.get("reader_open") or {})
+    reader_primary = dict(reader_open.get("primaryEvidence") or {})
+
+    assert ui.get("heading_path") == "5 Application / 5.3 Quantum communication"
+    assert "photon timing signals" in str(ui.get("summary_line") or "")
+    assert str((ui.get("primary_evidence") or {}).get("selection_reason") or "") == "shared_refs_pack"
+    assert str((ui.get("primary_evidence") or {}).get("block_id") or "") == "blk-quantum-communication"
+    assert str((ui.get("authoritative_primary_evidence") or {}).get("selection_reason") or "") == "shared_refs_pack"
+    assert str(reader_open.get("headingPath") or "") == "5 Application / 5.3 Quantum communication"
+    assert str(reader_primary.get("selection_reason") or "") == "shared_refs_pack"
+    assert str(reader_primary.get("block_id") or "") == "blk-quantum-communication"
+
+
+def test_build_doc_list_refs_payload_polishes_each_doc_list_hit(monkeypatch):
+    pack = {
+        "prompt": "Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+            "source_name": "ICIP-2025-SCIGS.pdf",
+            "heading_path": "1. Introduction",
+            "summary_line": "The paper introduces Snapshot Compressive Imaging (SCI).",
+        },
+        {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "summary_line": "The paper discusses Snapshot Compressive Imaging (SCI) for 3D reconstruction.",
+        },
+        {
+            "source_path": r"db\OE-2007\OE-2007.en.md",
+            "source_name": "OE-2007.pdf",
+            "heading_path": "5. Conclusions",
+            "summary_line": "The paper presents a single-shot compressive spectral imaging approach.",
+        },
+    ]
+    polished_titles: list[str] = []
+    allow_flags: list[bool] = []
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        title = str(meta.get("display_name") or meta.get("source_name") or "Reference").strip()
+        heading_path = str(meta.get("heading_path") or "").strip()
+        text = str(hit.get("text") or "").strip()
+        return {
+            "display_name": title,
+            "heading_path": heading_path,
+            "summary_line": text,
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": f"generic::{title}",
+            "why_generation": "deterministic_grounded",
+            "score": 8.8,
+            "score_pending": False,
+            "score_tier": "high",
+            "reader_open": {"sourcePath": str(meta.get("source_path") or "")},
+            "source_path": str(meta.get("source_path") or ""),
+        }
+
+    def fake_polish_single_ref_hit_card(*, prompt, hit, ui_meta, allow_expensive_llm):
+        del prompt, hit
+        ui = dict(ui_meta or {})
+        title = str(ui.get("display_name") or "").strip()
+        allow_flags.append(bool(allow_expensive_llm))
+        polished_titles.append(title)
+        ui["why_line"] = f"polished::{title}"
+        return ui
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", fake_polish_single_ref_hit_card)
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=2718,
+        pack=pack,
+        doc_list=doc_list,
+    )
+
+    hits = [hit for hit in list(out.get("hits") or []) if isinstance(hit, dict)]
+    titles = [str(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("display_name") or "").strip() for hit in hits]
+    why_lines = [str(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("why_line") or "").strip() for hit in hits]
+    assert polished_titles == titles
+    assert allow_flags == [False, False, False]
+    assert why_lines == [f"polished::{title}" for title in titles]
+
+
+def test_build_doc_list_refs_payload_keeps_sci_predecessor_why_line_honest_after_polish(monkeypatch):
+    pack = {
+        "prompt": "Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\OE-2007\OE-2007.en.md",
+            "source_name": "OE-2007.pdf",
+            "heading_path": "5. Conclusions",
+            "summary_line": "The paper presents a single-shot compressive spectral imaging approach.",
+            "topic_match_kind": "sci_related_predecessor",
+        }
+    ]
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        return {
+            "display_name": "OE-2007.pdf",
+            "heading_path": str(meta.get("heading_path") or "5. Conclusions"),
+            "summary_line": str(hit.get("text") or "").strip(),
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "This hit directly discusses Snapshot Compressive Imaging (SCI).",
+            "why_generation": "deterministic_grounded",
+            "score": 8.6,
+            "score_pending": False,
+            "score_tier": "high",
+            "reader_open": {"sourcePath": str(meta.get("source_path") or "")},
+            "source_path": str(meta.get("source_path") or ""),
+        }
+
+    def fake_polish_single_ref_hit_card(*, prompt, hit, ui_meta, allow_expensive_llm):
+        del prompt, hit, allow_expensive_llm
+        ui = dict(ui_meta or {})
+        ui["why_line"] = "This hit directly discusses Snapshot Compressive Imaging (SCI)."
+        return ui
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", fake_polish_single_ref_hit_card)
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=2719,
+        pack=pack,
+        doc_list=doc_list,
+    )
+
+    hit = list(out.get("hits") or [])[0]
+    ui = dict(hit.get("ui_meta") or {})
+    summary_line = str(ui.get("summary_line") or "")
+    why_line = str(ui.get("why_line") or "")
+    assert "single-shot" in summary_line.lower()
+    assert not summary_line.lower().startswith("snapshot compressive imaging:")
+    assert "single-shot compressive spectral imaging" in why_line
+    assert ("exact SCI term match" in why_line) or ("SCI 术语命中" in why_line)
+    assert "directly discusses Snapshot Compressive Imaging (SCI)" not in why_line
+
+
+def test_refs_prompt_focus_terms_detects_sci_inside_chinese_prompt():
+    prompt = "\u6709\u54ea\u51e0\u7bc7\u6587\u7ae0\u63d0\u5230\u4e86SCI\uff08\u5355\u6b21\u66dd\u5149\u538b\u7f29\u6210\u50cf\uff09"
+
+    terms = reference_ui._refs_prompt_focus_terms(prompt)
+
+    assert any("sci" in term for term in terms)
+    assert any("snapshot compressive imaging" in term for term in terms)
+
+
+def test_apply_doc_list_topic_match_hints_upgrades_generic_sci_why_line():
+    prompt = "\u6709\u54ea\u51e0\u7bc7\u6587\u7ae0\u63d0\u5230\u4e86SCI\uff08\u5355\u6b21\u66dd\u5149\u538b\u7f29\u6210\u50cf\uff09"
+
+    out = reference_ui._apply_doc_list_topic_match_hints(
+        prompt=prompt,
+        raw_item={
+            "topic_match_kind": "explicit_sci_mention",
+            "heading_path": "2. Related Work",
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+        },
+        ui_meta={
+            "display_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "summary_line": "In this paper, we explore the potential of Snapshot Compressive Imaging (SCI) technique for recovering the underlying 3D scene representation.",
+            "why_line": "\u8fd9\u6761\u547d\u4e2d\u843d\u5728\u201c2. Related Work\u201d\uff0c\u80fd\u76f4\u63a5\u63d0\u4f9b\u548c\u5f53\u524d\u95ee\u9898\u76f8\u5173\u7684\u5b9a\u4e49\u3001\u65b9\u6cd5\u6216\u7ed3\u679c\u8bc1\u636e\u3002",
+        },
+    )
+
+    why_line = str(out.get("why_line") or "")
+    assert "Snapshot Compressive Imaging" in why_line
+    assert "SCI" in why_line
+
+
+def test_expand_ref_summary_candidates_does_not_prefix_sci_predecessor_sentence():
+    prompt = "\u6709\u54ea\u51e0\u7bc7\u6587\u7ae0\u63d0\u5230\u4e86SCI\uff08\u5355\u6b21\u66dd\u5149\u538b\u7f29\u6210\u50cf\uff09"
+
+    candidates = reference_ui._expand_ref_summary_candidates(
+        "This paper describes a single-shot spectral imaging approach based on the concept of compressive sensing.",
+        prompt=prompt,
+        title="OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture.pdf",
+        prefer_zh=True,
+        allow_llm_translate=False,
+    )
+
+    assert candidates
+    assert all(not cand.lower().startswith("snapshot compressive imaging:") for cand in candidates)
+
+
+def test_pick_best_prompt_aligned_ref_summary_candidate_prefers_reader_friendly_sci_copy():
+    prompt = "\u6709\u54ea\u51e0\u7bc7\u6587\u7ae0\u63d0\u5230\u4e86SCI\uff08\u5355\u6b21\u66dd\u5149\u538b\u7f29\u6210\u50cf\uff09"
+    title = "ICIP-2025-SCIGS.pdf"
+    source_path = r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md"
+
+    chosen = reference_ui._pick_best_prompt_aligned_ref_summary_candidate(
+        [
+            {
+                "summary": "Video Snapshot Compressive Imaging (SCI) technology has been developed. A SCI system usually has two components: a hardware encoder and a software decoder.",
+                "heading_path": "1. Introduction",
+            },
+            {
+                "summary": "snapshot compressive imaging: In the process of capturing compressed images in the SCI system, an exposure time is divided into $B$ time intervals by the corresponding $B$ encoding masks.",
+                "heading_path": "3. Method / 3.2. Snapshot Compressive Imaging Model",
+                "raw_focus_surface": "3. Method / 3.2. Snapshot Compressive Imaging Model In the process of capturing compressed images in the SCI system.",
+                "source_kind": "source_block",
+            },
+        ],
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        anchor_target_kind="",
+        anchor_target_number=0,
+    )
+
+    assert str(chosen.get("heading_path") or "") == "1. Introduction"
+    assert str(chosen.get("summary") or "").startswith("Video Snapshot Compressive Imaging (SCI) technology has been developed.")
+
+
+def test_choose_prompt_aligned_ref_summary_candidate_from_source_blocks_skips_title_like_block(monkeypatch):
+    prompt = "\u6709\u54ea\u51e0\u7bc7\u6587\u7ae0\u63d0\u5230\u4e86SCI\uff08\u5355\u6b21\u66dd\u5149\u538b\u7f29\u6210\u50cf\uff09"
+    title = "ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.pdf"
+
+    monkeypatch.setattr(reference_ui, "_resolve_source_md_path", lambda source_path: Path(source_path))
+    monkeypatch.setattr(
+        reference_ui,
+        "load_source_blocks",
+        lambda _md_path: [
+            {
+                "text": "SCIGS: 3D Gaussians Splatting from A Snapshot Compressive Image",
+                "heading_path": "",
+                "kind": "heading",
+            },
+            {
+                "text": "Snapshot Compressive Imaging (SCI) offers a possibility for capturing information in high-speed dynamic scenes, requiring efficient reconstruction method to recover scene information.",
+                "heading_path": "Abstract",
+                "kind": "paragraph",
+            },
+            {
+                "text": "In the process of capturing compressed images in the SCI system, an exposure time is divided into $B$ time intervals by the corresponding $B$ encoding masks.",
+                "heading_path": "3. Method / 3.2. Snapshot Compressive Imaging Model",
+                "kind": "paragraph",
+            },
+        ],
+    )
+
+    chosen = reference_ui._choose_prompt_aligned_ref_summary_candidate_from_source_blocks(
+        prompt=prompt,
+        source_path=r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+        title=title,
+        allow_llm_translate=False,
+    )
+
+    assert str(chosen.get("heading_path") or "") == "Abstract"
+    assert str(chosen.get("summary") or "").startswith("Snapshot Compressive Imaging (SCI) offers a possibility")
+    assert not str(chosen.get("summary") or "").lower().startswith("snapshot compressive imaging:")
+
+
+def test_build_doc_list_refs_payload_repairs_mixed_quote_artifacts_after_polish(monkeypatch):
+    pack = {
+        "prompt": "有哪几篇文章提到了SCI（单次曝光压缩成像）",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "summary_line": "The paper explicitly mentions Snapshot Compressive Imaging (SCI).",
+            "topic_match_kind": "explicit_sci_mention",
+        }
+    ]
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        return {
+            "display_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": str(meta.get("heading_path") or "2. Related Work"),
+            "summary_line": str(hit.get("text") or "").strip(),
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "这条命中直接讨论了 SCI。",
+            "why_generation": "deterministic_grounded",
+            "score": 8.9,
+            "score_pending": False,
+            "score_tier": "high",
+            "reader_open": {"sourcePath": str(meta.get("source_path") or "")},
+            "source_path": str(meta.get("source_path") or ""),
+        }
+
+    def fake_polish_single_ref_hit_card(*, prompt, hit, ui_meta, allow_expensive_llm):
+        del prompt, hit, allow_expensive_llm
+        ui = dict(ui_meta or {})
+        ui["why_line"] = "Related Work’中明确提及Snapshot Compressive Imaging（SCI），直接回应用户查询。"
+        return ui
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", fake_polish_single_ref_hit_card)
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=2720,
+        pack=pack,
+        doc_list=doc_list,
+    )
+
+    hit = list(out.get("hits") or [])[0]
+    ui = dict(hit.get("ui_meta") or {})
+    why_line = str(ui.get("why_line") or "")
+    assert "“Related Work”中明确提及" in why_line
+    assert "Related Work’中" not in why_line
+
+
+def test_normalize_ref_copy_text_keeps_balanced_heading_quotes():
+    text = "“Related Work”中明确提及 Snapshot Compressive Imaging（SCI）。"
+
+    out = reference_ui._normalize_ref_copy_text(text)
+
+    assert out == text
+
+
+def test_build_doc_list_refs_payload_filters_bound_source_in_guide_mode(monkeypatch):
+    pack = {
+        "prompt": "Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\NatPhoton-2019-Principles and prospects for single-pixel imaging\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+            "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+            "heading_path": "Acquisition and image reconstruction strategies",
+            "summary_line": "The bound paper reviews single-pixel imaging and briefly mentions Fourier patterns.",
+        },
+        {
+            "source_path": r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md",
+            "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "2.2 Basis patterns generation",
+            "summary_line": "The paper directly compares Hadamard and Fourier single-pixel imaging.",
+        },
+    ]
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        return {
+            "display_name": str(meta.get("source_name") or "Reference"),
+            "heading_path": str(meta.get("heading_path") or ""),
+            "summary_line": str(hit.get("text") or "").strip(),
+            "why_line": "polished external paper",
+            "score": 8.8,
+            "score_pending": False,
+            "score_tier": "high",
+            "reader_open": {"sourcePath": str(meta.get("source_path") or "")},
+            "source_path": str(meta.get("source_path") or ""),
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", lambda **kwargs: dict(kwargs["ui_meta"]))
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=3001,
+        pack=pack,
+        doc_list=doc_list,
+        guide_mode=True,
+        guide_source_path=r"db\NatPhoton-2019-Principles and prospects for single-pixel imaging\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+        guide_source_name="NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+    )
+
+    hits = list(out.get("hits") or [])
+    assert len(hits) == 1
+    ui = dict((hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {})
+    assert str(ui.get("display_name") or "") == "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf"
+    guide_filter = dict(out.get("guide_filter") or {})
+    assert guide_filter.get("active") is True
+    assert guide_filter.get("hidden_self_source") is True
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 1
+    pipeline_debug = dict(out.get("pipeline_debug") or {})
+    assert int(pipeline_debug.get("raw_hit_count") or 0) == 1
+    assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 1
+    assert str(out.get("display_state") or "") == "ready"
+
+
+def test_build_doc_list_refs_payload_hides_self_only_guide_doc_list(monkeypatch):
+    pack = {
+        "prompt": "Besides this paper, what other papers in my library discuss ADMM?",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "summary_line": "This paper does not discuss ADMM.",
+        }
+    ]
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", lambda **kwargs: dict(kwargs["ui_meta"]))
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=3002,
+        pack=pack,
+        doc_list=doc_list,
+        guide_mode=True,
+        guide_source_path=r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+        guide_source_name="CVPR-2024-SCINeRF.pdf",
+    )
+
+    assert list(out.get("hits") or []) == []
+    guide_filter = dict(out.get("guide_filter") or {})
+    assert guide_filter.get("active") is True
+    assert guide_filter.get("hidden_self_source") is True
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 1
+    pipeline_debug = dict(out.get("pipeline_debug") or {})
+    assert int(pipeline_debug.get("raw_hit_count") or 0) == 0
+    assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 1
+    assert str(out.get("display_state") or "") == "hidden_by_guide"
+    assert str(out.get("suppression_reason") or "") == "guide_self_source_only"
+
+
+def test_build_doc_list_refs_payload_marks_empty_authoritative_guide_doc_list():
+    pack = {
+        "prompt": "Besides this paper, what other papers in my library discuss ADMM?",
+    }
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=3003,
+        pack=pack,
+        doc_list=[],
+        guide_mode=True,
+        guide_source_path=r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+        guide_source_name="CVPR-2024-SCINeRF.pdf",
+    )
+
+    assert list(out.get("hits") or []) == []
+    guide_filter = dict(out.get("guide_filter") or {})
+    assert guide_filter.get("active") is True
+    assert guide_filter.get("hidden_self_source") is True
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 0
+    pipeline_debug = dict(out.get("pipeline_debug") or {})
+    assert pipeline_debug.get("doc_list_authoritative") is True
+    assert pipeline_debug.get("guide_active") is True
+    assert int(pipeline_debug.get("raw_hit_count") or 0) == 0
+    assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 0
+    assert str(out.get("display_state") or "") == "hidden_by_guide"
+    assert str(out.get("suppression_reason") or "") == "guide_self_source_only"
 
 
 def test_enrich_refs_payload_applies_focus_filter_even_for_single_ready_hit(monkeypatch):

@@ -16,17 +16,25 @@ from pydantic import BaseModel
 
 from api.deps import get_chat_store, get_settings, load_prefs
 from api.reference_ui import (
-    _attach_pack_primary_ref_evidence,
+    _attach_pack_display_contract,
     _compact_reader_open_text,
     _filter_pending_refs_hits_by_prompt_focus,
     _refs_prompt_focus_terms,
+    build_doc_list_refs_payload,
     enrich_citation_detail_meta,
     enrich_refs_payload,
     ensure_source_citation_meta,
     open_reference_source,
 )
+from kb.generation_answer_finalize_runtime import (
+    _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
+)
 from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
+from kb.reference_query_family import (
+    prompt_explicitly_requests_multi_paper_list,
+    prompt_reference_focus_action,
+)
 from kb.source_blocks import load_source_blocks, source_blocks_to_reader_anchors
 from api.sse import sse_generator, sse_response
 from kb.reference_sync import (
@@ -99,15 +107,27 @@ def _refs_conversation_cache_signature(
     guide_mode: bool,
     guide_source_path: str,
     guide_source_name: str,
+    authoritative_doc_list_by_user: dict[int, list[dict]] | None = None,
 ) -> str:
     try:
         prefs = load_prefs()
     except Exception:
         prefs = {}
+    authoritative_map: dict[int, list[dict]] = {}
+    for key, value in dict(authoritative_doc_list_by_user or {}).items():
+        try:
+            user_msg_key = int(key)
+        except Exception:
+            continue
+        authoritative_map[user_msg_key] = [dict(item) for item in list(value or []) if isinstance(item, dict)]
     refs_digest: list[dict] = []
     for user_msg_id, pack in sorted((refs or {}).items(), key=lambda item: int(item[0]) if str(item[0]).isdigit() else str(item[0])):
         if not isinstance(pack, dict):
             continue
+        try:
+            user_msg_key = int(user_msg_id)
+        except Exception:
+            user_msg_key = 0
         hits = list(pack.get("hits") or [])
         pending_count = 0
         source_keys: list[str] = []
@@ -120,15 +140,31 @@ def _refs_conversation_cache_signature(
             source_path = str((meta or {}).get("source_path") or "").strip()
             if source_path:
                 source_keys.append(source_path)
+        doc_list_sig: list[dict] = []
+        for item in list(authoritative_map.get(user_msg_key, []) or [])[:4]:
+            source_path = str(item.get("source_path") or "").strip()
+            source_name = str(item.get("source_name") or "").strip()
+            heading_path = str(item.get("heading_path") or "").strip()
+            if source_path or source_name:
+                doc_list_sig.append(
+                    {
+                        "source_path": source_path,
+                        "source_name": source_name,
+                        "heading_path": heading_path,
+                    }
+                )
         payload = {
-            "user_msg_id": int(user_msg_id) if str(user_msg_id).isdigit() else str(user_msg_id),
+            "user_msg_id": user_msg_key if user_msg_key > 0 else str(user_msg_id),
             "prompt_sig": str(pack.get("prompt_sig") or "").strip(),
             "used_query": str(pack.get("used_query") or "").strip(),
             "used_translation": bool(pack.get("used_translation")),
             "updated_at": float(pack.get("updated_at") or 0.0),
+            "render_status": str(pack.get("render_status") or "").strip().lower(),
+            "rendered_payload_sig": str(pack.get("rendered_payload_sig") or "").strip(),
             "hit_count": len(hits),
             "pending_count": pending_count,
             "top_sources": source_keys,
+            "authoritative_doc_list": doc_list_sig,
         }
         refs_digest.append(payload)
     payload = {
@@ -276,16 +312,240 @@ def _get_stored_rendered_pack_payload(
     return dict(payload)
 
 
-def _build_pending_conversation_refs_payload(refs: dict) -> dict[int, dict]:
+def _extract_doc_list_contract_from_message_meta(meta: dict | None) -> list[dict]:
+    if not isinstance(meta, dict):
+        return []
+    contracts = meta.get("paper_guide_contracts") if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+    return [dict(item) for item in list((contracts or {}).get("doc_list") or []) if isinstance(item, dict)]
+
+
+def _load_authoritative_doc_list_contracts(
+    *,
+    store,
+    conv_id: str,
+    user_msg_ids: set[int],
+) -> dict[int, list[dict]]:
+    out: dict[int, list[dict]] = {}
+    if not user_msg_ids:
+        return out
+    get_messages = getattr(store, "get_messages", None)
+    if not callable(get_messages):
+        return out
+    try:
+        messages = list(get_messages(str(conv_id or "").strip()) or [])
+    except sqlite3.OperationalError:
+        return out
+    except Exception:
+        return out
+    for idx, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            continue
+        try:
+            msg_id = int(msg.get("id") or 0)
+        except Exception:
+            msg_id = 0
+        if msg_id not in user_msg_ids:
+            continue
+        if str(msg.get("role") or "").strip().lower() != "user":
+            continue
+        for nxt in messages[idx + 1 :]:
+            if not isinstance(nxt, dict):
+                continue
+            role = str(nxt.get("role") or "").strip().lower()
+            if role == "user":
+                break
+            if role != "assistant":
+                continue
+            content = str(nxt.get("content") or "")
+            if content.startswith("__KB_LIVE_TASK__:"):
+                continue
+            meta = nxt.get("meta") if isinstance(nxt.get("meta"), dict) else {}
+            contracts = meta.get("paper_guide_contracts") if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+            if "doc_list" in contracts:
+                out[msg_id] = _extract_doc_list_contract_from_message_meta(meta)
+            break
+    return out
+
+
+def _load_pending_doc_list_contracts(
+    *,
+    store,
+    conv_id: str,
+    pending_user_msg_ids: set[int],
+) -> dict[int, list[dict]]:
+    return _load_authoritative_doc_list_contracts(
+        store=store,
+        conv_id=conv_id,
+        user_msg_ids=pending_user_msg_ids,
+    )
+
+
+def _mark_doc_list_pending_pack(*, payload_pack: dict, pending_count: int) -> dict:
+    pack2 = dict(payload_pack or {})
+    hits_out: list[dict] = []
+    for raw_hit in list(pack2.get("hits") or []):
+        if not isinstance(raw_hit, dict):
+            continue
+        hit = dict(raw_hit)
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        meta2 = dict(meta or {})
+        meta2["ref_pack_state"] = "pending"
+        hit["meta"] = meta2
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        if isinstance(ui_meta, dict):
+            ui_meta2 = dict(ui_meta)
+            ui_meta2["score_pending"] = True
+            ui_meta2["score"] = None
+            ui_meta2["score_tier"] = ""
+            hit["ui_meta"] = ui_meta2
+        hits_out.append(hit)
+    pack2["hits"] = hits_out
+    pack2["pending"] = True
+    pack2["pending_hit_count"] = int(max(0, int(pending_count or 0)))
+    pack2["payload_mode"] = "pending"
+    pack2["enrichment_pending"] = True
+    return _attach_pack_display_contract(pack2)
+
+
+def _doc_list_source_paths(doc_list: list[dict] | None) -> list[str]:
+    out: list[str] = []
+    for item in list(doc_list or []):
+        if not isinstance(item, dict):
+            continue
+        source_path = str(item.get("source_path") or "").strip()
+        if source_path:
+            out.append(source_path)
+    return out
+
+
+def _payload_source_paths(payload_pack: dict | None) -> list[str]:
+    out: list[str] = []
+    if not isinstance(payload_pack, dict):
+        return out
+    for hit in list(payload_pack.get("hits") or []):
+        if not isinstance(hit, dict):
+            continue
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str(
+            (ui_meta or {}).get("source_path")
+            or (meta or {}).get("source_path")
+            or ""
+        ).strip()
+        if source_path:
+            out.append(source_path)
+    return out
+
+
+def _payload_is_authoritative_doc_list_pack(payload_pack: dict | None, authoritative_doc_list: list[dict] | None) -> bool:
+    if not isinstance(payload_pack, dict):
+        return False
+    pipeline_debug = payload_pack.get("pipeline_debug") if isinstance(payload_pack.get("pipeline_debug"), dict) else {}
+    if not bool((pipeline_debug or {}).get("doc_list_authoritative")):
+        return False
+    expected_paths = _doc_list_source_paths(authoritative_doc_list)
+    actual_paths = _payload_source_paths(payload_pack)
+    if not expected_paths:
+        return True
+    return bool(actual_paths) and actual_paths == expected_paths
+
+
+def _filter_pending_multi_paper_hits_for_display(prompt: str, hits: list[dict] | None) -> list[dict]:
+    rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    if (not rows) or (not prompt_explicitly_requests_multi_paper_list(prompt)):
+        return rows
+    try:
+        doc_list_seed = _references_build_multi_paper_doc_list_contract(
+            prompt=prompt,
+            seed_docs=list(rows),
+            answer_hits=list(rows),
+            evidence_cards=[],
+        )
+    except Exception:
+        return rows
+    source_order = _doc_list_source_paths(doc_list_seed)
+    if not source_order:
+        return rows
+    rows_by_source: dict[str, dict] = {}
+    for row in rows:
+        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        if source_path and source_path not in rows_by_source:
+            rows_by_source[source_path] = row
+    filtered: list[dict] = []
+    seen: set[str] = set()
+    for source_path in source_order:
+        row = rows_by_source.get(source_path)
+        if not isinstance(row, dict) or source_path in seen:
+            continue
+        filtered.append(row)
+        seen.add(source_path)
+    target_count = min(3, len(rows))
+    if len(filtered) < target_count:
+        for row in rows:
+            meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+            source_path = str((meta or {}).get("source_path") or "").strip()
+            if (not source_path) or source_path in seen:
+                continue
+            filtered.append(row)
+            seen.add(source_path)
+            if len(filtered) >= target_count:
+                break
+    return filtered or rows
+
+
+def _render_authoritative_doc_list_pack(
+    *,
+    user_msg_id: int,
+    pack: dict,
+    doc_list: list[dict],
+    guide_mode: bool,
+    guide_source_path: str,
+    guide_source_name: str,
+    pending: bool,
+) -> dict:
+    # Keep pending/full on the same authoritative paper set and only defer strict locate until full render.
+    return build_doc_list_refs_payload(
+        user_msg_id=int(user_msg_id),
+        pack=pack,
+        doc_list=doc_list,
+        allow_expensive_llm=False,
+        allow_exact_locate=not pending,
+        apply_copy_polish=True,
+        guide_mode=bool(guide_mode),
+        guide_source_path=str(guide_source_path or "").strip(),
+        guide_source_name=str(guide_source_name or "").strip(),
+    )
+
+
+def _build_pending_conversation_refs_payload(
+    refs: dict,
+    *,
+    doc_list_by_user: dict[int, list[dict]] | None = None,
+    guide_mode: bool = False,
+    guide_source_path: str = "",
+    guide_source_name: str = "",
+) -> dict[int, dict]:
     out: dict[int, dict] = {}
+    authoritative_map = {
+        int(key): [dict(item) for item in list(value or []) if isinstance(item, dict)]
+        for key, value in dict(doc_list_by_user or {}).items()
+        if str(key).isdigit() or isinstance(key, int)
+    }
     for user_msg_id, pack in (refs or {}).items():
         if not isinstance(pack, dict):
             continue
         prompt = str(pack.get("prompt") or "").strip()
-        prompt_low = prompt.lower()
         focus_terms = [str(term or "").strip() for term in _refs_prompt_focus_terms(prompt) if str(term or "").strip()]
+        focus_action = prompt_reference_focus_action(prompt)
         raw_hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
-        filtered_hits = _filter_pending_refs_hits_by_prompt_focus(prompt, raw_hits)[:2]
+        if prompt_explicitly_requests_multi_paper_list(prompt):
+            filtered_hits = _filter_pending_multi_paper_hits_for_display(prompt, raw_hits)
+            if not filtered_hits:
+                filtered_hits = _filter_pending_refs_hits_by_prompt_focus(prompt, raw_hits)
+            filtered_hits = filtered_hits[:3]
+        else:
+            filtered_hits = _filter_pending_refs_hits_by_prompt_focus(prompt, raw_hits)[:2]
         pending_count = 0
         hits_out: list[dict] = []
         for hit in raw_hits:
@@ -294,6 +554,23 @@ def _build_pending_conversation_refs_payload(refs: dict) -> dict[int, dict]:
             meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
             if str((meta or {}).get("ref_pack_state") or "").strip().lower() == "pending":
                 pending_count += 1
+        authoritative_doc_list_present = int(user_msg_id) in authoritative_map
+        authoritative_doc_list = [dict(item) for item in list(authoritative_map.get(int(user_msg_id), []) or []) if isinstance(item, dict)]
+        if authoritative_doc_list_present:
+            authoritative_pack = _render_authoritative_doc_list_pack(
+                user_msg_id=int(user_msg_id),
+                pack=pack,
+                doc_list=authoritative_doc_list,
+                guide_mode=bool(guide_mode),
+                guide_source_path=str(guide_source_path or "").strip(),
+                guide_source_name=str(guide_source_name or "").strip(),
+                pending=True,
+            )
+            out[int(user_msg_id)] = _mark_doc_list_pending_pack(
+                payload_pack=authoritative_pack,
+                pending_count=pending_count,
+            )
+            continue
         for hit in filtered_hits:
             meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
             source_path = str((meta or {}).get("source_path") or "").strip()
@@ -310,9 +587,9 @@ def _build_pending_conversation_refs_payload(refs: dict) -> dict[int, dict]:
                 snippet_seed = str(hit.get("text") or "").strip()
             summary_line = _compact_reader_open_text(snippet_seed)
             focus_text = " and ".join(focus_terms[:2]) if len(focus_terms) >= 2 else (focus_terms[0] if focus_terms else "the requested concept")
-            if re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", prompt_low):
+            if focus_action == "compare":
                 why_line = f"This pending match most directly compares {focus_text} in {heading_path or 'the matched section'}."
-            elif re.search(r"\b(define|defined|definition)\b", prompt_low):
+            elif focus_action == "define":
                 why_line = f"This pending match most directly defines {focus_text} in {heading_path or 'the matched section'}."
             else:
                 why_line = f"This pending match most directly discusses {focus_text} in {heading_path or 'the matched section'}."
@@ -363,7 +640,7 @@ def _build_pending_conversation_refs_payload(refs: dict) -> dict[int, dict]:
         pack2["pending_hit_count"] = int(pending_count)
         pack2["payload_mode"] = "pending"
         pack2["enrichment_pending"] = True
-        out[int(user_msg_id)] = _attach_pack_primary_ref_evidence(pack2)
+        out[int(user_msg_id)] = _attach_pack_display_contract(pack2)
     return out
 
 
@@ -374,18 +651,18 @@ def _annotate_refs_payload_refresh_state(payload: dict, *, mode: str) -> dict[in
     for user_msg_id, pack in (payload or {}).items():
         if not isinstance(pack, dict):
             continue
-        pack2 = _attach_pack_primary_ref_evidence(pack)
+        pack2 = _attach_pack_display_contract(pack)
         pack2["payload_mode"] = mode_norm
         if needs_enrichment:
             pack2["enrichment_pending"] = True
         else:
             pack2.pop("enrichment_pending", None)
-        out[int(user_msg_id)] = pack2
+        out[int(user_msg_id)] = _attach_pack_display_contract(pack2)
     return out
 
 
 def _attach_pack_render_state(payload_pack: dict, *, source_pack: dict | None, default_status: str = "") -> dict:
-    out = _attach_pack_primary_ref_evidence(payload_pack)
+    out = _attach_pack_display_contract(payload_pack)
     src = source_pack if isinstance(source_pack, dict) else {}
     render_status = str((src or {}).get("render_status") or default_status or "").strip().lower()
     render_error = str((src or {}).get("render_error") or "").strip()
@@ -416,7 +693,7 @@ def _attach_pack_render_state(payload_pack: dict, *, source_pack: dict | None, d
         out["render_locale"] = render_locale
     if str(out.get("render_status") or "").strip().lower() == "failed":
         out.pop("enrichment_pending", None)
-    return out
+    return _attach_pack_display_contract(out)
 
 
 def _build_fast_ready_conversation_refs_payload(
@@ -631,27 +908,48 @@ def get_conversation_refs(conv_id: str):
     except sqlite3.OperationalError:
         cached_any = _get_any_cached_conversation_refs_payload(conv_id=conv_id)
         return cached_any if isinstance(cached_any, dict) else {}
+    refs_norm = refs if isinstance(refs, dict) else {}
+    all_user_msg_ids: set[int] = set()
+    for key in refs_norm.keys():
+        try:
+            all_user_msg_ids.add(int(key))
+        except Exception:
+            continue
+    authoritative_doc_lists = _load_authoritative_doc_list_contracts(
+        store=store,
+        conv_id=conv_id,
+        user_msg_ids=all_user_msg_ids,
+    )
     signature = _refs_conversation_cache_signature(
-        refs=refs if isinstance(refs, dict) else {},
+        refs=refs_norm,
         guide_mode=guide_mode,
         guide_source_path=guide_source_path,
         guide_source_name=guide_source_name,
+        authoritative_doc_list_by_user=authoritative_doc_lists,
     )
-    refs_norm = refs if isinstance(refs, dict) else {}
     has_pending = _refs_payload_has_pending(refs_norm)
+    has_authoritative_doc_list = bool(authoritative_doc_lists)
     cached_rec = _get_cached_conversation_refs_record(conv_id=conv_id, signature=signature)
     cached_payload = cached_rec.get("payload") if isinstance(cached_rec, dict) else None
     cached_mode = str(cached_rec.get("mode") or "").strip().lower() if isinstance(cached_rec, dict) else ""
-    if isinstance(cached_payload, dict) and cached_mode == "full":
+    if isinstance(cached_payload, dict) and cached_mode == "full" and (not has_authoritative_doc_list):
         return cached_payload
 
     stored_full_payload: dict[int, dict] = {}
     pending_refs: dict[int, dict] = {}
     failed_ready_refs: dict[int, dict] = {}
     ready_missing_refs: dict[int, dict] = {}
+    authoritative_full_payloads: dict[int, dict] = {}
+    authoritative_full_refs: dict[int, dict] = {}
     for user_msg_id, pack in refs_norm.items():
         if not isinstance(pack, dict):
             continue
+        authoritative_doc_list_present = int(user_msg_id) in authoritative_doc_lists
+        authoritative_doc_list = [
+            dict(item)
+            for item in list(authoritative_doc_lists.get(int(user_msg_id), []) or [])
+            if isinstance(item, dict)
+        ]
         pack_full = _get_stored_rendered_pack_payload(
             user_msg_id=user_msg_id,
             pack=pack,
@@ -659,6 +957,35 @@ def get_conversation_refs(conv_id: str):
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
         )
+        if authoritative_doc_list_present and _refs_pack_has_pending(pack):
+            pending_refs[int(user_msg_id)] = pack
+            continue
+        if authoritative_doc_list_present:
+            if isinstance(pack_full, dict) and _payload_is_authoritative_doc_list_pack(pack_full, authoritative_doc_list):
+                stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
+                    pack_full,
+                    source_pack=pack,
+                    default_status="full",
+                )
+                continue
+            authoritative_payload = _render_authoritative_doc_list_pack(
+                user_msg_id=int(user_msg_id),
+                pack=pack,
+                doc_list=authoritative_doc_list,
+                guide_mode=bool(guide_mode),
+                guide_source_path=str(guide_source_path or "").strip(),
+                guide_source_name=str(guide_source_name or "").strip(),
+                pending=False,
+            )
+            if isinstance(authoritative_payload, dict) and authoritative_payload:
+                authoritative_full_payloads[int(user_msg_id)] = authoritative_payload
+                authoritative_full_refs[int(user_msg_id)] = pack
+                stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
+                    authoritative_payload,
+                    source_pack=pack,
+                    default_status="full",
+                )
+                continue
         if isinstance(pack_full, dict):
             stored_full_payload[int(user_msg_id)] = _attach_pack_render_state(
                 pack_full,
@@ -673,6 +1000,15 @@ def get_conversation_refs(conv_id: str):
         else:
             ready_missing_refs[int(user_msg_id)] = pack
 
+    if authoritative_full_payloads:
+        _persist_rendered_refs_payloads(
+            refs=authoritative_full_refs,
+            payload=authoritative_full_payloads,
+            guide_mode=guide_mode,
+            guide_source_path=guide_source_path,
+            guide_source_name=guide_source_name,
+        )
+
     if refs_norm and (not pending_refs) and (not failed_ready_refs) and (not ready_missing_refs) and stored_full_payload:
         _store_cached_conversation_refs_payload(
             conv_id=conv_id,
@@ -682,7 +1018,7 @@ def get_conversation_refs(conv_id: str):
         )
         return stored_full_payload
 
-    if isinstance(cached_payload, dict) and (not stored_full_payload):
+    if isinstance(cached_payload, dict) and (not stored_full_payload) and (not has_authoritative_doc_list):
         if (not has_pending) and (not failed_ready_refs) and cached_mode != "full":
             _warm_conversation_refs_payload_async(
                 conv_id=conv_id,
@@ -699,7 +1035,13 @@ def get_conversation_refs(conv_id: str):
 
     payload: dict[int, dict] = dict(stored_full_payload)
     if pending_refs:
-        pending_payload = _build_pending_conversation_refs_payload(pending_refs)
+        pending_payload = _build_pending_conversation_refs_payload(
+            pending_refs,
+            doc_list_by_user=authoritative_doc_lists,
+            guide_mode=bool(guide_mode),
+            guide_source_path=str(guide_source_path or "").strip(),
+            guide_source_name=str(guide_source_name or "").strip(),
+        )
         for user_msg_id, pack in pending_refs.items():
             payload_pack = pending_payload.get(int(user_msg_id))
             if isinstance(payload_pack, dict):

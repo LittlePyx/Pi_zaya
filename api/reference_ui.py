@@ -21,6 +21,16 @@ from kb.citation_meta import fetch_best_crossref_for_reference, fetch_best_cross
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
+from kb.reference_query_family import (
+    extract_multi_paper_topic as _shared_extract_multi_paper_topic,
+    prompt_explicitly_requests_multi_paper_list as _shared_prompt_explicitly_requests_multi_paper_list,
+    prompt_explicitly_requests_single_paper_pick as _shared_prompt_explicitly_requests_single_paper_pick,
+    prompt_reference_focus_action as _shared_prompt_reference_focus_action,
+    prompt_requests_reference_compare as _shared_prompt_requests_reference_compare,
+    prompt_requests_reference_definition as _shared_prompt_requests_reference_definition,
+    prompt_requires_reference_focus_match as _shared_prompt_requires_reference_focus_match,
+    prompt_targets_sci_topic as _shared_prompt_targets_sci_topic,
+)
 from kb.source_blocks import load_source_blocks, match_source_blocks
 from kb.source_filters import is_excluded_source_path
 from ui.refs_renderer import (
@@ -47,6 +57,9 @@ from ui.refs_renderer import (
 
 _MIN_REF_UI_SCORE = 5.2
 _MAX_REF_UI_GAP = 1.8
+_MIN_SINGLE_PAPER_DIRECT_HIT_SCORE = 4.25
+_MIN_PENDING_SINGLE_PAPER_DIRECT_HIT_SCORE = 3.0
+_MIN_COMPARE_DIRECT_HIT_SCORE = 5.0
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -664,6 +677,7 @@ def _ref_summary_focus_score(
     score = 0.0
     focus_terms = _refs_prompt_focus_terms(prompt)
     identity_terms = _ref_summary_identity_terms(source_path=source_path, title=title)
+    exact_focus_hits = _refs_exact_focus_match_count(prompt, cand)
 
     total_hits = 0
     non_source_hits = 0
@@ -676,14 +690,14 @@ def _ref_summary_focus_score(
         non_source_hits += 1
     score += 6.0 * float(non_source_hits)
     score += 1.5 * float(total_hits)
+    score += 2.2 * float(exact_focus_hits)
     keyword_hits = _refs_summary_focus_keyword_hit_count(prompt, surface)
     score += 1.35 * float(keyword_hits)
     title_keyword_hits = _ref_summary_title_keyword_hit_count(title, surface)
     if title_keyword_hits >= 2:
         score += 1.1 * float(title_keyword_hits - 1)
 
-    prompt_low = str(prompt or "").strip().lower()
-    if _is_definition_focus_prompt(prompt_low):
+    if _is_definition_focus_prompt(prompt):
         if re.search(r"\b(defin(?:e|es|ed|ition)|introduced?|refers?\s+to|is\s+defined\s+as)\b", cand, flags=re.I):
             score += 2.6
         if total_hits <= 0:
@@ -694,7 +708,7 @@ def _ref_summary_focus_score(
             score += 1.2
         if re.match(r"^\s*(however|but|additionally|furthermore|moreover|therefore|thus)\b", cand, flags=re.I):
             score -= 2.4
-    if re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", prompt_low):
+    if _shared_prompt_requests_reference_compare(prompt):
         if re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", cand, flags=re.I):
             score += 2.6
         if keyword_hits >= 2:
@@ -730,7 +744,7 @@ def _ref_summary_focus_score(
         score -= 0.6
     if re.search(r"\b(fig|figure|table)\b", cand, flags=re.I) and (not kind):
         score -= 0.4
-    if re.search(r"\brate\b", cand, flags=re.I) and keyword_hits <= 1 and re.search(r"\b(defin(?:e|es|ed|ition)|introduced?\s+as|what\s+is)\b", prompt_low):
+    if re.search(r"\brate\b", cand, flags=re.I) and keyword_hits <= 1 and _is_definition_focus_prompt(prompt):
         score -= 0.9
     return score
 
@@ -851,10 +865,7 @@ def _split_ref_summary_sentences(text: str, *, max_sentences: int = 8) -> list[s
 
 
 def _is_definition_focus_prompt(prompt: str) -> bool:
-    text = str(prompt or "").strip().lower()
-    if not text:
-        return False
-    return bool(re.search(r"\b(defin(?:e|es|ed|ition)|introduced?\s+as|what\s+is)\b", text))
+    return _shared_prompt_requests_reference_definition(prompt)
 
 
 @lru_cache(maxsize=512)
@@ -898,6 +909,22 @@ def _refs_prompt_focus_keywords(prompt: str) -> tuple[str, ...]:
             seen.add(token)
             out.append(token)
     return tuple(out[:8])
+
+
+def _refs_prompt_informative_focus_keywords(prompt: str) -> tuple[str, ...]:
+    keywords = list(_refs_prompt_focus_keywords(prompt))
+    if not keywords:
+        return ()
+    generic = {
+        "deep",
+        "learning",
+        "model",
+        "models",
+        "method",
+        "methods",
+    }
+    informative = [token for token in keywords if token not in generic]
+    return tuple(informative or keywords)
 
 
 @lru_cache(maxsize=512)
@@ -972,6 +999,7 @@ def _expand_ref_summary_candidates(
     title: str,
     prefer_zh: bool,
     allow_llm_translate: bool = True,
+    allow_focus_prefix: bool = True,
 ) -> list[str]:
     text = str(raw or "").strip()
     if not text:
@@ -1011,6 +1039,7 @@ def _expand_ref_summary_candidates(
         if len(window) <= 360:
             _push(window)
     focus_keywords = _refs_prompt_focus_keywords(prompt)
+    informative_focus_keywords = _refs_prompt_informative_focus_keywords(prompt)
     for sent in sentences[:6]:
         lowered = _normalize_title_identity(sent)
         if not lowered:
@@ -1030,10 +1059,21 @@ def _expand_ref_summary_candidates(
             heading_has_term = bool(exact_term and _focus_term_matches_surface(exact_term, heading))
             if definition_prompt and exact_term and (not sentence_has_term) and (not heading_has_term):
                 continue
-            if primary_term and exact_term and exact_term not in _normalize_title_identity(sent):
-                _push(f"{primary_term}: {sent}")
+            if allow_focus_prefix and primary_term and exact_term and exact_term not in _normalize_title_identity(sent):
+                prefix_hits = sum(1 for token in informative_focus_keywords if token in lowered)
                 if heading:
-                    _push(f"{primary_term}: {heading}. {sent}")
+                    prefix_hits += sum(
+                        1
+                        for token in informative_focus_keywords
+                        if token in _normalize_title_identity(heading)
+                    )
+                if prefix_hits > 0 and not (
+                    _shared_prompt_targets_sci_topic(prompt)
+                    and _surface_is_sci_related_predecessor(sent)
+                ):
+                    _push(f"{primary_term}: {sent}")
+                    if heading:
+                        _push(f"{primary_term}: {heading}. {sent}")
     return candidates
 
 
@@ -1179,6 +1219,372 @@ def _choose_prompt_aligned_ref_summary_candidate(
     }
 
 
+def _looks_bibliographic_source_block_text(text: str) -> bool:
+    raw = " ".join(str(text or "").strip().split())
+    if not raw:
+        return False
+    text_norm = re.sub(r"^\s*(?:\[\d+\]|\d+\.)\s*", "", raw)
+    citation_like_head = bool(
+        re.match(r"^(?:[A-Z][A-Za-z'`.-]+,\s*(?:[A-Z]\.?\s*){1,4})", text_norm)
+    )
+    if citation_like_head and re.search(r"\b(?:19|20)\d{2}\b", text_norm) and len(re.findall(r",", text_norm)) >= 4:
+        return True
+    if citation_like_head and re.search(
+        r"\b(et al\.|optica|opt\. express|nat\.|nature|science|photonics|phys\. rev\.|ieee|front\. phys\.)\b",
+        text_norm,
+        flags=re.I,
+    ):
+        return True
+    if re.search(r"\bdoi\b", text_norm, flags=re.I) and re.search(r"\b(?:19|20)\d{2}\b", text_norm):
+        return True
+    return False
+
+
+def _looks_title_like_ref_surface(text: str, title: str) -> bool:
+    surface_norm = _normalize_title_identity(str(text or "").strip())
+    title_norm = _normalize_title_identity(str(title or "").strip())
+    if (not surface_norm) or (not title_norm):
+        return False
+    if surface_norm == title_norm or surface_norm in title_norm or title_norm in surface_norm:
+        return True
+    surface_tokens = [
+        tok
+        for tok in surface_norm.split()
+        if tok and len(tok) >= 4 and tok not in _PROMPT_FOCUS_STOPWORDS
+    ]
+    title_tokens = {
+        tok
+        for tok in title_norm.split()
+        if tok and len(tok) >= 4 and tok not in _PROMPT_FOCUS_STOPWORDS
+    }
+    if (not surface_tokens) or (not title_tokens):
+        return False
+    overlap = sum(1 for tok in surface_tokens if tok in title_tokens)
+    return bool(
+        overlap >= max(4, math.ceil(len(surface_tokens) * 0.75))
+        and len(surface_tokens) <= max(18, len(title_tokens) + 4)
+        and (not re.search(r"[.!?。！？]", str(text or "")))
+    )
+
+
+def _prompt_prefers_overviewish_ref_summary(prompt: str, *, anchor_target_kind: str = "") -> bool:
+    if str(anchor_target_kind or "").strip():
+        return False
+    text = str(prompt or "").strip().lower()
+    if not text:
+        return False
+    if _shared_prompt_explicitly_requests_multi_paper_list(prompt):
+        return True
+    return bool(
+        re.search(
+            r"\b(mention|mentions|mentioned|discuss|discusses|discussed|which papers?|define|defines|defined|definition|what is|introduced?\s+as)\b",
+            text,
+            flags=re.I,
+        )
+    )
+
+
+def _summary_candidate_heading_role_score(
+    *,
+    prompt: str,
+    heading_path: str,
+    anchor_target_kind: str,
+) -> float:
+    heading_norm = _normalize_title_identity(str(heading_path or "").strip())
+    if not heading_norm:
+        return 0.0
+    if not _prompt_prefers_overviewish_ref_summary(prompt, anchor_target_kind=anchor_target_kind):
+        return 0.0
+    if "abstract" in heading_norm:
+        return 2.2
+    if "introduction" in heading_norm:
+        return 1.8
+    if "related work" in heading_norm or "background" in heading_norm or "overview" in heading_norm:
+        return 1.0
+    if "conclusion" in heading_norm or "discussion" in heading_norm:
+        return 0.4
+    if re.search(r"\b(method|model|pipeline|architecture|implementation|algorithm)\b", heading_norm):
+        return -1.8
+    if re.search(r"\b(experiment|results?|evaluation|ablation)\b", heading_norm):
+        return -0.7
+    return 0.0
+
+
+def _summary_candidate_heading_prefix_penalty(summary: str, *, heading_path: str) -> float:
+    summary_norm = _normalize_title_identity(str(summary or "").strip())
+    if not summary_norm:
+        return 0.0
+    leaf_heading = str(str(heading_path or "").split(" / ")[-1] if heading_path else "").strip()
+    leaf_heading = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", leaf_heading).strip()
+    leaf_norm = _normalize_title_identity(leaf_heading)
+    if (not leaf_norm) or (not summary_norm.startswith(leaf_norm)):
+        return 0.0
+    if re.search(
+        r"\b(model|method|methods|framework|pipeline|introduction|abstract|conclusion|discussion|results?|experiments?|evaluation|overview)\b",
+        leaf_norm,
+    ):
+        return 1.6
+    return 0.8
+
+
+def _summary_candidate_prefixed_title_echo_penalty(summary: str, *, title: str) -> float:
+    raw_summary = str(summary or "").strip()
+    if not raw_summary or not str(title or "").strip():
+        return 0.0
+    variants = [raw_summary]
+    cur = raw_summary
+    for _ in range(2):
+        if ":" not in cur:
+            break
+        cur = str(cur.split(":", 1)[1] or "").strip()
+        if cur:
+            variants.append(cur)
+    if any(_looks_title_like_ref_surface(candidate, title) for candidate in variants):
+        return 2.8
+    return 0.0
+
+
+def _looks_prefixed_heading_shell_ref_summary(text: str) -> bool:
+    raw = " ".join(str(text or "").strip().split())
+    if (not raw) or (":" not in raw):
+        return False
+    prefix_raw, suffix_raw = raw.split(":", 1)
+    prefix_norm = _normalize_title_identity(prefix_raw)
+    suffix_norm = _normalize_title_identity(suffix_raw)
+    if (not prefix_norm) or (not suffix_norm):
+        return False
+    prefix_tokens = [
+        tok
+        for tok in prefix_norm.split()
+        if tok and tok not in _PROMPT_FOCUS_STOPWORDS
+    ]
+    if (not prefix_tokens) or len(prefix_tokens) > 6:
+        return False
+    return bool(
+        re.match(
+            r"^(abstract|introduction|background|overview|discussion|conclusion|results?|methods?)\b",
+            suffix_norm,
+            flags=re.I,
+        )
+        or re.match(r"^(摘要|引言|背景|概述|讨论|结论|结果|方法)\b", suffix_norm)
+    )
+
+
+def _prompt_aligned_ref_summary_candidate_copy_score(
+    candidate: dict,
+    *,
+    prompt: str,
+    source_path: str,
+    title: str,
+    anchor_target_kind: str,
+    anchor_target_number: int,
+) -> float:
+    summary = str((candidate or {}).get("summary") or "").strip()
+    heading_path = str((candidate or {}).get("heading_path") or "").strip()
+    if not summary:
+        return -1000.0
+    score = _ref_summary_focus_score(
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        text=summary,
+        anchor_target_kind=anchor_target_kind,
+        anchor_target_number=anchor_target_number,
+    )
+    if _is_ref_card_summary_acceptable(
+        prompt=prompt,
+        title=title,
+        summary_line=summary,
+    ):
+        score += 2.0
+    elif _looks_natural_language_ref_summary(summary):
+        score += 0.4
+    else:
+        score -= 0.9
+    if _has_ref_summary_explainer_signal(summary):
+        score += 0.7
+    if _has_ref_summary_value_signal(summary):
+        score += 0.4
+    if _looks_natural_language_ref_summary(summary):
+        score += 0.5
+    score += _summary_candidate_heading_role_score(
+        prompt=prompt,
+        heading_path=heading_path,
+        anchor_target_kind=anchor_target_kind,
+    )
+    score -= _summary_candidate_heading_prefix_penalty(
+        summary,
+        heading_path=heading_path,
+    )
+    score -= _summary_candidate_prefixed_title_echo_penalty(
+        summary,
+        title=title,
+    )
+    if _looks_prefixed_heading_shell_ref_summary(summary):
+        score -= 3.2
+    return score
+
+
+def _rank_prompt_aligned_ref_summary_candidate(
+    candidate: dict,
+    *,
+    prompt: str,
+    source_path: str,
+    title: str,
+    anchor_target_kind: str,
+    anchor_target_number: int,
+) -> tuple[float, int, int, int, int, int, int, int, int]:
+    summary = str((candidate or {}).get("summary") or "").strip()
+    heading_path = str((candidate or {}).get("heading_path") or "").strip()
+    raw_focus_surface = str((candidate or {}).get("raw_focus_surface") or "").strip()
+    combined_surface = " ".join(part for part in (heading_path, summary) if part)
+    summary_score = _prompt_aligned_ref_summary_candidate_copy_score(
+        candidate,
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        anchor_target_kind=anchor_target_kind,
+        anchor_target_number=anchor_target_number,
+    )
+    focus_hits = len(_matched_focus_terms_for_ref_card(prompt, surface_text=combined_surface))
+    keyword_hits = _refs_summary_focus_keyword_hit_count(prompt, combined_surface)
+    heading_depth = heading_path.count(" / ")
+    block_boost = 1 if str((candidate or {}).get("source_kind") or "").strip().lower() == "source_block" else 0
+    source_rank = -int((candidate or {}).get("source_rank") or 0)
+    return (
+        float(summary_score),
+        _refs_exact_focus_match_count(prompt, summary),
+        _refs_exact_focus_match_count(prompt, combined_surface),
+        focus_hits,
+        keyword_hits,
+        _refs_exact_focus_match_count(prompt, raw_focus_surface),
+        len(_matched_focus_terms_for_ref_card(prompt, surface_text=raw_focus_surface)),
+        -heading_depth,
+        block_boost + source_rank,
+    )
+
+
+def _pick_best_prompt_aligned_ref_summary_candidate(
+    candidates: list[dict],
+    *,
+    prompt: str,
+    source_path: str,
+    title: str,
+    anchor_target_kind: str,
+    anchor_target_number: int,
+) -> dict:
+    ranked_rows: list[tuple[tuple[int, int, int, int, float, int, int, int, int], dict]] = []
+    for raw in list(candidates or []):
+        if not isinstance(raw, dict):
+            continue
+        summary = str(raw.get("summary") or "").strip()
+        if not summary:
+            continue
+        candidate_score = _rank_prompt_aligned_ref_summary_candidate(
+            raw,
+            prompt=prompt,
+            source_path=source_path,
+            title=title,
+            anchor_target_kind=anchor_target_kind,
+            anchor_target_number=anchor_target_number,
+        )
+        if float(candidate_score[0]) < 2.0:
+            continue
+        ranked_rows.append((candidate_score, dict(raw)))
+    if not ranked_rows:
+        return {}
+    ranked_rows.sort(key=lambda item: item[0], reverse=True)
+    return ranked_rows[0][1]
+
+
+def _choose_prompt_aligned_ref_summary_candidate_from_source_blocks(
+    *,
+    prompt: str,
+    source_path: str,
+    title: str,
+    anchor_target_kind: str = "",
+    anchor_target_number: int = 0,
+    allow_llm_translate: bool = True,
+) -> dict:
+    focus_terms = _refs_prompt_focus_terms(prompt)
+    if not focus_terms and (not str(anchor_target_kind or "").strip()):
+        return {}
+    md_path = _resolve_source_md_path(source_path)
+    if md_path is None:
+        return {}
+    try:
+        blocks = load_source_blocks(md_path)
+    except Exception:
+        return {}
+    if not blocks:
+        return {}
+
+    prefer_zh = _prefer_zh_ref_card_locale(prompt, title)
+    candidates: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for idx, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        block_text = str(block.get("text") or "").strip()
+        if (
+            (not block_text)
+            or _looks_bibliographic_source_block_text(block_text)
+            or _looks_title_like_ref_surface(block_text, title)
+        ):
+            continue
+        block_kind = str(block.get("kind") or "").strip().lower()
+        if block_kind in {"figure", "table", "equation"} and (not str(anchor_target_kind or "").strip()):
+            continue
+        heading_path = _normalize_refs_reader_heading_path(
+            prompt=prompt,
+            source_path=source_path,
+            heading_path=str(block.get("heading_path") or "").strip(),
+        )
+        focus_surface = " ".join(part for part in (heading_path, block_text) if part)
+        if (not str(anchor_target_kind or "").strip()):
+            exact_hits = _refs_exact_focus_match_count(prompt, focus_surface)
+            keyword_hits = _refs_summary_focus_keyword_hit_count(prompt, focus_surface)
+            surface_matches = len(_matched_focus_terms_for_ref_card(prompt, surface_text=focus_surface))
+            if exact_hits <= 0 and keyword_hits <= 0 and surface_matches <= 0:
+                continue
+        raw_candidates: list[str] = []
+        leaf_heading = str(heading_path.split(" / ")[-1] if heading_path else "").strip()
+        if leaf_heading:
+            raw_candidates.append(f"## {leaf_heading}\n{block_text}")
+        raw_candidates.append(block_text)
+        for raw_candidate in raw_candidates:
+            for summary in _expand_ref_summary_candidates(
+                raw_candidate,
+                prompt=prompt,
+                title=title,
+                prefer_zh=prefer_zh,
+                allow_llm_translate=allow_llm_translate,
+                allow_focus_prefix=False,
+            ):
+                key = (str(summary or "").strip().lower(), heading_path.lower())
+                if (not key[0]) or key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(
+                    {
+                        "summary": str(summary or "").strip(),
+                        "heading_path": heading_path,
+                        "raw_focus_surface": focus_surface,
+                        "source_kind": "source_block",
+                        "source_rank": 0,
+                        "block_index": idx,
+                    }
+                )
+    return _pick_best_prompt_aligned_ref_summary_candidate(
+        candidates,
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        anchor_target_kind=anchor_target_kind,
+        anchor_target_number=anchor_target_number,
+    )
+
+
 _GENERIC_REF_WHY_PATTERNS = (
     "给出了与",
     "主题一致",
@@ -1203,6 +1609,8 @@ def _looks_surface_like_ref_summary(text: str) -> bool:
     s = _clean_summary_line(text)
     if not s:
         return False
+    if _looks_prefixed_heading_shell_ref_summary(s):
+        return True
     if re.match(r"^\s*#{1,6}\s+", s):
         return True
     if re.match(r"^\s*(fig(?:ure)?|table|eq(?:uation)?|appendix)\b", s, flags=re.I):
@@ -1250,6 +1658,20 @@ def _render_focus_terms_for_ref_card(prompt: str, *, max_n: int = 2) -> list[str
         if len(out) >= max(1, int(max_n or 2)):
             break
     return out
+
+
+def _looks_focus_prefixed_ref_summary(prompt: str, summary_line: str) -> bool:
+    raw = " ".join(str(summary_line or "").strip().split())
+    if (not raw) or (":" not in raw):
+        return False
+    prefix_norm = _normalize_title_identity(str(raw.split(":", 1)[0] or "").strip())
+    if not prefix_norm:
+        return False
+    for term in _render_focus_terms_for_ref_card(prompt, max_n=3):
+        term_norm = _normalize_title_identity(term)
+        if term_norm and (prefix_norm == term_norm or prefix_norm in term_norm or term_norm in prefix_norm):
+            return True
+    return False
 
 
 def _display_focus_term_for_ref_card(prompt: str, term: str) -> str:
@@ -1374,8 +1796,7 @@ def _build_prompt_aligned_ref_why_line_v3(
         if part
     )
     matched_terms = _matched_focus_terms_for_ref_card(prompt, surface_text=surface)
-    prompt_low = str(prompt or "").strip().lower()
-    if len(matched_terms) >= 2 and re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", prompt_low):
+    if len(matched_terms) >= 2 and _shared_prompt_requests_reference_compare(prompt):
         compare_terms: list[str] = []
         for term in matched_terms:
             parts = re.split(r"\b(?:and|vs\.?|versus)\b", term, flags=re.IGNORECASE)
@@ -1393,7 +1814,7 @@ def _build_prompt_aligned_ref_why_line_v3(
         if prefer_zh:
             return f"这条命中在“{loc or heading_path or '该小节'}”直接比较了“{pair}”，和当前的对比问题是正对齐的。"
         return f"This hit directly compares '{pair}' in '{loc or heading_path or 'this section'}', so it is a strong match for the comparison request."
-    if matched_terms and re.search(r"\b(defin(?:e|es|ed|ition)|what\s+is|introduced?\s+as)\b", prompt_low):
+    if matched_terms and _shared_prompt_requests_reference_definition(prompt):
         term = _display_focus_term_for_ref_card(prompt, matched_terms[0])
         if prefer_zh:
             return f"这条命中在“{loc or heading_path or '该小节'}”直接定义或解释了“{term}”，适合作为定位切口。"
@@ -1623,6 +2044,8 @@ def _is_ref_card_summary_acceptable(
     s = _clean_summary_line(summary_line)
     if not s:
         return False
+    if _looks_prefixed_heading_shell_ref_summary(s):
+        return False
     if _looks_like_title_echo(s, title):
         return False
     if _looks_formula_heavy_ref_text(s):
@@ -1695,6 +2118,8 @@ def _ref_card_summary_candidate_score(*, prompt: str, title: str, text: str) -> 
         score += 0.7
     if _looks_surface_like_ref_summary(cand):
         score -= 2.5
+    if _looks_prefixed_heading_shell_ref_summary(cand):
+        score -= 3.0
     if re.search(r"\bOCIS\s+codes?\b", cand, flags=re.I):
         score -= 3.0
     if re.search(r"\b(optical society of america|all rights reserved|copyright)\b", cand, flags=re.I):
@@ -2065,14 +2490,21 @@ def _llm_ground_ref_why_line(
     return why_line
 
 
-def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) -> dict:
+def _maybe_polish_single_ref_hit_card(
+    *,
+    prompt: str,
+    hit: dict,
+    ui_meta: dict,
+    allow_expensive_llm: bool = True,
+) -> dict:
     ui = dict(ui_meta or {})
     title = str(ui.get("display_name") or "").strip()
     heading_path = str(ui.get("heading_path") or ui.get("section_label") or "").strip()
-    summary_line = str(ui.get("summary_line") or "").strip()
-    why_line = str(ui.get("why_line") or "").strip()
+    summary_line = _normalize_ref_copy_text(str(ui.get("summary_line") or "").strip())
+    why_line = _normalize_ref_copy_text(str(ui.get("why_line") or "").strip())
     summary_kind = str(ui.get("summary_kind") or "").strip().lower()
     why_generation = str(ui.get("why_generation") or "").strip().lower()
+    allow_llm_polish = bool(allow_expensive_llm and _refs_card_polish_llm_enabled())
 
     deterministic_why = _build_prompt_aligned_ref_why_line_v3(
         prompt=prompt,
@@ -2115,7 +2547,7 @@ def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) 
     attempt_grounded_why = bool(
         candidates
         and summary_kind != "metadata"
-        and _refs_card_polish_llm_enabled()
+        and allow_llm_polish
         and why_generation != "llm_grounded"
     )
     if not (needs_summary or needs_why or attempt_grounded_why):
@@ -2130,6 +2562,7 @@ def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) 
             title=title,
             candidates=candidates,
         )
+        fallback_summary = _normalize_ref_copy_text(fallback_summary)
         if fallback_summary and _is_ref_card_summary_acceptable(
             prompt=prompt,
             title=title,
@@ -2155,7 +2588,7 @@ def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) 
         why_line=why_line,
     )
     candidate_payload = "\n".join(f"- {item}" for item in candidates if item)
-    if candidate_payload and summary_kind != "metadata" and _refs_card_polish_llm_enabled():
+    if candidate_payload and summary_kind != "metadata" and allow_llm_polish:
         grounded_why = _llm_ground_ref_why_line(
             prompt=prompt,
             display_name=title,
@@ -2164,7 +2597,9 @@ def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) 
             why_seed=why_line,
             candidate_payload=candidate_payload,
         )
-        grounded_why = _summary_excerpt(grounded_why, max_sentences=2, max_len=160)
+        grounded_why = _normalize_ref_copy_text(
+            _summary_excerpt(grounded_why, max_sentences=2, max_len=160)
+        )
         if grounded_why and (not _looks_generic_ref_why_line(grounded_why)):
             why_line = grounded_why
             why_generation = "llm_grounded"
@@ -2180,7 +2615,7 @@ def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) 
     if not (needs_summary or needs_why):
         if (
             original_needs_summary
-            and _refs_card_polish_llm_enabled()
+            and allow_llm_polish
             and _summary_line_needs_polish(
                 prompt=prompt,
                 title=title,
@@ -2191,6 +2626,9 @@ def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) 
         else:
             ui["why_line"] = why_line
             return ui
+    if not allow_llm_polish:
+        ui["why_line"] = why_line
+        return ui
     polished_summary, polished_why = _llm_polish_ref_card_copy_v2(
         prompt=prompt,
         display_name=title,
@@ -2199,8 +2637,12 @@ def _maybe_polish_single_ref_hit_card(*, prompt: str, hit: dict, ui_meta: dict) 
         why_seed=why_line,
         candidate_payload=candidate_payload,
     )
-    polished_summary = _summary_excerpt(polished_summary, max_sentences=2, max_len=220)
-    polished_why = _summary_excerpt(polished_why, max_sentences=2, max_len=160)
+    polished_summary = _normalize_ref_copy_text(
+        _summary_excerpt(polished_summary, max_sentences=2, max_len=220)
+    )
+    polished_why = _normalize_ref_copy_text(
+        _summary_excerpt(polished_why, max_sentences=2, max_len=160)
+    )
     if polished_summary and (
         (
             len(_clean_summary_line(polished_summary)) >= 32
@@ -2256,6 +2698,7 @@ def _maybe_polish_refs_card_copy(*, prompt: str, hits: list[dict], guide_mode: b
             prompt=prompt,
             hit=hit,
             ui_meta=ui_meta,
+            allow_expensive_llm=True,
         )
         polished.append(hit2)
     return polished
@@ -2268,6 +2711,36 @@ def _compact_reader_open_text(text: str, *, max_len: int = 360) -> str:
     if len(raw) <= max_len:
         return raw
     return raw[:max_len].rstrip() + "..."
+
+
+_MIXED_QUOTE_SUFFIX_RE = re.compile(
+    r"(^|[\s\(\[（【,:：;；，、])(?:[“\"']?)(?P<inner>[A-Za-z][A-Za-z0-9 .:/&+\-]{1,80})[’'](?=(?:中|里|处|部分|章节|小节|一节|该节|本节))"
+)
+
+
+def _normalize_ref_copy_text(text: str) -> str:
+    s = " ".join(str(text or "").split())
+    if not s:
+        return ""
+
+    def _repair_mixed_quote_suffix(match: re.Match[str]) -> str:
+        prefix = str(match.group(1) or "")
+        inner = str(match.group("inner") or "").strip(" '\"“”‘’")
+        if not inner:
+            return str(match.group(0) or "")
+        return f"{prefix}“{inner}”"
+
+    return _MIXED_QUOTE_SUFFIX_RE.sub(_repair_mixed_quote_suffix, s)
+
+
+def _normalize_ref_copy_ui_meta(ui_meta: dict | None) -> dict:
+    ui = dict(ui_meta or {})
+    if not ui:
+        return {}
+    for key in ("summary_line", "why_line"):
+        if key in ui:
+            ui[key] = _normalize_ref_copy_text(str(ui.get(key) or ""))
+    return ui
 
 
 def _pick_reader_open_loc_text(loc: dict) -> str:
@@ -3020,6 +3493,963 @@ def _attach_pack_primary_ref_evidence(pack: dict | None) -> dict:
     return pack2
 
 
+def _attach_pack_display_contract(pack: dict | None) -> dict:
+    pack2 = _attach_pack_primary_ref_evidence(pack)
+    hits = [hit for hit in list(pack2.get("hits") or []) if isinstance(hit, dict)]
+    guide_filter = pack2.get("guide_filter") if isinstance(pack2.get("guide_filter"), dict) else {}
+    pipeline_debug = pack2.get("pipeline_debug") if isinstance(pack2.get("pipeline_debug"), dict) else {}
+    payload_mode = str(pack2.get("payload_mode") or "").strip().lower()
+    render_status = str(pack2.get("render_status") or "").strip().lower()
+    pending = bool(pack2.get("pending")) or bool(pack2.get("enrichment_pending")) or payload_mode == "pending"
+    hidden_self_source = bool(guide_filter.get("hidden_self_source"))
+    try:
+        raw_hit_count = int(pipeline_debug.get("raw_hit_count") or 0)
+    except Exception:
+        raw_hit_count = 0
+    try:
+        post_score_gate_hit_count = int(pipeline_debug.get("post_score_gate_hit_count") or 0)
+    except Exception:
+        post_score_gate_hit_count = 0
+    try:
+        post_focus_filter_hit_count = int(pipeline_debug.get("post_focus_filter_hit_count") or 0)
+    except Exception:
+        post_focus_filter_hit_count = 0
+    try:
+        post_llm_filter_hit_count = int(pipeline_debug.get("post_llm_filter_hit_count") or 0)
+    except Exception:
+        post_llm_filter_hit_count = 0
+
+    display_state = "empty"
+    suppression_reason = ""
+    if pending:
+        display_state = "pending"
+        suppression_reason = "pending_enrichment"
+    elif hits:
+        display_state = "ready"
+    elif hidden_self_source:
+        display_state = "hidden_by_guide"
+        suppression_reason = "guide_self_source_only"
+    elif render_status == "failed":
+        display_state = "suppressed"
+        suppression_reason = "render_failed"
+    elif raw_hit_count > 0:
+        display_state = "suppressed"
+        if (post_llm_filter_hit_count <= 0) and (post_focus_filter_hit_count > 0):
+            suppression_reason = "llm_filter_removed_all"
+        elif (post_focus_filter_hit_count <= 0) and (post_score_gate_hit_count > 0):
+            suppression_reason = "focus_filter_removed_all"
+        elif post_score_gate_hit_count <= 0:
+            suppression_reason = "score_gate_removed_all"
+        else:
+            suppression_reason = "no_renderable_hits"
+    else:
+        display_state = "empty"
+        suppression_reason = "no_candidate_hits"
+
+    pack2["display_state"] = display_state
+    if suppression_reason:
+        pack2["suppression_reason"] = suppression_reason
+    else:
+        pack2.pop("suppression_reason", None)
+    return pack2
+
+
+def _doc_list_ref_why_line(*, prompt: str, heading_path: str, prefer_zh: bool) -> str:
+    heading = str(heading_path or "").strip()
+    focus_action = _shared_prompt_reference_focus_action(prompt)
+    if prefer_zh:
+        if focus_action == "compare":
+            return f"这篇文献作为当前多篇对比查询中的直接命中被保留，定位落在 {heading or '命中章节'}。"
+        if focus_action == "define":
+            return f"这篇文献作为当前多篇定义/介绍查询中的直接命中被保留，定位落在 {heading or '命中章节'}。"
+        return f"这篇文献作为当前多篇库内命中的一项被保留，定位落在 {heading or '命中章节'}。"
+    if focus_action == "compare":
+        return f"This paper was kept as a direct comparison match for the current multi-paper query, anchored to {heading or 'the matched section'}."
+    if focus_action == "define":
+        return f"This paper was kept as a direct definition/introduction match for the current multi-paper query, anchored to {heading or 'the matched section'}."
+    return f"This paper was kept as one of the direct library matches for the current multi-paper query, anchored to {heading or 'the matched section'}."
+
+
+def _collect_doc_list_ref_text_candidates(*, raw_item: dict, primary_evidence: dict) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push(value: str) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = text.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(text)
+
+    _push(str(primary_evidence.get("highlight_snippet") or "").strip())
+    _push(str(primary_evidence.get("snippet") or "").strip())
+    _push(str(raw_item.get("summary_line") or "").strip())
+    for alt in list(primary_evidence.get("alternatives") or []):
+        if not isinstance(alt, dict):
+            continue
+        _push(str(alt.get("highlight_snippet") or "").strip())
+        _push(str(alt.get("snippet") or "").strip())
+    return out
+
+
+def _primary_ref_evidence_summary_seed(primary_evidence: dict | None) -> str:
+    primary = _normalize_primary_ref_evidence_payload(primary_evidence if isinstance(primary_evidence, dict) else {})
+    if not primary:
+        return ""
+    return _compact_reader_open_text(
+        str(primary.get("highlight_snippet") or primary.get("snippet") or "").strip()
+    )
+
+
+def _primary_ref_evidence_points_to_same_surface(
+    left_primary: dict | None,
+    right_primary: dict | None,
+) -> bool:
+    left = _normalize_primary_ref_evidence_payload(left_primary if isinstance(left_primary, dict) else {})
+    right = _normalize_primary_ref_evidence_payload(right_primary if isinstance(right_primary, dict) else {})
+    if (not left) or (not right):
+        return False
+
+    left_source = str(left.get("source_path") or "").strip()
+    right_source = str(right.get("source_path") or "").strip()
+    if left_source and right_source and (not _same_source_identity(left_source, right_source)):
+        return False
+
+    left_block = str(left.get("block_id") or "").strip()
+    right_block = str(right.get("block_id") or "").strip()
+    if left_block or right_block:
+        return bool(left_block and right_block and left_block == right_block)
+
+    left_anchor = str(left.get("anchor_id") or "").strip()
+    right_anchor = str(right.get("anchor_id") or "").strip()
+    if left_anchor or right_anchor:
+        return bool(left_anchor and right_anchor and left_anchor == right_anchor)
+
+    left_heading = str(left.get("heading_path") or "").strip()
+    right_heading = str(right.get("heading_path") or "").strip()
+    if left_heading and right_heading and left_heading != right_heading:
+        return False
+
+    left_summary = _primary_ref_evidence_summary_seed(left)
+    right_summary = _primary_ref_evidence_summary_seed(right)
+    if left_summary and right_summary:
+        return _ref_summary_surfaces_match(left_summary, right_summary)
+    if left_heading and right_heading:
+        return True
+    return False
+
+
+def _doc_list_authoritative_primary_is_upgradeable(primary_evidence: dict | None) -> bool:
+    primary = _normalize_primary_ref_evidence_payload(primary_evidence if isinstance(primary_evidence, dict) else {})
+    if not primary:
+        return True
+    if bool(primary.get("strict_locate")):
+        return False
+    if str(primary.get("block_id") or "").strip():
+        return False
+    if str(primary.get("anchor_id") or "").strip():
+        return False
+    reason = str(primary.get("selection_reason") or "").strip().lower()
+    return reason in {"", "answer_hit_top", "pending_section_seed"}
+
+
+def _primary_ref_evidence_precision_score(
+    *,
+    primary_evidence: dict | None,
+    prompt: str,
+    display_name: str,
+) -> tuple[int, int, int, int, int, int, int]:
+    primary = _normalize_primary_ref_evidence_payload(primary_evidence if isinstance(primary_evidence, dict) else {})
+    if not primary:
+        return (0, 0, 0, 0, 0, 0, 0)
+    reason = str(primary.get("selection_reason") or "").strip().lower()
+    reason_rank = {
+        "prompt_aligned_block": 8,
+        "prompt_aligned": 7,
+        "navigation": 6,
+        "fallback": 4,
+        "reader_open": 4,
+        "strict_locate": 4,
+        "shared_refs_pack": 4,
+        "answer_hit_top": 0,
+        "pending_section_seed": 0,
+    }.get(reason, 3 if reason else 0)
+    heading_path = _sanitize_heading_path_ui(
+        str(primary.get("heading_path") or "").strip(),
+        prompt=prompt,
+        source_path=str(primary.get("source_path") or "").strip(),
+    )
+    summary_seed = _primary_ref_evidence_summary_seed(primary)
+    summary_seed_usable = bool(
+        summary_seed
+        and (not _looks_bibliographic_source_block_text(summary_seed))
+        and (not _summary_line_needs_polish(
+            prompt=prompt,
+            title=display_name,
+            summary_line=summary_seed,
+        ))
+    )
+    return (
+        reason_rank,
+        1 if bool(primary.get("strict_locate")) else 0,
+        1 if str(primary.get("block_id") or "").strip() else 0,
+        1 if str(primary.get("anchor_id") or "").strip() else 0,
+        1 if heading_path else 0,
+        1 if summary_seed_usable else 0,
+        1 if summary_seed else 0,
+    )
+
+
+def _select_doc_list_effective_primary_evidence(
+    *,
+    prompt: str,
+    display_name: str,
+    authoritative_primary_evidence: dict | None,
+    synthesized_primary_evidence: dict | None,
+) -> tuple[dict, str]:
+    authoritative = _normalize_primary_ref_evidence_payload(
+        authoritative_primary_evidence if isinstance(authoritative_primary_evidence, dict) else {}
+    )
+    synthesized = _normalize_primary_ref_evidence_payload(
+        synthesized_primary_evidence if isinstance(synthesized_primary_evidence, dict) else {}
+    )
+    if not authoritative:
+        return synthesized, "synthesized"
+    if not synthesized:
+        return authoritative, "authoritative"
+    if _primary_ref_evidence_points_to_same_surface(authoritative, synthesized):
+        authoritative_score = _primary_ref_evidence_precision_score(
+            primary_evidence=authoritative,
+            prompt=prompt,
+            display_name=display_name,
+        )
+        synthesized_score = _primary_ref_evidence_precision_score(
+            primary_evidence=synthesized,
+            prompt=prompt,
+            display_name=display_name,
+        )
+        return (
+            (synthesized, "synthesized")
+            if synthesized_score > authoritative_score
+            else (authoritative, "authoritative")
+        )
+    if not _doc_list_authoritative_primary_is_upgradeable(authoritative):
+        return authoritative, "authoritative"
+
+    authoritative_score = _primary_ref_evidence_precision_score(
+        primary_evidence=authoritative,
+        prompt=prompt,
+        display_name=display_name,
+    )
+    synthesized_score = _primary_ref_evidence_precision_score(
+        primary_evidence=synthesized,
+        prompt=prompt,
+        display_name=display_name,
+    )
+    if synthesized_score > authoritative_score:
+        return synthesized, "synthesized"
+    if authoritative_score > synthesized_score:
+        return authoritative, "authoritative"
+
+    auth_reason = str(authoritative.get("selection_reason") or "").strip().lower()
+    synth_reason = str(synthesized.get("selection_reason") or "").strip().lower()
+    if bool(synthesized.get("strict_locate")) and (not bool(authoritative.get("strict_locate"))):
+        return synthesized, "synthesized"
+    if synth_reason in {"prompt_aligned_block", "prompt_aligned"} and auth_reason in {"", "answer_hit_top", "pending_section_seed"}:
+        return synthesized, "synthesized"
+    return authoritative, "authoritative"
+
+
+def _apply_doc_list_effective_primary_evidence(
+    *,
+    prompt: str,
+    display_name: str,
+    fallback_heading_path: str,
+    ui_meta: dict | None,
+    authoritative_primary_evidence: dict | None,
+    authoritative_summary_line: str = "",
+) -> tuple[dict, dict]:
+    ui_out = dict(ui_meta or {}) if isinstance(ui_meta, dict) else {}
+    synthesized_primary = _normalize_primary_ref_evidence_payload(
+        ui_out.get("primary_evidence") if isinstance(ui_out.get("primary_evidence"), dict) else {}
+    )
+    authoritative_primary = _normalize_primary_ref_evidence_payload(
+        authoritative_primary_evidence if isinstance(authoritative_primary_evidence, dict) else {}
+    )
+    effective_primary, selected_source = _select_doc_list_effective_primary_evidence(
+        prompt=prompt,
+        display_name=display_name,
+        authoritative_primary_evidence=authoritative_primary,
+        synthesized_primary_evidence=synthesized_primary,
+    )
+    effective_heading_path = str(
+        effective_primary.get("heading_path")
+        or ui_out.get("heading_path")
+        or fallback_heading_path
+        or ""
+    ).strip()
+    if effective_heading_path and (
+        (not str(ui_out.get("heading_path") or "").strip())
+        or selected_source == "authoritative"
+    ):
+            ui_out["heading_path"] = effective_heading_path
+
+    current_summary_line = str(ui_out.get("summary_line") or "").strip()
+    effective_summary_seed = _primary_ref_evidence_summary_seed(effective_primary)
+    authoritative_summary_seed = _compact_reader_open_text(str(authoritative_summary_line or "").strip())
+    if authoritative_summary_seed and _summary_line_needs_polish(
+        prompt=prompt,
+        title=display_name,
+        summary_line=authoritative_summary_seed,
+    ):
+        authoritative_summary_seed = ""
+    if (not authoritative_summary_seed) and authoritative_primary:
+        authoritative_summary_seed = _primary_ref_evidence_summary_seed(authoritative_primary)
+    authoritative_conflicts_with_synthesized = bool(
+        selected_source == "authoritative"
+        and authoritative_primary
+        and synthesized_primary
+        and (not _primary_ref_evidence_points_to_same_surface(authoritative_primary, synthesized_primary))
+    )
+    if authoritative_conflicts_with_synthesized and authoritative_summary_seed:
+        ui_out["summary_line"] = authoritative_summary_seed
+    if effective_summary_seed and (
+        (not str(ui_out.get("summary_line") or "").strip())
+        or (
+            _summary_line_needs_polish(
+                prompt=prompt,
+                title=display_name,
+                summary_line=str(ui_out.get("summary_line") or "").strip(),
+            )
+            and (not _summary_line_needs_polish(
+                prompt=prompt,
+                title=display_name,
+                summary_line=effective_summary_seed,
+            ))
+        )
+    ):
+        ui_out["summary_line"] = effective_summary_seed
+
+    if effective_primary:
+        ui_out["primary_evidence"] = dict(effective_primary)
+        ui_out["primary_evidence_heading_path"] = effective_heading_path
+        effective_source = str(
+            effective_primary.get("selection_reason")
+            or ui_out.get("primary_evidence_source")
+            or ("doc_list_authoritative" if selected_source == "authoritative" else "")
+        ).strip()
+        if effective_source:
+            ui_out["primary_evidence_source"] = effective_source
+    if authoritative_primary_evidence:
+        ui_out["authoritative_primary_evidence"] = dict(
+            _normalize_primary_ref_evidence_payload(
+                authoritative_primary_evidence if isinstance(authoritative_primary_evidence, dict) else {}
+            )
+        )
+        ui_out["primary_evidence_authority"] = "doc_list_authoritative"
+    return ui_out, effective_primary
+
+
+def _build_doc_list_ref_locs(*, heading_path: str, primary_evidence: dict) -> list[dict]:
+    locs: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _push(candidate: dict, *, source: str) -> None:
+        if not isinstance(candidate, dict):
+            return
+        loc_heading = str(candidate.get("heading_path") or heading_path or "").strip()
+        snippet = _compact_reader_open_text(
+            str(candidate.get("highlight_snippet") or candidate.get("snippet") or "").strip()
+        )
+        if (not loc_heading) and (not snippet):
+            return
+        key = (loc_heading, snippet)
+        if key in seen:
+            return
+        seen.add(key)
+        loc = {
+            "heading_path": loc_heading or None,
+            "heading": _top_heading(loc_heading) or None,
+            "snippet": snippet or None,
+            "text": snippet or None,
+            "quote": snippet or None,
+            "quality": "high" if (loc_heading or snippet) else "medium",
+            "source": source,
+            "score": 96.0 - (len(locs) * 0.5),
+        }
+        locs.append({key: value for key, value in loc.items() if value not in (None, "", [], {})})
+
+    _push(primary_evidence, source="doc_list_primary")
+    for alt in list(primary_evidence.get("alternatives") or []):
+        _push(alt if isinstance(alt, dict) else {}, source="doc_list_alternative")
+        if len(locs) >= 4:
+            break
+    return locs
+
+
+def _build_doc_list_ref_hit(*, raw_item: dict, idx: int) -> dict:
+    source_path = str(raw_item.get("source_path") or "").strip()
+    source_name = str(raw_item.get("source_name") or "").strip() or _source_filename(source_path) or f"Reference {idx}"
+    primary_evidence = _normalize_primary_ref_evidence_payload(
+        raw_item.get("primary_evidence") if isinstance(raw_item.get("primary_evidence"), dict) else {}
+    )
+    authoritative_summary_line = _compact_reader_open_text(str(raw_item.get("summary_line") or "").strip())
+    heading_path = (
+        str(raw_item.get("heading_path") or "").strip()
+        or str(primary_evidence.get("heading_path") or "").strip()
+    )
+    section_label, subsection_label = _split_section_subsection(heading_path) if heading_path else ("", "")
+    text_candidates = _collect_doc_list_ref_text_candidates(
+        raw_item=raw_item,
+        primary_evidence=primary_evidence,
+    )
+    anchor_kind = str(primary_evidence.get("anchor_kind") or "").strip().lower()
+    anchor_number = _positive_int(primary_evidence.get("anchor_number"))
+    rank_llm = max(72.0, 92.0 - float(max(0, idx - 1)) * 2.0)
+    rank_bm25 = max(6.0, 9.4 - float(max(0, idx - 1)) * 0.4)
+    meta = {
+        "source_path": source_path,
+        "source_name": source_name,
+        "display_name": source_name,
+        "ref_pack_state": "ready",
+        "heading_path": heading_path,
+        "top_heading": _top_heading(heading_path) or section_label or heading_path,
+        "ref_best_heading_path": heading_path,
+        "ref_section": section_label or _top_heading(heading_path) or "",
+        "ref_subsection": subsection_label or "",
+        "ref_loc_quality": "high" if heading_path else "medium",
+        "ref_locs": _build_doc_list_ref_locs(
+            heading_path=heading_path,
+            primary_evidence=primary_evidence,
+        ),
+        "ref_show_snippets": list(text_candidates[:3]),
+        "ref_snippets": list(text_candidates[:3]),
+        "ref_overview_snippets": list(text_candidates[:2]),
+        "explicit_doc_match_score": 12.0,
+        "ref_rank": {
+            "llm": rank_llm,
+            "bm25": rank_bm25,
+            "deep": 2.8,
+            "term_bonus": 2.4,
+            "semantic_score": 8.8,
+            "score": rank_llm,
+            "display_score": rank_llm,
+        },
+    }
+    if anchor_kind:
+        meta["anchor_target_kind"] = anchor_kind
+    if anchor_number > 0:
+        meta["anchor_target_number"] = anchor_number
+        meta["anchor_match_score"] = 10.0
+    if primary_evidence:
+        meta["authoritative_primary_evidence"] = dict(primary_evidence)
+    return {
+        "text": str(text_candidates[0] if text_candidates else (source_name or source_path)).strip(),
+        "meta": meta,
+    }
+
+
+def _build_doc_list_reader_open_payload(
+    *,
+    source_path: str,
+    source_name: str,
+    heading_path: str,
+    summary_line: str,
+    primary_evidence: dict,
+    reader_open: dict | None,
+) -> dict:
+    primary = _normalize_primary_ref_evidence_payload(primary_evidence)
+    out = dict(reader_open or {}) if isinstance(reader_open, dict) else {}
+    if source_path:
+        out["sourcePath"] = source_path
+    if source_name:
+        out["sourceName"] = source_name
+    auth_heading = str(primary.get("heading_path") or heading_path or out.get("headingPath") or "").strip()
+    auth_snippet = _compact_reader_open_text(
+        str(primary.get("snippet") or out.get("snippet") or summary_line or "").strip()
+    )
+    auth_highlight = _compact_reader_open_text(
+        str(primary.get("highlight_snippet") or auth_snippet or out.get("highlightSnippet") or "").strip()
+    )
+    if auth_heading:
+        out["headingPath"] = auth_heading
+    if auth_snippet:
+        out["snippet"] = auth_snippet
+    if auth_highlight:
+        out["highlightSnippet"] = auth_highlight
+    for src_key, dst_key in (
+        ("block_id", "blockId"),
+        ("anchor_id", "anchorId"),
+        ("anchor_kind", "anchorKind"),
+    ):
+        value = str(primary.get(src_key) or "").strip()
+        if value:
+            out[dst_key] = value
+    anchor_number = _positive_int(primary.get("anchor_number"))
+    if anchor_number > 0:
+        out["anchorNumber"] = anchor_number
+    if "strict_locate" in primary:
+        out["strictLocate"] = bool(primary.get("strict_locate"))
+    if primary:
+        out["primaryEvidence"] = dict(primary)
+    return {
+        key: value
+        for key, value in out.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _build_doc_list_hit_ui_meta(
+    *,
+    raw_item: dict,
+    idx: int,
+    prompt: str,
+    allow_expensive_llm: bool,
+    allow_exact_locate: bool,
+) -> dict:
+    source_path = str(raw_item.get("source_path") or "").strip()
+    source_name = str(raw_item.get("source_name") or "").strip() or _source_filename(source_path) or f"Reference {idx}"
+    primary_evidence = _normalize_primary_ref_evidence_payload(
+        raw_item.get("primary_evidence") if isinstance(raw_item.get("primary_evidence"), dict) else {}
+    )
+    authoritative_summary_line = _compact_reader_open_text(str(raw_item.get("summary_line") or "").strip())
+    heading_path = (
+        str(raw_item.get("heading_path") or "").strip()
+        or str(primary_evidence.get("heading_path") or "").strip()
+    )
+    hit = _build_doc_list_ref_hit(raw_item=raw_item, idx=idx)
+    ui_meta = dict(
+        build_hit_ui_meta(
+            hit,
+            prompt=prompt,
+            pdf_root=None,
+            lib_store=None,
+            allow_expensive_llm=bool(allow_expensive_llm),
+            allow_exact_locate=bool(allow_exact_locate),
+        )
+        or {}
+    )
+    if not str(ui_meta.get("display_name") or "").strip():
+        ui_meta["display_name"] = source_name
+    ui_meta, effective_primary_evidence = _apply_doc_list_effective_primary_evidence(
+        prompt=prompt,
+        display_name=str(ui_meta.get("display_name") or source_name),
+        fallback_heading_path=heading_path,
+        ui_meta=ui_meta,
+        authoritative_primary_evidence=primary_evidence,
+        authoritative_summary_line=authoritative_summary_line,
+    )
+    if not str(ui_meta.get("heading_path") or "").strip() and heading_path:
+        ui_meta["heading_path"] = heading_path
+    if not str(ui_meta.get("summary_line") or "").strip():
+        summary_seed = _compact_reader_open_text(
+            str(
+                raw_item.get("summary_line")
+                or _primary_ref_evidence_summary_seed(effective_primary_evidence)
+                or primary_evidence.get("highlight_snippet")
+                or primary_evidence.get("snippet")
+                or ""
+            ).strip()
+        )
+        if summary_seed:
+            ui_meta["summary_line"] = summary_seed
+    if _why_line_needs_polish(
+        prompt=prompt,
+        display_name=str(ui_meta.get("display_name") or source_name),
+        heading_path=str(ui_meta.get("heading_path") or heading_path),
+        summary_line=str(ui_meta.get("summary_line") or ""),
+        why_line=str(ui_meta.get("why_line") or ""),
+    ):
+        fallback_why = _build_prompt_aligned_ref_why_line_v3(
+            prompt=prompt,
+            display_name=str(ui_meta.get("display_name") or source_name),
+            heading_path=str(ui_meta.get("heading_path") or heading_path),
+            summary_line=str(ui_meta.get("summary_line") or ""),
+            why_line=str(ui_meta.get("why_line") or ""),
+        )
+        if not fallback_why:
+            fallback_why = _doc_list_ref_why_line(
+                prompt=prompt,
+                heading_path=str(ui_meta.get("heading_path") or heading_path),
+                prefer_zh=bool(_prefer_zh_ref_card_locale(prompt, source_name)),
+            )
+        if fallback_why:
+            why_basis_meta = _build_ref_why_basis_meta(
+                prompt=prompt,
+                why_generation="deterministic_grounded",
+                why_line=fallback_why,
+            )
+            ui_meta["why_line"] = fallback_why
+            ui_meta["why_generation"] = str(why_basis_meta.get("why_generation") or "deterministic_grounded")
+            ui_meta["why_basis"] = str(why_basis_meta.get("why_basis") or "")
+    score = max(7.8, round(9.55 - (idx - 1) * 0.18, 2))
+    ui_meta["score"] = score
+    ui_meta["score_pending"] = False
+    ui_meta["score_tier"] = _score_tier(score)
+    ui_meta["source_path"] = source_path
+    reader_open = _build_doc_list_reader_open_payload(
+        source_path=source_path,
+        source_name=source_name,
+        heading_path=str(ui_meta.get("heading_path") or heading_path),
+        summary_line=str(ui_meta.get("summary_line") or ""),
+        primary_evidence=effective_primary_evidence or primary_evidence,
+        reader_open=ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {},
+    )
+    if reader_open:
+        ui_meta["reader_open"] = reader_open
+    if effective_primary_evidence:
+        ui_meta["primary_evidence"] = dict(effective_primary_evidence)
+        ui_meta["primary_evidence_heading_path"] = str(
+            effective_primary_evidence.get("heading_path")
+            or ui_meta.get("heading_path")
+            or heading_path
+            or ""
+        ).strip()
+    elif primary_evidence:
+        ui_meta["primary_evidence"] = dict(primary_evidence)
+        ui_meta["primary_evidence_heading_path"] = str(primary_evidence.get("heading_path") or heading_path or "").strip()
+        ui_meta["primary_evidence_source"] = "doc_list_authoritative"
+    topic_match_kind = str(raw_item.get("topic_match_kind") or "").strip().lower()
+    if topic_match_kind:
+        ui_meta["topic_match_kind"] = topic_match_kind
+    return ui_meta
+
+
+def _doc_list_topic_match_why_line(
+    *,
+    prompt: str,
+    heading_path: str,
+    match_kind: str,
+) -> str:
+    kind = str(match_kind or "").strip().lower()
+    if not kind:
+        return ""
+    prefer_zh = bool(_prefer_zh_ref_card_locale(prompt, heading_path))
+    loc = " / ".join(part for part in str(heading_path or "").split(" / ") if part).strip()
+    zh_fallback_loc = "\u76f8\u5173\u6bb5\u843d"
+    en_fallback_loc = "the matched section"
+    if kind == "sci_related_predecessor":
+        if prefer_zh:
+            return "\u8be5\u6587\u8ba8\u8bba\u7684\u662f single-shot compressive spectral imaging\uff0c\u53ef\u4f5c\u4e3a\u4e0e SCI \u76f8\u5173\u7684\u65e9\u671f\u524d\u8eab\u5de5\u4f5c\uff0c\u4f46\u4e0d\u662f\u4e25\u683c\u7684 SCI \u672f\u8bed\u547d\u4e2d\u3002"
+        return "This paper is better treated as an early related predecessor: it discusses single-shot compressive spectral imaging, which is SCI-adjacent rather than an exact SCI term match."
+    if kind == "explicit_sci_mention":
+        if prefer_zh:
+            return f"\u8be5\u6587\u5728\u201c{loc or heading_path or zh_fallback_loc}\u201d\u5904\u660e\u786e\u63d0\u5230 Snapshot Compressive Imaging (SCI)\uff0c\u76f4\u63a5\u5bf9\u5e94\u8fd9\u7c7b SCI \u5b9a\u4f4d\u95ee\u9898\u3002"
+        return f"The paper explicitly mentions Snapshot Compressive Imaging (SCI) in '{loc or heading_path or en_fallback_loc}', so it is a direct match for this SCI lookup."
+    return ""
+
+
+def _apply_doc_list_topic_match_hints(*, prompt: str, raw_item: dict, ui_meta: dict) -> dict:
+    ui = dict(ui_meta or {})
+    match_kind = str(raw_item.get("topic_match_kind") or ui.get("topic_match_kind") or "").strip().lower()
+    if not match_kind:
+        return ui
+    ui["topic_match_kind"] = match_kind
+    note = _doc_list_topic_match_why_line(
+        prompt=prompt,
+        heading_path=str(ui.get("heading_path") or raw_item.get("heading_path") or "").strip(),
+        match_kind=match_kind,
+    )
+    current_why = str(ui.get("why_line") or "").strip()
+    should_override = bool(
+        note
+        and (
+            match_kind == "sci_related_predecessor"
+            or (not current_why)
+            or _why_line_needs_polish(
+                prompt=prompt,
+                display_name=str(ui.get("display_name") or raw_item.get("source_name") or "").strip(),
+                heading_path=str(ui.get("heading_path") or raw_item.get("heading_path") or "").strip(),
+                summary_line=str(ui.get("summary_line") or raw_item.get("summary_line") or "").strip(),
+                why_line=current_why,
+            )
+            or (not _why_line_explicitly_names_focus_term(prompt, current_why))
+        )
+    )
+    if should_override:
+        why_basis_meta = _build_ref_why_basis_meta(
+            prompt=prompt,
+            why_generation="deterministic_grounded",
+            why_line=note,
+        )
+        ui["why_line"] = note
+        ui["why_generation"] = str(why_basis_meta.get("why_generation") or "deterministic_grounded")
+        ui["why_basis"] = str(why_basis_meta.get("why_basis") or "")
+    if match_kind == "sci_related_predecessor":
+        fallback_summary = _compact_reader_open_text(str(raw_item.get("summary_line") or "").strip())
+        current_summary = str(ui.get("summary_line") or "").strip()
+        display_name = str(ui.get("display_name") or raw_item.get("source_name") or "").strip()
+        if fallback_summary and (
+            (not current_summary)
+            or _summary_line_needs_polish(
+                prompt=prompt,
+                title=display_name,
+                summary_line=current_summary,
+            )
+            or current_summary.lower().startswith("snapshot compressive imaging:")
+            or _looks_like_title_echo(current_summary, display_name)
+        ):
+            summary_basis_meta = _build_ref_summary_basis_meta(
+                prompt=prompt,
+                summary_kind=str(ui.get("summary_kind") or "guide"),
+                summary_generation="deterministic_grounded",
+                summary_line=fallback_summary,
+            )
+            ui["summary_line"] = fallback_summary
+            ui["summary_generation"] = str(summary_basis_meta.get("summary_generation") or "deterministic_grounded")
+            ui["summary_basis"] = str(summary_basis_meta.get("summary_basis") or "")
+    return ui
+
+
+def _filter_doc_list_rows_for_guide(
+    *,
+    doc_rows: list[dict] | None,
+    guide_mode: bool,
+    guide_source_path: str,
+    guide_source_name: str,
+) -> tuple[list[dict], int]:
+    rows = [dict(item) for item in list(doc_rows or []) if isinstance(item, dict)]
+    guide_path = str(guide_source_path or "").strip()
+    guide_name = str(guide_source_name or "").strip()
+    guide_active = bool(guide_mode and (guide_path or guide_name))
+    if not guide_active:
+        return rows, 0
+    out: list[dict] = []
+    filtered_self = 0
+    for raw_item in rows:
+        source_path = str(raw_item.get("source_path") or "").strip()
+        source_name = str(raw_item.get("source_name") or "").strip() or _source_filename(source_path)
+        if _hit_matches_guide_source(
+            {
+                "source_path": source_path,
+                "source_name": source_name,
+                "display_name": source_name,
+            },
+            guide_source_path=guide_path,
+            guide_source_name=guide_name,
+        ):
+            filtered_self += 1
+            continue
+        out.append(raw_item)
+    return out, filtered_self
+
+
+def build_doc_list_refs_payload(
+    *,
+    user_msg_id: int | str,
+    pack: dict | None,
+    doc_list: list[dict] | None,
+    allow_expensive_llm: bool = False,
+    allow_exact_locate: bool = True,
+    apply_copy_polish: bool = True,
+    guide_mode: bool = False,
+    guide_source_path: str = "",
+    guide_source_name: str = "",
+) -> dict:
+    pack_src = dict(pack or {}) if isinstance(pack, dict) else {}
+    prompt = str(pack_src.get("prompt") or "").strip()
+    guide_source_path_norm = str(guide_source_path or "").strip()
+    guide_source_name_norm = str(guide_source_name or "").strip()
+    guide_active = bool(guide_mode and (guide_source_path_norm or guide_source_name_norm))
+    prompt_cross_paper_refs = bool(_prompt_likely_cross_paper_refs(prompt))
+    doc_rows_all = [dict(item) for item in list(doc_list or []) if isinstance(item, dict)]
+    doc_rows, filtered_self_doc_count = _filter_doc_list_rows_for_guide(
+        doc_rows=doc_rows_all,
+        guide_mode=guide_active,
+        guide_source_path=guide_source_path_norm,
+        guide_source_name=guide_source_name_norm,
+    )
+    if doc_rows_all:
+        hits: list[dict] = []
+        for idx, raw_item in enumerate(doc_rows, start=1):
+            source_path = str(raw_item.get("source_path") or "").strip()
+            if not source_path:
+                continue
+            ui_meta = _build_doc_list_hit_ui_meta(
+                raw_item=raw_item,
+                idx=idx,
+                prompt=prompt,
+                allow_expensive_llm=bool(allow_expensive_llm),
+                allow_exact_locate=bool(allow_exact_locate),
+            )
+            ui_meta = _normalize_ref_copy_ui_meta(ui_meta)
+            ui_meta = _apply_doc_list_topic_match_hints(
+                prompt=prompt,
+                raw_item=raw_item,
+                ui_meta=ui_meta,
+            )
+            hits.append(
+                {
+                    "text": str(ui_meta.get("summary_line") or ui_meta.get("why_line") or source_path).strip(),
+                    "meta": {
+                        "source_path": source_path,
+                        "ref_pack_state": "ready",
+                        "ref_best_heading_path": str(ui_meta.get("heading_path") or "").strip(),
+                    },
+                    "ui_meta": ui_meta,
+                }
+            )
+        if apply_copy_polish and hits:
+            polished_hits: list[dict] = []
+            for hit in hits:
+                ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+                if not isinstance(ui_meta, dict):
+                    polished_hits.append(hit)
+                    continue
+                hit2 = dict(hit)
+                hit2["ui_meta"] = _normalize_ref_copy_ui_meta(
+                    _maybe_polish_single_ref_hit_card(
+                        prompt=prompt,
+                        hit=hit,
+                        ui_meta=ui_meta,
+                        allow_expensive_llm=bool(allow_expensive_llm),
+                    )
+                )
+                hit2["ui_meta"] = _apply_doc_list_topic_match_hints(
+                    prompt=prompt,
+                    raw_item=doc_rows[len(polished_hits)],
+                    ui_meta=hit2.get("ui_meta") if isinstance(hit2.get("ui_meta"), dict) else {},
+                )
+                polished_hits.append(hit2)
+            hits = polished_hits
+        pack_out = dict(pack_src)
+        pack_out["user_msg_id"] = int(user_msg_id) if str(user_msg_id).isdigit() else user_msg_id
+        pack_out["hits"] = hits
+        pipeline_debug = dict(pack_out.get("pipeline_debug") or {}) if isinstance(pack_out.get("pipeline_debug"), dict) else {}
+        pipeline_debug["doc_list_authoritative"] = True
+        pipeline_debug["guide_active"] = bool(guide_active)
+        pipeline_debug["final_hit_count"] = int(len(hits))
+        pipeline_debug["raw_hit_count"] = int(len(hits))
+        pipeline_debug["post_score_gate_hit_count"] = int(len(hits))
+        pipeline_debug["post_focus_filter_hit_count"] = int(len(hits))
+        pipeline_debug["post_llm_filter_hit_count"] = int(len(hits))
+        pipeline_debug["filtered_self_hit_count"] = int(filtered_self_doc_count)
+        pipeline_debug["prompt_likely_cross_paper_refs"] = bool(prompt_cross_paper_refs)
+        pack_out["pipeline_debug"] = pipeline_debug
+        if guide_active:
+            hidden_self_source = bool(filtered_self_doc_count > 0)
+            if (not hidden_self_source) and prompt_cross_paper_refs:
+                hidden_self_source = True
+            pack_out["guide_filter"] = {
+                "active": True,
+                "hidden_self_source": hidden_self_source,
+                "filtered_hit_count": int(filtered_self_doc_count),
+                "guide_source_path": guide_source_path_norm,
+                "guide_source_name": guide_source_name_norm or _source_filename(guide_source_path_norm),
+            }
+        pack_out["payload_mode"] = "full"
+        return _attach_pack_display_contract(pack_out)
+    prefer_zh = bool(_prefer_zh_ref_card_locale(prompt))
+    hits: list[dict] = []
+    for idx, raw_item in enumerate(list(doc_list or []), start=1):
+        if not isinstance(raw_item, dict):
+            continue
+        source_path = str(raw_item.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        source_name = str(raw_item.get("source_name") or "").strip() or _source_filename(source_path) or f"Reference {idx}"
+        heading_path = str(raw_item.get("heading_path") or "").strip()
+        primary_evidence = _normalize_primary_ref_evidence_payload(
+            raw_item.get("primary_evidence") if isinstance(raw_item.get("primary_evidence"), dict) else {}
+        )
+        summary_line = _compact_reader_open_text(
+            str(
+                raw_item.get("summary_line")
+                or primary_evidence.get("highlight_snippet")
+                or primary_evidence.get("snippet")
+                or ""
+            ).strip()
+        )
+        why_line = _doc_list_ref_why_line(
+            prompt=prompt,
+            heading_path=heading_path or str(primary_evidence.get("heading_path") or "").strip(),
+            prefer_zh=prefer_zh,
+        )
+        reader_open = {
+            "sourcePath": source_path,
+            "sourceName": source_name,
+            "headingPath": heading_path or str(primary_evidence.get("heading_path") or "").strip() or None,
+            "snippet": summary_line or None,
+            "highlightSnippet": summary_line or None,
+            "strictLocate": bool(primary_evidence.get("strict_locate")),
+            "blockId": str(primary_evidence.get("block_id") or "").strip() or None,
+            "anchorId": str(primary_evidence.get("anchor_id") or "").strip() or None,
+        }
+        if primary_evidence:
+            reader_open["primaryEvidence"] = dict(primary_evidence)
+        score = max(6.6, round(9.6 - (idx - 1) * 0.18, 2))
+        ui_meta = {
+            "display_name": source_name,
+            "heading_path": heading_path,
+            "score": score,
+            "score_pending": False,
+            "score_tier": _score_tier(score),
+            "summary_line": summary_line,
+            "summary_kind": "guide",
+            "summary_label": "导读" if prefer_zh else "Guide",
+            "summary_title": "命中章节讲什么 / 提供什么" if prefer_zh else "What This Matched Section Covers",
+            "summary_generation": "doc_list_contract",
+            "summary_basis": "基于共享多篇文献列表 contract 的展示摘要" if prefer_zh else "Display summary sourced from the shared multi-paper document list contract",
+            "why_line": why_line,
+            "why_generation": "doc_list_contract",
+            "why_basis": "基于共享多篇文献列表 contract 的保留理由" if prefer_zh else "Retention reason sourced from the shared multi-paper document list contract",
+            "semantic_badges": [],
+            "can_open": True,
+            "citation_meta": {},
+            "source_path": source_path,
+            "reader_open": {k: v for k, v in reader_open.items() if v not in (None, "", [], {})},
+        }
+        if primary_evidence:
+            ui_meta["primary_evidence"] = dict(primary_evidence)
+            if not str(ui_meta.get("heading_path") or "").strip():
+                ui_meta["heading_path"] = str(primary_evidence.get("heading_path") or "").strip()
+        hits.append(
+            {
+                "text": summary_line or why_line,
+                "meta": {
+                    "source_path": source_path,
+                    "ref_pack_state": "ready",
+                    "ref_best_heading_path": str(ui_meta.get("heading_path") or "").strip(),
+                },
+                "ui_meta": ui_meta,
+            }
+        )
+
+    pack_out = dict(pack_src)
+    pack_out["user_msg_id"] = int(user_msg_id) if str(user_msg_id).isdigit() else user_msg_id
+    pack_out["hits"] = hits
+    pipeline_debug = dict(pack_out.get("pipeline_debug") or {}) if isinstance(pack_out.get("pipeline_debug"), dict) else {}
+    pipeline_debug["doc_list_authoritative"] = True
+    pipeline_debug["guide_active"] = bool(guide_active)
+    pipeline_debug["final_hit_count"] = int(len(hits))
+    if "raw_hit_count" not in pipeline_debug:
+        pipeline_debug["raw_hit_count"] = int(len(hits))
+    if "post_score_gate_hit_count" not in pipeline_debug:
+        pipeline_debug["post_score_gate_hit_count"] = int(len(hits))
+    if "post_focus_filter_hit_count" not in pipeline_debug:
+        pipeline_debug["post_focus_filter_hit_count"] = int(len(hits))
+    if "post_llm_filter_hit_count" not in pipeline_debug:
+        pipeline_debug["post_llm_filter_hit_count"] = int(len(hits))
+    if "filtered_self_hit_count" not in pipeline_debug:
+        pipeline_debug["filtered_self_hit_count"] = 0
+    pipeline_debug["prompt_likely_cross_paper_refs"] = bool(prompt_cross_paper_refs)
+    pack_out["pipeline_debug"] = pipeline_debug
+    if guide_active:
+        hidden_self_source = bool(prompt_cross_paper_refs)
+        pack_out["guide_filter"] = {
+            "active": True,
+            "hidden_self_source": hidden_self_source,
+            "filtered_hit_count": 0,
+            "guide_source_path": guide_source_path_norm,
+            "guide_source_name": guide_source_name_norm or _source_filename(guide_source_path_norm),
+        }
+    pack_out["payload_mode"] = "full"
+    return _attach_pack_display_contract(pack_out)
+
+
 def _resolve_ref_ui_heading_context(
     *,
     prompt: str,
@@ -3064,6 +4494,22 @@ def _resolve_ref_ui_heading_context(
     }
 
 
+def _should_allow_ref_summary_block_rescue(
+    *,
+    prompt: str,
+    source_path: str,
+    ref_pack_state: str,
+    allow_exact_locate: bool,
+) -> bool:
+    if not str(source_path or "").strip():
+        return False
+    if allow_exact_locate:
+        return True
+    if str(ref_pack_state or "").strip().lower() != "pending":
+        return False
+    return bool(_prompt_requires_explicit_focus_match(prompt))
+
+
 def _select_primary_ref_evidence(
     *,
     meta: dict,
@@ -3075,6 +4521,7 @@ def _select_primary_ref_evidence(
     anchor_target_kind: str,
     anchor_target_number: int,
     allow_exact_locate: bool,
+    allow_summary_block_rescue: bool = False,
     allow_llm_translate: bool = True,
 ) -> dict[str, object]:
     heading_path = str((heading_context or {}).get("heading_path") or "").strip()
@@ -3097,7 +4544,7 @@ def _select_primary_ref_evidence(
     summary_source = "navigation" if used_nav_summary else ("fallback" if summary_line else "")
     selected_heading_path = heading_path
 
-    prompt_aligned_candidate = _choose_prompt_aligned_ref_summary_candidate(
+    meta_prompt_aligned_candidate = _choose_prompt_aligned_ref_summary_candidate(
         meta,
         prompt=prompt,
         source_path=source_path,
@@ -3106,6 +4553,38 @@ def _select_primary_ref_evidence(
         anchor_target_number=anchor_target_number,
         allow_llm_translate=allow_llm_translate,
     )
+    block_prompt_aligned_candidate: dict = {}
+    if allow_summary_block_rescue and source_path:
+        needs_block_rescue = bool(
+            (not meta_prompt_aligned_candidate)
+            or (not summary_line)
+            or (
+                summary_source == "fallback"
+                and _looks_focus_prefixed_ref_summary(prompt, summary_line)
+            )
+            or _summary_line_needs_polish(
+                prompt=prompt,
+                title=display_name,
+                summary_line=summary_line,
+            )
+        )
+        if needs_block_rescue:
+            block_prompt_aligned_candidate = _choose_prompt_aligned_ref_summary_candidate_from_source_blocks(
+                prompt=prompt,
+                source_path=source_path,
+                title=str((citation_meta or {}).get("title") or (meta or {}).get("title") or "").strip(),
+                anchor_target_kind=anchor_target_kind,
+                anchor_target_number=anchor_target_number,
+                allow_llm_translate=allow_llm_translate,
+            )
+    prompt_aligned_candidate = _pick_best_prompt_aligned_ref_summary_candidate(
+        [meta_prompt_aligned_candidate, block_prompt_aligned_candidate],
+        prompt=prompt,
+        source_path=source_path,
+        title=str((citation_meta or {}).get("title") or (meta or {}).get("title") or "").strip(),
+        anchor_target_kind=anchor_target_kind,
+        anchor_target_number=anchor_target_number,
+    )
     prompt_aligned_summary = str((prompt_aligned_candidate or {}).get("summary") or "").strip()
     if prompt_aligned_summary:
         candidate_heading_path = _sanitize_heading_path_ui(
@@ -3113,7 +4592,7 @@ def _select_primary_ref_evidence(
             prompt=prompt,
             source_path=source_path,
         )
-        if (not candidate_heading_path) and allow_exact_locate:
+        if (not candidate_heading_path) and allow_summary_block_rescue:
             candidate_heading_path = _infer_heading_path_for_summary_from_source_blocks(
                 prompt=prompt,
                 source_path=source_path,
@@ -3167,7 +4646,11 @@ def _select_primary_ref_evidence(
         ):
             summary_line = prompt_aligned_summary
             used_prompt_aligned_summary = True
-            summary_source = "prompt_aligned"
+            summary_source = (
+                "prompt_aligned_block"
+                if str((prompt_aligned_candidate or {}).get("source_kind") or "").strip().lower() == "source_block"
+                else "prompt_aligned"
+            )
             should_rebind_prompt_aligned_heading = bool(
                 candidate_heading_path
                 and candidate_heading_path != heading_path
@@ -3214,6 +4697,7 @@ def build_hit_ui_meta(
 ) -> dict:
     meta = (hit or {}).get("meta", {}) or {}
     source_path = str(meta.get("source_path") or "").strip()
+    ref_pack_state = str(meta.get("ref_pack_state") or "").strip().lower()
     heading_context = _resolve_ref_ui_heading_context(
         prompt=prompt,
         source_path=source_path,
@@ -3268,6 +4752,12 @@ def build_hit_ui_meta(
         anchor_target_kind=anchor_target_kind,
         anchor_target_number=anchor_target_number,
         allow_exact_locate=allow_exact_locate,
+        allow_summary_block_rescue=_should_allow_ref_summary_block_rescue(
+            prompt=prompt,
+            source_path=source_path,
+            ref_pack_state=ref_pack_state,
+            allow_exact_locate=allow_exact_locate,
+        ),
         allow_llm_translate=bool(allow_expensive_llm),
     )
     nav = dict(primary_evidence.get("nav") or {}) if isinstance(primary_evidence.get("nav"), dict) else {}
@@ -3433,6 +4923,11 @@ _PROMPT_FOCUS_STOPWORDS = {
     "mentioned", "mention", "other", "besides", "find", "show", "explain",
 }
 
+_PROMPT_FOCUS_GENERIC_MODIFIERS = {
+    "dynamic", "compressive", "physics", "physical", "single", "high", "low",
+    "based", "guided", "driven", "general", "specific", "direct", "directly",
+}
+
 _PROMPT_FOCUS_PHRASE_PATTERNS = (
     re.compile(
         r"\bwhere\s+(?:in\s+the\s+[^?.!,]{1,80}\s+)?is\s+(.+?)\s+(?:discussed|mentioned|defined|introduced)\b",
@@ -3508,7 +5003,7 @@ def _extract_prompt_focus_phrases(prompt: str) -> tuple[str, ...]:
             continue
         raw = str(m.group(1) or "")
         _push(raw)
-        if re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", text, flags=re.IGNORECASE):
+        if _prompt_requests_compare(text):
             for part in re.split(r"\b(?:and|vs\.?|versus)\b", raw, flags=re.IGNORECASE):
                 _push(part)
     return tuple(out[:4])
@@ -3530,26 +5025,82 @@ def _prune_redundant_focus_terms(terms: list[str]) -> tuple[str, ...]:
     return tuple(out[:8])
 
 
+def _surface_has_focus_token_sequence(surface_tokens: list[str], term_tokens: list[str]) -> bool:
+    if (not surface_tokens) or (not term_tokens) or (len(term_tokens) > len(surface_tokens)):
+        return False
+    width = len(term_tokens)
+    for idx in range(len(surface_tokens) - width + 1):
+        if surface_tokens[idx : idx + width] == term_tokens:
+            return True
+    return False
+
+
+def _focus_term_adjacent_bigram_hits(surface: str, term_tokens: list[str]) -> int:
+    if (not surface) or len(term_tokens) < 2:
+        return 0
+    hits = 0
+    for idx in range(len(term_tokens) - 1):
+        phrase = f"{term_tokens[idx]} {term_tokens[idx + 1]}".strip()
+        if phrase and re.search(rf"\b{re.escape(phrase)}\b", surface, flags=re.I):
+            hits += 1
+    return hits
+
+
+def _focus_term_single_distinctive_token_fallback(term_tokens: list[str], surface_tokens: set[str]) -> bool:
+    if len(term_tokens) != 2 or (not surface_tokens):
+        return False
+    overlap = [tok for tok in term_tokens if tok in surface_tokens]
+    if len(overlap) != 1:
+        return False
+    matched = overlap[0]
+    unmatched = term_tokens[0] if matched == term_tokens[1] else term_tokens[1]
+    if len(matched) < 10:
+        return False
+    if matched in _PROMPT_FOCUS_GENERIC_MODIFIERS:
+        return False
+    return unmatched in _PROMPT_FOCUS_GENERIC_MODIFIERS
+
+
 def _focus_term_matches_surface(term: str, surface_text: str) -> bool:
     norm_term = _normalize_title_identity(term)
     surface = _normalize_title_identity(surface_text)
     if not norm_term or not surface:
         return False
-    if norm_term in surface:
+    if re.search(rf"\b{re.escape(norm_term)}\b", surface, flags=re.I):
         return True
     term_tokens = [
         tok for tok in norm_term.split()
         if tok and tok not in _PROMPT_FOCUS_STOPWORDS and len(tok) >= 4
     ]
-    if len(term_tokens) < 2:
+    if not term_tokens:
         return False
-    surface_tokens = set(surface.split())
-    overlap = [tok for tok in term_tokens if tok in surface_tokens]
-    if len(overlap) >= 2 and max((len(tok) for tok in overlap), default=0) >= 8:
+    surface_tokens = [tok for tok in surface.split() if tok]
+    if not surface_tokens:
+        return False
+    surface_token_set = set(surface_tokens)
+    if len(term_tokens) == 1:
+        return bool(term_tokens[0] in surface_token_set)
+    if len(term_tokens) == 2:
+        if _surface_has_focus_token_sequence(surface_tokens, term_tokens):
+            return True
+        return _focus_term_single_distinctive_token_fallback(term_tokens, surface_token_set)
+    if not all(tok in surface_token_set for tok in term_tokens):
+        return False
+    if _surface_has_focus_token_sequence(surface_tokens, term_tokens):
         return True
-    if len(term_tokens) == 2 and len(overlap) == 1 and len(overlap[0]) >= 8:
-        return True
-    return False
+    return _focus_term_adjacent_bigram_hits(surface, term_tokens) > 0
+
+
+def _refs_exact_focus_match_count(prompt: str, surface_text: str) -> int:
+    surface = _normalize_title_identity(surface_text)
+    if not surface:
+        return 0
+    count = 0
+    for term in _refs_prompt_focus_terms(prompt):
+        norm_term = _normalize_title_identity(term)
+        if norm_term and re.search(rf"\b{re.escape(norm_term)}\b", surface, flags=re.I):
+            count += 1
+    return count
 
 
 @lru_cache(maxsize=512)
@@ -3559,12 +5110,28 @@ def _refs_prompt_focus_terms(prompt: str) -> tuple[str, ...]:
         return ()
     out: list[str] = []
     seen: set[str] = set()
-    for quoted in re.findall(r"[\"“”'‘’]([^\"“”'‘’]{2,80})[\"“”'‘’]", text):
-        norm = _normalize_title_identity(quoted)
-        if norm and norm not in seen:
-            seen.add(norm)
-            out.append(norm)
-    for token in re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{1,40}\b", text):
+
+    def _push(raw: str) -> None:
+        cleaned = _clean_refs_focus_phrase(raw)
+        if not cleaned:
+            return
+        norm = _normalize_title_identity(cleaned)
+        if len(norm) < 3 or norm in seen:
+            return
+        seen.add(norm)
+        out.append(norm)
+
+    prompt_targets_sci = bool(_shared_prompt_targets_sci_topic(text))
+    if prompt_targets_sci:
+        _push("Snapshot Compressive Imaging")
+        _push("SCI")
+    topic = _shared_extract_multi_paper_topic(text)
+    if topic and (not prompt_targets_sci):
+        _push(topic)
+
+    for quoted in re.findall(r"[\"']([^\"']{2,80})[\"']", text):
+        _push(quoted)
+    for token in re.findall(r"(?<![A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]{1,40}(?![A-Za-z0-9_-])", text):
         raw = str(token or "").strip()
         low = raw.lower()
         if low in _PROMPT_FOCUS_STOPWORDS:
@@ -3572,16 +5139,9 @@ def _refs_prompt_focus_terms(prompt: str) -> tuple[str, ...]:
         has_case_signal = any(ch.isupper() for ch in raw[1:]) or raw.isupper() or any(ch.isdigit() for ch in raw) or ("-" in raw)
         if not has_case_signal:
             continue
-        norm = _normalize_title_identity(raw)
-        if len(norm) < 3 or norm in seen:
-            continue
-        seen.add(norm)
-        out.append(norm)
+        _push(raw)
     for phrase in _extract_prompt_focus_phrases(text):
-        if phrase in seen:
-            continue
-        seen.add(phrase)
-        out.append(phrase)
+        _push(phrase)
     return _prune_redundant_focus_terms(out)
 
 
@@ -3638,7 +5198,10 @@ def _refs_raw_hit_focus_match_count(prompt: str, hit: dict) -> int:
     surface = _refs_raw_hit_surface_text(hit)
     if not surface:
         return 0
-    return sum(1 for term in focus_terms if _focus_term_matches_surface(term, surface))
+    count = sum(1 for term in focus_terms if _focus_term_matches_surface(term, surface))
+    if count <= 0 and _shared_prompt_targets_sci_topic(prompt) and _surface_is_sci_related_predecessor(surface):
+        return 1
+    return count
 
 
 def _refs_raw_hit_non_source_focus_match_count(prompt: str, hit: dict) -> int:
@@ -3656,6 +5219,8 @@ def _refs_raw_hit_non_source_focus_match_count(prompt: str, hit: dict) -> int:
         if any(term == ident or term in ident or ident in term for ident in identity_terms):
             continue
         count += 1
+    if count <= 0 and _shared_prompt_targets_sci_topic(prompt) and _surface_is_sci_related_predecessor(surface):
+        return 1
     return count
 
 
@@ -3665,8 +5230,35 @@ def _filter_pending_refs_hits_by_prompt_focus(prompt: str, hits: list[dict]) -> 
         return rows
     rows = [hit for hit in rows if not _refs_hit_focus_terms_only_negated(prompt, hit)]
     focus_terms = _refs_prompt_focus_terms(prompt)
+    focus_action = _shared_prompt_reference_focus_action(prompt)
     if not focus_terms:
         return rows
+    if focus_action == "compare":
+        scored_compare_hits = sorted(
+            (
+                (_refs_compare_prompt_hit_score(prompt, hit, raw=True), hit)
+                for hit in rows
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        compare_hits = [hit for score, hit in scored_compare_hits if score >= _MIN_COMPARE_DIRECT_HIT_SCORE]
+        if len(compare_hits) >= 2:
+            top_score = float(scored_compare_hits[0][0])
+            second_score = float(scored_compare_hits[1][0])
+            if top_score >= (second_score + 1.0):
+                return [compare_hits[0]]
+        return compare_hits
+    if _prompt_requests_single_paper_pick(prompt) and focus_action != "compare":
+        scored_direct_hits = sorted(
+            (
+                (_refs_single_paper_pick_hit_score(prompt, hit, raw=True), hit)
+                for hit in rows
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        return [hit for score, hit in scored_direct_hits if score >= _MIN_PENDING_SINGLE_PAPER_DIRECT_HIT_SCORE]
     if len(focus_terms) > 1:
         return [hit for hit in rows if _refs_raw_hit_non_source_focus_match_count(prompt, hit) > 0]
     return [hit for hit in rows if _refs_raw_hit_focus_match_count(prompt, hit) > 0]
@@ -3713,6 +5305,19 @@ def _refs_hit_identity_terms(hit: dict) -> set[str]:
     return {item for item in identities if item}
 
 
+def _surface_is_sci_related_predecessor(surface_text: str) -> bool:
+    surface = _normalize_title_identity(surface_text)
+    if not surface:
+        return False
+    return bool(
+        "single shot compressive spectral imaging" in surface
+        or (
+            "single shot spectral imaging" in surface
+            and "compressive sensing" in surface
+        )
+    )
+
+
 def _refs_hit_focus_match_count(prompt: str, hit: dict) -> int:
     focus_terms = _refs_prompt_focus_terms(prompt)
     if not focus_terms:
@@ -3720,7 +5325,10 @@ def _refs_hit_focus_match_count(prompt: str, hit: dict) -> int:
     surface = _refs_hit_surface_text(hit)
     if not surface:
         return 0
-    return sum(1 for term in focus_terms if _focus_term_matches_surface(term, surface))
+    count = sum(1 for term in focus_terms if _focus_term_matches_surface(term, surface))
+    if count <= 0 and _shared_prompt_targets_sci_topic(prompt) and _surface_is_sci_related_predecessor(surface):
+        return 1
+    return count
 
 
 def _refs_hit_non_source_focus_match_count(prompt: str, hit: dict) -> int:
@@ -3738,6 +5346,8 @@ def _refs_hit_non_source_focus_match_count(prompt: str, hit: dict) -> int:
         if any(term == ident or term in ident or ident in term for ident in identity_terms):
             continue
         count += 1
+    if count <= 0 and _shared_prompt_targets_sci_topic(prompt) and _surface_is_sci_related_predecessor(surface):
+        return 1
     return count
 
 
@@ -3785,13 +5395,177 @@ def _refs_hit_focus_terms_only_negated(prompt: str, hit: dict) -> bool:
     return all(_focus_term_only_negated_in_surface(term, evidence_surface) for term in matched_terms)
 
 
-def _refs_compare_prompt_hit_score(prompt: str, hit: dict) -> float:
-    surface = _refs_hit_surface_text(hit)
+def _prompt_requests_single_paper_pick(prompt: str) -> bool:
+    return _shared_prompt_explicitly_requests_single_paper_pick(prompt)
+
+
+def _prompt_requests_compare(prompt: str) -> bool:
+    return _shared_prompt_requests_reference_compare(prompt)
+
+
+def _prompt_requests_definition(prompt: str) -> bool:
+    return _shared_prompt_requests_reference_definition(prompt)
+
+
+def _refs_hit_directness_surface_text(hit: dict, *, raw: bool) -> str:
+    meta = (hit or {}).get("meta") if isinstance((hit or {}).get("meta"), dict) else {}
+    ref_pack = (meta or {}).get("ref_pack") if isinstance((meta or {}).get("ref_pack"), dict) else {}
+    if raw:
+        parts: list[str] = [
+            str((hit or {}).get("text") or "").strip(),
+            str((meta or {}).get("ref_best_heading_path") or "").strip(),
+            str((meta or {}).get("ref_section") or "").strip(),
+            str((meta or {}).get("ref_subsection") or "").strip(),
+            str((ref_pack or {}).get("what") or "").strip(),
+            str((ref_pack or {}).get("why") or "").strip(),
+        ]
+        for key in ("ref_show_snippets", "ref_snippets", "ref_overview_snippets"):
+            raw_items = (meta or {}).get(key)
+            if not isinstance(raw_items, list):
+                continue
+            parts.extend(str(item or "").strip() for item in raw_items[:2] if str(item or "").strip())
+        return " ".join(part for part in parts if part)
+
+    ui_meta = (hit or {}).get("ui_meta") if isinstance((hit or {}).get("ui_meta"), dict) else {}
+    parts = [
+        str((hit or {}).get("text") or "").strip(),
+        str((ui_meta or {}).get("heading_path") or "").strip(),
+        str((ui_meta or {}).get("summary_line") or "").strip(),
+        str((ui_meta or {}).get("why_line") or "").strip(),
+        str((meta or {}).get("ref_best_heading_path") or "").strip(),
+        str((meta or {}).get("ref_section") or "").strip(),
+        str((ref_pack or {}).get("what") or "").strip(),
+        str((ref_pack or {}).get("why") or "").strip(),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _refs_hit_directness_heading_path(hit: dict, *, raw: bool) -> str:
+    meta = (hit or {}).get("meta") if isinstance((hit or {}).get("meta"), dict) else {}
+    if raw:
+        return str(
+            (meta or {}).get("ref_best_heading_path")
+            or (meta or {}).get("heading_path")
+            or (meta or {}).get("ref_section")
+            or ""
+        ).strip()
+    ui_meta = (hit or {}).get("ui_meta") if isinstance((hit or {}).get("ui_meta"), dict) else {}
+    return str(
+        (ui_meta or {}).get("heading_path")
+        or (meta or {}).get("ref_best_heading_path")
+        or (meta or {}).get("heading_path")
+        or (meta or {}).get("ref_section")
+        or ""
+    ).strip()
+
+
+def _refs_single_paper_pick_heading_score(heading_path: str) -> float:
+    heading_norm = _normalize_title_identity(str(heading_path or "").strip())
+    if not heading_norm:
+        return 0.0
+    if "abstract" in heading_norm:
+        return 2.2
+    if "introduction" in heading_norm:
+        return 1.8
+    if re.search(r"\b(method|methods|model|pipeline|architecture|framework|algorithm)\b", heading_norm):
+        return 1.0
+    if re.search(r"\b(compare|comparison|analysis|experiment|results?|evaluation)\b", heading_norm):
+        return 0.8
+    if ("related work" in heading_norm) or ("background" in heading_norm) or ("literature review" in heading_norm):
+        return -2.4
+    if ("conclusion" in heading_norm) or ("discussion" in heading_norm) or ("future work" in heading_norm):
+        return -0.8
+    return 0.0
+
+
+def _refs_single_paper_pick_hit_score(prompt: str, hit: dict, *, raw: bool = False) -> float:
+    if not _prompt_requests_single_paper_pick(prompt):
+        return -1000.0
+    surface = _refs_hit_directness_surface_text(hit, raw=raw)
     if not surface:
         return -1000.0
-    title_surface = " ".join(_refs_hit_identity_terms(hit))
+
+    if raw:
+        focus_hits = _refs_raw_hit_non_source_focus_match_count(prompt, hit)
+        identity_surface = " ".join(sorted(_refs_raw_hit_identity_terms(hit)))
+    else:
+        focus_hits = _refs_hit_non_source_focus_match_count(prompt, hit)
+        identity_surface = " ".join(sorted(_refs_hit_identity_terms(hit)))
+    title_focus_hits = _refs_focus_match_count_for_text(prompt, identity_surface)
+    title_keyword_hits = _refs_summary_focus_keyword_hit_count(prompt, identity_surface)
+    surface_keyword_hits = _refs_summary_focus_keyword_hit_count(prompt, surface)
+    if focus_hits <= 0 and title_focus_hits <= 0 and title_keyword_hits <= 0:
+        return -1000.0
+
+    heading_path = _refs_hit_directness_heading_path(hit, raw=raw)
+    heading_score = _refs_single_paper_pick_heading_score(heading_path)
+    heading_keyword_hits = _refs_summary_focus_keyword_hit_count(prompt, heading_path)
+    surface_low = str(surface or "").strip().lower()
     score = 0.0
-    focus_hits = _refs_hit_non_source_focus_match_count(prompt, hit)
+    score += 2.4 * float(focus_hits)
+    score += 2.1 * float(title_focus_hits)
+    score += 1.6 * float(min(2, surface_keyword_hits))
+    if heading_keyword_hits > 0:
+        score += 0.8
+    if title_keyword_hits >= 2:
+        score += 1.2
+    elif title_keyword_hits == 1 and title_focus_hits <= 0:
+        score += 0.6
+    score += heading_score
+    if title_focus_hits > 0 and focus_hits <= 0 and heading_score >= 0.8:
+        score += 1.8
+
+    if _prompt_requests_definition(prompt):
+        if re.search(r"\b(defin(?:e|es|ed|ition)|refers?\s+to|is\s+defined\s+as|introduced?\s+as|means)\b", surface_low):
+            score += 3.0
+        elif surface_keyword_hits > 0 or heading_keyword_hits > 0 or title_keyword_hits > 0:
+            score += 1.4
+        else:
+            score -= 1.8
+    else:
+        if re.search(
+            r"\b(this paper|the paper|this work|the work|we\s+(?:present|propose|introduce|define|describe|analy[sz]e|study|show|demonstrate|develop|use|investigate|explore))\b",
+            surface_low,
+        ):
+            score += 1.4
+        if re.search(r"\b(discuss(?:es|ed)?|explain(?:s|ed)?|describe(?:s|d)?|analy[sz]e(?:s|d)?|introduce(?:s|d)?|define(?:s|d)?)\b", surface_low):
+            score += 0.9
+
+    if re.search(
+        r"\b(mentioned\s+here\s+only|mentioned\s+in\s+passing|generic\s+optimization\s+family|background\s+discussion|"
+        r"related\s+work|prior\s+work|previous\s+work|existing\s+methods?|most\s+of\s+the\s+existing\s+methods?|"
+        r"many\s+existing\s+methods?|instead\s+of\s+using|widely\s+used|commonly\s+used|citation\s+in\s+related\s+work)\b",
+        surface_low,
+    ):
+        score -= 3.4
+    if _looks_negative_ref_reason_text(surface):
+        score -= 4.4
+    if (
+        focus_hits > 0
+        and title_focus_hits <= 0
+        and title_keyword_hits <= 1
+        and heading_score <= 0.0
+        and not re.search(
+            r"\b(defin(?:e|es|ed|ition)|discuss(?:es|ed)?|explain(?:s|ed)?|describe(?:s|d)?|analy[sz]e(?:s|d)?|introduce(?:s|d)?|compare(?:s|d)?)\b",
+            surface_low,
+        )
+    ):
+        score -= 0.6
+    return score
+
+
+def _refs_compare_prompt_hit_score(prompt: str, hit: dict, *, raw: bool = False) -> float:
+    if raw:
+        surface = _refs_hit_directness_surface_text(hit, raw=True)
+        title_surface = " ".join(sorted(_refs_raw_hit_identity_terms(hit)))
+        focus_hits = _refs_raw_hit_non_source_focus_match_count(prompt, hit)
+    else:
+        surface = _refs_hit_surface_text(hit)
+        title_surface = " ".join(sorted(_refs_hit_identity_terms(hit)))
+        focus_hits = _refs_hit_non_source_focus_match_count(prompt, hit)
+    if not surface:
+        return -1000.0
+    score = 0.0
     score += 2.2 * float(focus_hits)
     if re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", surface, flags=re.I):
         score += 2.0
@@ -3813,35 +5587,9 @@ def _refs_compare_prompt_hit_score(prompt: str, hit: dict) -> float:
 
 
 def _prompt_requires_explicit_focus_match(prompt: str) -> bool:
-    text = str(prompt or "").strip().lower()
-    if not text:
+    if not _shared_prompt_requires_reference_focus_match(prompt):
         return False
-    focus_terms = _refs_prompt_focus_terms(prompt)
-    if not focus_terms:
-        return False
-    patterns = (
-        "where is",
-        "where was",
-        "where are",
-        "discuss",
-        "mention",
-        "define",
-        "defined",
-        "compare",
-        "comparison",
-        "versus",
-        "point me",
-        "which paper",
-        "which papers",
-        "what other papers",
-        "besides this paper",
-        "哪篇",
-        "哪些论文",
-        "提到",
-        "哪里",
-        "定位",
-    )
-    return any(pat in text for pat in patterns)
+    return bool(_refs_prompt_focus_terms(prompt))
 
 
 def _looks_negative_ref_reason_text(text: str) -> bool:
@@ -3912,25 +5660,45 @@ def _filter_refs_hits_by_prompt_focus(prompt: str, hits: list[dict]) -> list[dic
     rows = [hit for hit in rows if not _should_suppress_negative_ref_hit(prompt, hit)]
     rows = [hit for hit in rows if not _refs_hit_focus_terms_only_negated(prompt, hit)]
     focus_terms = _refs_prompt_focus_terms(prompt)
-    prompt_low = str(prompt or "").strip().lower()
-    if re.search(r"\b(compare|compares|compared|comparison|versus|vs\.?)\b", prompt_low):
+    if _prompt_requests_compare(prompt):
+        def _ready_compare_display_score(hit: dict) -> float:
+            ready_score = _refs_compare_prompt_hit_score(prompt, hit)
+            raw_score = _refs_compare_prompt_hit_score(prompt, hit, raw=True)
+            if raw_score <= -999.0:
+                return ready_score
+            return min(ready_score, raw_score)
+
         scored_compare_hits = sorted(
             (
-                (_refs_compare_prompt_hit_score(prompt, hit), hit)
+                (_ready_compare_display_score(hit), hit)
                 for hit in rows
             ),
             key=lambda item: item[0],
             reverse=True,
         )
-        compare_hits = [hit for score, hit in scored_compare_hits if score >= 4.0]
+        compare_hits = [hit for score, hit in scored_compare_hits if score >= _MIN_COMPARE_DIRECT_HIT_SCORE]
         if len(compare_hits) >= 2:
             top_score = float(scored_compare_hits[0][0])
             second_score = float(scored_compare_hits[1][0])
             if top_score >= (second_score + 1.0):
                 return [compare_hits[0]]
-        if compare_hits:
-            return compare_hits
+        return compare_hits
+    if _prompt_requests_single_paper_pick(prompt):
+        scored_direct_hits = sorted(
+            (
+                (_refs_single_paper_pick_hit_score(prompt, hit), hit)
+                for hit in rows
+            ),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        return [hit for score, hit in scored_direct_hits if score >= _MIN_SINGLE_PAPER_DIRECT_HIT_SCORE]
     matched_non_source = [hit for hit in rows if _refs_hit_non_source_focus_match_count(prompt, hit) > 0]
+    if _prompt_explicitly_requests_multi_paper_list(prompt):
+        if matched_non_source:
+            return matched_non_source
+        matched = [hit for hit in rows if _refs_hit_focus_match_count(prompt, hit) > 0]
+        return matched if matched else rows
     if len(focus_terms) > 1:
         return matched_non_source if matched_non_source else []
     matched = [hit for hit in rows if _refs_hit_focus_match_count(prompt, hit) > 0]
@@ -3953,6 +5721,10 @@ def _sort_refs_hits_for_display(*, prompt: str, hits: list[dict]) -> list[dict]:
     return [item[6] for item in decorated]
 
 
+def _prompt_explicitly_requests_multi_paper_list(prompt: str) -> bool:
+    return _shared_prompt_explicitly_requests_multi_paper_list(prompt)
+
+
 def _prompt_likely_cross_paper_refs(prompt: str) -> bool:
     low = str(prompt or "").strip().lower()
     if not low:
@@ -3966,12 +5738,14 @@ def _prompt_likely_cross_paper_refs(prompt: str) -> bool:
         "in my library",
         "related papers",
         "references in my library",
-        "哪篇",
-        "哪些论文",
-        "还有哪些",
-        "库里",
-        "别的论文",
-        "其他论文",
+        "\u54ea\u7bc7",
+        "\u54ea\u4e9b\u8bba\u6587",
+        "\u8fd8\u6709\u54ea\u4e9b",
+        "\u5e93\u91cc",
+        "\u522b\u7684\u8bba\u6587",
+        "\u5176\u4ed6\u8bba\u6587",
+        "\u6709\u54ea\u51e0\u7bc7",
+        "\u6709\u54ea\u4e9b",
     )
     return any(token in low for token in needles)
 
@@ -4006,6 +5780,8 @@ def _should_try_refs_hit_relevance_gate(prompt: str, hits: list[dict], *, guide_
     if not rows:
         return False
     if not (_prompt_requires_explicit_focus_match(prompt) or _prompt_likely_cross_paper_refs(prompt)):
+        return False
+    if _prompt_explicitly_requests_multi_paper_list(prompt) and len(rows) > 1:
         return False
     if guide_mode and _prompt_likely_cross_paper_refs(prompt):
         return True
@@ -4423,6 +6199,7 @@ def enrich_refs_payload(
         prompt = str(pack.get("prompt") or "").strip()
         prompt_requires_focus_match = bool(_prompt_requires_explicit_focus_match(prompt))
         prompt_cross_paper_refs = bool(_prompt_likely_cross_paper_refs(prompt))
+        prompt_multi_paper_list = bool(_prompt_explicitly_requests_multi_paper_list(prompt))
         raw_hits = []
         scored_ready: list[float] = []
         filtered_self_hits = 0
@@ -4455,6 +6232,9 @@ def enrich_refs_payload(
         for hit2 in raw_hits:
             score, score_pending = _effective_ui_score(hit2)
             force_keep = _should_force_keep_ref_hit(hit2)
+            if prompt_multi_paper_list:
+                hits.append(hit2)
+                continue
             if has_pending:
                 hits.append(hit2)
                 continue
@@ -4510,20 +6290,20 @@ def enrich_refs_payload(
         post_focus_filter_hit_count = int(len(hits))
         if len(hits) > 1:
             hits = _sort_refs_hits_for_display(prompt=prompt, hits=hits)
-            if (not has_pending) and allow_expensive_llm_for_ready:
+            if (not has_pending) and allow_expensive_llm_for_ready and (not prompt_multi_paper_list):
                 hits = _maybe_llm_rerank_refs_hits(
                     prompt=prompt,
                     hits=hits,
                     guide_mode=guide_active,
                 )
-        if hits and (not has_pending) and allow_expensive_llm_for_ready:
+        if hits and (not has_pending) and allow_expensive_llm_for_ready and (not prompt_multi_paper_list):
             hits = _maybe_llm_filter_refs_hits(
                 prompt=prompt,
                 hits=hits,
                 guide_mode=guide_active,
             )
         post_llm_filter_hit_count = int(len(hits))
-        if hits and (not has_pending) and allow_expensive_llm_for_ready:
+        if hits and (not has_pending) and allow_expensive_llm_for_ready and (not prompt_multi_paper_list):
             hits = _maybe_polish_refs_card_copy(
                 prompt=prompt,
                 hits=hits,
@@ -4542,6 +6322,7 @@ def enrich_refs_payload(
             "filtered_self_hit_count": int(filtered_self_hits),
             "prompt_requires_explicit_focus_match": bool(prompt_requires_focus_match),
             "prompt_likely_cross_paper_refs": bool(prompt_cross_paper_refs),
+            "prompt_explicitly_requests_multi_paper_list": bool(prompt_multi_paper_list),
         }
         if guide_active:
             hidden_self_source = bool(filtered_self_hits > 0)
@@ -4556,7 +6337,7 @@ def enrich_refs_payload(
                 "guide_source_path": guide_source_path_norm,
                 "guide_source_name": guide_source_name_norm or _source_filename(guide_source_path_norm),
             }
-        out[int(user_msg_id)] = _attach_pack_primary_ref_evidence(pack2)
+        out[int(user_msg_id)] = _attach_pack_display_contract(pack2)
     return out
 
 

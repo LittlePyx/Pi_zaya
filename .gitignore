@@ -25,6 +25,7 @@ kb_chat.db
 # Local logs / temp outputs
 .codex_logs/
 .logs/
+/logs/
 .tmp*
 backups/
 ssp_speed*.log
@@ -34,6 +35,9 @@ tmp/
 tmp*/
 tmp-*
 tmp_*
+/report.md
+/summary.json
+/reconvert_all_*/
 test_output_*/
 web/test-results/
 workspace.code-workspace

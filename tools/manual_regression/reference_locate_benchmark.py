@@ -218,6 +218,42 @@ def _wait_for_refs_pack(
     return last_pack
 
 
+def _observe_refs_pack_lifecycle(
+    *,
+    base_url: str,
+    conv_id: str,
+    user_msg_id: int,
+    timeout_s: float,
+) -> dict[str, Any]:
+    t0 = time.time()
+    last_pack: dict[str, Any] = {}
+    last_stable_pack: dict[str, Any] = {}
+    first_stable_pack: dict[str, Any] = {}
+    stable_since = time.time()
+    last_sig = ""
+    while (time.time() - t0) <= timeout_s:
+        refs_by_user = _get_json(base_url, f"/api/references/conversation/{conv_id}", timeout_s=min(10.0, timeout_s))
+        pack = _select_refs_pack(refs_by_user, user_msg_id)
+        sig = json.dumps(pack, ensure_ascii=False, sort_keys=True)
+        if sig != last_sig:
+            last_sig = sig
+            stable_since = time.time()
+        last_pack = pack
+        if pack and (not _pack_has_pending_hits(pack)) and (time.time() - stable_since) >= 0.8:
+            stable_pack = dict(pack)
+            if not first_stable_pack:
+                first_stable_pack = stable_pack
+            last_stable_pack = stable_pack
+            if _render_status_identity(stable_pack) == "full":
+                break
+        time.sleep(0.6)
+    final_pack = last_stable_pack or last_pack
+    return {
+        "first_stable_pack": first_stable_pack or final_pack,
+        "final_pack": final_pack,
+    }
+
+
 def _wait_for_refs_pack_client(
     *,
     client: Any,
@@ -241,6 +277,42 @@ def _wait_for_refs_pack_client(
             return pack
         time.sleep(0.6)
     return last_pack
+
+
+def _observe_refs_pack_lifecycle_client(
+    *,
+    client: Any,
+    conv_id: str,
+    user_msg_id: int,
+    timeout_s: float,
+) -> dict[str, Any]:
+    t0 = time.time()
+    last_pack: dict[str, Any] = {}
+    last_stable_pack: dict[str, Any] = {}
+    first_stable_pack: dict[str, Any] = {}
+    stable_since = time.time()
+    last_sig = ""
+    while (time.time() - t0) <= timeout_s:
+        refs_by_user = _get_json_client(client, f"/api/references/conversation/{conv_id}")
+        pack = _select_refs_pack(refs_by_user, user_msg_id)
+        sig = json.dumps(pack, ensure_ascii=False, sort_keys=True)
+        if sig != last_sig:
+            last_sig = sig
+            stable_since = time.time()
+        last_pack = pack
+        if pack and (not _pack_has_pending_hits(pack)) and (time.time() - stable_since) >= 0.8:
+            stable_pack = dict(pack)
+            if not first_stable_pack:
+                first_stable_pack = stable_pack
+            last_stable_pack = stable_pack
+            if _render_status_identity(stable_pack) == "full":
+                break
+        time.sleep(0.6)
+    final_pack = last_stable_pack or last_pack
+    return {
+        "first_stable_pack": first_stable_pack or final_pack,
+        "final_pack": final_pack,
+    }
 
 
 def _messages_for_conversation(*, base_url: str, conv_id: str, timeout_s: float) -> list[dict[str, Any]]:
@@ -386,21 +458,134 @@ def _hit_reader_primary_evidence(hit: dict[str, Any]) -> dict[str, Any]:
 def _assistant_primary_evidence(message: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(message, dict):
         return {}
-    packet = _message_render_packet(message)
-    packet_primary = _normalize_evidence_surface(packet.get("primary_evidence") if isinstance(packet.get("primary_evidence"), dict) else {})
-    if packet_primary:
-        return packet_primary
     meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
     contracts = meta.get("paper_guide_contracts") if isinstance(meta.get("paper_guide_contracts"), dict) else {}
     contract_primary = _normalize_evidence_surface(contracts.get("primary_evidence") if isinstance(contracts.get("primary_evidence"), dict) else {})
     if contract_primary:
         return contract_primary
+    packet = _message_render_packet(message)
+    packet_primary = _normalize_evidence_surface(packet.get("primary_evidence") if isinstance(packet.get("primary_evidence"), dict) else {})
+    if packet_primary:
+        return packet_primary
     for cand in (message.get("provenance"), meta.get("provenance")):
         if isinstance(cand, dict):
             prov_primary = _normalize_evidence_surface(cand.get("primary_evidence") if isinstance(cand.get("primary_evidence"), dict) else {})
             if prov_primary:
                 return prov_primary
     return {}
+
+
+def _surface_heading(surface: dict[str, Any] | None) -> str:
+    if not isinstance(surface, dict):
+        return ""
+    return str(surface.get("heading_path") or "").strip()
+
+
+def _top_hit_heading(hit: dict[str, Any] | None) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    ui = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+    return str(ui.get("heading_path") or "").strip()
+
+
+def _metric_summary_heading_consistent(*, top_hit: dict[str, Any], pack_primary: dict[str, Any]) -> dict[str, Any]:
+    ui = top_hit.get("ui_meta") if isinstance(top_hit.get("ui_meta"), dict) else {}
+    summary_line = str(ui.get("summary_line") or "").strip()
+    card_heading = _top_hit_heading(top_hit)
+    summary_primary = _normalize_evidence_surface(
+        ui.get("primary_evidence") if isinstance(ui.get("primary_evidence"), dict) else {}
+    ) or dict(pack_primary or {})
+    primary_heading = _surface_heading(summary_primary)
+    if (not summary_line) or (not card_heading) or (not primary_heading):
+        return {
+            "value": None,
+            "reason": "insufficient_summary_heading_data",
+            "card_heading": card_heading,
+            "primary_heading": primary_heading,
+        }
+    return {
+        "value": card_heading.strip().lower() == primary_heading.strip().lower(),
+        "reason": "",
+        "card_heading": card_heading,
+        "primary_heading": primary_heading,
+    }
+
+
+def _metric_heading_reader_open_consistent(*, top_hit: dict[str, Any], reader_primary: dict[str, Any]) -> dict[str, Any]:
+    ui = top_hit.get("ui_meta") if isinstance(top_hit.get("ui_meta"), dict) else {}
+    reader_open = ui.get("reader_open") if isinstance(ui.get("reader_open"), dict) else {}
+    card_heading = _top_hit_heading(top_hit)
+    reader_heading = str(reader_open.get("headingPath") or "").strip() or _surface_heading(reader_primary)
+    if (not card_heading) or (not reader_heading):
+        return {
+            "value": None,
+            "reason": "insufficient_reader_heading_data",
+            "card_heading": card_heading,
+            "reader_heading": reader_heading,
+        }
+    return {
+        "value": card_heading.strip().lower() == reader_heading.strip().lower(),
+        "reason": "",
+        "card_heading": card_heading,
+        "reader_heading": reader_heading,
+    }
+
+
+def _render_status_identity(pack: dict[str, Any]) -> str:
+    if not isinstance(pack, dict):
+        return ""
+    render_status = str(pack.get("render_status") or "").strip().lower()
+    if render_status:
+        return render_status
+    payload_mode = str(pack.get("payload_mode") or "").strip().lower()
+    if payload_mode:
+        return payload_mode
+    return ""
+
+
+def _metric_fast_to_full_primary_block_same(
+    *,
+    first_pack: dict[str, Any],
+    final_pack: dict[str, Any],
+) -> dict[str, Any]:
+    first_primary = _pack_primary_evidence(first_pack)
+    final_primary = _pack_primary_evidence(final_pack)
+    first_status = _render_status_identity(first_pack)
+    final_status = _render_status_identity(final_pack)
+    first_sig = json.dumps(first_primary, ensure_ascii=False, sort_keys=True)
+    final_sig = json.dumps(final_primary, ensure_ascii=False, sort_keys=True)
+    transition_observed = bool(first_sig and final_sig and (first_sig != final_sig or first_status != final_status))
+    full_observed = final_status == "full"
+    if not first_primary or not final_primary:
+        return {
+            "value": None,
+            "reason": "missing_fast_or_full_primary_evidence",
+            "first_primary": first_primary,
+            "final_primary": final_primary,
+            "first_status": first_status,
+            "final_status": final_status,
+            "transition_observed": transition_observed,
+        }
+    if (not transition_observed) and (not full_observed):
+        return {
+            "value": None,
+            "reason": "full_transition_not_observed",
+            "first_primary": first_primary,
+            "final_primary": final_primary,
+            "first_status": first_status,
+            "final_status": final_status,
+            "transition_observed": transition_observed,
+        }
+    mismatches = _surfaces_align(first_primary, final_primary)
+    return {
+        "value": not mismatches,
+        "reason": "" if not mismatches else f"mismatch:{','.join(mismatches)}",
+        "first_primary": first_primary,
+        "final_primary": final_primary,
+        "first_status": first_status,
+        "final_status": final_status,
+        "transition_observed": transition_observed,
+    }
 
 
 def _source_surface(hit: dict[str, Any]) -> str:
@@ -449,7 +634,14 @@ def _check_contains_any(text: str, needles: list[str]) -> bool:
     return False
 
 
-def _evaluate_case(case: dict[str, Any], *, refs_pack: dict[str, Any], assistant_message: dict[str, Any] | None = None) -> dict[str, Any]:
+def _evaluate_case(
+    case: dict[str, Any],
+    *,
+    refs_pack: dict[str, Any],
+    assistant_message: dict[str, Any] | None = None,
+    first_refs_pack: dict[str, Any] | None = None,
+    final_refs_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     checks = case.get("checks") if isinstance(case.get("checks"), dict) else {}
     hits = [hit for hit in list(refs_pack.get("hits") or []) if isinstance(hit, dict)]
     guide_filter = refs_pack.get("guide_filter") if isinstance(refs_pack.get("guide_filter"), dict) else {}
@@ -620,6 +812,62 @@ def _evaluate_case(case: dict[str, Any], *, refs_pack: dict[str, Any], assistant
         }
         failures.extend(reasons)
 
+    consistency_checks = checks.get("consistency_metrics") if isinstance(checks.get("consistency_metrics"), dict) else {}
+    if consistency_checks:
+        top = _top_hit(refs_pack)
+        pack_primary = _pack_primary_evidence(refs_pack)
+        reader_primary = _hit_reader_primary_evidence(top)
+        summary_heading = _metric_summary_heading_consistent(top_hit=top, pack_primary=pack_primary)
+        heading_reader = _metric_heading_reader_open_consistent(top_hit=top, reader_primary=reader_primary)
+        fast_full = _metric_fast_to_full_primary_block_same(
+            first_pack=dict(first_refs_pack or refs_pack),
+            final_pack=dict(final_refs_pack or refs_pack),
+        )
+        status = "PASS"
+        reasons: list[str] = []
+
+        require_summary_heading = bool(consistency_checks.get("require_summary_heading_consistent"))
+        if require_summary_heading:
+            if summary_heading.get("value") is not True:
+                status = "FAIL"
+                reasons.append(
+                    "summary_heading_consistency_unavailable"
+                    if summary_heading.get("value") is None
+                    else "summary_heading_inconsistent"
+                )
+
+        require_heading_reader = bool(consistency_checks.get("require_heading_reader_open_consistent"))
+        if require_heading_reader:
+            if heading_reader.get("value") is not True:
+                status = "FAIL"
+                reasons.append(
+                    "heading_reader_open_consistency_unavailable"
+                    if heading_reader.get("value") is None
+                    else "heading_reader_open_inconsistent"
+                )
+
+        require_fast_full = bool(consistency_checks.get("require_fast_to_full_primary_block_same"))
+        if require_fast_full:
+            if fast_full.get("value") is not True:
+                status = "FAIL"
+                reasons.append(
+                    "fast_to_full_primary_block_same_unavailable"
+                    if fast_full.get("value") is None
+                    else "fast_to_full_primary_block_drift"
+                )
+
+        gate_results["consistency_metrics"] = {
+            "status": status,
+            "summary_heading_consistent": summary_heading.get("value"),
+            "heading_reader_open_consistent": heading_reader.get("value"),
+            "fast_to_full_primary_block_same": fast_full.get("value"),
+            "summary_heading": summary_heading,
+            "heading_reader_open": heading_reader,
+            "fast_to_full": fast_full,
+            "reasons": reasons,
+        }
+        failures.extend(reasons)
+
     return {
         "status": "PASS" if not failures else "FAIL",
         "gate_results": gate_results,
@@ -652,19 +900,27 @@ def evaluate_suite(*, base_url: str, suite: dict[str, Any], timeout_s: float = 1
         session_id = str(started.get("session_id") or "").strip()
         user_msg_id = int(started.get("user_msg_id") or 0)
         final = _stream_done(base_url, session_id, timeout_s=timeout_s)
-        refs_pack = _wait_for_refs_pack(
+        refs_observation = _observe_refs_pack_lifecycle(
             base_url=base_url,
             conv_id=conv_id,
             user_msg_id=user_msg_id,
             timeout_s=min(timeout_s, DEFAULT_REFS_WAIT_TIMEOUT_CAP_S),
         )
+        refs_pack = dict(refs_observation.get("final_pack") or {})
+        first_refs_pack = dict(refs_observation.get("first_stable_pack") or refs_pack)
         messages = _messages_for_conversation(
             base_url=base_url,
             conv_id=conv_id,
             timeout_s=timeout_s,
         )
         assistant_message = _assistant_message(messages)
-        evaluated = _evaluate_case(case, refs_pack=refs_pack, assistant_message=assistant_message)
+        evaluated = _evaluate_case(
+            case,
+            refs_pack=refs_pack,
+            assistant_message=assistant_message,
+            first_refs_pack=first_refs_pack,
+            final_refs_pack=refs_pack,
+        )
         results.append(
             {
                 "id": str(case.get("id") or ""),
@@ -673,6 +929,7 @@ def evaluate_suite(*, base_url: str, suite: dict[str, Any], timeout_s: float = 1
                 "prompt": str(case.get("prompt") or ""),
                 "status": evaluated["status"],
                 "answer_preview": str(final.get("answer") or "")[:240],
+                "refs_first_pack": first_refs_pack,
                 "refs_pack": refs_pack,
                 "assistant_message_id": int(assistant_message.get("id") or 0) if isinstance(assistant_message, dict) else 0,
                 "gate_results": evaluated["gate_results"],
@@ -729,15 +986,23 @@ def evaluate_suite_inprocess(*, suite: dict[str, Any], timeout_s: float = 120.0)
                     session_id = str(started.get("session_id") or "").strip()
                     user_msg_id = int(started.get("user_msg_id") or 0)
                     final = _stream_done_client(client, session_id, timeout_s=timeout_s)
-                    refs_pack = _wait_for_refs_pack_client(
+                    refs_observation = _observe_refs_pack_lifecycle_client(
                         client=client,
                         conv_id=conv_id,
                         user_msg_id=user_msg_id,
                         timeout_s=min(timeout_s, DEFAULT_REFS_WAIT_TIMEOUT_CAP_S),
                     )
+                    refs_pack = dict(refs_observation.get("final_pack") or {})
+                    first_refs_pack = dict(refs_observation.get("first_stable_pack") or refs_pack)
                     messages = _messages_for_conversation_client(client=client, conv_id=conv_id)
                     assistant_message = _assistant_message(messages)
-                    evaluated = _evaluate_case(case, refs_pack=refs_pack, assistant_message=assistant_message)
+                    evaluated = _evaluate_case(
+                        case,
+                        refs_pack=refs_pack,
+                        assistant_message=assistant_message,
+                        first_refs_pack=first_refs_pack,
+                        final_refs_pack=refs_pack,
+                    )
                     results.append(
                         {
                             "id": str(case.get("id") or ""),
@@ -746,6 +1011,7 @@ def evaluate_suite_inprocess(*, suite: dict[str, Any], timeout_s: float = 120.0)
                             "prompt": str(case.get("prompt") or ""),
                             "status": evaluated["status"],
                             "answer_preview": str(final.get("answer") or "")[:240],
+                            "refs_first_pack": first_refs_pack,
                             "refs_pack": refs_pack,
                             "assistant_message_id": int(assistant_message.get("id") or 0) if isinstance(assistant_message, dict) else 0,
                             "gate_results": evaluated["gate_results"],

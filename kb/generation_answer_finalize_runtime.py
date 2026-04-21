@@ -23,6 +23,13 @@ from kb.paper_guide_postprocess import (
     _sanitize_structured_cite_tokens,
     _strip_model_ref_section,
 )
+from kb.reference_query_family import (
+    extract_multi_paper_topic as _shared_extract_multi_paper_topic,
+    prompt_explicitly_requests_multi_paper_list,
+    prompt_prefers_zh,
+    prompt_requires_reference_focus_match as _shared_prompt_requires_reference_focus_match,
+    prompt_targets_sci_topic as _shared_prompt_targets_sci_topic,
+)
 from kb.source_blocks import normalize_inline_markdown
 from ui.chat_widgets import _normalize_math_markdown
 
@@ -44,6 +51,14 @@ _SID_RE = re.compile(r"^[A-Za-z0-9_-]{4,24}$")
 _INLINE_REF_NUM_RE = re.compile(r"\[(\d{1,4})\]")
 _FREEFORM_NUMERIC_CITE_RE = re.compile(
     r"(?<![!\\])\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\](?!\()"
+)
+_DOC_HEADING_LINE_RE = re.compile(r"(?im)^\s*DOC-\d{1,3}(?:-S\d{1,3})?\s*[:：]\s*$")
+_DOC_TITLE_LINE_RE = re.compile(r"(?im)^\s*(?:title|标题)\s*[:：]\s*(.+?)\s*$")
+_DOC_DIAGNOSTIC_LINE_RE = re.compile(
+    r"(?im)^\s*(?:note|注意|说明)\s*[:：]?\s*DOC-\d{1,3}(?:-S\d{1,3})?[^\n]*$"
+)
+_DOC_RESULT_PREAMBLE_RE = re.compile(
+    r"(?im)^\s*(?:based on the retrieved results|according to the retrieved results|根据提供的检索结果|根据检索结果)[^:：\n]*[:：]?\s*$"
 )
 _PAPER_GUIDE_NEGATIVE_SHELL_RE = re.compile(
     r"(?i)\b(?:not stated|does not state|do not state|does not specify|do not specify|"
@@ -196,6 +211,1073 @@ def _strip_final_answer_citation_markers(answer: str, *, preserve_numeric_marker
     out = re.sub(r"[ \t]+\n", "\n", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
+
+
+def _sanitize_internal_doc_label_blocks(answer: str) -> str:
+    text = str(answer or "").strip()
+    if not text or ("DOC-" not in text.upper()):
+        return text
+
+    lines = [str(line or "").rstrip() for line in text.splitlines()]
+    out: list[str] = []
+    idx = 0
+    converted = False
+
+    def _push_block(value: str) -> None:
+        block = str(value or "").strip()
+        if block:
+            out.append(block)
+
+    while idx < len(lines):
+        line = lines[idx].strip()
+        if _DOC_RESULT_PREAMBLE_RE.match(line):
+            idx += 1
+            continue
+        if _DOC_DIAGNOSTIC_LINE_RE.match(line):
+            converted = True
+            idx += 1
+            continue
+        if not _DOC_HEADING_LINE_RE.match(line):
+            _push_block(lines[idx])
+            idx += 1
+            continue
+
+        converted = True
+        idx += 1
+        title = ""
+        body_lines: list[str] = []
+        while idx < len(lines):
+            current = lines[idx].strip()
+            if _DOC_HEADING_LINE_RE.match(current):
+                break
+            if _DOC_DIAGNOSTIC_LINE_RE.match(current):
+                idx += 1
+                continue
+            title_match = _DOC_TITLE_LINE_RE.match(current)
+            if title_match and not title:
+                title = str(title_match.group(1) or "").strip()
+                idx += 1
+                continue
+            if current:
+                body_lines.append(current)
+            idx += 1
+
+        body = re.sub(r"\s+", " ", " ".join(body_lines)).strip()
+        if title and body:
+            _push_block(f"- {title}: {body}")
+        elif title:
+            _push_block(f"- {title}")
+        elif body:
+            _push_block(f"- {body}")
+
+    if not converted:
+        return text
+
+    out_text = "\n\n".join(part for part in out if str(part or "").strip())
+    out_text = re.sub(r"\n{3,}", "\n\n", out_text).strip()
+    return out_text or text
+
+
+def _source_name_from_path_like(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    name = Path(raw).name
+    for suffix in (".en.md", ".zh.md", ".md"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)] + ".pdf"
+    return name
+
+
+def _normalize_topic_identity(text: str) -> str:
+    raw = str(text or "").strip().lower()
+    if not raw:
+        return ""
+    raw = raw.replace(".en.md", " ").replace(".md", " ").replace(".pdf", " ")
+    raw = re.sub(r"[_/\\]+", " ", raw)
+    raw = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", raw)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _single_line_summary(text: str, *, source_name: str = "", max_chars: int = 180) -> str:
+    cleaned = _normalize_math_markdown(normalize_inline_markdown(str(text or "").strip()))
+    cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
+    cleaned = re.sub(r"(?im)^\s*(?:abstract|introduction|related work|conclusion|conclusions)\s*[:.-]?\s*", "", cleaned)
+    cleaned = re.sub(r"(?im)^\s*(?:\d+(?:\.\d+)*|[ivxlcdm]+)\s*[.)-]?\s*(?:abstract|introduction|related work|conclusion|conclusions)\s*[:.-]?\s*", "", cleaned)
+    cleaned = re.sub(r"\$[^$\n]{1,60}\$", " ", cleaned)
+    cleaned = cleaned.replace("\\sim", "~").replace("\\mum", "um").replace("\\mu", "u")
+    cleaned = re.sub(r"\\[A-Za-z]+", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -\n\t")
+    source_display = str(source_name or "").strip()
+    source_stem = re.sub(r"(?i)\.pdf$", "", source_display).strip()
+    if source_stem:
+        cleaned = re.sub(rf"^\s*{re.escape(source_stem)}\s*", "", cleaned, flags=re.I).strip()
+    cleaned = re.sub(r"^[A-Z][A-Za-z.\-\s,]{24,220}(?=\bAbstract\b)", "", cleaned).strip()
+    cleaned = re.sub(r"^(?:figure|table)\s+\d+\s*[:.-]?\s*", "", cleaned, flags=re.I)
+    cleaned = re.sub(r"^(?:abstract)\s*[:.-]?\s*", "", cleaned, flags=re.I)
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_chars:
+        return cleaned
+    trimmed = cleaned[: max_chars - 1].rstrip()
+    if " " in trimmed:
+        trimmed = trimmed.rsplit(" ", 1)[0].rstrip()
+    return trimmed + "…"
+
+
+
+def _sanitize_multi_paper_doc_list_entry_for_scoring(*, prompt: str, raw_item: dict) -> dict:
+    entry = {k: v for k, v in dict(raw_item or {}).items() if v not in ("", None, [], {})}
+    summary = str(entry.get("summary_line") or "").strip()
+    if _looks_generic_multi_paper_support_text(summary, prompt=prompt):
+        entry.pop("summary_line", None)
+    primary = dict(entry.get("primary_evidence") or {}) if isinstance(entry.get("primary_evidence"), dict) else {}
+    primary_snippet_was_generic = False
+    if primary:
+        snippet = str(primary.get("highlight_snippet") or primary.get("snippet") or "").strip()
+        if _looks_generic_multi_paper_support_text(snippet, prompt=prompt):
+            primary_snippet_was_generic = True
+            primary.pop("snippet", None)
+            primary.pop("highlight_snippet", None)
+        if primary:
+            entry["primary_evidence"] = primary
+        else:
+            entry.pop("primary_evidence", None)
+    summary = str(entry.get("summary_line") or "").strip()
+    topic = _extract_multi_paper_topic(prompt)
+    topic_norm = _normalize_topic_identity(topic)
+    summary_norm = _normalize_topic_identity(summary)
+    if summary and topic_norm and summary_norm and _surface_has_token_sequence(summary_norm, topic_norm.split()):
+        support_surface = _multi_paper_entry_surface(
+            source_name=str(entry.get("source_name") or "").strip(),
+            heading_path=str(entry.get("heading_path") or "").strip(),
+            summary_line="",
+            primary_evidence=entry.get("primary_evidence") if isinstance(entry.get("primary_evidence"), dict) else {},
+        )
+        support_surface_norm = _normalize_topic_identity(support_surface)
+        support_has_topic = _multi_paper_segment_matches(
+            segment=topic_norm,
+            surface_norm=support_surface_norm,
+            surface_tokens=support_surface_norm.split(),
+            raw_low=str(support_surface or "").lower(),
+        )
+        if primary_snippet_was_generic and (not support_has_topic):
+            entry.pop("summary_line", None)
+    return entry
+
+
+def _multi_paper_topic_segments(topic: str) -> list[str]:
+    norm = _normalize_topic_identity(topic)
+    if not norm:
+        return []
+    pieces = re.split(
+        r"\b(?:for|via|using|through|with|without|about|regarding|based on|based)\b",
+        norm,
+        flags=re.I,
+    )
+    out: list[str] = []
+    for piece in pieces:
+        seg = re.sub(r"\s+", " ", str(piece or "").strip())
+        if seg:
+            out.append(seg)
+    return out
+
+
+def _surface_has_token_sequence(surface_norm: str, token_seq: list[str]) -> bool:
+    tokens = [str(tok or "").strip() for tok in list(token_seq or []) if str(tok or "").strip()]
+    if not surface_norm or not tokens:
+        return False
+    phrase = " ".join(tokens).strip()
+    if not phrase:
+        return False
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", surface_norm, flags=re.I))
+
+
+def _is_informative_multi_paper_focus_token(token: str) -> bool:
+    low = str(token or "").strip().lower()
+    if not low:
+        return False
+    generic_tokens = {
+        "single",
+        "pixel",
+        "imaging",
+        "image",
+        "images",
+        "paper",
+        "papers",
+        "library",
+        "libraries",
+    }
+    return low not in generic_tokens
+
+
+def _multi_paper_segment_matches(
+    *,
+    segment: str,
+    surface_norm: str,
+    surface_tokens: list[str],
+    raw_low: str,
+) -> bool:
+    seg_norm = _normalize_topic_identity(segment)
+    if not seg_norm:
+        return False
+    seg_tokens = [tok for tok in seg_norm.split() if tok and len(tok) >= 4]
+    if not seg_tokens:
+        return False
+    surface_token_set = set(surface_tokens)
+    if len(seg_tokens) == 1:
+        token = str(seg_tokens[0] or "")
+        return bool(token in surface_token_set) and (not _multi_paper_focus_term_only_negated(token, raw_low))
+    if _surface_has_token_sequence(surface_norm, seg_tokens):
+        return not _multi_paper_focus_term_only_negated(" ".join(seg_tokens), raw_low)
+    non_negated_tokens = [
+        tok for tok in seg_tokens
+        if (tok in surface_token_set) and (not _multi_paper_focus_term_only_negated(tok, raw_low))
+    ]
+    for width in range(min(3, len(seg_tokens)), 1, -1):
+        for idx in range(0, len(seg_tokens) - width + 1):
+            phrase_tokens = seg_tokens[idx : idx + width]
+            if not any(_is_informative_multi_paper_focus_token(tok) for tok in phrase_tokens):
+                continue
+            if _surface_has_token_sequence(surface_norm, phrase_tokens):
+                return True
+    if len(seg_tokens) == 2:
+        return len(non_negated_tokens) >= 2
+    return len(non_negated_tokens) >= len(seg_tokens)
+
+
+def _multi_paper_focus_match(
+    *,
+    prompt: str,
+    source_name: str,
+    heading_path: str,
+    summary_line: str,
+    primary_evidence: dict | None,
+) -> bool:
+    topic = _extract_multi_paper_topic(prompt)
+    if not topic:
+        return False
+    surface = _multi_paper_entry_surface(
+        source_name=source_name,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        primary_evidence=primary_evidence,
+    )
+    surface_norm = _normalize_topic_identity(surface)
+    if not surface_norm:
+        return False
+    raw_low = str(surface or "").lower()
+    surface_tokens = [tok for tok in surface_norm.split() if tok]
+    segments = _multi_paper_topic_segments(topic)
+    if not segments:
+        return False
+    for segment in segments:
+        if not _multi_paper_segment_matches(
+            segment=segment,
+            surface_norm=surface_norm,
+            surface_tokens=surface_tokens,
+            raw_low=raw_low,
+        ):
+            return False
+    return True
+
+
+
+def _multi_paper_entry_surface(
+    *,
+    source_name: str,
+    heading_path: str,
+    summary_line: str,
+    primary_evidence: dict | None,
+) -> str:
+    primary = dict(primary_evidence or {}) if isinstance(primary_evidence, dict) else {}
+    parts = [
+        str(source_name or "").strip(),
+        str(heading_path or "").strip(),
+        str(summary_line or "").strip(),
+        str(primary.get("snippet") or "").strip(),
+        str(primary.get("highlight_snippet") or "").strip(),
+        str(primary.get("selection_reason") or "").strip(),
+    ]
+    return " ".join(part for part in parts if part)
+
+
+def _multi_paper_topic_score(
+    *,
+    prompt: str,
+    source_name: str,
+    heading_path: str,
+    summary_line: str,
+    primary_evidence: dict | None,
+) -> float:
+    surface = _multi_paper_entry_surface(
+        source_name=source_name,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        primary_evidence=primary_evidence,
+    )
+    surface_norm = _normalize_topic_identity(surface)
+    raw_low = str(surface or "").lower()
+    if not surface_norm:
+        return 0.0
+
+    score = 0.0
+    topic = _extract_multi_paper_topic(prompt)
+    focus_matched = _multi_paper_focus_match(
+        prompt=prompt,
+        source_name=source_name,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        primary_evidence=primary_evidence,
+    )
+    prompt_requires_focus = _multi_paper_prompt_requires_explicit_focus_match(prompt)
+    generic_topic_stop = {
+        "which", "papers", "paper", "other", "library", "libraries",
+        "mention", "mentions", "mentioned", "discuss", "discusses", "discussed",
+        "image", "images", "imaging", "technique", "techniques",
+        "single", "pixel",
+    }
+    topic_tokens = [
+        tok for tok in _normalize_topic_identity(topic).split()
+        if tok and len(tok) >= 4 and tok not in generic_topic_stop
+    ]
+    if topic_tokens:
+        surface_token_set = set(surface_norm.split())
+        overlap_tokens = [tok for tok in topic_tokens if tok in surface_token_set]
+        overlap = len(overlap_tokens)
+        non_negated_overlap = [
+            tok for tok in overlap_tokens
+            if not _multi_paper_focus_term_only_negated(tok, raw_low)
+        ]
+        overlap = len(non_negated_overlap)
+        if overlap >= 2:
+            score += 1.2 * float(overlap)
+        elif overlap == 1:
+            token = str(non_negated_overlap[0] or "")
+            min_len = 4 if len(topic_tokens) <= 1 else 6
+            if len(token) >= min_len:
+                score += 1.4 if len(topic_tokens) <= 1 else 1.2
+    if focus_matched:
+        score += 2.6
+    elif prompt_requires_focus and topic and (not _prompt_targets_sci_topic(prompt)):
+        return 0.0
+
+    if _prompt_targets_sci_topic(prompt):
+        sci_positive_norm = (
+            "snapshot compressive imaging",
+            "snapshot compressive image",
+            "single shot compressive spectral imaging",
+        )
+        sci_positive_raw = (
+            "scinerf",
+            "scigs",
+            "snapshot compressive imaging",
+            "snapshot compressive image",
+            "single-shot compressive spectral imaging",
+            "single shot compressive spectral imaging",
+        )
+        if re.search(r"\bsci\b", raw_low):
+            score += 3.5
+        if any(alias in surface_norm for alias in sci_positive_norm):
+            score += 3.5
+        if any(alias in raw_low for alias in sci_positive_raw):
+            score += 2.5
+        if ("single pixel imaging" in surface_norm) and (score <= 0.0):
+            score -= 2.5
+        if ("single pixel compressive holography" in surface_norm) and (score <= 0.0):
+            score -= 3.0
+        if ("compressive sensing" in surface_norm) and (score <= 0.0):
+            score -= 1.2
+    return score
+
+
+def _classify_multi_paper_topic_match(
+    *,
+    prompt: str,
+    source_name: str,
+    heading_path: str,
+    summary_line: str,
+    primary_evidence: dict | None,
+) -> str:
+    surface = _multi_paper_entry_surface(
+        source_name=source_name,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        primary_evidence=primary_evidence,
+    )
+    surface_norm = _normalize_topic_identity(surface)
+    raw_low = str(surface or "").lower()
+    if not surface_norm:
+        return ""
+    topic_score = _multi_paper_topic_score(
+        prompt=prompt,
+        source_name=source_name,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        primary_evidence=primary_evidence,
+    )
+    if _prompt_targets_sci_topic(prompt):
+        if re.search(r"\bsci\b", raw_low) or ("snapshot compressive imaging" in raw_low):
+            return "explicit_sci_mention"
+        if (
+            ("single-shot compressive spectral imaging" in raw_low)
+            or ("single shot compressive spectral imaging" in raw_low)
+        ):
+            return "sci_related_predecessor"
+    return "topic_aligned" if topic_score > 0.0 else ""
+
+
+def _multi_paper_topic_match_rank(match_kind: str) -> int:
+    kind = str(match_kind or "").strip().lower()
+    if kind == "explicit_sci_mention":
+        return 2
+    if kind == "sci_related_predecessor":
+        return 1
+    if kind:
+        return 1
+    return 0
+
+
+def _multi_paper_topic_match_note(*, prompt: str, match_kind: str) -> str:
+    kind = str(match_kind or "").strip().lower()
+    if not kind:
+        return ""
+    prefer_zh = bool(prompt_prefers_zh(prompt))
+    if kind == "explicit_sci_mention":
+        if prefer_zh:
+            return "\u6587\u4e2d\u660e\u786e\u63d0\u5230 Snapshot Compressive Imaging (SCI)\u3002"
+        return "The paper explicitly mentions Snapshot Compressive Imaging (SCI)."
+    if kind == "sci_related_predecessor":
+        if prefer_zh:
+            return "\u8fd9\u7bc7\u66f4\u9002\u5408\u89c6\u4e3a\u4e0e SCI \u76f8\u5173\u7684\u65e9\u671f\u524d\u8eab\u5de5\u4f5c\uff1a\u8ba8\u8bba\u7684\u662f single-shot compressive spectral imaging\uff0c\u4e0e SCI \u6982\u5ff5\u76f8\u5173\uff0c\u4f46\u4e0d\u662f\u4e25\u683c\u7684 SCI \u672f\u8bed\u547d\u4e2d\u3002"
+        return "This is better treated as an early related predecessor: it discusses single-shot compressive spectral imaging, which is SCI-adjacent rather than an exact SCI term match."
+    return ""
+
+
+def _filter_multi_paper_doc_list_contract(*, prompt: str, doc_list: list[dict] | None) -> list[dict]:
+    rows: list[dict] = []
+    for idx, raw_item in enumerate(list(doc_list or [])):
+        if not isinstance(raw_item, dict):
+            continue
+        entry = _sanitize_multi_paper_doc_list_entry_for_scoring(
+            prompt=prompt,
+            raw_item=raw_item,
+        )
+        entry["_topic_score"] = _multi_paper_topic_score(
+            prompt=prompt,
+            source_name=str(entry.get("source_name") or "").strip(),
+            heading_path=str(entry.get("heading_path") or "").strip(),
+            summary_line=str(entry.get("summary_line") or "").strip(),
+            primary_evidence=entry.get("primary_evidence") if isinstance(entry.get("primary_evidence"), dict) else {},
+        )
+        entry["topic_match_kind"] = _classify_multi_paper_topic_match(
+            prompt=prompt,
+            source_name=str(entry.get("source_name") or "").strip(),
+            heading_path=str(entry.get("heading_path") or "").strip(),
+            summary_line=str(entry.get("summary_line") or "").strip(),
+            primary_evidence=entry.get("primary_evidence") if isinstance(entry.get("primary_evidence"), dict) else {},
+        )
+        entry["_topic_match_rank"] = _multi_paper_topic_match_rank(str(entry.get("topic_match_kind") or ""))
+        entry["_order"] = idx
+        rows.append(entry)
+
+    positive_rows = [row for row in rows if float(row.get("_topic_score") or 0.0) > 0.0]
+    if positive_rows:
+        rows = positive_rows
+    elif _multi_paper_prompt_requires_explicit_focus_match(prompt):
+        return []
+
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("_topic_match_rank") or 0),
+            -float(item.get("_topic_score") or 0.0),
+            int(item.get("_order") or 0),
+        )
+    )
+    return [
+        {k: v for k, v in row.items() if not str(k).startswith("_")}
+        for row in rows
+    ]
+
+
+def _doc_list_entry_matches_bound_source(
+    entry: dict,
+    *,
+    bound_source_path: str,
+    bound_source_name: str,
+) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    target_tokens = {
+        token
+        for token in (
+            _normalize_topic_identity(bound_source_path),
+            _normalize_topic_identity(bound_source_name),
+            _normalize_topic_identity(_source_name_from_path_like(bound_source_path)),
+        )
+        if token
+    }
+    if not target_tokens:
+        return False
+    candidate_tokens = {
+        token
+        for token in (
+            _normalize_topic_identity(str(entry.get("source_path") or "")),
+            _normalize_topic_identity(str(entry.get("source_name") or "")),
+            _normalize_topic_identity(_source_name_from_path_like(str(entry.get("source_path") or ""))),
+        )
+        if token
+    }
+    if not candidate_tokens:
+        return False
+    if candidate_tokens.intersection(target_tokens):
+        return True
+    for left in candidate_tokens:
+        for right in target_tokens:
+            if (len(left) >= 20 and left in right) or (len(right) >= 20 and right in left):
+                return True
+    return False
+
+
+def _exclude_bound_source_from_multi_paper_doc_list_contract(
+    *,
+    doc_list: list[dict] | None,
+    bound_source_path: str,
+    bound_source_name: str,
+) -> list[dict]:
+    rows = [dict(item) for item in list(doc_list or []) if isinstance(item, dict)]
+    if not rows:
+        return []
+    out: list[dict] = []
+    for item in rows:
+        if _doc_list_entry_matches_bound_source(
+            item,
+            bound_source_path=bound_source_path,
+            bound_source_name=bound_source_name,
+        ):
+            continue
+        out.append(item)
+    return out
+
+
+def _multi_paper_primary_precision_score(primary_evidence: dict | None) -> tuple[int, int, int, int, int, int]:
+    primary = dict(primary_evidence or {}) if isinstance(primary_evidence, dict) else {}
+    if not primary:
+        return (0, 0, 0, 0, 0, 0)
+    reason = str(primary.get("selection_reason") or primary.get("selectionReason") or "").strip().lower()
+    reason_rank = {
+        "prompt_aligned_block": 8,
+        "prompt_aligned": 7,
+        "reader_open": 5,
+        "strict_locate": 5,
+        "provenance_segment": 5,
+        "shared_refs_pack": 5,
+        "pending_section_seed": 2,
+        "shared_contract_seed": 1,
+        "answer_hit_top": 0,
+    }.get(reason, 3 if reason else 0)
+    strict_locate = primary.get("strict_locate")
+    if strict_locate is None:
+        strict_locate = primary.get("strictLocate")
+    return (
+        1 if bool(strict_locate) else 0,
+        1 if str(primary.get("block_id") or primary.get("blockId") or "").strip() else 0,
+        1 if str(primary.get("anchor_id") or primary.get("anchorId") or "").strip() else 0,
+        1 if str(primary.get("heading_path") or primary.get("headingPath") or "").strip() else 0,
+        1
+        if str(primary.get("highlight_snippet") or primary.get("snippet") or "").strip()
+        else 0,
+        reason_rank,
+    )
+
+
+def _multi_paper_primary_is_weak(primary_evidence: dict | None) -> bool:
+    primary = dict(primary_evidence or {}) if isinstance(primary_evidence, dict) else {}
+    if not primary:
+        return True
+    strict_locate = primary.get("strict_locate")
+    if strict_locate is None:
+        strict_locate = primary.get("strictLocate")
+    if bool(strict_locate):
+        return False
+    if str(primary.get("block_id") or primary.get("blockId") or "").strip():
+        return False
+    if str(primary.get("anchor_id") or primary.get("anchorId") or "").strip():
+        return False
+    reason = str(primary.get("selection_reason") or primary.get("selectionReason") or "").strip().lower()
+    return reason in {"", "answer_hit_top", "pending_section_seed"}
+
+
+def _looks_like_multi_paper_section_heading(heading: str) -> bool:
+    text = re.sub(r"\s+", " ", str(heading or "").strip())
+    if not text:
+        return False
+    low = text.lower()
+    if re.match(r"^(?:\d+(?:\.\d+)*|[ivxlcdm]+)\s*[.)-]?\s+[a-z]", low, flags=re.I):
+        return True
+    return bool(
+        re.match(
+            r"(?i)^(?:abstract|introduction|related work|background|preliminar(?:y|ies)|"
+            r"method(?:s)?|approach|framework|experiments?|results?|discussion|"
+            r"conclusion(?:s)?|applications?|appendix|supplementary)\b",
+            text,
+        )
+    )
+
+
+def _extract_multi_paper_surface_seed(raw_text: str) -> tuple[str, str]:
+    raw = str(raw_text or "").strip()
+    if not raw:
+        return "", ""
+
+    abstract_match = re.search(
+        r"(?is)(?:^|\n)\s*\*\*Abstract\*\*\s*[:：]\s*(.+?)(?=(?:\n\s*#{1,6}\s+\S)|\Z)",
+        raw,
+    )
+    if abstract_match:
+        return "Abstract", str(abstract_match.group(1) or "").strip()
+
+    heading_matches = list(re.finditer(r"(?m)^\s{0,3}#{1,6}\s*([^\n#]{1,140})\s*$", raw))
+    for idx, match in enumerate(heading_matches):
+        heading = re.sub(r"\s+", " ", str(match.group(1) or "").strip())
+        if not _looks_like_multi_paper_section_heading(heading):
+            continue
+        next_match = heading_matches[idx + 1] if (idx + 1) < len(heading_matches) else None
+        excerpt = raw[match.end() : (next_match.start() if next_match else len(raw))].strip()
+        return heading, excerpt
+    return "", raw
+
+
+def _normalize_multi_paper_surface_seed(
+    *,
+    source_name: str,
+    heading_path: str,
+    raw_text: str,
+) -> tuple[str, str]:
+    normalized_heading = str(heading_path or "").strip()
+    inferred_heading, excerpt_text = _extract_multi_paper_surface_seed(raw_text)
+    if inferred_heading:
+        normalized_heading = inferred_heading
+    normalized_summary = _single_line_summary(
+        str(excerpt_text or raw_text or "").strip(),
+        source_name=source_name,
+    )
+    return normalized_heading, normalized_summary
+
+
+def _normalize_multi_paper_contract_primary_evidence(
+    *,
+    source_path: str,
+    source_name: str,
+    heading_path: str,
+    raw_text: str,
+    primary_evidence: dict | None,
+    selection_reason: str,
+) -> dict:
+    primary = dict(primary_evidence or {}) if isinstance(primary_evidence, dict) else {}
+    weak_primary = _multi_paper_primary_is_weak(primary)
+    normalized_heading, normalized_summary = _normalize_multi_paper_surface_seed(
+        source_name=source_name,
+        heading_path=heading_path,
+        raw_text=raw_text,
+    )
+    out = {
+        key: value
+        for key, value in primary.items()
+        if value not in ("", None, [], {})
+    }
+    if source_path and (not str(out.get("source_path") or "").strip()):
+        out["source_path"] = source_path
+    if source_name and (not str(out.get("source_name") or "").strip()):
+        out["source_name"] = source_name
+    if normalized_heading and (weak_primary or (not str(out.get("heading_path") or "").strip())):
+        out["heading_path"] = normalized_heading
+    if normalized_summary and (
+        weak_primary
+        or (
+            not str(out.get("highlight_snippet") or out.get("snippet") or "").strip()
+        )
+    ):
+        out["snippet"] = normalized_summary
+        out["highlight_snippet"] = normalized_summary
+    if selection_reason and (not str(out.get("selection_reason") or "").strip()):
+        out["selection_reason"] = str(selection_reason or "").strip()
+    return {
+        key: value
+        for key, value in out.items()
+        if value not in ("", None, [], {})
+    }
+
+
+def _pick_multi_paper_card_raw_summary(
+    *,
+    prompt: str,
+    card: dict,
+    primary_evidence: dict | None,
+) -> str:
+    primary = dict(primary_evidence or {}) if isinstance(primary_evidence, dict) else {}
+    primary_summary = str(primary.get("highlight_snippet") or primary.get("snippet") or "").strip()
+    if primary_summary and (not _looks_generic_multi_paper_support_text(primary_summary, prompt=prompt)):
+        return primary_summary
+
+    card_summary = str(card.get("snippet") or "").strip()
+    deepread_candidates = [
+        str(item or "").strip()
+        for item in list(card.get("deepread_texts") or [])
+        if str(item or "").strip()
+    ]
+    deepread_summary = str(deepread_candidates[0] or "").strip() if deepread_candidates else ""
+
+    if card_summary and (not _looks_generic_multi_paper_support_text(card_summary, prompt=prompt)):
+        return card_summary
+    if deepread_summary and (not _looks_generic_multi_paper_support_text(deepread_summary, prompt=prompt)):
+        return deepread_summary
+    return primary_summary or card_summary or deepread_summary
+
+
+def _build_multi_paper_doc_list_contract(
+    *,
+    prompt: str,
+    seed_docs: list[dict] | None = None,
+    answer_hits: list[dict] | None,
+    evidence_cards: list[dict] | None,
+) -> list[dict]:
+    entries: list[dict] = []
+    entry_by_source: dict[str, dict] = {}
+
+    def _merge_entry(
+        *,
+        source_path: str,
+        source_name: str,
+        heading_path: str,
+        summary: str,
+        primary_evidence: dict | None,
+        rank: int,
+    ) -> None:
+        src = str(source_path or "").strip()
+        if not src:
+            return
+        entry = entry_by_source.get(src)
+        if entry is None:
+            entry = {
+                "source_path": src,
+                "source_name": str(source_name or "").strip() or _source_name_from_path_like(src),
+                "heading_path": "",
+                "summary_line": "",
+                "_source_rank": int(rank),
+            }
+            entry_by_source[src] = entry
+            entries.append(entry)
+        else:
+            entry["_source_rank"] = min(int(entry.get("_source_rank") or rank), int(rank))
+
+        source_name_norm = str(source_name or "").strip() or _source_name_from_path_like(src)
+        if source_name_norm and (not str(entry.get("source_name") or "").strip()):
+            entry["source_name"] = source_name_norm
+
+        current_primary_score = _multi_paper_primary_precision_score(
+            entry.get("primary_evidence") if isinstance(entry.get("primary_evidence"), dict) else {}
+        )
+        incoming_primary_score = _multi_paper_primary_precision_score(primary_evidence)
+
+        new_heading = str(heading_path or "").strip()
+        cur_heading = str(entry.get("heading_path") or "").strip()
+        if new_heading and (
+            (not cur_heading)
+            or (
+                int(rank) >= 2
+                and (
+                    current_primary_score <= (0, 0, 0, 0, 0, 0)
+                    or incoming_primary_score >= current_primary_score
+                )
+            )
+        ):
+            entry["heading_path"] = new_heading
+
+        new_summary = str(summary or "").strip()
+        cur_summary = str(entry.get("summary_line") or "").strip()
+        if new_summary and (
+            (not cur_summary)
+            or (
+                int(rank) >= 2
+                and (
+                    current_primary_score <= (0, 0, 0, 0, 0, 0)
+                    or incoming_primary_score >= current_primary_score
+                )
+                and len(new_summary) >= max(24, len(cur_summary))
+            )
+        ):
+            entry["summary_line"] = new_summary
+
+        if isinstance(primary_evidence, dict) and primary_evidence:
+            norm_primary = {k: v for k, v in dict(primary_evidence).items() if v not in ("", None, [], {})}
+            if norm_primary:
+                current_primary = (
+                    dict(entry.get("primary_evidence") or {})
+                    if isinstance(entry.get("primary_evidence"), dict)
+                    else {}
+                )
+                current_primary_score = _multi_paper_primary_precision_score(current_primary)
+                norm_primary_score = _multi_paper_primary_precision_score(norm_primary)
+                if (not current_primary) or norm_primary_score >= current_primary_score:
+                    entry["primary_evidence"] = norm_primary
+                    if str(norm_primary.get("heading_path") or "").strip():
+                        entry["heading_path"] = str(norm_primary.get("heading_path") or "").strip()
+                    snippet = _single_line_summary(
+                        str(norm_primary.get("highlight_snippet") or norm_primary.get("snippet") or "").strip(),
+                        source_name=str(entry.get("source_name") or ""),
+                    )
+                    if snippet and (
+                        (not str(entry.get("summary_line") or "").strip())
+                        or norm_primary_score >= current_primary_score
+                    ):
+                        entry["summary_line"] = snippet
+
+    for doc in list(seed_docs or []):
+        if not isinstance(doc, dict):
+            continue
+        meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        source_name = _source_name_from_path_like(source_path)
+        raw_summary = str((((meta or {}).get("ref_show_snippets") or [None])[0]) or doc.get("text") or "").strip()
+        heading_path_raw = (
+            str((meta or {}).get("ref_best_heading_path") or "").strip()
+            or str((meta or {}).get("heading_path") or "").strip()
+            or str((meta or {}).get("top_heading") or "").strip()
+        )
+        heading_path, summary = _normalize_multi_paper_surface_seed(
+            source_name=source_name,
+            heading_path=heading_path_raw,
+            raw_text=raw_summary,
+        )
+        primary_evidence = _normalize_multi_paper_contract_primary_evidence(
+            source_path=source_path,
+            source_name=source_name,
+            heading_path=heading_path,
+            raw_text=raw_summary,
+            primary_evidence=None,
+            selection_reason="pending_section_seed",
+        )
+        _merge_entry(
+            source_path=source_path,
+            source_name=source_name,
+            heading_path=heading_path,
+            summary=summary,
+            primary_evidence=primary_evidence,
+            rank=1,
+        )
+
+    for card in list(evidence_cards or []):
+        if not isinstance(card, dict):
+            continue
+        primary = dict(card.get("primary_evidence") or {}) if isinstance(card.get("primary_evidence"), dict) else {}
+        source_path = str(card.get("source_path") or primary.get("source_path") or "").strip()
+        source_name = str(primary.get("source_name") or "").strip() or _source_name_from_path_like(source_path)
+        raw_summary = _pick_multi_paper_card_raw_summary(
+            prompt=prompt,
+            card=card,
+            primary_evidence=primary,
+        )
+        heading_path_raw = str(primary.get("heading_path") or "").strip() or str(card.get("heading") or "").strip()
+        heading_path, summary = _normalize_multi_paper_surface_seed(
+            source_name=source_name,
+            heading_path=heading_path_raw,
+            raw_text=raw_summary,
+        )
+        normalized_primary = _normalize_multi_paper_contract_primary_evidence(
+            source_path=source_path,
+            source_name=source_name,
+            heading_path=heading_path,
+            raw_text=raw_summary,
+            primary_evidence=primary,
+            selection_reason=str(primary.get("selection_reason") or "answer_hit_top").strip(),
+        )
+        _merge_entry(
+            source_path=source_path,
+            source_name=source_name,
+            heading_path=heading_path,
+            summary=summary,
+            primary_evidence=normalized_primary,
+            rank=3,
+        )
+
+    for hit in list(answer_hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        source_name = _source_name_from_path_like(source_path)
+        raw_summary = str((((meta or {}).get("ref_show_snippets") or [None])[0]) or hit.get("text") or "").strip()
+        heading_path_raw = (
+            str((meta or {}).get("ref_best_heading_path") or "").strip()
+            or str((meta or {}).get("heading_path") or "").strip()
+            or str((meta or {}).get("top_heading") or "").strip()
+        )
+        heading_path, summary = _normalize_multi_paper_surface_seed(
+            source_name=source_name,
+            heading_path=heading_path_raw,
+            raw_text=raw_summary,
+        )
+        primary_evidence = _normalize_multi_paper_contract_primary_evidence(
+            source_path=source_path,
+            source_name=source_name,
+            heading_path=heading_path,
+            raw_text=raw_summary,
+            primary_evidence=None,
+            selection_reason="answer_hit_top",
+        )
+        _merge_entry(
+            source_path=source_path,
+            source_name=source_name,
+            heading_path=heading_path,
+            summary=summary,
+            primary_evidence=primary_evidence,
+            rank=2,
+        )
+
+    normalized_entries = [
+        {
+            k: v
+            for k, v in dict(raw_entry or {}).items()
+            if k not in {"_source_rank"} and v not in ("", None, [], {})
+        }
+        for raw_entry in entries
+    ]
+    return _filter_multi_paper_doc_list_contract(
+        prompt=prompt,
+        doc_list=normalized_entries,
+    )
+
+
+
+def _format_multi_paper_list_answer_v2(*, prompt: str, docs: list[dict]) -> str:
+    rows = [dict(item) for item in list(docs or []) if isinstance(item, dict)]
+    if not rows:
+        return ""
+    prefer_zh = bool(prompt_prefers_zh(prompt))
+    topic = _extract_multi_paper_topic(prompt)
+    paper_count = len(rows)
+    if prefer_zh:
+        intro = (
+            f"\u6839\u636e\u547d\u4e2d\u7684\u5e93\u5185\u6587\u732e\uff0c\u4ee5\u4e0b {paper_count} \u7bc7\u6587\u7ae0\u4e0e\u201c{topic}\u201d\u76f4\u63a5\u76f8\u5173\uff1a"
+            if topic
+            else f"\u6839\u636e\u547d\u4e2d\u7684\u5e93\u5185\u6587\u732e\uff0c\u4ee5\u4e0b {paper_count} \u7bc7\u6587\u7ae0\u4e0e\u5f53\u524d\u95ee\u9898\u76f4\u63a5\u76f8\u5173\uff1a"
+        )
+        lines = [intro, ""]
+        for idx, item in enumerate(rows, start=1):
+            name = str(item.get("source_name") or _source_name_from_path_like(item.get("source_path") or "")).strip() or f"\u6587\u732e {idx}"
+            heading = str(item.get("heading_path") or "").strip()
+            summary = str(item.get("summary_line") or "").strip()
+            match_note = _multi_paper_topic_match_note(
+                prompt=prompt,
+                match_kind=str(item.get("topic_match_kind") or ""),
+            )
+            lines.append(f"{idx}. **{name}**")
+            if heading:
+                lines.append(f"   - \u5b9a\u4f4d\uff1a{heading}")
+            if summary:
+                lines.append(f"   - \u4f9d\u636e\uff1a{summary}")
+            if match_note:
+                lines.append(f"   - \u76f8\u5173\u6027\uff1a{match_note}")
+            lines.append("")
+        return "\n".join(lines).strip()
+
+    intro = (
+        f"The following library paper directly relates to '{topic}':"
+        if topic and paper_count == 1
+        else f"The following library paper directly relates to the current query:"
+        if paper_count == 1
+        else f"The following {paper_count} library papers directly relate to '{topic}':"
+        if topic
+        else f"The following {paper_count} library papers directly relate to the current query:"
+    )
+    lines = [intro, ""]
+    for idx, item in enumerate(rows, start=1):
+        name = str(item.get("source_name") or _source_name_from_path_like(item.get("source_path") or "")).strip() or f"Paper {idx}"
+        heading = str(item.get("heading_path") or "").strip()
+        summary = str(item.get("summary_line") or "").strip()
+        match_note = _multi_paper_topic_match_note(
+            prompt=prompt,
+            match_kind=str(item.get("topic_match_kind") or ""),
+        )
+        lines.append(f"{idx}. **{name}**")
+        if heading:
+            lines.append(f"   - Locate: {heading}")
+        if summary:
+            lines.append(f"   - Evidence: {summary}")
+        if match_note:
+            lines.append(f"   - Match: {match_note}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _extract_multi_paper_topic(prompt: str) -> str:
+    return _shared_extract_multi_paper_topic(prompt)
+
+
+def _multi_paper_prompt_requires_explicit_focus_match(prompt: str) -> bool:
+    return _shared_prompt_requires_reference_focus_match(prompt)
+
+
+def _looks_generic_multi_paper_support_text(text: str, *, prompt: str) -> bool:
+    low = str(text or "").strip().lower()
+    if not low:
+        return False
+    patterns = (
+        "directly related to the current query",
+        "directly relevant to the current query",
+        "directly relevant to the current question",
+        "directly responds to the user",
+        "can serve as the current question",
+        "matched section",
+        "besides this paper, what other",
+        "what other...",
+        "\u4e0e\u5f53\u524d\u95ee\u9898\u76f4\u63a5\u76f8\u5173",
+        "\u4e0e\u7528\u6237\u67e5\u8be2",
+        "\u76f4\u63a5\u56de\u5e94\u7528\u6237",
+        "\u5e93\u5185\u660e\u786e\u547d\u4e2d",
+        "\u547d\u4e2d\u7ae0\u8282",
+        "\u4e3b\u9898\u4e00\u81f4",
+        "\u540c\u7c7b\u6280\u672f\u6587\u732e",
+        "\u53ef\u4f5c\u4e3a\u5f53\u524d\u95ee\u9898",
+    )
+    if any(pattern in low for pattern in patterns):
+        return True
+    prompt_echo = str(prompt or "").strip().lower()
+    if prompt_echo:
+        prompt_echo = re.sub(r"\s+", " ", prompt_echo)
+        if len(prompt_echo) >= 18 and prompt_echo[:32] in low:
+            return True
+    return False
+
+
+def _multi_paper_focus_term_only_negated(term: str, surface: str) -> bool:
+    token = str(term or "").strip().lower()
+    normalized_surface = str(surface or "").strip().lower()
+    if not token or not normalized_surface:
+        return False
+    escaped = re.escape(token)
+    all_count = len(re.findall(rf"\b{escaped}\b", normalized_surface, flags=re.I))
+    if all_count <= 0:
+        return False
+    neg_patterns = (
+        rf"\b(?:without|not|no|lack(?:s|ing)?|avoid(?:s|ed|ing)?|rather than|instead of|does not mention|doesn't mention|does not discuss|doesn't discuss)\b[^.!?;\n]{{0,32}}\b{escaped}\b",
+        rf"\b(?:\u672a\u63d0\u53ca|\u4e0d\u6d89\u53ca|\u6ca1\u6709|\u5e76\u672a|\u4e0d\u662f)\b[^\u3002\uff01\uff1f\uff1b\n]{{0,20}}{escaped}\b",
+        rf"\b{escaped}\b[^.!?;\n]{{0,24}}\b(?:not|absent|omitted)\b",
+    )
+    negated_count = sum(
+        len(re.findall(pattern, normalized_surface, flags=re.I))
+        for pattern in neg_patterns
+    )
+    return negated_count >= all_count
+
+
+def _prompt_targets_sci_topic(prompt: str) -> bool:
+    return _shared_prompt_targets_sci_topic(prompt)
+
+
+def _format_multi_paper_list_answer(*, prompt: str, docs: list[dict]) -> str:
+    return _format_multi_paper_list_answer_v2(prompt=prompt, docs=docs)
 
 
 def _select_minimum_paper_guide_ref_num(
@@ -607,15 +1689,17 @@ def _build_paper_guide_contract_snapshot(
     support_resolution: list[dict] | None,
     needs_supplement: bool,
     citation_validation: dict | None,
+    doc_list_contract: list[dict] | None = None,
     paper_guide_contracts_seed: dict | None = None,
 ) -> dict:
     seed = dict(paper_guide_contracts_seed or {})
+    doc_list = [dict(item) for item in list(doc_list_contract or []) if isinstance(item, dict)]
     primary_evidence = _pick_shared_primary_evidence(
         paper_guide_contracts_seed=paper_guide_contracts_seed,
         evidence_cards=evidence_cards,
     )
     render_packet_seed = seed.get("render_packet") if isinstance(seed.get("render_packet"), dict) else {}
-    if (not paper_guide_mode) and (not primary_evidence) and (not render_packet_seed):
+    if (not paper_guide_mode) and (not primary_evidence) and (not render_packet_seed) and (not doc_list):
         return {}
 
     snapshot = {"version": 1}
@@ -643,6 +1727,8 @@ def _build_paper_guide_contract_snapshot(
             snapshot["render_packet"] = render_packet_dump
         if primary_evidence:
             snapshot["primary_evidence"] = dict(primary_evidence)
+        if doc_list:
+            snapshot["doc_list"] = doc_list
         return {
             key: value
             for key, value in snapshot.items()
@@ -710,6 +1796,8 @@ def _build_paper_guide_contract_snapshot(
         snapshot["render_packet"] = render_packet_dump
     if primary_evidence:
         snapshot["primary_evidence"] = dict(primary_evidence)
+    if doc_list:
+        snapshot["doc_list"] = doc_list
     return {
         key: value
         for key, value in snapshot.items()
@@ -722,17 +1810,52 @@ def _pick_shared_primary_evidence(
     paper_guide_contracts_seed: dict | None,
     evidence_cards: list[dict] | None,
 ) -> dict:
+    def _primary_precision_score(primary: dict | None) -> tuple[int, int, int, int, int, int]:
+        if not isinstance(primary, dict) or not primary:
+            return (0, 0, 0, 0, 0, 0)
+        reason = str(primary.get("selection_reason") or primary.get("selectionReason") or "").strip().lower()
+        reason_rank = {
+            "prompt_aligned": 6,
+            "reader_open": 5,
+            "strict_locate": 5,
+            "provenance_segment": 5,
+            "shared_refs_pack": 5,
+            "pending_section_seed": 2,
+            "shared_contract_seed": 1,
+            "answer_hit_top": 0,
+        }.get(reason, 3 if reason else 0)
+        return (
+            reason_rank,
+            1 if str(primary.get("block_id") or primary.get("blockId") or "").strip() else 0,
+            1 if str(primary.get("anchor_id") or primary.get("anchorId") or "").strip() else 0,
+            1 if str(primary.get("heading_path") or primary.get("headingPath") or "").strip() else 0,
+            1 if str(primary.get("snippet") or "").strip() else 0,
+            1
+            if str(primary.get("source_path") or primary.get("sourcePath") or primary.get("source_name") or primary.get("sourceName") or "").strip()
+            else 0,
+        )
+
+    best: dict = {}
+    best_score = (0, 0, 0, 0, 0, 0)
+
     seed = dict(paper_guide_contracts_seed or {})
+    candidates: list[dict] = []
     primary = seed.get("primary_evidence")
     if isinstance(primary, dict) and primary:
-        return dict(primary)
+        candidates.append(dict(primary))
     for card in list(evidence_cards or []):
         if not isinstance(card, dict):
             continue
         primary = card.get("primary_evidence")
         if isinstance(primary, dict) and primary:
-            return dict(primary)
-    return {}
+            candidates.append(dict(primary))
+
+    for candidate in candidates:
+        score = _primary_precision_score(candidate)
+        if (not best) or score > best_score:
+            best = dict(candidate)
+            best_score = score
+    return best
 
 
 def _finalize_generation_answer(
@@ -769,6 +1892,17 @@ def _finalize_generation_answer(
     )
     effective_paper_guide_family = str(getattr(resolved_paper_guide_intent, "family", "") or "").strip()
     sanitize_paper_guide_family = effective_paper_guide_family or "overview"
+    multi_paper_list_prompt = bool(prompt_explicitly_requests_multi_paper_list(prompt_for_user or prompt))
+    multi_paper_doc_list = (
+        _build_multi_paper_doc_list_contract(
+            prompt=prompt or prompt_for_user,
+            seed_docs=list((paper_guide_contracts_seed or {}).get("doc_list_seed") or []),
+            answer_hits=list(answer_hits or []),
+            evidence_cards=list(paper_guide_evidence_cards or []),
+        )
+        if multi_paper_list_prompt
+        else []
+    )
     answer = _normalize_math_markdown(
         _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
     ).strip() or "(No text returned)"
@@ -855,6 +1989,7 @@ def _finalize_generation_answer(
             prompt=prompt_for_user or prompt,
             prompt_family=sanitize_paper_guide_family,
         )
+    answer = _sanitize_internal_doc_label_blocks(answer)
     preserve_numeric_citations = _should_preserve_final_answer_numeric_citations(
         prompt=prompt_for_user or prompt,
         answer_output_mode=answer_output_mode,
@@ -865,6 +2000,13 @@ def _finalize_generation_answer(
         answer,
         preserve_numeric_markers=preserve_numeric_citations,
     )
+    if multi_paper_list_prompt and multi_paper_doc_list:
+        formatted_multi_paper_answer = _format_multi_paper_list_answer_v2(
+            prompt=prompt_for_user or prompt,
+            docs=multi_paper_doc_list,
+        )
+        if formatted_multi_paper_answer:
+            answer = formatted_multi_paper_answer
     grounded_answer = str(answer or "")
     answer = _maybe_prepend_paper_guide_low_confidence_notice(
         answer,
@@ -897,6 +2039,7 @@ def _finalize_generation_answer(
         support_resolution=list(paper_guide_support_resolution or []),
         needs_supplement=bool(_PAPER_GUIDE_SUPPLEMENT_BLOCK_MARKER_RE.search(answer)),
         citation_validation=dict(citation_validation or {}),
+        doc_list_contract=list(multi_paper_doc_list or []),
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
     )
     answer_quality = _build_answer_quality_probe(
