@@ -42,6 +42,7 @@ def _build_generation_prompt_bundle(
         "Answer the user's question directly and keep the response concise, concrete, and evidence-aware.\n"
         "Use retrieved snippets when they are available.\n"
         "If the retrieved evidence is missing or incomplete, say that clearly instead of fabricating paper details.\n"
+        "For trade-off or comparison questions, cover every concrete axis named in the retrieved title, headings, or snippets before explaining the tension.\n"
         "Do not invent papers, equations, numbers, baselines, or conclusions that are not supported by the retrieved context.\n"
         "Do not output retrieval diagnostics, Top-K lists, or reference-location dumps unless the user explicitly asks for them.\n"
         "For math, use inline $...$ for short symbols and $$...$$ for longer equations; do not wrap equations in backticks.\n"

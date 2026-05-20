@@ -30,6 +30,22 @@ _COMMON_LABELS = {
     "SCIGS",
     "SCINeRF",
 }
+_ALLOW_COMMON_LABELS_FOR_OPPORTUNITY = {"SCI", "SPI", "SPAD", "NeRF", "SCIGS", "SCINeRF"}
+_DOMAIN_LABEL_PATTERNS = (
+    ("single-pixel imaging", r"(?i)\bsingle[-\s]?pixel imaging\b|\u5355\u50cf\u7d20\u6210\u50cf"),
+    (
+        "snapshot compressive imaging",
+        r"(?i)\bsnapshot compressive imaging\b|\bSCI\b|\u538b\u7f29\u5feb\u7167\u6210\u50cf|\u5feb\u7167\u538b\u7f29\u6210\u50cf",
+    ),
+    ("physics-informed deep learning", r"(?i)\bphysics[-\s]?informed deep learning\b"),
+    ("SPAD", r"(?i)\bSPADs?\b|single[-\s]?photon avalanche diode"),
+    ("Hadamard", r"(?i)\bHadamard\b"),
+    ("Fourier", r"(?i)\bFourier\b"),
+    ("CASSI", r"(?i)\bCASSI\b|coded aperture snapshot spectral imaging"),
+    ("NeRF", r"(?i)\bNeRF\b|neural radiance fields?"),
+    ("3D Gaussian", r"(?i)\b3DGS\b|3D Gaussian|Gaussian splatting"),
+    ("PILN", r"(?i)\bPILN\b|part-based image-loop network|image-loop network"),
+)
 _LABEL_EXPANSIONS = {
     "admm": ("alternating direction method of multipliers",),
     "admm-net": ("deep tensor admm-net", "snapshot compressive imaging admm-net"),
@@ -45,6 +61,13 @@ _UPSTREAM_INTENT_RE = re.compile(
     r"(?:\u6765\u6e90|\u51fa\u5904|\u6e90\u5934|\u4e4b\u524d|\u4ee5\u524d|\u5df2\u6709|"
     r"\u73b0\u6210|\u7ecf\u5178|\u80cc\u666f|\u81ea\u5df1|\u53d1\u660e|\u539f\u521b|"
     r"\u65b0\u4e1c\u897f|\u501f\u9274|\u5f15\u7528|\u53c2\u8003\u6587\u732e)"
+)
+_RESEARCH_READING_TRACE_RE = re.compile(
+    r"(?i)\b(?:roadmap|lineage|reading\s+route|reading\s+order|how\s+to\s+read|"
+    r"relationship|relate|position|background|context|pair|connect)\b|"
+    r"(?:\u8bfb\u4e66\u8def\u7ebf|\u9605\u8bfb\u8def\u7ebf|\u5148\u8bfb|\u600e\u4e48\u8bfb|"
+    r"\u642d\u914d\u8bfb|\u5efa\u7acb\u4e3b\u7ebf|\u4e3b\u7ebf|\u8109\u7edc|\u8fd9\u6761\u7ebf|"
+    r"\u4ece.{0,40}\u5230|\u5173\u7cfb|\u5206\u522b|\u9002\u5408\u89e3\u51b3)"
 )
 _PRIOR_WORK_CUE_RE = re.compile(
     r"(?i)("
@@ -194,18 +217,30 @@ def _candidate_labels_from_text(*, prompt: str, answer: str = "", max_labels: in
     surface = f"{prompt}\n{answer}"
     labels: list[str] = []
     seen: set[str] = set()
+
+    def _push(label: str) -> bool:
+        value = str(label or "").strip()
+        if len(value) < 3 or len(value) > 64:
+            return False
+        key = value.lower()
+        if key in seen:
+            return False
+        seen.add(key)
+        labels.append(value)
+        return len(labels) >= max(1, int(max_labels))
+
+    for label, pattern in _DOMAIN_LABEL_PATTERNS:
+        if re.search(pattern, surface):
+            if _push(label):
+                return labels
+
     for match in _ENTITY_RE.finditer(surface):
         label = str(match.group(0) or "").strip()
         if len(label) < 3 or len(label) > 48:
             continue
-        if label in _COMMON_LABELS:
+        if label in _COMMON_LABELS and label not in _ALLOW_COMMON_LABELS_FOR_OPPORTUNITY:
             continue
-        key = label.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        labels.append(label)
-        if len(labels) >= max(1, int(max_labels)):
+        if _push(label):
             break
     return labels
 
@@ -345,7 +380,9 @@ def detect_text_reference_opportunities(
     """
 
     prompt_text = str(prompt or "").strip()
-    if not prompt_text or not _UPSTREAM_INTENT_RE.search(prompt_text):
+    if not prompt_text:
+        return []
+    if not (_UPSTREAM_INTENT_RE.search(prompt_text) or _RESEARCH_READING_TRACE_RE.search(prompt_text)):
         return []
     labels = _candidate_labels_from_text(prompt=prompt_text, answer=answer, max_labels=5)
     if not labels:

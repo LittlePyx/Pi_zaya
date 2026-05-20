@@ -19,6 +19,16 @@ _MULTI_PAPER_LIST_PATTERNS = (
     "\u54ea\u51e0\u7bc7\u8bba\u6587",
     "\u54ea\u4e9b\u6587\u732e",
     "\u54ea\u51e0\u7bc7\u6587\u732e",
+    "\u54ea\u51e0\u7bc7",
+)
+
+_MULTI_PAPER_SYNTHESIS_PATTERNS = (
+    r"\b(?:roadmap|lineage|reading\s+route|reading\s+order|how\s+to\s+read|how\s+.*relat(?:e|es)|position(?:ing)?|background)\b",
+    r"\bfrom\b.{0,80}\bto\b",
+    r"\u8bfb\u4e66\u8def\u7ebf|\u9605\u8bfb\u8def\u7ebf|\u5148\u8bfb|\u600e\u4e48\u8bfb|\u642d\u914d\u8bfb|\u5efa\u7acb\u4e3b\u7ebf",
+    r"\u4e3b\u7ebf|\u8109\u7edc|\u53d1\u5c55\u8def\u7ebf|\u8fd9\u6761\u7ebf|\u4ece.{0,40}\u5230",
+    r"\u8fd9\u4e9b.{0,80}(?:\u65b9\u6cd5|\u6280\u672f|\u6587\u732e|\u8bba\u6587).{0,40}(?:\u5206\u522b|\u5173\u7cfb|\u89e3\u51b3)",
+    r"(?:\u4e0e|\u548c).{0,40}(?:\u5173\u7cfb|\u533a\u522b|\u642d\u914d)",
 )
 
 _SINGLE_PAPER_PICK_PATTERNS = (
@@ -72,6 +82,15 @@ def prompt_explicitly_requests_multi_paper_list(prompt: str) -> bool:
             flags=re.I,
         )
     )
+
+
+def prompt_likely_multi_paper_synthesis(prompt: str) -> bool:
+    text = str(prompt or "").strip()
+    if not text:
+        return False
+    if prompt_explicitly_requests_multi_paper_list(text):
+        return True
+    return any(re.search(pattern, text, flags=re.I | re.S) for pattern in _MULTI_PAPER_SYNTHESIS_PATTERNS)
 
 
 def prompt_explicitly_requests_single_paper_pick(prompt: str) -> bool:

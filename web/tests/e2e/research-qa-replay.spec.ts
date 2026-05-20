@@ -21,7 +21,7 @@ test('research QA replay covers multiple real library documents and citation car
   await page.goto('/__research_qa_replay__')
 
   await expect(page.getByTestId('research-qa-doc-count')).toContainText('文献 21')
-  await expect(page.getByTestId('research-qa-case-count')).toContainText('问题 9')
+  await expect(page.getByTestId('research-qa-case-count')).toContainText('问题 14')
 
   await expect(page.getByTestId('research-qa-doc-scigs')).toContainText('SCIGS')
   await expect(page.getByTestId('research-qa-doc-hsi-fsi')).toContainText('HSI vs FSI')
@@ -29,10 +29,17 @@ test('research QA replay covers multiple real library documents and citation car
   await expect(page.getByTestId('research-qa-doc-qclfm')).toContainText('QCLFM')
   await expect(page.getByTestId('research-qa-doc-pidl-single-photon')).toContainText('PI single-photon')
   await expect(page.getByTestId('research-qa-doc-perovskite-laser')).toContainText('Perovskite laser')
+  await expect(page.getByTestId('research-qa-doc-spi-prospects')).toContainText('SPI prospects')
+  await expect(page.getByTestId('research-qa-doc-cassi')).toContainText('CASSI')
+  await expect(page.getByTestId('research-qa-doc-piln')).toContainText('PILN')
+  await expect(page.getByTestId('research-qa-doc-spd-review')).toContainText('SPD review')
 
   await expect(page.getByTestId('research-qa-case-scigs-dynamic-3d')).toContainText('SCIGS 这篇到底想解决什么问题')
   await expect(page.getByTestId('research-qa-case-hadamard-fourier-choice')).toContainText('Hadamard 和 Fourier')
   await expect(page.getByTestId('research-qa-case-single-photon-pidl')).toContainText('physics-informed deep learning')
+  await expect(page.getByTestId('research-qa-case-spi-roadmap-beginner')).toContainText('刚开始看单像素成像')
+  await expect(page.getByTestId('research-qa-case-cassi-to-3d-sci-lineage')).toContainText('压缩快照成像')
+  await expect(page.getByTestId('research-qa-case-piln-dl-spi-position')).toContainText('PILN')
 
   await expect(page.locator('body')).toContainText('SCIGS 的目标不是再做一个普通 SCI 帧解码器')
   await expect(page.locator('body')).toContainText('不是。SCINeRF 把 ADMM 放在 Related Work')

@@ -24,6 +24,7 @@ def test_build_generation_prompt_bundle_adds_abstract_rule_for_citeless_family()
     )
 
     assert "Paper-guide abstract rule:" in out["system"]
+    assert "For trade-off or comparison questions" in out["system"]
     assert "Question:\n把摘要原文给出并翻译" in out["user"]
     assert "Retrieved context (with deep-read supplements):" in out["user"]
     assert out["paper_guide_contract_enabled"] is False

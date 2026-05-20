@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -150,6 +151,54 @@ def _term_aliases(term: str) -> list[str]:
         "perovskite": ["perovskite", "钙钛矿"],
     }
     extra_aliases = {
+        "single-pixel imaging": [
+            "single-pixel imaging",
+            "single pixel imaging",
+            "SPI",
+            "单像素成像",
+            "單像素成像",
+        ],
+        "deep learning": ["deep learning", "DL", "深度学习", "深度學習"],
+        "snapshot compressive imaging": [
+            "snapshot compressive imaging",
+            "snapshot compressed image",
+            "SCI",
+            "压缩快照成像",
+            "快照压缩成像",
+        ],
+        "CASSI": [
+            "CASSI",
+            "coded aperture snapshot spectral imaging",
+            "compressive spectral imaging",
+            "压缩光谱成像",
+        ],
+        "3DGS": ["3DGS", "3D Gaussian", "Gaussian splatting", "Gaussians Splatting"],
+        "SPAD": ["SPAD", "single-photon avalanche diode", "单光子雪崩二极管"],
+        "detector": ["detector", "photodetector", "探测器", "光探测器"],
+        "generalization": [
+            "generalization",
+            "generalisation",
+            "泛化",
+            "通用性",
+            "未知环境",
+            "unseen",
+            "out-of-distribution",
+            "robustness",
+        ],
+        "PILN": ["PILN", "Part-based image-loop network", "image-loop network"],
+        "structured detection": ["structured detection", "结构化探测", "结构探测"],
+        "测量": [
+            "测量",
+            "采样",
+            "测量次数",
+            "测量预算",
+            "measurement",
+            "measurements",
+            "sampling",
+            "acquisition",
+            "DMD",
+            "调制",
+        ],
         "wave": ["\u6ce2\u52a8", "\u6ce2\u52a8\u5149\u5b66", "\u884d\u5c04", "\u4f20\u64ad"],
         "ray tracing": [
             "\u5149\u7ebf\u8ffd\u8ff9",
@@ -158,7 +207,18 @@ def _term_aliases(term: str) -> list[str]:
             "\u5c04\u7ebf\u8ffd\u8e2a",
             "\u5149\u7ebf\u4f20\u9012\u77e9\u9635",
         ],
-        "refocus": ["\u91cd\u805a\u7126", "\u91cd\u65b0\u5bf9\u7126", "\u91cd\u5bf9\u7126"],
+        "refocus": [
+            "\u91cd\u805a\u7126",
+            "\u91cd\u65b0\u5bf9\u7126",
+            "\u91cd\u5bf9\u7126",
+            "\u79bb\u7126",
+            "\u666f\u6df1",
+            "\u5927\u666f\u6df1",
+            "refocusing",
+            "light-field",
+            "light field",
+            "depth of field",
+        ],
     }
     out = [raw]
     out.extend(aliases.get(raw, []))
@@ -230,6 +290,51 @@ def _answer_text(result: dict[str, Any]) -> str:
     return str(result.get("answer") or "").strip()
 
 
+def _inline_inpaper_citation_details(answer: str) -> list[dict[str, Any]]:
+    text = str(answer or "")
+    if "[[CITE:" not in text:
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for match in re.finditer(r"\[\[CITE:([^:\]\s]+):(\d{1,4})\]\]", text):
+        sid = str(match.group(1) or "").strip()
+        ref_num = str(match.group(2) or "").strip()
+        start = max(
+            text.rfind("\n", 0, match.start()),
+            text.rfind("。", 0, match.start()),
+            text.rfind(".", 0, match.start()),
+            text.rfind("；", 0, match.start()),
+            text.rfind(";", 0, match.start()),
+        )
+        end_candidates = [
+            idx for idx in (
+                text.find("\n", match.end()),
+                text.find("。", match.end()),
+                text.find(".", match.end()),
+                text.find("；", match.end()),
+                text.find(";", match.end()),
+            )
+            if idx >= 0
+        ]
+        end = min(end_candidates) if end_candidates else min(len(text), match.end() + 180)
+        context = text[start + 1 : end + 1].strip()
+        key = (sid, ref_num, context.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "is_inpaper": True,
+                "sid": sid,
+                "ref_num": ref_num,
+                "raw": context,
+                "context": context,
+                "source": "inline_marker",
+            }
+        )
+    return out
+
+
 def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
     message = result.get("assistant_message")
     details: list[Any] = []
@@ -243,6 +348,7 @@ def _citation_details(result: dict[str, Any]) -> list[dict[str, Any]]:
     final_payload = result.get("final_payload")
     if isinstance(final_payload, dict):
         details.extend(_as_list(final_payload.get("cite_details")))
+    details.extend(_inline_inpaper_citation_details(_answer_text(result)))
     return [item for item in details if isinstance(item, dict)]
 
 
@@ -287,6 +393,17 @@ def _extract_primary_evidence_payloads(refs_payload: Any, user_msg_id: int | str
     return payloads
 
 
+def _expected_int(expected: dict[str, Any], key: str, default: int = 0) -> int:
+    try:
+        return max(0, int(expected.get(key, default) or default))
+    except Exception:
+        return max(0, int(default or 0))
+
+
+def _unique_doc_ids_in_payload(fixture: ResearchQaFixture, payload: Any) -> list[str]:
+    return sorted(doc_id for doc_id in fixture.docs_by_id if _doc_matches_payload(fixture, doc_id, payload))
+
+
 def _ref_card_quality_failures(refs_payload: Any, forbidden_phrases: list[str], user_msg_id: int | str | None = None) -> list[str]:
     failures: list[str] = []
     hits = _extract_ref_hits(refs_payload, user_msg_id=user_msg_id)
@@ -305,6 +422,44 @@ def _ref_card_quality_failures(refs_payload: Any, forbidden_phrases: list[str], 
     return failures
 
 
+def _ref_pack_state_failures(refs_payload: Any, user_msg_id: int | str | None = None) -> list[str]:
+    failures: list[str] = []
+    for pack_idx, pack in enumerate(_extract_ref_packs(refs_payload, user_msg_id=user_msg_id), start=1):
+        display_state = str(pack.get("display_state") or "").strip().lower()
+        if display_state and display_state != "ready":
+            failures.append(f"pack_{pack_idx}_display_state:{display_state}")
+        if bool(pack.get("pending")):
+            failures.append(f"pack_{pack_idx}_pending:true")
+        for hit_idx, hit in enumerate(_as_list(pack.get("hits")), start=1):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            ref_state = str(meta.get("ref_pack_state") or "").strip().lower()
+            if ref_state and ref_state != "ready":
+                failures.append(f"pack_{pack_idx}_hit_{hit_idx}_ref_pack_state:{ref_state}")
+    return failures
+
+
+def _ref_polish_failures(
+    refs_payload: Any,
+    *,
+    user_msg_id: int | str | None = None,
+    require_status: bool = False,
+    allowed_statuses: list[str] | None = None,
+) -> list[str]:
+    failures: list[str] = []
+    allowed = {str(item or "").strip().lower() for item in list(allowed_statuses or []) if str(item or "").strip()}
+    for idx, hit in enumerate(_extract_ref_hits(refs_payload, user_msg_id=user_msg_id), start=1):
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        status = str(ui_meta.get("polish_status") or "").strip().lower()
+        if require_status and not status:
+            failures.append(f"ref_card_{idx}_missing_polish_status")
+            continue
+        if status and allowed and status not in allowed:
+            failures.append(f"ref_card_{idx}_polish_status:{status}")
+    return failures
+
+
 def validate_case(
     case: dict[str, Any],
     fixture: ResearchQaFixture,
@@ -315,6 +470,8 @@ def validate_case(
     refs_payload = result.get("refs_payload")
     user_msg_id = result.get("user_msg_id")
     citation_details = _citation_details(result)
+    ref_hits = _extract_ref_hits(refs_payload, user_msg_id=user_msg_id)
+    ref_packs = _extract_ref_packs(refs_payload, user_msg_id=user_msg_id)
     checks: list[dict[str, Any]] = []
 
     def add_check(name: str, ok: bool, detail: Any = "") -> None:
@@ -337,6 +494,38 @@ def validate_case(
     missing_ref_docs = [doc_id for doc_id in required_ref_doc_ids if not _doc_matches_payload(fixture, doc_id, refs_payload)]
     add_check("refs_include_required_docs", not missing_ref_docs, missing_ref_docs)
 
+    min_ref_hits = _expected_int(expected, "minRefHits")
+    if min_ref_hits:
+        add_check("refs_min_hit_count", len(ref_hits) >= min_ref_hits, {"actual": len(ref_hits), "min": min_ref_hits})
+
+    min_ref_doc_count = _expected_int(expected, "minRefDocCount")
+    if min_ref_doc_count:
+        ref_doc_ids = _unique_doc_ids_in_payload(fixture, refs_payload)
+        add_check(
+            "refs_min_doc_count",
+            len(ref_doc_ids) >= min_ref_doc_count,
+            {"actual": len(ref_doc_ids), "min": min_ref_doc_count, "doc_ids": ref_doc_ids},
+        )
+
+    if bool(expected.get("requireRefsReady")):
+        ready_failures = _ref_pack_state_failures(refs_payload, user_msg_id=user_msg_id)
+        add_check("refs_ready", not ready_failures and bool(ref_packs), ready_failures)
+
+    require_polish_status = bool(expected.get("requirePolishStatus"))
+    allowed_polish_statuses = [
+        str(item).strip().lower()
+        for item in _as_list(expected.get("allowedRefPolishStatuses"))
+        if str(item or "").strip()
+    ]
+    if require_polish_status or allowed_polish_statuses:
+        polish_failures = _ref_polish_failures(
+            refs_payload,
+            user_msg_id=user_msg_id,
+            require_status=require_polish_status,
+            allowed_statuses=allowed_polish_statuses,
+        )
+        add_check("refs_card_polish_status", not polish_failures and bool(ref_hits), polish_failures)
+
     required_citation_doc_ids = [
         str(item) for item in _as_list(expected.get("requiredCitationDocIds")) if str(item or "").strip()
     ]
@@ -345,7 +534,31 @@ def validate_case(
     ]
     add_check("citations_include_required_docs", not missing_citation_docs, missing_citation_docs)
 
+    min_citation_count = _expected_int(expected, "minCitationCount")
+    if min_citation_count:
+        add_check(
+            "citations_min_count",
+            len(citation_details) >= min_citation_count,
+            {"actual": len(citation_details), "min": min_citation_count},
+        )
+
+    min_citation_doc_count = _expected_int(expected, "minCitationDocCount")
+    if min_citation_doc_count:
+        citation_doc_ids = _unique_doc_ids_in_payload(fixture, citation_details)
+        add_check(
+            "citations_min_doc_count",
+            len(citation_doc_ids) >= min_citation_doc_count,
+            {"actual": len(citation_doc_ids), "min": min_citation_doc_count, "doc_ids": citation_doc_ids},
+        )
+
     inpaper_details = [item for item in citation_details if bool(item.get("is_inpaper"))]
+    min_system_b_count = _expected_int(expected, "minSystemBCount", 1 if bool(expected.get("requireSystemB")) else 0)
+    if min_system_b_count:
+        add_check(
+            "system_b_min_count",
+            len(inpaper_details) >= min_system_b_count,
+            {"actual": len(inpaper_details), "min": min_system_b_count},
+        )
     if bool(expected.get("requireSystemB")):
         required_system_b_terms = [
             str(item) for item in _as_list(expected.get("requiredSystemBTerms")) if str(item or "").strip()
@@ -353,6 +566,22 @@ def validate_case(
         missing_system_b_terms = [term for term in required_system_b_terms if not _contains_term(inpaper_details, term)]
         add_check("system_b_present", bool(inpaper_details), len(inpaper_details))
         add_check("system_b_contains_required_terms", not missing_system_b_terms, missing_system_b_terms)
+    elif min_system_b_count:
+        required_system_b_terms = [
+            str(item) for item in _as_list(expected.get("requiredSystemBTerms")) if str(item or "").strip()
+        ]
+        if required_system_b_terms:
+            missing_system_b_terms = [term for term in required_system_b_terms if not _contains_term(inpaper_details, term)]
+            add_check("system_b_contains_required_terms", not missing_system_b_terms, missing_system_b_terms)
+
+    required_system_b_doc_ids = [
+        str(item) for item in _as_list(expected.get("requiredSystemBDocIds")) if str(item or "").strip()
+    ]
+    if required_system_b_doc_ids:
+        missing_system_b_docs = [
+            doc_id for doc_id in required_system_b_doc_ids if not _doc_matches_payload(fixture, doc_id, inpaper_details)
+        ]
+        add_check("system_b_includes_required_docs", not missing_system_b_docs, missing_system_b_docs)
 
     card_failures = _ref_card_quality_failures(
         refs_payload,
@@ -385,7 +614,9 @@ def validate_case(
         "answer_preview": answer[:360],
         "citation_count": len(citation_details),
         "system_b_count": len(inpaper_details),
-        "ref_hit_count": len(_extract_ref_hits(refs_payload, user_msg_id=user_msg_id)),
+        "ref_hit_count": len(ref_hits),
+        "ref_doc_ids": _unique_doc_ids_in_payload(fixture, refs_payload),
+        "citation_doc_ids": _unique_doc_ids_in_payload(fixture, citation_details),
     }
 
 

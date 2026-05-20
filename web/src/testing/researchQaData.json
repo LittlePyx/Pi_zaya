@@ -297,6 +297,122 @@
         "requiredCitationDocIds": ["perovskite-laser"],
         "requireSystemB": false
       }
+    },
+    {
+      "id": "spi-roadmap-beginner",
+      "docIds": ["spi-prospects", "dl-spi-review", "hsi-fsi"],
+      "question": "我刚开始看单像素成像，想先建立主线，应该先读哪几篇？每篇主要看什么？",
+      "acceptance": [
+        "回答要像给研究生安排读书路线，而不是把检索结果逐条罗列。",
+        "至少覆盖基础综述、深度学习 SPI 综述、Hadamard/Fourier 编码选择三类证据。",
+        "普通问题也应该给出可点开的上游文内参考，帮助用户继续追原始来源。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["single-pixel imaging", "deep learning", "Hadamard"],
+        "requiredRefDocIds": ["spi-prospects", "dl-spi-review", "hsi-fsi"],
+        "requiredCitationDocIds": ["spi-prospects", "dl-spi-review", "hsi-fsi"],
+        "minRefHits": 3,
+        "minRefDocCount": 3,
+        "minCitationCount": 3,
+        "minCitationDocCount": 3,
+        "minSystemBCount": 1,
+        "requiredSystemBTerms": ["single-pixel imaging"],
+        "requireRefsReady": true,
+        "requirePolishStatus": true,
+        "allowedRefPolishStatuses": ["full", "heuristic"]
+      }
+    },
+    {
+      "id": "cassi-to-3d-sci-lineage",
+      "docIds": ["cassi", "scinerf", "scigs"],
+      "question": "SCI 或压缩快照成像这条线，是怎么从光谱成像走到 3D 场景重建的？",
+      "acceptance": [
+        "回答要讲清 CASSI/压缩光谱成像、SCINeRF、SCIGS 三者的关系和差异。",
+        "不能把三篇文献混成同一个贡献，必须说明从编码测量到 3D 表示的演进。",
+        "参考定位卡要分别指向三篇论文里能支撑这条主线的段落。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["CASSI", "snapshot compressive imaging", "NeRF", "3DGS"],
+        "requiredRefDocIds": ["cassi", "scinerf", "scigs"],
+        "requiredCitationDocIds": ["cassi", "scinerf", "scigs"],
+        "minRefHits": 3,
+        "minRefDocCount": 3,
+        "minCitationCount": 3,
+        "minCitationDocCount": 3,
+        "minSystemBCount": 1,
+        "requireRefsReady": true,
+        "requirePolishStatus": true,
+        "allowedRefPolishStatuses": ["full", "heuristic"]
+      }
+    },
+    {
+      "id": "microscopy-methods-map",
+      "docIds": ["s2ism", "iism", "qclfm"],
+      "question": "显微成像这些 structured detection、interferometric、light-field 方法分别是在解决什么麻烦？",
+      "acceptance": [
+        "回答要把厚样本 SNR/层切、横向分辨率、离焦重聚焦这几类问题区分开。",
+        "不能只说都是提高成像质量，要说明每篇论文的技术入口和适用场景。",
+        "参考卡片需要让用户看得出每条证据为什么属于那篇方法。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["structured detection", "resolution", "SNR", "refocus"],
+        "requiredRefDocIds": ["s2ism", "iism", "qclfm"],
+        "requiredCitationDocIds": ["s2ism", "iism", "qclfm"],
+        "minRefHits": 3,
+        "minRefDocCount": 3,
+        "minCitationCount": 3,
+        "minCitationDocCount": 3,
+        "requireRefsReady": true,
+        "requirePolishStatus": true,
+        "allowedRefPolishStatuses": ["full", "heuristic"]
+      }
+    },
+    {
+      "id": "single-photon-reading-pair",
+      "docIds": ["spd-review", "pidl-single-photon"],
+      "question": "单光子成像里，探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？",
+      "acceptance": [
+        "回答要说明一篇提供硬件/噪声背景，另一篇把物理噪声模型放进算法训练。",
+        "要给出读者先读什么、再读什么、读的时候看哪些概念。",
+        "至少出现一个文内上游来源，帮助用户继续追 SPAD 或噪声模型来源。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["SPAD", "detector", "physics-informed", "noise"],
+        "requiredRefDocIds": ["spd-review", "pidl-single-photon"],
+        "requiredCitationDocIds": ["spd-review", "pidl-single-photon"],
+        "minRefHits": 2,
+        "minRefDocCount": 2,
+        "minCitationCount": 2,
+        "minCitationDocCount": 2,
+        "minSystemBCount": 1,
+        "requiredSystemBTerms": ["SPAD"],
+        "requireRefsReady": true,
+        "requirePolishStatus": true,
+        "allowedRefPolishStatuses": ["full", "heuristic"]
+      }
+    },
+    {
+      "id": "piln-dl-spi-position",
+      "docIds": ["piln", "dl-spi-review", "rt-spi-supp"],
+      "question": "PILN 这种网络方法和综述里说的深度学习单像素成像主线是什么关系？它适合解决什么，不适合解决什么？",
+      "acceptance": [
+        "回答要把 PILN 放回 DL-SPI 的 reconstruction/network 方法谱系里。",
+        "既要讲适合解决的重建质量或采样问题，也要提醒泛化、数据和实时性的边界。",
+        "参考定位卡不能只给综述，至少要命中 PILN 原文和 DL-SPI 综述。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["PILN", "deep learning", "single-pixel imaging", "generalization"],
+        "requiredRefDocIds": ["piln", "dl-spi-review"],
+        "requiredCitationDocIds": ["piln", "dl-spi-review"],
+        "minRefHits": 2,
+        "minRefDocCount": 2,
+        "minCitationCount": 2,
+        "minCitationDocCount": 2,
+        "minSystemBCount": 1,
+        "requireRefsReady": true,
+        "requirePolishStatus": true,
+        "allowedRefPolishStatuses": ["full", "heuristic"]
+      }
     }
   ]
 }

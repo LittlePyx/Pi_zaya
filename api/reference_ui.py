@@ -45,6 +45,7 @@ from kb.reference_query_family import (
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
     prompt_explicitly_requests_multi_paper_list as _shared_prompt_explicitly_requests_multi_paper_list,
     prompt_explicitly_requests_single_paper_pick as _shared_prompt_explicitly_requests_single_paper_pick,
+    prompt_likely_multi_paper_synthesis as _shared_prompt_likely_multi_paper_synthesis,
     prompt_reference_focus_action as _shared_prompt_reference_focus_action,
     prompt_requests_reference_compare as _shared_prompt_requests_reference_compare,
     prompt_requests_reference_definition as _shared_prompt_requests_reference_definition,
@@ -8994,6 +8995,12 @@ def _refs_hit_matches_expansion_variants(hit: dict) -> bool:
 
 def _filter_refs_hits_by_prompt_focus(prompt: str, hits: list[dict]) -> list[dict]:
     rows = [hit for hit in (hits or []) if isinstance(hit, dict)]
+    if (
+        _prompt_likely_multi_paper_synthesis(prompt)
+        and (not _prompt_explicitly_requests_multi_paper_list(prompt))
+        and (not _prompt_likely_cross_paper_refs(prompt))
+    ):
+        return rows
     bound_hits = _prompt_explicitly_binds_single_source(prompt, rows)
     if bound_hits:
         rows = bound_hits
@@ -9081,6 +9088,10 @@ def _sort_refs_hits_for_display(*, prompt: str, hits: list[dict]) -> list[dict]:
     prefer_raw_order = not (
         _prompt_requires_explicit_focus_match(prompt)
         or _prompt_likely_cross_paper_refs(prompt)
+        or (
+            _prompt_likely_multi_paper_synthesis(prompt)
+            and (not _prompt_explicitly_requests_multi_paper_list(prompt))
+        )
     )
     for idx, hit in enumerate(hits or []):
         if not isinstance(hit, dict):
@@ -9105,6 +9116,10 @@ def _sort_refs_hits_for_display(*, prompt: str, hits: list[dict]) -> list[dict]:
 
 def _prompt_explicitly_requests_multi_paper_list(prompt: str) -> bool:
     return _shared_prompt_explicitly_requests_multi_paper_list(prompt)
+
+
+def _prompt_likely_multi_paper_synthesis(prompt: str) -> bool:
+    return _shared_prompt_likely_multi_paper_synthesis(prompt)
 
 
 def _prompt_likely_cross_paper_refs(prompt: str) -> bool:
@@ -9162,6 +9177,13 @@ def _refs_hit_relevance_llm_enabled() -> bool:
 def _should_try_refs_hit_relevance_gate(prompt: str, hits: list[dict], *, guide_mode: bool) -> bool:
     rows = [hit for hit in (hits or []) if isinstance(hit, dict)]
     if not rows:
+        return False
+    if (
+        _prompt_likely_multi_paper_synthesis(prompt)
+        and (not _prompt_explicitly_requests_multi_paper_list(prompt))
+        and (not _prompt_likely_cross_paper_refs(prompt))
+        and len(rows) > 1
+    ):
         return False
     if not (_prompt_requires_explicit_focus_match(prompt) or _prompt_likely_cross_paper_refs(prompt)):
         return False
@@ -9603,6 +9625,14 @@ def enrich_refs_payload(
         prompt_requires_focus_match = bool(_prompt_requires_explicit_focus_match(prompt))
         prompt_cross_paper_refs = bool(_prompt_likely_cross_paper_refs(prompt))
         prompt_multi_paper_list = bool(_prompt_explicitly_requests_multi_paper_list(prompt))
+        prompt_ordinary_multi_source_synthesis = bool(
+            _prompt_likely_multi_paper_synthesis(prompt)
+            and (not prompt_multi_paper_list)
+            and (not prompt_cross_paper_refs)
+        )
+        prompt_multi_source_synthesis = bool(
+            prompt_multi_paper_list or prompt_ordinary_multi_source_synthesis
+        )
         raw_hits = []
         scored_ready: list[float] = []
         filtered_self_hits = 0
@@ -9638,7 +9668,7 @@ def enrich_refs_payload(
         for hit2 in raw_hits:
             score, score_pending = _effective_ui_score(hit2)
             force_keep = _should_force_keep_ref_hit(hit2)
-            if prompt_multi_paper_list:
+            if prompt_multi_source_synthesis:
                 hits.append(hit2)
                 continue
             if has_pending:
@@ -9727,7 +9757,7 @@ def enrich_refs_payload(
                         hit2["ui_meta"] = ui
                     except Exception:
                         continue
-        if hits and (not has_pending):
+        if hits and (not has_pending) and (not prompt_ordinary_multi_source_synthesis):
             hits = _filter_refs_hits_by_prompt_focus(prompt, hits)
         post_focus_filter_hit_count = int(len(hits))
         # Clean up internal field used by focus filter expansion check.
@@ -9740,7 +9770,7 @@ def enrich_refs_payload(
                 allow_expensive_llm_for_ready
                 and (not _refs_payload_deadline_near(deadline_at, 0.35))
             )
-            if (not has_pending) and slow_allowed and (not prompt_multi_paper_list):
+            if (not has_pending) and slow_allowed and (not prompt_multi_source_synthesis):
                 hits = _maybe_llm_rerank_refs_hits(
                     prompt=prompt,
                     hits=hits,
@@ -9750,13 +9780,20 @@ def enrich_refs_payload(
             allow_expensive_llm_for_ready
             and (not _refs_payload_deadline_near(deadline_at, 0.35))
         )
-        if hits and len(hits) > 1 and (not has_pending) and slow_allowed and (not prompt_multi_paper_list):
+        if hits and len(hits) > 1 and (not has_pending) and slow_allowed and (not prompt_multi_source_synthesis):
             hits = _maybe_llm_filter_refs_hits(
                 prompt=prompt,
                 hits=hits,
                 guide_mode=guide_active,
             )
         post_llm_filter_hit_count = int(len(hits))
+        display_cap = 0
+        if prompt_multi_paper_list:
+            display_cap = 6
+        elif prompt_multi_source_synthesis:
+            display_cap = 4
+        if display_cap > 0 and len(hits) > display_cap:
+            hits = hits[:display_cap]
         t_final = time.time()
         slow_allowed = bool(
             allow_expensive_llm_for_ready
@@ -9781,10 +9818,13 @@ def enrich_refs_payload(
             "post_focus_filter_hit_count": int(post_focus_filter_hit_count),
             "post_llm_filter_hit_count": int(post_llm_filter_hit_count),
             "final_hit_count": int(len(hits)),
+            "display_cap": int(display_cap),
             "filtered_self_hit_count": int(filtered_self_hits),
             "prompt_requires_explicit_focus_match": bool(prompt_requires_focus_match),
             "prompt_likely_cross_paper_refs": bool(prompt_cross_paper_refs),
             "prompt_explicitly_requests_multi_paper_list": bool(prompt_multi_paper_list),
+            "prompt_likely_multi_paper_synthesis": bool(prompt_multi_source_synthesis),
+            "prompt_ordinary_multi_source_synthesis": bool(prompt_ordinary_multi_source_synthesis),
             "enrich_elapsed_total_s": round(max(0.0, t_done - t_enrich_start), 3),
             "enrich_elapsed_score_gate_s": round(max(0.0, t_score_gate - t_enrich_start), 3),
             "enrich_elapsed_focus_filter_s": round(max(0.0, t_focus_filter - t_enrich_start), 3),

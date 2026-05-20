@@ -203,7 +203,10 @@ from kb.paper_guide_shared import (
     _trim_paper_guide_prompt_field,
     _trim_paper_guide_prompt_snippet,
 )
-from kb.reference_query_family import prompt_explicitly_requests_multi_paper_list
+from kb.reference_query_family import (
+    prompt_explicitly_requests_multi_paper_list,
+    prompt_likely_multi_paper_synthesis,
+)
 from kb.pdf_tools import run_pdf_to_md
 from kb.paper_guide_postprocess import (
     _sanitize_paper_guide_answer_for_user,
@@ -1606,6 +1609,20 @@ def _augment_prompt_with_source_hint(prompt: str, source_hint: str) -> str:
     return f"{hint} {q}".strip()
 
 
+def _source_hint_for_query(source_hint: str) -> str:
+    raw = str(source_hint or "").strip()
+    if not raw:
+        return ""
+    try:
+        path = Path(raw)
+        name = path.stem or path.name
+    except Exception:
+        name = raw
+    name = re.sub(r"\.en$", "", str(name or ""), flags=re.I).strip()
+    name = re.sub(r"\s+", " ", name)
+    return name or raw
+
+
 def _apply_bound_source_hints(prompt: str, source_hints: list[str], *, limit: int = 2) -> str:
     q = str(prompt or "").strip()
     if not q:
@@ -1615,6 +1632,28 @@ def _apply_bound_source_hints(prompt: str, source_hints: list[str], *, limit: in
     seen: set[str] = set()
     for raw in source_hints or []:
         hint = str(raw or "").strip()
+        if not hint:
+            continue
+        key = hint.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out = _augment_prompt_with_source_hint(out, hint)
+        used += 1
+        if used >= max(1, int(limit)):
+            break
+    return out
+
+
+def _apply_preferred_source_hints(prompt: str, source_hints: list[str], *, limit: int = 6) -> str:
+    q = str(prompt or "").strip()
+    if not q:
+        return q
+    out = q
+    used = 0
+    seen: set[str] = set()
+    for raw in list(source_hints or []):
+        hint = _source_hint_for_query(str(raw or ""))
         if not hint:
             continue
         key = hint.lower()
@@ -2689,7 +2728,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     continue
                 seen_pref.add(cand)
                 preferred_source_hints.append(cand)
-                if len(preferred_source_hints) >= 3:
+                if len(preferred_source_hints) >= 6:
                     break
         if paper_guide_mode:
             for cand in (paper_guide_bound_source_path, paper_guide_bound_source_name):
@@ -2699,6 +2738,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 preferred_source_hints.insert(0, cand_norm)
             if len(preferred_source_hints) > 3:
                 preferred_source_hints = preferred_source_hints[:3]
+        prompt_multi_source_synthesis = bool(
+            prompt_likely_multi_paper_synthesis(prompt or retrieval_prompt or "")
+            or len(preferred_source_hints) >= 3
+        )
+        if (not paper_guide_mode) and preferred_source_hints:
+            retrieval_prompt = _apply_preferred_source_hints(
+                retrieval_prompt,
+                preferred_source_hints,
+                limit=6 if prompt_multi_source_synthesis else 3,
+            )
         inferred_source_hint = ""
         if paper_guide_mode and paper_guide_bound_source_ready and preferred_source_hints:
             retrieval_prompt = _apply_bound_source_hints(retrieval_prompt, preferred_source_hints, limit=2)
@@ -3086,7 +3135,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer_hit_limit,
                 min(
                     int(top_k),
-                    5 if (guide_strict_mode and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough"}) else (4 if guide_strict_mode else 3),
+                    6
+                    if prompt_multi_source_synthesis
+                    else (
+                        5
+                        if (
+                            guide_strict_mode
+                            and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough"}
+                        )
+                        else (4 if guide_strict_mode else 3)
+                    ),
                 ),
             )
             should_sync_deep_seed = bool(hits_raw) and (
@@ -3525,7 +3583,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             1,
             min(
                 int(top_k),
-                5 if (paper_guide_mode and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough", "citation_lookup"}) else 4,
+                6
+                if prompt_multi_source_synthesis
+                else (
+                    5
+                    if (
+                        paper_guide_mode
+                        and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough", "citation_lookup"}
+                    )
+                    else 4
+                ),
             ),
         )
         answer_seed = _select_answer_seed_for_generation(
@@ -4022,7 +4089,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 final_refs_docs = _merge_refs_display_docs_with_answer_hits(
                     refs_seed_docs=list(refs_seed_docs_for_display or []),
                     answer_hits=list(answer_hits or []),
-                    limit=max(1, min(int(top_k or 4), 4)),
+                    limit=max(1, min(int(top_k or 4), 6 if prompt_multi_source_synthesis else 4)),
                     answer=answer,
                 )
                 _trace_section(

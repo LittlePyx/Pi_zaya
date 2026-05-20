@@ -83,6 +83,84 @@ def test_detect_text_reference_opportunities_for_normal_question(monkeypatch) ->
     assert opportunities[0]["ref_num"] == 4
 
 
+def test_detect_text_reference_opportunities_for_ordinary_reading_route(monkeypatch) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
+        del _index, source_path, source_sha1
+        if int(ref_num) == 4:
+            return {
+                "ref": {
+                    "title": "Single-pixel imaging via compressive sampling",
+                    "raw": "Duarte et al. Single-pixel imaging via compressive sampling.",
+                }
+            }
+        return None
+
+    monkeypatch.setattr(mod, "resolve_reference_entry", fake_resolve)
+
+    opportunities = detect_text_reference_opportunities(
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？",
+        answer="先读 single-pixel imaging 的基础综述，再读编码选择和 deep learning SPI。",
+        answer_hits=[
+            {
+                "text": "Principles and prospects for single-pixel imaging.",
+                "meta": {
+                    "source_path": "db/demo/spi-prospects.en.md",
+                    "source_sha1": "abc",
+                    "heading_path": "Principles",
+                },
+            }
+        ],
+        db_dir="db",
+    )
+
+    assert opportunities
+    assert opportunities[0]["label"] == "single-pixel imaging"
+    assert opportunities[0]["ref_num"] == 4
+
+
+def test_detect_text_reference_opportunities_keeps_common_spad_label_for_reading_pair(monkeypatch) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
+        del _index, source_path, source_sha1
+        if int(ref_num) == 6:
+            return {
+                "ref": {
+                    "title": "Confocal-based fluorescence fluctuation spectroscopy with a SPAD array detector",
+                    "raw": "Confocal-based fluorescence lifetime spectroscopy with a SPAD array detector.",
+                }
+            }
+        return None
+
+    monkeypatch.setattr(mod, "resolve_reference_entry", fake_resolve)
+
+    opportunities = detect_text_reference_opportunities(
+        prompt="单光子成像里，探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？",
+        answer="先读 SPAD detector 噪声背景，再看 physics-informed deep learning 如何建模 SPAD 噪声。",
+        answer_hits=[
+            {
+                "text": "The method models SPAD arrays and noise sources.",
+                "meta": {
+                    "source_path": "db/demo/pidl.en.md",
+                    "source_sha1": "abc",
+                    "heading_path": "Figure 1",
+                },
+            }
+        ],
+        db_dir="db",
+    )
+
+    assert opportunities
+    assert opportunities[0]["label"] == "physics-informed deep learning" or opportunities[0]["label"] == "SPAD"
+    assert opportunities[0]["ref_num"] == 6
+
+
 def test_reference_opportunities_can_be_injected_inline_without_tail_note() -> None:
     opportunities = detect_paper_guide_reference_opportunities(
         prompt="I am new to this. Is ADMM original to this paper, or does it come from earlier work?",

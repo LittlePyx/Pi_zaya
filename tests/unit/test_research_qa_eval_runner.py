@@ -18,7 +18,15 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     fixture = load_fixture()
 
     assert len(fixture.docs) == 21
-    assert len(fixture.cases) == 9
+    assert len(fixture.cases) == 14
+    case_ids = {str(item.get("id") or "") for item in fixture.cases}
+    assert {
+        "spi-roadmap-beginner",
+        "cassi-to-3d-sci-lineage",
+        "microscopy-methods-map",
+        "single-photon-reading-pair",
+        "piln-dl-spi-position",
+    }.issubset(case_ids)
     assert source_path_for_doc(fixture, "scinerf").endswith(
         "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/"
         "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
@@ -68,6 +76,123 @@ def test_validate_case_accepts_grounded_system_b_answer():
 
     assert quality["ok"] is True
     assert quality["system_b_count"] == 1
+
+
+def test_validate_case_accepts_multi_doc_ordinary_question_with_system_b_and_polished_refs():
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "spi-roadmap-beginner")
+    spi_path = source_path_for_doc(fixture, "spi-prospects")
+    dl_path = source_path_for_doc(fixture, "dl-spi-review")
+    hsi_path = source_path_for_doc(fixture, "hsi-fsi")
+    answer = (
+        "A good single-pixel imaging route is: first read the SPI principles review, "
+        "then read Hadamard/Fourier coding choices, and finally read the deep learning SPI review "
+        "for upstream single-pixel imaging background [[CITE:sinline:18]]."
+    )
+    result = {
+        "status": "done",
+        "done": True,
+        "user_msg_id": 301,
+        "assistant_message": {
+            "role": "assistant",
+            "content": answer,
+            "cite_details": [
+                {"source_path": spi_path, "source_name": "Principles and prospects for single-pixel imaging"},
+                {"source_path": dl_path, "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning"},
+                {"source_path": hsi_path, "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging"},
+            ],
+        },
+        "refs_payload": {
+            "301": {
+                "display_state": "ready",
+                "hits": [
+                    {
+                        "text": "single-pixel imaging principles",
+                        "meta": {"source_path": spi_path, "ref_pack_state": "ready"},
+                        "ui_meta": {
+                            "source_path": spi_path,
+                            "display_name": "Principles and prospects for single-pixel imaging",
+                            "summary_line": "This card establishes the core single-pixel imaging measurement route.",
+                            "why_line": "The user asks for a reading roadmap, so this evidence should be the starting point.",
+                            "polish_status": "full",
+                        },
+                    },
+                    {
+                        "text": "deep learning SPI review",
+                        "meta": {"source_path": dl_path, "ref_pack_state": "ready"},
+                        "ui_meta": {
+                            "source_path": dl_path,
+                            "display_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                            "summary_line": "This card explains where deep learning expands SPI and where it remains risky.",
+                            "why_line": "It lets the answer include both benefits and limitations rather than a hype summary.",
+                            "polish_status": "heuristic",
+                        },
+                    },
+                    {
+                        "text": "Hadamard versus Fourier SPI",
+                        "meta": {"source_path": hsi_path, "ref_pack_state": "ready"},
+                        "ui_meta": {
+                            "source_path": hsi_path,
+                            "display_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                            "summary_line": "This card turns the route into a coding and measurement-budget choice.",
+                            "why_line": "It is the practical bridge from principles to experiment design.",
+                            "polish_status": "full",
+                        },
+                    },
+                ],
+            }
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+
+    assert quality["ok"] is True
+    assert quality["ref_hit_count"] == 3
+    assert quality["system_b_count"] == 1
+
+
+def test_validate_case_rejects_unready_unpolished_refs_and_missing_ordinary_system_b():
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "spi-roadmap-beginner")
+    spi_path = source_path_for_doc(fixture, "spi-prospects")
+    result = {
+        "status": "done",
+        "done": True,
+        "user_msg_id": 302,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "Read a single-pixel imaging review first, then maybe deep learning and Hadamard later.",
+            "cite_details": [
+                {"source_path": spi_path, "source_name": "Principles and prospects for single-pixel imaging"}
+            ],
+        },
+        "refs_payload": {
+            "302": {
+                "display_state": "pending",
+                "hits": [
+                    {
+                        "text": "single-pixel imaging principles",
+                        "meta": {"source_path": spi_path, "ref_pack_state": "pending"},
+                        "ui_meta": {
+                            "source_path": spi_path,
+                            "display_name": "Principles and prospects for single-pixel imaging",
+                            "summary_line": "This card is long enough to avoid the short-copy failure.",
+                            "why_line": "This explanation is also long enough, but it has no polish status.",
+                        },
+                    }
+                ],
+            }
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert quality["ok"] is False
+    assert "refs_min_hit_count" in failed_names
+    assert "refs_ready" in failed_names
+    assert "refs_card_polish_status" in failed_names
+    assert "system_b_min_count" in failed_names
 
 
 def test_validate_case_rejects_template_answer_and_missing_system_b():
