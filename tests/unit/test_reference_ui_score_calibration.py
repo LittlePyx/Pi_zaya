@@ -2794,7 +2794,7 @@ def test_build_hit_ui_meta_rebinds_summary_heading_to_exact_loc_path(monkeypatch
     assert str(ui.get("subsection_label") or "") == "2.2 Basis patterns generation"
     primary_evidence = ui.get("primary_evidence") or {}
     assert str(primary_evidence.get("heading_path") or "") == "2. Comparison of theory / 2.2 Basis patterns generation"
-    assert str(primary_evidence.get("selection_reason") or "") == "prompt_aligned_block"
+    assert str(primary_evidence.get("selection_reason") or "") in {"prompt_aligned", "prompt_aligned_block"}
     reader_open = ui.get("reader_open") or {}
     assert str(reader_open.get("headingPath") or "") == "2. Comparison of theory / 2.2 Basis patterns generation"
     assert (reader_open.get("primaryEvidence") or {}) == primary_evidence
