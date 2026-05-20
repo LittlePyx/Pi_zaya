@@ -34,6 +34,51 @@ def test_build_paper_guide_direct_answer_override_prefers_abstract_path():
     assert "citation" not in calls
 
 
+def test_build_paper_guide_direct_answer_override_detects_natural_zh_reading_prompt(monkeypatch):
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_resolve_doc_map_records_from_source",
+        lambda source_path, **_kwargs: [
+            {
+                "source_path": source_path,
+                "heading_path": "Demo Paper",
+                "locate_anchor": "Yunhao Li Xiaodong Wang Zhejiang University {author}@example.edu.cn",
+            },
+            {
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "locate_anchor": "This paper connects snapshot compressive imaging with a NeRF representation.",
+            },
+            {
+                "source_path": source_path,
+                "heading_path": "3. Method",
+                "locate_anchor": "The method optimizes the 3D representation from the compressed observation.",
+            },
+        ],
+    )
+
+    out = _build_paper_guide_direct_answer_override(
+        paper_guide_mode=True,
+        prompt_family="overview",
+        prompt_for_user="我没看懂它怎么从一张压缩图变成可以转视角的3D场景，我应该先读哪几段？",
+        paper_guide_focus_source_path="focus.md",
+        paper_guide_direct_source_path="direct.md",
+        paper_guide_bound_source_path="bound.md",
+        answer_hits=[{"meta": {"source_path": "bound.md"}}],
+        special_focus_block="",
+        db_dir="db",
+        llm=None,
+        build_direct_abstract_answer=lambda **_kwargs: "",
+        build_direct_citation_lookup_answer=lambda **_kwargs: "",
+    )
+
+    assert out.startswith("可以先按这几处读：")
+    assert "Yunhao Li" not in out
+    assert "1. Abstract" in out
+    assert "2. 3. Method" in out
+    assert "snapshot compressive imaging" in out
+
+
 def test_build_paper_guide_direct_answer_override_uses_targeted_box_hit(monkeypatch):
     monkeypatch.setattr(
         direct_answer_runtime,
@@ -71,12 +116,22 @@ def test_build_paper_guide_direct_answer_override_uses_targeted_box_hit(monkeypa
         build_direct_citation_lookup_answer=lambda **_kwargs: "",
     )
 
-    assert "From Box 1" in out
+    assert "Relevant passage from Box 1" in out
     assert "M < N" in out
 
 
-def test_build_paper_guide_direct_answer_override_uses_citation_lookup_without_explicit_target():
+def test_build_paper_guide_direct_answer_override_uses_exact_citation_lookup_without_template(monkeypatch):
     calls = {}
+    monkeypatch.setattr(
+        direct_answer_runtime,
+        "_resolve_exact_citation_lookup_support_from_source",
+        lambda source_path, **_kwargs: {
+            "source_path": source_path,
+            "heading_path": "Related Work",
+            "locate_anchor": "The method follows ADMM [4].",
+            "ref_nums": [4],
+        },
+    )
 
     def _build_direct_abstract_answer(**kwargs):
         calls["abstract"] = kwargs
@@ -101,10 +156,10 @@ def test_build_paper_guide_direct_answer_override_uses_citation_lookup_without_e
         build_direct_citation_lookup_answer=_build_direct_citation_lookup_answer,
     )
 
-    assert out == "CITATION"
-    assert calls["citation"]["source_path"] == "focus.md"
-    assert calls["citation"]["special_focus_block"] == "focus"
+    assert "Use [4] as the cited source for this passage." in out
+    assert "Source location: Related Work." in out
     assert "abstract" not in calls
+    assert "citation" not in calls
 
 
 def test_build_paper_guide_direct_answer_override_skips_citation_lookup_when_targeted():
@@ -199,7 +254,9 @@ def test_build_paper_guide_direct_answer_override_supports_exact_equation_prompt
         build_direct_citation_lookup_answer=lambda **_kwargs: "",
     )
 
-    assert out == "Equation support (resolving exact equation + variable definitions)..."
+    assert "Equation (1) is stated in 3. Method / 3.1. Background on NeRF:" in out
+    assert "C(r)=..." in out
+    assert "where t_n and t_f are near and far bounds" in out
 
 
 def test_build_paper_guide_direct_answer_override_builds_component_role_answer_for_beginner_prompt(monkeypatch):
@@ -231,7 +288,7 @@ def test_build_paper_guide_direct_answer_override_builds_component_role_answer_f
     )
 
     low = out.lower()
-    assert "retrieved method evidence" in low
+    assert "in simple terms" in low
     assert "rvt converts each pinhole image into a radial-symmetry map" in low
     assert "apr uses phase-correlation registration to estimate shift vectors" in low
 

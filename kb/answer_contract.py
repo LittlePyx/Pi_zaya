@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 
 from kb.paper_guide_shared import _source_name_from_md_path
+from kb.reference_query_family import prompt_likely_cross_paper_refs
 
 
 def _split_kb_miss_notice(text: str) -> tuple[str, str]:
@@ -63,6 +64,29 @@ _ANSWER_INTENT_WRITING_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _ANSWER_CITE_HINT_RE = re.compile(r"(\[\d+\]|\[\[CITE:)", flags=re.IGNORECASE)
+_ANSWER_TEMPLATE_ONLY_RE = re.compile(
+    r"(?is)^\s*(?:"
+    r"The paper cites\b|"
+    r"The paper states this explicitly\b|"
+    r"Doc map\s*\(|"
+    r"Equation support\s*\(|"
+    r"Figure caption\s*\(|"
+    r"From the retrieved method evidence\b|"
+    r"This hit is directly relevant\b|"
+    r"This paper contains sections relevant to the query\b|"
+    r"该命中与问题主题相关|"
+    r"该命中的章节.*?与问题直接相关|"
+    r"本文作为多篇库内命中的一项被保留"
+    r")",
+)
+_ANSWER_INCOMPLETE_FRAGMENT_RE = re.compile(
+    r"(?:"
+    r"具体来说|简单来说|展开来说|也就是说|换句话说|核心是|可以理解为|"
+    r"主要包括|分成|分为|下面|如下|例如|比如|"
+    r"specifically|in short|in simple terms|for example|for instance|as follows|including"
+    r")\s*[:：]\s*$",
+    flags=re.IGNORECASE,
+)
 _ANSWER_LIMITS_HINT_RE = re.compile(
     r"(\bmay\b|\bmight\b|\buncertain\b|\bunknown\b|\bnot shown\b|\binsufficient\b|\bassum(?:e|ption)\b|"
     r"可能|不确定|未知|未给出|证据不足|假设)",
@@ -73,11 +97,6 @@ _ANSWER_SECTION_PREFIX_RE = re.compile(
 )
 _ANSWER_NEXT_STEPS_HEADER_RE = re.compile(r"(?im)^\s*(Next Steps|Next Step|下一步建议|下一步|建议)\s*[:：]")
 _ANSWER_ORDERED_LIST_RE = re.compile(r"(?m)^\s*1\.\s+\S+")
-_ANSWER_CROSS_PAPER_QUERY_RE = re.compile(
-    r"(\bother papers?\b|\bwhich papers?\b|\bwhich paper\b|\bbesides this paper\b|\bin my library\b|"
-    r"哪篇|哪些论文|别的论文|其他论文|库里|文库里)",
-    flags=re.IGNORECASE,
-)
 _ANSWER_INTENTS = {"reading", "compare", "idea", "experiment", "troubleshoot", "writing"}
 _ANSWER_DEPTHS = {"L1", "L2", "L3"}
 _ANSWER_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -534,6 +553,47 @@ def _has_sufficient_answer_sections(
     return len(keys) >= 2
 
 
+def _answer_looks_template_only(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    if _ANSWER_TEMPLATE_ONLY_RE.search(s):
+        return True
+    first_line = s.splitlines()[0].strip()
+    if re.search(r"\b(?:directly relevant|good entry point|matched section|matched passage)\b", first_line, flags=re.IGNORECASE):
+        quoted_lines = [line for line in s.splitlines() if line.strip().startswith(">")]
+        return bool(quoted_lines or len(s) < 240)
+    return False
+
+
+def _answer_looks_incomplete_fragment(
+    text: str,
+    *,
+    paper_guide_mode: bool = False,
+    prompt_family: str = "",
+    has_hits: bool = False,
+) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    if re.search(r"[,，;；、]\s*$", s):
+        return True
+    if _ANSWER_INCOMPLETE_FRAGMENT_RE.search(s):
+        return True
+    family = str(prompt_family or "").strip().lower()
+    broad_family = family in {
+        "overview",
+        "compare",
+        "method",
+        "reproduce",
+        "strength_limits",
+        "figure_walkthrough",
+    }
+    if paper_guide_mode and has_hits and broad_family and len(s) < 90 and re.search(r"[:：]\s*$", s):
+        return True
+    return False
+
+
 def _build_answer_quality_probe(
     answer: str,
     *,
@@ -552,7 +612,14 @@ def _build_answer_quality_probe(
     has_limits = "limits" in keys
     has_next_steps = "next_steps" in keys
     has_citations = bool(_ANSWER_CITE_HINT_RE.search(text) or re.search(r"\[\d{1,3}\]", text))
+    template_only = _answer_looks_template_only(text)
     prompt_family_norm = str(prompt_family or "").strip().lower()
+    incomplete_fragment = _answer_looks_incomplete_fragment(
+        text,
+        paper_guide_mode=bool(paper_guide_mode),
+        prompt_family=prompt_family_norm,
+        has_hits=bool(has_hits),
+    )
     output_mode_norm = _normalize_answer_output_mode(output_mode)
     abstract_mode = bool(paper_guide_mode and prompt_family_norm == "abstract")
     locate_required = bool(paper_guide_mode and prompt_family_norm == "figure_walkthrough" and has_hits)
@@ -586,11 +653,18 @@ def _build_answer_quality_probe(
     evidence_ok = (not evidence_required) or bool(has_evidence)
     locate_ok = (not locate_required) or bool(has_locate_hint)
     if abstract_mode:
-        minimum_ok = bool(abstract_style_ok)
+        minimum_ok = bool(abstract_style_ok and (not incomplete_fragment))
     elif not structured_required:
-        minimum_ok = bool(len(text) >= 40 and locate_ok)
+        minimum_ok = bool(len(text) >= 40 and locate_ok and (not template_only) and (not incomplete_fragment))
     else:
-        minimum_ok = bool(has_conclusion and evidence_ok and ((not next_steps_required) or has_next_steps) and locate_ok)
+        minimum_ok = bool(
+            has_conclusion
+            and evidence_ok
+            and ((not next_steps_required) or has_next_steps)
+            and locate_ok
+            and (not template_only)
+            and (not incomplete_fragment)
+        )
     return {
         "contract_enabled": bool(contract_enabled),
         "intent": str(intent or ""),
@@ -603,6 +677,8 @@ def _build_answer_quality_probe(
         "has_limits": bool(has_limits),
         "has_next_steps": bool(has_next_steps),
         "has_citations": bool(has_citations),
+        "template_only": bool(template_only),
+        "incomplete_fragment": bool(incomplete_fragment),
         "paper_guide_mode": bool(paper_guide_mode),
         "prompt_family": prompt_family_norm,
         "has_locate_hint": bool(has_locate_hint),
@@ -701,6 +777,8 @@ def _build_paper_guide_grounding_rules(
         "- If a 'Paper-guide evidence cards' block is provided, treat each DOC-k card as a hard boundary for paper-grounded claims.",
         "- Follow the card's use= instruction and stay inside the snippet scope instead of merging multiple cards into a stronger unsupported claim.",
         "- If a DOC-k card shows cite_example=[[CITE:<sid>:<ref_num>]], reuse that exact marker on the claim derived from the card unless DOI or author-year text clearly identifies a different ref.",
+        "- If an upstream-reference opportunity is provided for an ordinary origin, prior-work, concept, or method-background question, place its exact cite_example inline on the explanatory sentence instead of moving it to a separate reference trail.",
+        "- For origin/prior-work questions, answer the user's actual question first (for example, whether the idea is original or borrowed), then attach the upstream cite; never start with locator shells like 'The paper cites...' or 'This is stated in...'.",
         "- If a 'Paper-guide citation grounding hints' block is provided, keep each claim aligned to the same DOC-k line before choosing [[CITE:<sid>:<ref_num>]].",
         "- Prefer the ref numbers listed on that DOC-k line; do not borrow a ref number from another DOC-k line unless DOI or author-year text explicitly identifies it.",
     ]
@@ -737,6 +815,14 @@ def _build_paper_guide_grounding_rules(
             [
                 "- Prompt family=citation_lookup: extract the exact in-paper reference numbers or reference-list entries from the narrowest matching snippet before adding interpretation.",
                 "- If the retrieved snippet already shows the explicit refs, do not answer 'not stated' or 'not mentioned'.",
+            ]
+        )
+    elif prompt_family_norm == "strength_limits":
+        lines.extend(
+            [
+                "- Prompt family=strength_limits: when comparing method strengths, do not turn algorithm examples into peer method categories unless the retrieved text explicitly presents them as separate top-level classes.",
+                "- For reconstruction-method questions, treat basis pursuit, l1 minimization, total variation, curvature, or other optimization variants as submethods of compressed-sensing/optimization reconstruction when the evidence frames them that way.",
+                "- Do not claim an exact taxonomy count such as 'three classes' unless the retrieved evidence explicitly enumerates that count; otherwise phrase it as main approaches or evidence-backed families.",
             ]
         )
     if output_mode_norm == "fact_answer":
@@ -968,14 +1054,7 @@ def _contract_snippet_candidates_from_primary_evidence(primary_evidence: dict | 
 
 
 def _contract_requests_cross_paper_query(prompt: str) -> bool:
-    return bool(
-        re.search(
-            r"(\bwhich other papers?\b|\bother papers?\b|\bbesides this paper\b|\banother paper\b|"
-            r"除此之外|除(?:了)?这篇|其他论文|别的论文|还有哪些论文|另一篇论文)",
-            str(prompt or ""),
-            flags=re.IGNORECASE,
-        )
-    )
+    return prompt_likely_cross_paper_refs(prompt)
 
 
 def _contract_unique_source_names(answer_hits: list[dict] | None, *, limit: int = 4) -> list[str]:
@@ -1199,7 +1278,9 @@ def _clean_contract_snippet(text: str, *, max_len: int = 240) -> str:
         lines = lines[1:]
     cleaned = " ".join(lines).strip()
     cleaned = re.sub(r"^\s*#{1,6}\s*", "", cleaned)
-    cleaned = re.sub(r"\[\[CITE:[^\]]+\]\]|\[\d{1,4}\]", "", cleaned)
+    # N.b. intentionally NOT stripping [[CITE:...]] or [n] markers here:
+    # _evidence_section_is_too_thin already treats citation-marked content as
+    # substantive (see _ANSWER_CITE_HINT_RE), and stripping breaks traceability.
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:;,.")
     if not cleaned:
         return ""
@@ -1289,6 +1370,10 @@ def _build_hit_grounded_evidence_fallback(
     )
     if not best_snippet:
         return ""
+    # Strip [n] markers from the retrieval-system snippet — they are NOT the
+    # LLM's context citations and would create misleading reference links.
+    best_snippet = re.sub(r"\[\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*\]", "", best_snippet).strip()
+    best_snippet = re.sub(r"\s+", " ", best_snippet).strip(" ,;:.")
     topic = _contract_cross_paper_topic_label(prompt) or _contract_focus_label(prompt)
     singular_rel, _plural_rel, zh_rel = _contract_cross_paper_relation(prompt)
     if prefer_zh:
@@ -1368,9 +1453,9 @@ def _build_hit_grounded_conclusion_bridge(
     if best_source and topic:
         return f"命中的论文《{best_source}》直接{zh_rel}了“{topic}”。"
     if best_heading:
-        return f"命中的论文在“{best_heading}”里给出了直接相关的说明。"
+        return f"命中的论文在“{best_heading}”里留下了可核对的原文线索。"
     if best_source:
-        return f"命中的论文《{best_source}》给出了直接相关的说明。"
+        return f"命中的论文《{best_source}》留下了可核对的原文线索。"
     if best_snippet:
         return f"命中的论文直接指出：{best_snippet}"
     return ""
@@ -1445,11 +1530,11 @@ def _build_hit_grounded_evidence_bridge_zh(
     if best_heading and topic:
         return f"命中章节“{best_heading}”直接{zh_rel}了“{topic}”；原文片段：{best_snippet}"
     if best_source and best_heading:
-        return f"《{best_source}》的“{best_heading}”部分给出了直接相关的说明；原文片段：{best_snippet}"
+        return f"《{best_source}》的“{best_heading}”部分提供了可核对的原文片段：{best_snippet}"
     if best_heading:
-        return f"命中章节“{best_heading}”给出了直接相关的说明；原文片段：{best_snippet}"
+        return f"命中章节“{best_heading}”提供了可核对的原文片段：{best_snippet}"
     if best_source:
-        return f"《{best_source}》的命中段落给出了直接相关的说明；原文片段：{best_snippet}"
+        return f"《{best_source}》的命中段落提供了可核对的原文片段：{best_snippet}"
     return f"命中片段的原文为：{best_snippet}"
 
 
@@ -1747,7 +1832,23 @@ def _apply_answer_contract_v1(
                 seeded_limits.append(remainder)
             continue
         if _ANSWER_CITE_HINT_RE.search(p):
-            evidence.append(p)
+            # Classify by content, not just [n] presence — limitation or
+            # future-work paragraphs should stay in their proper section.
+            _cp = p1.lower()
+            if re.search(
+                r"(?im)(\blimitation\b|\btradeoff\b|\bweakness\b|\bconcern\b|\brisk\b|"
+                r"\bdoes not scale\b|\binsufficient\b|局限|限制|不足|缺点|风险|挑战)",
+                _cp,
+            ):
+                seeded_limits.append(p1)
+            elif re.search(
+                r"(?im)(\bfuture\b|\brecommend\b|\b下一步\b|未来)",
+                _cp,
+            ):
+                _norm_step = _normalize_contract_step_item(p1)
+                seeded_steps.append(_norm_step or p1)
+            else:
+                evidence.append(p)
             continue
         classification = _classify_contract_extra_paragraph(p1) if has_hits else "extra"
         if classification == "evidence":
@@ -1766,6 +1867,9 @@ def _apply_answer_contract_v1(
     prefer_zh = _prefer_zh_locale(prompt, src)
     cross_paper_query = _contract_requests_cross_paper_query(prompt)
     cross_paper_sources = _contract_unique_source_names(answer_hits, limit=4) if has_hits else []
+    # Preserve [n] citations from the original conclusion — rewriting
+    # may drop them, breaking traceability.
+    _orig_cites: list[str] = re.findall(r"\[\d{1,4}\]", conclusion)
     if cross_paper_query:
         if cross_paper_sources and _contract_cross_paper_conclusion_needs_rewrite(
             conclusion,
@@ -1802,6 +1906,9 @@ def _apply_answer_contract_v1(
         )
         if bridged_conclusion:
             conclusion = bridged_conclusion
+    # Restore original [n] citations dropped by rewriting
+    if _orig_cites and not re.search(r"\[\d{1,4}\]", conclusion):
+        conclusion += "  " + " ".join(sorted(set(_orig_cites), key=lambda x: int(x.strip("[]"))))
     steps_required = _answer_output_mode_requires_next_steps(output_mode)
     labels = {
         "conclusion": "结论" if prefer_zh else "Conclusion",
@@ -1969,4 +2076,3 @@ def _enhance_kb_miss_fallback(
     step_lines = "\n".join(f"{i}. {s}" for i, s in enumerate(steps, start=1))
     next_steps_title = "下一步建议" if prefer_zh else "Next Steps"
     return f"{notice}\n\n{body}\n\n{next_steps_title}:\n{step_lines}".strip()
-

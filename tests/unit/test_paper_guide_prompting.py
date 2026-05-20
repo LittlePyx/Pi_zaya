@@ -28,6 +28,23 @@ def test_paper_guide_prompt_family_detects_core_families():
         )
         == "citation_lookup"
     )
+    assert (
+        _paper_guide_prompt_family(
+            "Which in-paper references does this review cite when discussing compressed sensing? Please include the reference numbers."
+        )
+        == "citation_lookup"
+    )
+
+
+def test_paper_guide_prompt_family_detects_naive_source_trace_questions():
+    prompts = [
+        "ADMM 是怎么来的？作者这里是借鉴了谁的想法吗？",
+        "这个 APR 听起来不是他们原创的吧，源头是哪篇工作？",
+        "我完全不懂，这里的 ADMM-Net 之前是谁做的？",
+        "Where did this ADMM idea come from?",
+    ]
+    for prompt in prompts:
+        assert _paper_guide_prompt_family(prompt) == "citation_lookup"
 
 
 def test_paper_guide_prompt_family_prefers_overview_for_beginner_problem_and_application_questions():
@@ -120,6 +137,18 @@ def test_augment_paper_guide_retrieval_prompt_keeps_reference_list_bias_for_expl
     low = out.lower()
     assert "reference list" in low
     assert "works cited" in low
+
+
+def test_augment_paper_guide_retrieval_prompt_prioritizes_reconstruction_terms_for_cjk_tradeoff_query():
+    out = _augment_paper_guide_retrieval_prompt(
+        "文中提到的几类主流重建方法分别有什么优缺点，适用场景怎么选？",
+        family="strength_limits",
+    )
+    low = out.lower()
+    assert "acquisition and image reconstruction strategies" in low
+    assert "optimization" in low
+    assert "total variation" in low
+    assert "hadamard" in low
 
 
 def test_paper_guide_text_matches_requested_targets_for_box_and_section():

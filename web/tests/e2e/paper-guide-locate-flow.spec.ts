@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
 import { expect, test, type Page } from '@playwright/test'
 
 const PAPER_NAME = 'NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf'
@@ -11,20 +14,38 @@ test.use({
   viewport: { width: 1440, height: 900 },
 })
 
-const QUESTIONS: string[] = [
-  '这篇文章想解决的核心问题是什么，为什么传统方案不太好？',
-  '单像素成像的基本工作流程可以用一段话讲清楚吗？（从采集到重建）',
-  '文中提到的几类主流重建方法分别有什么优缺点，适用场景怎么选？',
-  '作者强调的主要瓶颈是什么：噪声、速度、分辨率还是硬件复杂度？为什么？',
-  '文中有没有给出提升成像速度的关键思路？它的代价是什么？',
-  '文章里对“压缩率/采样数”和重建质量的关系是怎么讨论的？',
-  '作者如何评价深度学习方法在单像素成像里的作用？它解决了什么，又带来了什么风险？',
-  '文中提到哪些硬件设计会显著影响成像质量或速度？',
-  '这篇综述里有没有对未来方向做出明确判断？最值得追的 2-3 个方向是什么？',
-  '如果我要复现一个最基础的 baseline，作者给的建议路线是什么？',
-  '文章有没有提到和其它成像范式（比如计算成像/压缩感知相关方向）的联系或区别？',
-  '这篇文章里有没有一处“同一句话提到多个相关工作”的地方？作者想表达的对比点是什么？',
-]
+type GoldenCase = {
+  id: string
+  question: string
+  answerContainsAny?: string[]
+  answerNotContains?: string[]
+  locateBlockIdsAny?: string[]
+  minLocateButtons?: number
+  notes?: string
+}
+
+type LocateAudit = {
+  count: number
+  targets: Array<{
+    blockId: string
+    heading: string
+  }>
+}
+
+type GoldenCaseReport = {
+  id: string
+  question: string
+  answerDoneMs: number
+  locateReadyMs: number
+  locateButtonCount: number
+  locateBlockIds: string[]
+  checks: Record<string, boolean>
+  answerPreview: string
+}
+
+const GOLDEN_CASES_PATH = path.join(process.cwd(), 'tests', 'fixtures', 'paper-guide-golden-cases.json')
+const GOLDEN_REPORT_PATH = path.join(process.cwd(), 'test-results', 'paper-guide-golden-report.json')
+const GOLDEN_CASES: GoldenCase[] = JSON.parse(fs.readFileSync(GOLDEN_CASES_PATH, 'utf8'))
 
 const QUESTION_LIMIT_RAW = Number(process.env.PW_QUESTION_LIMIT || 0)
 const QUESTION_LIMIT = Number.isFinite(QUESTION_LIMIT_RAW) && QUESTION_LIMIT_RAW > 0
@@ -35,9 +56,24 @@ const QUESTION_OFFSET = Number.isFinite(QUESTION_OFFSET_RAW) && QUESTION_OFFSET_
   ? Math.max(0, Math.floor(QUESTION_OFFSET_RAW))
   : 0
 const ACTIVE_QUESTIONS = (() => {
-  const sliced = QUESTIONS.slice(QUESTION_OFFSET)
+  const sliced = GOLDEN_CASES.slice(QUESTION_OFFSET)
   return QUESTION_LIMIT > 0 ? sliced.slice(0, QUESTION_LIMIT) : sliced
 })()
+
+function writeGoldenReport(records: GoldenCaseReport[]) {
+  fs.mkdirSync(path.dirname(GOLDEN_REPORT_PATH), { recursive: true })
+  fs.writeFileSync(
+    GOLDEN_REPORT_PATH,
+    JSON.stringify({
+      paper: PAPER_NAME,
+      generatedAt: new Date().toISOString(),
+      caseCount: records.length,
+      passCount: records.filter((item) => Object.values(item.checks).every(Boolean)).length,
+      records,
+    }, null, 2),
+    'utf8',
+  )
+}
 
 async function startPaperGuideFromLibrary(page: Page) {
   await page.goto('/library')
@@ -79,14 +115,31 @@ async function clickLocateButtonsAndAssert(
   assistantMsg: ReturnType<Page['locator']>,
   stepKey: string,
   attach: (name: string, buffer: Buffer) => Promise<void>,
-) {
+  expectedBlockIdsAny: string[] = [],
+): Promise<LocateAudit> {
   const locateBtns = assistantMsg.locator('button[aria-label="定位到原文证据"]')
+  await expect.poll(async () => locateBtns.count(), {
+    timeout: 30_000,
+    intervals: [250, 500, 750, 1000, 1500, 2000],
+  }).toBeGreaterThan(0)
+  const expectedBlocks = new Set(expectedBlockIdsAny.map((item) => String(item || '').trim()).filter(Boolean))
+  if (expectedBlocks.size > 0) {
+    await expect.poll(async () => {
+      const targets = await collectLocateTargets(locateBtns)
+      return targets.some((item) => expectedBlocks.has(item.blockId))
+    }, {
+      message: `${stepKey}: locate buttons never reached expected block set`,
+      timeout: 45_000,
+      intervals: [500, 750, 1000, 1500, 2000, 3000],
+    }).toBeTruthy()
+  }
   const count = await locateBtns.count()
+  const targets = await collectLocateTargets(locateBtns)
   expect.soft(count, `no locate buttons rendered for step=${stepKey}`).toBeGreaterThan(0)
   if (count <= 0) {
     const shot = await page.screenshot({ fullPage: false })
     await attach(`no-locate-${stepKey}.png`, shot)
-    return
+    return { count, targets }
   }
 
   const maxClicks = Math.min(3, count)
@@ -96,14 +149,23 @@ async function clickLocateButtonsAndAssert(
     const expectedHeading = (await btn.getAttribute('data-kb-locate-heading')) || ''
     await btn.click()
 
-    const reader = page.getByTestId('reader-content')
+    const reader = page.locator('[data-testid="reader-content"], .kb-reader-content').first()
     await expect(reader).toBeVisible({ timeout: 30_000 })
 
-    const status = page.getByTestId('reader-locate-status')
-    await expect(status).toBeVisible({ timeout: 30_000 })
+    const locateMeta = page.locator([
+      '[data-testid="reader-locate-status"]',
+      '[data-testid="reader-locate-resolution"]',
+      '[data-testid="reader-locate-mode"]',
+    ].join(', '))
+    await expect.poll(async () => locateMeta.count(), {
+      timeout: 30_000,
+      intervals: [250, 500, 750, 1000],
+    }).toBeGreaterThan(0)
+    await expect(locateMeta.first()).toBeVisible({ timeout: 30_000 })
 
     // Should not degrade into fuzzy locate for strict provenance locate.
-    await expect.soft(status).not.toContainText(/Fuzzy|fuzzy/i)
+    const locateMetaText = (await locateMeta.allInnerTexts()).join(' ')
+    expect.soft(locateMetaText).not.toMatch(/Fuzzy|fuzzy/i)
 
     // Must have a focused block in reader.
     const focus = page.locator('.kb-reader-focus')
@@ -128,6 +190,20 @@ async function clickLocateButtonsAndAssert(
     const shot = await page.screenshot({ fullPage: false })
     await attach(`locate-${stepKey}-${i + 1}.png`, shot)
   }
+  return { count, targets }
+}
+
+async function collectLocateTargets(locateBtns: ReturnType<Page['locator']>): Promise<LocateAudit['targets']> {
+  const count = await locateBtns.count()
+  const targets: LocateAudit['targets'] = []
+  for (let i = 0; i < count; i += 1) {
+    const btn = locateBtns.nth(i)
+    targets.push({
+      blockId: ((await btn.getAttribute('data-kb-locate-block-id')) || '').trim(),
+      heading: ((await btn.getAttribute('data-kb-locate-heading')) || '').trim(),
+    })
+  }
+  return targets
 }
 
 test.describe.serial('paper guide locate flow (recorded)', () => {
@@ -136,16 +212,20 @@ test.describe.serial('paper guide locate flow (recorded)', () => {
 
   test('NatPhoton-2019: natural questions with locate jumps', async ({ page }, testInfo) => {
     await startPaperGuideFromLibrary(page)
+    const reportRecords: GoldenCaseReport[] = []
+    writeGoldenReport(reportRecords)
 
     const attach = async (name: string, buffer: Buffer) => {
       await testInfo.attach(name, { body: buffer, contentType: 'image/png' })
     }
 
     for (let idx = 0; idx < ACTIVE_QUESTIONS.length; idx += 1) {
-      const q = ACTIVE_QUESTIONS[idx]
+      const goldenCase = ACTIVE_QUESTIONS[idx]
+      const q = goldenCase.question
       const stepKey = `q${String(QUESTION_OFFSET + idx + 1).padStart(2, '0')}`
 
       const beforeCount = await assistantMessages(page).count()
+      const startedAt = Date.now()
 
       const input = page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea')
       await expect(input).toBeVisible({ timeout: 30_000 })
@@ -162,8 +242,50 @@ test.describe.serial('paper guide locate flow (recorded)', () => {
       const msg = assistantMessages(page).last()
       await expect(msg).toBeVisible({ timeout: 30_000 })
       await expect(msg).toContainText(/./, { timeout: 30_000 })
+      const answerDoneMs = Date.now() - startedAt
+      const answerText = await msg.innerText()
 
-      await clickLocateButtonsAndAssert(page, msg, stepKey, attach)
+      const locateAudit = await clickLocateButtonsAndAssert(
+        page,
+        msg,
+        stepKey,
+        attach,
+        goldenCase.locateBlockIdsAny || [],
+      )
+      const locateReadyMs = Date.now() - startedAt
+      const answerLower = answerText.toLowerCase()
+      const expectedTerms = listLower(goldenCase.answerContainsAny)
+      const forbiddenTerms = listLower(goldenCase.answerNotContains)
+      const expectedBlocks = new Set((goldenCase.locateBlockIdsAny || []).map((item) => String(item || '').trim()).filter(Boolean))
+      const locateBlockIds = locateAudit.targets.map((item) => item.blockId).filter(Boolean)
+      const checks = {
+        answerContainsAny: expectedTerms.length <= 0 || expectedTerms.some((term) => answerLower.includes(term)),
+        forbiddenTextAbsent: forbiddenTerms.every((term) => !answerLower.includes(term)),
+        locateButtonCount: locateAudit.count >= Math.max(1, Number(goldenCase.minLocateButtons || 1)),
+        expectedBlockMatched: expectedBlocks.size <= 0 || locateBlockIds.some((blockId) => expectedBlocks.has(blockId)),
+      }
+      expect.soft(checks.answerContainsAny, `${goldenCase.id}: answer missing expected terms`).toBeTruthy()
+      expect.soft(checks.forbiddenTextAbsent, `${goldenCase.id}: answer contains forbidden internal text`).toBeTruthy()
+      expect.soft(checks.locateButtonCount, `${goldenCase.id}: locate button count below threshold`).toBeTruthy()
+      expect.soft(checks.expectedBlockMatched, `${goldenCase.id}: locate blocks did not match expected set`).toBeTruthy()
+
+      reportRecords.push({
+        id: goldenCase.id,
+        question: q,
+        answerDoneMs,
+        locateReadyMs,
+        locateButtonCount: locateAudit.count,
+        locateBlockIds,
+        checks,
+        answerPreview: answerText.replace(/\s+/g, ' ').slice(0, 600),
+      })
+      writeGoldenReport(reportRecords)
     }
   })
 })
+
+function listLower(values: string[] | undefined): string[] {
+  return (values || [])
+    .map((item) => String(item || '').trim().toLowerCase())
+    .filter(Boolean)
+}

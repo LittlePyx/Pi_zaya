@@ -12,6 +12,7 @@ import MessageListRegressionPage from './pages/MessageListRegressionPage'
 import RefsPanelRegressionPage from './pages/RefsPanelRegressionPage'
 import ReaderRegressionPage from './pages/ReaderRegressionPage'
 import ReaderSplitRegressionPage from './pages/ReaderSplitRegressionPage'
+import ResearchQaReplayPage from './pages/ResearchQaReplayPage'
 
 function App() {
   const theme = useTheme()
@@ -32,6 +33,7 @@ function App() {
           <Route path="/__refs_panel_test__" element={<RefsPanelRegressionPage />} />
           <Route path="/__reader_test__" element={<ReaderRegressionPage />} />
           <Route path="/__reader_split_test__" element={<ReaderSplitRegressionPage />} />
+          <Route path="/__research_qa_replay__" element={<ResearchQaReplayPage />} />
           <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />
           <Route path="/library" element={<AppLayout><LibraryPage /></AppLayout>} />
         </Routes>

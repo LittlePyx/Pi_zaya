@@ -9,6 +9,7 @@ export interface CiteDetail {
   traceUserMsgId: number
   raw: string
   citeFmt: string
+  isInpaper: boolean
   title: string
   authors: string
   venue: string
@@ -35,6 +36,23 @@ export interface CiteDetail {
   bibliometricsChecked: boolean
   summaryLine: string
   summarySource: string
+  answerClaim: string
+  headingPath: string
+  evidenceQuote: string
+  evidenceSource: string
+  citationContext: string
+  citationContextSource: string
+  upstreamWorkRole: string
+  userQuestionRelation: string
+  locationLabel: string
+  supportRelation: string
+  whyLine: string
+  blockId: string
+  anchorId: string
+  anchorKind: string
+  pageStart: number
+  pageEnd: number
+  score: number
 }
 
 export interface CiteShelfItem extends CiteDetail {
@@ -168,6 +186,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     traceUserMsgId: pickNumber(rec, 'trace_user_msg_id', 'traceUserMsgId'),
     raw: pickText(rec, 'raw'),
     citeFmt: pickText(rec, 'cite_fmt', 'citeFmt'),
+    isInpaper: rec.is_inpaper === true || rec.isInpaper === true,
     title: pickText(rec, 'title'),
     authors: pickText(rec, 'authors'),
     venue: pickText(rec, 'venue'),
@@ -194,6 +213,23 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     bibliometricsChecked: Boolean(rec.bibliometrics_checked ?? rec.bibliometricsChecked),
     summaryLine: pickText(rec, 'summary_line', 'summaryLine'),
     summarySource: pickText(rec, 'summary_source', 'summarySource'),
+    answerClaim: pickText(rec, 'answer_claim', 'answerClaim'),
+    headingPath: pickText(rec, 'heading_path', 'headingPath'),
+    evidenceQuote: pickText(rec, 'evidence_quote', 'evidenceQuote'),
+    evidenceSource: pickText(rec, 'evidence_source', 'evidenceSource'),
+    citationContext: pickText(rec, 'citation_context', 'citationContext'),
+    citationContextSource: pickText(rec, 'citation_context_source', 'citationContextSource'),
+    upstreamWorkRole: pickText(rec, 'upstream_work_role', 'upstreamWorkRole'),
+    userQuestionRelation: pickText(rec, 'user_question_relation', 'userQuestionRelation'),
+    locationLabel: pickText(rec, 'location_label', 'locationLabel'),
+    supportRelation: pickText(rec, 'support_relation', 'supportRelation'),
+    whyLine: pickText(rec, 'why_line', 'whyLine'),
+    blockId: pickText(rec, 'block_id', 'blockId'),
+    anchorId: pickText(rec, 'anchor_id', 'anchorId'),
+    anchorKind: pickText(rec, 'anchor_kind', 'anchorKind'),
+    pageStart: pickNumber(rec, 'page_start', 'pageStart'),
+    pageEnd: pickNumber(rec, 'page_end', 'pageEnd'),
+    score: pickNumber(rec, 'score'),
   }
 }
 
@@ -409,7 +445,7 @@ function compactSourceChipLabel(
 export function citationInlineLabel(detail: CiteDetail, options?: InlineCitationLabelOptions): string {
   const includeSource = options?.includeSource ?? true
   const n = detail.num > 0 ? String(detail.num) : '?'
-  if (!includeSource) return n
+  if (!includeSource) return detail.isInpaper ? `[R${n}]` : n
   const sourceTag = compactSourceChipLabel(detail.sourceName, detail.sourcePath, options)
   if (!sourceTag) return n
   return `${sourceTag}#${n}`

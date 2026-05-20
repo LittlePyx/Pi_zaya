@@ -141,6 +141,46 @@ const REFS_PANEL_GUIDE_FILTER_ONLY_PAYLOAD: Record<string, unknown> = {
   },
 }
 
+const REFS_PANEL_PENDING_WITH_HITS_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: 'Which papers mention NeRF?',
+    display_state: 'pending',
+    pending: true,
+    payload_mode: 'pending',
+    enrichment_pending: true,
+    hits: [
+      {
+        text: 'SCINeRF uses neural radiance fields as the underlying scene representation.',
+        meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          ref_pack_state: 'pending',
+          ref_best_heading_path: 'Fixture Paper / Abstract',
+        },
+        ui_meta: {
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Fixture Paper / Abstract',
+          section_label: 'Abstract',
+          summary_line: 'SCINeRF uses neural radiance fields as the underlying scene representation.',
+          summary_label: 'Guide',
+          summary_title: 'Provisional Matched Section',
+          why_line: 'This pending match directly mentions NeRF while the final card copy is still being refined.',
+          score: null,
+          score_pending: true,
+          reader_open: {
+            sourcePath: READER_REGRESSION_SOURCE_PATH,
+            sourceName: READER_REGRESSION_SOURCE_NAME,
+            headingPath: 'Fixture Paper / Abstract',
+            snippet: 'SCINeRF uses neural radiance fields as the underlying scene representation.',
+            highlightSnippet: 'SCINeRF uses neural radiance fields as the underlying scene representation.',
+            strictLocate: false,
+          },
+        },
+      },
+    ],
+  },
+}
+
 const REFS_PANEL_NEGATIVE_SUPPRESSED_PAYLOAD: Record<string, unknown> = {
   7: {
     prompt: 'In the SCINeRF paper, where is ADMM discussed? Please point me to the source section.',
@@ -176,6 +216,85 @@ const REFS_PANEL_NEGATIVE_SUPPRESSED_PAYLOAD: Record<string, unknown> = {
   },
 }
 
+const REFS_PANEL_SECTION_TARGET_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: 'Where does the paper discuss its limitations?',
+    display_state: 'ready',
+    hits: [
+      {
+        meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Fixture Paper / 5. Limitations',
+          section_label: '5. Limitations',
+          summary_line: 'The limitations section explains that temporal coverage is still traded against reconstruction stability.',
+          summary_basis: '基于命中章节和小节标题的规则化摘要',
+          why_line: 'This hit points directly to the section where the paper describes its current limitations.',
+          why_basis: '基于章节级定位和问题关键词对齐',
+          reader_open: {
+            sourcePath: READER_REGRESSION_SOURCE_PATH,
+            sourceName: READER_REGRESSION_SOURCE_NAME,
+            headingPath: 'Fixture Paper / 5. Limitations',
+            snippet: 'A current limitation is that the method still trades temporal coverage against reconstruction stability, especially when the scene departs from the static-scene assumption used by the reconstruction pipeline.',
+            highlightSnippet: 'A current limitation is that the method still trades temporal coverage against reconstruction stability, especially when the scene departs from the static-scene assumption used by the reconstruction pipeline.',
+            strictLocate: true,
+            locateTarget: {
+              segmentId: 'refs-panel-section-limitations',
+              sourceSegmentId: 'refs-panel-section-limitations',
+              headingPath: 'Fixture Paper / 5. Limitations',
+              hitLevel: 'heading',
+              claimType: 'section_claim',
+              locatePolicy: 'required',
+              locateSurfacePolicy: 'primary',
+            },
+            visibleAlternatives: [
+              {
+                headingPath: 'Fixture Paper / 5. Limitations',
+                snippet: 'A current limitation is that the method still trades temporal coverage against reconstruction stability, especially when the scene departs from the static-scene assumption used by the reconstruction pipeline.',
+                highlightSnippet: 'A current limitation is that the method still trades temporal coverage against reconstruction stability, especially when the scene departs from the static-scene assumption used by the reconstruction pipeline.',
+              },
+              {
+                headingPath: 'Fixture Paper / 6. Future Work',
+                snippet: 'Looking ahead, the most direct extension would be to combine the current pipeline with adaptive masking so dynamic scenes can be reconstructed more faithfully without increasing the hardware burden.',
+                highlightSnippet: 'Looking ahead, the most direct extension would be to combine the current pipeline with adaptive masking so dynamic scenes can be reconstructed more faithfully without increasing the hardware burden.',
+              },
+            ],
+            initialAltIndex: 0,
+          },
+        },
+      },
+    ],
+  },
+}
+
+const REFS_PANEL_AUTO_CITATION_META_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: '哪几篇文章里提到了NeRF',
+    display_state: 'ready',
+    hits: [
+      {
+        meta: {
+          source_path: '__refs_panel_regression__/CVPR-2024-SCINeRF.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf',
+          source_path: '__refs_panel_regression__/CVPR-2024-SCINeRF.en.md',
+          heading_path: 'Abstract',
+          summary_line: '论文提出了 SCINeRF，并将 NeRF 作为底层 3D 场景表示。',
+          why_line: 'Abstract 里说明该文把 NeRF 用作底层 3D 场景表示，可用来核对 NeRF 线索。',
+          can_open: true,
+          citation_meta: {},
+        },
+      },
+    ],
+  },
+}
+
 export default function RefsPanelRegressionPage() {
   const scenarioParam = (() => {
     if (typeof window === 'undefined') return ''
@@ -185,13 +304,25 @@ export default function RefsPanelRegressionPage() {
     ? 'guide-filter-note'
     : scenarioParam === 'negative-suppressed'
       ? 'negative-suppressed'
-      : 'rich-reader-open'
+      : scenarioParam === 'section-target'
+        ? 'section-target'
+        : scenarioParam === 'auto-citation-meta'
+          ? 'auto-citation-meta'
+          : scenarioParam === 'pending-with-hits'
+            ? 'pending-with-hits'
+        : 'rich-reader-open'
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
 
   const refs = scenario === 'guide-filter-note'
     ? REFS_PANEL_GUIDE_FILTER_ONLY_PAYLOAD
     : scenario === 'negative-suppressed'
       ? REFS_PANEL_NEGATIVE_SUPPRESSED_PAYLOAD
+      : scenario === 'section-target'
+        ? REFS_PANEL_SECTION_TARGET_PAYLOAD
+        : scenario === 'auto-citation-meta'
+          ? REFS_PANEL_AUTO_CITATION_META_PAYLOAD
+          : scenario === 'pending-with-hits'
+            ? REFS_PANEL_PENDING_WITH_HITS_PAYLOAD
       : REFS_PANEL_PAYLOAD
 
   return (

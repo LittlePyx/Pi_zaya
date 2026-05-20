@@ -11,6 +11,7 @@ import {
   normalizeShelfTags,
   summarySourceLabel,
 } from './citationState'
+import { useT } from '../../i18n'
 
 interface Props {
   open: boolean
@@ -38,11 +39,11 @@ const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
 
 type GroupMode = 'none' | 'tag' | 'source'
 
-const GROUP_MODE_LABEL: Record<GroupMode, string> = {
-  none: '不分组',
-  tag: '按标签',
-  source: '按来源',
-}
+const GROUP_MODE_LABEL = (S: Record<string, string>): Record<GroupMode, string> => ({
+  none: S.shelf_no_group,
+  tag: S.shelf_by_tag,
+  source: S.shelf_by_source,
+})
 
 const normalizeDoiLike = (value: string): string =>
   String(value || '')
@@ -142,6 +143,7 @@ export function CiteShelf({
   onLoadSnapshot,
   onDeleteSnapshot,
 }: Props) {
+  const S = useT()
   const [expandedSummaryKeys, setExpandedSummaryKeys] = useState<Record<string, boolean>>({})
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({})
   const [searchText, setSearchText] = useState('')
@@ -187,12 +189,12 @@ export function CiteShelf({
     const labels: string[] = []
     const answerOrder = Number(item.traceAssistantOrder || 0)
     if (Number.isFinite(answerOrder) && answerOrder > 0) {
-      labels.push(`回答 ${answerOrder}`)
+      labels.push(S.shelf_answer.replace('{n}', String(answerOrder)))
     }
     const num = Number(item.num || 0)
-    if (Number.isFinite(num) && num > 0) labels.push(`引用 #${num}`)
+    if (Number.isFinite(num) && num > 0) labels.push(S.shelf_ref_num.replace('{n}', String(num)))
     const anchor = String(item.anchor || '').trim()
-    const debugTitle = anchor ? `锚点: ${anchor}` : ''
+    const debugTitle = anchor ? S.shelf_anchor.replace('{anchor}', anchor) : ''
     return { labels, debugTitle }
   }
 
@@ -212,20 +214,20 @@ export function CiteShelf({
     const unresolved = !item.bibliometricsChecked
     const needsRepair = shouldAutoRepairItem(item, display)
 
-    if (!hasDoi) chips.push('缺 DOI')
-    if (!hasAuthors) chips.push('缺作者')
-    if (!hasVenue) chips.push('缺期刊/会议')
-    if (hasWeakTitle) chips.push('标题待校正')
-    if (hasMetaConflict) chips.push('元数据冲突')
-    if (unresolved && chips.length <= 1) chips.push('待校验')
+    if (!hasDoi) chips.push(S.shelf_missing_doi)
+    if (!hasAuthors) chips.push(S.shelf_missing_author)
+    if (!hasVenue) chips.push(S.shelf_missing_venue)
+    if (hasWeakTitle) chips.push(S.shelf_weak_title)
+    if (hasMetaConflict) chips.push(S.shelf_meta_conflict)
+    if (unresolved && chips.length <= 1) chips.push(S.shelf_pending_verify)
 
     if (!chips.length) return { chips: [], tip: '', needsRepair }
 
-    let tip = '系统会自动校正元数据，无需手动点击。'
-    if (!hasDoi) tip = '当前缺少 DOI，系统会先按标题和参考文献串自动匹配。'
-    else if (hasMetaConflict) tip = '检测到期刊/会议信号冲突，系统会自动重新匹配并校正。'
-    else if (hasWeakStoredTitle && !hasWeakTitle) tip = '已优先展示解析出的标题，系统会继续回填规范元数据。'
-    else if (hasWeakTitle) tip = '标题信息不完整，系统会自动按 DOI 或参考文献重新校正。'
+    let tip = S.shelf_auto_fix_tip
+    if (!hasDoi) tip = S.shelf_no_doi_tip
+    else if (hasMetaConflict) tip = S.shelf_conflict_tip
+    else if (hasWeakStoredTitle && !hasWeakTitle) tip = S.shelf_weak_stored_tip
+    else if (hasWeakTitle) tip = S.shelf_weak_title_tip
     return { chips: chips.slice(0, 3), tip, needsRepair }
   }
 
@@ -300,7 +302,7 @@ export function CiteShelf({
 
   const groupedVisibleItems = useMemo(() => {
     if (groupMode === 'none') {
-      return [{ key: 'all', label: '全部条目', items: visibleItems }]
+      return [{ key: 'all', label: S.shelf_all, items: visibleItems }]
     }
     const groups = new Map<string, { label: string; items: CiteShelfItem[] }>()
     for (const item of visibleItems) {
@@ -308,13 +310,13 @@ export function CiteShelf({
       let groupLabel = ''
       if (groupMode === 'tag') {
         const tags = normalizeShelfTags(item.tags)
-        const primaryTag = tags[0] || '未标记'
+        const primaryTag = tags[0] || S.shelf_untagged
         groupKey = `tag:${primaryTag.toLowerCase()}`
-        groupLabel = `标签 · ${primaryTag}`
+        groupLabel = S.shelf_tag_prefix.replace('{tag}', primaryTag)
       } else {
-        const src = String(item.sourceName || item.sourcePath || '').trim() || '未知来源'
+        const src = String(item.sourceName || item.sourcePath || '').trim() || S.shelf_unknown_source
         groupKey = `source:${src}`
-        groupLabel = `来源 · ${src}`
+        groupLabel = S.shelf_source_prefix.replace('{src}', src)
       }
       const existing = groups.get(groupKey)
       if (existing) {
@@ -426,14 +428,14 @@ export function CiteShelf({
         const bib = selectedItems.map((item) => citationFormats(item).bibtex).join('\n\n').trim()
         if (!bib) return
         downloadTextFile(`${base}.bib`, bib, 'application/x-bibtex;charset=utf-8')
-        message.success(`已导出 BibTeX（${selectedItems.length} 条）`)
+        message.success(S.shelf_export_bibtex.replace('{n}', String(selectedItems.length)))
         return
       }
       if (kind === 'ris') {
         const ris = selectedItems.map((item) => citationFormats(item).ris).join('\n\n').trim()
         if (!ris) return
         downloadTextFile(`${base}.ris`, ris, 'application/x-research-info-systems;charset=utf-8')
-        message.success(`已导出 RIS（${selectedItems.length} 条）`)
+        message.success(S.shelf_export_ris.replace('{n}', String(selectedItems.length)))
         return
       }
       const headers = [
@@ -468,9 +470,9 @@ export function CiteShelf({
       ].map((field) => csvEscape(field)).join(',')))
       const csv = `${headers.join(',')}\n${rows.join('\n')}`
       downloadTextFile(`${base}.csv`, csv, 'text/csv;charset=utf-8')
-      message.success(`已导出 CSV（${selectedItems.length} 条）`)
+      message.success(S.shelf_export_csv.replace('{n}', String(selectedItems.length)))
     } catch {
-      message.error('导出失败，请稍后重试')
+      message.error(S.shelf_export_failed)
     }
   }
 
@@ -588,7 +590,7 @@ export function CiteShelf({
         onClick={onToggle}
         type="button"
       >
-        文献篮
+        {S.shelf_title}
       </button>
       <aside
         className={`fixed right-0 top-0 z-40 h-full w-[360px] max-w-[90vw] border-l border-[var(--border)] bg-[var(--panel)] shadow-[0_24px_64px_rgba(15,23,42,0.18)] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
@@ -597,37 +599,37 @@ export function CiteShelf({
           <div className="kb-shelf-head border-b border-[var(--border)] px-3 py-3">
             <div className="kb-shelf-head-top">
               <div className="kb-shelf-head-meta">
-                <div className="kb-shelf-title">文献篮</div>
+                <div className="kb-shelf-title">{S.shelf_title}</div>
                 <div className="kb-shelf-count">
-                  已收藏 {items.length} 条{searchText.trim() ? ` · 匹配 ${visibleItems.length} 条` : ''}
+                  {S.shelf_collect_count.replace('{n}', String(items.length))}{searchText.trim() ? ` · ${S.shelf_match_count.replace('{n}', String(visibleItems.length))}` : ''}
                 </div>
               </div>
               <div className="kb-shelf-head-actions">
                 <Button size="small" onClick={onClear} disabled={items.length === 0}>
-                  清空
+                  {S.shelf_clear}
                 </Button>
                 <Button size="small" onClick={onToggle}>
-                  关闭
+                  {S.shelf_close}
                 </Button>
               </div>
             </div>
             <div className="kb-shelf-snapshot-row" onClick={(event) => event.stopPropagation()}>
               <Button size="small" onClick={onSaveSnapshot} disabled={items.length === 0}>
-                保存快照
+                {S.shelf_save_snapshot}
               </Button>
               <Select
                 size="small"
                 value={selectedSnapshotId || undefined}
-                placeholder={snapshotOptions.length > 0 ? '选择快照' : '暂无快照'}
+                placeholder={snapshotOptions.length > 0 ? S.shelf_select_snapshot : S.shelf_no_snapshot}
                 className="kb-shelf-snapshot-select"
                 options={snapshotOptions}
                 onChange={(value) => onSelectSnapshot(String(value || ''))}
               />
               <Button size="small" onClick={onLoadSnapshot} disabled={!selectedSnapshotId}>
-                载入
+                {S.shelf_load}
               </Button>
               <Button size="small" onClick={onDeleteSnapshot} disabled={!selectedSnapshotId}>
-                删除
+                {S.shelf_delete}
               </Button>
             </div>
             {snapshotDiff ? (
@@ -635,30 +637,30 @@ export function CiteShelf({
             ) : null}
             {selectedCount > 0 ? (
               <div className="kb-shelf-batch-row">
-                <span className="kb-shelf-batch-count">导出队列 {selectedCount} 条</span>
+                <span className="kb-shelf-batch-count">{S.shelf_batch_count.replace('{n}', String(selectedCount))}</span>
                 <Button size="small" onClick={removeSelected}>
-                  批量移除
+                  {S.shelf_batch_remove}
                 </Button>
                 <Button size="small" onClick={() => void copySelectedAs('gbt')}>
-                  {copyState === 'gbt' ? '已复制 GB/T' : '复制 GB/T'}
+                  {copyState === 'gbt' ? S.shelf_copied_gbt : S.shelf_copy_gbt}
                 </Button>
                 <Button size="small" onClick={() => void copySelectedAs('bibtex')}>
-                  {copyState === 'bibtex' ? '已复制 BibTeX' : '复制 BibTeX'}
+                  {copyState === 'bibtex' ? S.shelf_copied_bibtex : S.shelf_copy_bibtex}
                 </Button>
                 <Button size="small" onClick={() => exportSelectedAs('bib')}>
-                  导出 BibTeX
+                  {S.shelf_export_bib_btn}
                 </Button>
                 <Button size="small" onClick={() => exportSelectedAs('ris')}>
-                  导出 RIS
+                  {S.shelf_export_ris_btn}
                 </Button>
                 <Button size="small" onClick={() => exportSelectedAs('csv')}>
-                  导出 CSV
+                  {S.shelf_export_csv_btn}
                 </Button>
                 <div className="flex min-w-[170px] items-center gap-1" onClick={(event) => event.stopPropagation()}>
                   <Select
                     size="small"
                     value={batchTagInput || undefined}
-                    placeholder="批量加标签"
+                    placeholder={S.shelf_batch_tag_placeholder}
                     style={{ minWidth: 124 }}
                     showSearch
                     onChange={(value) => {
@@ -677,11 +679,11 @@ export function CiteShelf({
                       setBatchTagInput('')
                     }}
                   >
-                    去标签
+                    {S.shelf_remove_tag}
                   </Button>
                 </div>
                 <button type="button" className="kb-shelf-clear-select" onClick={clearSelected}>
-                  清除勾选
+                  {S.shelf_clear_selection}
                 </button>
               </div>
             ) : null}
@@ -693,7 +695,7 @@ export function CiteShelf({
                   <div className="kb-shelf-toolbar-main">
                   <Input
                     allowClear
-                    placeholder="搜索标题 / 作者 / DOI"
+                    placeholder={S.shelf_search_placeholder}
                     value={searchText}
                     onChange={(event) => setSearchText(event.target.value)}
                     className="kb-shelf-search"
@@ -703,10 +705,10 @@ export function CiteShelf({
                     onChange={(value) => setSortKey(value)}
                     className="kb-shelf-sort"
                     options={[
-                      { value: 'recent', label: '最近加入' },
-                      { value: 'cited', label: '被引次数' },
-                      { value: 'year', label: '年份' },
-                      { value: 'impact', label: 'IF/评级' },
+                      { value: 'recent', label: S.shelf_sort_recent },
+                      { value: 'cited', label: S.shelf_sort_cited },
+                      { value: 'year', label: S.shelf_sort_year },
+                      { value: 'impact', label: S.shelf_sort_impact },
                     ]}
                   />
                   <button
@@ -714,13 +716,13 @@ export function CiteShelf({
                     className={`kb-shelf-advanced-toggle ${advancedFiltersOpen ? 'is-open' : ''} ${advancedFilterActive ? 'is-active' : ''}`}
                     onClick={() => setAdvancedFiltersOpen((prev) => !prev)}
                   >
-                    {advancedFiltersOpen ? '收起筛选' : '高级筛选'}
+                    {advancedFiltersOpen ? S.shelf_advanced_collapse : S.shelf_advanced_filter}
                   </button>
                   <Button size="small" onClick={addVisibleToSelection} disabled={visibleItems.length <= 0}>
-                    当前筛选入队
+                    {S.shelf_add_to_queue}
                   </Button>
                   <Button size="small" onClick={removeVisibleFromSelection} disabled={visibleSelectedCount <= 0}>
-                    取消当前筛选
+                    {S.shelf_remove_from_queue}
                   </Button>
                   </div>
                   {advancedFiltersOpen ? (
@@ -730,9 +732,9 @@ export function CiteShelf({
                     onChange={(value) => setGroupMode(value as GroupMode)}
                     className="kb-shelf-sort"
                     options={[
-                      { value: 'none', label: '不分组' },
-                      { value: 'tag', label: '按标签' },
-                      { value: 'source', label: '按来源' },
+                      { value: 'none', label: S.shelf_group_none },
+                      { value: 'tag', label: S.shelf_group_tag },
+                      { value: 'source', label: S.shelf_group_source },
                     ]}
                   />
                   <Select
@@ -740,7 +742,7 @@ export function CiteShelf({
                     value={tagFilter === 'all' ? undefined : tagFilter}
                     onChange={(value) => setTagFilter(value || 'all')}
                     className="kb-shelf-sort"
-                    placeholder="标签筛选"
+                    placeholder={S.shelf_tag_filter_placeholder}
                     options={allTags.map((tag) => ({ value: tag, label: tag }))}
                   />
                     </div>
@@ -753,7 +755,7 @@ export function CiteShelf({
                           className="kb-shelf-filter-pill"
                           onClick={() => setGroupMode('none')}
                         >
-                          分组: {GROUP_MODE_LABEL[groupMode]} · 清除
+                          {S.shelf_filter_pill_group.replace('{mode}', GROUP_MODE_LABEL(S)[groupMode])}
                         </button>
                       ) : null}
                       {tagFilter !== 'all' ? (
@@ -762,20 +764,20 @@ export function CiteShelf({
                           className="kb-shelf-filter-pill"
                           onClick={() => setTagFilter('all')}
                         >
-                          标签: {tagFilter} · 清除
+                          {S.shelf_filter_pill_tag.replace('{tag}', tagFilter)}
                         </button>
                       ) : null}
                     </div>
                   ) : null}
                 </div>
                 {copyState === 'error' ? (
-                  <div className="kb-shelf-copy-hint">复制失败，请检查剪贴板权限</div>
+                  <div className="kb-shelf-copy-hint">{S.shelf_copy_error}</div>
                 ) : null}
               </div>
             ) : null}
             {items.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-5 text-sm text-black/45 dark:text-white/45">
-                从文内参考弹窗点击“加入文献篮”，这里会保存标题、作者、来源、DOI 和相关指标。
+                {S.shelf_empty_hint}
               </div>
             ) : (
               <div className="kb-shelf-list space-y-2">
@@ -845,7 +847,7 @@ export function CiteShelf({
                                 onRemove(item.key)
                               }}
                             >
-                              移除
+                              {S.shelf_remove_item}
                             </button>
                           </div>
                           {subtitle ? (
@@ -862,7 +864,7 @@ export function CiteShelf({
                               </div>
                               {quality.needsRepair ? (
                                 <span className="kb-shelf-repair-btn" aria-live="polite">
-                                  {repairLoadingKey === item.key ? '自动修复中...' : '系统自动校正'}
+                                  {repairLoadingKey === item.key ? S.shelf_repairing : S.shelf_auto_repair}
                                 </span>
                               ) : null}
                             </div>
@@ -878,7 +880,7 @@ export function CiteShelf({
                                 </span>
                               ))}
                               {duplicateCount > 1 ? (
-                                <span className="kb-shelf-dup">可能重复 ×{duplicateCount}</span>
+                                <span className="kb-shelf-dup">{S.shelf_dup.replace('{n}', String(duplicateCount))}</span>
                               ) : null}
                               {itemTags.map((tag) => (
                                 <span key={`${item.key}-tag-${tag}`} className="kb-shelf-tag">
@@ -893,7 +895,7 @@ export function CiteShelf({
                                 maxTagCount={1}
                                 maxTagTextLength={14}
                                 className="w-full"
-                                placeholder="+标签"
+                                placeholder={S.shelf_add_tag}
                                 value={itemTags}
                                 options={tagOptions}
                                 onChange={(value) => onUpdateTags(item.key, normalizeShelfTags(value))}
@@ -907,12 +909,12 @@ export function CiteShelf({
                             >
                               {noteEditing ? (
                                 <>
-                                  <div className="kb-shelf-note-head">备注</div>
+                                  <div className="kb-shelf-note-head">{S.shelf_note_head}</div>
                                   <Input.TextArea
                                     className="kb-shelf-note-editor"
                                     autoSize={{ minRows: 2, maxRows: 4 }}
                                     maxLength={1200}
-                                    placeholder="记录这篇文献对你有用的点..."
+                                    placeholder={S.shelf_note_placeholder}
                                     value={item.note || ''}
                                     onChange={(event) => onUpdateNote(item.key, event.target.value)}
                                   />
@@ -922,14 +924,14 @@ export function CiteShelf({
                                       className="kb-shelf-note-link"
                                       onClick={() => setEditingNoteKeys((prev) => ({ ...prev, [item.key]: false }))}
                                     >
-                                      完成
+                                      {S.shelf_done}
                                     </button>
                                   </div>
                                 </>
                               ) : (
                                 <div className="kb-shelf-note-inline">
                                   <div className="kb-shelf-note-preview">
-                                    {noteText || '暂无备注'}
+                                    {noteText || S.shelf_no_note}
                                   </div>
                                   {isFocused ? (
                                     <button
@@ -937,7 +939,7 @@ export function CiteShelf({
                                       className="kb-shelf-note-link"
                                       onClick={() => setEditingNoteKeys((prev) => ({ ...prev, [item.key]: true }))}
                                     >
-                                      {noteText ? '编辑备注' : '添加备注'}
+                                      {noteText ? S.shelf_edit_note : S.shelf_add_note}
                                     </button>
                                   ) : null}
                                 </div>
@@ -959,17 +961,17 @@ export function CiteShelf({
                                 {item.doi || item.doiUrl}
                               </a>
                             ) : (
-                              <span className="kb-shelf-doi-empty">暂无 DOI 链接</span>
+                              <span className="kb-shelf-doi-empty">{S.shelf_no_doi_link}</span>
                             )}
                           </div>
                           {isFocused ? (
                             <div className="kb-shelf-summary">
                               {summaryLoadingKey === item.key ? (
-                                <div className="kb-shelf-summary-text">正在生成学术概括...</div>
+                                <div className="kb-shelf-summary-text">{S.shelf_summary_loading}</div>
                               ) : item.summaryLine ? (
                                 <>
                                   <div className="kb-shelf-summary-meta">
-                                    <span className="kb-shelf-summary-head">学术概括</span>
+                                    <span className="kb-shelf-summary-head">{S.shelf_summary_head}</span>
                                     <span className="kb-shelf-summary-source">{summarySourceLabel(item.summarySource)}</span>
                                   </div>
                                   {(() => {
@@ -993,7 +995,7 @@ export function CiteShelf({
                                               setExpandedSummaryKeys((prev) => ({ ...prev, [item.key]: !expanded }))
                                             }}
                                           >
-                                            {expanded ? '收起概括' : `展开剩余 ${lines.length - visibleLines.length} 条`}
+                                            {expanded ? S.shelf_collapse : S.shelf_expand.replace('{n}', String(lines.length - visibleLines.length))}
                                           </button>
                                         ) : null}
                                       </>
@@ -1001,7 +1003,7 @@ export function CiteShelf({
                                   })()}
                                 </>
                               ) : (
-                                <div className="kb-shelf-summary-empty">暂无可用学术概括</div>
+                                <div className="kb-shelf-summary-empty">{S.shelf_summary_empty}</div>
                               )}
                             </div>
                           ) : null}
@@ -1012,7 +1014,7 @@ export function CiteShelf({
                 ))}
                 {visibleItems.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[var(--border)] px-3 py-4 text-xs text-black/45 dark:text-white/45">
-                    未匹配到文献，请调整搜索词或排序方式。
+                    {S.shelf_no_match}
                   </div>
                 ) : null}
               </div>

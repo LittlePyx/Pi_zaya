@@ -30,6 +30,7 @@ from kb.reference_index import (
     resolve_reference_entry as _resolve_reference_entry_from_index,
 )
 from kb.pdf_tools import open_in_explorer
+from kb.source_blocks import normalize_inline_markdown
 from kb.tokenize import tokenize
 from ui.strings import S
 import json
@@ -322,26 +323,57 @@ _SECTION_WORDS_UI = {
     "analysis",
 }
 _METHOD_QUERY_RE_UI = re.compile(
-    r"(鎬庝箞|濡備綍|鏂规硶|瀹炵幇|姝ラ|娴佺▼|鍘熺悊|鏈哄埗|绠楁硶|妯″瀷|鍏紡|鎺ㄥ|"
+    r"(怎么|如何|方法|实现|步骤|流程|原理|机制|算法|模型|公式|推导|"
     r"\bhow\b|\bmethod\b|\bapproach\b|\bimplement(?:ation)?\b|\balgorithm\b|\bmodel\b|\bequation\b)",
     flags=re.I,
 )
 _LIMIT_QUERY_RE_UI = re.compile(
-    r"(灞€闄恷闄愬埗|涓嶈冻|鏈潵宸ヤ綔|璁ㄨ|缁撹|"
+    r"(局限|限制|不足|未来工作|讨论|结论|"
     r"\blimitation\b|\bfuture\s+work\b|\bdiscussion\b|\bconclusion\b)",
     flags=re.I,
 )
 _DISCUSS_HEAD_RE_UI = re.compile(
-    r"\b(discussion|conclusion|limitations?|future\s+work)\b|(璁ㄨ|缁撹|灞€闄恷鏈潵宸ヤ綔)",
+    r"\b(discussion|conclusion|limitations?|future\s+work)\b|(讨论|结论|局限|未来工作)",
     flags=re.I,
 )
+_PDF_SHELL_HEADING_TOKENS_UI = {
+    "article",
+    "article info",
+    "article information",
+}
+
+
+def _compact_spaced_heading_token_ui(h: str) -> str:
+    s = " ".join(str(h or "").strip().split())
+    if not s:
+        return ""
+    tokens = re.findall(r"[A-Za-z]", s)
+    words = re.findall(r"[A-Za-z]+", s)
+    if len(tokens) < 3 or not words:
+        return ""
+    if all(len(word) == 1 for word in words):
+        return "".join(tokens).lower()
+    return ""
+
+
+def _is_pdf_shell_heading_ui(h: str) -> bool:
+    s = " ".join(str(h or "").strip().split())
+    if not s:
+        return False
+    low = re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+    if low in (_PDF_SHELL_HEADING_TOKENS_UI | {"research article", "original article"}):
+        return True
+    compact = _compact_spaced_heading_token_ui(s)
+    if compact in {"abstract", "article", "articleinfo", "articleinformation"}:
+        return True
+    return False
 
 
 def _wants_reference_nav_ui(prompt: str) -> bool:
     q = str(prompt or "").strip()
     if not q:
         return False
-    return bool(re.search(r"(鍙傝€冩枃鐚畖寮曠敤|cite|citation|reference|bibliography)", q, flags=re.I))
+    return bool(re.search(r"(参考文献|引用|cite|citation|reference|bibliography)", q, flags=re.I))
 
 
 def _is_reference_heading_ui(h: str) -> bool:
@@ -399,6 +431,8 @@ def _looks_like_doc_title_heading_ui(h: str, source_path: str) -> bool:
 def _is_non_navigational_heading_ui(h: str, *, prompt: str, source_path: str) -> bool:
     s = " ".join(str(h or "").strip().split())
     if not s:
+        return True
+    if _is_pdf_shell_heading_ui(s):
         return True
     if _is_venue_heading_ui(s):
         return True
@@ -535,24 +569,24 @@ _ANCHOR_STOPWORDS_UI = {
     "table",
     "supplementary",
     "appendix",
-    "鏂囩尞",
-    "璁烘枃",
-    "鐮旂┒",
-    "闂",
-    "鎸戞垬",
-    "鐡堕",
-    "绾︽潫",
-    "鐩稿叧",
-    "淇℃伅",
-    "鍐呭",
-    "绔犺妭",
-    "灏忚妭",
-    "鏂规硶",
-    "缁撴灉",
-    "瀹為獙",
-    "妯″瀷",
-    "绠楁硶",
-    "鏁版嵁",
+    "文献",
+    "论文",
+    "研究",
+    "问题",
+    "挑战",
+    "瓶颈",
+    "约束",
+    "相关",
+    "信息",
+    "内容",
+    "章节",
+    "小节",
+    "方法",
+    "结果",
+    "实验",
+    "模型",
+    "算法",
+    "数据",
     "with",
     "using",
     "use",
@@ -597,12 +631,12 @@ def _looks_keyword_list_ui(text: str) -> bool:
         return True
     low = s.lower()
     verb_markers = (
-        "鎻愬嚭",
-        "閲囩敤",
-        "閫氳繃",
-        "瀹炵幇",
-        "鎻愬崌",
-        "楠岃瘉",
+        "提出",
+        "采用",
+        "通过",
+        "实现",
+        "提升",
+        "验证",
         "propose",
         "use",
         "introduce",
@@ -618,8 +652,8 @@ def _contains_question_echo_ui(text: str, prompt: str) -> bool:
     q = " ".join(str(prompt or "").strip().split()).lower()
     if not t or not q:
         return False
-    q_compact = re.sub(r"[\s`'\"鈥溾€濃€樷€欙紝銆傦紒锛?.?!:;锛涳細()锛堬級\-_/\\]+", "", q)
-    t_compact = re.sub(r"[\s`'\"鈥溾€濃€樷€欙紝銆傦紒锛?.?!:;锛涳細()锛堬級\-_/\\]+", "", t)
+    q_compact = re.sub(r"[\s`'\"“”‘’，。！？.?!:;；：（）()\-_/\\]+", "", q)
+    t_compact = re.sub(r"[\s`'\"“”‘’，。！？.?!:;；：（）()\-_/\\]+", "", t)
     if len(q_compact) < 10:
         return False
     for n in (24, 18, 14):
@@ -754,7 +788,7 @@ def _extract_anchor_terms_ui(meta: dict, *, prompt: str = "", max_n: int = 4) ->
             _bump(w, 1.0)
 
     for zh in re.findall(r"[\u4e00-\u9fff]{2,8}", all_text):
-        if zh in {"杩欑瘒鏂囩尞", "褰撳墠闂", "鐩稿叧淇℃伅"}:
+        if zh in {"这篇文献", "当前问题", "相关信息"}:
             continue
         _bump(zh, 1.4)
 
@@ -1117,7 +1151,7 @@ def _split_sentences_ui(text: str, *, max_n: int = 24) -> list[str]:
     s = _clean_sentence_candidate_ui(text)
     if not s:
         return []
-    parts = re.split(r"(?<=[銆傦紒锛?!?;锛沒)\s+|[銆傦紒锛燂紱]", s)
+    parts = re.split(r"(?<=[。！？!?;；])\s+|[。！？；]", s)
     out: list[str] = []
     seen: set[str] = set()
     for p in parts:
@@ -1140,8 +1174,8 @@ def _trim_clause_ui(text: str, *, max_chars: int = 110) -> str:
     s = " ".join(str(text or "").strip().split())
     if not s:
         return ""
-    s = re.sub(r"^[,;:锛岋紱锛歕-]+", "", s).strip()
-    s = re.sub(r"[銆傦紒锛?!?;锛沒+$", "", s).strip()
+    s = re.sub(r"^[,;:，；：、-]+", "", s).strip()
+    s = re.sub(r"[。！？!?;；]+$", "", s).strip()
     if len(s) <= max_chars:
         return s
     return s[: max_chars - 3].rstrip() + "..."
@@ -1185,17 +1219,17 @@ def _pick_role_sentence_ui(sents: list[str], *, role: str, anchors: list[str]) -
     role_key = str(role or "").strip().lower()
     if role_key == "problem":
         pat = re.compile(
-            r"(闂|鎸戞垬|鐡堕|鍙楅檺|闅句互|鍥伴毦|problem|challenge|bottleneck|limitation|difficult|lack|struggle)",
+            r"(问题|挑战|瓶颈|受限|难以|困难|problem|challenge|bottleneck|limitation|difficult|lack|struggle)",
             flags=re.I,
         )
     elif role_key == "method":
         pat = re.compile(
-            r"(鎻愬嚭|閲囩敤|璁捐|鏋勫缓|寮曞叆|瀹炵幇|propose|introduce|design|develop|variant)",
+            r"(提出|采用|设计|构建|引入|实现|propose|introduce|design|develop|variant)",
             flags=re.I,
         )
     else:
         pat = re.compile(
-            r"(缁撴灉|鏄剧ず|琛ㄦ槑|鎻愬崌|鎻愰珮|浼樹簬|楠岃瘉|鎬ц兘|鎸囨爣|result|results|show|demonstrate|improv|outperform|achieve|experiment)",
+            r"(结果|显示|表明|提升|提高|优于|验证|性能|指标|result|results|show|demonstrate|improv|outperform|achieve|experiment)",
             flags=re.I,
         )
 
@@ -1221,7 +1255,7 @@ def _pick_role_sentence_ui(sents: list[str], *, role: str, anchors: list[str]) -
         if re.search(r"\b(table|fig|figure)\b", low):
             sc -= 1.2
         if role_key == "problem":
-            if re.search(r"(challenge|limitations?|struggle|bottleneck|鍙楅檺|鎸戞垬|鐡堕|鍥伴毦)", low):
+            if re.search(r"(challenge|limitations?|struggle|bottleneck|受限|挑战|瓶颈|困难)", low):
                 sc += 3.0
             if re.search(r"(did\s+not\s+outperform|not\s+outperform)", low):
                 sc -= 2.2
@@ -1233,7 +1267,7 @@ def _pick_role_sentence_ui(sents: list[str], *, role: str, anchors: list[str]) -
             if re.search(r"(compared?|comparison|baseline)", low):
                 sc -= 1.1
         else:
-            if re.search(r"(results?|show|demonstrate|outperform|improv|achieve|瀹為獙|缁撴灉)", low):
+            if re.search(r"(results?|show|demonstrate|outperform|improv|achieve|实验|结果)", low):
                 sc += 2.0
             if re.search(r"(second-best|underlined|bold)", low):
                 sc -= 0.8
@@ -1382,10 +1416,10 @@ def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = ""
             else:
                 start_from = (start_from[: m.start()] + start_from[m.end() :]).strip(" ，;；。")
     if start_from:
-        compact_start = re.sub(r"[\s`|,;:锛岋紱銆傦細路\-_/\\(){}\[\]]+", "", start_from)
+        compact_start = re.sub(r"[\s`|,;:，；。：·\-_/\\(){}\[\]]+", "", start_from)
         if len(compact_start) < 6:
             start_from = ""
-        elif re.search(r"(鍏堜粠\s*寮€濮媩start\s+with\s*$)", start_from, flags=re.I):
+        elif re.search(r"(先从\s*开始|start\s+with\s*$)", start_from, flags=re.I):
             start_from = ""
     if start_from and _is_venue_heading_ui(start_from):
         start_from = ""
@@ -2735,9 +2769,9 @@ def _render_refs(
             elif metric_failed:
                 fail_reason = str(st.session_state.get(f"{net_key}_failed_reason") or "").strip()
                 if fail_reason:
-                    st.caption(f"鏂囩尞鎸囨爣妫€绱㈠け璐ワ紙{fail_reason}锛夛紝鍙偣鍑?Cite 閲嶈瘯")
+                    st.caption(f"文献指标检索失败（{fail_reason}），可点击 Cite 重试")
                 else:
-                    st.caption("鏂囩尞鎸囨爣妫€绱㈠け璐ワ紝鍙偣鍑?Cite 閲嶈瘯")
+                    st.caption("文献指标检索失败，可点击 Cite 重试")
 
             if st.session_state.get(cite_key, False):
                 _render_citation_ui(uid, source_path, key_ns)
@@ -3323,11 +3357,61 @@ def _ref_doi_url(ref_rec: dict) -> str:
     return ""
 
 
+_SYSTEM_B_PRIOR_CONTEXT_RE = re.compile(
+    r"(?i)\b(?:prior|previous|existing|earlier|background|upstream|source|origin|"
+    r"borrowed|inspired|based\s+on|cited|citation|reference|not\s+original|not\s+new)\b|"
+    r"(?:前人|已有|先前|早期|背景|上游|来源|出处|源头|借鉴|引用|参考|不是.{0,12}(?:原创|新提出))"
+)
+_SYSTEM_B_METHOD_CONTEXT_RE = re.compile(
+    r"(?i)\b(?:method|model|framework|algorithm|optimization|implementation|reconstruction|machinery|tool)\b|"
+    r"(?:方法|模型|框架|算法|优化|实现|重建|工具|机制)"
+)
+
+
+def _system_b_prefers_zh(*texts: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", " ".join(str(text or "") for text in texts)))
+
+
+def _system_b_upstream_role(context_line: str, ref_rec: dict) -> str:
+    raw = " ".join(
+        [
+            str(context_line or ""),
+            str((ref_rec or {}).get("title") or ""),
+            str((ref_rec or {}).get("raw") or ""),
+        ]
+    ).strip()
+    prefer_zh = _system_b_prefers_zh(context_line)
+    if _SYSTEM_B_PRIOR_CONTEXT_RE.search(raw):
+        if prefer_zh:
+            return "作为当前论文引用的已有方法或前人工作，用来追溯回答中这个判断的上游来源。"
+        return "Cited prior work or background source used to trace the upstream origin of the answer's claim."
+    if _SYSTEM_B_METHOD_CONTEXT_RE.search(raw):
+        if prefer_zh:
+            return "作为当前论文引用的方法背景或实现依据，帮助核对该方法线索从哪里来。"
+        return "Method background or implementation source cited by the current paper for this part of the answer."
+    if prefer_zh:
+        return "作为当前回答所依赖的文内参考，适合打开核对作者引用的上游文献。"
+    return "Upstream bibliography reference used by the current answer; open it to inspect the cited source."
+
+
+def _system_b_user_relation(context_line: str, ref_rec: dict) -> str:
+    prefer_zh = _system_b_prefers_zh(context_line)
+    raw = " ".join([str(context_line or ""), str((ref_rec or {}).get("title") or "")]).strip()
+    if _SYSTEM_B_PRIOR_CONTEXT_RE.search(raw):
+        if prefer_zh:
+            return "用户问的是概念、方法或想法的来源；这条参考是当前论文给出的上游出处。"
+        return "The user is asking about origin or prior work; this reference is the current paper's upstream source for that thread."
+    if prefer_zh:
+        return "它对应回答中的这句判断，可用来从当前论文继续追到被引用的原始文献。"
+    return "It is tied to the cited sentence in the answer and lets you follow the current paper back to the referenced work."
+
+
 def _annotate_inpaper_citations_with_hover_meta(
     md: str,
     hits: list[dict],
     *,
     anchor_ns: str = "",
+    canonical_paths: list[str] | None = None,
 ) -> tuple[str, list[dict]]:
     s = (md or "")
     if not s or "[" not in s:
@@ -3467,6 +3551,8 @@ def _annotate_inpaper_citations_with_hover_meta(
 
     def _replace_text_segment(seg: str, *, table_mode: bool = False) -> str:
         structured_seen = False
+        unresolved_struct_refs: set[int] = set()
+        resolved_struct_refs: set[int] = set()
 
         def _preferred_source_by_context(pos: int) -> str:
             try:
@@ -3493,6 +3579,50 @@ def _annotate_inpaper_citations_with_hover_meta(
                 return f"[{int(n)}](#{anchor})"
             t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
             return f"[{int(n)}](#{anchor} \"{t_attr}\")"
+
+        def _citation_context_line(*, token_start: int, token_end: int) -> str:
+            try:
+                start = max(0, int(token_start))
+                end = max(start, int(token_end))
+            except Exception:
+                return ""
+            left = seg.rfind("\n", 0, start)
+            left = 0 if left < 0 else left + 1
+            right = seg.find("\n", end)
+            if right < 0:
+                right = len(seg)
+            raw = str(seg[left:right] or "").strip()
+            raw = _STRUCT_CITE_RE.sub("", raw)
+            raw = _STRUCT_CITE_SINGLE_RE.sub("", raw)
+            raw = _STRUCT_CITE_SID_ONLY_RE.sub("", raw)
+            raw = _STRUCT_CITE_GARBAGE_RE.sub("", raw)
+            raw = re.sub(r"\s+", " ", normalize_inline_markdown(raw)).strip()
+            return raw[:420]
+
+        def _enrich_system_b_detail_from_answer_context(detail: dict, *, token_start: int, token_end: int) -> None:
+            context_line = _citation_context_line(token_start=token_start, token_end=token_end)
+            if context_line:
+                if not str(detail.get("answer_claim") or "").strip():
+                    detail["answer_claim"] = context_line
+                if not str(detail.get("citation_context") or "").strip():
+                    detail["citation_context"] = context_line
+                    detail["citation_context_source"] = "answer_context"
+                if not str(detail.get("evidence_quote") or "").strip():
+                    detail["evidence_quote"] = context_line
+                    detail["evidence_source"] = "answer_context"
+                if not str(detail.get("summary_line") or "").strip():
+                    detail["summary_line"] = context_line
+                    detail["summary_source"] = "answer_context"
+            role_line = _system_b_upstream_role(context_line, detail)
+            relation_line = _system_b_user_relation(context_line, detail)
+            if role_line and not str(detail.get("upstream_work_role") or "").strip():
+                detail["upstream_work_role"] = role_line
+            if relation_line and not str(detail.get("user_question_relation") or "").strip():
+                detail["user_question_relation"] = relation_line
+            if relation_line and not str(detail.get("support_relation") or "").strip():
+                detail["support_relation"] = relation_line
+            if not str(detail.get("why_line") or "").strip():
+                detail["why_line"] = role_line or relation_line
 
         def _pick_grounded_numeric_candidate(
             n: int,
@@ -3555,13 +3685,48 @@ def _annotate_inpaper_citations_with_hover_meta(
             ref = got.get("ref")
             if not isinstance(ref, dict):
                 return ""
+            try:
+                token_end = int(pos) + max(1, len(f"[[CITE:{sid}:{int(n)}]]"))
+            except Exception:
+                token_end = int(pos)
+            hints = extract_citation_context_hints(seg, token_start=int(pos), token_end=token_end)
+            doi_hint = str(hints.get("doi") or "").strip()
+            author_year_hint = bool(
+                str(hints.get("author") or "").strip()
+                and str(hints.get("year") or "").strip()
+                and bool(hints.get("author_confident"))
+            )
+            if doi_hint or author_year_hint:
+                score = float(reference_alignment_score(ref, hints))
+                if has_explicit_reference_conflict(ref, hints):
+                    return ""
+                if doi_hint and score < 6.0:
+                    return ""
+                if author_year_hint and score < 3.5:
+                    return ""
             src_name = _display_source_name(sp)
             detail = _remember_detail(int(n), sp, src_name, ref)
+            detail["is_inpaper"] = True  # Mark as System B (in-paper bibliography ref)
+            _enrich_system_b_detail_from_answer_context(detail, token_start=int(pos), token_end=token_end)
             title_attr = _citation_hover_title(src_name, int(n), ref)
-            return _mk_cite_link_md(int(n), detail, title_attr)
+            anchor = str(detail.get("anchor") or "").strip()
+            t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
+            return f"[{int(n)}](#{anchor} \"{t_attr}\")"
 
         def _repl_struct(m: re.Match) -> str:
-            return _resolve_struct_token(str(m.group(1) or ""), str(m.group(2) or ""), pos=int(m.start()))
+            result = _resolve_struct_token(str(m.group(1) or ""), str(m.group(2) or ""), pos=int(m.start()))
+            if result:
+                n_txt = str(m.group(2) or "").strip()
+                if n_txt:
+                    try:
+                        resolved_struct_refs.add(int(n_txt))
+                    except ValueError:
+                        pass
+                return result
+            n_txt = str(m.group(2) or "").strip()
+            if not n_txt:
+                return ""
+            return ""
 
         def _repl_struct_single(m: re.Match) -> str:
             sid = str(m.group(1) or "")
@@ -3569,11 +3734,122 @@ def _annotate_inpaper_citations_with_hover_meta(
             if not n_txt:
                 # Malformed form like [CITE:sid] -> hide raw token.
                 return ""
-            return _resolve_struct_token(sid, n_txt, pos=int(m.start()))
+            result = _resolve_struct_token(sid, n_txt, pos=int(m.start()))
+            if result:
+                try:
+                    resolved_struct_refs.add(int(n_txt))
+                except ValueError:
+                    pass
+                return result
+            return ""
 
         def _repl_struct_sid_only(_: re.Match) -> str:
             # Malformed form like [[CITE:sid]] -> hide raw token.
             return ""
+
+        def _resolve_n_from_hits(n: int, *, token_start: int = -1, token_end: int = -1) -> dict | None:
+            """Map [n] to hits[n-1] — the context snippet the LLM actually referenced."""
+            idx = int(n) - 1
+            hit: dict | None = None
+            sp: str = ""
+            # If canonical_paths is available, use it to find the correct hit
+            # regardless of display-list ordering.
+            if isinstance(canonical_paths, list) and 0 <= idx < len(canonical_paths):
+                target_sp = str(canonical_paths[idx] or "").strip().lower()
+                if target_sp:
+                    for _h in hits or []:
+                        _mh = (_h or {}).get("meta", {}) or {}
+                        _sp_h = str(_mh.get("source_path") or "").strip().lower()
+                        if _sp_h == target_sp:
+                            hit = _h
+                            sp = str(_mh.get("source_path") or "").strip()
+                            break
+            if hit is None:
+                if not (0 <= idx < len(hits)):
+                    return None
+                hit = hits[idx]
+                meta_h = (hit or {}).get("meta", {}) or {}
+                sp = str(meta_h.get("source_path") or "").strip()
+            if not sp or _is_temp_source_path(sp):
+                return None
+            skey = f"{int(n)}|{sp.lower()}"
+            cached = detail_by_key.get(skey)
+            if isinstance(cached, dict):
+                return cached
+            meta_h = (hit or {}).get("meta", {}) or {}
+            src_name = _display_source_name(sp)
+            heading = str(
+                meta_h.get("heading_path")
+                or meta_h.get("ref_best_heading_path")
+                or ""
+            ).strip()
+            snippet = str(hit.get("text") or "").strip()
+            evidence_quote = str(
+                meta_h.get("evidence_quote")
+                or meta_h.get("support_locate_anchor")
+                or meta_h.get("anchor_text")
+                or snippet
+                or ""
+            ).strip()
+            p0, p1 = _safe_page_range(meta_h)
+            ref_rank = meta_h.get("ref_rank") if isinstance(meta_h.get("ref_rank"), dict) else {}
+            try:
+                score_value = float(
+                    ref_rank.get("display_score")
+                    or ref_rank.get("score")
+                    or meta_h.get("score")
+                    or 0.0
+                )
+            except Exception:
+                score_value = 0.0
+            answer_claim = ""
+            if int(token_start) >= 0:
+                answer_claim = _citation_context_line(token_start=int(token_start), token_end=int(token_end))
+            location_bits: list[str] = []
+            if heading:
+                location_bits.append(heading)
+            if p0:
+                if p1 and int(p1) != int(p0):
+                    location_bits.append(f"pp. {int(min(p0, p1))}-{int(max(p0, p1))}")
+                else:
+                    location_bits.append(f"p. {int(p0)}")
+            anchor_kind = str(meta_h.get("anchor_kind") or "").strip()
+            if anchor_kind:
+                location_bits.append(anchor_kind)
+            why_line = str(ref_rank.get("why") or meta_h.get("why_line") or "").strip()[:320]
+            support_relation = why_line
+            if not support_relation:
+                support_relation = (
+                    "This retrieval hit is the source evidence for the cited answer sentence; "
+                    "open it to verify the original wording and section context."
+                )
+            anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=src_name)
+            rec = {
+                "num": int(n),
+                "anchor": anchor,
+                "source_name": src_name,
+                "source_path": sp,
+                "raw": snippet[:520],
+                "title": heading or src_name,
+                "is_inpaper": False,  # System A (hit citation)
+                "heading_path": heading,
+                "summary_line": evidence_quote[:360] or snippet[:360],
+                "summary_source": "retrieval_hit",
+                "answer_claim": answer_claim[:420],
+                "evidence_quote": evidence_quote[:520],
+                "evidence_source": "retrieval_hit",
+                "location_label": " · ".join([part for part in location_bits if str(part or "").strip()])[:260],
+                "support_relation": support_relation,
+                "why_line": why_line,
+                "block_id": str(meta_h.get("primary_block_id") or meta_h.get("block_id") or "").strip(),
+                "anchor_id": str(meta_h.get("primary_anchor_id") or meta_h.get("anchor_id") or "").strip(),
+                "anchor_kind": anchor_kind,
+                "page_start": int(p0 or 0),
+                "page_end": int(p1 or 0),
+                "score": score_value,
+            }
+            detail_by_key[skey] = rec
+            return rec
 
         def _repl_any(m: re.Match) -> str:
             raw = str(m.group(0) or "")
@@ -3589,18 +3865,56 @@ def _annotate_inpaper_citations_with_hover_meta(
             items: list[str] = []
             changed = False
             for n in nums:
-                picked = _pick_grounded_numeric_candidate(
-                    int(n),
-                    pos=int(m.start()),
-                    target_sp=target_sp,
-                )
-                if not picked:
-                    if not _STRICT_STRUCTURED_CITATION_LINKING:
-                        items.append(f"[{int(n)}]")
+                if int(n) in unresolved_struct_refs:
+                    # A failed System B token must not be silently reinterpreted
+                    # as a System A retrieval-hit citation with the same number.
+                    changed = True
                     continue
-                sp_picked, src_name, ref = picked
-                detail = _remember_detail(int(n), sp_picked, src_name, ref)
-                title_attr = _citation_hover_title(src_name, int(n), ref)
+                # [n] normally maps to hits[n-1] — the context snippet the LLM
+                # referenced.  If [n] cannot be a retrieval-hit citation (for
+                # example [116] with one hit), fall back to a grounded reference
+                # index lookup so legacy in-paper numeric refs stay usable.
+
+                # If this number was already resolved by System B's _repl_struct,
+                # the [[CITE:...]] was converted to [{n}](#anchor "title") and we
+                # must preserve the [n] link text.  Checking resolved_struct_refs
+                # before _resolve_n_from_hits is critical: _resolve_n_from_hits
+                # may return a hit (same number, different source) and would
+                # overwrite the System B anchor with a System A anchor.
+                if int(n) in resolved_struct_refs:
+                    items.append(f"[{int(n)}]")
+                    changed = True
+                    continue
+                hit_detail = _resolve_n_from_hits(
+                    int(n),
+                    token_start=int(m.start()),
+                    token_end=int(m.end()),
+                )
+                if hit_detail:
+                    detail = hit_detail
+                else:
+                    picked = _pick_grounded_numeric_candidate(
+                        int(n),
+                        pos=int(m.start()),
+                        target_sp=target_sp,
+                    )
+                    if not picked:
+                        if not _STRICT_STRUCTURED_CITATION_LINKING:
+                            items.append(f"[{int(n)}]")
+                        continue
+                    sp, src_name, ref = picked
+                    detail = _remember_detail(int(n), sp, src_name, ref)
+                    detail["is_inpaper"] = True
+                    _enrich_system_b_detail_from_answer_context(
+                        detail,
+                        token_start=int(m.start()),
+                        token_end=int(m.end()),
+                    )
+                title_attr = _citation_hover_title(
+                    str(detail.get("source_name") or ""),
+                    int(n),
+                    detail,
+                )
                 items.append(_mk_cite_link_md(int(n), detail, title_attr))
                 changed = True
             if not changed:
@@ -3613,6 +3927,7 @@ def _annotate_inpaper_citations_with_hover_meta(
         # Final safety-net: never leak raw CITE tokens to UI.
         seg2 = _STRUCT_CITE_GARBAGE_RE.sub("", seg2)
         if structured_seen:
+            seg2 = _INPAPER_CITE_ANY_RE.sub(_repl_any, seg2)
             return seg2
         return _INPAPER_CITE_ANY_RE.sub(_repl_any, seg2)
 
@@ -3662,18 +3977,12 @@ def _annotate_inpaper_citations_with_hover_meta(
     return "\n".join(out_lines), details
 
 
-def _annotate_inpaper_citations_with_hover(md: str, hits: list[dict]) -> str:
-    out, _ = _annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="")
-    return out
-
 
 def _render_inpaper_citation_details(
     cite_details: list[dict],
     *,
-    key_ns: str,
     max_items: int = 24,
 ) -> None:
-    del key_ns
     if not isinstance(cite_details, list) or not cite_details:
         return
 
@@ -3995,4 +4304,3 @@ def _render_citation_ui(uid: str, source_path: str, key_ns: str) -> None:
         st.code(gbt_str, language="text")
     with t2:
         st.code(bib_str, language="latex")
-

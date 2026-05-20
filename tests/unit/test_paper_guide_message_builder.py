@@ -48,15 +48,20 @@ def test_build_generation_prompt_bundle_adds_citation_lock_for_non_citeless_fami
         paper_guide_support_slots_block="SUPPORT BLOCK",
         paper_guide_evidence_cards_block="EVIDENCE BLOCK",
         paper_guide_citation_grounding_block="GROUNDING BLOCK",
+        paper_guide_reference_opportunities_block="Paper-guide upstream reference opportunities:\n- label=ADMM | cite_example=[[CITE:s12345678:4]]",
         image_attachment_count=2,
     )
 
     assert "Citation source lock:" in out["system"]
     assert "[[CITE:s12345678:<ref_num>]]" in out["system"]
     assert "Paper-guide support-slot protocol:" in out["system"]
+    assert "Upstream-reference protocol:" in out["system"]
+    assert "Answer the user's substantive question first" in out["system"]
+    assert "Never begin the final answer with locator-only shells" in out["system"]
     assert "Anchor-grounded answer rule:" in out["system"]
     assert "FOCUS BLOCK" in out["user"]
     assert "SUPPORT BLOCK" in out["user"]
+    assert "Paper-guide upstream reference opportunities:" in out["user"]
     assert "EVIDENCE BLOCK" in out["user"]
     assert "GROUNDING BLOCK" in out["user"]
     assert "Attached images: 2." in out["user"]

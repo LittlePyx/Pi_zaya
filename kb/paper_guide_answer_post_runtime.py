@@ -34,6 +34,10 @@ from kb.paper_guide.router import (
 from kb.paper_guide_postprocess import _sanitize_paper_guide_answer_for_user
 from kb.paper_guide_provenance import _resolve_paper_guide_md_path
 from kb.paper_guide_provenance import _extract_figure_number
+from kb.paper_guide_doc_map import (
+    _paper_guide_prompt_requests_focused_reading_path,
+    _select_focused_doc_map_records,
+)
 from kb.paper_guide_retrieval_runtime import (
     _focus_citation_fragment_for_refs,
     _paper_guide_citation_lookup_fragments,
@@ -138,6 +142,125 @@ def _ground_paper_guide_answer_support(
         prompt_family=prompt_family,
         db_dir=db_dir,
     )
+
+
+def _repair_reconstruction_method_taxonomy_answer(
+    answer: str,
+    *,
+    prompt: str = "",
+    prompt_family: str = "",
+) -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return text
+    family = str(prompt_family or "").strip().lower()
+    q = str(prompt or "").strip().lower()
+    asks_reconstruction_tradeoff = bool(
+        (
+            ("重建" in q and "方法" in q)
+            or re.search(r"\breconstruction\s+(?:method|methods|algorithm|algorithms|strateg(?:y|ies))\b", q)
+        )
+        and (
+            "优缺点" in q
+            or "适用场景" in q
+            or re.search(r"\b(?:strength|weakness|advantage|disadvantage|trade[- ]?off|when to use)\b", q)
+        )
+    )
+    if family != "strength_limits" or not asks_reconstruction_tradeoff:
+        return text
+    low = text.lower()
+    has_basis_pursuit_third_class = (
+        ("basis pursuit" in low)
+        or ("基追踪" in text)
+        or ("稀疏表示" in text)
+    )
+    has_adaptive_subset_third_class = bool(
+        ("自适应" in text)
+        or ("子集采样" in text)
+        or ("进化式" in text)
+        or re.search(r"\b(?:adaptive|subset|evolutionary)\b", low)
+    )
+    if not (
+        has_basis_pursuit_third_class
+        or has_adaptive_subset_third_class
+        or "三类主流重建方法" in text
+    ):
+        return text
+    lines = text.splitlines()
+    third_start = -1
+    for idx, line in enumerate(lines):
+        if re.match(
+            r"\s*3\.\s+\*\*.*(?:basis pursuit|基追踪|稀疏表示|自适应|子集采样|进化式|adaptive|subset|evolutionary)",
+            line,
+            flags=re.IGNORECASE,
+        ):
+            third_start = idx
+            break
+    if third_start < 0:
+        repaired = re.sub(r"明确(?:提到|区分)(?:了)?三类主流重建方法", "主要涉及两类主流重建策略", text)
+        repaired = repaired.replace("三类主流重建方法", "两类主流重建策略")
+        return repaired
+
+    third_end = len(lines)
+    for idx in range(third_start + 1, len(lines)):
+        line = str(lines[idx] or "").strip()
+        if line.startswith(">") or re.match(r"\s*\d+\.\s+\*\*", line):
+            third_end = idx
+            break
+
+    if has_adaptive_subset_third_class and not has_basis_pursuit_third_class:
+        folded = (
+            " - **补充策略说明**：自适应/子集采样更适合作为采样加速或先验利用策略，"
+            "不作为与结构化基快速重建、压缩感知优化重建并列的第三个顶层重建范式；"
+            "它的价值在于减少测量次数或利用时序/先验信息，但适用性依赖场景与先验质量。"
+        )
+    else:
+        folded = (
+            " - **子方法说明**：基追踪（basis pursuit）/ wavelet 稀疏组合属于压缩感知优化重建中的 "
+            "$\\ell_1$ 最小化类方法，不作为与前两类并列的第三个顶层范式；文中指出它可通过凸优化求解，"
+            "但仍有不可忽略的计算负担。"
+        )
+    repaired_lines = lines[:third_start] + [folded] + lines[third_end:]
+    repaired = "\n".join(repaired_lines).strip()
+    repaired = re.sub(r"明确(?:提到|区分)(?:了)?三类主流重建方法", "主要涉及两类主流重建策略", repaired)
+    repaired = repaired.replace("三类主流重建方法", "两类主流重建策略")
+    repaired = re.sub(r"文中未明确(?:给出|列出)[“\"]?三类[”\"]?(?:方法)?", "文中未明确列出三类以上独立重建方法", repaired)
+    repaired = repaired.replace("上述分类基于其描述的策略本质（快速算法 vs 优化重建 vs 稀疏基追踪）", "上述分类基于其描述的两条主要策略路径")
+    return repaired
+
+
+def _soften_baseline_reproduction_inference(answer: str, *, prompt: str = "") -> str:
+    text = str(answer or "").strip()
+    if not text:
+        return text
+    q = str(prompt or "").strip().lower()
+    if not (
+        "baseline" in q
+        or "复现" in q
+        or re.search(r"\breproduc(?:e|tion)|replicate\b", q)
+    ):
+        return text
+    text = re.sub(
+        r"作者建议的最基础\s*baseline\s*复现路线是[:：]",
+        "文中没有直接给出“复现 baseline”的逐步操作清单；如果按文中原理归纳，一个最基础 baseline 可以是：",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"该路线源于\s*Duarte\s*等人在\s*Rice University\s*的开创性工作，并被本文明确列为最常见且基础的压缩感知单像素成像实现范式。",
+        "需要注意：这是基于文中原理和引用工作归纳出的复现路线，不是作者逐条给出的实验操作建议。",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = text.replace(
+        "隐式推荐此三步为最基础 baseline",
+        "可将这三步作为一个基础 baseline",
+    )
+    text = text.replace(
+        "作者虽未明说“建议路线”",
+        "文中虽未直接给出“建议路线”",
+    )
+    return text
 
 
 def _iter_component_role_answer_lines(answer_text: str) -> list[str]:
@@ -1796,9 +1919,14 @@ def _force_exact_method_support_surface(
         return text
     if locate_anchor.lower() in text.lower():
         return text
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", str(prompt or "")))
     if heading_path:
-        return f"The paper states this explicitly in {heading_path}:\n> {locate_anchor}"
-    return f"The paper states this explicitly:\n> {locate_anchor}"
+        if prefer_zh:
+            return f"原文位置：{heading_path}。\n> {locate_anchor}"
+        return f"Source location: {heading_path}.\n> {locate_anchor}"
+    if prefer_zh:
+        return f"原文位置：当前绑定论文的匹配段落。\n> {locate_anchor}"
+    return f"Source location: matched passage in the bound paper.\n> {locate_anchor}"
 
 
 def _apply_paper_guide_answer_postprocess(
@@ -1829,18 +1957,27 @@ def _apply_paper_guide_answer_postprocess(
 
     if _paper_guide_prompt_requests_doc_map(prompt_text):
         doc_source_path = str(bound_source_path or source_path or "").strip()
+        focused_path = _paper_guide_prompt_requests_focused_reading_path(prompt_text)
         recs = _resolve_doc_map_records_from_source(
             doc_source_path,
             prompt=prompt_text,
             db_dir=db_dir,
-            max_items=16,
+            max_items=24 if focused_path else 16,
         )
         if recs:
+            if focused_path:
+                recs = _select_focused_doc_map_records(recs, prompt=prompt_text, max_items=6)
+            prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", prompt_text))
             lines: list[str] = []
-            lines.append("Doc map (verbatim anchors by section):")
+            lines.append(
+                "可以先按这几处读：" if (prefer_zh and focused_path)
+                else "可以按这些原文位置读：" if prefer_zh
+                else "Start with these source anchors:" if focused_path
+                else "Use these source anchors as a reading map:"
+            )
             lines.append("")
             for i, rec in enumerate(recs, start=1):
-                heading_path = str(rec.get("heading_path") or "").strip() or "Unheaded section"
+                heading_path = str(rec.get("heading_path") or "").strip() or ("未命名小节" if prefer_zh else "Unheaded section")
                 anchor = str(rec.get("locate_anchor") or "").strip()
                 if not anchor:
                     continue
@@ -1913,6 +2050,15 @@ def _apply_paper_guide_answer_postprocess(
                     db_dir=db_dir,
                 )
 
+    text = _repair_reconstruction_method_taxonomy_answer(
+        text,
+        prompt=prompt_text,
+        prompt_family=effective_family,
+    )
+    text = _soften_baseline_reproduction_inference(
+        text,
+        prompt=prompt_text,
+    )
     text, support_resolution = _ground_paper_guide_answer_support(
         text,
         support_slots=support_slots,

@@ -5,23 +5,30 @@ import re
 from kb.paper_guide_prompting import (
     _paper_guide_allows_citeless_answer,
     _paper_guide_prompt_requests_doc_map,
-    _paper_guide_prompt_requests_exact_method_support,
     _paper_guide_requested_box_numbers,
     _paper_guide_requested_section_targets,
 )
 from kb.paper_guide.router import (
     PaperGuideBroadSkillDeps,
+    PaperGuideExactSkillDeps,
     _dispatch_paper_guide_broad_skill,
+    _dispatch_paper_guide_exact_support_skill,
     _resolve_paper_guide_intent,
 )
 from kb.paper_guide_answer_post_runtime import (
-    _paper_guide_prompt_requests_exact_citation_support,
-    _paper_guide_prompt_requests_exact_equation_support,
-    _paper_guide_prompt_requests_exact_figure_caption_support,
+    _build_exact_equation_support_answer,
+    _extract_caption_clause_superscript_ref_nums,
+    _extract_inline_reference_numbers,
     _resolve_exact_citation_lookup_support_from_source,
+    _resolve_doc_map_records_from_source,
     _resolve_exact_equation_support_from_source,
     _resolve_exact_figure_panel_caption_support_from_source,
     _resolve_exact_method_support_from_source,
+    _sanitize_paper_guide_answer_for_user,
+)
+from kb.paper_guide_doc_map import (
+    _paper_guide_prompt_requests_focused_reading_path,
+    _select_focused_doc_map_records,
 )
 from kb.paper_guide_focus import (
     _build_paper_guide_overview_role_lines,
@@ -146,6 +153,89 @@ def _select_section_target_direct_hit(
     return dict(ranked[0][1])
 
 
+def _paper_guide_prompt_prefers_zh(prompt: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(prompt or "")))
+
+
+def _build_direct_doc_map_answer(
+    *,
+    source_path: str,
+    prompt_text: str,
+    prompt_family: str,
+    db_dir,
+    has_hits: bool,
+) -> str:
+    src = str(source_path or "").strip()
+    if not src:
+        return ""
+    focused_path = _paper_guide_prompt_requests_focused_reading_path(prompt_text)
+    recs = _resolve_doc_map_records_from_source(
+        src,
+        prompt=prompt_text,
+        db_dir=db_dir,
+        max_items=24 if focused_path else 16,
+    )
+    if not recs:
+        return ""
+    if focused_path:
+        recs = _select_focused_doc_map_records(recs, prompt=prompt_text, max_items=6)
+    prefer_zh = _paper_guide_prompt_prefers_zh(prompt_text)
+    lines: list[str] = [
+        "可以先按这几处读：" if (prefer_zh and focused_path)
+        else "可以按这些原文位置读：" if prefer_zh
+        else "Start with these source anchors:" if focused_path
+        else "Use these source anchors as a reading map:",
+        "",
+    ]
+    for i, rec in enumerate(list(recs or []), start=1):
+        heading_path = str((rec or {}).get("heading_path") or "").strip() or ("未命名小节" if prefer_zh else "Unheaded section")
+        anchor = str((rec or {}).get("locate_anchor") or "").strip()
+        if not anchor:
+            continue
+        lines.append(f"{int(i)}. {heading_path}")
+        lines.append(f"> {anchor}")
+        lines.append("")
+    answer = "\n".join(lines).rstrip()
+    return _sanitize_paper_guide_answer_for_user(
+        answer,
+        has_hits=bool(has_hits),
+        prompt=prompt_text,
+        prompt_family=prompt_family or "overview",
+    )
+
+
+def _build_exact_support_direct_answer(
+    *,
+    prompt_text: str,
+    resolved_intent,
+    source_path: str,
+    db_dir,
+    has_hits: bool,
+) -> str:
+    if not str(source_path or "").strip():
+        return ""
+    exact_skill_result = _dispatch_paper_guide_exact_support_skill(
+        prompt_text=prompt_text,
+        resolved_intent=resolved_intent,
+        source_path=str(source_path or "").strip(),
+        db_dir=db_dir,
+        has_hits=bool(has_hits),
+        deps=PaperGuideExactSkillDeps(
+            resolve_exact_method_support=_resolve_exact_method_support_from_source,
+            resolve_exact_equation_support=_resolve_exact_equation_support_from_source,
+            build_exact_equation_answer=_build_exact_equation_support_answer,
+            resolve_exact_citation_lookup_support=_resolve_exact_citation_lookup_support_from_source,
+            extract_inline_reference_numbers=_extract_inline_reference_numbers,
+            resolve_exact_figure_panel_caption_support=_resolve_exact_figure_panel_caption_support_from_source,
+            extract_caption_clause_superscript_ref_nums=_extract_caption_clause_superscript_ref_nums,
+            sanitize_answer=_sanitize_paper_guide_answer_for_user,
+        ),
+    )
+    if exact_skill_result is None:
+        return ""
+    return str(exact_skill_result.answer_text or "").strip()
+
+
 def _build_paper_guide_direct_answer_override(
     *,
     paper_guide_mode: bool,
@@ -177,12 +267,26 @@ def _build_paper_guide_direct_answer_override(
         or int(resolved_intent.target_figure or 0) > 0
     )
 
-    # Deterministic doc map is generated in postprocess; returning a non-empty override here
-    # skips the LLM call for this request.
     if _paper_guide_prompt_requests_doc_map(prompt_text):
-        return "Doc map (building verbatim section anchors)..."
+        return _build_direct_doc_map_answer(
+            source_path=paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path,
+            prompt_text=prompt_text,
+            prompt_family=effective_family or family,
+            db_dir=db_dir,
+            has_hits=bool(answer_hits),
+        )
 
     source_path = paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path
+    exact_direct_answer = _build_exact_support_direct_answer(
+        prompt_text=prompt_text,
+        resolved_intent=resolved_intent,
+        source_path=source_path,
+        db_dir=db_dir,
+        has_hits=bool(answer_hits),
+    )
+    if exact_direct_answer:
+        return exact_direct_answer
+
     broad_skill_result = _dispatch_paper_guide_broad_skill(
         prompt_text=prompt_text,
         resolved_intent=resolved_intent,
@@ -205,27 +309,6 @@ def _build_paper_guide_direct_answer_override(
     if broad_skill_result is not None and str(broad_skill_result.answer_text or "").strip():
         return str(broad_skill_result.answer_text or "").strip()
 
-    if effective_family == "equation" and _paper_guide_prompt_requests_exact_equation_support(prompt_text):
-        rec = _resolve_exact_equation_support_from_source(
-            paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
-        )
-        equation_markdown = str((rec or {}).get("equation_markdown") or "").strip()
-        if equation_markdown:
-            return "Equation support (resolving exact equation + variable definitions)..."
-
-    # Deterministic caption-clause resolver in postprocess; skip LLM to avoid mismatched panel anchors.
-    if effective_family == "figure_walkthrough" and _paper_guide_prompt_requests_exact_figure_caption_support(prompt_text):
-        rec = _resolve_exact_figure_panel_caption_support_from_source(
-            paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
-        )
-        locate_anchor = str((rec or {}).get("locate_anchor") or "").strip()
-        if locate_anchor:
-            return "Figure caption (resolving exact panel clause)..."
-
     if _paper_guide_allows_citeless_answer(effective_family):
         return str(
             build_direct_abstract_answer(
@@ -237,52 +320,11 @@ def _build_paper_guide_direct_answer_override(
             or ""
         ).strip()
 
-    # Exact-support citation lookup should not depend on the LLM answer formatting.
-    # If the user asks "where exactly is that stated", deterministically surface the best in-paper clause
-    # with its inline reference number(s).
-    if effective_family == "citation_lookup" and _paper_guide_prompt_requests_exact_citation_support(prompt_text):
-        rec = _resolve_exact_citation_lookup_support_from_source(
-            paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
-        )
-        locate_anchor = str((rec or {}).get("locate_anchor") or "").strip()
-        heading_path = str((rec or {}).get("heading_path") or "").strip()
-        ref_nums = [int(n) for n in list((rec or {}).get("ref_nums") or []) if int(n) > 0]
-        if locate_anchor and ref_nums:
-            ref_label = ", ".join(f"[{int(n)}]" for n in ref_nums[:4])
-            if heading_path:
-                return f"The paper cites {ref_label} for this point in {heading_path}:\n> {locate_anchor}"
-            return f"The paper cites {ref_label} for this point:\n> {locate_anchor}"
-
-    if effective_family != "citation_lookup":
-        if effective_family not in {"method", "reproduce"}:
-            return ""
-        if not _paper_guide_prompt_requests_exact_method_support(prompt_text):
-            return ""
-        rec = _resolve_exact_method_support_from_source(
-            paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path,
-            prompt=prompt_text,
-            db_dir=db_dir,
-        )
-        locate_anchor = str((rec or {}).get("locate_anchor") or "").strip()
-        heading_path = str((rec or {}).get("heading_path") or "").strip()
-        if not locate_anchor:
-            return ""
-        if heading_path:
-            return f"The paper states this explicitly in {heading_path}:\n> {locate_anchor}"
-        return f"The paper states this explicitly:\n> {locate_anchor}"
-
     if has_non_ref_target:
         return ""
 
-    return str(
-        build_direct_citation_lookup_answer(
-            prompt=prompt_text,
-            source_path=paper_guide_focus_source_path or paper_guide_direct_source_path or paper_guide_bound_source_path,
-            answer_hits=answer_hits,
-            special_focus_block=special_focus_block,
-            db_dir=db_dir,
-        )
-        or ""
-    ).strip()
+    # For citation_lookup family without an exact-support request (e.g.
+    # "what references are cited" without "where exactly"),
+    # fall through to LLM generation — the template-based direct answer is
+    # too rigid and produces poor results for mixed-concept questions.
+    return ""

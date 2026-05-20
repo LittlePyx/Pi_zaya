@@ -1,0 +1,109 @@
+[
+  {
+    "id": "nat-single-pixel-q01-core-problem",
+    "question": "这篇文章想解决的核心问题是什么，为什么传统方案不太好？",
+    "answerContainsAny": ["单像素", "single-pixel", "传统", "raster"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00005", "blk_ce8a1e326e8b_00007", "blk_ce8a1e326e8b_00010", "blk_ce8a1e326e8b_00014", "blk_ce8a1e326e8b_00049"],
+    "minLocateButtons": 1,
+    "notes": "Overview question should stay on the bound NatPhoton-2019 paper and expose at least one direct source locate button."
+  },
+  {
+    "id": "nat-single-pixel-q02-workflow",
+    "question": "单像素成像的基本工作流程可以用一段话讲清楚吗？（从采集到重建）",
+    "answerContainsAny": ["采集", "重建", "DMD", "detector", "单像素"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00010", "blk_ce8a1e326e8b_00025", "blk_ce8a1e326e8b_00026"],
+    "minLocateButtons": 1,
+    "notes": "Workflow answer should connect sampling/measurement to reconstruction and locate in camera architecture or reconstruction strategy blocks."
+  },
+  {
+    "id": "nat-single-pixel-q03-reconstruction-tradeoffs",
+    "question": "文中提到的几类主流重建方法分别有什么优缺点，适用场景怎么选？",
+    "answerContainsAny": ["两类", "两种", "结构化基", "压缩感知"],
+    "answerNotContains": ["三类主流重建方法", "retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00022", "blk_ce8a1e326e8b_00025", "blk_ce8a1e326e8b_00026"],
+    "minLocateButtons": 1,
+    "notes": "Regression case for the earlier miss: reconstruction tradeoffs must hit the compressed-sensing and structured-basis evidence, not Figure 5 or generic application blocks."
+  },
+  {
+    "id": "nat-single-pixel-q04-main-bottleneck",
+    "question": "作者强调的主要瓶颈是什么：噪声、速度、分辨率还是硬件复杂度？为什么？",
+    "answerContainsAny": ["速度", "噪声", "分辨率", "硬件", "瓶颈"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00025", "blk_ce8a1e326e8b_00026", "blk_ce8a1e326e8b_00049"],
+    "minLocateButtons": 1,
+    "notes": "Bottleneck question should not collapse to unsupported generic limitations."
+  },
+  {
+    "id": "nat-single-pixel-q05-speed-idea-tradeoff",
+    "question": "文中有没有给出提升成像速度的关键思路？它的代价是什么？",
+    "answerContainsAny": ["速度", "实时", "压缩", "子采样", "trade-off", "代价"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00025", "blk_ce8a1e326e8b_00026", "blk_ce8a1e326e8b_00027"],
+    "minLocateButtons": 1,
+    "notes": "Speed answer should locate in acquisition/reconstruction strategy evidence."
+  },
+  {
+    "id": "nat-single-pixel-q06-sampling-vs-quality",
+    "question": "文章里对“压缩率/采样数”和重建质量的关系是怎么讨论的？",
+    "answerContainsAny": ["采样", "压缩", "重建质量", "测量", "compressed"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00021", "blk_ce8a1e326e8b_00022", "blk_ce8a1e326e8b_00025"],
+    "minLocateButtons": 1,
+    "notes": "Sampling/quality discussion should stay in compressed-sensing evidence."
+  },
+  {
+    "id": "nat-single-pixel-q07-deep-learning",
+    "question": "作者如何评价深度学习方法在单像素成像里的作用？它解决了什么，又带来了什么风险？",
+    "answerContainsAny": ["深度学习", "learning", "风险", "训练", "数据"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "minLocateButtons": 1,
+    "notes": "This case is intentionally broad; if the source paper does not directly discuss deep learning, the answer must say so without fabricating details."
+  },
+  {
+    "id": "nat-single-pixel-q08-hardware-quality-speed",
+    "question": "文中提到哪些硬件设计会显著影响成像质量或速度？",
+    "answerContainsAny": ["硬件", "DMD", "detector", "modulation", "质量", "速度"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00010", "blk_ce8a1e326e8b_00049", "blk_ce8a1e326e8b_00052"],
+    "minLocateButtons": 1,
+    "notes": "Hardware question should locate in camera architecture or application/hardware discussion."
+  },
+  {
+    "id": "nat-single-pixel-q09-future-directions",
+    "question": "这篇综述里有没有对未来方向做出明确判断？最值得追的 2-3 个方向是什么？",
+    "answerContainsAny": ["未来", "方向", "potential", "applications", "值得"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00049", "blk_ce8a1e326e8b_00050", "blk_ce8a1e326e8b_00052"],
+    "minLocateButtons": 1,
+    "notes": "Future-direction question should locate in applications/future-potential section."
+  },
+  {
+    "id": "nat-single-pixel-q10-basic-baseline",
+    "question": "如果我要复现一个最基础的 baseline，作者给的建议路线是什么？",
+    "answerContainsAny": ["baseline", "复现", "采样", "重建", "Hadamard", "raster"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00010", "blk_ce8a1e326e8b_00012", "blk_ce8a1e326e8b_00022", "blk_ce8a1e326e8b_00025", "blk_ce8a1e326e8b_00026", "blk_ce8a1e326e8b_00032", "blk_ce8a1e326e8b_00049"],
+    "minLocateButtons": 1,
+    "notes": "Baseline answer should distinguish explicit paper evidence from inferred implementation advice."
+  },
+  {
+    "id": "nat-single-pixel-q11-related-paradigms",
+    "question": "文章有没有提到和其它成像范式（比如计算成像/压缩感知相关方向）的联系或区别？",
+    "answerContainsAny": ["计算成像", "压缩感知", "联系", "区别", "computational", "compressive sensing"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00017", "blk_ce8a1e326e8b_00020", "blk_ce8a1e326e8b_00021", "blk_ce8a1e326e8b_00022", "blk_ce8a1e326e8b_00025", "blk_ce8a1e326e8b_00026"],
+    "minLocateButtons": 1,
+    "notes": "Related-paradigm question should locate in compressed-sensing explanation."
+  },
+  {
+    "id": "nat-single-pixel-q12-multiple-related-works",
+    "question": "这篇文章里有没有一处“同一句话提到多个相关工作”的地方？作者想表达的对比点是什么？",
+    "answerContainsAny": ["相关工作", "引用", "同一句", "Hadamard", "Fourier", "wavelet"],
+    "answerNotContains": ["retrieved context", "依据 、、", "（如）"],
+    "locateBlockIdsAny": ["blk_ce8a1e326e8b_00032", "blk_fc7d08b7213b_00032"],
+    "minLocateButtons": 1,
+    "notes": "Citation-rich question should preserve the source sentence and avoid empty citation shells."
+  }
+]

@@ -307,9 +307,26 @@ const renderPacketContractMessages: Message[] = [
             {
               num: 1,
               anchor: 'kb-cite-demo-1',
+              is_inpaper: true,
               source_name: READER_REGRESSION_SOURCE_NAME,
               source_path: READER_REGRESSION_SOURCE_PATH,
-              raw: 'Demo reference [1]',
+              raw: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013',
+              title: 'Single-shot compressive spectral imaging with a dual-disperser architecture',
+              authors: 'Gehm M, Brady D',
+              venue: 'Optics Express',
+              year: '2007',
+              doi: '10.1364/OE.15.014013',
+              doi_url: 'https://doi.org/10.1364/OE.15.014013',
+              answer_claim: 'Equation (1) uses this reference as the upstream source for single-shot compressive spectral imaging.',
+              citation_context: 'The current paper cites this work when tracing the single-shot compressive spectral imaging background.',
+              citation_context_source: 'answer_context',
+              upstream_work_role: 'Cited prior work or background source used to trace the upstream origin of the answer.',
+              user_question_relation: 'The user is asking about the evidence behind the answer; this reference is the upstream paper to open next.',
+              evidence_quote: 'The answer points to this paper as the upstream source for single-shot compressive spectral imaging.',
+              evidence_source: 'answer_context',
+              summary_line: 'The answer points to this paper as the upstream source for single-shot compressive spectral imaging.',
+              summary_source: 'answer_context',
+              why_line: 'This reference is the cited prior work to open when tracing the concept behind the answer.',
             },
           ],
           locate_target: {
@@ -420,6 +437,98 @@ const renderPacketHiddenLocateMessages: Message[] = [
   },
 ]
 
+const citationHoverRaceMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: 'Compare two cited papers: [1](#kb-cite-race-a) and [2](#kb-cite-race-b).',
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        intent: { family: 'citation_lookup' },
+        render_packet: {
+          answer_markdown: 'Compare two cited papers: [1](#kb-cite-race-a) and [2](#kb-cite-race-b).',
+          rendered_body: 'Compare two cited papers: [1](#kb-cite-race-a) and [2](#kb-cite-race-b).',
+          rendered_content: 'Compare two cited papers: [1](#kb-cite-race-a) and [2](#kb-cite-race-b).',
+          copy_text: 'Compare two cited papers: [1] and [2].',
+          copy_markdown: 'Compare two cited papers: [1](#kb-cite-race-a) and [2](#kb-cite-race-b).',
+          cite_details: [
+            {
+              num: 1,
+              anchor: 'kb-cite-race-a',
+              source_name: 'Slow Paper A.pdf',
+              source_path: '__citation_race__/slow-a.en.md',
+              is_inpaper: true,
+              raw: '[1] Slow Paper A.',
+              doi: '10.0000/slow-a',
+              doi_url: 'https://doi.org/10.0000/slow-a',
+            },
+            {
+              num: 2,
+              anchor: 'kb-cite-race-b',
+              source_name: 'Fast Paper B.pdf',
+              source_path: '__citation_race__/fast-b.en.md',
+              is_inpaper: true,
+              raw: '[2] Fast Paper B.',
+              doi: '10.0000/fast-b',
+              doi_url: 'https://doi.org/10.0000/fast-b',
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
+const systemACitationPopoverMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        intent: { family: 'method' },
+        render_packet: {
+          answer_markdown: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          rendered_body: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          rendered_content: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          copy_text: 'The method details are grounded in [1].',
+          copy_markdown: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          cite_details: [
+            {
+              num: 1,
+              anchor: 'kb-cite-system-a-1',
+              source_name: READER_REGRESSION_SOURCE_NAME,
+              source_path: READER_REGRESSION_SOURCE_PATH,
+              is_inpaper: false,
+              title: 'Fixture Paper / 2. Method',
+              raw: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+              heading_path: 'Fixture Paper / 2. Method',
+              answer_claim: 'The method details are grounded in this paper.',
+              evidence_quote: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+              evidence_source: 'retrieval_hit',
+              location_label: 'Fixture Paper / 2. Method · p. 2 · sentence',
+              summary_line: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+              summary_source: 'retrieval_hit',
+              support_relation: 'The Method section states the exact mechanism used by the answer.',
+              why_line: 'The Method section states the exact mechanism used by the answer.',
+              block_id: 'p-method-1',
+              anchor_id: 'a-p-method-1',
+              anchor_kind: 'sentence',
+              page_start: 2,
+              page_end: 2,
+              score: 8.9,
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
 const guideFilterOnlyMessages: Message[] = [
   {
     id: 1,
@@ -500,6 +609,98 @@ const negativeEvidenceLocateMessages: Message[] = [
   },
 ]
 
+const normalMultiDocAmbiguousInlineLocateMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: [
+      '在提供的检索文档中，明确提到 **NeRF** 的文章有以下两篇：',
+      '',
+      '1. **DOC-1**：*CVPR-2024-SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image*',
+      ' - 多次提及 NeRF 作为其底层场景表示方法，例如：“SCINeRF exploits neural radiance fields as its underlying scene representation”。',
+      '',
+      '2. **DOC-2**：*ICIP-2025-SCIGS: 3D Gaussians Splatting from A Snapshot Compressive Image*',
+      ' - 明确对比了 NeRF-based 方法的局限性，如：“NeRF-based reconstruction methods still face limitations in handling dynamic scenes”。',
+    ].join('\n'),
+    rendered_body: [
+      '在提供的检索文档中，明确提到 **NeRF** 的文章有以下两篇：',
+      '',
+      '1. **DOC-1**：*CVPR-2024-SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image*',
+      ' - 多次提及 NeRF 作为其底层场景表示方法，例如：“SCINeRF exploits neural radiance fields as its underlying scene representation”。',
+      '',
+      '2. **DOC-2**：*ICIP-2025-SCIGS: 3D Gaussians Splatting from A Snapshot Compressive Image*',
+      ' - 明确对比了 NeRF-based 方法的局限性，如：“NeRF-based reconstruction methods still face limitations in handling dynamic scenes”。',
+    ].join('\n'),
+    copy_text: 'normal multi-doc ambiguous inline locate',
+    copy_markdown: 'normal multi-doc ambiguous inline locate',
+    refs_user_msg_id: 9001,
+    created_at: Date.now(),
+  },
+]
+
+const normalMultiDocAmbiguousInlineLocateRefs: Record<string, unknown> = {
+  '9001': {
+    hits: [
+      {
+        ui_meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          heading_path: 'Fixture Paper / Abstract',
+          summary_line: 'Single-source fallback should not power multi-doc inline locate in normal mode.',
+          why_line: 'This fixture intentionally leaves only one refs candidate.',
+          reader_open: {
+            sourcePath: READER_REGRESSION_SOURCE_PATH,
+            sourceName: READER_REGRESSION_SOURCE_NAME,
+            headingPath: 'Fixture Paper / Abstract',
+            snippet: 'Single-source fallback should not power multi-doc inline locate in normal mode.',
+            highlightSnippet: 'Single-source fallback should not power multi-doc inline locate in normal mode.',
+          },
+        },
+      },
+    ],
+  },
+}
+
+const liveUserPendingRefsMessages: Message[] = [
+  {
+    id: 9101,
+    role: 'user',
+    content: 'Which paper compares Hadamard and Fourier single-pixel imaging?',
+    created_at: Date.now(),
+  },
+]
+
+const liveUserPendingRefs: Record<string, unknown> = {
+  '9101': {
+    display_state: 'pending',
+    payload_mode: 'pending',
+    enrichment_pending: true,
+    hits: [
+      {
+        meta: {
+          ref_pack_state: 'pending',
+        },
+        ui_meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          heading_path: 'Fixture Paper / Theory Comparison',
+          score_pending: true,
+          summary_line: 'Provisional refs should render while the assistant answer is still streaming.',
+          why_line: 'The refs payload is available before the assistant message is persisted.',
+          reader_open: {
+            sourcePath: READER_REGRESSION_SOURCE_PATH,
+            sourceName: READER_REGRESSION_SOURCE_NAME,
+            headingPath: 'Fixture Paper / Theory Comparison',
+            snippet: 'Provisional refs should render while the assistant answer is still streaming.',
+            highlightSnippet: 'Provisional refs should render while the assistant answer is still streaming.',
+            strictLocate: false,
+          },
+        },
+      },
+    ],
+  },
+}
+
 type RegressionScenario =
   | 'structured-primary-rerank'
   | 'required-fallback-anchor'
@@ -507,8 +708,12 @@ type RegressionScenario =
   | 'guide-formula-remap'
   | 'render-packet-contract'
   | 'render-packet-hidden-locate'
+  | 'citation-hover-race'
+  | 'system-a-citation-popover'
   | 'guide-filter-empty-external'
   | 'negative-evidence-locate'
+  | 'normal-multi-doc-ambiguous-inline-locate'
+  | 'live-user-pending-refs'
 
 export default function MessageListRegressionPage() {
   const scenarioParam = (() => {
@@ -521,8 +726,12 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'guide-formula-remap') return 'guide-formula-remap'
     if (scenarioParam === 'render-packet-contract') return 'render-packet-contract'
     if (scenarioParam === 'render-packet-hidden-locate') return 'render-packet-hidden-locate'
+    if (scenarioParam === 'citation-hover-race') return 'citation-hover-race'
+    if (scenarioParam === 'system-a-citation-popover') return 'system-a-citation-popover'
     if (scenarioParam === 'guide-filter-empty-external') return 'guide-filter-empty-external'
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
+    if (scenarioParam === 'normal-multi-doc-ambiguous-inline-locate') return 'normal-multi-doc-ambiguous-inline-locate'
+    if (scenarioParam === 'live-user-pending-refs') return 'live-user-pending-refs'
     return 'structured-primary-rerank'
   })()
   const regressionMessages: Message[] = (() => {
@@ -531,11 +740,26 @@ export default function MessageListRegressionPage() {
     if (scenario === 'guide-formula-remap') return guideFormulaRemapMessages
     if (scenario === 'render-packet-contract') return renderPacketContractMessages
     if (scenario === 'render-packet-hidden-locate') return renderPacketHiddenLocateMessages
+    if (scenario === 'citation-hover-race') return citationHoverRaceMessages
+    if (scenario === 'system-a-citation-popover') return systemACitationPopoverMessages
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyMessages
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages
+    if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateMessages
+    if (scenario === 'live-user-pending-refs') return liveUserPendingRefsMessages
     return structuredPrimaryRerankMessages
   })()
-  const regressionRefs: Record<string, unknown> = scenario === 'guide-filter-empty-external' ? guideFilterOnlyRefs : {}
+  const regressionRefs: Record<string, unknown> = (() => {
+    if (scenario === 'guide-filter-empty-external') return guideFilterOnlyRefs
+    if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateRefs
+    if (scenario === 'live-user-pending-refs') return liveUserPendingRefs
+    return {}
+  })()
+  const regressionGuideSourcePath = scenario === 'normal-multi-doc-ambiguous-inline-locate' || scenario === 'citation-hover-race'
+    ? ''
+    : READER_REGRESSION_SOURCE_PATH
+  const regressionGuideSourceName = scenario === 'normal-multi-doc-ambiguous-inline-locate' || scenario === 'citation-hover-race'
+    ? ''
+    : READER_REGRESSION_SOURCE_NAME
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
 
   return (
@@ -555,8 +779,8 @@ export default function MessageListRegressionPage() {
             messages={regressionMessages}
             refs={regressionRefs}
             onOpenReader={(nextPayload) => setPayload(nextPayload)}
-            paperGuideSourcePath={READER_REGRESSION_SOURCE_PATH}
-            paperGuideSourceName={READER_REGRESSION_SOURCE_NAME}
+            paperGuideSourcePath={regressionGuideSourcePath}
+            paperGuideSourceName={regressionGuideSourceName}
           />
         </div>
 

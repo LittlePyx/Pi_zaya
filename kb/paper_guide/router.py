@@ -26,6 +26,7 @@ from .skills import (
 )
 from ..paper_guide_prompting import (
     _paper_guide_prompt_family,
+    _paper_guide_prompt_requests_naive_source_trace,
     _paper_guide_prompt_requests_exact_method_support,
     _requested_figure_number,
 )
@@ -51,6 +52,8 @@ _PAPER_GUIDE_CITATION_EXACT_SUPPORT_RE = re.compile(
     r"where\s+is\s+that\s+stated\s+exactly|where\s+exactly|exact\s+supporting\s+part|"
     r"exact\s+supporting\s+sentence(?:s)?|exact\s+supporting\s+sentence\(s\)|"
     r"exact\s+sentence(?:s)?|supporting\s+sentence(?:s)?|point\s+me\s+to|"
+    r"which\s+(?:in-paper\s+)?references?|in-paper references?|reference numbers?|"
+    r"does\s+this\s+(?:paper|review|article)\s+cite|include\s+the\s+reference\s+numbers?|"
     r"\u5f15\u7528\u7f16\u53f7|\u53c2\u8003\u6587\u732e\u7f16\u53f7|\u6587\u5185\u5f15\u7528|\u6587\u5185\u53c2\u8003|"
     r"\u539f\u6587.*?(?:\u54ea\u91cc|\u54ea\u513f).*?(?:\u5199|\u8bf4|\u63d0\u5230)|"
     r"(?:\u54ea\u91cc|\u54ea\u513f).{0,6}\u660e\u786e.{0,10}(?:\u5199|\u8bf4|\u63d0\u5230)|"
@@ -132,7 +135,10 @@ def _paper_guide_prompt_requests_exact_citation_support(prompt: str) -> bool:
     q = str(prompt or "").strip()
     if not q:
         return False
-    return bool(_PAPER_GUIDE_CITATION_EXACT_SUPPORT_RE.search(q))
+    return bool(
+        _PAPER_GUIDE_CITATION_EXACT_SUPPORT_RE.search(q)
+        or _paper_guide_prompt_requests_naive_source_trace(q)
+    )
 
 
 def _paper_guide_prompt_requests_exact_figure_caption_support(prompt: str) -> bool:

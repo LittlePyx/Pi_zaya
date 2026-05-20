@@ -4,17 +4,22 @@ from kb.llm import DeepSeekChat
 
 
 class _FakeSettings:
-    api_key = "test-key"
-    base_url = "https://example.com/v1"
-    model = "qwen3-vl-plus"
+    text_api_key = "test-key"
+    text_base_url = "https://example.com/v1"
+    text_model = "deepseek-chat"
+    vision_api_key = "test-key"
+    vision_base_url = "https://example.com/v1"
+    vision_model = "qwen3-vl-plus"
     timeout_s = 5.0
     max_retries = 0
+    auto_route = False
 
 
 def test_chat_stream_falls_back_to_chat_for_multimodal():
     ds = DeepSeekChat.__new__(DeepSeekChat)
     ds._settings = _FakeSettings()
-    ds._client = None
+    ds._text_client = None
+    ds._vision_client = None
 
     called = {"chat": 0}
 

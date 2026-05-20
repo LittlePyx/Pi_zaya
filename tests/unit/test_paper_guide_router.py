@@ -18,6 +18,16 @@ def test_resolve_paper_guide_intent_marks_beginner_overview_prompt():
     assert out.target_equation == 0
 
 
+def test_resolve_paper_guide_intent_marks_plain_user_origin_questions_as_citation_lookup():
+    zh = _resolve_paper_guide_intent("ADMM 是怎么来的？作者是不是借鉴了别人以前的想法？")
+    en = _resolve_paper_guide_intent("Where did ADMM-Net come from before this paper?")
+
+    assert zh.family == "citation_lookup"
+    assert zh.exact_support is True
+    assert en.family == "citation_lookup"
+    assert en.exact_support is True
+
+
 def test_resolve_paper_guide_intent_prefers_overview_for_beginner_role_prompt():
     out = _resolve_paper_guide_intent("I am new to this paper. What are RVT and APR doing here, in simple terms?")
 
@@ -47,6 +57,20 @@ def test_resolve_paper_guide_intent_extracts_exact_equation_target():
 
 def test_resolve_paper_guide_intent_extracts_exact_citation_lookup_target():
     out = _resolve_paper_guide_intent("这句话文内引用编号是什么？原文哪里明确写到？")
+
+    assert out.family == "citation_lookup"
+    assert out.exact_support is True
+
+    out2 = _resolve_paper_guide_intent(
+        "Which in-paper references does this review cite when discussing compressed sensing? Please include the reference numbers."
+    )
+
+    assert out2.family == "citation_lookup"
+    assert out2.exact_support is True
+
+
+def test_resolve_paper_guide_intent_marks_naive_source_trace_as_citation_lookup():
+    out = _resolve_paper_guide_intent("这个 APR 听起来不是他们原创的吧，源头是哪篇工作？")
 
     assert out.family == "citation_lookup"
     assert out.exact_support is True
@@ -145,8 +169,46 @@ def test_dispatch_paper_guide_exact_support_skill_routes_citation_lookup_family(
 
     assert calls == ["citation"]
     assert result is not None
-    assert "The paper cites [4] for this point." in result.answer_text
+    assert "Use [4] as the cited source for this passage." in result.answer_text
     assert result.support_resolution[0]["resolved_ref_num"] == 4
+
+
+def test_dispatch_paper_guide_exact_support_skill_routes_naive_source_trace():
+    calls: list[str] = []
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("unexpected skill route")
+
+    prompt = (
+        "\u8fd9\u4e2a APR \u542c\u8d77\u6765\u4e0d\u662f\u4ed6\u4eec\u539f\u521b\u7684\u5427\uff0c"
+        "\u6e90\u5934\u662f\u54ea\u7bc7\u5de5\u4f5c\uff1f"
+    )
+    result = _dispatch_paper_guide_exact_support_skill(
+        prompt_text=prompt,
+        resolved_intent=_resolve_paper_guide_intent(prompt),
+        source_path="bound.md",
+        db_dir="db",
+        has_hits=True,
+        deps=PaperGuideExactSkillDeps(
+            resolve_exact_method_support=_unexpected,
+            resolve_exact_equation_support=_unexpected,
+            build_exact_equation_answer=lambda _rec: ("", []),
+            resolve_exact_citation_lookup_support=lambda source_path, **_kwargs: calls.append("citation") or {
+                "source_path": source_path,
+                "heading_path": "Related Work",
+                "locate_anchor": "APR was introduced as adaptive pixel-reassignment [11].",
+                "ref_nums": [11],
+            },
+            extract_inline_reference_numbers=lambda *_args, **_kwargs: [],
+            resolve_exact_figure_panel_caption_support=_unexpected,
+            extract_caption_clause_superscript_ref_nums=lambda *_args, **_kwargs: [],
+            sanitize_answer=lambda answer, **_kwargs: answer,
+        ),
+    )
+
+    assert result is not None
+    assert calls == ["citation"]
+    assert result.support_resolution[0]["resolved_ref_num"] == 11
 
 
 def test_dispatch_paper_guide_broad_skill_routes_component_role_overview():
@@ -177,7 +239,7 @@ def test_dispatch_paper_guide_broad_skill_routes_component_role_overview():
 
     assert calls == ["terms", "focus:bound.md", "lines"]
     assert result is not None
-    assert "retrieved method evidence" in result.answer_text.lower()
+    assert "in simple terms" in result.answer_text.lower()
     assert result.support_resolution[0]["claim_type"] == "overview_component_role"
 
 
@@ -288,5 +350,5 @@ def test_dispatch_paper_guide_broad_skill_routes_box_only_family():
 
     assert calls == ["box:bound.md"]
     assert result is not None
-    assert "From Box 1" in result.answer_text
+    assert "Relevant passage from Box 1" in result.answer_text
     assert result.support_resolution[0]["claim_type"] == "box_only"

@@ -1,65 +1,148 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 
+# Offset added to snippet numbers in classic RAG context so that hit citations
+# (System A: [10001], [10002], ...) and in-paper bibliography references
+# (System B: [1], [2], ...) use disjoint numeric ranges.  No post-processing
+# heuristic needed — the number itself tells you which system it belongs to.
+CITATION_OFFSET = 10000
+
+
+def _clean_env_key(raw: str) -> str | None:
+    v = str(raw or "").strip()
+    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+        v = v[1:-1].strip()
+    return v or None
+
+
 @dataclass(frozen=True)
 class Settings:
-    api_key: str | None
-    base_url: str
-    model: str
+    # Text model (cheaper, faster — e.g. DeepSeek).
+    text_api_key: str | None
+    text_base_url: str
+    text_model: str
+    # Vision model (multimodal — e.g. Qwen VL).  When not configured, text model is used for
+    # everything (including image-bearing requests, which will likely fail or degrade).
+    vision_api_key: str | None
+    vision_base_url: str
+    vision_model: str
+    # Shared settings.
     db_dir: Path
     chat_db_path: Path
     library_db_path: Path
     timeout_s: float
     max_retries: int
+    # Whether auto-routing is active (both text *and* vision keys are set).
+    auto_route: bool = field(default=False)
+    # Whether LLM-based query expansion is enabled for BM25 retrieval.
+    query_expansion_enabled: bool = field(default=False)
+
+    # ------------------------------------------------------------------
+    # Backward-compatible accessors (so existing callers that read
+    # .api_key / .base_url / .model still work).
+    # ------------------------------------------------------------------
+    @property
+    def api_key(self) -> str | None:
+        return self.text_api_key
+
+    @property
+    def base_url(self) -> str:
+        return self.text_base_url
+
+    @property
+    def model(self) -> str:
+        return self.text_model
 
 
 def load_settings() -> Settings:
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
-    # Prefer Qwen (vision-capable) when configured; fall back to DeepSeek/OpenAI.
-    api_key = (
-        os.environ.get("QWEN_API_KEY")
-        or os.environ.get("DEEPSEEK_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or ""
-    ).strip()
-    # Users often set env vars with quotes (e.g. cmd.exe: set DEEPSEEK_API_KEY="sk-...").
-    if (api_key.startswith('"') and api_key.endswith('"')) or (api_key.startswith("'") and api_key.endswith("'")):
-        api_key = api_key[1:-1].strip()
-    api_key = api_key or None
 
-    # Base URL: prefer Qwen OpenAI-compatible endpoint when QWEN_API_KEY is set.
-    if os.environ.get("QWEN_API_KEY"):
-        base_url = (os.environ.get("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1").strip().rstrip("/")
-        model = (os.environ.get("QWEN_MODEL") or os.environ.get("OPENAI_MODEL") or "qwen3-vl-plus").strip()
+    _env = os.environ.get
+
+    # --- text model ---------------------------------------------------
+    # Prefer DeepSeek (cheapest / fastest for text).  Fall back to Qwen,
+    # then OpenAI.
+    text_api_key = _clean_env_key(
+        _env("DEEPSEEK_API_KEY") or _env("QWEN_API_KEY") or _env("OPENAI_API_KEY") or ""
+    )
+    if _env("DEEPSEEK_API_KEY"):
+        text_base_url = (
+            _env("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
+        ).strip().rstrip("/")
+        if "api.deepseek.com" in text_base_url and not text_base_url.endswith("/v1"):
+            text_base_url = text_base_url + "/v1"
+        raw_model = (
+            _env("DEEPSEEK_MODEL") or _env("OPENAI_MODEL") or "deepseek-chat"
+        ).strip()
+        # Auto-upgrade old deprecated model IDs to the current series.
+        if raw_model in ("deepseek-reasoner",):
+            raw_model = "deepseek-chat"
+        text_model = raw_model
+    elif _env("QWEN_API_KEY"):
+        text_base_url = (
+            _env("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ).strip().rstrip("/")
+        text_model = (
+            _env("QWEN_MODEL") or _env("OPENAI_MODEL") or "qwen3-vl-plus"
+        ).strip()
     else:
-        base_url = (os.environ.get("DEEPSEEK_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or "https://api.deepseek.com/v1").strip().rstrip("/")
-        # Be forgiving: many people set DEEPSEEK_BASE_URL=https://api.deepseek.com
-        # but the OpenAI-compatible endpoint is under /v1.
-        if "api.deepseek.com" in base_url and not base_url.endswith("/v1"):
-            base_url = base_url + "/v1"
-        model = (os.environ.get("DEEPSEEK_MODEL") or os.environ.get("OPENAI_MODEL") or "deepseek-chat").strip()
+        text_base_url = (
+            _env("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+        ).strip().rstrip("/")
+        text_model = (_env("OPENAI_MODEL") or "gpt-4o").strip()
 
+    # --- vision model -------------------------------------------------
+    # Qwen VL is the primary vision model.  DeepSeek does not support
+    # image inputs through its API at time of writing.
+    vision_api_key = _clean_env_key(_env("QWEN_API_KEY") or "") or text_api_key
+    if _env("QWEN_API_KEY"):
+        vision_base_url = (
+            _env("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ).strip().rstrip("/")
+        vision_model = (
+            _env("QWEN_MODEL") or _env("OPENAI_MODEL") or "qwen3-vl-plus"
+        ).strip()
+    else:
+        # No dedicated vision key — fall back to text model for everything.
+        vision_base_url = text_base_url
+        vision_model = text_model
+
+    # --- shared -------------------------------------------------------
     here = Path(__file__).resolve().parent.parent
-    db_dir = Path(os.environ.get("KB_DB_DIR", str(here / "db"))).expanduser().resolve()
-    chat_db_path = Path(os.environ.get("KB_CHAT_DB", str(here / "chat.sqlite3"))).expanduser().resolve()
-    library_db_path = Path(os.environ.get("KB_LIBRARY_DB", str(here / "library.sqlite3"))).expanduser().resolve()
+    db_dir = Path(_env("KB_DB_DIR", str(here / "db"))).expanduser().resolve()
+    chat_db_path = Path(_env("KB_CHAT_DB", str(here / "chat.sqlite3"))).expanduser().resolve()
+    library_db_path = Path(_env("KB_LIBRARY_DB", str(here / "library.sqlite3"))).expanduser().resolve()
 
-    timeout_s = float(os.environ.get("KB_LLM_TIMEOUT_S", os.environ.get("DEEPSEEK_TIMEOUT_S", "60")))
-    max_retries = int(os.environ.get("KB_LLM_MAX_RETRIES", os.environ.get("DEEPSEEK_MAX_RETRIES", "2")))
+    timeout_s = float(_env("KB_LLM_TIMEOUT_S", _env("DEEPSEEK_TIMEOUT_S", "60")))
+    max_retries = int(_env("KB_LLM_MAX_RETRIES", _env("DEEPSEEK_MAX_RETRIES", "2")))
+
+    # Auto-routing is active when both text and vision keys differ
+    # (i.e. the operator intentionally set up two providers).
+    auto_route = bool(
+        text_api_key
+        and vision_api_key
+        and (text_api_key != vision_api_key or text_base_url != vision_base_url)
+    )
+    query_expansion_enabled = _env("KB_QUERY_EXPANSION_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
 
     return Settings(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
+        text_api_key=text_api_key,
+        text_base_url=text_base_url,
+        text_model=text_model,
+        vision_api_key=vision_api_key,
+        vision_base_url=vision_base_url,
+        vision_model=vision_model,
         db_dir=db_dir,
         chat_db_path=chat_db_path,
         library_db_path=library_db_path,
         timeout_s=timeout_s,
         max_retries=max_retries,
+        auto_route=auto_route,
+        query_expansion_enabled=query_expansion_enabled,
     )

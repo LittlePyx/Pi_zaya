@@ -29,6 +29,8 @@ from .retrieval_heuristics import (
     _score_tokens,
 )
 from .retriever import BM25Retriever
+from .reference_query_family import prompt_explicitly_requests_multi_paper_list as _prompt_explicitly_requests_multi_paper_list
+from .source_blocks import load_anchor_index_cached as _load_anchor_index_cached
 from .source_filters import is_excluded_source_path
 from .store import compute_file_sha1
 from .tokenize import tokenize
@@ -383,6 +385,8 @@ _ANCHOR_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("definition", re.compile(r"\bdefinition\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
     ("proposition", re.compile(r"\bproposition\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
     ("corollary", re.compile(r"\bcorollary\.?\s*([0-9ivxlcdm]+)\b", flags=re.I)),
+    ("figure", re.compile(r"图\s*([零一二两三四五六七八九十百\d]+)(?!\d)")),
+    ("table", re.compile(r"表\s*([零一二两三四五六七八九十百\d]+)(?!\d)")),
     ("figure", re.compile(r"第\s*([零一二两三四五六七八九十百\d]+)\s*(?:张)?图")),
     ("table", re.compile(r"第\s*([零一二两三四五六七八九十百\d]+)\s*表")),
     ("equation", re.compile(r"(?:公式|式)\s*[\(\[（]?\s*([零一二两三四五六七八九十百\d]+)\s*[\)\]）]?")),
@@ -469,34 +473,38 @@ def _extract_explicit_anchor_hint(question: str) -> dict[str, object]:
     q = str(question or "").strip()
     if not q:
         return {}
+    hints: list[dict] = []
     for kind, pat in _ANCHOR_PATTERNS:
-        m = pat.search(q)
-        if not m:
-            continue
-        num = _parse_anchor_number(m.group(1))
-        if num is None or num <= 0:
-            continue
-        phrases: list[str] = []
-        labels = _ANCHOR_KIND_LABELS.get(kind) or ()
-        for lab in labels:
-            if lab in {"fig", "eq"}:
-                phrases.append(f"{lab}. {num}")
-                phrases.append(f"{lab} {num}")
-            elif lab == "张图":
-                phrases.append(f"第{num}张图")
-            elif lab in {"图", "表", "公式", "式", "定理", "引理", "定义", "命题", "推论"}:
-                phrases.append(f"{lab}{num}")
-                phrases.append(f"{lab} {num}")
-                phrases.append(f"第{num}{lab}")
-            else:
-                phrases.append(f"{lab} {num}")
-        return {
-            "kind": kind,
-            "number": int(num),
-            "label": f"{kind} {num}",
-            "phrases": list(dict.fromkeys([p for p in phrases if str(p or "").strip()])),
-        }
-    return {}
+        for m in pat.finditer(q):
+            num = _parse_anchor_number(m.group(1))
+            if num is None or num <= 0:
+                continue
+            phrases: list[str] = []
+            labels = _ANCHOR_KIND_LABELS.get(kind) or ()
+            for lab in labels:
+                if lab in {"fig", "eq"}:
+                    phrases.append(f"{lab}. {num}")
+                    phrases.append(f"{lab} {num}")
+                elif lab == "张图":
+                    phrases.append(f"第{num}张图")
+                elif lab in {"图", "表", "公式", "式", "定理", "引理", "定义", "命题", "推论"}:
+                    phrases.append(f"{lab}{num}")
+                    phrases.append(f"{lab} {num}")
+                    phrases.append(f"第{num}{lab}")
+                else:
+                    phrases.append(f"{lab} {num}")
+            hints.append({
+                "kind": kind,
+                "number": int(num),
+                "label": f"{kind} {num}",
+                "phrases": list(dict.fromkeys([p for p in phrases if str(p or "").strip()])),
+            })
+    if not hints:
+        return {}
+    # Return primary (first) hint with all hints accessible via "all_hints".
+    primary = dict(hints[0])
+    primary["all_hints"] = hints
+    return primary
 
 
 def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
@@ -526,6 +534,19 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
         for t in tokenize(_norm_text_for_match(" ".join(str(x or "") for x in candidates)))
         if len(t) >= 3 and t not in _DOC_HINT_STOP_TOKENS
     ]
+    for token in re.findall(r"(?<![A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]{2,40}(?![A-Za-z0-9_-])", " ".join(candidates)):
+        raw_token = str(token or "").strip().strip("-_")
+        low_token = raw_token.lower()
+        if low_token in _DOC_HINT_STOP_TOKENS or len(low_token) < 4:
+            continue
+        has_identity_signal = (
+            raw_token.isupper()
+            or any(ch.isupper() for ch in raw_token[1:])
+            or any(ch.isdigit() for ch in raw_token)
+            or ("-" in raw_token)
+        )
+        if has_identity_signal and low_token in prompt_norm:
+            score = max(score, 6.5)
     if prompt_tokens and src_tokens:
         inter = set(prompt_tokens) & set(src_tokens)
         if len(inter) >= 3:
@@ -534,6 +555,196 @@ def _source_prompt_match_score(prompt_text: str, source_path: str) -> float:
             if ratio >= 0.55:
                 score += 2.0
     return float(score)
+
+
+_DIRECT_PROMPT_STOP_TOKENS = _DOC_HINT_STOP_TOKENS | {
+    "a",
+    "an",
+    "and",
+    "answer",
+    "are",
+    "around",
+    "be",
+    "by",
+    "can",
+    "could",
+    "define",
+    "defined",
+    "defines",
+    "definition",
+    "direct",
+    "directly",
+    "discuss",
+    "discussed",
+    "discusses",
+    "does",
+    "for",
+    "from",
+    "give",
+    "how",
+    "in",
+    "is",
+    "it",
+    "library",
+    "me",
+    "mention",
+    "mentioned",
+    "mentions",
+    "most",
+    "my",
+    "of",
+    "on",
+    "or",
+    "paper",
+    "papers",
+    "please",
+    "point",
+    "section",
+    "show",
+    "source",
+    "sources",
+    "tell",
+    "that",
+    "the",
+    "this",
+    "to",
+    "what",
+    "where",
+    "which",
+    "why",
+    "with",
+}
+
+
+def _direct_phrase_surface(text: str) -> str:
+    s = _norm_text_for_match(text)
+    s = re.sub(r"[-_/]+", " ", s)
+    s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", s)
+    return " ".join(s.split())
+
+
+def _extract_direct_prompt_phrases(prompt_text: str) -> tuple[str, ...]:
+    """Extract user-written technical phrases that should anchor source choice."""
+
+    raw = str(prompt_text or "").strip()
+    if not raw:
+        return ()
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _push_phrase(value: str) -> None:
+        phrase = _direct_phrase_surface(value)
+        if not phrase or phrase in seen:
+            return
+        toks = [t for t in tokenize(phrase) if t]
+        if not toks:
+            return
+        informative = [
+            t
+            for t in toks
+            if t not in _DIRECT_PROMPT_STOP_TOKENS
+            and (len(t) >= 4 or any(ch.isdigit() for ch in t))
+        ]
+        if len(toks) >= 2:
+            if not informative:
+                return
+        elif len(toks) == 1:
+            tok = toks[0]
+            if tok in _DIRECT_PROMPT_STOP_TOKENS:
+                return
+            raw_hit = re.search(rf"(?<![A-Za-z0-9_-]){re.escape(tok)}(?![A-Za-z0-9_-])", raw, flags=re.I)
+            raw_token = raw_hit.group(0) if raw_hit else tok
+            has_identity_signal = (
+                raw_token.isupper()
+                or any(ch.isupper() for ch in raw_token[1:])
+                or any(ch.isdigit() for ch in raw_token)
+                or ("-" in raw_token)
+            )
+            if len(tok) < 5 and not has_identity_signal:
+                return
+        seen.add(phrase)
+        out.append(phrase)
+
+    for quoted in re.findall(r"[\"“”‘’]([^\"“”‘’]{2,120})[\"“”‘’]", raw):
+        _push_phrase(quoted)
+
+    latin_runs = re.findall(
+        r"[A-Za-z][A-Za-z0-9+_.-]*(?:\s+[A-Za-z][A-Za-z0-9+_.-]*){0,11}",
+        raw,
+    )
+    for run in latin_runs:
+        raw_tokens = re.findall(r"[A-Za-z][A-Za-z0-9+_.-]*", run)
+        tokens = []
+        for token in raw_tokens:
+            normed = _direct_phrase_surface(token)
+            if not normed:
+                continue
+            parts = [p for p in normed.split() if p and p not in _DIRECT_PROMPT_STOP_TOKENS]
+            tokens.extend(parts)
+        if len(tokens) == 1:
+            _push_phrase(tokens[0])
+            continue
+        if len(tokens) >= 2:
+            max_n = min(5, len(tokens))
+            for n in range(max_n, 1, -1):
+                for idx in range(0, len(tokens) - n + 1):
+                    phrase_tokens = tokens[idx : idx + n]
+                    if not any(len(t) >= 6 or any(ch.isdigit() for ch in t) for t in phrase_tokens):
+                        continue
+                    _push_phrase(" ".join(phrase_tokens))
+
+    # Prefer specific phrases first. Keep the list small so generic English
+    # questions do not produce a cloud of weak title matches.
+    out.sort(key=lambda item: (len(item.split()), len(item)), reverse=True)
+    return tuple(out[:12])
+
+
+def _direct_prompt_match_score(
+    *,
+    prompt_text: str,
+    source_path: str,
+    snippets: list[str],
+    headings: list[str],
+) -> tuple[float, tuple[str, ...]]:
+    phrases = _extract_direct_prompt_phrases(prompt_text)
+    if not phrases:
+        return 0.0, ()
+    p = Path(str(source_path or "").strip())
+    title_surface = _direct_phrase_surface(
+        " ".join(
+            str(x or "")
+            for x in (p.name, p.stem, re.sub(r"^[A-Za-z]+-\d{4}[-_ ]*", "", p.stem))
+            if str(x or "").strip()
+        )
+    )
+    heading_surface = _direct_phrase_surface(" ".join(str(x or "") for x in list(headings or [])[:8]))
+    snippet_surface = _direct_phrase_surface(" ".join(str(x or "") for x in list(snippets or [])[:4]))
+    score = 0.0
+    matched: list[str] = []
+    for phrase in phrases:
+        toks = phrase.split()
+        if not toks:
+            continue
+        title_hit = phrase in title_surface
+        heading_hit = phrase in heading_surface
+        snippet_hit = phrase in snippet_surface
+        if not (title_hit or heading_hit or snippet_hit):
+            continue
+        is_single = len(toks) == 1
+        phrase_score = 0.0
+        if title_hit:
+            phrase_score += 3.4 if is_single else 5.6 + min(2.0, 0.35 * len(toks))
+        if heading_hit:
+            phrase_score += 1.8 if is_single else 3.4
+        if snippet_hit:
+            phrase_score += 1.2 if is_single else 2.3
+        if title_hit and (heading_hit or snippet_hit):
+            phrase_score += 2.2
+        elif (heading_hit and snippet_hit) and (not is_single):
+            phrase_score += 1.1
+        score += phrase_score
+        matched.append(phrase)
+    return float(min(score, 18.0)), tuple(matched[:5])
 
 
 def _clean_doc_focus_phrase(raw: str) -> str:
@@ -712,23 +923,55 @@ def _anchor_text_bonus(text: str, anchor_hint: dict[str, object]) -> float:
         return 0.0
     score = 0.0
     patterns_by_kind = {
-        "figure": rf"(?:fig(?:ure)?\.?\s*{num}\b|图\s*{num}\b|图{num}\b|第\s*{num}\s*张图)",
-        "table": rf"(?:table\.?\s*{num}\b|表\s*{num}\b|表{num}\b|第\s*{num}\s*表)",
-        "equation": rf"(?:eq(?:uation)?\.?\s*{num}\b|formula\s*{num}\b|公式\s*{num}\b|公式{num}\b|式\s*{num}\b|式{num}\b|[\(（]\s*{num}\s*[\)）]|\\tag\{{\s*{num}\s*\}})",
-        "theorem": rf"(?:theorem\.?\s*{num}\b|定理\s*{num}\b|定理{num}\b)",
-        "lemma": rf"(?:lemma\.?\s*{num}\b|引理\s*{num}\b|引理{num}\b)",
-        "definition": rf"(?:definition\.?\s*{num}\b|定义\s*{num}\b|定义{num}\b)",
-        "proposition": rf"(?:proposition\.?\s*{num}\b|命题\s*{num}\b|命题{num}\b)",
-        "corollary": rf"(?:corollary\.?\s*{num}\b|推论\s*{num}\b|推论{num}\b)",
+        "figure": rf"(?:fig(?:ure)?\.?\s*{num}\b|图\s*{num}(?!\d)|图{num}(?!\d)|第\s*{num}\s*张图)",
+        "table": rf"(?:table\.?\s*{num}\b|表\s*{num}(?!\d)|表{num}(?!\d)|第\s*{num}\s*表)",
+        "equation": rf"(?:eq(?:uation)?\.?\s*{num}\b|formula\s*{num}\b|公式\s*{num}(?!\d)|公式{num}(?!\d)|式\s*{num}(?!\d)|式{num}(?!\d)|[\(（]\s*{num}\s*[\)）]|\\tag\{{\s*{num}\s*\}})",
+        "theorem": rf"(?:theorem\.?\s*{num}\b|定理\s*{num}(?!\d)|定理{num}(?!\d))",
+        "lemma": rf"(?:lemma\.?\s*{num}\b|引理\s*{num}(?!\d)|引理{num}(?!\d))",
+        "definition": rf"(?:definition\.?\s*{num}\b|定义\s*{num}(?!\d)|定义{num}(?!\d))",
+        "proposition": rf"(?:proposition\.?\s*{num}\b|命题\s*{num}(?!\d)|命题{num}(?!\d))",
+        "corollary": rf"(?:corollary\.?\s*{num}\b|推论\s*{num}(?!\d)|推论{num}(?!\d))",
     }
     pat = patterns_by_kind.get(kind)
-    if pat and re.search(pat, low, flags=re.I):
-        score += 12.0
+    first_anchor_pos: int | None = None
+    if pat:
+        m_anchor = re.search(pat, low, flags=re.I)
+        if m_anchor:
+            first_anchor_pos = int(m_anchor.start())
+            score += 25.0
+            # Stronger boost when the anchor text is at the very start of the snippet
+            # (this IS the figure caption / equation definition itself).
+            if first_anchor_pos <= 120:
+                score += 15.0
     labels = _ANCHOR_KIND_LABELS.get(kind) or ()
     if any(lab in low for lab in labels):
-        score += 2.0
+        score += 3.0
     if str(num) in low:
-        score += 1.2
+        score += 1.5
+    if kind in {"figure", "table"}:
+        label_pat = r"(?:fig(?:ure)?\.?|图)" if kind == "figure" else r"(?:table\.?|表)"
+        direct_caption_pat = rf"(?:^|[\n/]\s*|!\[[^\]]*)\**\s*{label_pat}\s*{num}(?!\d)"
+        m_direct = re.search(direct_caption_pat, low, flags=re.I)
+        if m_direct:
+            score += 20.0
+            direct_pos = int(m_direct.start())
+            if direct_pos <= 80:
+                score += 15.0
+            elif first_anchor_pos is not None and direct_pos > (int(first_anchor_pos) + 120):
+                score -= 6.0
+        other_caption_pat = (
+            r"(?:^|[\n/]\s*|!\[[^\]]*)\**\s*(?:fig(?:ure)?\.?|图)\s*(\d+)(?!\d)"
+            if kind == "figure"
+            else r"(?:^|[\n/]\s*|!\[[^\]]*)\**\s*(?:table\.?|表)\s*(\d+)(?!\d)"
+        )
+        m_other = re.search(other_caption_pat, low, flags=re.I)
+        if m_other:
+            try:
+                other_num = int(m_other.group(1))
+            except Exception:
+                other_num = num
+            if other_num != num and first_anchor_pos is not None and int(m_other.start()) < first_anchor_pos:
+                score -= 8.0
     return score
 
 
@@ -746,28 +989,28 @@ def _anchor_regexes(anchor_hint: dict[str, object]) -> list[re.Pattern[str]]:
         "figure": [
             rf"fig(?:ure)?\.?\s*{num}\b",
             rf"第\s*{num}\s*张?图",
-            rf"图\s*{num}\b",
-            rf"图{num}\b",
+            rf"图\s*{num}(?!\d)",
+            rf"图{num}(?!\d)",
         ],
         "table": [
             rf"table\.?\s*{num}\b",
             rf"第\s*{num}\s*表",
-            rf"表\s*{num}\b",
-            rf"表{num}\b",
+            rf"表\s*{num}(?!\d)",
+            rf"表{num}(?!\d)",
         ],
         "equation": [
             rf"eq(?:uation)?\.?\s*{num}\b",
             rf"formula\s*{num}\b",
-            rf"(?:公式|式)\s*{num}\b",
-            rf"(?:公式|式){num}\b",
+            rf"(?:公式|式)\s*{num}(?!\d)",
+            rf"(?:公式|式){num}(?!\d)",
             rf"[\(（]\s*{num}\s*[\)）]",
             rf"\\tag\{{\s*{num}\s*\}}",
         ],
-        "theorem": [rf"theorem\.?\s*{num}\b", rf"定理\s*{num}\b", rf"定理{num}\b"],
-        "lemma": [rf"lemma\.?\s*{num}\b", rf"引理\s*{num}\b", rf"引理{num}\b"],
-        "definition": [rf"definition\.?\s*{num}\b", rf"定义\s*{num}\b", rf"定义{num}\b"],
-        "proposition": [rf"proposition\.?\s*{num}\b", rf"命题\s*{num}\b", rf"命题{num}\b"],
-        "corollary": [rf"corollary\.?\s*{num}\b", rf"推论\s*{num}\b", rf"推论{num}\b"],
+        "theorem": [rf"theorem\.?\s*{num}\b", rf"定理\s*{num}(?!\d)", rf"定理{num}(?!\d)"],
+        "lemma": [rf"lemma\.?\s*{num}\b", rf"引理\s*{num}(?!\d)", rf"引理{num}(?!\d)"],
+        "definition": [rf"definition\.?\s*{num}\b", rf"定义\s*{num}(?!\d)", rf"定义{num}(?!\d)"],
+        "proposition": [rf"proposition\.?\s*{num}\b", rf"命题\s*{num}(?!\d)", rf"命题{num}(?!\d)"],
+        "corollary": [rf"corollary\.?\s*{num}\b", rf"推论\s*{num}(?!\d)", rf"推论{num}(?!\d)"],
     }
     out: list[re.Pattern[str]] = []
     for pat in raw_patterns.get(kind, []):
@@ -791,6 +1034,46 @@ def _find_anchor_snippets_in_md(
     pats = _anchor_regexes(anchor_hint)
     if not pats:
         return []
+
+    # Pre-indexed anchor lookup: O(1) via source_blocks cache.
+    anchor_index = _load_anchor_index_cached(md_path)
+    hint_kind = str(anchor_hint.get("kind") or "").strip().lower()
+    hint_number = 0
+    try:
+        hint_number = int(anchor_hint.get("number") or 0)
+    except Exception:
+        hint_number = 0
+    if hint_kind and hint_number > 0:
+        kind_plural = hint_kind + "s" if hint_kind != "equation" else "equations"
+        entries = anchor_index.get(kind_plural, []) if kind_plural in anchor_index else anchor_index.get(hint_kind + "s", [])
+        for entry in entries:
+            if int(entry.get("number") or 0) == hint_number:
+                caption = str(entry.get("caption_text") or entry.get("text_fragment") or "").strip()
+                heading = str(entry.get("heading_path") or "").strip()
+                block_id = str(entry.get("block_id") or "").strip()
+                if caption:
+                    meta = {"source_path": str(md_path), "anchor_read": True, "heading_path": heading, "block_id": block_id}
+                    out = [{"score": 95.0, "id": block_id, "text": caption, "meta": meta}]
+                    # If we have more entries for the same figure/table (e.g., caption paragraphs),
+                    # include them as additional snippets.
+                    for extra in entries:
+                        if int(extra.get("number") or 0) != hint_number:
+                            continue
+                        if extra.get("block_id") == block_id:
+                            continue
+                        extra_text = str(extra.get("caption_text") or extra.get("text_fragment") or "").strip()
+                        if extra_text and extra_text != caption:
+                            out.append({
+                                "score": 85.0,
+                                "id": str(extra.get("block_id") or ""),
+                                "text": extra_text,
+                                "meta": {"source_path": str(md_path), "anchor_read": True,
+                                         "heading_path": str(extra.get("heading_path") or heading),
+                                         "block_id": str(extra.get("block_id") or "")},
+                            })
+                    if len(out) >= max(1, int(max_snippets)):
+                        out = out[:max(1, int(max_snippets))]
+                    return out
 
     text = _read_text_cached(md_path)
     if not text.strip():
@@ -1130,6 +1413,10 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         ("\u7b97\u6cd5", "algorithm"),
         ("\u6df1\u5ea6\u5b66\u4e60", "deep learning"),
         ("\u795e\u7ecf\u7f51\u7edc", "neural network"),
+        ("\u7ed3\u6784\u5316\u63a2\u6d4b", "structured detection"),
+        ("\u6fc0\u5149\u626b\u63cf\u663e\u5fae", "laser scanning microscopy"),
+        ("\u5171\u805a\u7126", "confocal"),
+        ("\u6743\u8861", "trade-off"),
         ("\u4e3b\u8981\u8d21\u732e", "main contribution"),
         ("\u6838\u5fc3\u8d21\u732e", "core contribution"),
         ("\u8d21\u732e", "contribution"),
@@ -1190,7 +1477,7 @@ def _translate_query_for_search(settings, prompt_text: str) -> str | None:
         settings_fast = replace(
             settings,
             timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), 8.0),
-            max_retries=0,
+            max_retries=1,
         )
     except Exception:
         settings_fast = settings
@@ -1265,13 +1552,13 @@ def _llm_semantic_rerank_score(settings, *, question: str, doc_headings: list[st
         )
     else:
         sys = (
-            "浣犳槸涓ユ牸鐨勫鏈绱㈤噸鎺掑櫒銆俓n"
-            "鍙兘杈撳嚭 JSON锛歿\"score\":number,\"why\":string}銆俓n"
-            "瑙勫垯锛歕n"
-            "- score 涓?0..100锛屽繀椤诲弽鏄犫€滆繖浜涚墖娈垫槸鍚︾洿鎺ュ洖绛旂敤鎴烽棶棰樷€濄€俓n"
-            "- 閬囧埌鏈鍋囨湅鍙嬭鎵ｅ垎锛堝 single-shot vs single-pixel锛夈€俓n"
-            "- 鍙兘鏍规嵁 snippets/headings 鍒ゆ柇锛屼笉鑳芥牴鎹枃浠跺悕鍒ゆ柇銆俓n"
-            "- why锛?= 18 涓瓧锛屽啓娓呮涓轰粈涔堛€俓n"
+            "你是严格的学术检索重排器。\n"
+            "只能输出 JSON：{\"score\":number,\"why\":string}。\n"
+            "规则：\n"
+            "- score 为 0..100，必须反映“这些片段是否直接回答用户问题”。\n"
+            "- 遇到术语假朋友要扣分（如 single-shot vs single-pixel）。\n"
+            "- 只能根据 snippets/headings 判断，不能根据文件名判断。\n"
+            "- why <= 18 个字，写清楚为什么。\n"
         )
 
     user = (
@@ -1304,6 +1591,175 @@ def _llm_semantic_rerank_score(settings, *, question: str, doc_headings: list[st
     _cache_set("rerank", cache_key, {"score": score, "why": why}, max_items=600)
     return score, why
 
+
+def _expand_query_via_llm(settings, prompt_text: str) -> list[str]:
+    """
+    Generate up to 3 search query variants via LLM for BM25 recall expansion.
+    Always prepends the original query as the first variant.
+    Returns [prompt_text] on failure or when expansion is not beneficial.
+    """
+    q = (prompt_text or "").strip()
+    if not q or len(q) < 4:
+        return [q] if q else []
+
+    cache_key = hashlib.sha1((str(getattr(settings, "api_key", None)) + "|expand|" + q).encode("utf-8", "ignore")).hexdigest()[:16]
+    cached = _cache_get("query_expand", cache_key)
+    if isinstance(cached, list) and len(cached) >= 1:
+        # Always ensure original query is first
+        return [q] + [v for v in cached if v and v != q]
+
+    if not getattr(settings, "api_key", None):
+        return [q]
+
+    try:
+        settings_fast = replace(
+            settings,
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), 8.0),
+            max_retries=0,
+        )
+    except Exception:
+        settings_fast = settings
+    ds = DeepSeekChat(settings_fast)
+
+    has_cjk = bool(re.search(r"[一-鿿]", q))
+    system = (
+        "You generate search query variants for academic paper retrieval.\n"
+        "Rules:\n"
+        "- Output up to 3 alternative search queries, one per line, no numbering.\n"
+        "- Each query should be a compact keyword phrase (8-20 tokens).\n"
+        "- Focus on the topic's core concepts and related terminology.\n"
+        "- Explore BROADENING expansions: capture synonyms and parallel concepts\n"
+        "  that would find papers on the same topic using different terminology.\n"
+        + (
+            "- For CJK queries: generate ALL variants in English (academic papers are in English).\n"
+            "  Do NOT keep CJK characters — translate core concepts to English keywords.\n"
+            if has_cjk
+            else "- For English input, include synonym variants that may not share keywords.\n"
+        )
+        + "- Do NOT add quotes, numbering, or commentary.\n"
+        "- If the query is already well-formed and has no useful variants, output only: NONE\n"
+    )
+    user = f"Query: {q}\n\nAlternative search queries:"
+    try:
+        out = (
+            ds.chat(
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                temperature=0.3,
+                max_tokens=160,
+            )
+            or ""
+        ).strip()
+    except Exception:
+        out = ""
+
+    variants: list[str] = []
+    if out and out.strip().upper() != "NONE":
+        for line in out.split("\n"):
+            line = " ".join(line.strip().strip('"\'「」').split())
+            if line and len(line) >= 4 and line.lower() != q.lower():
+                variants.append(line)
+        # Limit to 3 variants
+        variants = variants[:3]
+
+    _cache_set("query_expand", cache_key, variants, max_items=300)
+    return [q] + variants
+
+
+def _deterministic_query_variants(prompt_text: str) -> list[str]:
+    """Cheap domain-aware query variants for common research questions.
+
+    These variants cover mechanism/term aliases that are easy to miss with
+    lexical BM25, especially mixed Chinese-English questions where we avoid a
+    translation call because the prompt already contains a long English title.
+    """
+
+    q = str(prompt_text or "").strip()
+    if not q:
+        return []
+    low = q.lower()
+    variants: list[str] = []
+
+    def has_any(*needles: str) -> bool:
+        return any(str(item or "").lower() in low for item in needles if str(item or "").strip())
+
+    def add(value: str) -> None:
+        v = " ".join(str(value or "").split()).strip()
+        if not v:
+            return
+        key = v.lower()
+        if key == low:
+            return
+        if key in {x.lower() for x in variants}:
+            return
+        variants.append(v)
+
+    if has_any(
+        "refocus",
+        "refocusing",
+        "out of focus",
+        "\u79bb\u7126",
+        "\u91cd\u805a\u7126",
+        "\u91cd\u65b0\u5bf9\u7126",
+        "\u91cd\u5bf9\u7126",
+    ):
+        add(
+            "digital refocusing out-of-focus sample ray tracing wave propagation "
+            "diffraction angular information"
+        )
+    if has_any("trade-off", "tradeoff", "\u6743\u8861", "\u539a\u6837\u672c", "thick sample", "thick samples", "s2ism"):
+        add(
+            "structured detection microscopy thick samples resolution SNR signal-to-noise "
+            "optical sectioning out-of-focus background"
+        )
+    if has_any("benefit", "risk", "advantage", "disadvantage", "\u597d\u5904", "\u574f\u5904", "\u98ce\u9669") and has_any(
+        "deep learning",
+        "\u6df1\u5ea6\u5b66\u4e60",
+    ):
+        add(
+            "deep learning single-pixel imaging advantages challenges data generalization "
+            "interpretability speed reconstruction quality"
+        )
+    if has_any("origin", "source", "comes from", "prior", "previous", "\u6765\u6e90", "\u51fa\u5904", "\u4e4b\u524d", "\u5df2\u6709"):
+        add("prior work existing method background reference citation source")
+    return variants[:4]
+
+
+def _merge_expanded_results(
+    results: list[tuple[list[dict], list[float], str]],
+    top_k: int,
+    *,
+    weights: list[float] | None = None,
+) -> tuple[list[dict], list[float]]:
+    """
+    Reciprocal Rank Fusion (RRF) over multiple query result sets.
+    Each entry: (hits, scores, query_text).
+    Deduplicates by chunk_id. Returns merged (hits, scores).
+
+    When *weights* is provided (one per result set), each set's RRF
+    contribution is multiplied by its weight.  This lets the original
+    query (weight > 1.0) dominate over expansion variants.
+    """
+    rrf_scores: dict[str, float] = {}
+    hit_map: dict[str, dict] = {}
+    chunk_order: list[str] = []
+
+    for result_idx, (hits, _scores, _query) in enumerate(results):
+        weight = weights[result_idx] if weights else 1.0
+        for rank, h in enumerate(hits or []):
+            meta = h.get("meta") if isinstance(h.get("meta"), dict) else {}
+            chunk_id = str(meta.get("chunk_id") or h.get("chunk_id") or h.get("text", "")[:120])
+            if chunk_id not in hit_map:
+                hit_map[chunk_id] = h
+                chunk_order.append(chunk_id)
+            rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0.0) + weight / (20.0 + rank)
+
+    # Sort by RRF score descending
+    ordered = sorted(chunk_order, key=lambda cid: rrf_scores.get(cid, 0.0), reverse=True)
+    merged_hits = [hit_map[cid] for cid in ordered[:top_k]]
+    merged_scores = [rrf_scores.get(cid, 0.0) for cid in ordered[:top_k]]
+    return merged_hits, merged_scores
+
+
 def _search_hits_with_fallback(
     prompt_text: str,
     retriever: BM25Retriever,
@@ -1311,15 +1767,17 @@ def _search_hits_with_fallback(
     settings,
     *,
     allow_translate: bool = True,
-) -> tuple[list[dict], list[float], str, bool]:
+    allow_expand: bool = False,
+) -> tuple[list[dict], list[float], str, bool, list[str]]:
     """
-    Returns: (hits_raw, scores, used_query, used_translation)
+    Returns: (hits_raw, scores, used_query, used_translation, query_variants)
     """
     q1 = (prompt_text or "").strip()
     hits1 = retriever.search(q1, top_k=max(10, top_k * 6)) if q1 else []
     hits1 = [h for h in (hits1 or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
     scores1 = [float(h.get("score", 0.0) or 0.0) for h in hits1]
     best1 = float(max(scores1) if scores1 else 0.0)
+    query_variants: list[str] = [q1] if q1 else []
 
     # If the query is CJK-only, BM25 over English corpora can return all-zeros (but still returns arbitrary docs).
     # Try translating to English to get meaningful retrieval.
@@ -1330,11 +1788,98 @@ def _search_hits_with_fallback(
         hits2 = [h for h in (hits2 or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
         scores2 = [float(h.get("score", 0.0) or 0.0) for h in hits2]
         best2 = float(max(scores2) if scores2 else 0.0)
-        # Prefer translated retrieval when it yields a more meaningful signal.
-        if (not hits1 and hits2) or (best1 <= 0.0 and best2 > 0.0) or (best2 > (best1 * 1.25 + 0.10)):
-            return hits2, scores2, q2, True
+        query_variants.append(q2)
+        # RRF-merge original and translated results instead of replacing
+        # one with the other, so hits found by either query are preserved.
+        # Original query (q1) is weighted 2x so it dominates ranking.
+        if hits1 and hits2:
+            merged_q1q2, merged_s1s2 = _merge_expanded_results(
+                [(hits1, scores1, q1), (hits2, scores2, q2)],
+                top_k=max(10, top_k * 6),
+                weights=[2.0, 1.0],
+            )
+            merged_best = float(max(merged_s1s2) if merged_s1s2 else 0.0)
+            if merged_best >= max(best1, best2) - 0.01:
+                hits1, scores1, best1 = merged_q1q2, merged_s1s2, merged_best
+                used_trans = True
+                for _h in hits1:
+                    _h["_bm25_score"] = _h.get("score", 0.0)
+        elif not hits1 and hits2:
+            hits1, scores1, best1 = hits2, scores2, best2
+            for _h in hits1:
+                _h["_bm25_score"] = _h.get("score", 0.0)
+            used_trans = True
 
-    return hits1, scores1, q1, used_trans
+    # LLM-based query expansion to improve recall for synonym-variant queries.
+    deterministic_variants = [
+        v
+        for v in _deterministic_query_variants(q1)
+        if v and v.lower() != q1.lower() and (not q2 or v.lower() != q2.lower())
+    ]
+    if deterministic_variants:
+        all_results: list[tuple[list[dict], list[float], str]] = [(hits1, scores1, q1)]
+        for variant in deterministic_variants:
+            v_hits = retriever.search(variant, top_k=max(10, top_k * 6))
+            v_hits = [h for h in (v_hits or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
+            v_scores = [float(h.get("score", 0.0) or 0.0) for h in v_hits]
+            all_results.append((v_hits, v_scores, variant))
+            if variant not in query_variants:
+                query_variants.append(variant)
+        merged_hits, merged_scores = _merge_expanded_results(
+            all_results,
+            top_k=max(10, top_k * 6),
+            weights=[1.5] + [2.5 for _ in deterministic_variants],
+        )
+        for _h in merged_hits:
+            _h["_bm25_score"] = _h.get("score", 0.0)
+        hits1, scores1, best1 = merged_hits, merged_scores, float(max(merged_scores) if merged_scores else best1)
+
+    # LLM-based query expansion to improve recall for synonym-variant queries.
+    if bool(allow_expand) and q1 and getattr(settings, "api_key", None) and getattr(settings, "query_expansion_enabled", False):
+        expanded = _expand_query_via_llm(settings, q1)
+        # expanded[0] is q1; skip it since we already searched q1
+        new_variants = [v for v in expanded[1:] if v and v.lower() != q1.lower() and (not q2 or v.lower() != q2.lower())]
+        if new_variants:
+            all_results: list[tuple[list[dict], list[float], str]] = [(hits1, scores1, q1)]
+            if q2 and not used_trans:
+                all_results.append((hits2, scores2, q2))
+            for variant in new_variants:
+                v_hits = retriever.search(variant, top_k=max(10, top_k * 6))
+                v_hits = [h for h in (v_hits or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
+                v_scores = [float(h.get("score", 0.0) or 0.0) for h in v_hits]
+                all_results.append((v_hits, v_scores, variant))
+                query_variants.append(variant)
+
+            # RRF merge all result sets (always use merged results — RRF handles
+            # low-quality expansions by weighting at rank depth, and the original
+            # query results are included in the pool so nothing is lost).
+            # Original query (q1) is weighted 2x, all other variants 1x.
+            merged_hits, merged_scores = _merge_expanded_results(
+                all_results,
+                top_k=max(10, top_k * 6),
+                weights=[2.0 if i == 0 else 1.0 for i in range(len(all_results))],
+            )
+            # Preserve original BM25 score so downstream sorters can use it.
+            for _h in merged_hits:
+                _h["_bm25_score"] = _h.get("score", 0.0)
+            # Tag hits with the variant list so the focus filter can be more
+            # lenient for expansion-discovered papers.
+            _expansion_variants = [v for v in query_variants if v.lower() != q1.lower()]
+            if _expansion_variants:
+                for _h in merged_hits:
+                    _h["_expansion_variants"] = list(_expansion_variants)
+            return merged_hits, merged_scores, q1, used_trans, query_variants
+
+    # Last-resort fallback: if all queries returned empty, try a broad search
+    # with the original query to avoid starving downstream rendering.
+    if not hits1 and q1:
+        hits_fb = retriever.search(q1, top_k=max(20, top_k * 20))
+        hits_fb = [h for h in (hits_fb or []) if not _is_temp_source_path(str((h.get("meta") or {}).get("source_path") or ""))]
+        if hits_fb:
+            scores_fb = [float(h.get("score", 0.0) or 0.0) for h in hits_fb]
+            return hits_fb, scores_fb, q1, used_trans, query_variants
+
+    return hits1, scores1, q1, used_trans, query_variants
 
 def _group_hits_by_doc_for_refs(
     hits_raw: list[dict],
@@ -1361,12 +1906,16 @@ def _group_hits_by_doc_for_refs(
     doc_order: list[tuple[float, str]] = []
     doc_hint_scores: dict[str, float] = {}
     doc_focus_scores: dict[str, float] = {}
+    doc_direct_scores: dict[str, float] = {}
+    doc_direct_terms: dict[str, tuple[str, ...]] = {}
     anchor_hint = _extract_explicit_anchor_hint(prompt_text or deep_query or "")
+    _bm25_scores: list[float] = []
     for src, hs in by_doc.items():
         try:
             best_score = float(max(float(h.get("score", 0.0) or 0.0) for h in hs))
         except Exception:
             best_score = 0.0
+        _bm25_scores.append(best_score)
         doc_hint_score = _source_prompt_match_score(prompt_text or deep_query or "", src)
         doc_focus_score = _doc_focus_match_score(
             prompt_text=(prompt_text or deep_query or ""),
@@ -1378,14 +1927,30 @@ def _group_hits_by_doc_for_refs(
                 if isinstance(h.get("meta"), dict)
             ],
         )
+        direct_score, direct_terms = _direct_prompt_match_score(
+            prompt_text=(prompt_text or deep_query or ""),
+            source_path=src,
+            snippets=[str((h.get("text") or "")).strip() for h in hs[:6] if str((h.get("text") or "")).strip()],
+            headings=[
+                str(((h.get("meta", {}) or {}).get("heading_path") or (h.get("meta", {}) or {}).get("top_heading") or "")).strip()
+                for h in hs[:6]
+                if isinstance(h.get("meta"), dict)
+            ],
+        )
         doc_hint_scores[src] = float(doc_hint_score)
         doc_focus_scores[src] = float(doc_focus_score)
-        doc_order.append((best_score + (1.6 * doc_hint_score) + (1.05 * doc_focus_score), src))
+        doc_direct_scores[src] = float(direct_score)
+        doc_direct_terms[src] = tuple(direct_terms or ())
+        doc_order.append((best_score + (1.6 * doc_hint_score) + (1.05 * doc_focus_score) + (1.8 * direct_score), src))
     doc_order.sort(key=lambda x: x[0], reverse=True)
 
     docs: list[dict] = []
     profile = _query_term_profile(prompt_text, deep_query or "")
     nav_question = (prompt_text or deep_query or "").strip()
+    # Normalize BM25 scores across all candidate docs (0-1 range).
+    _bm25_global_max = max(_bm25_scores) if _bm25_scores else 1.0
+    if _bm25_global_max <= 0:
+        _bm25_global_max = 1.0
     # Bound work: only consider a limited number of candidate docs.
     max_docs_consider = max(int(top_k_docs) * 2, 12)
     # Quality-first refs: if deep_read is enabled, expand more candidate docs than before.
@@ -1396,6 +1961,8 @@ def _group_hits_by_doc_for_refs(
         best_score = float(hs2[0].get("score", 0.0) or 0.0) if hs2 else 0.0
         doc_hint_score = float(doc_hint_scores.get(src, 0.0) or 0.0)
         doc_focus_score = float(doc_focus_scores.get(src, 0.0) or 0.0)
+        direct_score = float(doc_direct_scores.get(src, 0.0) or 0.0)
+        direct_terms = tuple(doc_direct_terms.get(src) or ())
         force_anchor_focus = bool(anchor_hint) and (doc_hint_score >= 6.0)
         anchor_focus_query = (
             _build_doc_anchor_focus_query(prompt_text or deep_query or "", src, anchor_hint)
@@ -1427,7 +1994,7 @@ def _group_hits_by_doc_for_refs(
             if top and (not _is_non_navigational_heading(top, question=nav_question, source_path=src)):
                 hp_raw = _normalize_heading_path_for_display(str(meta.get("heading_path") or ""))
                 hp = _sanitize_heading_path_for_navigation(hp_raw or top, question=nav_question, source_path=src)
-                sc_adj = sc_h + _heading_intent_bonus_for_question(hp or top, nav_question) + (0.35 * anchor_bonus)
+                sc_adj = sc_h + _heading_intent_bonus_for_question(hp or top, nav_question) + (2.0 * anchor_bonus)
                 cand.append((sc_adj, top))
                 if hp:
                     p0, p1 = _page_range_from_meta(meta)
@@ -1450,7 +2017,7 @@ def _group_hits_by_doc_for_refs(
                     heading_path=str(meta.get("heading_path") or top or ""),
                     question=nav_question,
                     source_path=src,
-                ):
+                ) and not (force_anchor_focus and anchor_bonus > 0.0):
                     t = ""
             if t:
                 if force_anchor_focus and anchor_bonus > 0.0:
@@ -1510,6 +2077,8 @@ def _group_hits_by_doc_for_refs(
                     if force_anchor_focus
                     else 0.0
                 )
+                if force_anchor_focus and bool(meta_ex.get("anchor_read")) and anchor_bonus_ex > 0.0:
+                    anchor_bonus_ex += 10.0
                 hp2_raw = str(meta_ex.get("heading_path", "") or "").strip()
                 hp2 = _sanitize_heading_path_for_navigation(
                     _normalize_heading_path_for_display(hp2_raw),
@@ -1541,7 +2110,7 @@ def _group_hits_by_doc_for_refs(
                         heading_path=hp2 or hp2_raw,
                         question=nav_question,
                         source_path=src,
-                    ):
+                    ) and not (force_anchor_focus and anchor_bonus_ex > 0.0):
                         tx = ""
                 if tx:
                     if force_anchor_focus and anchor_bonus_ex > 0.0:
@@ -1549,7 +2118,7 @@ def _group_hits_by_doc_for_refs(
                     if tx not in snippets:
                         snippets.append(tx)
                 try:
-                    deep_best = max(deep_best, float(ex.get("score", 0.0) or 0.0) + (0.20 * anchor_bonus_ex))
+                    deep_best = max(deep_best, float(ex.get("score", 0.0) or 0.0) + (2.0 * anchor_bonus_ex))
                 except Exception:
                     pass
 
@@ -1732,13 +2301,17 @@ def _group_hits_by_doc_for_refs(
         term_bonus = _doc_term_bonus(profile, doc_name, snippets[:3])
         deep_scaled = 1.6 * (deep_best ** 0.6) if deep_best > 0 else 0.0
         anchor_best = max((float(v or 0.0) for v in snippet_anchor_bonus.values()), default=0.0)
+        # Normalize BM25 to 0-1 range; cap anchor bonus so it can't dominate.
+        norm_bm25 = best_score / _bm25_global_max if _bm25_global_max > 0 else 0.0
+        anchor_capped = min(anchor_best, 20.0)
         combined = (
-            (0.75 * best_score)
+            (5.0 * norm_bm25)  # BM25 contribution scaled to ~0-5
             + (0.25 * deep_scaled)
             + term_bonus
             + (1.5 * doc_hint_score)
             + (1.15 * doc_focus_score)
-            + (0.35 * anchor_best)
+            + (1.35 * direct_score)
+            + (0.35 * anchor_capped)
         )
 
         meta_out = {"source_path": src}
@@ -1764,6 +2337,9 @@ def _group_hits_by_doc_for_refs(
         meta_out["ref_headings"] = headings_for_pack
         if doc_hint_score > 0.0:
             meta_out["explicit_doc_match_score"] = float(doc_hint_score)
+        if direct_score > 0.0:
+            meta_out["direct_prompt_match_score"] = float(direct_score)
+            meta_out["direct_prompt_match_terms"] = list(direct_terms)
         if force_anchor_focus and anchor_hint:
             meta_out["anchor_target_kind"] = str(anchor_hint.get("kind") or "")
             meta_out["anchor_target_number"] = int(anchor_hint.get("number") or 0)
@@ -1791,9 +2367,10 @@ def _group_hits_by_doc_for_refs(
         meta_out["ref_rank"] = {
             "bm25": best_score,
             "deep": deep_best,
-                "term_bonus": term_bonus,
-                "focus_bonus": doc_focus_score,
-                "llm": 0.0,
+            "term_bonus": term_bonus,
+            "focus_bonus": doc_focus_score,
+            "direct_prompt": direct_score,
+            "llm": 0.0,
             "why": "",
             "score": combined,
             "display_score": combined,
@@ -1991,7 +2568,7 @@ def _pick_heading_from_md(md_path: Path, query: str, *, prefer: list[str], sourc
 
     best = max(hs, key=score)
     # Avoid pointing to REFERENCES unless asked.
-    wants_refs = bool(re.search(r"(鍙傝€冩枃鐚畖寮曠敤|cite|citation|reference)", q, flags=re.I))
+    wants_refs = bool(re.search(r"(参考文献|引用|cite|citation|reference)", q, flags=re.I))
     if _is_non_navigational_heading(best, question=q, source_path=source_path) and not wants_refs:
         for h in hs:
             if _is_non_navigational_heading(h, question=q, source_path=source_path):
@@ -3234,6 +3811,38 @@ def _llm_refs_pack(settings, *, question: str, docs: list[dict]) -> dict[int, di
     if isinstance(v0, dict):
         return v0
 
+    if _prompt_explicitly_requests_multi_paper_list(q):
+        try:
+            settings_fast = replace(
+                settings,
+                timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), 10.0),
+                max_retries=0,
+            )
+        except Exception:
+            settings_fast = settings
+        try:
+            arr_retry = _llm_refs_pack_docwise_items(
+                settings_fast,
+                question=q,
+                items=items,
+            )
+        except Exception:
+            arr_retry = []
+        result: dict[int, dict] = {}
+        for rec in arr_retry:
+            if not isinstance(rec, dict):
+                continue
+            try:
+                idx = int(rec.get("i") or 0)
+            except Exception:
+                idx = 0
+            if idx <= 0:
+                continue
+            result[idx] = dict(rec)
+        result = _postprocess_refs_pack(result, docs, question=q)
+        _cache_set("refs_pack", cache_key, result, max_items=260)
+        return result
+
     item_batches: list[list[dict]] = []
     batch_size = 2 if len(items) > 4 else 3
     batch_size = max(1, batch_size)
@@ -3439,7 +4048,9 @@ def _semantic_filter_docs_by_llm(docs: list[dict]) -> list[dict]:
         return docs
 
     best_llm = max(llm_scores)
-    sem_keep_min = max(28.0, best_llm - 35.0)
+    # Adaptive: keep docs within 60% of best score, with a floor of 20.
+    # This avoids the hard 28.0 floor that kept everything when best_llm was weak.
+    sem_keep_min = max(20.0, best_llm * 0.40)
     filtered: list[dict] = []
     for d in docs:
         meta = d.get("meta", {}) or {}
@@ -3493,6 +4104,7 @@ def _enrich_grouped_refs_with_llm_pack(
     pack_batch: dict[int, dict] = {}
     partial_pack: dict[int, dict] = {}
     items, _source_by_i = _build_llm_refs_pack_items(q, docs2)
+    used_multi_paper_docwise_fast_path = bool(_prompt_explicitly_requests_multi_paper_list(q))
 
     def _on_item(rec: dict) -> None:
         if not isinstance(rec, dict):
@@ -3528,7 +4140,7 @@ def _enrich_grouped_refs_with_llm_pack(
     missing_items = [it for it in items if int(it.get("i") or 0) not in ready_ids]
 
     arr: list[dict] = [dict(rec) for rec in (pack_batch or {}).values() if isinstance(rec, dict)]
-    if missing_items:
+    if missing_items and (not used_multi_paper_docwise_fast_path):
         try:
             arr_retry = _llm_refs_pack_docwise_items(settings, question=q, items=missing_items, on_item=_on_item)
         except Exception:

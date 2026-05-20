@@ -48,6 +48,7 @@ import { useLibraryStore } from '../stores/libraryStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import VirtualList from 'rc-virtual-list'
 import { useNavigate } from 'react-router-dom'
+import { useT } from '../i18n'
 
 const { Text } = Typography
 const { Dragger } = Upload
@@ -94,13 +95,15 @@ const PAPER_CATEGORY_PRESETS = [
   'Benchmark',
 ] as const
 const TAG_INPUT_SEPARATORS = [',', '，', ';', '；']
-const READING_STATUS_OPTIONS = [
-  { value: '', label: '全部阅读状态' },
-  { value: 'unread', label: '未读' },
-  { value: 'reading', label: '在读' },
-  { value: 'done', label: '已读' },
-  { value: 'revisit', label: '待回看' },
-] as const
+function READING_STATUS_OPTIONS(S: Record<string, string>) {
+  return [
+    { value: '', label: S.lib_reading_status_all },
+    { value: 'unread', label: S.lib_reading_status_unread },
+    { value: 'reading', label: S.lib_reading_status_reading },
+    { value: 'done', label: S.lib_reading_status_done },
+    { value: 'revisit', label: S.lib_reading_status_revisit },
+  ] as const
+}
 
 type ReadingStatusValue = '' | 'unread' | 'reading' | 'done' | 'revisit'
 type LibraryMetaDraft = {
@@ -156,42 +159,50 @@ type SuggestionMetaInfo = {
   basis_detail?: string
 }
 
-const SCOPE_OPTIONS = [
-  { value: '200', label: '最近 200 篇' },
-  { value: '1000', label: '最近 1000 篇' },
-  { value: 'all', label: '全部' },
-]
-
-const RENAME_SCOPE_OPTIONS = [
-  { value: '30', label: '最近 30 篇' },
-  { value: '50', label: '最近 50 篇' },
-  { value: '100', label: '最近 100 篇' },
-  { value: 'all', label: '全部' },
-]
-
-const DRAFT_STATUS_TEXT: Record<DraftStatus, string> = {
-  queued: '待处理',
-  inspecting: '扫描中',
-  ready: '待保存',
-  saving: '保存中',
-  saved: '已保存',
-  error: '失败',
+function SCOPE_OPTIONS(S: Record<string, string>) {
+  return [
+    { value: '200', label: S.lib_scope_recent_200 },
+    { value: '1000', label: S.lib_scope_recent_1000 },
+    { value: 'all', label: S.lib_scope_all },
+  ]
 }
 
-const FAILED_REASON_META: Record<Exclude<UploadErrorReason, 'all'>, { label: string, icon: ReactNode }> = {
-  duplicate: { label: '重复文件', icon: <CopyOutlined /> },
-  path: { label: '路径/目录', icon: <FolderOpenOutlined /> },
-  permission: { label: '权限', icon: <LockOutlined /> },
-  network: { label: '网络', icon: <ApiOutlined /> },
-  other: { label: '其他', icon: <ExclamationCircleOutlined /> },
+function RENAME_SCOPE_OPTIONS(S: Record<string, string>) {
+  return [
+    { value: '30', label: S.lib_scope_recent_30 },
+    { value: '50', label: S.lib_scope_recent_50 },
+    { value: '100', label: S.lib_scope_recent_100 },
+    { value: 'all', label: S.lib_scope_all },
+  ]
 }
 
-function fileTag(item: LibraryFileItem) {
-  if (item.task_state === 'running') return { color: 'processing' as const, text: '转换中' }
-  if (item.task_state === 'queued') return { color: 'warning' as const, text: `排队中${item.queue_pos > 0 ? ` #${item.queue_pos}` : ''}` }
+function DRAFT_STATUS_TEXT(S: Record<string, string>): Record<DraftStatus, string> {
+  return {
+    queued: S.lib_draft_queued,
+    inspecting: S.lib_draft_inspecting,
+    ready: S.lib_draft_ready,
+    saving: S.lib_draft_saving,
+    saved: S.lib_draft_saved,
+    error: S.lib_draft_error,
+  }
+}
+
+function FAILED_REASON_META(S: Record<string, string>): Record<Exclude<UploadErrorReason, 'all'>, { label: string, icon: ReactNode }> {
+  return {
+    duplicate: { label: S.lib_fail_duplicate, icon: <CopyOutlined /> },
+    path: { label: S.lib_fail_path, icon: <FolderOpenOutlined /> },
+    permission: { label: S.lib_fail_permission, icon: <LockOutlined /> },
+    network: { label: S.lib_fail_network, icon: <ApiOutlined /> },
+    other: { label: S.lib_fail_other, icon: <ExclamationCircleOutlined /> },
+  }
+}
+
+function fileTag(item: LibraryFileItem, S: Record<string, string>) {
+  if (item.task_state === 'running') return { color: 'processing' as const, text: S.lib_tag_converting }
+  if (item.task_state === 'queued') return { color: 'warning' as const, text: `${S.lib_tag_queued}${item.queue_pos > 0 ? ` #${item.queue_pos}` : ''}` }
   return item.category === 'converted'
-    ? { color: 'success' as const, text: '已转换' }
-    : { color: 'default' as const, text: '待转换' }
+    ? { color: 'success' as const, text: S.lib_tag_converted }
+    : { color: 'default' as const, text: S.lib_tag_pending }
 }
 
 function derivePageProgress(done0: number, total0: number, msg0: string) {
@@ -209,11 +220,11 @@ function derivePageProgress(done0: number, total0: number, msg0: string) {
   return { done: Math.max(0, parsedDone), total: Math.max(0, parsedTotal) }
 }
 
-function deriveConvertStageLabel(msg0: string) {
+function deriveConvertStageLabel(msg0: string, S_?: Record<string, string>) {
   const msg = String(msg0 || '').trim().toLowerCase()
   if (!msg) return ''
-  if (msg.includes('ingesting')) return '正在更新知识库索引...'
-  if (msg.includes('cancel')) return '正在取消转换...'
+  if (msg.includes('ingesting')) return S_ ? S_.lib_convert_ingesting : '正在更新知识库索引...'
+  if (msg.includes('cancel')) return S_ ? S_.lib_convert_cancelling : '正在取消转换...'
   return ''
 }
 
@@ -222,11 +233,11 @@ function matchesKeyword(name: string, keyword: string) {
   return name.toLowerCase().includes(keyword)
 }
 
-function readingStatusLabel(value: string) {
-  if (value === 'unread') return '未读'
-  if (value === 'reading') return '在读'
-  if (value === 'done') return '已读'
-  if (value === 'revisit') return '待回看'
+function readingStatusLabel(value: string, S_?: Record<string, string>) {
+  if (value === 'unread') return S_ ? S_.lib_reading_status_unread : '未读'
+  if (value === 'reading') return S_ ? S_.lib_reading_status_reading : '在读'
+  if (value === 'done') return S_ ? S_.lib_reading_status_done : '已读'
+  if (value === 'revisit') return S_ ? S_.lib_reading_status_revisit : '待回看'
   return ''
 }
 
@@ -317,6 +328,7 @@ function optionMatchesInput(input: string, option?: TextOption) {
 }
 
 export default function LibraryPage() {
+  const S = useT()
   const store = useLibraryStore()
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const nav = useNavigate()
@@ -415,7 +427,7 @@ export default function LibraryPage() {
       counter.set(key, (counter.get(key) || 0) + 1)
     }
     return Array.from(counter.entries())
-      .map(([key, count]) => ({ key, count, label: FAILED_REASON_META[key].label }))
+      .map(([key, count]) => ({ key, count, label: FAILED_REASON_META(S)[key].label }))
       .sort((a, b) => b.count - a.count)
   }, [failedUploadDrafts])
   const filteredUploadDrafts = useMemo(() => {
@@ -432,22 +444,22 @@ export default function LibraryPage() {
   }, [uploadDrafts, uploadDraftFilter, uploadErrorReason])
   const uploadDraftFilterOptions = useMemo(
     () => [
-      { value: 'all', label: `全部 (${uploadDrafts.length})` },
-      { value: 'todo', label: `待处理 (${uploadDrafts.filter((x) => ['queued', 'inspecting', 'ready', 'saving'].includes(x.status)).length})` },
-      { value: 'error', label: `失败 (${uploadDrafts.filter((x) => x.status === 'error').length})` },
-      { value: 'dup_error', label: `重复失败 (${uploadDrafts.filter((x) => x.status === 'error' && isDuplicateFailure(x.note)).length})` },
-      { value: 'saved', label: `已保存 (${uploadDrafts.filter((x) => x.status === 'saved').length})` },
+      { value: 'all', label: S.lib_upload_filter_all.replace('{n}', String(uploadDrafts.length)) },
+      { value: 'todo', label: S.lib_upload_filter_todo.replace('{n}', String(uploadDrafts.filter((x) => ['queued', 'inspecting', 'ready', 'saving'].includes(x.status)).length)) },
+      { value: 'error', label: S.lib_upload_filter_error.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'error').length)) },
+      { value: 'dup_error', label: S.lib_upload_filter_dup.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'error' && isDuplicateFailure(x.note)).length)) },
+      { value: 'saved', label: S.lib_upload_filter_saved.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'saved').length)) },
     ],
     [uploadDrafts],
   )
   const activeErrorReasonText = useMemo(() => {
     const map: Record<UploadErrorReason, string> = {
-      all: '全部原因',
-      duplicate: FAILED_REASON_META.duplicate.label,
-      path: FAILED_REASON_META.path.label,
-      permission: FAILED_REASON_META.permission.label,
-      network: FAILED_REASON_META.network.label,
-      other: FAILED_REASON_META.other.label,
+      all: S.lib_error_filter_all,
+      duplicate: FAILED_REASON_META(S).duplicate.label,
+      path: FAILED_REASON_META(S).path.label,
+      permission: FAILED_REASON_META(S).permission.label,
+      network: FAILED_REASON_META(S).network.label,
+      other: FAILED_REASON_META(S).other.label,
     }
     return map[uploadErrorReason]
   }, [uploadErrorReason])
@@ -503,7 +515,7 @@ export default function LibraryPage() {
     return `\u5e76\u884c\u4e2d ${tasks.length} \u7bc7\uff1a${preview}${suffix}`
   }, [store.progress])
   const convertStageLabel = useMemo(
-    () => deriveConvertStageLabel(String(store.progress?.curPageMsg || '')),
+    () => deriveConvertStageLabel(String(store.progress?.curPageMsg || ''), S),
     [store.progress],
   )
   const refSyncPercent = useMemo(
@@ -649,7 +661,7 @@ export default function LibraryPage() {
     const out: CategoryCardItem[] = []
     for (const [key, items] of groups.entries()) {
       const label = key === 'category:__unclassified__'
-        ? '未分类'
+        ? S.lib_category_unclassified
         : String(items[0]?.paper_category || '').trim()
       const tagCounts = new Map<string, number>()
       for (const item of items) {
@@ -665,7 +677,7 @@ export default function LibraryPage() {
         .map(([tag]) => tag)
       out.push({
         key,
-        label: label || '未分类',
+        label: label || S.lib_category_unclassified,
         count: items.length,
         unreadCount: items.filter((item) => item.reading_status === 'unread').length,
         convertedCount: items.filter((item) => item.category === 'converted').length,
@@ -700,7 +712,7 @@ export default function LibraryPage() {
         ?.user_tags.find((tag) => String(tag || '').trim().toLowerCase() === key) || key
       const categoryCounts = new Map<string, number>()
       for (const item of items) {
-        const category = String(item.paper_category || '').trim() || '未分类'
+        const category = String(item.paper_category || '').trim() || S.lib_category_unclassified
         categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1)
       }
       out.push({
@@ -786,7 +798,7 @@ export default function LibraryPage() {
 
   const saveDirs = useCallback(async () => {
     if (!pdfDirDraft.trim() || !mdDirDraft.trim()) {
-      message.warning('PDF/MD 目录不能为空')
+      message.warning(S.lib_msg_dir_empty)
       return false
     }
     setSavingDirs(true)
@@ -794,11 +806,11 @@ export default function LibraryPage() {
       await updateSettings({ pdfDir: pdfDirDraft.trim(), mdDir: mdDirDraft.trim() })
       setDirTouched(false)
       setDirEditorOpen(false)
-      message.success('目录已保存')
+      message.success(S.lib_msg_save_dir_success)
       await store.loadFiles(scope)
       return true
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '目录保存失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_save_dir_fail)
       return false
     } finally {
       setSavingDirs(false)
@@ -822,14 +834,14 @@ export default function LibraryPage() {
     try {
       const res = await settingsApi.pickDir(target, initial)
       if (!res.ok || !res.path) {
-        message.info('未选择目录')
+        message.info(S.lib_msg_no_dir_selected)
         return
       }
       setDirTouched(true)
       if (target === 'pdf') setPdfDirDraft(res.path)
       else setMdDirDraft(res.path)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '打开目录选择器失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_pick_dir_fail)
     } finally {
       setPickingDir(null)
     }
@@ -885,13 +897,13 @@ export default function LibraryPage() {
           suggestionMatchMethod: String(res.meta?.match_method || ''),
           suggestionYearSource: String(res.meta?.year_source || ''),
           status: res.duplicate ? 'error' : 'ready',
-          note: res.duplicate ? `重复：${String(res.existing || '')}` : '扫描完成',
+          note: res.duplicate ? `${S.lib_upload_dup_prefix}${String(res.existing || '')}` : S.lib_upload_scan_done,
         }
       }))
     } catch (err) {
       setUploadDrafts((cur) => cur.map((x) => (
         x.key === key
-          ? { ...x, status: 'error', note: err instanceof Error ? err.message : '扫描失败' }
+          ? { ...x, status: 'error', note: err instanceof Error ? err.message : S.lib_upload_scan_fail }
           : x
       )))
     }
@@ -900,7 +912,7 @@ export default function LibraryPage() {
   const inspectSelectedDrafts = async () => {
     const selected = uploadDrafts.filter((x) => x.selected && x.status !== 'inspecting')
     if (!selected.length) {
-      message.info('请先选择要扫描的文件')
+      message.info(S.lib_msg_select_scan)
       return
     }
     setUploadInspecting(true)
@@ -908,7 +920,7 @@ export default function LibraryPage() {
       for (const x of selected) {
         await inspectDraft(x.key)
       }
-      message.success(`已扫描 ${selected.length} 个文件`)
+      message.success(S.lib_msg_scanned_count.replace('{n}', String(selected.length)))
     } finally {
       setUploadInspecting(false)
     }
@@ -974,7 +986,7 @@ export default function LibraryPage() {
       const enqueued = Boolean(convertNow && res.enqueued)
       setUploadDrafts((cur) => cur.map((x) => {
         if (x.key !== key) return x
-        if (res.duplicate) return { ...x, status: 'error', note: `重复：${String(res.existing || '')}` }
+        if (res.duplicate) return { ...x, status: 'error', note: `${S.lib_upload_dup_prefix}${String(res.existing || '')}` }
         return {
           ...x,
           status: 'saved',
@@ -985,7 +997,7 @@ export default function LibraryPage() {
           savedSha1: String(res.sha1 || ''),
           taskId: String(res.task_id || ''),
           convertRequested: enqueued,
-          note: enqueued ? `已保存并加入转换队列：${savedName}` : `已保存：${savedName}`,
+          note: enqueued ? S.lib_msg_saved_enqueued.replace('{name}', savedName) : S.lib_msg_saved_only.replace('{name}', savedName),
         }
       }))
       if (res.duplicate) return { saved: false, enqueued: false }
@@ -997,7 +1009,7 @@ export default function LibraryPage() {
     } catch (err) {
       setUploadDrafts((cur) => cur.map((x) => (
         x.key === key
-          ? { ...x, status: 'error', note: err instanceof Error ? err.message : '保存失败' }
+          ? { ...x, status: 'error', note: err instanceof Error ? err.message : S.lib_upload_save_fail }
           : x
       )))
       return { saved: false, enqueued: false }
@@ -1009,7 +1021,7 @@ export default function LibraryPage() {
     if (!ready) return
     const selected = uploadDrafts.filter((x) => x.selected && x.status !== 'saving' && x.status !== 'saved')
     if (!selected.length) {
-      message.info('请先选择要保存的文件')
+      message.info(S.lib_msg_select_save)
       return
     }
     setUploadSaving(true)
@@ -1021,7 +1033,7 @@ export default function LibraryPage() {
       }
       await store.loadFiles(scope)
       if (anyEnqueued) store.startProgressStream()
-      message.success(`已处理 ${selected.length} 个文件`)
+      message.success(S.lib_msg_processed_count.replace('{n}', String(selected.length)))
     } finally {
       setUploadSaving(false)
     }
@@ -1042,9 +1054,9 @@ export default function LibraryPage() {
       setRenameSelected(selected)
       setRenameOverrides(overrides)
       setRenameResultsOpen(items.some((item) => item.diff))
-      message.success(`扫描完成：${res.changed}/${res.total_scanned} 需要改名`)
+      message.success(S.lib_msg_scan_result.replace('{changed}', String(res.changed)).replace('{total}', String(res.total_scanned)))
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '扫描改名建议失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_scan_rename_fail)
     } finally {
       setRenameLoading(false)
     }
@@ -1052,26 +1064,26 @@ export default function LibraryPage() {
 
   const selectFailedDrafts = () => {
     if (!failedUploadDrafts.length) {
-      message.info('暂无失败项')
+      message.info(S.lib_msg_no_failed_items)
       return
     }
     setUploadDrafts((cur) => cur.map((x) => ({ ...x, selected: x.status === 'error' })))
-    message.info(`已选择 ${failedUploadDrafts.length} 个失败项`)
+    message.info(S.lib_msg_selected_failed.replace('{n}', String(failedUploadDrafts.length)))
   }
 
   const showDuplicateFailedDrafts = () => {
     if (!duplicateFailedDrafts.length) {
-      message.info('当前没有重复文件失败项')
+      message.info(S.lib_msg_no_dup_failures)
       return
     }
     applyUploadFilter('dup_error')
-    message.info(`已切换到重复失败项（${duplicateFailedDrafts.length}）`)
+    message.info(S.lib_msg_switched_dup.replace('{n}', String(duplicateFailedDrafts.length)))
   }
 
   const retryFailedDrafts = async (convertNow: boolean) => {
     const failed = uploadDrafts.filter((x) => x.status === 'error')
     if (!failed.length) {
-      message.info('没有可重试的失败项')
+      message.info(S.lib_msg_no_retryable)
       return
     }
     setUploadSaving(true)
@@ -1083,7 +1095,7 @@ export default function LibraryPage() {
       }
       await store.loadFiles(scope)
       if (anyEnqueued) store.startProgressStream()
-      message.success(`已重试 ${failed.length} 个失败项`)
+      message.success(S.lib_msg_retried_count.replace('{n}', String(failed.length)))
     } finally {
       setUploadSaving(false)
     }
@@ -1092,7 +1104,7 @@ export default function LibraryPage() {
   const applyRenameSuggestions = async () => {
     const names = renameItems.filter((x) => renameSelected[x.name]).map((x) => x.name)
     if (!names.length) {
-      message.info('请先选择要改名的条目')
+      message.info(S.lib_msg_select_rename)
       return
     }
     setRenameApplying(true)
@@ -1100,12 +1112,12 @@ export default function LibraryPage() {
       const overrides: Record<string, string> = {}
       for (const name of names) overrides[name] = String(renameOverrides[name] || '').trim()
       const res = await libraryApi.applyRenameSuggestions(names, overrides, { useLlm: true, alsoMd: true })
-      message[res.failed > 0 ? 'warning' : 'success'](`改名完成：成功 ${res.renamed}，跳过 ${res.skipped}，失败 ${res.failed}`)
-      if (res.needs_reindex) message.info('改名后建议更新知识库')
+      message[res.failed > 0 ? 'warning' : 'success'](S.lib_msg_rename_result.replace('{ok}', String(res.renamed)).replace('{skip}', String(res.skipped)).replace('{fail}', String(res.failed)))
+      if (res.needs_reindex) message.info(S.lib_msg_rename_suggest_reindex)
       await store.loadFiles(scope)
       await scanRenameSuggestions()
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '应用改名失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_apply_rename_fail)
     } finally {
       setRenameApplying(false)
     }
@@ -1115,8 +1127,8 @@ export default function LibraryPage() {
     const res = await store.convertPending(CONVERT_MODE)
     message[res.enqueued > 0 ? 'success' : 'info'](
       res.enqueued > 0
-        ? `已加入队列 ${res.enqueued} 个待转换文件`
-        : '没有可入队的待转换文件',
+        ? S.lib_msg_enqueued_count.replace('{n}', String(res.enqueued))
+        : S.lib_msg_no_convertible,
     )
     await store.loadFiles(scope)
   }
@@ -1129,25 +1141,25 @@ export default function LibraryPage() {
   const handleDeleteOne = async (item: LibraryFileItem) => {
     const res = await store.deleteFile(item.name, true)
     if (res.ok) {
-      message.success(`已删除 ${item.name}`)
+      message.success(S.lib_msg_deleted_name.replace('{name}', item.name))
       if (res.needs_reindex) {
-        message.info('删除/改名后建议更新知识库')
+        message.info(S.lib_msg_delete_suggest_reindex)
       }
       return
     }
     const warning = Array.isArray(res.warnings) && res.warnings.length > 0
       ? `（${res.warnings.join('；')}）`
       : ''
-    message.warning(`删除未完全成功${warning}`)
+    message.warning(S.lib_msg_delete_not_complete.replace('{warning}', warning))
   }
 
   const confirmDeleteOne = (item: LibraryFileItem) => {
     Modal.confirm({
-      title: '确认删除这个文献吗？',
+      title: S.lib_menu_delete_confirm_title,
       content: item.name,
-      okText: '删除',
+      okText: S.lib_menu_delete_ok,
       okType: 'danger',
-      cancelText: '取消',
+      cancelText: S.lib_menu_delete_cancel,
       onOk: async () => {
         await handleDeleteOne(item)
       },
@@ -1155,50 +1167,50 @@ export default function LibraryPage() {
   }
 
   const handleReindex = async () => {
-    const hide = message.loading('正在更新知识库...', 0)
+    const hide = message.loading(S.lib_msg_updating_kb, 0)
     try {
       const res = await store.reindex()
       hide()
       if (!res.ok) {
-        message.error('执行失败')
+        message.error(S.lib_msg_exec_fail)
         return
       }
-      message.success('执行完成')
+      message.success(S.lib_msg_exec_done)
       if (res.refsync_error) {
-        message.warning(`引用同步启动失败：${res.refsync_error}`)
+        message.warning(S.lib_msg_refsync_fail_detail.replace('{error}', String(res.refsync_error)))
       } else if (res.refsync?.started) {
-        message.info('已在后台启动引用同步')
+        message.info(S.lib_msg_refsync_started_bg)
       }
     } catch (err) {
       hide()
-      message.error(err instanceof Error ? err.message : '执行失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
     }
   }
 
   const handleStartRefSync = async () => {
-    const hide = message.loading('正在启动引用同步...', 0)
+    const hide = message.loading(S.lib_msg_starting_refsync, 0)
     try {
       const res = await store.startReferenceSync()
       hide()
       if (res.started) {
-        message.success('引用同步已启动')
+        message.success(S.lib_msg_refsync_started)
       } else if (res.reason === 'running') {
-        message.info('引用同步已在运行')
+        message.info(S.lib_msg_refsync_already_running)
       } else {
-        message.warning('引用同步未启动')
+        message.warning(S.lib_msg_refsync_not_started)
       }
     } catch (err) {
       hide()
-      message.error(err instanceof Error ? err.message : '启动引用同步失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_start_refsync_fail)
     }
   }
 
   const handleStartPaperGuide = async (item: LibraryFileItem) => {
     if (!item.md_exists || !item.md_path) {
-      message.info('该文献尚未完成入库转换，请先转换后再进入阅读指导。')
+      message.info(S.lib_msg_guide_not_converted)
       return
     }
-    const hide = message.loading('正在创建阅读指导会话...', 0)
+    const hide = message.loading(S.lib_msg_creating_guide, 0)
     try {
       let sourcePath = ''
       let sourceName = stripKnownSourceExt(item.name) || item.name
@@ -1211,7 +1223,7 @@ export default function LibraryPage() {
       } catch {
         // Backward-compatible fallback when backend route is not available yet.
         sourcePath = String(item.md_path || '').trim()
-        message.warning('阅读指导源解析失败，已回退到当前文献源。建议重启后端后再试。')
+        message.warning(S.lib_msg_guide_source_fallback)
       }
       const convTitle = `阅读指导 · ${sourceName}`
       if (!sourcePath) throw new Error('source path not ready')
@@ -1225,10 +1237,10 @@ export default function LibraryPage() {
       }
       hide()
       nav('/')
-      message.success('已进入阅读指导会话')
+      message.success(S.lib_msg_guide_entered)
     } catch (err) {
       hide()
-      message.error(err instanceof Error ? err.message : '创建阅读指导会话失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_guide_create_fail)
     }
   }
 
@@ -1258,9 +1270,9 @@ export default function LibraryPage() {
       })
       if (updated) setMetaItem(updated)
       setMetaDrawerOpen(false)
-      message.success('文献元数据已保存')
+      message.success(S.lib_msg_meta_saved)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '保存文献元数据失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_meta_save_fail)
     } finally {
       setMetaSaving(false)
     }
@@ -1269,15 +1281,15 @@ export default function LibraryPage() {
   const regenerateSuggestionsForVisible = async () => {
     const targets = visibleAll.map((item) => item.name).filter(Boolean)
     if (!targets.length) {
-      message.info('当前筛选结果里没有可生成建议的文献')
+      message.info(S.lib_msg_no_suggestion_candidates)
       return
     }
     setSuggestionsRefreshing(true)
     try {
       const updated = await store.regenerateSuggestions({ pdf_names: targets })
-      message.success(`已刷新 ${updated} 篇文献的分类建议`)
+      message.success(S.lib_msg_suggestions_refreshed_count.replace('{n}', String(updated)))
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '刷新建议失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_refresh_suggestion_fail)
     } finally {
       setSuggestionsRefreshing(false)
     }
@@ -1312,7 +1324,7 @@ export default function LibraryPage() {
         }))
       }
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '更新建议失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_update_suggestion_fail)
     } finally {
       setMetaSuggestionSaving(false)
     }
@@ -1334,9 +1346,9 @@ export default function LibraryPage() {
           user_tags: normalizeTextList(Array.isArray(refreshed.user_tags) ? refreshed.user_tags : []),
         }))
       }
-      message.success('文献建议已刷新')
+      message.success(S.lib_msg_suggestion_refreshed)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '刷新建议失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_refresh_suggestion_fail)
     } finally {
       setMetaSuggestionSaving(false)
     }
@@ -1354,7 +1366,7 @@ export default function LibraryPage() {
 
   const selectCurrentListItems = () => {
     if (!currentListItems.length) {
-      message.info('当前列表没有可选文献')
+      message.info(S.lib_msg_no_selectable)
       return
     }
     setSelectedLibraryNames((cur) => {
@@ -1370,7 +1382,7 @@ export default function LibraryPage() {
 
   const openBatchEditor = () => {
     if (!selectedLibraryCount) {
-      message.info('请先选择要批量编辑的文献')
+      message.info(S.lib_msg_select_batch_edit)
       return
     }
     setBatchDraft({
@@ -1395,7 +1407,7 @@ export default function LibraryPage() {
       && addTags.length === 0
       && removeTags.length === 0
     ) {
-      message.info('请先设置至少一项批量修改内容')
+      message.info(S.lib_msg_set_batch_content)
       return
     }
     setBatchSaving(true)
@@ -1411,9 +1423,9 @@ export default function LibraryPage() {
       })
       setBatchDrawerOpen(false)
       setSelectedLibraryNames({})
-      message.success(`已批量更新 ${updated} 篇文献`)
+      message.success(S.lib_msg_batch_updated_count.replace('{n}', String(updated)))
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '批量编辑失败')
+      message.error(err instanceof Error ? err.message : S.lib_msg_batch_edit_fail)
     } finally {
       setBatchSaving(false)
     }
@@ -1459,7 +1471,7 @@ export default function LibraryPage() {
   }
 
   const renderFileRow = (item: LibraryFileItem) => {
-    const tag = fileTag(item)
+    const tag = fileTag(item, S)
     const statusTone =
       tag.color === 'success'
         ? 'is-success'
@@ -1468,7 +1480,7 @@ export default function LibraryPage() {
           : tag.color === 'warning'
             ? 'is-warning'
             : 'is-default'
-    const readingLabel = readingStatusLabel(item.reading_status)
+    const readingLabel = readingStatusLabel(item.reading_status, S)
     const metaTags = item.user_tags || []
     const suggestionCount = (item.suggested_category ? 1 : 0) + (item.suggested_tags || []).length
     const categoryActive = !onlyUnclassified && paperCategoryFilter && String(item.paper_category || '') === paperCategoryFilter
@@ -1496,10 +1508,10 @@ export default function LibraryPage() {
             </div>
             <div className="kb-lib-file-submeta">
               <span className={`kb-lib-file-status-chip ${statusTone}`}>{tag.text}</span>
-              {!item.md_exists ? <span className="kb-lib-file-meta-muted">待生成 MD</span> : null}
+              {!item.md_exists ? <span className="kb-lib-file-meta-muted">{S.lib_file_no_md}</span> : null}
               {suggestionCount > 0 ? (
                 <span className="kb-lib-file-submeta-chip is-suggestion">
-                  {suggestionCount} 建议
+                  {S.lib_file_suggestions.replace('{n}', String(suggestionCount))}
                 </span>
               ) : null}
             </div>
@@ -1560,7 +1572,7 @@ export default function LibraryPage() {
 
         <div className={`kb-lib-file-actions${showPrimaryConvertAction ? ' has-convert' : ' is-compact'}`}>
           <Button className="kb-lib-file-action-main" size="small" onClick={() => openMetaEditor(item)}>
-            分类
+            {S.lib_btn_categorize}
           </Button>
           {item.md_exists ? (
             <Button
@@ -1570,7 +1582,7 @@ export default function LibraryPage() {
               disabled={!item.md_path}
               onClick={() => { void handleStartPaperGuide(item) }}
             >
-              阅读
+              {S.lib_btn_read}
             </Button>
           ) : null}
           {showPrimaryConvertAction ? (
@@ -1581,7 +1593,7 @@ export default function LibraryPage() {
               disabled={item.task_state !== 'idle'}
               onClick={() => { void handleConvertOne(item) }}
             >
-              转换
+              {S.lib_btn_convert}
             </Button>
           ) : null}
           <Button className="kb-lib-file-action-link" type="text" size="small" onClick={() => { void store.openFile(item.name, 'pdf') }}>
@@ -1593,11 +1605,11 @@ export default function LibraryPage() {
               menu={{
                 items: [
                   ...(item.md_exists
-                    ? [{ key: 'reconvert', label: '重新转换', disabled: item.task_state !== 'idle', icon: <ReloadOutlined /> }]
+                    ? [{ key: 'reconvert', label: S.lib_btn_reconvert, disabled: item.task_state !== 'idle', icon: <ReloadOutlined /> }]
                     : []),
-                  { key: 'open-md', label: '打开 MD', disabled: !item.md_exists },
+                  { key: 'open-md', label: S.lib_btn_open_md, disabled: !item.md_exists },
                   { type: 'divider' },
-                  { key: 'delete', label: '删除文献', danger: true, disabled: item.task_state !== 'idle', icon: <DeleteOutlined /> },
+                  { key: 'delete', label: S.lib_btn_delete, danger: true, disabled: item.task_state !== 'idle', icon: <DeleteOutlined /> },
                 ],
                 onClick: ({ key }) => {
                   if (key === 'reconvert') {
@@ -1624,7 +1636,7 @@ export default function LibraryPage() {
 
   const renderCategoriesView = () => {
     if (!categoryCards.length) {
-      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下暂无分类结果" />
+      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_empty_category} />
     }
 
     return (
@@ -1668,7 +1680,7 @@ export default function LibraryPage() {
                   ))}
                 </div>
               ) : (
-                <div className="kb-lib-category-card-empty">暂时还没有明显的常用标签</div>
+                <div className="kb-lib-category-card-empty">{S.lib_tag_empty_common}</div>
               )}
 
               <div className="kb-lib-category-card-recent">
@@ -1687,7 +1699,7 @@ export default function LibraryPage() {
 
   const renderTagsView = () => {
     if (!tagCards.length) {
-      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下暂无标签结果" />
+      return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_empty_tag} />
     }
 
     return (
@@ -1710,7 +1722,7 @@ export default function LibraryPage() {
                   <strong>{card.count}</strong>
                 </div>
                 <div className="kb-lib-tag-card-meta">
-                  <span>{card.unreadCount} 未读</span>
+                  <span>{S.lib_tag_unread_count.replace('{n}', String(card.unreadCount))}</span>
                 </div>
               </div>
 
@@ -1761,7 +1773,7 @@ export default function LibraryPage() {
     return (
       <div className="kb-lib-file-virtual-shell">
         <div className="kb-lib-file-virtual-tip">
-          <Text type="secondary" className="text-xs">已启用虚拟滚动（{items.length} 条）</Text>
+          <Text type="secondary" className="text-xs">{S.lib_virtual_scroll_hint.replace('{n}', String(items.length))}</Text>
         </div>
         <VirtualList
           data={items}
@@ -1792,11 +1804,11 @@ export default function LibraryPage() {
   const directoriesConfigured = Boolean(pdfDirDraft.trim() && mdDirDraft.trim())
   const showDirEditor = dirEditorOpen || !directoriesConfigured
   const workbenchStats = [
-    { key: 'view', label: '当前视图', value: counts.total_view },
-    { key: 'pending', label: '待转换', value: counts.pending },
-    { key: 'converted', label: '已转换', value: counts.converted },
-    { key: 'queued', label: '排队中', value: counts.queued },
-    { key: 'running', label: '运行中', value: counts.running },
+    { key: 'view', label: S.lib_stats_view, value: counts.total_view },
+    { key: 'pending', label: S.lib_stats_pending, value: counts.pending },
+    { key: 'converted', label: S.lib_stats_converted, value: counts.converted },
+    { key: 'queued', label: S.lib_stats_queued, value: counts.queued },
+    { key: 'running', label: S.lib_stats_running, value: counts.running },
   ]
 
   const renameHasResults = renameItems.length > 0
@@ -1812,37 +1824,37 @@ export default function LibraryPage() {
     <section className="kb-lib-workbench-section kb-lib-workbench-section-rename">
       <div className="kb-lib-section-head">
         <div className="kb-lib-section-copy">
-          <Text className="kb-lib-section-title">文件名管理</Text>
+          <Text className="kb-lib-section-title">{S.lib_section_rename}</Text>
         </div>
       </div>
 
       <div className="kb-lib-rename-summary">
         <div className="kb-lib-rename-summary-main">
-          <Select value={renameScope} onChange={setRenameScope} className="kb-lib-rename-scope" options={RENAME_SCOPE_OPTIONS} />
+          <Select value={renameScope} onChange={setRenameScope} className="kb-lib-rename-scope" options={RENAME_SCOPE_OPTIONS(S)} />
           <Button size="small" className="kb-lib-action-tonal" loading={renameLoading} onClick={() => { void scanRenameSuggestions() }}>
-            {renameHasResults ? '重新检查' : '检查文件名'}
+            {renameHasResults ? S.lib_rename_recheck : S.lib_btn_rename_check}
           </Button>
           {renameHasVisibleItems ? (
             <Button className="kb-lib-action-quiet" size="small" onClick={() => setRenameResultsOpen((open) => !open)}>
-              {renameResultsOpen ? '收起结果' : '展开结果'}
+              {renameResultsOpen ? S.lib_rename_collapse : S.lib_rename_expand}
             </Button>
           ) : null}
           {renameHasVisibleItems ? (
-            <Button className="kb-lib-action-quiet" size="small" onClick={selectRenameDiffItems}>全选</Button>
+            <Button className="kb-lib-action-quiet" size="small" onClick={selectRenameDiffItems}>{S.lib_btn_select_all}</Button>
           ) : null}
           {hasRenameSelection ? (
-            <Button className="kb-lib-action-quiet" size="small" onClick={clearRenameSelection}>清空</Button>
+            <Button className="kb-lib-action-quiet" size="small" onClick={clearRenameSelection}>{S.lib_btn_clear}</Button>
           ) : null}
           {hasRenameSelection ? (
             <Button className="kb-lib-action-tonal" size="small" type="primary" loading={renameApplying} onClick={() => { void applyRenameSuggestions() }}>
-              应用改名
+              {S.lib_btn_apply_rename}
             </Button>
           ) : null}
         </div>
         {renameHasResults ? (
           <div className="kb-lib-rename-summary-side">
             <div className="kb-lib-rename-badges">
-              <span className="kb-lib-rename-meta">{selectedRenameCount} 已选 · {renameVisible.length}/{renameItems.length} 显示</span>
+              <span className="kb-lib-rename-meta">{S.lib_rename_meta_format.replace('{sel}', String(selectedRenameCount)).replace('{vis}', String(renameVisible.length)).replace('{total}', String(renameItems.length))}</span>
             </div>
           </div>
         ) : null}
@@ -1852,7 +1864,7 @@ export default function LibraryPage() {
         <List
           className="kb-lib-rename-list"
           size="small"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下暂无改名项" /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_empty_rename} /> }}
           dataSource={renameVisible}
           pagination={{ pageSize: 6, size: 'small', showSizeChanger: false }}
           renderItem={(item) => (
@@ -1864,7 +1876,7 @@ export default function LibraryPage() {
                     onChange={(e) => setRenameSelected((cur) => ({ ...cur, [item.name]: e.target.checked }))}
                   />
                   <Text className="kb-lib-rename-item-name">{item.name}</Text>
-                  <Tag color={item.diff ? 'warning' : 'default'}>{item.diff ? '建议改名' : '无需改名'}</Tag>
+                  <Tag color={item.diff ? 'warning' : 'default'}>{item.diff ? S.lib_rename_suggest_rename : S.lib_rename_no_rename}</Tag>
                 </div>
                 <Input
                   value={renameOverrides[item.name] || ''}
@@ -1893,24 +1905,24 @@ export default function LibraryPage() {
       ) : null}
       {renameHasResults && !renameHasVisibleItems ? (
         <Text type="secondary" className="kb-lib-section-note">
-          当前范围内没有需要改名的文件。
+          {S.lib_rename_no_files}
         </Text>
       ) : null}
     </section>
   )
 
   const preparationWorkbench = (
-    <Card size="small" className="kb-lib-card kb-lib-workbench-card" title="准备工作台">
+    <Card size="small" className="kb-lib-card kb-lib-workbench-card" title={S.lib_prep_workbench}>
       <div className="kb-lib-workbench">
         <div className="kb-lib-workbench-main">
           <section className="kb-lib-workbench-section">
             <div className="kb-lib-section-head">
               <div className="kb-lib-section-copy">
-                <Text className="kb-lib-section-title">目录设置</Text>
+                <Text className="kb-lib-section-title">{S.lib_section_dir}</Text>
               </div>
               {directoriesConfigured ? (
                 <Button className="kb-lib-action-quiet" onClick={() => setDirEditorOpen((open) => !open)}>
-                  {showDirEditor ? '收起编辑' : '编辑目录'}
+                  {showDirEditor ? S.lib_dir_collapse : S.lib_dir_edit}
                 </Button>
               ) : null}
             </div>
@@ -1921,54 +1933,48 @@ export default function LibraryPage() {
                 {showDirEditor ? (
                   <Input
                     value={pdfDirDraft}
-                    placeholder="选择 PDF 文献目录"
+                    placeholder={S.lib_dir_select_pdf}
                     onChange={(e) => {
                       setDirTouched(true)
                       setPdfDirDraft(e.target.value)
                     }}
                   />
                 ) : (
-                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: pdfDirDraft || '未设置 PDF 目录' }}>
-                    {pdfDirDraft || '未设置 PDF 目录'}
+                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: pdfDirDraft || S.lib_dir_no_pdf }}>
+                    {pdfDirDraft || S.lib_dir_no_pdf}
                   </Text>
                 )}
                 {showDirEditor ? (
-                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'pdf'} onClick={() => { void pickDir('pdf') }}>选择目录</Button>
+                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'pdf'} onClick={() => { void pickDir('pdf') }}>{S.lib_dir_pick}</Button>
                 ) : null}
-                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!pdfDirDraft.trim()} onClick={() => { void openFolder('pdf_dir') }}>
-                  打开目录
-                </Button>
+                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!pdfDirDraft.trim()} onClick={() => { void openFolder('pdf_dir') }}>{S.lib_dir_open}</Button>
               </div>
               <div className={`kb-lib-dir-summary-row${showDirEditor ? ' is-editing' : ''}`}>
                 <Text className="kb-lib-dir-summary-label">MD</Text>
                 {showDirEditor ? (
                   <Input
                     value={mdDirDraft}
-                    placeholder="选择 Markdown 输出目录"
+                    placeholder={S.lib_dir_select_md}
                     onChange={(e) => {
                       setDirTouched(true)
                       setMdDirDraft(e.target.value)
                     }}
                   />
                 ) : (
-                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: mdDirDraft || '未设置 Markdown 目录' }}>
-                    {mdDirDraft || '未设置 Markdown 目录'}
+                  <Text className="kb-lib-dir-summary-path" ellipsis={{ tooltip: mdDirDraft || S.lib_dir_no_md }}>
+                    {mdDirDraft || S.lib_dir_no_md}
                   </Text>
                 )}
                 {showDirEditor ? (
-                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'md'} onClick={() => { void pickDir('md') }}>选择目录</Button>
+                  <Button className="kb-lib-action-quiet" loading={pickingDir === 'md'} onClick={() => { void pickDir('md') }}>{S.lib_dir_pick}</Button>
                 ) : null}
-                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!mdDirDraft.trim()} onClick={() => { void openFolder('md_dir') }}>
-                  打开目录
-                </Button>
+                <Button className="kb-lib-action-quiet" icon={<FolderOpenOutlined />} disabled={!mdDirDraft.trim()} onClick={() => { void openFolder('md_dir') }}>{S.lib_dir_open}</Button>
               </div>
             </div>
 
             {showDirEditor ? (
               <div className="kb-lib-section-actions">
-                <Button className="kb-lib-action-tonal" type="primary" icon={<SaveOutlined />} loading={savingDirs} disabled={!dirDirty} onClick={() => { void saveDirs() }}>
-                  保存目录设置
-                </Button>
+                <Button className="kb-lib-action-tonal" type="primary" icon={<SaveOutlined />} loading={savingDirs} disabled={!dirDirty} onClick={() => { void saveDirs() }}>{S.lib_dir_save}</Button>
               </div>
             ) : null}
           </section>
@@ -1980,7 +1986,7 @@ export default function LibraryPage() {
           <section className="kb-lib-workbench-section kb-lib-workbench-section-upload">
             <div className="kb-lib-section-head">
               <div className="kb-lib-section-copy">
-                <Text className="kb-lib-section-title">上传 PDF</Text>
+                <Text className="kb-lib-section-title">{S.lib_upload_title}</Text>
               </div>
             </div>
 
@@ -1997,8 +2003,8 @@ export default function LibraryPage() {
             >
               <div className="kb-lib-upload-dropzone-copy">
                 <UploadOutlined className="kb-lib-upload-dropzone-icon" />
-                <Text className="kb-lib-upload-dropzone-title">拖拽 PDF 到这里</Text>
-                <Text type="secondary" className="kb-lib-upload-dropzone-note">或点击选择文件</Text>
+                <Text className="kb-lib-upload-dropzone-title">{S.lib_upload_drop_hint}</Text>
+                <Text type="secondary" className="kb-lib-upload-dropzone-note">{S.lib_upload_click_hint}</Text>
               </div>
             </Dragger>
 
@@ -2006,15 +2012,15 @@ export default function LibraryPage() {
               <div className="kb-lib-upload-meta">
                 {uploadDrafts.length > 0 ? (
                   <div className="kb-lib-upload-meta-main">
-                    <span className="kb-lib-rename-meta">草稿 {uploadDrafts.length}</span>
+                    <span className="kb-lib-rename-meta">{S.lib_workbench_draft_count.replace('{n}', String(uploadDrafts.length))}</span>
                     <Button className="kb-lib-action-quiet" onClick={() => setUploadWorkbenchOpen((open) => !open)}>
-                      {showUploadWorkbench ? '收起队列' : '查看队列'}
+                      {showUploadWorkbench ? S.lib_workbench_hide_queue : S.lib_workbench_upload_queue}
                     </Button>
                   </div>
                 ) : null}
                 {uploadLocked ? (
                   <Text type="secondary" className="kb-lib-upload-inline-note">
-                    {store.converting ? '转换进行中，上传暂时锁定。' : '引用同步进行中，上传暂时锁定。'}
+                    {store.converting ? S.lib_upload_locked_converting : S.lib_upload_locked_refsync}
                   </Text>
                 ) : null}
               </div>
@@ -2024,7 +2030,7 @@ export default function LibraryPage() {
           <section className="kb-lib-workbench-section kb-lib-workbench-section-process">
             <div className="kb-lib-section-head">
               <div className="kb-lib-section-copy">
-                <Text className="kb-lib-section-title">批量处理</Text>
+                <Text className="kb-lib-section-title">{S.lib_section_batch}</Text>
               </div>
             </div>
 
@@ -2034,15 +2040,13 @@ export default function LibraryPage() {
                   value={scope}
                   onChange={(value) => { setScope(value); void store.loadFiles(value) }}
                   className="kb-lib-process-scope"
-                  options={SCOPE_OPTIONS}
+                  options={SCOPE_OPTIONS(S)}
                 />
-                <Button className="kb-lib-action-tonal" type="primary" onClick={() => { void handleConvertPending() }}>转换待处理</Button>
+                <Button className="kb-lib-action-tonal" type="primary" onClick={() => { void handleConvertPending() }}>{S.lib_btn_convert_pending_short}</Button>
               </div>
               <div className="kb-lib-process-toolbar-side">
-                <Button className="kb-lib-action-quiet kb-lib-process-refresh" icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>
-                  刷新
-                </Button>
-                {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>停止</Button> : null}
+                <Button className="kb-lib-action-quiet kb-lib-process-refresh" icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>{S.lib_btn_refresh}</Button>
+                {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>{S.lib_btn_stop}</Button> : null}
               </div>
             </div>
           </section>
@@ -2055,41 +2059,41 @@ export default function LibraryPage() {
     <Card
       size="small"
       className="kb-lib-card kb-lib-upload-workbench-card"
-      title="上传工作台"
+      title={S.lib_section_upload_workbench}
       extra={(
         <Space size={8}>
-          <Text type="secondary" className="text-xs">已选 {selectedUploadCount} 项</Text>
-          <Text type="secondary" className="text-xs">显示 {filteredUploadDrafts.length}/{uploadDrafts.length} 项</Text>
-          <Button size="small" onClick={() => setUploadWorkbenchOpen(false)}>收起</Button>
+          <Text type="secondary" className="text-xs">{S.lib_upload_selected_count.replace('{n}', String(selectedUploadCount))}</Text>
+          <Text type="secondary" className="text-xs">{S.lib_upload_show_count.replace('{n}', String(filteredUploadDrafts.length)).replace('{total}', String(uploadDrafts.length))}</Text>
+          <Button size="small" onClick={() => setUploadWorkbenchOpen(false)}>{S.lib_btn_collapse}</Button>
         </Space>
       )}
     >
       <div className="space-y-3">
         <div className="kb-lib-upload-toolbar flex flex-wrap items-center gap-2">
           <Switch checked={uploadUseLlm} onChange={setUploadUseLlm} />
-          <Text className="text-sm text-[var(--muted)]">使用 LLM 补全信息</Text>
+          <Text className="text-sm text-[var(--muted)]">{S.lib_upload_use_llm}</Text>
           <Select
             value={uploadDraftFilter}
             onChange={(value) => applyUploadFilter(value as UploadDraftFilter)}
             options={uploadDraftFilterOptions}
             className="kb-lib-upload-filter"
           />
-          <Tooltip title="全选草稿"><Button icon={<CheckOutlined />} onClick={selectAllUploadDrafts}>全选</Button></Tooltip>
-          <Tooltip title="反选草稿"><Button icon={<ClearOutlined />} onClick={invertUploadDraftSelection}>反选</Button></Tooltip>
-          <Button loading={uploadInspecting} disabled={uploadLocked} onClick={() => { void inspectSelectedDrafts() }}>扫描已选</Button>
-          <Button loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(false) }}>保存已选</Button>
-          <Button type="primary" loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(true) }}>保存并转换</Button>
-          <Button disabled={uploadLocked} onClick={selectFailedDrafts}>选择失败项</Button>
-          <Button disabled={uploadLocked || duplicateFailedDrafts.length === 0} onClick={showDuplicateFailedDrafts}>仅看重复失败</Button>
-          <Button loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(false) }}>重试失败项</Button>
-          <Button type="primary" loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(true) }}>重试并转换</Button>
-          <Button disabled={uploadLocked} onClick={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}>清理已保存</Button>
+          <Tooltip title={S.lib_btn_select_all}><Button icon={<CheckOutlined />} onClick={selectAllUploadDrafts}>{S.lib_btn_select_all}</Button></Tooltip>
+          <Tooltip title={S.lib_btn_invert_select}><Button icon={<ClearOutlined />} onClick={invertUploadDraftSelection}>{S.lib_btn_invert_select}</Button></Tooltip>
+          <Button loading={uploadInspecting} disabled={uploadLocked} onClick={() => { void inspectSelectedDrafts() }}>{S.lib_btn_scan_selected}</Button>
+          <Button loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(false) }}>{S.lib_btn_save_selected}</Button>
+          <Button type="primary" loading={uploadSaving} disabled={uploadLocked} onClick={() => { void saveSelectedDrafts(true) }}>{S.lib_btn_save_and_convert}</Button>
+          <Button disabled={uploadLocked} onClick={selectFailedDrafts}>{S.lib_btn_select_failed}</Button>
+          <Button disabled={uploadLocked || duplicateFailedDrafts.length === 0} onClick={showDuplicateFailedDrafts}>{S.lib_btn_view_dup_failed}</Button>
+          <Button loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(false) }}>{S.lib_btn_retry_failed}</Button>
+          <Button type="primary" loading={uploadSaving} disabled={uploadLocked || failedUploadDrafts.length === 0} onClick={() => { void retryFailedDrafts(true) }}>{S.lib_btn_retry_and_convert}</Button>
+          <Button disabled={uploadLocked} onClick={() => setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))}>{S.lib_btn_clear_saved}</Button>
         </div>
 
         {(uploadDraftFilter === 'error' || uploadDraftFilter === 'dup_error') && uploadErrorReason !== 'all' ? (
           <div className="kb-lib-upload-meta flex flex-wrap items-center gap-3">
             <Button size="small" onClick={() => setUploadErrorReason('all')}>
-              原因筛选：{activeErrorReasonText}（清除）
+              {S.lib_upload_filter_reason.replace('{reason}', activeErrorReasonText)}
             </Button>
           </div>
         ) : null}
@@ -2098,7 +2102,7 @@ export default function LibraryPage() {
           <Alert
             type="warning"
             showIcon
-            message={`失败草稿：${failedUploadDrafts.length}`}
+            message={S.lib_upload_failed_drafts.replace('{n}', String(failedUploadDrafts.length))}
             description={(
               <div className="kb-lib-failed-summary">
                 <div className="kb-lib-failed-reasons">
@@ -2106,7 +2110,7 @@ export default function LibraryPage() {
                     <Button
                       key={bucket.key}
                       size="small"
-                      icon={FAILED_REASON_META[bucket.key].icon}
+                      icon={FAILED_REASON_META(S)[bucket.key].icon}
                       className={`kb-lib-failed-reason-btn kb-lib-reason-tone is-${bucket.key}${uploadErrorReason === bucket.key ? ' is-active' : ''}`}
                       onClick={() => {
                         applyUploadFilter('error')
@@ -2118,7 +2122,7 @@ export default function LibraryPage() {
                   ))}
                 </div>
                 <Text type="secondary" className="text-xs">
-                  {failedUploadNotes.length > 0 ? failedUploadNotes.join(' | ') : '请查看行内错误信息后重试。'}
+                  {failedUploadNotes.length > 0 ? failedUploadNotes.join(' | ') : S.lib_upload_error_hint}
                 </Text>
               </div>
             )}
@@ -2127,7 +2131,7 @@ export default function LibraryPage() {
 
         <List
           size="small"
-          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无上传草稿" /> }}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.lib_upload_empty} /> }}
           dataSource={filteredUploadDrafts}
           pagination={{ pageSize: 8, size: 'small', showSizeChanger: false }}
           renderItem={(x) => {
@@ -2141,21 +2145,21 @@ export default function LibraryPage() {
                     <Checkbox checked={x.selected} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, selected: e.target.checked } : t)))} />
                     <Text className="min-w-0 flex-1 truncate text-sm">{x.name}</Text>
                     <Tag color={x.status === 'saved' ? 'success' : x.status === 'error' ? 'error' : (x.status === 'saving' || x.status === 'inspecting') ? 'processing' : 'default'}>
-                      {DRAFT_STATUS_TEXT[x.status]}
+                      {DRAFT_STATUS_TEXT(S)[x.status]}
                     </Tag>
                     {reasonKey ? (
                       <span className={`kb-lib-inline-reason-chip kb-lib-reason-tone is-${reasonKey}`}>
-                        {FAILED_REASON_META[reasonKey].icon}
-                        <span>{FAILED_REASON_META[reasonKey].label}</span>
+                        {FAILED_REASON_META(S)[reasonKey].icon}
+                        <span>{FAILED_REASON_META(S)[reasonKey].label}</span>
                       </span>
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-2 pl-6">
-                    <Text type="secondary" className="text-xs">建议存储名</Text>
+                    <Text type="secondary" className="text-xs">{S.lib_upload_suggest_name}</Text>
                     <Input value={x.stem} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, stem: e.target.value } : t)))} className="w-[24rem] max-w-full" />
-                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { void inspectDraft(x.key) }}>扫描</Button>
-                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>保存</Button>
-                    <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>保存并转换</Button>
+                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { void inspectDraft(x.key) }}>{S.lib_btn_scan}</Button>
+                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>{S.lib_btn_save}</Button>
+                    <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>{S.lib_btn_save_and_convert}</Button>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 pl-6">
                     <Text type="secondary" className="text-xs">{x.displayName}</Text>
@@ -2186,14 +2190,14 @@ export default function LibraryPage() {
     <div className="kb-library-page mx-auto w-full max-w-[1760px] space-y-5 p-5">
       <div className="kb-lib-head flex flex-wrap items-end justify-between gap-3">
         <div className="kb-lib-head-main">
-          <Text className="text-2xl font-semibold">文献管理</Text>
+          <Text className="text-2xl font-semibold">{S.page_library}</Text>
           <div>
-            <Text type="secondary" className="text-sm">先配置目录，再批量处理，最后在列表逐条检查。</Text>
+            <Text type="secondary" className="text-sm">{S.lib_page_subtitle}</Text>
           </div>
         </div>
         <Space wrap className="kb-lib-head-actions">
-          <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} type="primary" onClick={() => { void handleReindex() }}>更新知识库</Button>
-          <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} onClick={() => { void handleStartRefSync() }}>同步引用信息</Button>
+          <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} type="primary" onClick={() => { void handleReindex() }}>{S.reindex_now}</Button>
+          <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} onClick={() => { void handleStartRefSync() }}>{S.lib_btn_sync_refs}</Button>
         </Space>
       </div>
 
@@ -2210,11 +2214,11 @@ export default function LibraryPage() {
       {uploadWorkbenchCard}
 
       <div className="kb-lib-stats-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">当前视图</Text><div className="kb-lib-stat-value">{counts.total_view}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">待转换</Text><div className="kb-lib-stat-value">{counts.pending}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">已转换</Text><div className="kb-lib-stat-value">{counts.converted}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">排队中</Text><div className="kb-lib-stat-value">{counts.queued}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">运行中</Text><div className="kb-lib-stat-value">{counts.running}</div></Card>
+        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_view}</Text><div className="kb-lib-stat-value">{counts.total_view}</div></Card>
+        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_pending}</Text><div className="kb-lib-stat-value">{counts.pending}</div></Card>
+        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_converted}</Text><div className="kb-lib-stat-value">{counts.converted}</div></Card>
+        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_queued}</Text><div className="kb-lib-stat-value">{counts.queued}</div></Card>
+        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_running}</Text><div className="kb-lib-stat-value">{counts.running}</div></Card>
       </div>
 
       {showStickyStatus ? (
@@ -2223,13 +2227,13 @@ export default function LibraryPage() {
             {store.converting && store.progress ? (
               <div className="kb-lib-sticky-item">
                 <div className="kb-lib-sticky-main">
-                  <Text className="kb-lib-sticky-title">转换中 {store.progress.completed}/{store.progress.total}</Text>
+                  <Text className="kb-lib-sticky-title">{S.lib_convert_progress.replace('{done}', String(store.progress.completed)).replace('{total}', String(store.progress.total))}</Text>
                   {store.progress.current ? <Text type="secondary" className="kb-lib-sticky-sub">{store.progress.current}</Text> : null}
                   {convertActiveSummary ? <Text type="secondary" className="kb-lib-sticky-sub">{convertActiveSummary}</Text> : null}
                   {convertStageLabel ? <Text type="secondary" className="kb-lib-sticky-sub">{convertStageLabel}</Text> : null}
                   {convertPageProgress.total > 0 ? (
                     <Text type="secondary" className="kb-lib-sticky-sub">
-                      篇内进度 {convertPageProgress.done}/{convertPageProgress.total}
+                      {S.lib_convert_page_progress} {convertPageProgress.done}/{convertPageProgress.total}
                     </Text>
                   ) : null}
                 </div>
@@ -2240,7 +2244,7 @@ export default function LibraryPage() {
                   ) : null}
                 </div>
                 <Button size="small" danger icon={<StopOutlined />} onClick={() => { void store.cancelConvert() }}>
-                  停止
+                  {S.lib_btn_stop}
                 </Button>
               </div>
             ) : null}
@@ -2248,40 +2252,40 @@ export default function LibraryPage() {
             {store.refSync?.running ? (
               <div className="kb-lib-sticky-item">
                 <div className="kb-lib-sticky-main">
-                  <Text className="kb-lib-sticky-title">引用同步中</Text>
+                  <Text className="kb-lib-sticky-title">{S.lib_refsync_title}</Text>
                   <Text type="secondary" className="kb-lib-sticky-sub">
                     {store.refSync.current
-                      ? `${store.refSync.stage || '运行中'} | ${store.refSync.current}`
-                      : (store.refSync.message || '等待同步任务')}
+                      ? `${store.refSync.stage || S.lib_refsync_running} | ${store.refSync.current}`
+                      : (store.refSync.message || S.lib_refsync_waiting)}
                   </Text>
                 </div>
                 <Progress className="kb-lib-sticky-progress" percent={refSyncPercent} status="active" size="small" />
-                <Tag color="processing">运行中</Tag>
+                <Tag color="processing">{S.lib_refsync_running}</Tag>
               </div>
             ) : null}
           </div>
         </Card>
       ) : null}
 
-      <Card size="small" className="kb-lib-card kb-lib-legacy-convert-card" title="转换与列表筛选">
+      <Card size="small" className="kb-lib-card kb-lib-legacy-convert-card" title={S.lib_convert_scope}>
         <div className="kb-lib-convert-shell">
           <div className="kb-lib-convert-row kb-lib-convert-row-top">
             <Select
               value={scope}
               onChange={(value) => { setScope(value); void store.loadFiles(value) }}
               className="kb-lib-convert-scope"
-              options={SCOPE_OPTIONS}
+              options={SCOPE_OPTIONS(S)}
             />
             <Input
               value={fileKeyword}
               onChange={(e) => setFileKeyword(e.target.value)}
               allowClear
               prefix={<SearchOutlined className="opacity-50" />}
-              placeholder="筛选文件名"
+              placeholder={S.lib_filter_filename}
               className="kb-lib-convert-search"
             />
             <Button className="kb-lib-convert-refresh" icon={<ReloadOutlined />} onClick={() => { void store.loadFiles(scope) }}>
-              刷新
+              {S.lib_btn_refresh}
             </Button>
           </div>
 
@@ -2289,7 +2293,7 @@ export default function LibraryPage() {
             <Select
               value={paperCategoryFilter || undefined}
               allowClear
-              placeholder="按分类筛选"
+              placeholder={S.lib_filter_category}
               className="kb-lib-convert-filter"
               options={paperCategoryFilterOptions}
               onChange={(value) => setPaperCategoryFilter(String(value || ''))}
@@ -2298,7 +2302,7 @@ export default function LibraryPage() {
               value={paperTagFilter || undefined}
               allowClear
               showSearch
-              placeholder="按标签筛选"
+              placeholder={S.lib_filter_tag}
               className="kb-lib-convert-filter"
               options={paperTagFilterOptions}
               optionFilterProp="label"
@@ -2307,9 +2311,9 @@ export default function LibraryPage() {
             <Select
               value={readingStatusFilter || undefined}
               allowClear
-              placeholder="按阅读状态筛选"
+              placeholder={S.lib_filter_reading}
               className="kb-lib-convert-filter"
-              options={READING_STATUS_OPTIONS.filter((item) => item.value)}
+              options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
               onChange={(value) => setReadingStatusFilter(String(value || '') as ReadingStatusValue)}
             />
             <Button
@@ -2320,28 +2324,28 @@ export default function LibraryPage() {
                 setReadingStatusFilter('')
               }}
             >
-              清空元数据筛选
+              {S.lib_btn_clear_metadata_filter}
             </Button>
           </div>
 
           <div className="kb-lib-convert-row kb-lib-convert-row-actions">
-            <Button type="primary" onClick={() => { void handleConvertPending() }}>立即转换待处理</Button>
-            {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>停止</Button> : null}
+            <Button type="primary" onClick={() => { void handleConvertPending() }}>{S.lib_btn_convert_pending}</Button>
+            {store.converting ? <Button icon={<StopOutlined />} danger onClick={() => { void store.cancelConvert() }}>{S.lib_btn_stop}</Button> : null}
           </div>
         </div>
       </Card>
 
       {store.refSync && !store.refSync.running && (store.refSync.status === 'error' || Boolean(store.refSync.error)) ? (
-        <Card size="small" className="kb-lib-card" title="引用同步">
+        <Card size="small" className="kb-lib-card" title={S.lib_card_refsync}>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Text type="secondary" className="text-xs">
                 {store.refSync.current
-                  ? `${store.refSync.stage || '运行中'} | ${store.refSync.current}`
-                  : (store.refSync.message || '等待同步任务')}
+                  ? `${store.refSync.stage || S.lib_refsync_running} | ${store.refSync.current}`
+                  : (store.refSync.message || S.lib_refsync_waiting)}
               </Text>
               <Tag color={store.refSync.running ? 'processing' : (store.refSync.status === 'error' ? 'error' : 'default')}>
-                {store.refSync.running ? '运行中' : (store.refSync.status === 'idle' ? '空闲' : store.refSync.status)}
+                {store.refSync.running ? S.lib_refsync_running : (store.refSync.status === 'idle' ? S.lib_refsync_idle : store.refSync.status)}
               </Tag>
             </div>
             {store.refSync.docsTotal > 0 ? (
@@ -2355,7 +2359,7 @@ export default function LibraryPage() {
         </Card>
       ) : null}
 
-      <Card size="small" className="kb-lib-card kb-lib-taxonomy-bar" title="文献分类与标签">
+      <Card size="small" className="kb-lib-card kb-lib-taxonomy-bar" title={S.lib_taxonomy_title}>
         <div className="kb-lib-taxonomy-shell">
           <div className="kb-lib-taxonomy-top">
             <div className="kb-lib-taxonomy-view">
@@ -2364,20 +2368,20 @@ export default function LibraryPage() {
                 value={browseMode}
                 onChange={(value) => setBrowseMode(value as LibraryBrowseMode)}
                 options={[
-                  { label: '列表', value: 'list' },
-                  { label: '分类', value: 'categories' },
-                  { label: '标签', value: 'tags' },
+                  { label: S.lib_browse_list, value: 'list' },
+                  { label: S.lib_browse_categories, value: 'categories' },
+                  { label: S.lib_browse_tags, value: 'tags' },
                 ]}
               />
             </div>
             <div className="kb-lib-taxonomy-meta">
               <div className="kb-lib-taxonomy-summary">
                 <Text type="secondary" className="kb-lib-taxonomy-result">
-                  已显示 {visibleAll.length}/{store.files.length} 篇文献
+                  {S.lib_taxonomy_result.replace('{n}', String(visibleAll.length)).replace('{total}', String(store.files.length))}
                 </Text>
                 {hasActiveTaxonomyFilters ? (
                   <span className="kb-lib-taxonomy-status-pill">
-                    筛选中 {activeTaxonomyFilterCount}
+                    {S.lib_taxonomy_filtering.replace('{n}', String(activeTaxonomyFilterCount))}
                   </span>
                 ) : null}
               </div>
@@ -2385,7 +2389,7 @@ export default function LibraryPage() {
                 <div className="kb-lib-taxonomy-top-actions">
                   {showTaxonomySelectAction ? (
                     <Button className="kb-lib-action-quiet" onClick={selectCurrentListItems}>
-                      选中当前列表
+                      {S.lib_btn_select_current_list}
                     </Button>
                   ) : null}
                   {showTaxonomyRefreshAction ? (
@@ -2394,12 +2398,12 @@ export default function LibraryPage() {
                       loading={suggestionsRefreshing}
                       onClick={() => { void regenerateSuggestionsForVisible() }}
                     >
-                      刷新建议
+                      {S.lib_btn_refresh_suggestions}
                     </Button>
                   ) : null}
                   {showTaxonomyClearAction ? (
                     <Button className="kb-lib-action-quiet" onClick={clearTaxonomyFilters}>
-                      清空筛选
+                      {S.lib_btn_clear_filters}
                     </Button>
                   ) : null}
                 </div>
@@ -2414,13 +2418,13 @@ export default function LibraryPage() {
                 onChange={(e) => setFileKeyword(e.target.value)}
                 allowClear
                 prefix={<SearchOutlined className="opacity-50" />}
-                placeholder="搜索标题、分类、标签或备注"
+                placeholder={S.lib_search_placeholder}
                 className="kb-lib-taxonomy-search"
               />
               <Select
                 value={paperCategoryFilter || undefined}
                 allowClear
-                placeholder="分类"
+                placeholder={S.lib_search_category}
                 className="kb-lib-taxonomy-select"
                 options={paperCategoryFilterOptions}
                 onChange={(value) => applyPaperCategoryFilter(String(value || ''))}
@@ -2429,7 +2433,7 @@ export default function LibraryPage() {
                 value={paperTagFilter || undefined}
                 allowClear
                 showSearch
-                placeholder="标签"
+                placeholder={S.lib_search_tag}
                 className="kb-lib-taxonomy-select"
                 options={paperTagFilterOptions}
                 optionFilterProp="label"
@@ -2438,9 +2442,9 @@ export default function LibraryPage() {
               <Select
                 value={readingStatusFilter || undefined}
                 allowClear
-                placeholder="阅读状态"
+                placeholder={S.lib_search_reading}
                 className="kb-lib-taxonomy-select"
-                options={READING_STATUS_OPTIONS.filter((item) => item.value)}
+                options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
                 onChange={(value) => setReadingStatusFilter(String(value || '') as ReadingStatusValue)}
               />
             </div>
@@ -2452,7 +2456,7 @@ export default function LibraryPage() {
                   className={`kb-lib-taxonomy-pill is-status${onlyUnread ? ' is-active' : ''}`}
                   onClick={() => setOnlyUnread((value) => !value)}
                 >
-                  未读
+                  {S.lib_taxonomy_unread}
                 </button>
                 <button
                   type="button"
@@ -2463,14 +2467,14 @@ export default function LibraryPage() {
                     if (next) setPaperCategoryFilter('')
                   }}
                 >
-                  未分类
+                  {S.lib_category_unclassified}
                 </button>
                 <button
                   type="button"
                   className={`kb-lib-taxonomy-pill is-suggestion${onlySuggested ? ' is-active' : ''}`}
                   onClick={() => setOnlySuggested((value) => !value)}
                 >
-                  有建议
+                  {S.lib_taxonomy_has_suggestions}
                 </button>
               </div>
             </div>
@@ -2483,16 +2487,16 @@ export default function LibraryPage() {
           <div className="kb-lib-batch-bar">
             <div className="kb-lib-batch-summary">
               <div className="kb-lib-batch-badges">
-                <span className="kb-lib-batch-badge is-strong">已选 {selectedLibraryCount} 篇</span>
-                <span className="kb-lib-batch-badge">{currentListItems.length} 篇在当前列表</span>
+                <span className="kb-lib-batch-badge is-strong">{S.lib_batch_selected_count.replace('{n}', String(selectedLibraryCount))}</span>
+                <span className="kb-lib-batch-badge">{S.lib_batch_current_count.replace('{n}', String(currentListItems.length))}</span>
               </div>
-              <Text className="kb-lib-batch-count">批量整理当前选择</Text>
-              <Text type="secondary" className="kb-lib-batch-hint">批量编辑只会作用于已选文献，适合先批量设分类，再统一加减标签。</Text>
+              <Text className="kb-lib-batch-count">{S.lib_batch_title_selected}</Text>
+              <Text type="secondary" className="kb-lib-batch-hint">{S.lib_batch_hint_scope}</Text>
             </div>
             <div className="kb-lib-batch-actions">
-              <Button onClick={selectCurrentListItems}>选中当前列表</Button>
-              <Button onClick={clearLibrarySelection} disabled={!selectedLibraryCount}>清空选中</Button>
-              <Button type="primary" onClick={openBatchEditor} disabled={!selectedLibraryCount}>批量编辑</Button>
+              <Button onClick={selectCurrentListItems}>{S.lib_btn_select_current_list}</Button>
+              <Button onClick={clearLibrarySelection} disabled={!selectedLibraryCount}>{S.lib_btn_clear_selection}</Button>
+              <Button type="primary" onClick={openBatchEditor} disabled={!selectedLibraryCount}>{S.lib_batch_title}</Button>
             </div>
           </div>
         </Card>
@@ -2504,9 +2508,9 @@ export default function LibraryPage() {
         activeKey={tabKey}
         onChange={(key) => setTabKey(key as FileTabKey)}
         items={[
-          { key: 'pending', label: `待转换 (${visiblePending.length})`, children: renderFiles(visiblePending, '暂无待转换文件') },
-          { key: 'converted', label: `已转换 (${visibleConverted.length})`, children: renderFiles(visibleConverted, '暂无已转换文件') },
-          { key: 'all', label: `全部 (${visibleAll.length})`, children: renderFiles(visibleAll, '暂无文件') },
+          { key: 'pending', label: S.lib_tab_pending.replace('{n}', String(visiblePending.length)), children: renderFiles(visiblePending, S.lib_empty_pending) },
+          { key: 'converted', label: S.lib_tab_converted.replace('{n}', String(visibleConverted.length)), children: renderFiles(visibleConverted, S.lib_empty_converted) },
+          { key: 'all', label: S.lib_tab_all.replace('{n}', String(visibleAll.length)), children: renderFiles(visibleAll, S.lib_empty_all) },
         ]}
       />
       ) : browseMode === 'categories' ? (
@@ -2520,7 +2524,7 @@ export default function LibraryPage() {
       )}
 
       <Drawer
-        title={metaItem ? `文献元数据 · ${metaItem.name}` : '文献元数据'}
+        title={metaItem ? S.lib_meta_title.replace('{name}', metaItem.name) : S.lib_meta_title_fallback}
         open={metaDrawerOpen}
         width={420}
         onClose={() => setMetaDrawerOpen(false)}
@@ -2532,18 +2536,18 @@ export default function LibraryPage() {
               <div className="kb-lib-meta-hero-copy">
                 <Text className="kb-lib-meta-hero-title">{stripKnownSourceExt(metaItem.name) || metaItem.name}</Text>
                 <Text type="secondary" className="kb-lib-meta-hero-note">
-                  分类和标签完全由你掌控。可以沿用已有词汇，也可以直接录入你自己的整理方式。
+                  {S.lib_meta_hero_hint}
                 </Text>
               </div>
               <Space wrap size={[6, 6]} className="kb-lib-meta-chip-row">
-                <Tag color={metaDraftCategory ? 'blue' : 'default'}>{metaDraftCategory || '未分类'}</Tag>
+                <Tag color={metaDraftCategory ? 'blue' : 'default'}>{metaDraftCategory || S.lib_category_unclassified}</Tag>
                 {metaDraft.reading_status ? (
-                  <Tag color="gold">{readingStatusLabel(metaDraft.reading_status)}</Tag>
+                  <Tag color="gold">{readingStatusLabel(metaDraft.reading_status, S)}</Tag>
                 ) : (
-                  <Tag>阅读状态未设置</Tag>
+                  <Tag>{S.lib_meta_status_not_set}</Tag>
                 )}
                 <Tag color={metaSuggestionCount ? 'processing' : 'default'}>
-                  {metaSuggestionCount ? `${metaSuggestionCount} 条系统建议` : '暂无系统建议'}
+                  {metaSuggestionCount ? S.lib_meta_suggestions.replace('{n}', String(metaSuggestionCount)) : S.lib_meta_no_suggestions}
                 </Tag>
               </Space>
               {metaDraftTags.length ? (
@@ -2559,64 +2563,64 @@ export default function LibraryPage() {
           <section className="kb-lib-meta-section">
             <div className="kb-lib-meta-section-head">
               <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">我的整理</Text>
+                <Text className="kb-lib-meta-section-title">{S.lib_meta_section_my_org}</Text>
                 <Text type="secondary" className="kb-lib-meta-section-note">
-                  主分类放稳定归属，标签放可复用的检索切面。
+                  {S.lib_meta_org_hint}
                 </Text>
               </div>
             </div>
 
             <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">主分类</Text>
+              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_category}</Text>
               <AutoComplete
                 value={metaDraft.paper_category}
                 allowClear
                 options={paperCategoryOptions}
-                placeholder="选择已有分类，或直接输入自己的分类"
+                placeholder={S.lib_meta_category_placeholder}
                 filterOption={optionMatchesInput}
                 onChange={(value) => setMetaDraft((cur) => ({ ...cur, paper_category: String(value || '') }))}
                 onBlur={() => setMetaDraft((cur) => ({ ...cur, paper_category: normalizeTextValue(cur.paper_category) }))}
               />
               <Text type="secondary" className="kb-lib-meta-help">
-                可直接新建分类。建议保持短、稳定、能跨多篇论文复用。
+                {S.lib_meta_category_hint}
               </Text>
             </div>
 
             <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">阅读状态</Text>
+              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_status}</Text>
               <Select
                 value={metaDraft.reading_status || undefined}
                 allowClear
-                placeholder="选择阅读状态"
-                options={READING_STATUS_OPTIONS.filter((item) => item.value)}
+                placeholder={S.lib_meta_reading_placeholder}
+                options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
                 onChange={(value) => setMetaDraft((cur) => ({ ...cur, reading_status: String(value || '') as ReadingStatusValue }))}
               />
             </div>
 
             <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">标签</Text>
+              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_tags}</Text>
               <Select
                 mode="tags"
                 value={metaDraft.user_tags}
                 showSearch
                 maxTagCount="responsive"
                 tokenSeparators={TAG_INPUT_SEPARATORS}
-                placeholder="输入标签后回车，也支持逗号 / 分号分隔"
+                placeholder={S.lib_meta_tag_placeholder}
                 options={paperTagOptions}
                 optionFilterProp="label"
                 onChange={(value) => setMetaDraft((cur) => ({ ...cur, user_tags: normalizeTextList(value as unknown[]) }))}
               />
               <Text type="secondary" className="kb-lib-meta-help">
-                标签更适合放 modality、task、constraint、method property 这类可复用 facet。
+                {S.lib_meta_tags_hint}
               </Text>
             </div>
 
             <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">备注</Text>
+              <Text type="secondary" className="kb-lib-meta-label">{S.lib_meta_label_note}</Text>
               <Input.TextArea
                 autoSize={{ minRows: 5, maxRows: 9 }}
                 value={metaDraft.note}
-                placeholder="记录这篇文献的用途、结论或后续阅读计划"
+                placeholder={S.lib_meta_note_placeholder}
                 onChange={(event) => setMetaDraft((cur) => ({ ...cur, note: event.target.value }))}
               />
             </div>
@@ -2625,14 +2629,14 @@ export default function LibraryPage() {
           <section className="kb-lib-meta-section kb-lib-meta-section-suggest">
             <div className="kb-lib-suggest-head">
               <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">系统建议</Text>
+                <Text className="kb-lib-meta-section-title">{S.lib_meta_section_system}</Text>
                 <Text type="secondary" className="kb-lib-meta-section-note">
-                  系统只建议，不会自动覆盖你已经确认的分类和标签。
+                  {S.lib_meta_system_hint}
                 </Text>
               </div>
               <Space size={8} wrap>
                 <Button size="small" loading={metaSuggestionSaving} onClick={() => { void regenerateMetaSuggestions() }}>
-                  刷新建议
+                  {S.lib_btn_refresh_suggestions}
                 </Button>
                 {metaItem?.has_suggestions ? (
                   <>
@@ -2648,7 +2652,7 @@ export default function LibraryPage() {
                         })
                       }}
                     >
-                      接受全部
+                      {S.lib_btn_accept_all}
                     </Button>
                     <Button
                       size="small"
@@ -2660,7 +2664,7 @@ export default function LibraryPage() {
                         })
                       }}
                     >
-                      忽略全部
+                      {S.lib_btn_dismiss_all}
                     </Button>
                   </>
                 ) : null}
@@ -2672,7 +2676,7 @@ export default function LibraryPage() {
                 {metaItem.suggested_category ? (
                   <div className="kb-lib-suggest-item">
                     <div className="kb-lib-suggest-copy">
-                      <Text className="kb-lib-suggest-title">建议分类</Text>
+                      <Text className="kb-lib-suggest-title">{S.lib_meta_suggest_category}</Text>
                       <div className="kb-lib-meta-chip-row">
                         <Tag color="blue">{metaItem.suggested_category}</Tag>
                       </div>
@@ -2685,14 +2689,14 @@ export default function LibraryPage() {
                         loading={metaSuggestionSaving}
                         onClick={() => { void applyMetaSuggestionAction({ category_action: 'accept' }) }}
                       >
-                        接受
+                        {S.lib_btn_accept}
                       </Button>
                       <Button
                         size="small"
                         loading={metaSuggestionSaving}
                         onClick={() => { void applyMetaSuggestionAction({ category_action: 'dismiss' }) }}
                       >
-                        忽略
+                        {S.lib_btn_dismiss}
                       </Button>
                     </Space>
                   </div>
@@ -2701,7 +2705,7 @@ export default function LibraryPage() {
                 {(metaItem?.suggested_tags || []).map((tagValue) => (
                   <div key={`meta-suggest-${tagValue}`} className="kb-lib-suggest-item">
                     <div className="kb-lib-suggest-copy">
-                      <Text className="kb-lib-suggest-title">建议标签</Text>
+                      <Text className="kb-lib-suggest-title">{S.lib_meta_suggest_tags}</Text>
                       <div className="kb-lib-meta-chip-row">
                         <Tag>{tagValue}</Tag>
                       </div>
@@ -2714,14 +2718,14 @@ export default function LibraryPage() {
                         loading={metaSuggestionSaving}
                         onClick={() => { void applyMetaSuggestionAction({ accept_tags: [tagValue] }) }}
                       >
-                        接受
+                        {S.lib_btn_accept}
                       </Button>
                       <Button
                         size="small"
                         loading={metaSuggestionSaving}
                         onClick={() => { void applyMetaSuggestionAction({ dismiss_tags: [tagValue] }) }}
                       >
-                        忽略
+                        {S.lib_btn_dismiss}
                       </Button>
                     </Space>
                   </div>
@@ -2732,25 +2736,25 @@ export default function LibraryPage() {
                 type="info"
                 showIcon
                 className="kb-lib-suggest-empty"
-                message="当前还没有分类建议"
-                description="建议会结合你确认过的分类、标签和论文信号生成；你始终可以直接手动录入自己的分类与标签。"
+                message={S.lib_meta_no_suggestions_msg}
+                description={S.lib_batch_hint}
               />
             )}
           </section>
 
           <div className="kb-lib-meta-actions">
             <Button onClick={() => setMetaDrawerOpen(false)}>
-              取消
+              {S.lib_btn_cancel}
             </Button>
             <Button type="primary" loading={metaSaving} onClick={() => { void saveMetaEditor() }}>
-              保存
+              {S.lib_btn_save}
             </Button>
           </div>
         </div>
       </Drawer>
 
       <Drawer
-        title={`批量编辑 · ${selectedLibraryCount} 篇文献`}
+        title={S.lib_batch_edit_count_format.replace('{n}', String(selectedLibraryCount))}
         open={batchDrawerOpen}
         width={420}
         onClose={() => setBatchDrawerOpen(false)}
@@ -2759,18 +2763,18 @@ export default function LibraryPage() {
         <div className="kb-lib-meta-drawer">
           <div className="kb-lib-meta-hero kb-lib-meta-hero-batch">
             <div className="kb-lib-meta-hero-copy">
-              <Text className="kb-lib-meta-hero-title">批量编辑 {selectedLibraryCount} 篇文献</Text>
+              <Text className="kb-lib-meta-hero-title">{S.lib_batch_edit_hero.replace('{n}', String(selectedLibraryCount))}</Text>
               <Text type="secondary" className="kb-lib-meta-hero-note">
-                适合先统一主分类和阅读状态，再一次性补充或移除标签。
+                {S.lib_batch_notice}
               </Text>
             </div>
             <Space wrap size={[6, 6]} className="kb-lib-meta-chip-row">
-              <Tag color={selectedLibraryCount ? 'blue' : 'default'}>{selectedLibraryCount} 篇已选</Tag>
+              <Tag color={selectedLibraryCount ? 'blue' : 'default'}>{S.lib_batch_selected_tag.replace('{n}', String(selectedLibraryCount))}</Tag>
               {batchDraft.apply_paper_category && normalizeTextValue(batchDraft.paper_category) ? (
-                <Tag color="processing">将设置分类: {normalizeTextValue(batchDraft.paper_category)}</Tag>
+                <Tag color="processing">{S.lib_batch_set_category_label.replace('{category}', normalizeTextValue(batchDraft.paper_category))}</Tag>
               ) : null}
               {batchDraft.add_tags.length ? (
-                <Tag color="green">新增 {normalizeTextList(batchDraft.add_tags).length} 个标签</Tag>
+                <Tag color="green">{S.lib_batch_add_tag_count.replace('{n}', String(normalizeTextList(batchDraft.add_tags).length))}</Tag>
               ) : null}
             </Space>
           </div>
@@ -2778,9 +2782,9 @@ export default function LibraryPage() {
           <section className="kb-lib-meta-section">
             <div className="kb-lib-meta-section-head">
               <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">批量设置</Text>
+                <Text className="kb-lib-meta-section-title">{S.lib_batch_section_setting}</Text>
                 <Text type="secondary" className="kb-lib-meta-section-note">
-                  只会影响当前选中的文献，不会改到未选中的内容。
+                  {S.lib_batch_setting_hint}
                 </Text>
               </div>
             </div>
@@ -2790,20 +2794,20 @@ export default function LibraryPage() {
                 checked={batchDraft.apply_paper_category}
                 onChange={(event) => setBatchDraft((cur) => ({ ...cur, apply_paper_category: event.target.checked }))}
               >
-                批量设置主分类
+                {S.lib_batch_set_category_cb}
               </Checkbox>
               <AutoComplete
                 value={batchDraft.paper_category}
                 allowClear
                 disabled={!batchDraft.apply_paper_category}
                 options={paperCategoryOptions}
-                placeholder="选择已有分类，或直接输入自己的分类"
+                placeholder={S.lib_meta_category_placeholder}
                 filterOption={optionMatchesInput}
                 onChange={(value) => setBatchDraft((cur) => ({ ...cur, paper_category: String(value || '') }))}
                 onBlur={() => setBatchDraft((cur) => ({ ...cur, paper_category: normalizeTextValue(cur.paper_category) }))}
               />
               <Text type="secondary" className="kb-lib-meta-help">
-                这里也支持手动录入新分类，会写入到所有已选文献。
+                {S.lib_batch_category_hint}
               </Text>
             </div>
 
@@ -2812,14 +2816,14 @@ export default function LibraryPage() {
                 checked={batchDraft.apply_reading_status}
                 onChange={(event) => setBatchDraft((cur) => ({ ...cur, apply_reading_status: event.target.checked }))}
               >
-                批量设置阅读状态
+                {S.lib_batch_set_status_cb}
               </Checkbox>
               <Select
                 value={batchDraft.reading_status || undefined}
                 allowClear
                 disabled={!batchDraft.apply_reading_status}
-                placeholder="选择阅读状态"
-                options={READING_STATUS_OPTIONS.filter((item) => item.value)}
+                placeholder={S.lib_meta_reading_placeholder}
+                options={READING_STATUS_OPTIONS(S).filter((item) => item.value)}
                 onChange={(value) => setBatchDraft((cur) => ({ ...cur, reading_status: String(value || '') as ReadingStatusValue }))}
               />
             </div>
@@ -2828,22 +2832,22 @@ export default function LibraryPage() {
           <section className="kb-lib-meta-section">
             <div className="kb-lib-meta-section-head">
               <div className="kb-lib-meta-section-copy">
-                <Text className="kb-lib-meta-section-title">标签批处理</Text>
+                <Text className="kb-lib-meta-section-title">{S.lib_batch_section_tags}</Text>
                 <Text type="secondary" className="kb-lib-meta-section-note">
-                  新增标签支持自由输入；移除标签只从已存在标签里选，避免误删。
+                  {S.lib_batch_tags_hint}
                 </Text>
               </div>
             </div>
 
             <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">批量新增标签</Text>
+              <Text type="secondary" className="kb-lib-meta-label">{S.lib_batch_label_add_tags}</Text>
               <Select
                 mode="tags"
                 value={batchDraft.add_tags}
                 showSearch
                 maxTagCount="responsive"
                 tokenSeparators={TAG_INPUT_SEPARATORS}
-                placeholder="输入新增标签后回车，也支持逗号 / 分号分隔"
+                placeholder={S.lib_batch_add_tag_placeholder}
                 options={paperTagOptions}
                 optionFilterProp="label"
                 onChange={(value) => setBatchDraft((cur) => ({ ...cur, add_tags: normalizeTextList(value as unknown[]) }))}
@@ -2851,12 +2855,12 @@ export default function LibraryPage() {
             </div>
 
             <div className="kb-lib-meta-field">
-              <Text type="secondary" className="kb-lib-meta-label">批量移除标签</Text>
+              <Text type="secondary" className="kb-lib-meta-label">{S.lib_batch_label_remove_tags}</Text>
               <Select
                 mode="multiple"
                 value={batchDraft.remove_tags}
                 maxTagCount="responsive"
-                placeholder="选择要移除的标签"
+                placeholder={S.lib_batch_remove_tag_placeholder}
                 options={paperTagFilterOptions}
                 optionFilterProp="label"
                 onChange={(value) => setBatchDraft((cur) => ({ ...cur, remove_tags: normalizeTextList(value as unknown[]) }))}
@@ -2866,10 +2870,10 @@ export default function LibraryPage() {
 
           <div className="kb-lib-meta-actions">
             <Button onClick={() => setBatchDrawerOpen(false)}>
-              取消
+              {S.lib_btn_cancel}
             </Button>
             <Button type="primary" loading={batchSaving} onClick={() => { void saveBatchEditor() }}>
-              应用到已选文献
+              {S.lib_btn_apply_to_selected}
             </Button>
           </div>
         </div>

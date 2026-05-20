@@ -1,6 +1,62 @@
+from pathlib import Path
+
 import pytest
 
 import kb.generation_answer_finalize_runtime as finalize_runtime
+
+
+def test_prompt_requested_reference_targets_accepts_naive_source_trace():
+    labels = [
+        label
+        for label, _alts in finalize_runtime._prompt_requested_reference_targets(
+            "ADMM 是怎么来的？作者这里是借鉴了谁的想法吗？ADMM-Net 又是谁先做的？"
+        )
+    ]
+
+    assert labels == ["ADMM", "ADMM-Net"]
+
+
+def test_prompt_requested_reference_targets_does_not_confuse_admm_net_with_admm():
+    labels = [
+        label
+        for label, _alts in finalize_runtime._prompt_requested_reference_targets(
+            "ADMM-Net \u4e4b\u524d\u662f\u8c01\u505a\u7684\uff1f\u6211\u60f3\u77e5\u9053\u8fd9\u6761\u7ebf\u7d22\u5e94\u8be5\u4ece\u54ea\u7bc7\u5de5\u4f5c\u770b\u8d77\u3002"
+        )
+    ]
+
+    assert labels == ["ADMM-Net"]
+
+
+def test_maybe_append_requested_refs_uses_admm_net_label_after_wrong_inline_ref(monkeypatch):
+    monkeypatch.setattr(finalize_runtime, "_load_reference_index", lambda _path: {"loaded": True})
+
+    def _resolve(_index, _source_path, ref_num, *, source_sha1=""):
+        if int(ref_num) == 21:
+            return {
+                "ref": {
+                    "title": "Deep tensor ADMM-Net for snapshot compressive imaging",
+                    "authors": "Jiawei Ma",
+                    "venue": "ICCV",
+                    "year": "2019",
+                }
+            }
+        return {}
+
+    monkeypatch.setattr(finalize_runtime, "_resolve_reference_entry", _resolve)
+    answer = "ADMM-Net modeled the decoding process as a tensor recovery problem [[CITE:s7f6b9404:31]]."
+    out = finalize_runtime._maybe_append_prompt_requested_inpaper_refs(
+        answer,
+        prompt=(
+            "ADMM-Net \u4e4b\u524d\u662f\u8c01\u505a\u7684\uff1f"
+            "\u6211\u60f3\u77e5\u9053\u8fd9\u6761\u7ebf\u7d22\u5e94\u8be5\u4ece\u54ea\u7bc7\u5de5\u4f5c\u770b\u8d77\u3002"
+        ),
+        answer_hits=[{"meta": {"source_path": "paper.md"}}],
+        db_dir=Path("db"),
+        locked_citation_source=None,
+    )
+
+    assert "ADMM-Net [[CITE:" in out
+    assert "\u539f\u8bba\u6587\u6765\u6e90\uff1aADMM [[CITE:" not in out
 
 
 def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkeypatch):
@@ -498,7 +554,7 @@ def test_finalize_generation_answer_injects_minimum_cite_when_missing_after_sani
         validate_structured_citations=lambda answer, **kwargs: (answer, {"kept": 0}),
     )
 
-    assert "[[CITE:s1234abcd:26]]" not in out["answer"]
+    assert "[[CITE:s1234abcd:26]]" in out["answer"]
 
 
 def test_finalize_generation_answer_does_not_inject_minimum_cite_for_overview(monkeypatch):
@@ -642,7 +698,7 @@ def test_finalize_generation_answer_strips_cite_tokens_for_non_citation_answer(m
     )
 
     assert "[[CITE:" not in out["answer"]
-    assert "[2]" not in out["answer"]
+    assert "[2]" in out["answer"]
     assert "Section 2.2 compares the two methods" in out["answer"]
 
 
@@ -694,6 +750,55 @@ def test_finalize_generation_answer_sanitizes_internal_doc_label_blocks(monkeypa
     assert "ICIP-2025-SCIGS" in out["answer"]
     assert "CVPR-2024-SCINeRF" in out["answer"]
     assert "- ICIP-2025-SCIGS" in out["answer"]
+
+
+def test_finalize_generation_answer_sanitizes_inline_internal_doc_labels(monkeypatch):
+    monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_apply_answer_contract_v1", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_enhance_kb_miss_fallback", lambda answer, **kwargs: answer)
+    monkeypatch.setattr(finalize_runtime, "_build_answer_quality_probe", lambda answer, **kwargs: {"minimum_ok": True, "answer": answer})
+
+    raw = (
+        "Among the retrieved papers, the following two mention NeRF:\n\n"
+        "**DOC-1** (): *CVPR-2024-SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image*\n\n"
+        "The paper repeatedly uses NeRF as its underlying scene representation.\n\n"
+        "**DOC-2** (): *ICIP-2025-SCIGS: 3D Gaussians Splatting from A Snapshot Compressive Image*\n\n"
+        "It explicitly contrasts the limitations of NeRF-based reconstruction methods.\n\n"
+        "The remaining papers (DOC-3, DOC-4) do not mention NeRF."
+    )
+
+    out = finalize_runtime._finalize_generation_answer(
+        raw,
+        prompt="Which papers in my library mention NeRF?",
+        prompt_for_user="Which papers in my library mention NeRF?",
+        answer_hits=[{"meta": {"source_path": "demo.md"}}],
+        db_dir="db",
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="medium",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=False,
+        paper_guide_contract_enabled=False,
+        paper_guide_prompt_family="",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **kwargs: answer,
+        validate_structured_citations=lambda answer, **kwargs: (answer, {}),
+    )
+
+    assert "DOC-1" not in out["answer"]
+    assert "DOC-2" not in out["answer"]
+    assert "DOC-3" not in out["answer"]
+    assert "DOC-4" not in out["answer"]
+    assert "CVPR-2024-SCINeRF" in out["answer"]
+    assert "ICIP-2025-SCIGS" in out["answer"]
+    assert "The remaining papers do not mention NeRF." in out["answer"]
 
 
 def test_finalize_generation_answer_rebuilds_multi_paper_list_from_structured_docs(monkeypatch):
@@ -980,6 +1085,42 @@ def test_build_multi_paper_doc_list_contract_uses_deepread_text_when_card_snippe
     )
 
 
+def test_build_multi_paper_doc_list_contract_carries_llm_pack_copy_from_ref_pack():
+    source_path = (
+        r"db\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
+        r"\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+    )
+
+    out = finalize_runtime._build_multi_paper_doc_list_contract(
+        prompt="Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
+        seed_docs=[
+            {
+                "text": "Snapshot Compressive Imaging is discussed in the abstract.",
+                "meta": {
+                    "source_path": source_path,
+                    "ref_best_heading_path": "Abstract",
+                    "ref_show_snippets": [
+                        "Snapshot Compressive Imaging is discussed in the abstract."
+                    ],
+                    "ref_pack": {
+                        "what": "The paper studies SCI-based 3D scene reconstruction from a single compressed capture rather than only introducing the term.",
+                        "why": "It explicitly frames the method as Snapshot Compressive Imaging (SCI), so it is a direct match for papers that mention SCI.",
+                    },
+                },
+            }
+        ],
+        answer_hits=[],
+        evidence_cards=[],
+    )
+
+    assert len(out) == 1
+    row = out[0]
+    assert row["summary_line"].startswith("The paper studies SCI-based 3D scene reconstruction")
+    assert row["summary_generation"] == "llm_pack"
+    assert row["why_line"].startswith("It explicitly frames the method as Snapshot Compressive Imaging")
+    assert row["why_generation"] == "llm_pack"
+
+
 @pytest.mark.skip(reason="legacy encoding-sensitive prompt case replaced by ASCII-equivalent coverage below")
 def test_filter_multi_paper_doc_list_contract_keeps_only_sci_topic_matches():
     prompt = "有哪几篇文章提到了SCI（单次曝光压缩成像）"
@@ -1160,6 +1301,86 @@ def test_filter_multi_paper_doc_list_contract_returns_empty_when_explicit_focus_
     )
 
     assert out == []
+
+
+def test_filter_multi_paper_doc_list_contract_keeps_cjk_adjacent_nerf_mentions():
+    prompt = "Which papers in my library mention NeRF?"
+    rows = [
+        {
+            "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+            "source_name": "ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.pdf",
+            "heading_path": "Abstract",
+            "summary_line": (
+                "\u8be5\u8bba\u6587\u5728\u6458\u8981\u4e2d\u63d0\u53caNeRF-based reconstruction methods\uff0c"
+                "\u5e76\u6307\u51fa\u5176\u5728\u52a8\u6001\u573a\u666f\u4e2d\u4ecd\u6709\u5c40\u9650\u3002"
+            ),
+            "primary_evidence": {
+                "heading_path": "Abstract",
+                "snippet": (
+                    "Snapshot Compressive Imaging (SCI) offers a possibility for capturing information in "
+                    "high-speed dynamic scenes. Despite promising results, current deep learning-based and "
+                    "NeRF-based reconstruction methods still face limitations in handling dynamic scenes."
+                ),
+            },
+        },
+        {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from A Snapshot Compressive Image.pdf",
+            "heading_path": "Abstract",
+            "summary_line": "SCINeRF exploits neural radiance fields as its underlying scene representation.",
+            "primary_evidence": {
+                "heading_path": "Abstract",
+                "snippet": "Our approach builds upon the powerful 3D scene representation capabilities of neural radiance fields (NeRF).",
+            },
+        },
+        {
+            "source_path": r"db\Unrelated\Unrelated.en.md",
+            "source_name": "Unrelated-3D Gaussian Splatting.pdf",
+            "heading_path": "Abstract",
+            "summary_line": "This paper discusses dynamic scene reconstruction with 3D Gaussian splatting.",
+        },
+    ]
+
+    out = finalize_runtime._filter_multi_paper_doc_list_contract(
+        prompt=prompt,
+        doc_list=rows,
+    )
+
+    assert [item["source_name"] for item in out] == [
+        "ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.pdf",
+        "CVPR-2024-SCINeRF- Neural Radiance Fields from A Snapshot Compressive Image.pdf",
+    ]
+
+
+def test_filter_multi_paper_doc_list_contract_excludes_cjk_adjacent_negated_nerf_mentions():
+    prompt = "Which papers in my library mention NeRF?"
+    rows = [
+        {
+            "source_path": r"db\Negative\Negative.en.md",
+            "source_name": "Negative-3DGS-note.pdf",
+            "heading_path": "Abstract",
+            "summary_line": "\u672c\u6587\u672a\u63d0\u53caNeRF\uff0c\u4ec5\u8ba8\u8bba3D Gaussian Splatting\u3002",
+        },
+        {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "source_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from A Snapshot Compressive Image.pdf",
+            "heading_path": "Abstract",
+            "summary_line": "SCINeRF exploits neural radiance fields as its underlying scene representation.",
+            "primary_evidence": {
+                "heading_path": "Abstract",
+                "snippet": "Our approach builds upon the powerful 3D scene representation capabilities of neural radiance fields (NeRF).",
+            },
+        },
+    ]
+
+    out = finalize_runtime._filter_multi_paper_doc_list_contract(
+        prompt=prompt,
+        doc_list=rows,
+    )
+
+    assert [item["source_name"] for item in out] == [
+        "CVPR-2024-SCINeRF- Neural Radiance Fields from A Snapshot Compressive Image.pdf",
+    ]
 
 
 def test_filter_multi_paper_doc_list_contract_ignores_generic_prompt_echo_summary_for_fourier():
@@ -1465,7 +1686,7 @@ def test_finalize_generation_answer_preserves_numeric_refs_for_citation_lookup(m
         validate_structured_citations=lambda answer, **kwargs: (answer, {"kept": 1}),
     )
 
-    assert "[[CITE:" not in out["answer"]
+    assert "[[CITE:s1234abcd:35]]" in out["answer"]
     assert "[35]" in out["answer"]
 
 

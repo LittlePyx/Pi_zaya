@@ -21,13 +21,20 @@ user_prefs.json
 db/
 chat.db
 kb_chat.db
+library.db
 
 # Local logs / temp outputs
+.runtime/
 .codex_logs/
 .logs/
 /logs/
 .tmp*
 backups/
+api_server.log
+backend_stderr.log
+backend_stdout.log
+server.log
+vite_server.log
 ssp_speed*.log
 test-results/
 test_results/

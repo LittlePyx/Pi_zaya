@@ -1,0 +1,302 @@
+{
+  "dbRoot": "F:/research-papers/2026/Jan/else/kb_chat/db",
+  "docs": [
+    {
+      "id": "qclfm",
+      "title": "Quantum correlation light-field microscope with extreme depth of field",
+      "dir": "arXiv-Quantum correlation light-ﬁeld microscope with extreme depth of ﬁeld",
+      "topic": "quantum correlation microscopy",
+      "shortLabel": "QCLFM"
+    },
+    {
+      "id": "scinerf",
+      "title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+      "dir": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image",
+      "topic": "SCI plus NeRF 3D reconstruction",
+      "shortLabel": "SCINeRF"
+    },
+    {
+      "id": "spd-review",
+      "title": "Emerging single-photon detection technique for high-performance photodetector",
+      "dir": "Frontiers of Physics-2024-Emerging single-photon...performance photodetector",
+      "topic": "single-photon detectors",
+      "shortLabel": "SPD review"
+    },
+    {
+      "id": "scigs",
+      "title": "SCIGS: 3D Gaussians Splatting from A Snapshot Compressive Image",
+      "dir": "ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image",
+      "topic": "SCI plus 3D Gaussian splatting",
+      "shortLabel": "SCIGS"
+    },
+    {
+      "id": "3d-sp-video",
+      "title": "3D single-pixel video",
+      "dir": "Journal of Optics-2016-3D single-pixel video",
+      "topic": "video-rate 3D single-pixel imaging",
+      "shortLabel": "3D SPI video"
+    },
+    {
+      "id": "dl-spi-review",
+      "title": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+      "dir": "LPR-2025-Advances and Challenges of Single‐Pixel Imaging Based on Deep Learning",
+      "topic": "deep learning single-pixel imaging review",
+      "shortLabel": "DL-SPI review"
+    },
+    {
+      "id": "iism",
+      "title": "Interferometric Image Scanning Microscopy with enhanced lateral resolution inside live cells",
+      "dir": "LSA-2026-Interferometric Image Scanning...lateral resolution inside live cells",
+      "topic": "interferometric image scanning microscopy",
+      "shortLabel": "iISM"
+    },
+    {
+      "id": "sph-biological",
+      "title": "Imaging biological tissue with high-throughput single-pixel compressive holography",
+      "dir": "NatCommun-2021-Imaging biological tissue with...pixel compressive holography",
+      "topic": "single-pixel compressive holography",
+      "shortLabel": "SPH biology"
+    },
+    {
+      "id": "pidl-single-photon",
+      "title": "High-resolution single-photon imaging with physics-informed deep learning",
+      "dir": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning",
+      "topic": "physics-informed single-photon imaging",
+      "shortLabel": "PI single-photon"
+    },
+    {
+      "id": "spi-prospects",
+      "title": "Principles and prospects for single-pixel imaging",
+      "dir": "NatPhoton-2019-Principles and prospects for single-pixel imaging",
+      "topic": "single-pixel imaging foundations",
+      "shortLabel": "SPI prospects"
+    },
+    {
+      "id": "s2ism",
+      "title": "Structured detection for high-SNR image scanning microscopy in thick samples",
+      "dir": "NatPhoton-2025-Structured detection for...in laser scanning microscopy",
+      "topic": "structured detection microscopy",
+      "shortLabel": "s2ISM"
+    },
+    {
+      "id": "perovskite-laser",
+      "title": "Electrically driven lasing from a dual-cavity perovskite device",
+      "dir": "Nature-2025-Electrically driven lasing from a dual-cavity perovskite device",
+      "topic": "perovskite optoelectronic device",
+      "shortLabel": "Perovskite laser"
+    },
+    {
+      "id": "cassi",
+      "title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+      "dir": "OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture",
+      "topic": "compressive spectral imaging",
+      "shortLabel": "CASSI"
+    },
+    {
+      "id": "hsi-fsi",
+      "title": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+      "dir": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+      "topic": "Hadamard versus Fourier SPI",
+      "shortLabel": "HSI vs FSI"
+    },
+    {
+      "id": "fdm-metamaterials",
+      "title": "Frequency-division-multiplexed single-pixel imaging with metamaterials",
+      "dir": "Optica-2016-Frequency-division-multiplexed single-pixel imaging with metamaterials",
+      "topic": "metamaterial single-pixel imaging",
+      "shortLabel": "FDM metamaterials"
+    },
+    {
+      "id": "rt-spi-supp",
+      "title": "Robust real-time single-pixel imaging with differential detection - supplement",
+      "dir": "Optica-2024-Robust real-time single-pixel...differential detection- supplement",
+      "topic": "real-time SPI supplement",
+      "shortLabel": "RT-SPI supp"
+    },
+    {
+      "id": "piln",
+      "title": "Part-based image-loop network for single-pixel imaging",
+      "dir": "Optics & Laser Technology-2024-Part-based image-loop network for single-pixel imaging",
+      "topic": "single-pixel image reconstruction network",
+      "shortLabel": "PILN"
+    },
+    {
+      "id": "visual-perception",
+      "title": "Some informational aspects of visual perception",
+      "dir": "Psychological Review-1954-Some informational aspects of visual perception",
+      "topic": "visual perception and information",
+      "shortLabel": "Visual perception"
+    },
+    {
+      "id": "foveated-spi",
+      "title": "Adaptive foveated single-pixel imaging with dynamic supersampling",
+      "dir": "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling",
+      "topic": "adaptive foveated single-pixel imaging",
+      "shortLabel": "Foveated SPI"
+    },
+    {
+      "id": "seq-cs",
+      "title": "Sequentially designed compressed sensing",
+      "dir": "SSP-2012-Sequentially designed compressed sensing",
+      "topic": "adaptive compressed sensing",
+      "shortLabel": "Sequential CS"
+    },
+    {
+      "id": "denoising-review",
+      "title": "Brief review of image denoising techniques",
+      "dir": "Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques",
+      "topic": "image denoising review",
+      "shortLabel": "Denoising review"
+    }
+  ],
+  "forbiddenPhrases": [
+    "The paper cites",
+    "This hit is directly relevant",
+    "This is stated in",
+    "适合作为定位入口",
+    "直接定义或解释了",
+    "命中章节讲什么 / 提供什么"
+  ],
+  "cases": [
+    {
+      "id": "scigs-dynamic-3d",
+      "docIds": ["scigs", "scinerf"],
+      "question": "SCIGS 这篇到底想解决什么问题？它和 SCINeRF 的区别在哪里？",
+      "acceptance": [
+        "回答先解释研究问题，再比较两篇论文路线。",
+        "至少出现一个 SCIGS 原文证据和一个 SCINeRF 对照证据。",
+        "参考卡文字不能只说“直接相关”，要说明命中段落承担的判断。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["SCIGS", "SCINeRF", "动态", "3D"],
+        "requiredRefDocIds": ["scigs", "scinerf"],
+        "requiredCitationDocIds": ["scigs", "scinerf"],
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "scinerf-admm-origin",
+      "docIds": ["scinerf"],
+      "question": "ADMM 是作者自己发明的吗？我应该把它当成这篇论文的新东西吗？",
+      "acceptance": [
+        "回答必须先说清楚“不是本文原创”。",
+        "System B 卡片要解释上游文献角色，而不是只列参考文献信息。",
+        "System A 卡片打开后应定位到 Related Work 中 ADMM 的语境。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["ADMM", "不是", "已有"],
+        "requiredRefDocIds": ["scinerf"],
+        "requiredCitationDocIds": ["scinerf"],
+        "requireSystemB": true,
+        "requiredSystemBTerms": ["ADMM", "Distributed optimization"]
+      }
+    },
+    {
+      "id": "hadamard-fourier-choice",
+      "docIds": ["hsi-fsi"],
+      "question": "我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
+      "acceptance": [
+        "回答应给出条件化建议，不要一句话武断说某个一定更好。",
+        "参考卡应说明“测量次数/能量集中/噪声质量”的关系。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["Hadamard", "Fourier", "测量"],
+        "requiredRefDocIds": ["hsi-fsi"],
+        "requiredCitationDocIds": ["hsi-fsi"],
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "foveated-dynamic-supersampling",
+      "docIds": ["foveated-spi", "visual-perception"],
+      "question": "dynamic supersampling 是不是就是只盯着画面重要的地方多拍一点？",
+      "acceptance": [
+        "回答应把用户朴素表述翻译成技术机制。",
+        "参考定位卡应能区分技术证据和背景性启发文献。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["foveated", "supersampling", "重要"],
+        "requiredRefDocIds": ["foveated-spi"],
+        "requiredCitationDocIds": ["foveated-spi"],
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "dl-spi-benefits-risks",
+      "docIds": ["dl-spi-review"],
+      "question": "深度学习给单像素成像带来的好处和坑分别是什么？",
+      "acceptance": [
+        "回答必须同时覆盖收益和风险。",
+        "不能把综述回答成宣传口径，要指出数据、解释性、泛化和速度质量权衡。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["深度学习", "数据", "泛化"],
+        "requiredRefDocIds": ["dl-spi-review"],
+        "requiredCitationDocIds": ["dl-spi-review"],
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "qclfm-refocus",
+      "docIds": ["qclfm"],
+      "question": "这个 quantum correlation light-field microscope 是怎么把离焦样品重新对焦的？",
+      "acceptance": [
+        "回答应解释两个步骤，而不是只复述“extreme depth of field”。",
+        "定位卡应命中 Concept/Experimental Results，不应漂到 references。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["ray tracing", "wave", "重聚焦"],
+        "requiredRefDocIds": ["qclfm"],
+        "requiredCitationDocIds": ["qclfm"],
+        "requiredPrimaryEvidenceTerms": ["Digital Refocusing", "ray tracing", "wave propagation"],
+        "forbiddenPrimaryEvidenceTerms": ["Conventional light-field microscope designs"],
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "s2ism-thick-samples",
+      "docIds": ["s2ism", "iism"],
+      "question": "s2ISM 这篇说的 trade-off 是什么？为什么厚样本会麻烦？",
+      "acceptance": [
+        "回答应把 trade-off 的三个量说全。",
+        "厚样本解释应关联离焦背景/散射/SNR，而不是泛泛说“更难”。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["SNR", "resolution", "optical sectioning"],
+        "requiredRefDocIds": ["s2ism"],
+        "requiredCitationDocIds": ["s2ism"],
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "single-photon-pidl",
+      "docIds": ["pidl-single-photon", "spd-review"],
+      "question": "physics-informed deep learning 在单光子成像里到底帮了什么？",
+      "acceptance": [
+        "回答应说清物理先验具体进入哪里。",
+        "参考卡应能区分算法主文献和探测器背景综述。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["physics-informed", "SPAD", "noise"],
+        "requiredRefDocIds": ["pidl-single-photon"],
+        "requiredCitationDocIds": ["pidl-single-photon"],
+        "requireSystemB": false
+      }
+    },
+    {
+      "id": "perovskite-boundary",
+      "docIds": ["perovskite-laser"],
+      "question": "这篇 perovskite laser 和我的单像素成像主线关系大吗？值得一起读吗？",
+      "acceptance": [
+        "回答应能识别边界文献，不应为了命中而夸大相关性。",
+        "参考定位卡应说明“为什么这是外围而非主线”。"
+      ],
+      "expected": {
+        "requiredAnswerTerms": ["perovskite", "器件", "不是"],
+        "requiredRefDocIds": ["perovskite-laser"],
+        "requiredCitationDocIds": ["perovskite-laser"],
+        "requireSystemB": false
+      }
+    }
+  ]
+}

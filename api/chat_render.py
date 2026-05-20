@@ -11,6 +11,7 @@ from kb import task_runtime
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
     _paper_guide_model_dump,
+    _paper_guide_promote_hidden_direct_segment_for_render,
 )
 from kb.paper_guide.grounder import (
     _build_paper_guide_segment_locate_target,
@@ -54,7 +55,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
-_RENDER_CACHE_SCHEMA_VERSION = 3
+_RENDER_CACHE_SCHEMA_VERSION = 5
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -252,13 +253,17 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
     if not rendered_payload:
         return pack
     merged = dict(rendered_payload)
+    # Always prefer original hits/scores (they reflect the full retrieval result
+    # the LLM actually saw).  rendered_payload may hold a stale or partial subset.
+    if pack.get("hits") not in (None, "", [], {}):
+        merged["hits"] = pack["hits"]
+    if pack.get("scores") not in (None, "", [], {}):
+        merged["scores"] = pack["scores"]
     for key in (
         "user_msg_id",
         "conv_id",
         "prompt",
         "prompt_sig",
-        "hits",
-        "scores",
         "render_status",
         "render_error",
         "render_error_detail",
@@ -401,13 +406,38 @@ def _message_answer_output_mode(rec: dict | None) -> str:
     return str(answer_quality.get("output_mode") or "").strip().lower()
 
 
-def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str) -> bool:
+def _message_has_validated_structured_cites(rec: dict | None) -> bool:
+    if not isinstance(rec, dict):
+        return False
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    answer_quality = dict(meta.get("answer_quality") or {}) if isinstance(meta.get("answer_quality"), dict) else {}
+    citation_validation = (
+        answer_quality.get("citation_validation")
+        if isinstance(answer_quality.get("citation_validation"), dict)
+        else {}
+    )
+    kept = int((citation_validation or {}).get("kept") or 0)
+    rewritten = int((citation_validation or {}).get("rewritten") or 0)
+    if kept + rewritten > 0:
+        return True
+    ref_opps = answer_quality.get("reference_opportunities")
+    if isinstance(ref_opps, dict) and int(ref_opps.get("count") or 0) > 0:
+        return True
+    return False
+
+
+def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str, hits: list[dict] | None = None) -> bool:
     raw = str(content or "")
     if not raw:
         return False
     if _message_intent_family(rec) == "citation_lookup":
         return True
     if _message_answer_prompt_family(rec) == "citation_lookup":
+        return True
+    if hits and _STRUCT_CITE_RE.search(raw) and _message_has_validated_structured_cites(rec):
+        return True
+    # Classic RAG with [n] markers and available hits → link citations.
+    if hits and re.search(r"\[\d{1,4}\]", raw):
         return True
     return "citation" in _message_answer_output_mode(rec)
 
@@ -424,8 +454,6 @@ def _strip_freeform_numeric_citation_markers(md: str) -> str:
 
 
 def _should_retry_structured_cite_fallback(*, raw_body: str, rendered_body: str, cite_details: list[dict]) -> bool:
-    if cite_details:
-        return False
     raw = str(raw_body or "")
     rendered = str(rendered_body or "")
     had_structured = bool(
@@ -439,6 +467,15 @@ def _should_retry_structured_cite_fallback(*, raw_body: str, rendered_body: str,
     # safety downgrade, keep them and avoid re-linking.
     if _VISIBLE_NUMERIC_CITE_RE.search(rendered):
         return False
+    # Count resolved System B entries — if the primary renderer handled all
+    # [[CITE:...]] markers, we don't need the fallback.
+    sysb_resolved = sum(1 for d in cite_details if d.get("is_inpaper") is True)
+    raw_cite_count = len(_STRUCT_CITE_RE.findall(raw)) + len(_STRUCT_CITE_SINGLE_RE.findall(raw))
+    if sysb_resolved >= raw_cite_count:
+        return False
+    # Some [[CITE:...]] markers were not resolved by the primary renderer
+    # (typically because the SID wasn't in sid_to_source).  Fallback to the
+    # standalone renderer which builds its own SID mapping from hits.
     return True
 
 
@@ -483,7 +520,69 @@ def _build_message_render_cache_key(
     return _stable_json_hash(base)
 
 
-def _extract_render_cache(meta: dict | None, *, expected_key: str) -> dict | None:
+def _iter_numeric_citation_numbers(text: str) -> list[int]:
+    nums: list[int] = []
+    for m in _VISIBLE_NUMERIC_CITE_RE.finditer(str(text or "")):
+        for raw in re.findall(r"\d{1,4}", str(m.group(0) or "")):
+            try:
+                n = int(raw)
+            except Exception:
+                continue
+            if n > 0:
+                nums.append(n)
+    return nums
+
+
+def _count_linkable_source_hits(hits: list[dict] | None) -> int:
+    count = 0
+    for h in list(hits or []):
+        if not isinstance(h, dict):
+            continue
+        meta = h.get("meta") if isinstance(h.get("meta"), dict) else {}
+        if str(meta.get("source_path") or "").strip():
+            count += 1
+    return count
+
+
+def _content_has_linkable_answer_citations(content: str, hits: list[dict] | None) -> bool:
+    raw = str(content or "")
+    if not raw or "[" not in raw:
+        return False
+    hit_count = _count_linkable_source_hits(hits)
+    if hit_count <= 0:
+        return False
+    return any(1 <= int(n) <= hit_count for n in _iter_numeric_citation_numbers(raw))
+
+
+def _cache_has_rendered_citation_links(cache: dict) -> bool:
+    cite_details = cache.get("cite_details")
+    if isinstance(cite_details, list) and any(isinstance(item, dict) for item in cite_details):
+        return True
+    render_packet = cache.get("render_packet") if isinstance(cache.get("render_packet"), dict) else {}
+    packet_cites = render_packet.get("cite_details") if isinstance(render_packet, dict) else None
+    if isinstance(packet_cites, list) and any(isinstance(item, dict) for item in packet_cites):
+        return True
+    for key in ("rendered_content", "rendered_body", "copy_markdown"):
+        if "#kb-cite-" in str(cache.get(key) or ""):
+            return True
+        if isinstance(render_packet, dict) and "#kb-cite-" in str(render_packet.get(key) or ""):
+            return True
+    return False
+
+
+def _render_cache_is_degraded_for_citations(cache: dict, *, raw_content: str, hits: list[dict] | None) -> bool:
+    if not _content_has_linkable_answer_citations(raw_content, hits):
+        return False
+    return not _cache_has_rendered_citation_links(cache)
+
+
+def _extract_render_cache(
+    meta: dict | None,
+    *,
+    expected_key: str,
+    raw_content: str = "",
+    hits: list[dict] | None = None,
+) -> dict | None:
     if not isinstance(meta, dict):
         return None
     cache = meta.get("render_cache")
@@ -499,16 +598,27 @@ def _extract_render_cache(meta: dict | None, *, expected_key: str) -> dict | Non
     render_packet = cache.get("render_packet")
     if not isinstance(render_packet, dict):
         render_packet = {}
-    return {
-        "notice": str(cache.get("notice") or ""),
-        "rendered_body": str(cache.get("rendered_body") or ""),
-        "rendered_content": str(cache.get("rendered_content") or ""),
-        "copy_markdown": str(cache.get("copy_markdown") or ""),
-        "copy_text": str(cache.get("copy_text") or ""),
+    packet_cite_details = render_packet.get("cite_details") if isinstance(render_packet.get("cite_details"), list) else []
+    normalized = {
+        "notice": str(cache.get("notice") or render_packet.get("notice") or ""),
+        "rendered_body": str(cache.get("rendered_body") or render_packet.get("rendered_body") or ""),
+        "rendered_content": str(cache.get("rendered_content") or render_packet.get("rendered_content") or ""),
+        "copy_markdown": str(cache.get("copy_markdown") or render_packet.get("copy_markdown") or ""),
+        "copy_text": str(cache.get("copy_text") or render_packet.get("copy_text") or ""),
         "cite_details": [dict(item) for item in cite_details if isinstance(item, dict)],
         "refs_user_msg_id": int(cache.get("refs_user_msg_id") or 0),
         "render_packet": dict(render_packet),
     }
+    if not normalized["cite_details"] and isinstance(packet_cite_details, list):
+        normalized["cite_details"] = [dict(item) for item in packet_cite_details if isinstance(item, dict)]
+    if str(raw_content or "").strip() and not (
+        str(normalized.get("rendered_content") or "").strip()
+        or str(normalized.get("rendered_body") or "").strip()
+    ):
+        return None
+    if _render_cache_is_degraded_for_citations(normalized, raw_content=raw_content, hits=hits):
+        return None
+    return normalized
 
 
 def _build_render_cache_payload(
@@ -535,6 +645,24 @@ def _build_render_cache_payload(
         "refs_user_msg_id": int(refs_user_msg_id or 0),
         "render_packet": dict(render_packet or {}) if isinstance(render_packet, dict) else {},
     }
+
+
+def _sync_render_cache_packet(meta: dict, render_packet: dict) -> bool:
+    cache = meta.get("render_cache") if isinstance(meta, dict) else None
+    if not isinstance(cache, dict) or not cache:
+        return False
+    next_cache = dict(cache)
+    current_packet = (
+        dict(next_cache.get("render_packet") or {})
+        if isinstance(next_cache.get("render_packet"), dict)
+        else {}
+    )
+    next_packet = dict(render_packet or {}) if isinstance(render_packet, dict) else {}
+    if current_packet == next_packet:
+        return False
+    next_cache["render_packet"] = next_packet
+    meta["render_cache"] = next_cache
+    return True
 
 
 def _merge_render_packet_contract_meta(
@@ -671,13 +799,17 @@ def _merge_render_packet_contract_meta(
         primary_evidence=provenance_primary_evidence,
     )
     render_packet = _paper_guide_model_dump(render_packet_model)
+    cache_changed = _sync_render_cache_packet(meta, render_packet)
     if existing_packet == render_packet:
-        if contracts_changed:
+        if contracts_changed or cache_changed:
             meta["paper_guide_contracts"] = contracts
             rec["meta"] = meta
             if chat_store is not None and msg_id > 0:
                 try:
-                    chat_store.merge_message_meta(msg_id, {"paper_guide_contracts": contracts})
+                    patch = {"paper_guide_contracts": contracts}
+                    if cache_changed and isinstance(meta.get("render_cache"), dict):
+                        patch["render_cache"] = dict(meta.get("render_cache") or {})
+                    chat_store.merge_message_meta(msg_id, patch)
                 except Exception:
                     pass
         else:
@@ -688,7 +820,10 @@ def _merge_render_packet_contract_meta(
     rec["meta"] = meta
     if chat_store is not None and msg_id > 0:
         try:
-            chat_store.merge_message_meta(msg_id, {"paper_guide_contracts": contracts})
+            patch = {"paper_guide_contracts": contracts}
+            if cache_changed and isinstance(meta.get("render_cache"), dict):
+                patch["render_cache"] = dict(meta.get("render_cache") or {})
+            chat_store.merge_message_meta(msg_id, patch)
         except Exception:
             pass
 
@@ -943,6 +1078,16 @@ def _enrich_provenance_segments_for_display(
     source_name = str(provenance.get("source_name") or "").strip()
     if (not source_name) and source_path:
         source_name = _source_name_from_path(source_path)
+    has_visible_direct_segment = any(
+        isinstance(item, dict)
+        and str(item.get("evidence_mode") or "").strip().lower() == "direct"
+        and str(item.get("locate_policy") or "").strip().lower() != "hidden"
+        and (
+            str(item.get("primary_block_id") or "").strip()
+            or any(str(block_id or "").strip() for block_id in list(item.get("evidence_block_ids") or []))
+        )
+        for item in list(segments_raw or [])
+    )
     segments_out: list[dict] = []
     for idx, seg0 in enumerate(segments_raw, start=1):
         if not isinstance(seg0, dict):
@@ -1008,6 +1153,13 @@ def _enrich_provenance_segments_for_display(
         )
         if reader_open:
             seg["reader_open"] = reader_open
+        promoted_seg = (
+            {}
+            if has_visible_direct_segment
+            else _paper_guide_promote_hidden_direct_segment_for_render(seg)
+        )
+        if promoted_seg:
+            seg = promoted_seg
         segments_out.append(seg)
     out = dict(provenance)
     out["segments"] = segments_out
@@ -1113,6 +1265,7 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             "anchor": anchor,
             "source_name": source_name,
             "source_path": source_path,
+            "is_inpaper": True,
             "raw": str(ref2.get("raw") or raw).strip(),
             "title": str(ref2.get("title") or "").strip(),
             "authors": str(ref2.get("authors") or "").strip(),
@@ -1139,7 +1292,7 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             return ""
         detail = _mk_detail(sid, n)
         if not detail:
-            return ""
+            return f"[{n}]"
         return f"[{n}](#{detail['anchor']})"
 
     out = _STRUCT_CITE_RE.sub(_replace, str(md or ""))
@@ -1191,6 +1344,8 @@ def enrich_messages_with_reference_render(
         cached = _extract_render_cache(
             rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
             expected_key=render_cache_key,
+            raw_content=content,
+            hits=hits,
         )
         if cached:
             _restore_render_packet_contract_from_cache(rec, cached)
@@ -1212,15 +1367,21 @@ def enrich_messages_with_reference_render(
             allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
                 rec=rec,
                 content=content,
+                hits=hits,
             )
             if rendered_body.strip():
                 rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
                 rendered_body = _normalize_equation_source_notes(rendered_body)
                 if allow_inpaper_citation_linking:
+                    # Pass canonical hit ordering if available, so [n] resolves to
+                    # the same source the LLM referenced during generation.
+                    _rec_meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
+                    _canon_paths = list(_rec_meta.get("canonical_hit_paths") or []) if isinstance(_rec_meta.get("canonical_hit_paths"), list) else []
                     rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
                         rendered_body,
                         hits,
                         anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+                        canonical_paths=_canon_paths or None,
                     )
                     if _should_retry_structured_cite_fallback(
                         raw_body=raw_body,
@@ -1307,4 +1468,3 @@ def enrich_messages_with_reference_render(
         out.append(rec)
 
     return out
-

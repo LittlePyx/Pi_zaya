@@ -10,7 +10,7 @@ import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawe
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
 import type { ReaderOpenPayload, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
 import type { ChatUploadItem, Message } from '../api/chat'
-import { S } from '../i18n/zh'
+import { useT } from '../i18n'
 
 const { Text } = Typography
 
@@ -35,12 +35,12 @@ function uploadItemKey(item: ChatUploadItem) {
   return [item.kind, item.sha1 || '', item.path || '', item.name].join(':')
 }
 
-function compactTimelineText(content: string, maxLen = 68) {
+function compactTimelineText(content: string, maxLen = 68, txt?: Record<string, string>) {
   const raw = String(content || '').replace(/\s+/g, ' ').trim()
-  if (!raw) return '空白提问'
+  if (!raw) return txt?.timeline_blank_question || '空白提问'
   const imgOnly = raw.match(/^\[Image attachment x(\d+)\]$/i)
   if (imgOnly) {
-    return `图片提问 x${imgOnly[1] || '1'}`
+    return (txt?.timeline_image_question || '图片提问 x{n}').replace('{n}', imgOnly[1] || '1')
   }
   if (raw.length <= maxLen) return raw
   return `${raw.slice(0, Math.max(8, maxLen - 1)).trimEnd()}...`
@@ -93,6 +93,7 @@ interface TimelineItem {
 }
 
 export default function ChatPage() {
+  const S = useT()
   const messages = useChatStore((s) => s.messages)
   const conversationLoading = useChatStore((s) => s.conversationLoading)
   const messagesLoadingMore = useChatStore((s) => s.messagesLoadingMore)
@@ -300,7 +301,7 @@ export default function ChatPage() {
       }
       uploadNoticeRef.current[key] = terminalState
       if (terminalState === 'ready') {
-        message.success(`PDF 已入库: ${item.name}`)
+        message.success(`${S.upload_pdf_ready}: ${item.name}`)
         if (dismissTimerRef.current[key] == null) {
           dismissTimerRef.current[key] = window.setTimeout(() => {
             dismissUploadItem(key)
@@ -308,7 +309,7 @@ export default function ChatPage() {
           }, READY_DISMISS_MS)
         }
       } else if (terminalState === 'duplicate') {
-        message.info(`PDF 已在库中: ${item.name}`)
+        message.info(`${S.upload_pdf_duplicate}: ${item.name}`)
         if (dismissTimerRef.current[key] == null) {
           dismissTimerRef.current[key] = window.setTimeout(() => {
             dismissUploadItem(key)
@@ -316,9 +317,9 @@ export default function ChatPage() {
           }, DUPLICATE_DISMISS_MS)
         }
       } else if (terminalState === 'cancelled') {
-        message.info(`PDF 已取消: ${item.name}`)
+        message.info(`${S.upload_pdf_cancelled}: ${item.name}`)
       } else if (terminalState === 'error') {
-        message.error(`PDF 入库失败: ${item.name}`)
+        message.error(`${S.upload_pdf_error}: ${item.name}`)
       }
     }
 
@@ -346,7 +347,7 @@ export default function ChatPage() {
     try {
       await uploadFiles(files, { quickIngest: true, speedMode: 'balanced' })
     } catch {
-      message.error('上传失败')
+      message.error(S.upload_failed_generic)
     }
   }
 
@@ -354,7 +355,7 @@ export default function ChatPage() {
     try {
       await retryUploadItem(key)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '重试入库失败')
+      message.error(err instanceof Error ? err.message : S.retry_ingest_failed)
     }
   }
 
@@ -362,18 +363,18 @@ export default function ChatPage() {
     try {
       await cancelUploadItem(key)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '取消入库失败')
+      message.error(err instanceof Error ? err.message : S.cancel_ingest_failed)
     }
   }
 
   const onStartGuideFromUpload = async (item: ChatUploadItem) => {
     const sourcePath = String(item.md_path || '').trim()
     if (!sourcePath) {
-      message.info('PDF 尚未完成转换，请等待入库完成后再开始阅读指导。')
+      message.info(S.reader_pdf_not_ready)
       return
     }
     const sourceName = stripSourceExt(item.name) || item.name
-    const hide = message.loading('正在创建阅读指导会话...', 0)
+    const hide = message.loading(S.reader_creating_guide, 0)
     try {
       await createPaperGuideConversation({
         sourcePath,
@@ -381,10 +382,10 @@ export default function ChatPage() {
         title: `阅读指导 · ${sourceName}`,
       })
       hide()
-      message.success('已进入阅读指导会话')
+      message.success(S.reader_entered_guide)
     } catch (err) {
       hide()
-      message.error(err instanceof Error ? err.message : '创建阅读指导会话失败')
+      message.error(err instanceof Error ? err.message : S.reader_create_guide_failed)
     }
   }
 
@@ -393,6 +394,7 @@ export default function ChatPage() {
     ? messages.slice(-Math.min(messages.length, LIVE_WINDOW))
     : messages
   const deferredTimelineMessages = useDeferredValue(messages)
+  const deferredRefs = useDeferredValue(refs)
   const hiddenCount = liveRunning
     ? Math.max(0, messages.length - visibleMessages.length)
     : 0
@@ -418,7 +420,7 @@ export default function ChatPage() {
         order,
         userMsgId: pendingUser.id,
         targetMsgId: msg.id,
-        questionPreview: compactTimelineText(pendingUser.content),
+        questionPreview: compactTimelineText(pendingUser.content, 68, S),
         hasAnswer: true,
       })
       pendingUser = null
@@ -429,7 +431,7 @@ export default function ChatPage() {
         order,
         userMsgId: pendingUser.id,
         targetMsgId: pendingUser.id,
-        questionPreview: compactTimelineText(pendingUser.content),
+        questionPreview: compactTimelineText(pendingUser.content, 68, S),
         hasAnswer: false,
       })
     }
@@ -456,7 +458,7 @@ export default function ChatPage() {
 
   const jumpToTimelineItem = (item: TimelineItem) => {
     if (liveRunning) {
-      message.info('当前正在生成回答，完成后再使用时间线跳转。')
+      message.info(S.timeline_jump_blocked)
       return
     }
     const idx = messageIndexById.get(item.targetMsgId)
@@ -471,7 +473,7 @@ export default function ChatPage() {
   const openReader = (payload: ReaderOpenPayload) => {
     const sourcePath = String(payload?.sourcePath || '').trim()
     if (!sourcePath) {
-      message.info('当前引用缺少可绑定的文献路径')
+      message.info(S.reader_missing_path)
       return
     }
     const locateRequestId = nextReaderLocateRequestId()
@@ -633,9 +635,9 @@ export default function ChatPage() {
   const showConversationMeta = !conversationLoading && (timelineUiReady || activeConversation?.mode === 'paper_guide')
   const guideSourceLabel = String(activeConversation?.bound_source_name || '').trim()
     || String(activeConversation?.bound_source_path || '').trim()
-    || '未绑定文献'
+    || S.guide_unbound
   const guideSourceReady = Boolean(activeConversation?.bound_source_ready)
-  const guideStatusLabel = guideSourceReady ? '已入库可检索' : '待入库'
+  const guideStatusLabel = guideSourceReady ? S.timeline_guide_ready : S.timeline_guide_pending
   const beginReaderResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!desktopReaderExpanded || !event.isPrimary) return
     const currentWidth = clampReaderWidth(readerWidthLiveRef.current)
@@ -692,8 +694,8 @@ export default function ChatPage() {
             <div className="kb-empty-logo-wrap flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
               <img src="/pi_logo.png" alt="Pi assistant" className="kb-empty-logo h-9 w-9 object-contain" loading="lazy" />
             </div>
-            <div className="kb-empty-typewriter" aria-label="π-zaya · 你的知识库助理">
-              π-zaya · 你的知识库助理
+            <div className="kb-empty-typewriter" aria-label={S.brand_subtitle}>
+              {S.brand_subtitle}
             </div>
           </div>
           <Text type="secondary" className="max-w-xs text-center">
@@ -706,7 +708,7 @@ export default function ChatPage() {
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/60 px-4 py-3">
               <div className="mx-auto flex max-w-5xl items-center gap-3">
                 <Button size="small" loading={messagesLoadingMore} onClick={() => { void loadOlderMessages() }}>
-                  显示更早 {Math.min(HISTORY_PAGE_SIZE, hiddenCount)} 条
+                  {S.show_older.replace('{n}', String(Math.min(HISTORY_PAGE_SIZE, hiddenCount)))}
                 </Button>
                 <Button size="small" onClick={() => {}}>
                   展开全部
@@ -735,10 +737,10 @@ export default function ChatPage() {
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/60 px-4 py-3">
               <div className="mx-auto flex max-w-5xl items-center gap-3">
                 <Button size="small" loading={messagesLoadingMore} onClick={() => { void loadOlderMessages() }}>
-                  显示更早 {HISTORY_PAGE_SIZE} 条
+                  {S.show_older.replace('{n}', String(HISTORY_PAGE_SIZE))}
                 </Button>
                 <Text type="secondary" className="text-xs">
-                  当前先加载最近一页消息；较早消息按需分页加载。
+                  {S.show_older_paged}
                 </Text>
               </div>
             </div>
@@ -748,7 +750,7 @@ export default function ChatPage() {
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/40 px-4 py-2">
               <div className="mx-auto max-w-5xl">
                 <Text type="secondary" className="text-xs">
-                  正在打开会话并加载最近消息...
+                  {S.loading_conversation}
                 </Text>
               </div>
             </div>
@@ -758,7 +760,7 @@ export default function ChatPage() {
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/40 px-4 py-2">
               <div className="mx-auto max-w-5xl">
                 <Text type="secondary" className="text-xs">
-                  流式生成时仅保留最近 {visibleMessages.length} 条消息可见，以保持界面流畅。
+                  {S.live_stream_hint.replace('{n}', String(visibleMessages.length))}
                 </Text>
               </div>
             </div>
@@ -771,8 +773,8 @@ export default function ChatPage() {
                   <div className="kb-chat-meta-strip">
                     {timelineItems.length > 0 ? (
                       <div className="kb-chat-meta-inline-block">
-                        <span className="kb-chat-meta-label">会话时间线</span>
-                        <span className="kb-chat-meta-badge">{timelineItems.length} 个节点</span>
+                        <span className="kb-chat-meta-label">{S.timeline_label}</span>
+                        <span className="kb-chat-meta-badge">{S.timeline_badge.replace('{n}', String(timelineItems.length))}</span>
                         {showInlineTimelineToggle ? (
                           <Button
                             size="small"
@@ -780,14 +782,14 @@ export default function ChatPage() {
                             className="kb-chat-meta-action"
                             onClick={toggleTimelineOpen}
                           >
-                          {timelineOpen ? '收起' : '展开'}
+                          {timelineOpen ? S.timeline_collapse : S.timeline_expand}
                           </Button>
                         ) : null}
                       </div>
                     ) : null}
                     {activeConversation?.mode === 'paper_guide' ? (
                       <div className="kb-chat-meta-inline-block kb-chat-meta-inline-guide">
-                        <span className="kb-chat-meta-label">阅读指导</span>
+                        <span className="kb-chat-meta-label">{S.timeline_guide_label}</span>
                         <span className="kb-chat-meta-source" title={guideSourceLabel}>{guideSourceLabel}</span>
                         <span className={`kb-chat-meta-state ${guideSourceReady ? 'is-ready' : 'is-pending'}`}>
                           {guideStatusLabel}
@@ -880,9 +882,10 @@ export default function ChatPage() {
                   <MessageList
                     activeConvId={activeConvId}
                     messages={visibleMessages}
-                    refs={refs}
+                    refs={deferredRefs}
                     generationPartial={generation?.partial}
                     generationStage={generation?.stage}
+                    generationTrace={generation?.researchTrace}
                     jumpTarget={timelineJump}
                     onJumpHandled={(handled) => {
                       setTimelineJump((current) => (
@@ -954,8 +957,8 @@ export default function ChatPage() {
                   <div className="kb-chat-timeline-head">
                     <div className="kb-chat-timeline-title-row">
                       <div className="min-w-0">
-                        <div className="kb-chat-timeline-title">会话时间线</div>
-                        <div className="kb-chat-timeline-hint">点击节点跳转到对应问答</div>
+                        <div className="kb-chat-timeline-title">{S.timeline_label}</div>
+                        <div className="kb-chat-timeline-hint">{S.timeline_hint}</div>
                       </div>
                       <div className="kb-chat-timeline-head-actions">
                         <span className="kb-chat-timeline-count">{timelineItems.length}</span>
@@ -964,12 +967,12 @@ export default function ChatPage() {
                           className="kb-chat-timeline-toggle"
                           onClick={toggleTimelineOpen}
                         >
-                          收起
+                          {S.timeline_collapse}
                         </button>
                       </div>
                     </div>
-                    <div className="text-sm font-medium">会话时间线</div>
-                    <div className="mt-1 text-xs text-black/50 dark:text-white/50">点击可跳到对应问答</div>
+                    <div className="text-sm font-medium">{S.timeline_label}</div>
+                    <div className="mt-1 text-xs text-black/50 dark:text-white/50">{S.timeline_hint}</div>
                   </div>
                   <div className="kb-chat-timeline-list">
                     {timelineItems.map((item) => (
@@ -986,7 +989,7 @@ export default function ChatPage() {
                         <div className="kb-chat-timeline-item-meta">
                           <span className="kb-chat-timeline-item-order">Q{item.order}</span>
                           <span className={`kb-chat-timeline-item-status ${item.hasAnswer ? 'is-ready' : 'is-pending'}`}>
-                            {item.hasAnswer ? '已回答' : '待回答'}
+                            {item.hasAnswer ? S.timeline_answered : S.timeline_pending_qa}
                           </span>
                         </div>
                         <div className="kb-chat-timeline-item-text">

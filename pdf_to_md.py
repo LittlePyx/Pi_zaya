@@ -6594,7 +6594,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> ConvertConfig:
     else:
         # DeepSeek's OpenAI-compatible endpoint uses the /v1 prefix.
         default_base_url = os.environ.get("DEEPSEEK_BASE_URL", os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com/v1"))
-        default_model = os.environ.get("DEEPSEEK_MODEL", os.environ.get("OPENAI_MODEL", "deepseek-chat"))
+        default_model = os.environ.get("DEEPSEEK_MODEL", os.environ.get("OPENAI_MODEL", "deepseek-v4-flash"))
         default_key_env = os.environ.get("DEEPSEEK_API_KEY_ENV", "DEEPSEEK_API_KEY")
 
     ap.add_argument("--base-url", default=default_base_url)

@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Collapse, Modal, Tabs, Typography, message } from 'antd'
 import { useNavigate } from 'react-router-dom'
-import { S } from '../../i18n/zh'
+import { useT } from '../../i18n'
 import { referencesApi } from '../../api/references'
 import { useChatStore } from '../../stores/chatStore'
 import type { ReaderOpenPayload } from '../chat/reader/readerTypes'
@@ -15,6 +15,12 @@ import {
 } from '../chat/citationState'
 
 const { Link, Text } = Typography
+const expandedRefsPanelKeys = new Set<string>()
+
+
+function refsPanelExpansionKey(msgId: number) {
+  return String(Number(msgId || 0) || 0)
+}
 
 interface RefUiMeta {
   display_name?: string
@@ -58,6 +64,7 @@ interface RefEntry {
   hits?: RefHit[]
   display_state?: string
   suppression_reason?: string
+  suggestion?: string
   guide_filter?: {
     active?: boolean
     hidden_self_source?: boolean
@@ -71,6 +78,7 @@ interface Props {
   msgId: number
   onOpenReader?: (payload: ReaderOpenPayload) => void
 }
+
 
 function hasResolvedCitationMeta(meta: Record<string, unknown> | null | undefined) {
   const rec = meta || {}
@@ -87,6 +95,34 @@ function hasResolvedCitationMeta(meta: Record<string, unknown> | null | undefine
 function positiveNumber(input: unknown): number {
   const value = Number(input)
   return Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function normalizeUiText(input: string) {
+  return String(input || '').replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+
+
+function shouldShowSemanticBadge(text: string) {
+  const low = normalizeUiText(text)
+  if (!low) return false
+  const blocked = [
+    '语义直连',
+    '文档语义',
+    'semantic',
+    'vector',
+    'embedding',
+    'dense',
+    'sparse',
+    'bm25',
+    'keyword',
+    '关键词',
+    'lexical',
+    'rerank',
+    'cross encoder',
+    'cross-encoder',
+  ]
+  return !blocked.some((token) => low.includes(token))
 }
 
 function normalizeRefFocusText(input: unknown) {
@@ -229,14 +265,24 @@ function shouldSuppressRefHitCard(prompt: string, hit: RefHit) {
   return false
 }
 
+
+
+
+
 export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
+  const S = useT()
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const nav = useNavigate()
+  const expansionKey = refsPanelExpansionKey(msgId)
+  const [activeKeys, setActiveKeys] = useState<string[]>(() => (
+    expandedRefsPanelKeys.has(expansionKey) ? ['refs'] : []
+  ))
   const entry = refs[String(msgId)] as RefEntry | undefined
   const prompt = String(entry?.prompt || '').trim()
   const displayState = String(entry?.display_state || '').trim().toLowerCase()
   const suppressionReason = String(entry?.suppression_reason || '').trim().toLowerCase()
   const hasBackendDisplayState = Boolean(displayState)
+  const suggestionText = String(entry?.suggestion || '').trim()
   const rawHits = entry?.hits
   const hits = useMemo(() => (Array.isArray(rawHits) ? rawHits : []), [rawHits])
   const visibleHits = useMemo(
@@ -256,33 +302,69 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
     displayState === 'suppressed'
     || ((!hasBackendDisplayState) && visibleHits.length === 0 && suppressedHitCount > 0)
   )
+  const shouldShowEmptyNote = !hasPending && displayState === 'empty'
   const suppressionNoteText = suppressionReason === 'focus_filter_removed_all'
-    ? '后端在焦点过滤后没有保留足够可靠的参考定位卡片。'
+    ? S.refs_suppressed_focus
     : suppressionReason === 'llm_filter_removed_all'
-      ? '后端在语义筛选后没有保留足够可靠的参考定位卡片。'
+      ? S.refs_suppressed_llm
       : suppressionReason === 'score_gate_removed_all'
-        ? '后端在相关性分数筛选后没有保留足够可靠的参考定位卡片。'
+        ? S.refs_suppressed_score
         : suppressionReason === 'render_failed'
-          ? '后端在生成参考定位卡片时失败，当前没有可安全展示的结果。'
-          : '当前没有足够可靠、能直接支撑这个问题的定位切口可供打开。'
+          ? S.refs_suppressed_render
+          : S.refs_suppressed_default
   const [citeIndex, setCiteIndex] = useState<number | null>(null)
   const [loadingIndex, setLoadingIndex] = useState<number | null>(null)
   const [guideLoadingIndex, setGuideLoadingIndex] = useState<number | null>(null)
   const [remoteMeta, setRemoteMeta] = useState<Record<number, Record<string, unknown>>>({})
+  const autoFetchedCitationMetaRef = useRef<Set<string>>(new Set())
 
-  const fetchCitationMeta = async (index: number, ui: RefUiMeta) => {
+  const handleCollapseChange = (keys: string | string[]) => {
+    const nextKeys = (Array.isArray(keys) ? keys : [keys])
+      .map((key) => String(key || '').trim())
+      .filter(Boolean)
+    setActiveKeys(nextKeys)
+    if (nextKeys.includes('refs')) {
+      expandedRefsPanelKeys.add(expansionKey)
+    } else {
+      expandedRefsPanelKeys.delete(expansionKey)
+    }
+  }
+
+  const fetchCitationMeta = async (index: number, ui: RefUiMeta, options?: { silent?: boolean }) => {
     const sourcePath = String(ui.source_path || '').trim()
     if (!sourcePath) return
-    setLoadingIndex(index)
+    const silent = Boolean(options?.silent)
+    if (!silent) {
+      setLoadingIndex(index)
+    }
     try {
       const meta = await referencesApi.citationMetaCached(sourcePath)
       setRemoteMeta((current) => ({ ...current, [index]: meta }))
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '拉取文献信息失败')
+      if (!silent) {
+        message.error(err instanceof Error ? err.message : S.refs_fetch_meta_failed)
+      }
     } finally {
-      setLoadingIndex((current) => (current === index ? null : current))
+      if (!silent) {
+        setLoadingIndex((current) => (current === index ? null : current))
+      }
     }
   }
+
+  useEffect(() => {
+    if (hasPending || visibleHits.length <= 0) return
+    for (const [index, hit] of visibleHits.entries()) {
+      const ui = hit.ui_meta || {}
+      const sourcePath = String(ui.source_path || '').trim()
+      if (!sourcePath) continue
+      const existingMeta = (remoteMeta[index] || ui.citation_meta || {}) as Record<string, unknown>
+      if (hasResolvedCitationMeta(existingMeta)) continue
+      const fetchKey = `${msgId}:${index}:${sourcePath}`
+      if (autoFetchedCitationMetaRef.current.has(fetchKey)) continue
+      autoFetchedCitationMetaRef.current.add(fetchKey)
+      void fetchCitationMeta(index, ui, { silent: true })
+    }
+  }, [hasPending, msgId, remoteMeta, visibleHits])
 
   const citeDetail = useMemo<CiteDetail | null>(() => {
     if (citeIndex === null || !visibleHits[citeIndex]) return null
@@ -299,10 +381,10 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
   const startPaperGuideFromHit = async (index: number, ui: RefUiMeta) => {
     const sourcePath = String(ui.source_path || '').trim()
     if (!sourcePath) {
-      message.info('当前引用缺少可绑定的文献路径')
+      message.info(S.refs_reader_missing)
       return
     }
-    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || '文献'
+    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'Paper'
     setGuideLoadingIndex(index)
     try {
       await createPaperGuideConversation({
@@ -311,9 +393,9 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
         title: `阅读指导 · ${sourceName}`,
       })
       nav('/')
-      message.success('已进入阅读指导会话')
+      message.success(S.refs_guide_started)
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '创建阅读指导会话失败')
+      message.error(err instanceof Error ? err.message : S.refs_guide_failed)
     } finally {
       setGuideLoadingIndex((current) => (current === index ? null : current))
     }
@@ -324,7 +406,7 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
     const readerOpen = (ui.reader_open && typeof ui.reader_open === 'object') ? ui.reader_open : {}
     const sourcePath = String(readerOpen.sourcePath || ui.source_path || '').trim()
     if (!sourcePath) {
-      message.info('当前引用缺少可绑定的文献路径')
+      message.info(S.refs_reader_missing)
       return
     }
     const payload = buildBasicReaderOpenPayload({
@@ -352,40 +434,68 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
     onOpenReader(payload)
   }
 
-  if (!entry || (!hasPending && visibleHits.length === 0 && !shouldShowGuideFilterNote && !shouldShowNegativeSuppressedNote)) return null
+  if (!entry || (!hasPending && visibleHits.length === 0 && !shouldShowGuideFilterNote && !shouldShowNegativeSuppressedNote && !shouldShowEmptyNote)) return null
 
   return (
     <>
       <Collapse
-        size="large"
-        className="kb-refs-panel overflow-hidden rounded-[24px] border border-[var(--border)] bg-[var(--panel)]"
+        size="middle"
+        activeKey={activeKeys}
+        onChange={handleCollapseChange}
+        className="kb-refs-panel overflow-hidden rounded-[14px] border border-[var(--border)] bg-[var(--panel)]"
         items={[
           {
             key: 'refs',
             label: <span className="kb-refs-panel-title">{S.refs}</span>,
-            children: hasPending ? (
-              <div className="rounded-[18px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-5 py-4 text-sm text-[var(--muted)]">
-                正在筛选高相关参考文献，并生成摘要与相关性说明...
+            children: hasPending && visibleHits.length === 0 ? (
+              <div className="rounded-[14px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-4 py-3 text-[13px] text-[var(--muted-text)]">
+                {S.refs_pending_filter}
               </div>
             ) : shouldShowGuideFilterNote ? (
               <div
-                className="rounded-[18px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-5 py-4 text-sm text-[var(--muted)]"
+                className="rounded-[14px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-4 py-3 text-[13px] text-[var(--muted-text)]"
                 data-testid="refs-panel-guide-filter-note"
               >
-                {`已过滤当前阅读指导文献${filteredSelfCount > 0 ? `（${filteredSelfCount} 条）` : ''}，但这次没有命中其它库内文章。`}
+                {S.refs_guide_filter_note.replace('{count}', filteredSelfCount > 0 ? `（${filteredSelfCount}）` : '')}
               </div>
             ) : shouldShowNegativeSuppressedNote ? (
               <div
-                className="rounded-[18px] border border-amber-200/80 bg-amber-50/80 px-5 py-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100"
+                className="rounded-[14px] border border-amber-200/80 bg-amber-50/80 px-4 py-3 text-[13px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100"
                 data-testid="refs-panel-negative-suppressed-note"
               >
-                <div className="font-medium">已隐藏可能误导的参考定位卡片。</div>
+                <div className="font-medium">{S.refs_suppressed_title}</div>
                 <div className="mt-1 text-[13px] opacity-80">
                   {suppressionNoteText}
                 </div>
+                {suggestionText && (
+                  <div className="mt-1.5 text-[12px] italic opacity-60">
+                    {suggestionText}
+                  </div>
+                )}
+              </div>
+            ) : shouldShowEmptyNote ? (
+              <div
+                className="rounded-[14px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-4 py-3 text-[13px] text-[var(--muted-text)]"
+                data-testid="refs-panel-empty-note"
+              >
+                {S.refs_empty_note}
+                {suggestionText && (
+                  <div className="mt-1.5 text-[12px] italic opacity-60">
+                    {suggestionText}
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="space-y-5">
+              <>
+                {hasPending ? (
+                  <div
+                    className="mb-3 rounded-[14px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-4 py-3 text-[13px] text-[var(--muted-text)]"
+                    data-testid="refs-panel-pending-note"
+                  >
+                    {S.refs_pending_note}
+                  </div>
+                ) : null}
+                <div className="kb-ref-list">
                 {visibleHits.map((hit, index) => {
                   const ui = hit.ui_meta || {}
                   const metaState = String(hit.meta?.ref_pack_state || '').trim().toLowerCase()
@@ -395,12 +505,16 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                   const scorePending = Boolean(ui.score_pending)
                   const score = typeof ui.score === 'number' ? ui.score.toFixed(2) : ''
                   const summary = String(ui.summary_line || '').trim()
-                  const summaryLabel = String(ui.summary_label || '').trim() || '摘要'
-                  const summaryTitle = String(ui.summary_title || '').trim() || '这篇文献讲什么 / 提供什么'
-                  const summaryBasis = String(ui.summary_basis || '').trim()
+                  const summaryLabel = String(ui.summary_label || '').trim() || S.refs_summary_label
+                  const summaryTitle = String(ui.summary_title || '').trim() || S.refs_summary_title
                   const why = String(ui.why_line || '').trim()
-                  const whyBasis = String(ui.why_basis || '').trim()
-                  const semanticBadges = Array.isArray(ui.semantic_badges) ? ui.semantic_badges : []
+                  const semanticBadges = (Array.isArray(ui.semantic_badges) ? ui.semantic_badges : [])
+                    .map((badge) => ({
+                      text: String(badge?.text || '').trim(),
+                      score: positiveNumber(badge?.score),
+                    }))
+                    .filter((badge) => shouldShowSemanticBadge(badge.text))
+                    .slice(0, 1)
                   const detail = buildCiteDetailFromMeta(
                     (remoteMeta[index] || ui.citation_meta || {}) as Record<string, unknown>,
                     {
@@ -419,38 +533,36 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                   const canFetchMeta = Boolean(String(ui.source_path || '').trim())
 
                   return (
-                    <div key={`${msgId}-${index}`} className="space-y-4 border-b border-[var(--border)]/60 pb-5 last:border-b-0 last:pb-0">
-                      <div className="flex items-start gap-4">
+                    <div key={`${msgId}-${index}`} className="kb-ref-item">
+                      <div className="kb-ref-header">
                         <div className="kb-ref-rank">#{index + 1}</div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start gap-4">
+                        <div className="kb-ref-main">
+                          <div className="kb-ref-title-row">
                             <div className="min-w-0 flex-1">
                               <div className="kb-ref-title">{title}</div>
-                              <div className="kb-ref-meta-row mt-1.5">
+                              <div className="kb-ref-meta-row mt-1">
                                 {heading ? <span>{heading}</span> : null}
-                                {scorePending ? <span className="kb-ref-score">相关分评估中</span> : null}
-                                {!scorePending && score ? <span className="kb-ref-score">相关分 {score}</span> : null}
+                                {scorePending ? <span className="kb-ref-score">{S.refs_score_pending}</span> : null}
+                                {!scorePending && score ? <span className="kb-ref-score">{S.refs_score_label.replace('{score}', score)}</span> : null}
                                 {semanticBadges.map((badge, badgeIndex) => {
-                                  const text = String(badge?.text || '').trim()
+                                  const text = String(badge.text || '').trim()
                                   if (!text) return null
-                                  const scoreText = positiveNumber(badge?.score)
                                   return (
                                     <span className="kb-ref-semantic" key={`semantic-${msgId}-${index}-${badgeIndex}`}>
                                       {text}
-                                      {scoreText > 0 ? ` (${scoreText.toFixed(1)})` : ''}
                                     </span>
                                   )
                                 })}
                                 {pageText ? <span>{pageText}</span> : null}
                               </div>
                             </div>
-                            <div className="flex shrink-0 gap-2">
+                            <div className="kb-ref-actions">
                               <Button
-                                className="kb-ref-action"
+                                className="kb-ref-action is-primary"
                                 disabled={!canFetchMeta || !onOpenReader}
                                 onClick={() => openReaderFromHit(ui)}
                               >
-                                定位
+                                {S.refs_locate_btn}
                               </Button>
                               <Button
                                 className="kb-ref-action"
@@ -458,11 +570,11 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                                 onClick={async () => {
                                   if (!ui.source_path) return
                                   await referencesApi.open(ui.source_path, ui.page_start ?? null)
-                                    .then(() => message.success('已打开 PDF'))
-                                    .catch((err: Error) => message.error(err.message || '打开失败'))
+                                    .then(() => message.success(S.refs_open_pdf_success))
+                                    .catch((err: Error) => message.error(err.message || S.refs_open_pdf_failed))
                                 }}
                               >
-                                PDF
+                                {S.refs_pdf_btn}
                               </Button>
                               <Button
                                 className="kb-ref-action"
@@ -476,7 +588,7 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                                   }
                                 }}
                               >
-                                Cite
+                                {S.refs_cite_btn}
                               </Button>
                               <Button
                                 className="kb-ref-action"
@@ -484,46 +596,36 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                                 disabled={!canFetchMeta}
                                 onClick={() => { void startPaperGuideFromHit(index, ui) }}
                               >
-                                阅读
+                                {S.refs_guide_btn}
                               </Button>
                             </div>
                           </div>
                         </div>
                       </div>
 
-                      <div className="grid gap-3 md:grid-cols-2">
+                      <div className="kb-ref-evidence-grid">
                         <div className="kb-ref-card">
-                          <div className="mb-2 flex items-center gap-2">
+                          <div className="kb-ref-card-head">
                             <span className="kb-ref-chip">{summaryLabel}</span>
                             <span className="kb-ref-card-title">{summaryTitle}</span>
                           </div>
-                          {summaryBasis ? (
-                            <div className="mb-2 text-[12px] text-[var(--muted)]" data-testid="refs-panel-summary-basis">
-                              {summaryBasis}
-                            </div>
-                          ) : null}
                           <Text className="kb-ref-card-text !block !whitespace-pre-wrap">
-                            {summary || (isFailed ? '暂未生成摘要定位' : '未提供摘要定位')}
+                            {summary || (isFailed ? S.refs_no_summary_failed : S.refs_no_summary)}
                           </Text>
                         </div>
                         <div className="kb-ref-card">
-                          <div className="mb-2 flex items-center gap-2">
-                            <span className="kb-ref-chip">相关</span>
-                            <span className="kb-ref-card-title">为什么与当前问题相关</span>
+                          <div className="kb-ref-card-head">
+                            <span className="kb-ref-chip">{S.refs_why_chip}</span>
+                            <span className="kb-ref-card-title">{S.refs_why_title}</span>
                           </div>
-                          {whyBasis ? (
-                            <div className="mb-2 text-[12px] text-[var(--muted)]" data-testid="refs-panel-why-basis">
-                              {whyBasis}
-                            </div>
-                          ) : null}
                           <Text className="kb-ref-card-text !block !whitespace-pre-wrap">
-                            {why || (isFailed ? '暂未生成相关性说明' : '未提供相关性说明')}
+                            {why || (isFailed ? S.refs_no_why_failed : S.refs_no_why)}
                           </Text>
                         </div>
                       </div>
 
                       {metrics.length > 0 || doiUrl ? (
-                        <div className="kb-ref-metrics">
+                        <div className="kb-ref-metrics" data-testid={`refs-panel-metrics-${index}`}>
                           {metrics.map((item, idx) => (
                             <span key={item}>
                               {idx > 0 ? ' | ' : ''}
@@ -544,7 +646,8 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                     </div>
                   )
                 })}
-              </div>
+                </div>
+              </>
             ),
           },
         ]}
@@ -559,11 +662,11 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
         className="kb-ref-cite-modal"
       >
         {loadingIndex === citeIndex ? (
-          <div className="py-8 text-center text-sm text-neutral-500">正在拉取文献信息...</div>
+          <div className="py-8 text-center text-sm text-neutral-500">{S.refs_cite_loading}</div>
         ) : citeDetail ? (
           <>
             <div className="kb-ref-cite-head">
-              <div className="kb-ref-cite-label">来源引用</div>
+              <div className="kb-ref-cite-label">{S.refs_cite_label}</div>
               <div className="kb-ref-cite-main">{citationDisplay(citeDetail).main}</div>
               {citationDisplay(citeDetail).authors ? (
                 <div className="kb-ref-cite-sub">{citationDisplay(citeDetail).authors}</div>
@@ -596,19 +699,19 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
               items={[
                 {
                   key: 'gbt',
-                  label: 'GB/T 7714',
-                  children: <pre className="kb-ref-cite-pre">{citationFormats(citeDetail).gbt || '暂无可用引用'}</pre>,
+                  label: S.refs_cite_gbt,
+                  children: <pre className="kb-ref-cite-pre">{citationFormats(citeDetail).gbt || S.refs_cite_none_gbt}</pre>,
                 },
                 {
                   key: 'bib',
-                  label: 'BibTeX',
-                  children: <pre className="kb-ref-cite-pre">{citationFormats(citeDetail).bibtex || '暂无可用引用'}</pre>,
+                  label: S.refs_cite_bib,
+                  children: <pre className="kb-ref-cite-pre">{citationFormats(citeDetail).bibtex || S.refs_cite_none_bib}</pre>,
                 },
               ]}
             />
           </>
         ) : (
-          <div className="py-8 text-center text-sm text-neutral-500">暂无可用引用</div>
+          <div className="py-8 text-center text-sm text-neutral-500">{S.refs_cite_none}</div>
         )}
       </Modal>
     </>

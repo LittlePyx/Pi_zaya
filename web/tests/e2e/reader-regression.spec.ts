@@ -97,6 +97,8 @@ async function selectText(page: Page, startText: string, endText?: string) {
 
 test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await openHarness(page, 'strict-quote')
+  await expect(page.getByTestId('reader-locate-mode')).toHaveText('Strict locate')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Exact target')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
 })
@@ -111,6 +113,8 @@ test('multi-panel caption locate highlights the combined target snippet', async 
 test('discussion-only locate can open the reader at section level without an exact block id', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 })
   await openHarness(page, 'discussion-only')
+  await expect(page.getByTestId('reader-locate-mode')).toHaveText('Strict locate')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Section only')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
   await expect(page.locator('.kb-reader-focus')).toContainText('4. Discussion')
   await expect(page.getByRole('heading', { name: '4. Discussion' })).toBeInViewport()
@@ -169,14 +173,19 @@ test('outline active section follows reader scroll position', async ({ page }) =
 
 test('structured fallback switches to the resolved alternative instead of re-ranking blindly', async ({ page }) => {
   await openHarness(page, 'candidate-fallback')
+  await expect(page.getByTestId('reader-locate-switch')).toHaveText('Auto-switched')
+  await expect(page.getByTestId('reader-locate-decision')).toContainText('best backup evidence')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
+  await expect(page.getByTestId('reader-candidate-chip-0')).toContainText('Requested')
   await expect(page.getByTestId('reader-candidate-chip-1')).toHaveClass(/is-active/)
+  await expect(page.getByTestId('reader-candidate-chip-1')).toContainText('Resolved')
   await expect(page.getByTestId('reader-candidate-chip-2')).toBeVisible()
   await expect(page.getByTestId('reader-evidence-nav')).toHaveCount(0)
 })
 
 test('strict exact locate does not degrade to heading fallback when direct identity is missing', async ({ page }) => {
   await openHarness(page, 'strict-missing-exact')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Unresolved')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Strict stopped')
   await expect(page.locator('.kb-reader-focus')).toHaveCount(0)
 })

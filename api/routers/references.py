@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 from urllib.parse import quote
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -19,6 +19,7 @@ from api.reference_ui import (
     _attach_pack_display_contract,
     _compact_reader_open_text,
     _filter_pending_refs_hits_by_prompt_focus,
+    _refs_card_polish_llm_enabled,
     _refs_prompt_focus_terms,
     build_doc_list_refs_payload,
     enrich_citation_detail_meta,
@@ -48,7 +49,7 @@ router = APIRouter(prefix="/api/references", tags=["references"])
 _REFS_CONVERSATION_CACHE: dict[str, dict] = {}
 _REFS_CONVERSATION_WARMING: set[str] = set()
 _REFS_CONVERSATION_WARMING_LOCK = threading.Lock()
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 3
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 8
 
 
 def _md_dir() -> Path:
@@ -173,6 +174,7 @@ def _refs_conversation_cache_signature(
         "guide_mode": bool(guide_mode),
         "guide_source_path": str(guide_source_path or "").strip(),
         "guide_source_name": str(guide_source_name or "").strip(),
+        "refs_background_llm_polish": bool(_refs_background_llm_polish_enabled()),
         "refs_card_locale": str((prefs or {}).get("refs_card_locale") or "").strip().lower(),
         "ui_locale": str((prefs or {}).get("ui_locale") or "").strip().lower(),
         "refs_digest": refs_digest,
@@ -199,6 +201,7 @@ def _refs_pack_render_signature(
         "guide_mode": bool(guide_mode),
         "guide_source_path": str(guide_source_path or "").strip(),
         "guide_source_name": str(guide_source_name or "").strip(),
+        "refs_background_llm_polish": bool(_refs_background_llm_polish_enabled()),
         "refs_card_locale": str((prefs or {}).get("refs_card_locale") or "").strip().lower(),
         "ui_locale": str((prefs or {}).get("ui_locale") or "").strip().lower(),
         "prompt": str((pack or {}).get("prompt") or "").strip(),
@@ -258,6 +261,60 @@ def _get_any_cached_conversation_refs_payload(*, conv_id: str) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _refs_perf_ms(started_at: float) -> float:
+    return max(0.0, (time.perf_counter() - float(started_at or time.perf_counter())) * 1000.0)
+
+
+def _refs_payload_counts_for_header(payload: dict | None) -> str:
+    packs = 0
+    hits = 0
+    pending = 0
+    fast = 0
+    ready = 0
+    for pack in list((payload or {}).values()):
+        if not isinstance(pack, dict):
+            continue
+        packs += 1
+        pack_hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
+        hits += len(pack_hits)
+        mode = str(pack.get("payload_mode") or "").strip().lower()
+        if mode == "pending" or bool(pack.get("enrichment_pending")):
+            pending += 1
+        elif mode == "fast":
+            fast += 1
+        elif pack_hits:
+            ready += 1
+    return f"packs={packs};hits={hits};pending={pending};fast={fast};ready={ready}"
+
+
+def _set_refs_timing_headers(
+    response: Response | None,
+    *,
+    timings: list[tuple[str, float]],
+    total_ms: float,
+    mode: str,
+    payload: dict | None,
+) -> None:
+    if response is None:
+        return
+    seen: dict[str, int] = {}
+    parts: list[str] = []
+    for raw_name, raw_duration in list(timings or []):
+        name = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw_name or "").strip())[:36] or "phase"
+        seen[name] = seen.get(name, 0) + 1
+        if seen[name] > 1:
+            name = f"{name}_{seen[name]}"
+        try:
+            duration = float(raw_duration)
+        except Exception:
+            duration = 0.0
+        parts.append(f"{name};dur={max(0.0, duration):.1f}")
+    parts.append(f"total;dur={max(0.0, float(total_ms or 0.0)):.1f}")
+    response.headers["Server-Timing"] = ", ".join(parts)
+    response.headers["X-KB-Refs-Mode"] = str(mode or "").strip().lower() or "unknown"
+    response.headers["X-KB-Refs-Counts"] = _refs_payload_counts_for_header(payload)
+
+
 def _refs_conversation_read_timeout_s() -> float:
     try:
         raw = float(str(os.environ.get("KB_REFS_CONVERSATION_READ_TIMEOUT_S", "0.35") or "0.35"))
@@ -266,25 +323,110 @@ def _refs_conversation_read_timeout_s() -> float:
     return max(0.05, min(2.0, raw))
 
 
-def _refs_payload_has_pending(refs: dict) -> bool:
-    for pack in list((refs or {}).values()):
-        if not isinstance(pack, dict):
-            continue
-        if _refs_pack_has_pending(pack):
-            return True
-    return False
+def _refs_ready_budget_s() -> float:
+    try:
+        raw = float(str(os.environ.get("KB_REFS_READY_BUDGET_S", "1.8") or "1.8"))
+    except Exception:
+        raw = 1.8
+    return max(0.25, min(8.0, raw))
 
 
-def _refs_pack_has_pending(pack: dict) -> bool:
+def _refs_pending_stale_after_s() -> float:
+    try:
+        raw = float(str(os.environ.get("KB_REFS_PENDING_STALE_AFTER_S", "20") or "20"))
+    except Exception:
+        raw = 20.0
+    return max(5.0, min(120.0, raw))
+
+
+def _refs_pack_is_stale_pending(pack: dict) -> bool:
     if not isinstance(pack, dict):
         return False
+    has_pending = False
     for hit in list(pack.get("hits") or []):
         if not isinstance(hit, dict):
             continue
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         if str((meta or {}).get("ref_pack_state") or "").strip().lower() == "pending":
+            has_pending = True
+            break
+    if not has_pending:
+        return False
+    try:
+        updated_at = float(pack.get("updated_at") or 0.0)
+    except Exception:
+        updated_at = 0.0
+    if updated_at <= 0:
+        return False
+    return (time.time() - updated_at) >= _refs_pending_stale_after_s()
+
+
+def _refs_payload_has_pending(refs: dict, *, include_stale: bool = True) -> bool:
+    for pack in list((refs or {}).values()):
+        if not isinstance(pack, dict):
+            continue
+        if _refs_pack_has_pending(pack, include_stale=include_stale):
             return True
     return False
+
+
+def _refs_pack_has_pending(pack: dict, *, include_stale: bool = True) -> bool:
+    if not isinstance(pack, dict):
+        return False
+    has_pending = False
+    for hit in list(pack.get("hits") or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        if str((meta or {}).get("ref_pack_state") or "").strip().lower() == "pending":
+            has_pending = True
+            break
+    if (not has_pending) or include_stale:
+        return has_pending
+    return not _refs_pack_is_stale_pending(pack)
+
+
+def _stored_rendered_pack_payload_lost_current_hits(*, payload: dict, pack: dict) -> bool:
+    if not isinstance(payload, dict) or not isinstance(pack, dict):
+        return False
+    raw_hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
+    if not raw_hits:
+        return False
+    payload_hits = [hit for hit in list(payload.get("hits") or []) if isinstance(hit, dict)]
+    if payload_hits:
+        raw_sources: list[str] = []
+        for hit in raw_hits[:4]:
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            source_path = str((meta or {}).get("source_path") or "").strip()
+            if source_path:
+                raw_sources.append(source_path)
+        payload_sources: list[str] = []
+        for hit in payload_hits[:4]:
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            source_path = str((ui_meta or {}).get("source_path") or (meta or {}).get("source_path") or "").strip()
+            if source_path:
+                payload_sources.append(source_path)
+        # A persisted rendered payload is stale if it no longer contains the
+        # answer-leading source stored in message_refs.  This can happen when
+        # the fast reference route was cached before final answer provenance
+        # rewrote the refs pack.
+        if raw_sources and payload_sources and raw_sources[0] not in payload_sources:
+            return True
+        return False
+    display_state = str(payload.get("display_state") or "").strip().lower()
+    suppression_reason = str(payload.get("suppression_reason") or "").strip().lower()
+    if display_state == "hidden_by_guide" or suppression_reason == "guide_self_source_only":
+        return False
+    pipeline_debug = payload.get("pipeline_debug") if isinstance(payload.get("pipeline_debug"), dict) else {}
+    try:
+        debug_raw_hit_count = int((pipeline_debug or {}).get("raw_hit_count") or 0)
+    except Exception:
+        debug_raw_hit_count = 0
+    doc_list_authoritative = bool((pipeline_debug or {}).get("doc_list_authoritative"))
+    if doc_list_authoritative and debug_raw_hit_count <= 0:
+        return True
+    return bool(display_state == "empty" and suppression_reason == "no_candidate_hits" and debug_raw_hit_count <= 0)
 
 
 def _get_stored_rendered_pack_payload(
@@ -309,6 +451,14 @@ def _get_stored_rendered_pack_payload(
         guide_source_name=guide_source_name,
     )
     if (not stored_sig) or (stored_sig != expected_sig):
+        return None
+    if _stored_rendered_pack_payload_lost_current_hits(payload=payload, pack=pack):
+        return None
+    if (
+        _refs_background_llm_polish_enabled()
+        and (not prompt_explicitly_requests_multi_paper_list(str((pack or {}).get("prompt") or "").strip()))
+        and (not _payload_refs_card_copy_has_llm_result(payload))
+    ):
         return None
     return dict(payload)
 
@@ -438,17 +588,96 @@ def _payload_source_paths(payload_pack: dict | None) -> list[str]:
     return out
 
 
+def _payload_refs_card_copy_has_llm_result(payload_pack: dict | None) -> bool:
+    if not isinstance(payload_pack, dict):
+        return False
+    hits = [hit for hit in list(payload_pack.get("hits") or []) if isinstance(hit, dict)]
+    if not hits:
+        return True
+    summary_llm = {"llm_grounded", "llm_pack", "llm_abstract"}
+    why_llm = {"llm_grounded", "llm_pack"}
+    for hit in hits:
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        summary_kind = str((ui_meta or {}).get("summary_kind") or "").strip().lower()
+        if summary_kind and summary_kind != "guide":
+            continue
+        if str((ui_meta or {}).get("summary_generation") or "").strip().lower() not in summary_llm:
+            return False
+        if str((ui_meta or {}).get("why_generation") or "").strip().lower() not in why_llm:
+            return False
+    return True
+
+
 def _payload_is_authoritative_doc_list_pack(payload_pack: dict | None, authoritative_doc_list: list[dict] | None) -> bool:
     if not isinstance(payload_pack, dict):
         return False
     pipeline_debug = payload_pack.get("pipeline_debug") if isinstance(payload_pack.get("pipeline_debug"), dict) else {}
     if not bool((pipeline_debug or {}).get("doc_list_authoritative")):
         return False
+    if not _payload_refs_card_copy_has_llm_result(payload_pack):
+        return False
     expected_paths = _doc_list_source_paths(authoritative_doc_list)
     actual_paths = _payload_source_paths(payload_pack)
     if not expected_paths:
         return True
     return bool(actual_paths) and actual_paths == expected_paths
+
+
+def _rebuild_authoritative_doc_list_from_pack(*, prompt: str, pack: dict, guide_mode: bool) -> list[dict]:
+    prompt_text = str(prompt or "").strip()
+    if guide_mode or (not prompt_explicitly_requests_multi_paper_list(prompt_text)):
+        return []
+    rows = [dict(hit) for hit in list((pack or {}).get("hits") or []) if isinstance(hit, dict)]
+    if not rows:
+        return []
+    try:
+        rebuilt = _references_build_multi_paper_doc_list_contract(
+            prompt=prompt_text,
+            seed_docs=list(rows),
+            answer_hits=list(rows),
+            evidence_cards=[],
+        )
+    except Exception:
+        rebuilt = []
+    return [dict(item) for item in list(rebuilt or []) if isinstance(item, dict)]
+
+
+def _normalize_authoritative_doc_list_contracts_for_refs(
+    *,
+    refs: dict,
+    doc_lists: dict[int, list[dict]],
+    guide_mode: bool,
+) -> dict[int, list[dict]]:
+    out: dict[int, list[dict]] = {}
+    for raw_user_msg_id, raw_rows in dict(doc_lists or {}).items():
+        try:
+            user_msg_id = int(raw_user_msg_id)
+        except Exception:
+            continue
+        rows = [dict(item) for item in list(raw_rows or []) if isinstance(item, dict)]
+        if rows:
+            out[user_msg_id] = rows
+            continue
+        if guide_mode:
+            # In guide mode an empty cross-paper contract is meaningful: it hides self-only refs.
+            out[user_msg_id] = []
+            continue
+        pack = None
+        for key in (user_msg_id, str(user_msg_id)):
+            candidate = (refs or {}).get(key)
+            if isinstance(candidate, dict):
+                pack = candidate
+                break
+        if not isinstance(pack, dict):
+            continue
+        rebuilt = _rebuild_authoritative_doc_list_from_pack(
+            prompt=str(pack.get("prompt") or "").strip(),
+            pack=pack,
+            guide_mode=False,
+        )
+        if rebuilt:
+            out[user_msg_id] = rebuilt
+    return out
 
 
 def _filter_pending_multi_paper_hits_for_display(prompt: str, hits: list[dict] | None) -> list[dict]:
@@ -510,7 +739,7 @@ def _render_authoritative_doc_list_pack(
         user_msg_id=int(user_msg_id),
         pack=pack,
         doc_list=doc_list,
-        allow_expensive_llm=False,
+        allow_expensive_llm=not pending,
         allow_exact_locate=not pending,
         apply_copy_polish=True,
         guide_mode=bool(guide_mode),
@@ -703,6 +932,7 @@ def _build_fast_ready_conversation_refs_payload(
     guide_mode: bool,
     guide_source_path: str,
     guide_source_name: str,
+    deadline_at: float | None = None,
 ) -> dict[int, dict]:
     return _annotate_refs_payload_refresh_state(
         enrich_refs_payload(
@@ -716,6 +946,7 @@ def _build_fast_ready_conversation_refs_payload(
             render_variant="fast",
             allow_expensive_llm_for_ready=False,
             allow_exact_locate=False,
+            deadline_at=deadline_at,
         ),
         mode="fast",
     )
@@ -765,6 +996,13 @@ def _persist_rendered_refs_payloads(
             continue
 
 
+def _refs_background_llm_polish_enabled() -> bool:
+    raw = str(os.environ.get("KB_REFS_BACKGROUND_LLM_POLISH", "") or "").strip().lower()
+    if raw:
+        return raw in {"1", "true", "on", "yes"}
+    return bool(_refs_card_polish_llm_enabled())
+
+
 def _warm_conversation_refs_payload_async(
     *,
     conv_id: str,
@@ -795,7 +1033,7 @@ def _warm_conversation_refs_payload_async(
                 guide_source_path=guide_source_path,
                 guide_source_name=guide_source_name,
                 render_variant="bounded_full",
-                allow_expensive_llm_for_ready=False,
+                allow_expensive_llm_for_ready=_refs_background_llm_polish_enabled(),
                 allow_exact_locate=True,
             )
             if not isinstance(payload, dict):
@@ -888,27 +1126,172 @@ async def sync_status():
     return sse_response(sse_generator(poll, interval=0.5))
 
 
-@router.get("/conversation/{conv_id}")
-def get_conversation_refs(conv_id: str):
+def _compute_diagnose_suggestion(suppression_reason: str) -> str:
+    suggestions = {
+        "no_candidate_hits": (
+            "No documents matched the query. Try rephrasing with different keywords, "
+            "or check that relevant documents are ingested in the knowledge base."
+        ),
+        "score_gate_removed_all": (
+            "All BM25 scores were below the relevance threshold. "
+            "Try a more specific query."
+        ),
+        "focus_filter_removed_all": (
+            "All hits were filtered out because they did not match the prompt's "
+            "focus terms. Try broadening the question or removing specific constraints."
+        ),
+        "llm_filter_removed_all": (
+            "The LLM relevance filter judged all hits as irrelevant. "
+            "This may indicate a vocabulary mismatch between the query and documents."
+        ),
+        "guide_self_source_only": (
+            "Guide mode hides the bound source paper. "
+            "Disable guide mode or ask about other papers."
+        ),
+        "render_failed": (
+            "The reference card rendering pipeline failed unexpectedly. "
+            "Check server logs for error details."
+        ),
+        "pending_enrichment": (
+            "Results are still being computed. "
+            "Try again in a few seconds."
+        ),
+        "no_renderable_hits": (
+            "Hits entered the pipeline but none could be rendered as reference cards. "
+            "Check the pipeline stage counts for details."
+        ),
+    }
+    return suggestions.get(suppression_reason, "No specific suggestion available for this state.")
+
+
+def _build_diagnostic_report(*, store, conv_id: str, refs: dict) -> dict:
+    """Build a diagnostic report for all refs packs in a conversation."""
+    packs: dict[int, dict] = {}
+    total_packs = 0
+    empty_packs = 0
+    suppressed_packs = 0
+
+    for key, pack in (refs or {}).items():
+        try:
+            user_msg_id = int(key)
+        except (ValueError, TypeError):
+            continue
+        total_packs += 1
+        if not isinstance(pack, dict):
+            packs[user_msg_id] = {"parse_error": "pack is not a dict"}
+            continue
+
+        try:
+            contract = _attach_pack_display_contract(pack)
+        except Exception as exc:
+            packs[user_msg_id] = {"parse_error": str(exc)[:200]}
+            continue
+
+        display_state = str(contract.get("display_state") or "unknown")
+        suppression_reason = str(contract.get("suppression_reason") or "").strip()
+        pipeline_debug = contract.get("pipeline_debug") if isinstance(contract.get("pipeline_debug"), dict) else {}
+        retrieval_diag = pipeline_debug.get("retrieval_diag") if isinstance(pipeline_debug.get("retrieval_diag"), dict) else {}
+        prompt_raw = str(pack.get("prompt") or pack.get("question") or "").strip()
+        used_query = str(pack.get("used_query") or pipeline_debug.get("used_query") or retrieval_diag.get("used_query") or "").strip()
+        used_translation = bool(pack.get("used_translation") or retrieval_diag.get("query_translated") or False)
+
+        # Compute top BM25 scores from hits.
+        top_scores: list[dict] = []
+        hits = [h for h in list(contract.get("hits") or []) if isinstance(h, dict)]
+        scored = []
+        for h in hits:
+            try:
+                bm25_score = float(h.get("score") or 0.0)
+            except (ValueError, TypeError):
+                bm25_score = 0.0
+            meta = h.get("meta") if isinstance(h.get("meta"), dict) else {}
+            source_path = str(meta.get("source_path") or "").strip()
+            source_name = str(meta.get("source_name") or "").strip()
+            if not source_name:
+                source_name = str(Path(source_path).stem if source_path else "unknown")
+            heading = str(meta.get("heading_path") or "").strip()[:120]
+            scored.append({
+                "score": round(bm25_score, 2),
+                "doc_name": source_name[:80],
+                "source_path": source_path,
+                "heading_path": heading,
+            })
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        top_scores = scored[:5]
+
+        if display_state == "empty":
+            empty_packs += 1
+        elif display_state in ("suppressed", "hidden_by_guide"):
+            suppressed_packs += 1
+
+        suggestion = _compute_diagnose_suggestion(suppression_reason) if suppression_reason else ""
+
+        packs[user_msg_id] = {
+            "prompt": prompt_raw[:500],
+            "display_state": display_state,
+            "suppression_reason": suppression_reason,
+            "pipeline_debug": pipeline_debug,
+            "retrieval_diag": retrieval_diag,
+            "used_query": used_query,
+            "used_translation": used_translation,
+            "top_scores": top_scores,
+            "has_pending": bool(contract.get("pending")),
+            "suggestion": suggestion,
+        }
+
+    return {
+        "conv_id": conv_id,
+        "total_packs": total_packs,
+        "empty_packs": empty_packs,
+        "suppressed_packs": suppressed_packs,
+        "packs": packs,
+    }
+
+
+def get_conversation_refs(conv_id: str, response: Response | None = None):
+    route_started_at = time.perf_counter()
+    route_deadline_at = route_started_at + _refs_ready_budget_s()
+    timings: list[tuple[str, float]] = []
+
+    def _record(name: str, started_at: float) -> None:
+        timings.append((name, _refs_perf_ms(started_at)))
+
+    def _finish(payload: dict | None, mode: str) -> dict:
+        payload_out = payload if isinstance(payload, dict) else {}
+        _set_refs_timing_headers(
+            response,
+            timings=timings,
+            total_ms=_refs_perf_ms(route_started_at),
+            mode=mode,
+            payload=payload_out,
+        )
+        return payload_out
+
     store = get_chat_store()
     read_timeout_s = _refs_conversation_read_timeout_s()
+    phase_started_at = time.perf_counter()
     try:
         conversation = store.get_conversation(conv_id, timeout_s=read_timeout_s) or {}
     except TypeError:
         conversation = store.get_conversation(conv_id) or {}
     except sqlite3.OperationalError:
+        _record("conversation", phase_started_at)
         cached_any = _get_any_cached_conversation_refs_payload(conv_id=conv_id)
-        return cached_any if isinstance(cached_any, dict) else {}
+        return _finish(cached_any if isinstance(cached_any, dict) else {}, "cache_fallback")
+    _record("conversation", phase_started_at)
     guide_mode = str(conversation.get("mode") or "").strip().lower() == "paper_guide"
     guide_source_path = str(conversation.get("bound_source_path") or "").strip()
     guide_source_name = str(conversation.get("bound_source_name") or "").strip()
+    phase_started_at = time.perf_counter()
     try:
         refs = store.list_message_refs(conv_id, timeout_s=read_timeout_s)
     except TypeError:
         refs = store.list_message_refs(conv_id)
     except sqlite3.OperationalError:
+        _record("list_refs", phase_started_at)
         cached_any = _get_any_cached_conversation_refs_payload(conv_id=conv_id)
-        return cached_any if isinstance(cached_any, dict) else {}
+        return _finish(cached_any if isinstance(cached_any, dict) else {}, "cache_fallback")
+    _record("list_refs", phase_started_at)
     refs_norm = refs if isinstance(refs, dict) else {}
     all_user_msg_ids: set[int] = set()
     for key in refs_norm.keys():
@@ -916,11 +1299,19 @@ def get_conversation_refs(conv_id: str):
             all_user_msg_ids.add(int(key))
         except Exception:
             continue
+    phase_started_at = time.perf_counter()
     authoritative_doc_lists = _load_authoritative_doc_list_contracts(
         store=store,
         conv_id=conv_id,
         user_msg_ids=all_user_msg_ids,
     )
+    authoritative_doc_lists = _normalize_authoritative_doc_list_contracts_for_refs(
+        refs=refs_norm,
+        doc_lists=authoritative_doc_lists,
+        guide_mode=bool(guide_mode),
+    )
+    _record("doc_list_contracts", phase_started_at)
+    phase_started_at = time.perf_counter()
     signature = _refs_conversation_cache_signature(
         refs=refs_norm,
         guide_mode=guide_mode,
@@ -928,13 +1319,16 @@ def get_conversation_refs(conv_id: str):
         guide_source_name=guide_source_name,
         authoritative_doc_list_by_user=authoritative_doc_lists,
     )
-    has_pending = _refs_payload_has_pending(refs_norm)
+    _record("signature", phase_started_at)
+    has_pending = _refs_payload_has_pending(refs_norm, include_stale=False)
     has_authoritative_doc_list = bool(authoritative_doc_lists)
+    phase_started_at = time.perf_counter()
     cached_rec = _get_cached_conversation_refs_record(conv_id=conv_id, signature=signature)
+    _record("cache_lookup", phase_started_at)
     cached_payload = cached_rec.get("payload") if isinstance(cached_rec, dict) else None
     cached_mode = str(cached_rec.get("mode") or "").strip().lower() if isinstance(cached_rec, dict) else ""
     if isinstance(cached_payload, dict) and cached_mode == "full" and (not has_authoritative_doc_list):
-        return cached_payload
+        return _finish(cached_payload, "cache_full")
 
     stored_full_payload: dict[int, dict] = {}
     pending_refs: dict[int, dict] = {}
@@ -942,15 +1336,25 @@ def get_conversation_refs(conv_id: str):
     ready_missing_refs: dict[int, dict] = {}
     authoritative_full_payloads: dict[int, dict] = {}
     authoritative_full_refs: dict[int, dict] = {}
+    phase_started_at = time.perf_counter()
     for user_msg_id, pack in refs_norm.items():
         if not isinstance(pack, dict):
             continue
+        prompt_text = str(pack.get("prompt") or "").strip()
         authoritative_doc_list_present = int(user_msg_id) in authoritative_doc_lists
         authoritative_doc_list = [
             dict(item)
             for item in list(authoritative_doc_lists.get(int(user_msg_id), []) or [])
             if isinstance(item, dict)
         ]
+        if authoritative_doc_list_present and (not authoritative_doc_list):
+            rebuilt_doc_list = _rebuild_authoritative_doc_list_from_pack(
+                prompt=prompt_text,
+                pack=pack,
+                guide_mode=bool(guide_mode),
+            )
+            if rebuilt_doc_list:
+                authoritative_doc_list = rebuilt_doc_list
         pack_full = _get_stored_rendered_pack_payload(
             user_msg_id=user_msg_id,
             pack=pack,
@@ -958,7 +1362,7 @@ def get_conversation_refs(conv_id: str):
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
         )
-        if authoritative_doc_list_present and _refs_pack_has_pending(pack):
+        if authoritative_doc_list_present and _refs_pack_has_pending(pack, include_stale=False):
             pending_refs[int(user_msg_id)] = pack
             continue
         if authoritative_doc_list_present:
@@ -994,14 +1398,16 @@ def get_conversation_refs(conv_id: str):
                 default_status="full",
             )
             continue
-        if _refs_pack_has_pending(pack):
+        if _refs_pack_has_pending(pack, include_stale=False):
             pending_refs[int(user_msg_id)] = pack
         elif str((pack or {}).get("render_status") or "").strip().lower() == "failed":
             failed_ready_refs[int(user_msg_id)] = pack
         else:
             ready_missing_refs[int(user_msg_id)] = pack
+    _record("render_state_scan", phase_started_at)
 
     if authoritative_full_payloads:
+        phase_started_at = time.perf_counter()
         _persist_rendered_refs_payloads(
             refs=authoritative_full_refs,
             payload=authoritative_full_payloads,
@@ -1009,6 +1415,7 @@ def get_conversation_refs(conv_id: str):
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
         )
+        _record("persist_authoritative", phase_started_at)
 
     if refs_norm and (not pending_refs) and (not failed_ready_refs) and (not ready_missing_refs) and stored_full_payload:
         _store_cached_conversation_refs_payload(
@@ -1017,7 +1424,7 @@ def get_conversation_refs(conv_id: str):
             payload=stored_full_payload,
             mode="full",
         )
-        return stored_full_payload
+        return _finish(stored_full_payload, "stored_full")
 
     if isinstance(cached_payload, dict) and (not stored_full_payload) and (not has_authoritative_doc_list):
         if (not has_pending) and (not failed_ready_refs) and cached_mode != "full":
@@ -1029,13 +1436,15 @@ def get_conversation_refs(conv_id: str):
                 guide_source_path=guide_source_path,
                 guide_source_name=guide_source_name,
             )
-        return _annotate_refs_payload_refresh_state(
+        annotated_cached = _annotate_refs_payload_refresh_state(
             cached_payload,
             mode=cached_mode or ("pending" if has_pending else "fast"),
         )
+        return _finish(annotated_cached, f"cache_{cached_mode or ('pending' if has_pending else 'fast')}")
 
     payload: dict[int, dict] = dict(stored_full_payload)
     if pending_refs:
+        phase_started_at = time.perf_counter()
         pending_payload = _build_pending_conversation_refs_payload(
             pending_refs,
             doc_list_by_user=authoritative_doc_lists,
@@ -1051,12 +1460,15 @@ def get_conversation_refs(conv_id: str):
                     source_pack=pack,
                     default_status="pending",
                 )
+        _record("pending_render", phase_started_at)
     if failed_ready_refs:
+        phase_started_at = time.perf_counter()
         failed_payload = _build_fast_ready_conversation_refs_payload(
             refs=failed_ready_refs,
             guide_mode=guide_mode,
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
+            deadline_at=route_deadline_at,
         )
         for user_msg_id, pack in failed_ready_refs.items():
             payload_pack = failed_payload.get(int(user_msg_id))
@@ -1066,12 +1478,15 @@ def get_conversation_refs(conv_id: str):
                     source_pack=pack,
                     default_status="failed",
                 )
+        _record("failed_fast_render", phase_started_at)
     if ready_missing_refs:
+        phase_started_at = time.perf_counter()
         fast_payload = _build_fast_ready_conversation_refs_payload(
             refs=ready_missing_refs,
             guide_mode=guide_mode,
             guide_source_path=guide_source_path,
             guide_source_name=guide_source_name,
+            deadline_at=route_deadline_at,
         )
         for user_msg_id, pack in ready_missing_refs.items():
             payload_pack = fast_payload.get(int(user_msg_id))
@@ -1081,6 +1496,7 @@ def get_conversation_refs(conv_id: str):
                     source_pack=pack,
                     default_status="fast",
                 )
+        _record("fast_render", phase_started_at)
         _warm_conversation_refs_payload_async(
             conv_id=conv_id,
             signature=signature,
@@ -1104,7 +1520,25 @@ def get_conversation_refs(conv_id: str):
             payload=payload,
             mode=cache_mode,
         )
-    return payload
+    return _finish(payload, cache_mode)
+
+
+@router.get("/conversation/{conv_id}")
+def get_conversation_refs_route(conv_id: str, response: Response):
+    return get_conversation_refs(conv_id, response=response)
+
+
+@router.get("/diagnose/{conv_id}")
+def get_refs_diagnose(conv_id: str):
+    """Return a diagnostic report for why reference cards are empty/suppressed."""
+    store = get_chat_store()
+    try:
+        refs = store.list_message_refs(conv_id, timeout_s=10.0)
+    except Exception:
+        refs = None
+    if refs is None:
+        raise HTTPException(404, f"Conversation {conv_id} not found or has no refs data")
+    return _build_diagnostic_report(store=store, conv_id=conv_id, refs=refs)
 
 
 class OpenReferenceBody(BaseModel):

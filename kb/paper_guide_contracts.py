@@ -195,6 +195,72 @@ def _paper_guide_primary_render_segment_score(seg: dict[str, Any]) -> float:
     return score
 
 
+def _paper_guide_promote_hidden_direct_segment_for_render(seg: dict[str, Any]) -> dict[str, Any]:
+    segment = dict(seg or {}) if isinstance(seg, dict) else {}
+    locate_target = dict(segment.get("locate_target") or {}) if isinstance(segment.get("locate_target"), dict) else {}
+    reader_open = dict(segment.get("reader_open") or {}) if isinstance(segment.get("reader_open"), dict) else {}
+    if not (locate_target or reader_open):
+        return {}
+    locate_policy = str(segment.get("locate_policy") or locate_target.get("locatePolicy") or "").strip().lower()
+    surface_policy = str(
+        segment.get("locate_surface_policy")
+        or locate_target.get("locateSurfacePolicy")
+        or ""
+    ).strip().lower()
+    if locate_policy != "hidden" and surface_policy != "hidden":
+        return {}
+    if str(segment.get("evidence_mode") or "").strip().lower() != "direct":
+        return {}
+    if not (
+        str(segment.get("primary_block_id") or "").strip()
+        or str(locate_target.get("blockId") or "").strip()
+        or str(reader_open.get("blockId") or "").strip()
+    ):
+        return {}
+    if not (
+        str(segment.get("support_locate_anchor") or "").strip()
+        or str(locate_target.get("snippet") or locate_target.get("highlightSnippet") or "").strip()
+    ):
+        return {}
+
+    promoted = dict(segment)
+    promoted["locate_policy"] = "required"
+    promoted["locate_surface_policy"] = "primary"
+    promoted["must_locate"] = True
+    if locate_target:
+        locate_target["locatePolicy"] = "required"
+        locate_target["locateSurfacePolicy"] = "primary"
+        if (
+            str(segment.get("formula_origin") or "").strip().lower() == "derived"
+            and str(locate_target.get("anchorKind") or "").strip().lower() in {"equation", "inline_formula"}
+        ):
+            locate_target["anchorKind"] = "paragraph"
+        promoted["locate_target"] = locate_target
+    if reader_open:
+        reader_open["strictLocate"] = True
+        if (
+            str(segment.get("formula_origin") or "").strip().lower() == "derived"
+            and str(reader_open.get("anchorKind") or "").strip().lower() in {"equation", "inline_formula"}
+        ):
+            reader_open["anchorKind"] = "paragraph"
+        reader_locate = (
+            dict(reader_open.get("locateTarget") or {})
+            if isinstance(reader_open.get("locateTarget"), dict)
+            else {}
+        )
+        if reader_locate:
+            reader_locate["locatePolicy"] = "required"
+            reader_locate["locateSurfacePolicy"] = "primary"
+            if (
+                str(segment.get("formula_origin") or "").strip().lower() == "derived"
+                and str(reader_locate.get("anchorKind") or "").strip().lower() in {"equation", "inline_formula"}
+            ):
+                reader_locate["anchorKind"] = "paragraph"
+            reader_open["locateTarget"] = reader_locate
+        promoted["reader_open"] = reader_open
+    return promoted
+
+
 def _select_paper_guide_primary_render_segment(
     visible_segments: list[dict[str, Any]],
     all_segments: list[dict[str, Any]],
@@ -361,6 +427,22 @@ class PaperGuideCitationDetailModel(_PaperGuideBaseModel):
     doi: str = ""
     doi_url: str = ""
     cite_fmt: str = ""
+    is_inpaper: bool = False
+    summary_line: str = ""
+    summary_source: str = ""
+    answer_claim: str = ""
+    heading_path: str = ""
+    evidence_quote: str = ""
+    evidence_source: str = ""
+    location_label: str = ""
+    support_relation: str = ""
+    why_line: str = ""
+    block_id: str = ""
+    anchor_id: str = ""
+    anchor_kind: str = ""
+    page_start: int = 0
+    page_end: int = 0
+    score: float = 0.0
 
 
 class PaperGuideRenderPacketModel(_PaperGuideBaseModel):
@@ -481,6 +563,13 @@ def _paper_guide_contract_int(value: Any, *, default: int = 0) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def _paper_guide_contract_float(value: Any, *, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
 
 
 def _normalize_paper_guide_candidate_refs(items: Any, *, limit: int = 8) -> list[int]:
@@ -1003,6 +1092,22 @@ def _paper_guide_citation_detail_model_from_raw(
         doi=str(src.get("doi") or "").strip(),
         doi_url=str(src.get("doi_url") or "").strip(),
         cite_fmt=str(src.get("cite_fmt") or "").strip(),
+        is_inpaper=bool(src.get("is_inpaper")),
+        summary_line=str(src.get("summary_line") or "").strip(),
+        summary_source=str(src.get("summary_source") or "").strip(),
+        answer_claim=str(src.get("answer_claim") or "").strip(),
+        heading_path=str(src.get("heading_path") or "").strip(),
+        evidence_quote=str(src.get("evidence_quote") or "").strip(),
+        evidence_source=str(src.get("evidence_source") or "").strip(),
+        location_label=str(src.get("location_label") or "").strip(),
+        support_relation=str(src.get("support_relation") or "").strip(),
+        why_line=str(src.get("why_line") or "").strip(),
+        block_id=str(src.get("block_id") or "").strip(),
+        anchor_id=str(src.get("anchor_id") or "").strip(),
+        anchor_kind=str(src.get("anchor_kind") or "").strip(),
+        page_start=_paper_guide_contract_int(src.get("page_start"), default=0),
+        page_end=_paper_guide_contract_int(src.get("page_end"), default=0),
+        score=_paper_guide_contract_float(src.get("score"), default=0.0),
         **{
             key: value
             for key, value in src.items()
@@ -1023,6 +1128,22 @@ def _paper_guide_citation_detail_model_from_raw(
                 "doi",
                 "doi_url",
                 "cite_fmt",
+                "is_inpaper",
+                "summary_line",
+                "summary_source",
+                "answer_claim",
+                "heading_path",
+                "evidence_quote",
+                "evidence_source",
+                "location_label",
+                "support_relation",
+                "why_line",
+                "block_id",
+                "anchor_id",
+                "anchor_kind",
+                "page_start",
+                "page_end",
+                "score",
             }
         },
     )
@@ -1062,6 +1183,15 @@ def _build_paper_guide_render_packet_model(
         for item in segments
         if str(item.get("locate_policy") or item.get("locatePolicy") or "").strip().lower() != "hidden"
     ]
+    if not visible_segments:
+        visible_segments = [
+            promoted
+            for promoted in (
+                _paper_guide_promote_hidden_direct_segment_for_render(item)
+                for item in segments
+            )
+            if promoted
+        ]
     visible_segment_ids = _normalize_paper_guide_id_list(
         [item.get("segment_id") for item in visible_segments],
         limit=12,

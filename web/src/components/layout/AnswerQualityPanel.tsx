@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Select, Switch, Typography } from 'antd'
+import { useT } from '../../i18n'
 import { generateApi, type AnswerQualitySummary } from '../../api/generate'
 
 const { Text } = Typography
 
 export function AnswerQualityPanel({ open }: { open: boolean }) {
+  const S = useT()
   const [qualityLoading, setQualityLoading] = useState(false)
   const [qualitySummary, setQualitySummary] = useState<AnswerQualitySummary | null>(null)
   const [qualityError, setQualityError] = useState('')
@@ -24,7 +26,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
       })
       setQualitySummary(res)
     } catch (err) {
-      setQualityError(err instanceof Error ? err.message : '加载失败')
+      setQualityError(err instanceof Error ? err.message : S.quality_loading_failed)
     } finally {
       setQualityLoading(false)
     }
@@ -59,9 +61,9 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
   return (
     <div className="kb-settings-quality-panel">
       <div className="kb-settings-quality-head">
-        <Text className="kb-settings-quality-title">回答质量（最近样本）</Text>
+        <Text className="kb-settings-quality-title">{S.quality_title}</Text>
         <Button size="small" loading={qualityLoading} onClick={() => { void loadQualitySummary() }}>
-          刷新
+          {S.quality_refresh}
         </Button>
       </div>
 
@@ -72,7 +74,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
           value={intentFilter}
           onChange={(v) => setIntentFilter(String(v || ''))}
           options={[
-            { label: '全部意图', value: '' },
+            { label: S.quality_all_intents, value: '' },
             { label: 'reading', value: 'reading' },
             { label: 'compare', value: 'compare' },
             { label: 'idea', value: 'idea' },
@@ -87,7 +89,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
           value={depthFilter}
           onChange={(v) => setDepthFilter(String(v || ''))}
           options={[
-            { label: '全部深度', value: '' },
+            { label: S.quality_all_depths, value: '' },
             { label: 'L1', value: 'L1' },
             { label: 'L2', value: 'L2' },
             { label: 'L3', value: 'L3' },
@@ -95,7 +97,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
         />
         <div className="kb-settings-quality-failed-toggle">
           <Switch size="small" checked={onlyFailed} onChange={setOnlyFailed} />
-          <Text type="secondary" className="text-xs">仅未达标</Text>
+          <Text type="secondary" className="text-xs">{S.quality_only_failed}</Text>
         </div>
       </div>
 
@@ -104,13 +106,13 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
       ) : (
         <div className="kb-settings-quality-body">
           <div className="kb-settings-quality-grid">
-            <div className="kb-settings-quality-metric"><span>样本数</span><strong>{qualitySummary?.total || 0}</strong></div>
-            <div className="kb-settings-quality-metric"><span>最低达标</span><strong>{fmtRate(Number(qualitySummary?.minimum_ok_rate || 0))}</strong></div>
-            <div className="kb-settings-quality-metric"><span>未达标占比</span><strong>{fmtRate(Number(qualitySummary?.failed_rate || 0))}</strong></div>
-            <div className="kb-settings-quality-metric"><span>结构完整</span><strong>{fmtRate(Number(qualitySummary?.structure_complete_rate || 0))}</strong></div>
-            <div className="kb-settings-quality-metric"><span>证据覆盖</span><strong>{fmtRate(Number(qualitySummary?.evidence_coverage_rate || 0))}</strong></div>
-            <div className="kb-settings-quality-metric"><span>下一步覆盖</span><strong>{fmtRate(Number(qualitySummary?.next_steps_coverage_rate || 0))}</strong></div>
-            <div className="kb-settings-quality-metric"><span>核心覆盖</span><strong>{fmtRate(Number(qualitySummary?.avg_core_section_coverage || 0))}</strong></div>
+            <div className="kb-settings-quality-metric"><span>{S.quality_sample_count}</span><strong>{qualitySummary?.total || 0}</strong></div>
+            <div className="kb-settings-quality-metric"><span>{S.quality_min_ok}</span><strong>{fmtRate(Number(qualitySummary?.minimum_ok_rate || 0))}</strong></div>
+            <div className="kb-settings-quality-metric"><span>{S.quality_failed_rate}</span><strong>{fmtRate(Number(qualitySummary?.failed_rate || 0))}</strong></div>
+            <div className="kb-settings-quality-metric"><span>{S.quality_structure}</span><strong>{fmtRate(Number(qualitySummary?.structure_complete_rate || 0))}</strong></div>
+            <div className="kb-settings-quality-metric"><span>{S.quality_evidence}</span><strong>{fmtRate(Number(qualitySummary?.evidence_coverage_rate || 0))}</strong></div>
+            <div className="kb-settings-quality-metric"><span>{S.quality_next_steps}</span><strong>{fmtRate(Number(qualitySummary?.next_steps_coverage_rate || 0))}</strong></div>
+            <div className="kb-settings-quality-metric"><span>{S.quality_core}</span><strong>{fmtRate(Number(qualitySummary?.avg_core_section_coverage || 0))}</strong></div>
           </div>
 
           {qualityIntentRows.length > 0 ? (
@@ -118,13 +120,13 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
               {qualityIntentRows.map(([intent, rec]) => (
                 <div key={intent} className="kb-settings-quality-intent-row">
                   <span>{intent}</span>
-                  <span>{rec.count} 条</span>
-                  <span>达标 {fmtRate(Number(rec.minimum_ok_rate || 0))}</span>
+                  <span>{rec.count}</span>
+                  <span>{fmtRate(Number(rec.minimum_ok_rate || 0))}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <Text type="secondary" className="text-xs">暂无已完成回答样本。</Text>
+            <Text type="secondary" className="text-xs">{S.quality_no_samples}</Text>
           )}
 
           {qualityDepthRows.length > 0 ? (
@@ -132,8 +134,8 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
               {qualityDepthRows.map(([depth, rec]) => (
                 <div key={depth} className="kb-settings-quality-intent-row">
                   <span>{depth}</span>
-                  <span>{rec.count} 条</span>
-                  <span>达标 {fmtRate(Number(rec.minimum_ok_rate || 0))}</span>
+                  <span>{rec.count}</span>
+                  <span>{fmtRate(Number(rec.minimum_ok_rate || 0))}</span>
                 </div>
               ))}
             </div>
@@ -141,7 +143,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
 
           {qualityFailReasons.length > 0 ? (
             <Text type="secondary" className="text-xs">
-              常见未达标原因：{qualityFailReasons.map(([k, v]) => `${k}(${v})`).join(' / ')}
+              {S.quality_fail_reasons}{qualityFailReasons.map(([k, v]) => `${k}(${v})`).join(' / ')}
             </Text>
           ) : null}
         </div>

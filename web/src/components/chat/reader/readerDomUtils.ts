@@ -830,29 +830,53 @@ export function nearbyReadableBlocks(root: HTMLElement, target: HTMLElement, max
   return out
 }
 
-export function scrollReaderTargetIntoView(root: HTMLElement, target: HTMLElement) {
+export function scrollReaderTargetIntoView(
+  root: HTMLElement,
+  target: HTMLElement,
+  opts: { force?: boolean } = {},
+) {
+  const force = Boolean(opts.force)
   const rootRect = root.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   const maxScrollTop = Math.max(0, root.scrollHeight - root.clientHeight)
-  if (rootRect.height > 0 && targetRect.height > 0) {
+  if (!force && rootRect.height > 0 && targetRect.height > 0) {
     const topPadding = Math.max(20, Math.min(52, root.clientHeight * 0.08))
     const bottomPadding = Math.max(28, Math.min(96, root.clientHeight * 0.18))
     const visibleTop = rootRect.top + topPadding
     const visibleBottom = rootRect.bottom - bottomPadding
+    const visibleSpan = Math.max(80, visibleBottom - visibleTop)
     let nextTop = root.scrollTop
-
-    if (targetRect.top < visibleTop) {
-      nextTop = root.scrollTop + (targetRect.top - visibleTop)
+    if (targetRect.height >= visibleSpan || targetRect.top > visibleBottom) {
+      const targetTop = targetRect.top - rootRect.top + root.scrollTop
+      nextTop = targetTop - topPadding
+    } else if (targetRect.top < visibleTop) {
+      nextTop += targetRect.top - visibleTop
     } else if (targetRect.bottom > visibleBottom) {
-      nextTop = root.scrollTop + (targetRect.bottom - visibleBottom)
+      nextTop += targetRect.bottom - visibleBottom
     } else {
       return
     }
-
     root.scrollTo({
       top: Math.max(0, Math.min(maxScrollTop, nextTop)),
       behavior: 'auto',
     })
+    if (root.scrollHeight <= root.clientHeight + 2) {
+      target.scrollIntoView({ block: 'center', inline: 'nearest' })
+    }
+    return
+  }
+
+  if (rootRect.height > 0 && targetRect.height > 0) {
+    const topPadding = Math.max(28, Math.min(96, root.clientHeight * 0.18))
+    const targetTop = targetRect.top - rootRect.top + root.scrollTop
+    const nextTop = targetTop - topPadding
+    root.scrollTo({
+      top: Math.max(0, Math.min(maxScrollTop, nextTop)),
+      behavior: 'auto',
+    })
+    if (root.scrollHeight <= root.clientHeight + 2) {
+      target.scrollIntoView({ block: 'center', inline: 'nearest' })
+    }
     return
   }
 

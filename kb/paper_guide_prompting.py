@@ -78,7 +78,9 @@ _PAPER_GUIDE_EQUATION_PROMPT_RE_CLEAN = re.compile(
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE = re.compile(
-    r"(\bwhich prior work\b|\bwhat (?:in-paper )?citation\b|\bwhat reference\b|\bwhich references?\b|"
+    r"(\bwhich prior work\b|\bwhat (?:in-paper )?citation\b|\bwhat reference\b|"
+    r"\bwhich\s+(?:in-paper\s+)?references?\b|\bin-paper references?\b|\breference numbers?\b|"
+    r"\bwhich references?\b|\bdoes\s+this\s+(?:paper|review|article)\s+cite\b|\binclude\s+the\s+reference\s+numbers?\b|"
     r"\battributed to\b|\bintroduced with\b|\bwhen introducing it\b|\bwho introduced\b|"
     # Chinese prompts: include generic “引用了/标出引用号/引用编号” patterns, not only “引用的是哪篇”.
     r"引用的是哪篇|文内参考|参考文献.*哪(?:篇|一|些)|归因于哪篇|"
@@ -101,6 +103,29 @@ _PAPER_GUIDE_CITATION_LOOKUP_ATTRIBUTION_RE = re.compile(
     r"(?i)\b(?:we use|we used|we invert|introduced(?: as)?|introducing|"
     r"attributed to|akin to|as detailed in|as described in|cited as|"
     r"performed using|using the .*? method|based on)\b"
+)
+_PAPER_GUIDE_NAIVE_SOURCE_TRACE_PROMPT_RE = re.compile(
+    r"(?i)("
+    r"\bwhere\s+did\s+.{1,80}\s+come\s+from\b|"
+    r"\bwho\s+(?:first\s+)?(?:proposed|introduced|invented|came\s+up\s+with|did)\b|"
+    r"\bwhat\s+(?:paper|work|method|idea|approach)\s+.{0,60}\b(?:based\s+on|builds?\s+on|comes?\s+from)\b|"
+    r"\b(?:source|origin|roots?)\s+of\b|"
+    r"\b(?:borrowed|adapted|derived)\s+from\b|"
+    r"(?:\u8c01|\u54ea\u7bc7|\u54ea\u4e2a).{0,16}(?:\u63d0\u51fa|\u505a\u51fa|\u505a\u7684|\u53d1\u660e)|"
+    r"(?:\u4e4b\u524d|\u5148\u524d).{0,16}(?:\u8c01|\u54ea\u4e2a|\u54ea\u7bc7).{0,12}(?:\u505a|\u63d0\u51fa)|"
+    r"(?:\u600e\u4e48\u6765\u7684|\u4ece\u54ea\u91cc\u6765|\u54ea\u91cc\u6765\u7684|\u6e90\u5934|\u6765\u6e90|\u51fa\u5904)|"
+    r"(?:\u501f\u9274|\u57fa\u4e8e|\u53c2\u8003|\u8ddf\u8c01\u5b66).{0,24}(?:\u8c01|\u54ea\u7bc7|\u54ea\u4e2a|\u5de5\u4f5c|\u6587\u732e|\u65b9\u6cd5|\u60f3\u6cd5)|"
+    r"(?:\u4e0d\u662f.{0,8}\u539f\u521b|\u4ed6\u4eec.{0,8}\u539f\u521b).{0,24}(?:\u54ea\u7bc7|\u8c01|\u6e90\u5934|\u6765\u6e90)"
+    r")",
+    flags=re.IGNORECASE,
+)
+_PAPER_GUIDE_NAIVE_SOURCE_TRACE_OBJECT_RE = re.compile(
+    r"(?i)("
+    r"\b[A-Z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*\b|"
+    r"\b(?:method|algorithm|technique|model|network|architecture|idea|approach|prior\s+work)\b|"
+    r"(?:\u65b9\u6cd5|\u6280\u672f|\u6a21\u578b|\u7b97\u6cd5|\u7f51\u7edc|\u60f3\u6cd5|\u601d\u8def|\u5de5\u4f5c|\u4f5c\u8005|\u8fd9\u4e2a|\u8fd9\u91cc)"
+    r")",
+    flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_CITATION_LOOKUP_QUERY_STOPWORDS = {
     "reference",
@@ -136,6 +161,15 @@ _PAPER_GUIDE_CITATION_LOOKUP_QUERY_STOPWORDS = {
     "list",
     "bibliography",
 }
+
+
+def _paper_guide_prompt_requests_naive_source_trace(prompt: str) -> bool:
+    q = str(prompt or "").strip()
+    if not q:
+        return False
+    if not _PAPER_GUIDE_NAIVE_SOURCE_TRACE_PROMPT_RE.search(q):
+        return False
+    return bool(_PAPER_GUIDE_NAIVE_SOURCE_TRACE_OBJECT_RE.search(q))
 _PAPER_GUIDE_METHOD_PROMPT_RE_CLEAN = re.compile(
     r"(\u8fd9\u4e2a?\u65b9\u6cd5.{0,8}(?:\u5177\u4f53)?\u4ecb\u7ecd|\u65b9\u6cd5.{0,4}\u4ecb\u7ecd|"
     r"\u600e\u4e48\u5de5\u4f5c|\u600e\u4e48\u5b9e\u73b0|\u539f\u7406|\u673a\u5236|\u7b97\u6cd5)",
@@ -365,7 +399,11 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         return "discussion_only"
     if _PAPER_GUIDE_FIGURE_PROMPT_RE.search(q):
         return "figure_walkthrough"
-    if _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE.search(q) or _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE_CLEAN.search(q):
+    if (
+        _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE.search(q)
+        or _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE_CLEAN.search(q)
+        or _paper_guide_prompt_requests_naive_source_trace(q)
+    ):
         return "citation_lookup"
     # Allow citation lookup to explicitly scope to "in the Abstract" without being misclassified as abstract.
     if _PAPER_GUIDE_ABSTRACT_PROMPT_RE.search(q):
@@ -543,10 +581,13 @@ def _augment_paper_guide_retrieval_prompt(
     if (family_norm == "overview") and (str(output_mode or "").strip().lower() == "critical_review"):
         extras.extend(["limitations", "discussion"])
     # Topic-specific recall helpers (works even when prompt family is ambiguous).
+    # Keep these before broad family defaults so CJK prompts like "重建方法优缺点" do not
+    # spend the whole augmentation budget on generic strength/limitations terms.
+    topic_extras: list[str] = []
     if re.search(r"(深度学习|神经网络|卷积网络|CNN|neural\s+network|deep\s+learning)", q, flags=re.IGNORECASE):
-        extras.extend(["deep learning", "neural network", "CNN"])
+        topic_extras.extend(["deep learning", "neural network", "CNN"])
     if re.search(r"(重建|reconstruction|压缩感知|compressed\s+sensing)", q, flags=re.IGNORECASE):
-        extras.extend([
+        topic_extras.extend([
             "acquisition and image reconstruction strategies",
             "understanding compressed sensing",
             "optimization",
@@ -557,6 +598,8 @@ def _augment_paper_guide_retrieval_prompt(
             "wavelet",
             "matching pursuit",
         ])
+    if topic_extras:
+        extras = [*topic_extras, *extras]
 
     norm = normalize_match_text(q)
     missing: list[str] = []
@@ -831,7 +874,12 @@ _PAPER_GUIDE_DOC_MAP_PROMPT_RE = re.compile(
     r"(?i)(?:\bdoc\s*map\b|\breading\s+map\b|\boutline\b|\btable\s+of\s+contents\b|\btoc\b|"
     r"\bsection(?:\s*-\s*|\s+)by(?:\s*-\s*|\s+)section\b|\bverbatim\s+anchor(?:\s+sentence)?s?\b|"
     r"\banchor\s+sentence(?:s)?\b|\bmajor\s+section(?:s)?\b|"
-    r"\u76ee\u5f55|\u5927\u7eb2|\u6587\u6863\u5730\u56fe|\u5730\u56fe|\u6982\u89c8|\u7ae0\u8282\u6982\u89c8|\u6bcf\u4e00\u5757|\u6bcf\u6bb5\u603b\u7ed3|\u6309\u6bb5\u603b\u7ed3|\u5148\u603b\u7ed3\u4e00\u4e0b)",
+    r"\u76ee\u5f55|\u5927\u7eb2|\u6587\u6863\u5730\u56fe|\u5730\u56fe|\u6982\u89c8|\u7ae0\u8282\u6982\u89c8|"
+    r"\u6bcf\u4e00\u5757|\u6bcf\u6bb5\u603b\u7ed3|\u6309\u6bb5\u603b\u7ed3|\u5148\u603b\u7ed3\u4e00\u4e0b|"
+    r"\u9605\u8bfb\u8def\u7ebf|\u9605\u8bfb\u987a\u5e8f|\u4ece\u54ea(?:\u51e0|\u4e9b)?(?:\u6bb5|\u8282|\u90e8\u5206)\u5f00\u59cb|"
+    r"\u4ece\u54ea\u91cc\u5f00\u59cb\u8bfb|\u5e94\u8be5\u5148\u8bfb|\u5148\u8bfb\u54ea(?:\u51e0|\u4e9b)?(?:\u6bb5|\u8282|\u90e8\u5206)|"
+    r"\u5148\u770b\u54ea(?:\u51e0|\u4e9b)?(?:\u6bb5|\u8282|\u90e8\u5206)?|\u8bfb\u54ea(?:\u51e0|\u4e9b)?(?:\u6bb5|\u8282|\u90e8\u5206)|"
+    r"\u8bfb\u54ea\u4e9b\u90e8\u5206|\u54ea(?:\u51e0|\u4e9b)?(?:\u6bb5|\u8282|\u5c0f\u8282|\u90e8\u5206).{0,12}\u8bfb)",
 )
 
 

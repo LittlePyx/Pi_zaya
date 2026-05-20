@@ -151,6 +151,19 @@ def test_build_paper_guide_grounding_rules_adds_citation_lookup_guard():
     assert "do not answer 'not stated'" in rules
 
 
+def test_build_paper_guide_grounding_rules_adds_strength_limits_taxonomy_guard():
+    from kb import task_runtime
+
+    rules = task_runtime._build_paper_guide_grounding_rules(
+        answer_contract_v1=False,
+        prompt_family="strength_limits",
+    )
+
+    assert "algorithm examples into peer method categories" in rules
+    assert "basis pursuit" in rules
+    assert "Do not claim an exact taxonomy count" in rules
+
+
 def test_build_paper_guide_grounding_rules_mentions_doc_scoped_candidate_refs():
     from kb import task_runtime
 
@@ -162,6 +175,25 @@ def test_build_paper_guide_grounding_rules_mentions_doc_scoped_candidate_refs():
     assert "Paper-guide citation grounding hints" in rules
     assert "same DOC-k line" in rules
     assert "cite_example" in rules
+    assert "upstream-reference opportunity" in rules
+    assert "answer the user's actual question first" in rules
+    assert "The paper cites" in rules
+
+
+def test_answer_quality_rejects_incomplete_paper_guide_fragment():
+    from kb import task_runtime
+
+    probe = task_runtime._build_answer_quality_probe(
+        "In simple terms:\n\nThe paper asks whether one coded snapshot can recover a 3D scene.\n\nSpecifically:",
+        has_hits=True,
+        contract_enabled=False,
+        output_mode="reading_guide",
+        paper_guide_mode=True,
+        prompt_family="overview",
+    )
+
+    assert probe["incomplete_fragment"] is True
+    assert probe["minimum_ok"] is False
 
 
 def test_apply_answer_contract_without_hits_adds_limits():
@@ -951,6 +983,23 @@ def test_build_answer_quality_probe_paper_guide_plain_answer_without_contract_is
     assert probe["minimum_ok"] is True
 
 
+def test_build_answer_quality_probe_rejects_template_only_paper_guide_answer():
+    from kb import task_runtime
+
+    answer = "The paper cites [4] for this point.\n> Most methods employ ADMM [4]."
+    probe = task_runtime._build_answer_quality_probe(
+        answer,
+        has_hits=True,
+        contract_enabled=False,
+        intent="reading",
+        depth="L2",
+        paper_guide_mode=True,
+        prompt_family="citation_lookup",
+    )
+    assert probe["template_only"] is True
+    assert probe["minimum_ok"] is False
+
+
 def test_build_answer_quality_probe_paper_guide_figure_tracks_locate_hint():
     from kb import task_runtime
 
@@ -1439,3 +1488,75 @@ def test_gen_answer_quality_summary_supports_filters(monkeypatch):
     assert out["failed_rate"] == 1.0
     assert out["by_intent"]["reading"]["count"] == 1
     assert out["by_depth"]["L1"]["count"] == 1
+
+
+def test_sync_paper_guide_render_packet_prefers_fresh_provenance_locate():
+    from kb import task_runtime
+
+    answer = "这篇文章的核心问题是解释单像素相机如何绕开传统 FPA 的波段和成本限制。"
+    contracts = {
+        "primary_evidence": {
+            "source_path": "paper.en.md",
+            "source_name": "paper.pdf",
+            "block_id": "blk_old_00025",
+            "anchor_id": "p_old",
+            "heading_path": "Old / Strategy",
+            "snippet": "For this reason, this strategy is not readily employed...",
+            "selection_reason": "answer_hit_top",
+        },
+        "render_packet": {
+            "answer_markdown": answer,
+            "rendered_body": answer,
+            "rendered_content": answer,
+            "copy_markdown": answer,
+            "copy_text": answer,
+            "locate_target": {
+                "blockId": "blk_old_00025",
+                "anchorId": "p_old",
+                "snippet": "For this reason, this strategy is not readily employed...",
+            },
+            "reader_open": {
+                "blockId": "blk_old_00025",
+                "anchorId": "p_old",
+                "strictLocate": True,
+            },
+        },
+    }
+    provenance = {
+        "segments": [
+            {
+                "segment_id": "seg_001",
+                "text": answer,
+                "raw_markdown": answer,
+                "primary_block_id": "blk_new_00010",
+                "primary_anchor_id": "p_new",
+                "primary_heading_path": "Paper / Abstract / How a single-pixel camera works",
+                "evidence_quote": "A single-pixel camera is a technology that produces images...",
+                "anchor_text": "A single-pixel camera is a technology that produces images...",
+                "hit_level": "exact",
+                "locate_policy": "required",
+                "locate_surface_policy": "primary",
+                "must_locate": True,
+            }
+        ],
+        "primary_evidence": {
+            "source_path": "paper.en.md",
+            "source_name": "paper.pdf",
+            "block_id": "blk_new_00010",
+            "anchor_id": "p_new",
+            "heading_path": "Paper / Abstract / How a single-pixel camera works",
+            "snippet": "A single-pixel camera is a technology that produces images...",
+            "selection_reason": "provenance_segment",
+        },
+    }
+
+    out = task_runtime._sync_paper_guide_render_packet_with_provenance(
+        paper_guide_contracts=contracts,
+        provenance=provenance,
+        answer=answer,
+    )
+
+    packet = out["render_packet"]
+    assert packet["locate_target"]["blockId"] == "blk_new_00010"
+    assert packet["reader_open"]["blockId"] == "blk_new_00010"
+    assert packet["visible_segment_ids"] == ["seg_001"]

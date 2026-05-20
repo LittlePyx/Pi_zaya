@@ -346,7 +346,7 @@ def test_repair_paper_guide_focus_answer_generic_overrides_not_stated_for_exact_
         ),
     )
     low = out.lower()
-    assert "retrieved method evidence" in low
+    assert "method detail from the source" in low
     assert "applied back to the original iism dataset" in low
 
 
@@ -397,7 +397,7 @@ def test_repair_paper_guide_focus_answer_generic_replaces_overview_role_not_stat
         ),
     )
     low = out.lower()
-    assert "retrieved method evidence" in low
+    assert "in simple terms" in low
     assert "rvt turns the interferometric image into an intensity-only map" in low
     assert "apr uses phase-correlation registration to estimate shift vectors" in low
     assert "not explained" not in low
@@ -420,7 +420,7 @@ def test_repair_paper_guide_focus_answer_generic_treats_markdown_does_not_explai
         ),
     )
     low = out.lower()
-    assert "retrieved method evidence" in low
+    assert "in simple terms" in low
     assert "rvt converts each pinhole image into a radial-symmetry map" in low
     assert "does *not* explain" not in low
     assert "not described" not in low
@@ -445,6 +445,6 @@ def test_repair_paper_guide_focus_answer_generic_replaces_method_family_role_pro
         ),
     )
     low = out.lower()
-    assert "retrieved method evidence" in low
+    assert "in simple terms" in low
     assert "rvt converts each pinhole image into a radial-symmetry map" in low
     assert "apr uses phase-correlation registration to estimate shift vectors" in low

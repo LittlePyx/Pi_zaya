@@ -37,23 +37,38 @@ def _format_context(hits: list[dict], max_chars: int = 12000) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _has_cjk(text: str) -> bool:
+    “””Check if text contains CJK (Chinese/Japanese/Korean) characters.”””
+    if not text:
+        return False
+    cjk_count = sum(1 for c in text if '一' <= c <= '鿿')
+    return cjk_count >= 4
+
+
 def build_messages(
     user_query: str,
     history: list[dict],
     hits: list[dict],
 ) -> list[dict]:
     # Keep system prompt simple and strict: use context first, cite [n], don't hallucinate.
+    prefer_zh = _has_cjk(user_query)
+    answer_lang = “中文” if prefer_zh else “English”
+    source_hint = “检索片段” if prefer_zh else “retrieved snippets”
+    no_hit_notice = “未命中知识库片段” if prefer_zh else “(No relevant snippets found in the knowledge base)”
+    ref_title = “可参考定位” if prefer_zh else “Referenced Sources”
+    ref_miss = “（本次未命中）” if prefer_zh else “(No hits this time)”
+    ref_suggest = “建议去你认为最相关的论文的 REFERENCES/Related Work 追溯” if prefer_zh else “check the REFERENCES/Related Work sections of the most relevant paper”
     system = (
-        "你是我的个人知识库助手。你会先阅读我提供的“检索片段”（可能来自多篇论文/笔记），"
-        "然后用中文回答问题。\n"
-        "规则：\n"
-        "1) 如果检索片段存在：优先基于检索片段回答；需要引用时，用 [1] [2] 这样的编号标注引用来源。\n"
-        "2) 如果检索片段为空：也要给出可用的通用回答，但必须在回答开头明确标注“未命中知识库片段”。\n"
-        "3) 不要编造不存在的论文、公式、数据或结论。\n"
-        "4) 输出要求：\n"
-        "   - 先给出“回答”。\n"
-        "   - 最后给出“可参考定位：”并列出你实际引用到的编号，每条都写清楚对应的 source + section（大标题即可）。\n"
-        "   - 若未命中片段：在“可参考定位”里写“（本次未命中）”，并建议去你认为最相关的论文的 REFERENCES/Related Work 追溯。\n"
+        “You are my personal knowledge base assistant. Read the retrieved snippets first, “
+        f”then answer in {answer_lang}.\n”
+        “Rules:\n”
+        f”1) If {source_hint} exist: answer based on them first; when citing, use [1] [2] markers.\n”
+        f”2) If {source_hint} are empty: still give a general answer, but start with \”{no_hit_notice}\”.\n”
+        “3) Do not fabricate papers, formulas, data, or conclusions.\n”
+        “4) Output format:\n”
+        f”   - First give the answer.\n”
+        f”   - Then list \”{ref_title}:\” with the sources you actually cited, each with source + section.\n”
+        f”   - If no hits: write \”{ref_miss}\” under \”{ref_title}\”, and {ref_suggest}.\n”
     )
 
     ctx = _format_context(hits)

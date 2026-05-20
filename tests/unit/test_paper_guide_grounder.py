@@ -123,3 +123,27 @@ def test_build_paper_guide_segment_locate_target_and_reader_open_use_panel_snipp
     assert reader_open["strictLocate"] is True
     assert reader_open["locateTarget"] == locate_target
     assert reader_open["claimGroup"] == {"id": "cg-1"}
+
+
+def test_build_paper_guide_segment_locate_target_prefers_support_anchor():
+    seg = {
+        "segment_id": "seg-1",
+        "primary_heading_path": "Methods",
+        "support_locate_anchor": "In general, a sub-sampled basis is most appropriate to low-resolution real-time reconstruction.",
+        "evidence_quote": "A broad background definition of a single-pixel camera.",
+        "anchor_text": "A broad background definition of a single-pixel camera.",
+        "text": "适用场景：低至中等分辨率成像、需快速重建。",
+        "primary_block_id": "blk_26",
+        "primary_anchor_id": "p_19",
+        "claim_type": "critical_fact_claim",
+        "locate_policy": "required",
+        "locate_surface_policy": "primary",
+    }
+
+    locate_target = grounder._build_paper_guide_segment_locate_target(seg)
+
+    assert locate_target["snippet"].startswith("In general, a sub-sampled basis")
+    assert locate_target["highlightSnippet"].startswith("In general, a sub-sampled basis")
+    assert locate_target["evidenceQuote"].startswith("In general, a sub-sampled basis")
+    assert locate_target["anchorText"].startswith("In general, a sub-sampled basis")
+    assert locate_target["blockId"] == "blk_26"

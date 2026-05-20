@@ -44,7 +44,8 @@ def test_run_exact_citation_lookup_skill_extracts_inline_refs_when_record_missin
     )
 
     assert result is not None
-    assert "The paper cites [4], [7] for this point." in result.answer_text
+    assert "Use [4], [7] as the cited source for this passage." in result.answer_text
+    assert "Source location: Related Work." in result.answer_text
     assert result.support_resolution == [
         {
             "source_path": "bound.md",
@@ -78,7 +79,7 @@ def test_run_exact_figure_panel_skill_surfaces_clause_references():
     )
 
     assert result is not None
-    assert "Figure 3 caption for panel (f) states:" in result.answer_text
+    assert "Caption clause for Figure 3(f):" in result.answer_text
     assert "References in this clause: [15]" in result.answer_text
     assert result.support_resolution == [
         {
@@ -146,7 +147,7 @@ def test_run_overview_component_role_skill_builds_broad_skill_answer():
     )
 
     assert result is not None
-    assert "retrieved method evidence" in result.answer_text.lower()
+    assert "in simple terms" in result.answer_text.lower()
     assert "radial-symmetry map" in result.answer_text
     assert result.support_resolution == [
         {
@@ -188,7 +189,7 @@ def test_run_section_target_skill_builds_strength_limits_answer():
 
     assert result is not None
     low = result.answer_text.lower()
-    assert "discussion section" in low
+    assert "discussion" in low
     assert "different spad arrays may deviate" in low
     assert result.support_resolution == [
         {
@@ -254,7 +255,7 @@ def test_run_box_target_skill_builds_targeted_box_answer():
     )
 
     assert result is not None
-    assert "From Box 1" in result.answer_text
+    assert "Relevant passage from Box 1" in result.answer_text
     assert "M < N" in result.answer_text
     assert result.support_resolution == [
         {

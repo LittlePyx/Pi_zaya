@@ -10,7 +10,7 @@ import {
 import { Button, Input, Tag, Typography, message } from 'antd'
 import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
 import type { ChatImageAttachment, ChatUploadItem } from '../../api/chat'
-import { S } from '../../i18n/zh'
+import { useT } from '../../i18n'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -76,27 +76,27 @@ function uploadTone(item: ChatUploadItem): 'default' | 'success' | 'error' | 'wa
   return 'success'
 }
 
-function uploadLabel(item: ChatUploadItem) {
+function uploadLabel(item: ChatUploadItem, S: Record<string, string>) {
   if (item.kind === 'image') {
-    return item.status === 'duplicate' ? '图片已附带' : '图片待发送'
+    return item.status === 'duplicate' ? S.upload_image_attached : S.upload_image_pending
   }
   if (item.kind === 'pdf') {
-    if (item.status === 'duplicate') return 'PDF 已在库中'
-    if (item.status === 'error') return 'PDF 入库失败'
-    if (item.ingest_status === 'cancelled') return 'PDF 已取消'
-    if (item.ingest_status === 'renaming') return 'PDF 自动命名中'
-    if (item.ingest_status === 'converting') return 'PDF 转换中'
-    if (item.ingest_status === 'ingesting') return 'PDF 建库中'
-    if (item.ingest_status === 'processing') return 'PDF 入库中'
-    if (item.ready && isPdfQualityRunning(item)) return 'PDF 已入库，后台精修中'
-    if (item.ready && item.quality_status === 'ready') return 'PDF 已入库（高质量版）'
-    if (item.ready && item.quality_status === 'error') return 'PDF 已入库（精修失败，保留快速版）'
-    if (item.ready && item.quality_status === 'cancelled') return 'PDF 已入库（已取消后台精修）'
-    if (item.ready) return 'PDF 已入库'
-    return 'PDF 已上传，尚未开始入库'
+    if (item.status === 'duplicate') return S.upload_pdf_duplicate
+    if (item.status === 'error') return S.upload_pdf_error
+    if (item.ingest_status === 'cancelled') return S.upload_pdf_cancelled
+    if (item.ingest_status === 'renaming') return S.upload_pdf_renaming
+    if (item.ingest_status === 'converting') return S.upload_pdf_converting
+    if (item.ingest_status === 'ingesting') return S.upload_pdf_ingesting
+    if (item.ingest_status === 'processing') return S.upload_pdf_processing
+    if (item.ready && isPdfQualityRunning(item)) return S.upload_pdf_ready_quality_running
+    if (item.ready && item.quality_status === 'ready') return S.upload_pdf_ready_quality_done
+    if (item.ready && item.quality_status === 'error') return S.upload_pdf_ready_quality_error
+    if (item.ready && item.quality_status === 'cancelled') return S.upload_pdf_ready_quality_cancelled
+    if (item.ready) return S.upload_pdf_ready
+    return S.upload_pdf_pending
   }
-  if (item.status === 'unsupported') return '不支持的类型'
-  return '上传失败'
+  if (item.status === 'unsupported') return S.upload_unsupported
+  return S.upload_failed
 }
 
 function uploadDetail(item: ChatUploadItem) {
@@ -155,6 +155,7 @@ export function ChatInput({
   generating,
   appendSignal,
 }: Props) {
+  const S = useT()
   const [text, setText] = useState('')
   const [dragActive, setDragActive] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -184,7 +185,7 @@ export function ChatInput({
   const uploadSelectedFiles = async (files: File[]) => {
     const { accepted, rejected } = collectAcceptedFiles(files)
     if (rejected.length > 0) {
-      message.warning('已跳过部分文件：仅支持 PDF / 图片，图片最大 8MB，PDF 最大 80MB')
+      message.warning(S.upload_skip_warning)
     }
     if (accepted.length === 0) return
     await onUpload(accepted)
@@ -289,7 +290,7 @@ export function ChatInput({
                   className="m-0 inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1 text-xs"
                 >
                   <span className="truncate max-w-[16rem]">{item.name}</span>
-                  <span className="opacity-75">{uploadLabel(item)}</span>
+                  <span className="opacity-75">{uploadLabel(item, S)}</span>
                   {uploadDetail(item) ? (
                     <span className="truncate max-w-[14rem] opacity-60">{uploadDetail(item)}</span>
                   ) : null}
@@ -298,7 +299,7 @@ export function ChatInput({
                       type="button"
                       className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border-0 bg-transparent px-1 opacity-75 transition hover:opacity-100"
                       onClick={() => { void onCancelUploadItem(uploadItemKey(item)) }}
-                      title={ingestRunning ? '取消入库' : '取消后台精修'}
+                      title={ingestRunning ? S.upload_cancel_ingest : S.upload_cancel_quality}
                     >
                       <StopOutlined />
                     </button>
@@ -308,7 +309,7 @@ export function ChatInput({
                       type="button"
                       className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border-0 bg-transparent px-1 opacity-75 transition hover:opacity-100"
                       onClick={() => { void onRetryUploadItem(uploadItemKey(item)) }}
-                      title={item.quality_status === 'error' ? '重试后台精修' : '重试入库'}
+                      title={item.quality_status === 'error' ? S.upload_retry_quality : S.upload_retry_ingest}
                     >
                       <RedoOutlined />
                     </button>
@@ -318,7 +319,7 @@ export function ChatInput({
                       type="button"
                       className="inline-flex h-5 min-w-5 items-center justify-center rounded-full border-0 bg-transparent px-1 opacity-75 transition hover:opacity-100"
                       onClick={() => onStartGuideFromUpload(item)}
-                      title="围绕本文进入阅读指导"
+                      title={S.upload_start_guide}
                     >
                       <BookOutlined />
                     </button>
@@ -360,7 +361,7 @@ export function ChatInput({
                   <div className="flex items-center justify-between gap-2 border-t border-[var(--border)]/70 bg-[var(--panel)]/92 px-3 py-2">
                     <div className="min-w-0">
                       <div className="truncate text-xs font-medium">{item.name}</div>
-                      <div className="text-[11px] text-[var(--muted-text)]">发送时附带</div>
+                      <div className="text-[11px] text-[var(--muted-text)]">{S.image_send_with}</div>
                     </div>
                     <button
                       type="button"
@@ -389,7 +390,7 @@ export function ChatInput({
         >
           {dragActive ? (
             <div className="pointer-events-none absolute inset-x-3 top-3 rounded-2xl border border-[var(--accent)]/30 bg-[var(--panel)]/92 px-4 py-3 text-sm text-[var(--text-main)] shadow-sm">
-              拖到这里即可上传。支持 PDF 快速入库，或图片随本轮提问发送。
+              {S.upload_drop_hint}
             </div>
           ) : null}
 
@@ -424,10 +425,10 @@ export function ChatInput({
                   loading={uploading}
                   disabled={generating}
                 >
-                  添加文件
+                  {S.upload_file_btn}
                 </Button>
                 <Text type="secondary" className="kb-chat-help-text">
-                  PDF 会先快速入库，再后台精修；图片会随本轮提问发送。支持拖拽和粘贴图片。
+                  {S.upload_help_text}
                 </Text>
               </div>
               <div className="kb-chat-toolbar-right">
@@ -457,3 +458,5 @@ export function ChatInput({
     </div>
   )
 }
+
+// Collect status label for a given upload item — used outside the component where S is available

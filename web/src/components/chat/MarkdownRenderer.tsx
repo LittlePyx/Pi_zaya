@@ -3,6 +3,7 @@ import { createContext } from 'react'
 import { Fragment } from 'react'
 import type { ComponentPropsWithoutRef } from 'react'
 import { message } from 'antd'
+import { useT } from '../../i18n'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -152,6 +153,8 @@ interface Props {
   content: string
   citeDetails?: CiteDetail[]
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
+  onCitationHover?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
+  onCitationLeave?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
   onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void
   canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean
   locateTitleResolver?: (snippet: string) => string
@@ -581,12 +584,31 @@ function collectInlineLocateTokens(
     }
     return false
   }
+  const looksLikeQuotedPaperTitleToken = (start: number, text0: string): boolean => {
+    const inner = String(text0 || '')
+      .replace(/^["'\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\u300A\u300B]+|["'\u2018\u2019\u201C\u201D\u300C\u300D\u300E\u300F\u300A\u300B]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!inner) return false
+    if (hasMathSignalInline(inner)) return false
+    if (/[。！？.!?；;]/.test(inner)) return false
+    if ((inner.match(/[\u4e00-\u9fff]/g) || []).length > 0) return false
+    const latinWords = inner.match(/[A-Za-z][A-Za-z0-9'/-]*/g) || []
+    if (latinWords.length < 4) return false
+    const prefix = src.slice(Math.max(0, start - 90), start).toLowerCase()
+    const suffix = src.slice(start + String(text0 || '').length, start + String(text0 || '').length + 100).toLowerCase()
+    const titleContextBefore = /(?:论文|文献|工作|研究|参考|来源|线索|综述|作者|引用|提出|发表|paper|work|study|source|reference|title|titled|entitled|called|cited|proposed|introduced|reported|reviewed)\s*[:：]?\s*$/i
+    const titleContextAfter = /^\s*(?:(?:中|里|这篇|这个|提出|发表|总结|综述|系统总结|作为|是)(?=$|[\s，,。；;：:]|[^\x00-\x7F])|(?:which|that|paper|work|study|source|reference|proposed|introduced|summarized|reviewed|reported|cited)\b)/i
+    if (titleContextBefore.test(prefix) || titleContextAfter.test(suffix)) return true
+    return false
+  }
   const push = (start: number, end: number, text0: string, kind: InlineLocateTokenKind) => {
     const text = String(text0 || '').replace(/\s+/g, ' ').trim()
     if (!text) return
     if (kind === 'quote') {
       if (text.length < 18) return
       if (isHeadingLikeQuotedToken(start, text)) return
+      if (looksLikeQuotedPaperTitleToken(start, text)) return
       if (!looksLikeDirectQuoteToken(text)) return
     }
     raw.push({ start, end, text, kind })
@@ -852,6 +874,8 @@ function parseAnswerContract(text: string): { preamble: string; sections: Parsed
 function buildMarkdownComponents(
   byAnchor: Map<string, CiteDetail>,
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
+  onCitationHover?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
+  onCitationLeave?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   toneBySource?: Map<string, CiteChipTone>,
   onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void,
   canLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => boolean,
@@ -863,6 +887,7 @@ function buildMarkdownComponents(
   variant: 'chat' | 'reader' = 'chat',
   readerAnchorAllocator?: ReaderAnchorAllocator | null,
   readerBlockResolver?: ReaderBlockResolver | null,
+  S?: Record<string, string>,
 ) {
   const effectiveInlineLocateTokenPolicy = normalizeInlineLocateTokenPolicy(inlineLocateTokenPolicy)
   const effectiveLocateSurfacePolicy = normalizeLocateSurfacePolicy(locateSurfacePolicy)
@@ -909,16 +934,16 @@ function buildMarkdownComponents(
       const raw = String(snippet || '').trim()
       if (!(hasMathSignalInline(raw) || raw.length >= 18)) return null
     }
-    const label = '定位到原文证据'
-    const title = String(locateTitleResolver?.(snippet) || '').trim() || '定位到原文证据'
+    const label = S?.locate_label || '定位到原文证据'
+    const title = String(locateTitleResolver?.(snippet) || '').trim() || label
     const kind = meta?.kind || 'paragraph'
     const badgeText = kind === 'equation'
-      ? '式'
+      ? (S?.locate_badge_eq || '式')
       : kind === 'quote'
-        ? '引'
+        ? (S?.locate_badge_quote || '引')
       : kind === 'figure'
-        ? '图'
-        : '原文'
+        ? (S?.locate_badge_fig || '图')
+        : (S?.locate_badge_source || '原文')
     return (
       <button
         type="button"
@@ -1052,10 +1077,10 @@ function buildMarkdownComponents(
               type="button"
               className="kb-code-copy"
               onClick={() => {
-                navigator.clipboard.writeText(text).then(() => message.success('代码已复制'))
+                navigator.clipboard.writeText(text).then(() => message.success(S?.code_copied || '代码已复制'))
               }}
             >
-              复制代码
+              {S?.code_copy || '复制代码'}
             </button>
           </div>
           <pre>{children}</pre>
@@ -1145,12 +1170,18 @@ function buildMarkdownComponents(
         return (
           <button
             type="button"
-            className="kb-cite-chip"
+            className={detail.isInpaper ? 'kb-cite-chip-sysb' : 'kb-cite-chip'}
             style={toneStyle}
             title={detail.sourceName || detail.sourcePath || undefined}
             onClick={(event) => {
               event.preventDefault()
               onCitationClick?.(detail, event)
+            }}
+            onMouseEnter={(event) => {
+              onCitationHover?.(detail, event)
+            }}
+            onMouseLeave={(event) => {
+              onCitationLeave?.(detail, event)
             }}
           >
             {citationInlineLabel(detail, { includeSource: false })}
@@ -1312,6 +1343,8 @@ export function MarkdownRenderer({
   content,
   citeDetails = [],
   onCitationClick,
+  onCitationHover,
+  onCitationLeave,
   onLocateSnippet,
   canLocateSnippet,
   locateTitleResolver,
@@ -1323,6 +1356,7 @@ export function MarkdownRenderer({
   readerAnchors,
   readerBlocks,
 }: Props) {
+  const S = useT()
   const renderContent = variant === 'reader'
     ? dedupeRepeatedReaderImageMarkdown(String(content || ''))
     : normalize(content)
@@ -1339,6 +1373,8 @@ export function MarkdownRenderer({
   const components = buildMarkdownComponents(
     byAnchor,
     onCitationClick,
+    onCitationHover,
+    onCitationLeave,
     toneBySource,
     onLocateSnippet,
     canLocateSnippet,
@@ -1350,8 +1386,15 @@ export function MarkdownRenderer({
     variant,
     readerAnchorAllocator,
     readerBlockResolver,
+    S,
   )
   const parsedContract = variant === 'chat' ? parseAnswerContract(renderContent) : null
+  const sectionLabelMap: Record<string, string> = {
+    conclusion: S.section_conclusion,
+    evidence: S.section_evidence,
+    limits: S.section_limits,
+    next_steps: S.section_next_steps,
+  }
 
   return (
     <div className={`kb-markdown prose dark:prose-invert max-w-none min-w-0 text-sm ${variant === 'reader' ? 'kb-markdown-reader' : 'kb-markdown-chat'}`}>
@@ -1368,7 +1411,7 @@ export function MarkdownRenderer({
           ) : null}
           {parsedContract.sections.map((section) => (
             <section key={section.key} className={`kb-answer-section kb-answer-${section.key}`}>
-              <div className="kb-answer-title">{section.label}</div>
+              <div className="kb-answer-title">{sectionLabelMap[section.key] || section.label}</div>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkMath]}
                 rehypePlugins={[rehypeKatex, rehypeHighlight]}
@@ -1391,4 +1434,3 @@ export function MarkdownRenderer({
     </div>
   )
 }
-

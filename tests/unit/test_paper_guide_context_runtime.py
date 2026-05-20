@@ -148,3 +148,78 @@ def test_prepare_paper_guide_prompt_context_builds_blocks_and_candidate_refs(mon
     assert seed["prompt_context"]["bound_source_path"] == r"db\demo\paper.en.md"
     assert seed["primary_evidence"]["source_path"] == r"db\demo\paper.en.md"
     assert seed["primary_evidence"]["heading_path"] == "Results / Figure 1"
+
+
+def test_prepare_paper_guide_prompt_context_builds_reference_opportunity_block(monkeypatch):
+    source_path = r"db\demo\scinerf.en.md"
+    support_slot = {
+        "source_path": source_path,
+        "sid": "s1234abcd",
+        "heading_path": "2. Related Work",
+        "snippet": "Most existing methods employ alternating direction method of multipliers (ADMM) [4].",
+        "candidate_refs": [4],
+        "claim_type": "prior_work",
+        "cite_policy": "prefer_ref",
+    }
+
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots", lambda *args, **kwargs: [support_slot])
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_evidence_cards_block", lambda *args, **kwargs: "EVIDENCE BLOCK")
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots_block", lambda *args, **kwargs: "SUPPORT BLOCK")
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_special_focus_block", lambda *args, **kwargs: "FOCUS BLOCK")
+    monkeypatch.setattr(context_runtime, "_collect_paper_guide_candidate_refs_by_source", lambda *args, **kwargs: {})
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_citation_grounding_block", lambda *args, **kwargs: "")
+
+    out = context_runtime._prepare_paper_guide_prompt_context(
+        paper_guide_mode=True,
+        paper_guide_bound_source_ready=True,
+        answer_hits=[{"meta": {"source_path": source_path}}],
+        paper_guide_evidence_cards=[],
+        prompt="I am new to this. Is ADMM original to this paper?",
+        retrieval_prompt="ADMM origin",
+        used_query="ADMM origin",
+        prompt_family="overview",
+        paper_guide_bound_source_path=source_path,
+        db_dir="db",
+    )
+
+    assert "Upstream reference opportunities:" in out["paper_guide_reference_opportunities_block"]
+    assert "cite_example=[[CITE:s1234abcd:4]]" in out["paper_guide_reference_opportunities_block"]
+    assert out["paper_guide_candidate_refs_by_source"] == {source_path: [4]}
+    assert out["paper_guide_contracts_seed"]["reference_opportunities"][0]["ref_num"] == 4
+
+
+def test_prepare_paper_guide_prompt_context_keeps_bound_focus_when_first_hit_is_external(monkeypatch):
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots", lambda *args, **kwargs: [])
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_evidence_cards_block", lambda *args, **kwargs: "")
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_support_slots_block", lambda *args, **kwargs: "")
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_citation_grounding_block", lambda *args, **kwargs: "")
+
+    def _focus_block(*_args, **kwargs):
+        captured["source_path"] = kwargs.get("source_path", "")
+        return "FOCUS"
+
+    monkeypatch.setattr(context_runtime, "_build_paper_guide_special_focus_block", _focus_block)
+    monkeypatch.setattr(context_runtime, "_collect_paper_guide_candidate_refs_by_source", lambda *args, **kwargs: {})
+
+    bound = r"db\bound\paper.en.md"
+    out = context_runtime._prepare_paper_guide_prompt_context(
+        paper_guide_mode=True,
+        paper_guide_bound_source_ready=True,
+        answer_hits=[
+            {"meta": {"source_path": r"db\external\other.en.md"}},
+            {"meta": {"source_path": bound}},
+        ],
+        paper_guide_evidence_cards=[],
+        prompt="Where did this idea come from?",
+        retrieval_prompt="source trace",
+        used_query="source trace",
+        prompt_family="citation_lookup",
+        paper_guide_bound_source_path=bound,
+        db_dir="db",
+    )
+
+    assert out["paper_guide_focus_source_path"] == bound
+    assert captured["source_path"] == bound
+    assert out["paper_guide_contracts_seed"]["prompt_context"]["focus_source_path"] == bound

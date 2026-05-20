@@ -1671,17 +1671,20 @@ def _repair_paper_guide_focus_answer_generic(
     family = str(prompt_family or "").strip().lower()
     excerpt = _extract_paper_guide_special_focus_excerpt(focus_block)
     ref_extractor = extract_inline_reference_numbers
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", str(prompt or "")))
     if family == "citation_lookup":
         refs = ref_extractor(excerpt) if callable(ref_extractor) else []
         if refs and _paper_guide_answer_has_not_stated_shell(text):
+            prefix = "可定位到这段原文证据：" if prefer_zh else "Source evidence: "
             return (
-                "The paper states this explicitly in the retrieved evidence: "
+                prefix
                 + _trim_paper_guide_prompt_snippet(excerpt, max_chars=420)
             ).strip()
         return text
     if _paper_guide_requested_heading_hints(prompt) and _paper_guide_answer_has_not_stated_shell(text):
+        prefix = "可定位到这段原文证据：" if prefer_zh else "Source evidence: "
         return (
-            "The paper states this explicitly in the retrieved evidence: "
+            prefix
             + _trim_paper_guide_prompt_snippet(excerpt, max_chars=420)
         ).strip()
     if family in {"overview", "method"} and _paper_guide_prompt_requests_component_role_explanation(prompt):
@@ -1708,8 +1711,9 @@ def _repair_paper_guide_focus_answer_generic(
         if role_lines and _paper_guide_answer_has_not_stated_shell(text) and (
             family == "overview" or len(role_lines) >= 2
         ):
+            intro = "简单说：" if prefer_zh else "In simple terms:"
             return (
-                "From the retrieved method evidence, in simple terms:\n- "
+                intro + "\n- "
                 + "\n- ".join(role_lines)
             ).strip()
         if family == "overview":
@@ -1749,8 +1753,9 @@ def _repair_paper_guide_focus_answer_generic(
             and _paper_guide_answer_has_not_stated_shell(text)
             and _paper_guide_method_detail_strength(detail) >= 2.5
         ):
+            prefix = "原文方法细节：" if prefer_zh else "Method detail from the source:"
             return (
-                "The paper states this explicitly in the retrieved method evidence: "
+                prefix + " "
                 + detail
             ).strip()
         if _paper_guide_prompt_requests_exact_method_support(prompt):
@@ -1761,8 +1766,9 @@ def _repair_paper_guide_focus_answer_generic(
                 if cue in detail_low
             ]
             if exact_cues and not all(cue in text.lower() for cue in exact_cues):
+                prefix = "原文方法细节：" if prefer_zh else "Method detail from the source:"
                 return (
-                    "The paper states this explicitly in the retrieved method evidence: "
+                    prefix + " "
                     + detail
                 ).strip()
         if _paper_guide_method_detail_is_covered(text, detail):

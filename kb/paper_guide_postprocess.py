@@ -70,6 +70,23 @@ def _sanitize_structured_cite_tokens(answer: str) -> str:
     return s
 
 
+def _should_preserve_structured_cites_for_user(*, prompt: str = "", prompt_family: str = "") -> bool:
+    family = str(prompt_family or "").strip().lower()
+    if family == "citation_lookup":
+        return True
+    text = str(prompt or "").strip().lower()
+    if not text:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:citation|cited|cite|reference number|reference numbers|in-paper citation|which reference|which references)\b|"
+            r"(?:文内参考|文中参考|参考编号|引用编号|哪条引用|哪些引用|指出.*参考|点开.*参考)",
+            text,
+            flags=re.I,
+        )
+    )
+
+
 def _canonicalize_negative_shell(answer: str) -> str:
     text = str(answer or "").strip()
     if not text:
@@ -88,13 +105,23 @@ def _sanitize_paper_guide_answer_for_user(
     has_hits: bool,
     prompt: str = "",
     prompt_family: str = "",
+    preserve_structured_cites: bool | None = None,
 ) -> str:
     text = str(answer or "").strip()
     if not text:
         return text
 
+    if preserve_structured_cites is None:
+        preserve_structured_cites = _should_preserve_structured_cites_for_user(
+            prompt=prompt,
+            prompt_family=prompt_family,
+        )
+    else:
+        preserve_structured_cites = bool(preserve_structured_cites)
+
     # Normalize and strip internal structured markers. The user-facing answer should never
-    # leak raw tokens like [[CITE:sid:12]] or [[SUPPORT:DOC-1]]. Rendering uses cite_details/locate_target.
+    # leak raw SUPPORT/SID tokens. Citation lookup intentionally keeps valid
+    # [[CITE:sid:n]] tokens for the renderer to turn into hoverable chips.
     text = _sanitize_structured_cite_tokens(text)
 
     if "未命中知识库片段" in text:
@@ -135,12 +162,58 @@ def _sanitize_paper_guide_answer_for_user(
 
     out = "\n\n".join(kept).strip()
     if out:
+        # Strip orphaned markdown bold/italic markers: broken ****, **, __, or * at word boundaries.
+        out = re.sub(r"\*{2,4}|\_{2,4}", "", out)
+        out = re.sub(r"(?<!\w)\*\s+(?=\w)", "", out)
+        out = re.sub(r"(?<=\w)\s+\*(?!\w)", "", out)
+        # Remove empty or near-empty parenthetical brackets.
+        out = re.sub(r"[（(]\s*[,，、;；:\s]*[）)]", "", out)
+        # Fix sentence fragments starting with Chinese conjunctions that lack a subject.
+        out = re.sub(
+            r"(?<=[。])\s*(和|并且|以及|分别|同时|另外|此外|同时|进一步|最后|最终)\s*"
+            r"(讨论|说明|阐述|指出|介绍|描述|提到|分析|探讨|对比|比较|实现|采用|提出|证明)",
+            lambda m: f"，{m.group(1)}{m.group(2)}",
+            out,
+        )
         out = _SUPPORT_MARKER_RE.sub("", out)
-        out = _CITE_CANON_RE.sub("", out)
-        out = _DOC_CONTEXT_LABEL_RE.sub("the supporting excerpts", out)
+        if not preserve_structured_cites:
+            out = _CITE_CANON_RE.sub("", out)
+        context_label = "原文证据" if re.search(r"[\u4e00-\u9fff]", out) else "source evidence"
+        out = _DOC_CONTEXT_LABEL_RE.sub(context_label, out)
+        out = re.sub(r"(?i)\bthe supporting excerpts\b", context_label, out)
+        out = re.sub(r"(?i)\bsupporting excerpts\b", context_label, out)
+        out = re.sub(r"(?i)\bretrieved context\b", "retrieved paper evidence", out)
+        out = re.sub(r"当前\s*retrieved paper evidence", "当前已检索到的原文证据", out)
+        out = re.sub(r"依据\s*retrieved paper evidence", "依据已检索到的原文证据", out)
+        out = re.sub(r"依据当前\s*retrieved paper evidence", "依据当前已检索到的原文证据", out)
+        out = re.sub(r"原文证据\s+的", "原文证据的", out)
+        out = re.sub(r"位于\s+原文证据", "位于原文证据", out)
+        out = re.sub(r"\brefs?\s+([0-9,\s]+)", lambda m: f"参考文献 {str(m.group(1) or '').strip()}", out, flags=re.IGNORECASE)
+        out = re.sub(r"（\s*依据\s*[,，、;；:\s]*）", "", out)
+        out = re.sub(r"\(\s*依据\s*[,，、;；:\s]*\)", "", out)
+        out = re.sub(r"\s*依据\s*[,，、;；:\s]*[）)]", "", out)
+        out = re.sub(r"（\s*(?:均)?基于\s*[,，、;；:\s]*）", "", out)
+        out = re.sub(r"\(\s*(?:all\s+)?based\s+on\s*[,，、;；:\s]*\)", "", out, flags=re.IGNORECASE)
+        out = re.sub(r"（\s*(?:共\s*\d+\s*篇)?参考文献\s*[:：]\s*[,，、;；\s]*）", "", out)
+        out = re.sub(r"\(\s*(?:total\s+)?(?:\d+\s+)?references?\s*[:：]\s*[,，、;；\s]*\)", "", out, flags=re.IGNORECASE)
+        out = re.sub(r"(?m)^\s*[-*+]\s*[^。\n]{1,100}[:：]\s*$\n?", "", out)
+        out = re.sub(
+            r"并分别标注了对应参考文献编号\s*[:：]\s*(?=(?:\n|\s)*(?:作者想表达|该句|这里))",
+            "并在原句中保留了对应参考文献编号。",
+            out,
+        )
+        out = re.sub(r"即\s*[:：]\s*(?=(?:\n|\s)*(?:作者想表达|该句|这里|证据\d))", "", out)
+        out = re.sub(r"（\s*(?:如|例如)\s*）", "", out)
+        out = re.sub(r"\(\s*(?:e\.g\.?|for example|see)?\s*\)", "", out, flags=re.IGNORECASE)
+        # Remove truly orphaned Chinese brackets after all paired-bracket patterns have been handled.
+        out = re.sub(r"""[）](?=\s*[，。；：！？、])""", "", out)
+        out = re.sub(r"""^\s*[（]\s*(?=[一-鿿])""", "", out, flags=re.MULTILINE)
+        out = re.sub(r"""(?<=[。！？])\s*[（]\s*(?=[一-鿿])""", "", out)
         out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+        out = re.sub(r"\s+([，。；：！？、）])", r"\1", out)
         out = re.sub(r"[ \t]{2,}", " ", out)
-        out = re.sub(r"\(\s*the supporting excerpts\s*\)", "(supporting excerpts)", out)
+        out = re.sub(r"\(\s*原文证据\s*\)", "（原文证据）", out)
+        out = re.sub(r"\(\s*source evidence\s*\)", "(source evidence)", out, flags=re.IGNORECASE)
         out = re.sub(r"\n{3,}", "\n\n", out).strip()
 
     # If the answer is a short negative-shell ("does not specify ..."), add a tiny next-step hint.

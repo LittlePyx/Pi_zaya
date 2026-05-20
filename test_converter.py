@@ -41,7 +41,7 @@ def test_convert(pdf_path: str, output_dir: str = "test_output", use_llm: bool =
                 # Be forgiving: add /v1 if missing
                 if "api.deepseek.com" in base_url and not base_url.endswith("/v1"):
                     base_url = base_url + "/v1"
-                model = os.environ.get("DEEPSEEK_MODEL", os.environ.get("OPENAI_MODEL", "deepseek-chat"))
+                model = os.environ.get("DEEPSEEK_MODEL", os.environ.get("OPENAI_MODEL", "deepseek-v4-flash"))
                 llm_config = LlmConfig(
                     api_key=api_key,
                     base_url=base_url,

@@ -692,3 +692,84 @@ def _validate_structured_citations(
 
     out = cite_canon_re.sub(_repl, cleaned)
     return out, stats
+
+
+# ── Standard RAG [n] freeform citation validation ────────────────────────
+
+_FREEFORM_NUMERIC_CITE_RE = re.compile(
+    r"(?<![!\\])\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\](?!\()"
+)
+
+
+def _validate_freeform_numeric_citations(
+    answer: str,
+    *,
+    answer_hits: list[dict],
+    db_dir: Path | None = None,
+    hit_source_path=None,
+    load_reference_index=None,
+    source_refs_from_index=None,
+    resolve_reference_entry=None,
+) -> tuple[str, dict]:
+    """Validate [n] citation markers in standard RAG mode.
+
+    Checks that each [n] falls within [1, len(answer_hits)]. Out-of-range
+    markers are removed (hallucinated citation). Stats are returned for
+    observability.
+    """
+    text = str(answer or "")
+    stats: dict = {
+        "raw_count": 0,
+        "valid_count": 0,
+        "out_of_range": 0,
+        "dropped": 0,
+        "kept": 0,
+        "hits_available": len(list(answer_hits or [])),
+    }
+    if (not text) or ("[" not in text):
+        return text, stats
+
+    hit_count = stats["hits_available"]
+    raw_tokens = list(_FREEFORM_NUMERIC_CITE_RE.finditer(text))
+    if not raw_tokens:
+        return text, stats
+
+    stats["raw_count"] = len(raw_tokens)
+
+    def _all_nums_in_spec(spec: str) -> list[int]:
+        """Parse '1,2' or '1-3' or '1' into a list of ints."""
+        out: list[int] = []
+        for item in re.split(r"\s*(?:-|–|—|,)\s*", str(spec or "").strip()):
+            try:
+                n = int(item)
+            except Exception:
+                continue
+            if n > 0:
+                out.append(n)
+        return out
+
+    def _repl(m: re.Match[str]) -> str:
+        spec = str(m.group(1) or "").strip()
+        nums = _all_nums_in_spec(spec)
+        if not nums:
+            stats["dropped"] = int(stats["dropped"]) + 1
+            return ""
+
+        # Check each number in the spec against hit bounds
+        all_valid = True
+        for n in nums:
+            if n > hit_count:
+                all_valid = False
+                break
+
+        if not all_valid:
+            stats["out_of_range"] = int(stats["out_of_range"]) + 1
+            stats["dropped"] = int(stats["dropped"]) + 1
+            return ""
+
+        stats["valid_count"] = int(stats["valid_count"]) + 1
+        stats["kept"] = int(stats["kept"]) + 1
+        return m.group(0)
+
+    out = _FREEFORM_NUMERIC_CITE_RE.sub(_repl, text)
+    return out, stats

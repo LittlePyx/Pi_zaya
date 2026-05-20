@@ -3,6 +3,75 @@ import json
 import kb.paper_guide_answer_post_runtime as answer_post_runtime
 
 
+def test_repair_reconstruction_method_taxonomy_folds_basis_pursuit_third_class():
+    raw = (
+        "文中明确提到了三类主流重建方法，其优缺点与适用场景如下：\n\n"
+        "1. **基于正交/结构化基的快速重建**\n"
+        " - **优点**：计算速度快。\n\n"
+        "2. **压缩感知优化重建**\n"
+        " - **优点**：重建质量高。\n\n"
+        "3. **稀疏表示+基追踪（Basis Pursuit）**（如 wavelet 基下的 ℓ₁ 最小化）\n"
+        " - **优点**：利用信号稀疏性。\n"
+        " - **缺点**：仍具显著计算负担。\n\n"
+        "> 注：文中未明确给出三类方法的严格分类标签。"
+    )
+
+    out = answer_post_runtime._repair_reconstruction_method_taxonomy_answer(
+        raw,
+        prompt="文中提到的几类主流重建方法分别有什么优缺点，适用场景怎么选？",
+        prompt_family="strength_limits",
+    )
+
+    assert "三类主流重建方法" not in out
+    assert "主要涉及两类主流重建策略" in out
+    assert "3. **稀疏表示" not in out
+    assert "子方法说明" in out
+    assert "不作为与前两类并列的第三个顶层范式" in out
+
+
+def test_repair_reconstruction_method_taxonomy_folds_adaptive_subset_third_class():
+    raw = (
+        "文中明确区分了三类主流重建方法，其优缺点与适用场景如下（均基于原文证据）：\n\n"
+        "1. **正交基直接加权重建**\n"
+        " - **优点**：计算极快。\n\n"
+        "2. **压缩感知优化重建**\n"
+        " - **优点**：可在远少于 N 次测量下重建。\n\n"
+        "3. **自适应/子集采样策略**（如“进化式Hadamard”）\n"
+        " - **优点**：减少测量次数。\n"
+        " - **缺点**：依赖先验或历史帧质量。\n\n"
+        "注：文中未明确给出“三类”的分类标签。"
+    )
+
+    out = answer_post_runtime._repair_reconstruction_method_taxonomy_answer(
+        raw,
+        prompt="文中提到的几类主流重建方法分别有什么优缺点，适用场景怎么选？",
+        prompt_family="strength_limits",
+    )
+
+    assert "三类主流重建方法" not in out
+    assert "主要涉及两类主流重建策略" in out
+    assert "3. **自适应" not in out
+    assert "补充策略说明" in out
+    assert "不作为与结构化基快速重建、压缩感知优化重建并列的第三个顶层重建范式" in out
+
+
+def test_soften_baseline_reproduction_inference_adds_caveat():
+    raw = (
+        "作者建议的最基础 baseline 复现路线是：\n\n"
+        "1. 使用 DMD 和单像素探测器。\n\n"
+        "该路线源于 Duarte 等人在 Rice University 的开创性工作，并被本文明确列为最常见且基础的压缩感知单像素成像实现范式。"
+    )
+
+    out = answer_post_runtime._soften_baseline_reproduction_inference(
+        raw,
+        prompt="如果我要复现一个最基础的 baseline，作者给的建议路线是什么？",
+    )
+
+    assert "文中没有直接给出“复现 baseline”的逐步操作清单" in out
+    assert "不是作者逐条给出的实验操作建议" in out
+    assert "作者建议的最基础 baseline" not in out
+
+
 def test_resolve_exact_method_support_from_source_combines_framework_lr_and_batch_details(tmp_path, monkeypatch):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text("placeholder", encoding="utf-8")
@@ -529,7 +598,7 @@ def test_apply_paper_guide_answer_postprocess_forces_exact_figure_caption_clause
         locked_citation_source=None,
     )
 
-    assert "Figure 3 caption for panel (f)" in out
+    assert "Caption clause for Figure 3(f)" in out
     assert "(f) methane imaging using SPC" in out
     assert support_resolution and support_resolution[0].get("block_id") == "blk_cap"
 
@@ -570,7 +639,7 @@ def test_apply_paper_guide_answer_postprocess_exact_citation_sets_resolved_ref_n
         locked_citation_source=None,
     )
 
-    assert "The paper cites [4] for this point." in out
+    assert "Use [4] as the cited source for this passage." in out
     assert support_resolution == [
         {
             "source_path": "bound.md",
@@ -625,7 +694,7 @@ def test_apply_paper_guide_answer_postprocess_exact_citation_sets_resolved_ref_n
         locked_citation_source=None,
     )
 
-    assert "The paper cites [33], [34] for this point." in out
+    assert "Use [33], [34] as the cited source for this passage." in out
     assert support_resolution and support_resolution[0].get("candidate_refs") == [33, 34]
     assert support_resolution and int(support_resolution[0].get("resolved_ref_num") or 0) == 33
 
@@ -666,7 +735,7 @@ def test_apply_paper_guide_answer_postprocess_exact_citation_extracts_refs_from_
         locked_citation_source=None,
     )
 
-    assert "The paper cites [33], [34] for this point." in out
+    assert "Use [33], [34] as the cited source for this passage." in out
     assert support_resolution and support_resolution[0].get("candidate_refs") == [33, 34]
     assert support_resolution and int(support_resolution[0].get("resolved_ref_num") or 0) == 33
 
@@ -861,9 +930,65 @@ def test_apply_paper_guide_answer_postprocess_detects_section_by_section_doc_map
         locked_citation_source=None,
     )
 
-    assert out.startswith("Doc map (verbatim anchors by section):")
+    assert out.startswith("Use these source anchors as a reading map:")
     assert "1. Introduction" in out
     assert support_resolution and support_resolution[0].get("claim_type") == "doc_map"
+
+
+def test_apply_paper_guide_answer_postprocess_focuses_natural_zh_reading_path(monkeypatch):
+    monkeypatch.setattr(
+        answer_post_runtime,
+        "_resolve_doc_map_records_from_source",
+        lambda source_path, **kwargs: [
+            {
+                "source_path": source_path,
+                "block_id": "blk_title",
+                "anchor_id": "p_title",
+                "heading_path": "Demo Paper",
+                "locate_anchor": "Yunhao Li Xiaodong Wang Zhejiang University {author}@example.edu.cn",
+                "claim_type": "doc_map",
+            },
+            {
+                "source_path": source_path,
+                "block_id": "blk_abs",
+                "anchor_id": "p_abs",
+                "heading_path": "Abstract",
+                "locate_anchor": "This paper connects snapshot compressive imaging with a NeRF representation.",
+                "claim_type": "doc_map",
+            },
+            {
+                "source_path": source_path,
+                "block_id": "blk_method",
+                "anchor_id": "p_method",
+                "heading_path": "3. Method",
+                "locate_anchor": "Our method takes a single compressed image and recovers the underlying 3D scene representation.",
+                "claim_type": "doc_map",
+            },
+        ],
+    )
+
+    out, support_resolution = answer_post_runtime._apply_paper_guide_answer_postprocess(
+        "placeholder",
+        paper_guide_mode=True,
+        prompt="我没看懂它怎么从一张压缩图变成可以转视角的3D场景，我应该先读哪几段？",
+        prompt_for_user="我没看懂它怎么从一张压缩图变成可以转视角的3D场景，我应该先读哪几段？",
+        prompt_family="overview",
+        special_focus_block="",
+        focus_source_path="",
+        direct_source_path="",
+        bound_source_path="bound.md",
+        db_dir="db",
+        answer_hits=[],
+        support_slots=[],
+        cards=[],
+        locked_citation_source=None,
+    )
+
+    assert out.startswith("可以先按这几处读：")
+    assert "Yunhao Li" not in out
+    assert "1. Abstract" in out
+    assert "2. 3. Method" in out
+    assert len(support_resolution) == 2
 
 
 def test_extract_caption_panel_clause_supports_plain_and_bold_markers():

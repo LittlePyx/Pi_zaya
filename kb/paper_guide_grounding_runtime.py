@@ -109,6 +109,66 @@ _PAPER_GUIDE_CITE_STRONG_TOKENS = {
     "iscat",
     "iism",
 }
+_PAPER_GUIDE_SUPPORT_TECH_STRONG_TOKENS = {
+    "algorithm",
+    "basis",
+    "computational",
+    "compressed",
+    "data",
+    "convex",
+    "dynamic",
+    "fast",
+    "faster",
+    "feedback",
+    "frame",
+    "fourier",
+    "hadamard",
+    "highest",
+    "image",
+    "least",
+    "low",
+    "minimization",
+    "moderate",
+    "offline",
+    "optimization",
+    "overhead",
+    "processing",
+    "pursuit",
+    "rate",
+    "real",
+    "reconstruction",
+    "resolution",
+    "resolutions",
+    "sensing",
+    "sparse",
+    "sparsest",
+    "squares",
+    "time",
+    "variation",
+    "video",
+    "wavelet",
+}
+_PAPER_GUIDE_SUPPORT_CJK_TOKEN_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (r"凸优化|优化", ("convex", "optimization", "algorithm")),
+    (r"最小二乘", ("least", "squares")),
+    (r"稀疏|最稀疏", ("sparse", "sparsest", "sparsity")),
+    (r"最小化", ("minimization",)),
+    (r"小波|子波", ("wavelet",)),
+    (r"全变分|总变分", ("total", "variation")),
+    (r"计算开销|计算负担", ("computational", "overhead")),
+    (r"重建时间", ("reconstruction", "time")),
+    (r"实时|近实时", ("real", "time", "performance")),
+    (r"低[/／至到-]?中(?:等)?分辨率|低分辨率|中(?:等)?分辨率", ("low", "moderate", "resolution", "resolutions")),
+    (r"快速反馈|速度要求|快速|加速", ("fast", "faster", "feedback")),
+    (r"动态|视频流", ("dynamic", "video")),
+    (r"离线|后处理", ("offline", "post", "processing")),
+    (r"图像质量|保真", ("image", "quality")),
+    (r"最高", ("highest",)),
+    (r"高帧率|视频", ("frame", "rate", "video")),
+    (r"压缩数据|高度压缩", ("compressed", "data")),
+    (r"欠采样|亚奈奎斯特", ("under", "sampling", "sub", "compressed")),
+    (r"压缩感知", ("compressed", "compressive", "sensing")),
+)
 _CITE_CANON_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]",
     re.IGNORECASE,
@@ -325,13 +385,19 @@ def _paper_guide_support_focus_tokens(*parts: str, limit: int = 18) -> set[str]:
     except Exception:
         max_items = 18
     for part in parts:
-        for tok in _paper_guide_cue_tokens(str(part or "")):
+        part_text = str(part or "")
+        mapped_tokens: list[str] = []
+        for pattern, tokens in _PAPER_GUIDE_SUPPORT_CJK_TOKEN_HINTS:
+            if re.search(pattern, part_text, flags=re.IGNORECASE):
+                mapped_tokens.extend(tokens)
+        for tok in [*mapped_tokens, *_paper_guide_cue_tokens(part_text)]:
             if tok in seen:
+                continue
+            is_strong = tok in _PAPER_GUIDE_SUPPORT_TECH_STRONG_TOKENS or tok in _PAPER_GUIDE_CITE_STRONG_TOKENS
+            if len(out) >= max_items and not is_strong:
                 continue
             seen.add(tok)
             out.append(tok)
-            if len(out) >= max_items:
-                return set(out)
     return set(out)
 
 
@@ -413,6 +479,7 @@ def _score_paper_guide_evidence_atom(
     atom_tokens = _paper_guide_support_focus_tokens(atom_heading, atom_text)
     shared_tokens = set(query_tokens or set()).intersection(atom_tokens)
     strong_shared = shared_tokens.intersection(_PAPER_GUIDE_CITE_STRONG_TOKENS)
+    tech_shared = shared_tokens.intersection(_PAPER_GUIDE_SUPPORT_TECH_STRONG_TOKENS)
     family = str(prompt_family or "").strip().lower()
     claim = str(claim_type or "").strip().lower()
     score = 0.0
@@ -422,6 +489,75 @@ def _score_paper_guide_evidence_atom(
         score += min(0.9, 0.18 * float(len(shared_tokens)))
     if strong_shared:
         score += min(0.72, 0.22 * float(len(strong_shared)))
+    if tech_shared:
+        score += min(2.0, 0.55 * float(len(tech_shared)))
+    atom_norm = normalize_match_text(atom_text[:2000])
+    quality_query_terms = {
+        "compressed",
+        "data",
+        "frame",
+        "highest",
+        "image",
+        "offline",
+        "processing",
+        "quality",
+        "rate",
+        "video",
+    }
+    quality_shared = shared_tokens.intersection(quality_query_terms)
+    quality_trigger = (
+        bool(quality_shared.intersection({"compressed", "frame", "highest", "offline", "quality", "video"}))
+        or bool(
+            re.search(
+                r"(?:最高|图像质量|高帧率|视频|压缩数据|高度压缩|离线|后处理)",
+                str(probe or ""),
+            )
+        )
+    )
+    exact_quality_hits = 0
+    if quality_trigger:
+        if "highest image quality" in atom_norm:
+            score += 1.15
+            exact_quality_hits += 1
+        if "frame rate video" in atom_norm:
+            score += 0.75
+            exact_quality_hits += 1
+        if "compressed data" in atom_norm:
+            score += 0.55
+            exact_quality_hits += 1
+        if "post processing offline" in atom_norm or (
+            "offline" in atom_tokens and {"post", "processing"}.intersection(atom_tokens)
+        ):
+            score += 0.45
+            exact_quality_hits += 1
+        if exact_quality_hits <= 0 and len(quality_shared) <= 2:
+            # Avoid letting generic "data/image" overlap beat the sentence that states the
+            # actual quality/frame-rate/compression tradeoff.
+            score -= 0.35
+    speed_query_terms = {"dynamic", "fast", "faster", "feedback", "low", "moderate", "real", "resolution", "resolutions", "time"}
+    speed_shared = shared_tokens.intersection(speed_query_terms)
+    speed_trigger = (
+        bool(speed_shared)
+        or bool(
+            re.search(
+                r"(?:低[/／至到-]?中(?:等)?分辨率|低分辨率|中(?:等)?分辨率|实时|近实时|快速反馈|快速|速度|动态)",
+                str(probe or ""),
+            )
+        )
+    )
+    exact_speed_hits = 0
+    if speed_trigger:
+        if "low to moderate image resolutions" in atom_norm:
+            score += 1.25
+            exact_speed_hits += 1
+        if "real time image reconstruction" in atom_norm:
+            score += 0.95
+            exact_speed_hits += 1
+        if "faster" in atom_norm or "fast algorithmic transform" in atom_norm:
+            score += 0.45
+            exact_speed_hits += 1
+        if exact_speed_hits <= 0 and "highest frame rate video" in atom_norm:
+            score -= 0.55
     if query_phrases:
         score += min(
             1.0,
@@ -466,6 +602,11 @@ def _score_paper_guide_evidence_atom(
             score -= 0.35
         if re.search(r"(?i)\b(?:transform domain|optimization problem|k\s*\\?log\s*\(n/k\)|m\s*[>=鈮]\s*o\()", atom_text):
             score += 0.95
+
+    if atom_kind == "ref_span" and family != "citation_lookup" and claim not in {"prior_work", "borrowed_tool"}:
+        # Ref spans are excellent for citation lookup, but they are often a poor anchor for
+        # ordinary claim support. Prefer the sentence that states the fact over a nearby ref id.
+        score -= 0.75
 
     inline_refs = [int(n) for n in list(atom.get("inline_refs") or []) if int(n) > 0]
     if inline_refs:
@@ -1066,6 +1207,11 @@ def _is_paper_guide_broad_summary_line(text: str, *, prompt_family: str = "") ->
         or bool(_summary_segment_tags(raw))
     ):
         return True
+    if family == "strength_limits" and re.search(
+        r"(?:可分为|如下|依据|优缺点与适用场景|综合文中线索)",
+        raw,
+    ):
+        return True
     return False
 
 
@@ -1139,9 +1285,15 @@ def _paper_guide_support_claim_type(
         return "own_result"
     if family == "compare":
         return "compare_result"
+    if family == "strength_limits":
+        if has_refs and re.search(
+            r"\b(?:prior work|previous work|background|reference|references|"
+            r"reported by|proposed by|introduced by|literature)\b",
+            detail_text,
+        ):
+            return "prior_work"
+        return "own_result"
     if has_refs and ("reference" in heading_low or "background" in heading_low or "prior" in snippet_low):
-        return "prior_work"
-    if family == "strength_limits" and has_refs:
         return "prior_work"
     return "own_result"
 
@@ -1954,7 +2106,7 @@ def _paper_guide_support_rule_tokens(slot: dict) -> set[str]:
         txt = str(extra or "").strip()
         if txt:
             cue_parts.append(txt)
-    return set(_paper_guide_cue_tokens(" ".join(cue_parts)))
+    return _paper_guide_support_focus_tokens(" ".join(cue_parts))
 
 
 def _paper_guide_support_slot_looks_figure_like(slot: dict) -> bool:
@@ -2001,7 +2153,7 @@ def _select_paper_guide_support_slot_for_context(
     if len(candidates) == 1:
         return candidates[0]
     surface = _normalize_paper_guide_support_surface(context_text)
-    line_tokens = set(_paper_guide_cue_tokens(surface))
+    line_tokens = _paper_guide_support_focus_tokens(surface)
     line_panel_letters = _extract_caption_panel_letters(context_text)
     if not line_tokens:
         return candidates[0]
@@ -2180,7 +2332,7 @@ def _inject_paper_guide_support_markers(
             continue
         if stripped.startswith("|") or skip_line_re.search(stripped):
             continue
-        line_tokens = set(_paper_guide_cue_tokens(stripped))
+        line_tokens = _paper_guide_support_focus_tokens(stripped)
         if not line_tokens:
             continue
         line_panel_letters = _extract_caption_panel_letters(stripped)
@@ -2372,6 +2524,9 @@ def _resolve_paper_guide_support_markers(
         line = str(raw_line or "")
         surface = _normalize_paper_guide_support_surface(line)
         if _is_paper_guide_support_meta_line(surface):
+            lines[idx] = _SUPPORT_MARKER_RE.sub("", line).rstrip()
+            continue
+        if _is_paper_guide_broad_summary_line(surface, prompt_family=prompt_family):
             lines[idx] = _SUPPORT_MARKER_RE.sub("", line).rstrip()
             continue
 

@@ -142,6 +142,10 @@ class ChatStore:
                 conn.execute("ALTER TABLE message_refs ADD COLUMN render_locale TEXT NOT NULL DEFAULT ''")
             except sqlite3.OperationalError:
                 pass
+            try:
+                conn.execute("ALTER TABLE message_refs ADD COLUMN query_variants_json TEXT NOT NULL DEFAULT '[]'")
+            except sqlite3.OperationalError:
+                pass
             conn.execute("CREATE INDEX IF NOT EXISTS idx_message_refs_conv_id ON message_refs(conv_id);")
             # Projects (ChatGPT-style): optional grouping for conversations
             conn.execute(
@@ -787,6 +791,7 @@ class ChatStore:
         render_attempts: int | None = None,
         render_evidence_sig: str | None = None,
         render_locale: str | None = None,
+        query_variants: list[str] | None = None,
     ) -> bool:
         mid = int(user_msg_id or 0)
         if mid <= 0:
@@ -812,6 +817,10 @@ class ChatStore:
             )
         except Exception:
             rendered_payload_json = ""
+        try:
+            query_variants_json = json.dumps(list(query_variants or []), ensure_ascii=False)
+        except Exception:
+            query_variants_json = "[]"
         rendered_sig = str(rendered_payload_sig or "").strip() if rendered_payload_json else ""
         with self._connect() as conn:
             row = conn.execute(
@@ -858,7 +867,7 @@ class ChatStore:
                         rendered_payload_json = ?, rendered_payload_sig = ?,
                         render_status = ?, render_error = ?, render_error_detail = ?,
                         render_built_at = ?, render_attempts = ?, render_evidence_sig = ?, render_locale = ?,
-                        used_query = ?, used_translation = ?, updated_at = ?
+                        used_query = ?, used_translation = ?, query_variants_json = ?, updated_at = ?
                     WHERE user_msg_id = ?
                     """,
                     (
@@ -878,6 +887,7 @@ class ChatStore:
                         next_render_locale,
                         used_query,
                         1 if bool(used_translation) else 0,
+                        query_variants_json,
                         now,
                         mid,
                     ),
@@ -892,9 +902,9 @@ class ChatStore:
                         rendered_payload_json, rendered_payload_sig,
                         render_status, render_error, render_error_detail,
                         render_built_at, render_attempts, render_evidence_sig, render_locale,
-                        used_query, used_translation, created_at, updated_at
+                        used_query, used_translation, query_variants_json, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         mid,
@@ -914,6 +924,7 @@ class ChatStore:
                         next_render_locale,
                         used_query,
                         1 if bool(used_translation) else 0,
+                        query_variants_json,
                         created_at,
                         now,
                     ),
@@ -1088,7 +1099,7 @@ class ChatStore:
                        rendered_payload_json, rendered_payload_sig,
                        render_status, render_error, render_error_detail,
                        render_built_at, render_attempts, render_evidence_sig, render_locale,
-                       used_query, used_translation, created_at, updated_at
+                       used_query, used_translation, query_variants_json, created_at, updated_at
                 FROM message_refs
                 WHERE conv_id = ?
                 ORDER BY user_msg_id ASC
@@ -1139,6 +1150,7 @@ class ChatStore:
                 "render_locale": str(r["render_locale"] or ""),
                 "used_query": str(r["used_query"] or ""),
                 "used_translation": bool(int(r["used_translation"] or 0)),
+                "query_variants": json.loads(r["query_variants_json"] or "[]") if isinstance(r["query_variants_json"], str) and r["query_variants_json"].strip() else [],
                 "created_at": float(r["created_at"] or 0.0),
                 "updated_at": float(r["updated_at"] or 0.0),
             }

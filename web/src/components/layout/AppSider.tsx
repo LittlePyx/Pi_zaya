@@ -28,6 +28,7 @@ import {
   CaretDownOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { Conversation, Project } from '../../api/chat'
@@ -36,14 +37,14 @@ import { SettingsDrawer } from './SettingsDrawer'
 const { Sider, Content } = Layout
 const { Text } = Typography
 
-function formatRelativeTime(ts?: number) {
+function formatRelativeTime(ts: number | undefined, txt: { just_now: string; minutes_ago: string; hours_ago: string; days_ago: string }) {
   if (!ts) return ''
   const now = Date.now() / 1000
   const diff = Math.max(0, Math.floor(now - ts))
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-  if (diff < 86400 * 7) return `${Math.floor(diff / 86400)} 天前`
+  if (diff < 60) return txt.just_now
+  if (diff < 3600) return txt.minutes_ago.replace('{n}', String(Math.floor(diff / 60)))
+  if (diff < 86400) return txt.hours_ago.replace('{n}', String(Math.floor(diff / 3600)))
+  if (diff < 86400 * 7) return txt.days_ago.replace('{n}', String(Math.floor(diff / 86400)))
   const d = new Date(ts * 1000)
   const mm = `${d.getMonth() + 1}`.padStart(2, '0')
   const dd = `${d.getDate()}`.padStart(2, '0')
@@ -126,13 +127,14 @@ function ConversationRow({
   onMove?: (targetProjectId: string) => void
   moveMenuItems?: MenuProps['items']
 }) {
+  const S = useT()
   const menuItems: MenuProps['items'] = [
-    { key: 'rename', icon: <EditOutlined />, label: '重命名' },
+    { key: 'rename', icon: <EditOutlined />, label: S.rename },
     ...(moveMenuItems && moveMenuItems.length > 0
-      ? [{ key: 'move', icon: <FolderOpenOutlined />, label: '移动到', children: moveMenuItems }]
+      ? [{ key: 'move', icon: <FolderOpenOutlined />, label: S.move_to, children: moveMenuItems }]
       : []),
     { type: 'divider' },
-    { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
+    { key: 'delete', icon: <DeleteOutlined />, label: S.delete, danger: true },
   ]
 
   return (
@@ -147,7 +149,7 @@ function ConversationRow({
         <div className="kb-conv-title" title={conversation.title}>
           <span className="kb-conv-title-text">{conversation.title}</span>
         </div>
-        <span className="kb-conv-time">{formatRelativeTime(conversation.updated_at) || ' '}</span>
+        <span className="kb-conv-time">{formatRelativeTime(conversation.updated_at, S) || ' '}</span>
       </div>
       <Dropdown
         trigger={['click']}
@@ -164,7 +166,9 @@ function ConversationRow({
               return
             }
             Modal.confirm({
-              title: '确认删除这个对话吗？',
+              title: S.confirm_delete_conversation,
+              okText: S.confirm_ok,
+              cancelText: S.confirm_cancel,
               onOk: async () => {
                 await onDelete()
               },
@@ -211,6 +215,7 @@ function ProjectSection({
   onRename: () => void
   onDelete: () => void
 }) {
+  const S = useT()
   return (
     <div className={`kb-project-card rounded-lg overflow-hidden ${selected ? 'is-active' : ''}`}>
       <div className="kb-project-head flex items-center gap-1 px-2 py-1">
@@ -235,8 +240,8 @@ function ProjectSection({
             trigger={['click']}
             menu={{
               items: [
-                { key: 'rename', icon: <EditOutlined />, label: '重命名项目' },
-                { key: 'delete', icon: <DeleteOutlined />, label: '删除项目', danger: true },
+                { key: 'rename', icon: <EditOutlined />, label: S.rename_project },
+                { key: 'delete', icon: <DeleteOutlined />, label: S.delete_project, danger: true },
               ],
               onClick: ({ key, domEvent }) => {
                 domEvent.stopPropagation()
@@ -245,8 +250,10 @@ function ProjectSection({
                   return
                 }
                 Modal.confirm({
-                  title: '确认删除这个项目吗？',
-                  content: '项目下会话会保留，并自动移动到未分组。',
+                  title: S.confirm_delete_project,
+                  content: S.delete_project_warning,
+                  okText: S.confirm_ok,
+                  cancelText: S.confirm_cancel,
                   onOk: async () => {
                     await onDelete()
                   },
@@ -280,7 +287,7 @@ function ProjectSection({
             ))
           ) : (
             <div className="px-2 py-1">
-              <Text type="secondary" className="!text-xs">这个项目下暂无会话</Text>
+              <Text type="secondary" className="!text-xs">{S.no_conversations_in_project}</Text>
             </div>
           )}
         </div>
@@ -290,6 +297,7 @@ function ProjectSection({
 }
 
 export function AppLayout({ children }: { children: ReactNode }) {
+  const S = useT()
   const nav = useNavigate()
   const loc = useLocation()
   const projects = useChatStore((s) => s.projects)
@@ -513,10 +521,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <img src="/team_logo.png" alt="Team logo" className="kb-sider-team-logo" />
           </div>
           <Text className="block text-[14px] font-semibold leading-tight tracking-tight">
-            π-zaya · 你的知识库助理
+            {S.brand_subtitle}
           </Text>
           <Text type="secondary" className="!text-[11px]">
-            当前会话 {normalizedKeyword ? `${visibleConversationCount}/${totalConversationCount}` : totalConversationCount} 条
+            {S.conversation_count.replace('{n}', String(normalizedKeyword ? `${visibleConversationCount}/${totalConversationCount}` : totalConversationCount))}
           </Text>
         </div>
 
@@ -525,8 +533,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
           selectedKeys={[menuKey]}
           className="kb-sider-menu !bg-transparent !border-none"
           items={[
-            { key: 'chat', icon: <MessageOutlined />, label: '对话', onClick: () => nav('/') },
-            { key: 'library', icon: <BookOutlined />, label: '文献管理', onClick: () => nav('/library') },
+            { key: 'chat', icon: <MessageOutlined />, label: S.chat, onClick: () => nav('/') },
+            { key: 'library', icon: <BookOutlined />, label: S.page_library, onClick: () => nav('/library') },
           ]}
         />
 
@@ -542,7 +550,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 nav('/')
               }}
             >
-              新建对话
+              {S.new_chat}
             </Button>
             <Button
               size="small"
@@ -550,11 +558,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
               className="kb-sider-main-action flex-1"
               onClick={openCreateProject}
             >
-              新建项目
+              {S.new_project}
             </Button>
           </div>
           <div className="kb-sider-tool-buttons mt-1 flex items-center gap-1">
-            <Tooltip title={theme === 'dark' ? '切换浅色模式' : '切换深色模式'}>
+            <Tooltip title={theme === 'dark' ? S.switch_light_mode : S.switch_dark_mode}>
               <Button
                 className="kb-sider-icon-btn"
                 size="small"
@@ -562,7 +570,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 onClick={toggleTheme}
               />
             </Tooltip>
-            <Tooltip title="打开设置">
+            <Tooltip title={S.open_settings}>
               <Button className="kb-sider-icon-btn" size="small" icon={<SettingOutlined />} onClick={() => setDrawerOpen(true)} />
             </Tooltip>
           </div>
@@ -572,7 +580,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               allowClear
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="搜索项目或会话"
+              placeholder={S.search_project_or_conversation}
               prefix={<SearchOutlined className="opacity-50" />}
             />
           </div>
@@ -606,7 +614,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             ))
           ) : (
             <div className="kb-sider-empty">
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<Text type="secondary">没有匹配的项目或会话</Text>} />
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<Text type="secondary">{S.no_matching_items}</Text>} />
             </div>
           )}
 
@@ -616,7 +624,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               className="kb-ungrouped-head w-full flex items-center justify-between gap-2 text-left"
               onClick={() => selectProject(null)}
             >
-              <Text className="text-[13px] font-medium">未分组对话</Text>
+              <Text className="text-[13px] font-medium">{S.ungrouped_conversations}</Text>
               <Text type="secondary" className="kb-count-text">{filteredRootConversations.length}</Text>
             </button>
             <div className="kb-root-conversations px-1 py-1 space-y-0.5">
@@ -642,7 +650,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 ))
               ) : (
                 <div className="px-2 py-1">
-                  <Text type="secondary" className="!text-xs">暂无未分组会话</Text>
+                  <Text type="secondary" className="!text-xs">{S.no_ungrouped_conversations}</Text>
                 </div>
               )}
             </div>
@@ -652,7 +660,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <SettingsDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
         <Modal
-          title={projectModalMode === 'create' ? '新建项目' : '重命名项目'}
+          title={projectModalMode === 'create' ? S.new_project : S.rename_project}
           open={projectModalOpen}
           onOk={() => { void submitProjectModal() }}
           onCancel={() => {
@@ -665,13 +673,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <Input
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
-            placeholder="输入项目名称"
+            placeholder={S.input_project_name_placeholder}
             onPressEnter={() => { void submitProjectModal() }}
           />
         </Modal>
 
         <Modal
-          title="重命名会话"
+          title={S.rename_conversation_title}
           open={conversationModalOpen}
           onOk={() => { void submitConversationModal() }}
           onCancel={() => {
@@ -684,7 +692,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <Input
             value={conversationTitle}
             onChange={(e) => setConversationTitle(e.target.value)}
-            placeholder="输入会话标题"
+            placeholder={S.input_conversation_title_placeholder}
             onPressEnter={() => { void submitConversationModal() }}
           />
         </Modal>

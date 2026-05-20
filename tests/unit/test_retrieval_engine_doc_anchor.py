@@ -4,6 +4,7 @@ from pathlib import Path
 
 import kb.retrieval_engine as retrieval_engine
 from kb.retrieval_engine import (
+    _anchor_text_bonus,
     _extract_explicit_anchor_hint,
     _group_hits_by_doc_for_refs,
     _postprocess_refs_pack,
@@ -15,6 +16,10 @@ def test_extract_explicit_anchor_hint_supports_figure_equation_and_theorem():
     assert fig["kind"] == "figure"
     assert fig["number"] == 3
 
+    fig_direct = _extract_explicit_anchor_hint("SCINeRF的真实硬件实验装置，请对应到原文图3或实验设置")
+    assert fig_direct["kind"] == "figure"
+    assert fig_direct["number"] == 3
+
     eq = _extract_explicit_anchor_hint("请解释这篇论文里的公式(11)")
     assert eq["kind"] == "equation"
     assert eq["number"] == 11
@@ -22,6 +27,20 @@ def test_extract_explicit_anchor_hint_supports_figure_equation_and_theorem():
     thm = _extract_explicit_anchor_hint("what does theorem 2 mean in this paper")
     assert thm["kind"] == "theorem"
     assert thm["number"] == 2
+
+
+def test_anchor_text_bonus_prefers_direct_caption_at_snippet_start():
+    hint = {"kind": "figure", "number": 3}
+    direct = "![Figure 3](./fig3.png)\n**Figure 3.** Experimental setup with a CCD camera and DMD."
+    delayed = (
+        "The real-world paragraph says Fig. 3 shows the setup. "
+        "Several unrelated sentences appear before the actual caption.\n"
+        "![Figure 3](./fig3.png)\n**Figure 3.** Experimental setup with a CCD camera and DMD."
+    )
+    indirect = "**Figure 5.** Qualitative examples captured by our system in Fig. 3."
+
+    assert _anchor_text_bonus(direct, hint) > _anchor_text_bonus(delayed, hint)
+    assert _anchor_text_bonus(direct, hint) > _anchor_text_bonus(indirect, hint)
 
 
 def test_group_hits_by_doc_for_refs_prioritizes_anchor_snippet_for_explicit_doc(tmp_path: Path, monkeypatch):
@@ -88,6 +107,117 @@ def test_group_hits_by_doc_for_refs_prioritizes_anchor_snippet_for_explicit_doc(
     show_snips = meta.get("ref_show_snippets") or []
     assert show_snips
     assert "Figure 3" in str(show_snips[0])
+
+
+def test_group_hits_by_doc_for_refs_rescues_cn_direct_figure_anchor_for_short_title(tmp_path: Path, monkeypatch):
+    md = tmp_path / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                "",
+                "## 4. Experiments",
+                "This section contains general reconstruction results.",
+                "",
+                "**Real-world datasets.** The setup consists of an iRAYPLE A5402MU90 camera and a FLDISCOVERY F4110 DMD. Fig. 3 shows the experimental setup used to collect the real dataset.",
+                "",
+                "![Figure 3](./assets/fig3.png)",
+                "**Figure 3.** Experimental setup for real dataset collection. This SCI imaging system contains a CCD camera to record snapshot measurement, primary and relay lens, and a DMD to modulate input frames.",
+                "",
+                "![Figure 5](./assets/fig5.png)",
+                "**Figure 5.** Additional synthetic reconstruction comparisons.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(retrieval_engine, "_is_temp_source_path", lambda _src: False)
+
+    hits_raw = [
+        {
+            "score": 8.0,
+            "id": "h1",
+            "text": "SCINeRF reports reconstruction experiments and synthetic comparisons.",
+            "meta": {
+                "source_path": str(md),
+                "heading_path": "4. Experiments",
+            },
+        }
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits_raw,
+        prompt_text="SCINeRF的真实硬件实验装置包含哪些部件？请对应到原文图3或实验设置。",
+        top_k_docs=3,
+        deep_query="",
+        deep_read=False,
+        llm_rerank=False,
+        settings=None,
+    )
+
+    assert len(docs) == 1
+    doc = docs[0]
+    text = str(doc.get("text") or "")
+    meta = doc.get("meta", {}) or {}
+    assert "Figure 3" in text
+    assert "CCD camera" in text
+    assert meta.get("anchor_target_kind") == "figure"
+    assert meta.get("anchor_target_number") == 3
+    assert float(meta.get("explicit_doc_match_score") or 0.0) >= 6.0
+    show_snips = [str(item or "") for item in (meta.get("ref_show_snippets") or [])]
+    assert any("FLDISCOVERY F4110 DMD" in item for item in show_snips)
+
+
+def test_group_hits_by_doc_for_refs_prefers_direct_figure_caption_over_later_reference(tmp_path: Path, monkeypatch):
+    md = tmp_path / "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                "",
+                "## 4. Experiments",
+                "### 4.1. Experimental Setup",
+                "![Figure 3](./assets/fig3.png)",
+                "**Figure 3.** Experimental setup for real dataset collection. This SCI imaging system contains a CCD camera to record snapshot measurement, primary and relay lens, and a DMD to modulate input frames.",
+                "**Implementation details.** We use PyTorch [48], NeRF [26], and Adam [16] after the caption.",
+                "",
+                "### 4.2. Additional Study",
+                "![Figure 5](./assets/fig5.png)",
+                "**Figure 5.** Qualitative evaluations on the real dataset captured by our system in Fig. 3.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(retrieval_engine, "_is_temp_source_path", lambda _src: False)
+
+    hits_raw = [
+        {
+            "score": 18.0,
+            "id": "h-fig5",
+            "text": "**Figure 5.** Qualitative evaluations on the real dataset captured by our system in Fig. 3.",
+            "meta": {
+                "source_path": str(md),
+                "heading_path": "4. Experiments / 4.2. Additional Study / Figure 5",
+            },
+        }
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits_raw,
+        prompt_text="SCINeRF的真实硬件实验装置包含哪些部件？请对应到原文图3或实验设置。",
+        top_k_docs=3,
+        deep_query="",
+        deep_read=False,
+        llm_rerank=False,
+        settings=None,
+    )
+
+    doc = docs[0]
+    text = str(doc.get("text") or "")
+    meta = doc.get("meta", {}) or {}
+    assert "Figure 3" in text
+    assert "CCD camera" in text
+    assert "Figure 5" not in text
+    assert str(meta.get("ref_best_heading_path") or "").endswith("4.1. Experimental Setup")
 
 
 def test_group_hits_by_doc_for_refs_supports_latex_tagged_equation_anchor(tmp_path: Path, monkeypatch):
@@ -201,6 +331,93 @@ def test_group_hits_by_doc_for_refs_boosts_exact_focus_doc_over_higher_bm25_nois
     top_meta = docs[0].get("meta", {}) or {}
     assert str(top_meta.get("source_path") or "").endswith(target_md.name)
     assert float(((top_meta.get("ref_rank") or {}).get("focus_bonus") or 0.0)) > 0.0
+
+
+def test_group_hits_by_doc_for_refs_promotes_user_written_technical_phrase(tmp_path: Path, monkeypatch):
+    target_md = tmp_path / "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md"
+    target_md.write_text(
+        "\n".join(
+            [
+                "# Adaptive foveated single-pixel imaging with dynamic supersampling",
+                "",
+                "## INTRODUCTION",
+                "### Spatially variant digital supersampling",
+                "Dynamic supersampling shifts pixel boundaries between frames so important regions receive denser spatial samples.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    background_md = tmp_path / "SSP-2012-Sequential compressed sensing.en.md"
+    background_md.write_text(
+        "\n".join(
+            [
+                "# Sequential compressed sensing",
+                "",
+                "## I. Introduction",
+                "Single-pixel imaging can use compressed sensing and dynamically adapt measurements in a general reconstruction pipeline.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mention_only_md = tmp_path / "NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md"
+    mention_only_md.write_text(
+        "\n".join(
+            [
+                "# Principles and prospects for single-pixel imaging",
+                "",
+                "## Adaptive strategies",
+                "Recently, adaptive and smart sensing with dynamic supersampling was reported for single-pixel imaging.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(retrieval_engine, "_is_temp_source_path", lambda _src: False)
+
+    hits_raw = [
+        {
+            "score": 31.0,
+            "id": "background",
+            "text": "Single-pixel imaging can use compressed sensing and dynamically adapt measurements in a general reconstruction pipeline.",
+            "meta": {
+                "source_path": str(background_md),
+                "heading_path": "I. Introduction",
+            },
+        },
+        {
+            "score": 28.0,
+            "id": "mention-only",
+            "text": "Recently, adaptive and smart sensing with dynamic supersampling was reported for single-pixel imaging.",
+            "meta": {
+                "source_path": str(mention_only_md),
+                "heading_path": "Adaptive strategies",
+            },
+        },
+        {
+            "score": 22.0,
+            "id": "target",
+            "text": "Dynamic supersampling shifts pixel boundaries between frames so important regions receive denser spatial samples.",
+            "meta": {
+                "source_path": str(target_md),
+                "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+            },
+        },
+    ]
+
+    docs = _group_hits_by_doc_for_refs(
+        hits_raw,
+        prompt_text="dynamic supersampling \u662f\u4e0d\u662f\u5c31\u662f\u53ea\u76ef\u7740\u753b\u9762\u91cd\u8981\u7684\u5730\u65b9\u591a\u62cd\u4e00\u70b9\uff1f",
+        top_k_docs=3,
+        deep_query="",
+        deep_read=False,
+        llm_rerank=False,
+        settings=None,
+    )
+
+    assert len(docs) == 3
+    top_meta = docs[0].get("meta", {}) or {}
+    assert str(top_meta.get("source_path") or "").endswith(target_md.name)
+    assert float(top_meta.get("direct_prompt_match_score") or 0.0) >= 6.0
+    assert "dynamic supersampling" in list(top_meta.get("direct_prompt_match_terms") or [])
 
 
 def test_group_hits_by_doc_for_refs_does_not_mistake_reference_index_for_equation_anchor(tmp_path: Path, monkeypatch):

@@ -27,6 +27,12 @@ from kb.paper_guide_prompting import (
     _merge_paper_guide_deepread_context,
     _paper_guide_allows_citeless_answer,
 )
+from kb.paper_guide_reference_opportunities import (
+    build_reference_opportunities_prompt_block,
+    detect_paper_guide_reference_opportunities,
+    detect_text_reference_opportunities,
+    merge_reference_opportunity_candidate_refs,
+)
 from kb.paper_guide.router import _resolve_paper_guide_intent
 from kb.paper_guide_retrieval_runtime import _select_paper_guide_deepread_extras
 from kb.paper_guide_shared import _cite_source_id, _source_name_from_md_path
@@ -40,6 +46,22 @@ def _hit_source_path(hit: dict) -> str:
         return ""
     meta = hit.get("meta", {}) or {}
     return str(meta.get("source_path") or "").strip()
+
+
+def _normalize_source_path_for_compare(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return str(Path(text).expanduser().resolve()).replace("\\", "/").casefold()
+    except Exception:
+        return text.replace("\\", "/").casefold()
+
+
+def _same_source_path(left: str, right: str) -> bool:
+    lval = _normalize_source_path_for_compare(left)
+    rval = _normalize_source_path_for_compare(right)
+    return bool(lval and rval and lval == rval)
 
 
 def _positive_int(value) -> int | None:
@@ -144,7 +166,7 @@ def _build_paper_guide_context_records(
 
         candidate_refs: list[int] = []
         cue_texts: list[str] = []
-        if paper_guide_mode and src:
+        if src:
             candidate_refs = extract_candidate_ref_nums_from_hits([hit], source_path=src, max_candidates=6)
             cue_texts = extract_candidate_ref_cue_texts(hit, max_cues=1, max_chars=160)
             if candidate_refs:
@@ -312,6 +334,8 @@ def _prepare_paper_guide_prompt_context(
     paper_guide_support_slots_block = ""
     paper_guide_special_focus_block = ""
     paper_guide_citation_grounding_block = ""
+    paper_guide_reference_opportunities_block = ""
+    paper_guide_reference_opportunities: list[dict[str, object]] = []
     paper_guide_candidate_refs_by_source: dict[str, list[int]] = {}
     paper_guide_support_slots: list[dict] = []
     paper_guide_target_scope = _build_paper_guide_target_scope(
@@ -320,27 +344,39 @@ def _prepare_paper_guide_prompt_context(
     )
     paper_guide_direct_source_path = str(paper_guide_bound_source_path or "").strip()
     paper_guide_focus_source_path = str(paper_guide_bound_source_path or "").strip()
+    bound_source_path_norm = str(paper_guide_bound_source_path or "").strip()
 
-    if paper_guide_mode and _paper_guide_allows_citeless_answer(prompt_family):
+    if paper_guide_mode and _paper_guide_allows_citeless_answer(prompt_family) and not (
+        paper_guide_bound_source_ready and bound_source_path_norm
+    ):
         for hit in answer_hits or []:
             src_hit = _hit_source_path(hit)
             if src_hit:
                 paper_guide_direct_source_path = src_hit
                 break
-    for hit in answer_hits or []:
-        src_hit = _hit_source_path(hit)
-        if src_hit:
-            paper_guide_focus_source_path = src_hit
-            break
+    if paper_guide_mode and paper_guide_bound_source_ready and bound_source_path_norm:
+        for hit in answer_hits or []:
+            src_hit = _hit_source_path(hit)
+            if _same_source_path(src_hit, bound_source_path_norm):
+                paper_guide_focus_source_path = src_hit
+                break
+    else:
+        for hit in answer_hits or []:
+            src_hit = _hit_source_path(hit)
+            if src_hit:
+                paper_guide_focus_source_path = src_hit
+                break
 
     if paper_guide_mode and paper_guide_bound_source_ready:
         prompt_text = prompt or retrieval_prompt or used_query
+        support_slot_limit = max(4, min(6, len(paper_guide_evidence_cards or [])))
         paper_guide_support_slots = _build_paper_guide_support_slots(
             paper_guide_evidence_cards,
             prompt=prompt_text,
             prompt_family=prompt_family,
             db_dir=db_dir,
             target_scope=paper_guide_target_scope,
+            max_slots=support_slot_limit,
         )
         paper_guide_evidence_cards_block = _build_paper_guide_evidence_cards_block(
             paper_guide_evidence_cards,
@@ -349,6 +385,7 @@ def _prepare_paper_guide_prompt_context(
         )
         paper_guide_support_slots_block = _build_paper_guide_support_slots_block(
             paper_guide_support_slots,
+            max_slots=support_slot_limit,
         )
         paper_guide_special_focus_block = _build_paper_guide_special_focus_block(
             paper_guide_evidence_cards,
@@ -366,6 +403,42 @@ def _prepare_paper_guide_prompt_context(
             prompt=prompt_text,
             db_dir=db_dir,
         )
+        paper_guide_reference_opportunities = detect_paper_guide_reference_opportunities(
+            prompt=prompt_text,
+            answer="",
+            prompt_family=prompt_family,
+            source_path=paper_guide_focus_source_path or paper_guide_direct_source_path or paper_guide_bound_source_path,
+            support_slots=paper_guide_support_slots,
+            cards=paper_guide_evidence_cards,
+            max_items=3,
+        )
+        if paper_guide_reference_opportunities:
+            paper_guide_reference_opportunities_block = build_reference_opportunities_prompt_block(
+                paper_guide_reference_opportunities,
+                max_items=3,
+            )
+            paper_guide_candidate_refs_by_source = merge_reference_opportunity_candidate_refs(
+                paper_guide_candidate_refs_by_source,
+                paper_guide_reference_opportunities,
+            )
+    elif answer_hits:
+        prompt_text = prompt or retrieval_prompt or used_query
+        paper_guide_reference_opportunities = detect_text_reference_opportunities(
+            prompt=prompt_text,
+            answer="",
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            max_items=3,
+        )
+        if paper_guide_reference_opportunities:
+            paper_guide_reference_opportunities_block = build_reference_opportunities_prompt_block(
+                paper_guide_reference_opportunities,
+                max_items=3,
+            )
+            paper_guide_candidate_refs_by_source = merge_reference_opportunity_candidate_refs(
+                paper_guide_candidate_refs_by_source,
+                paper_guide_reference_opportunities,
+            )
 
     if (
         paper_guide_mode
@@ -415,15 +488,28 @@ def _prepare_paper_guide_prompt_context(
                 if value not in (None, "", [], {})
             },
         }
+        if paper_guide_reference_opportunities:
+            paper_guide_contracts_seed["reference_opportunities"] = [
+                dict(item) for item in paper_guide_reference_opportunities if isinstance(item, dict)
+            ]
         seed_primary_evidence = _select_seed_primary_evidence(paper_guide_evidence_cards)
         if seed_primary_evidence:
             paper_guide_contracts_seed["primary_evidence"] = dict(seed_primary_evidence)
+    elif paper_guide_reference_opportunities:
+        paper_guide_contracts_seed = {
+            "version": 1,
+            "reference_opportunities": [
+                dict(item) for item in paper_guide_reference_opportunities if isinstance(item, dict)
+            ],
+        }
 
     return {
         "paper_guide_evidence_cards_block": paper_guide_evidence_cards_block,
         "paper_guide_support_slots_block": paper_guide_support_slots_block,
         "paper_guide_special_focus_block": paper_guide_special_focus_block,
         "paper_guide_citation_grounding_block": paper_guide_citation_grounding_block,
+        "paper_guide_reference_opportunities_block": paper_guide_reference_opportunities_block,
+        "paper_guide_reference_opportunities": paper_guide_reference_opportunities,
         "paper_guide_candidate_refs_by_source": paper_guide_candidate_refs_by_source,
         "paper_guide_support_slots": paper_guide_support_slots,
         "paper_guide_target_scope": paper_guide_target_scope,

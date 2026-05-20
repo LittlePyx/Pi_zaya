@@ -55,6 +55,13 @@ def _positive_ints(values: list[int] | tuple[int, ...], *, limit: int) -> list[i
     return out
 
 
+def _source_location_label(heading_path: str, *, prefer_zh: bool) -> str:
+    heading = str(heading_path or "").strip()
+    if prefer_zh:
+        return f"原文位置：{heading}。" if heading else "原文位置：当前绑定论文的匹配段落。"
+    return f"Source location: {heading}." if heading else "Source location: matched passage in the bound paper."
+
+
 def _finalize_skill_result(
     answer_text: str,
     *,
@@ -113,6 +120,10 @@ def _extract_block_quote(answer_text: str, *, label: str) -> str:
     if not match:
         return ""
     return str(match.group(1) or "").strip()
+
+
+def _contains_cjk(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
 
 
 def run_exact_equation_skill(
@@ -184,11 +195,16 @@ def run_exact_citation_lookup_skill(
         return None
 
     ref_label = ", ".join(f"[{int(n)}]" for n in ref_nums[:4])
-    lines = [f"The paper cites {ref_label} for this point."]
-    if heading_path:
-        lines.append(f"This is stated in {heading_path}:")
+    if _contains_cjk(prompt):
+        lines = [
+            f"这条线索在原文里可以定位到下面这句；句中的文内来源是 {ref_label}。",
+            _source_location_label(heading_path, prefer_zh=True),
+        ]
     else:
-        lines.append("This is stated explicitly in the paper:")
+        lines = [
+            f"Use {ref_label} as the cited source for this passage.",
+            _source_location_label(heading_path, prefer_zh=False),
+        ]
     lines.append(f"> {locate_anchor}")
 
     rec_out = dict(rec or {})
@@ -242,15 +258,25 @@ def run_exact_figure_panel_skill(
     if not locate_anchor:
         return None
 
-    prefix = "Figure caption"
-    if fig_num > 0 and panel_letters:
-        prefix = f"Figure {int(fig_num)} caption for panel ({panel_letters[0]})"
-    elif fig_num > 0:
-        prefix = f"Figure {int(fig_num)} caption"
+    prefer_zh = _contains_cjk(prompt)
+    if prefer_zh:
+        if fig_num > 0 and panel_letters:
+            prefix = f"图 {int(fig_num)}({panel_letters[0]}) 的图注原文片段："
+        elif fig_num > 0:
+            prefix = f"图 {int(fig_num)} 的图注原文片段："
+        else:
+            prefix = "图注原文片段："
+    else:
+        if fig_num > 0 and panel_letters:
+            prefix = f"Caption clause for Figure {int(fig_num)}({panel_letters[0]}):"
+        elif fig_num > 0:
+            prefix = f"Caption clause for Figure {int(fig_num)}:"
+        else:
+            prefix = "Caption clause:"
 
-    lines = [f"{prefix} states:"]
+    lines = [prefix]
     if heading_path:
-        lines.append(f"Section: {heading_path}")
+        lines.append(_source_location_label(heading_path, prefer_zh=prefer_zh))
     lines.append(f"> {locate_anchor}")
 
     ref_nums = _positive_ints(
@@ -260,7 +286,7 @@ def run_exact_figure_panel_skill(
     if ref_nums:
         label = ", ".join(f"[{int(n)}]" for n in ref_nums if int(n) > 0)
         if label:
-            lines.append(f"References in this clause: {label}")
+            lines.append(f"该片段里的文内来源：{label}" if prefer_zh else f"References in this clause: {label}")
 
     rec_out = dict(rec or {})
     if ref_nums and (not list(rec_out.get("candidate_refs") or [])):
@@ -303,10 +329,10 @@ def run_exact_method_skill(
     if not locate_anchor:
         return None
 
-    if heading_path:
-        out = f"The paper states this explicitly in {heading_path}:\n> {locate_anchor}"
+    if _contains_cjk(prompt):
+        out = f"{_source_location_label(heading_path, prefer_zh=True)}\n> {locate_anchor}"
     else:
-        out = f"The paper states this explicitly:\n> {locate_anchor}"
+        out = f"{_source_location_label(heading_path, prefer_zh=False)}\n> {locate_anchor}"
 
     rec_out = dict(rec or {})
     rec_out.setdefault("segment_text", locate_anchor)
@@ -368,8 +394,9 @@ def run_overview_component_role_skill(
     if len(role_lines) < 2:
         return None
 
+    intro = "简单说：" if _contains_cjk(prompt) else "In simple terms:"
     return _finalize_skill_result(
-        "From the retrieved method evidence, in simple terms:\n- " + "\n- ".join(role_lines),
+        intro + "\n- " + "\n- ".join(role_lines),
         support_resolution=[
             _build_skill_support_record(
                 source_path=source_path,
@@ -427,9 +454,15 @@ def run_section_target_skill(
         support_anchor = str(extract_discussion_future_snippet(locate_anchor) or locate_anchor).strip()
         answer_text = support_anchor
     elif family == "strength_limits":
-        answer_text = f"From the {heading_leaf} section, the paper describes this trade-off:\n> {locate_anchor}"
+        if _contains_cjk(prompt):
+            answer_text = f"{heading_leaf} 这一节里的关键限制/取舍是：\n> {locate_anchor}"
+        else:
+            answer_text = f"Key limitation or trade-off from {heading_leaf}:\n> {locate_anchor}"
     else:
-        answer_text = f"From the {heading_leaf} section, the paper states:\n> {locate_anchor}"
+        if _contains_cjk(prompt):
+            answer_text = f"{heading_leaf} 这一节的相关原文是：\n> {locate_anchor}"
+        else:
+            answer_text = f"Relevant passage from {heading_leaf}:\n> {locate_anchor}"
 
     return _finalize_skill_result(
         answer_text,
@@ -533,8 +566,12 @@ def run_box_target_skill(
         return None
 
     label = f"Box {int(box_nums[0])}"
+    if _contains_cjk(prompt):
+        answer_text = f"{label} 里的相关原文是：\n> {locate_anchor}"
+    else:
+        answer_text = f"Relevant passage from {label}:\n> {locate_anchor}"
     return _finalize_skill_result(
-        f"From {label}, the paper states:\n> {locate_anchor}",
+        answer_text,
         support_resolution=[
             _build_skill_support_record(
                 source_path=source_path,

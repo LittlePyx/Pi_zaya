@@ -14,6 +14,9 @@ from kb.task_runtime import (
     _build_doc_list_refs_render_payload,
     _filter_multi_paper_seed_docs_for_display,
     _build_precomputed_refs_render_payload,
+    _pick_doc_list_contract_primary_evidence,
+    _rebuild_multi_paper_doc_list_contract_from_available_refs,
+    _sync_multi_paper_primary_evidence_into_contracts,
     _maybe_append_library_figure_markdown,
     _build_paper_guide_direct_abstract_answer,
     _build_paper_guide_direct_citation_lookup_answer,
@@ -33,6 +36,7 @@ from kb.task_runtime import (
     _inject_paper_guide_card_citations,
     _filter_history_for_multimodal_turn,
     _has_anchor_grounded_answer_hits,
+    _looks_like_incomplete_stream_partial,
     _inject_paper_guide_fallback_citations,
     _merge_paper_guide_deepread_context,
     _needs_conversational_source_hint,
@@ -125,6 +129,25 @@ def test_paper_guide_prompt_family_detects_broad_overview_compare_and_reproduce(
     assert _paper_guide_prompt_family("If I want to reproduce the experiment, which hardware and acquisition parameters matter most?") == "reproduce"
 
 
+def test_incomplete_stream_partial_detects_dangling_overview_leadin():
+    text = "In simple terms:\n\nThe paper asks whether one coded snapshot can recover a 3D scene.\n\nSpecifically:"
+    assert _looks_like_incomplete_stream_partial(
+        text,
+        paper_guide_mode=True,
+        prompt_family="overview",
+        has_hits=True,
+    )
+
+
+def test_incomplete_stream_partial_allows_complete_citation_lookup_answer():
+    assert not _looks_like_incomplete_stream_partial(
+        "Use [21] as the cited source for this passage.",
+        paper_guide_mode=True,
+        prompt_family="citation_lookup",
+        has_hits=True,
+    )
+
+
 def test_paper_guide_prompt_family_detects_citation_lookup_before_reproduce():
     assert (
         _paper_guide_prompt_family(
@@ -169,7 +192,7 @@ def test_sanitize_paper_guide_answer_for_user_keeps_structured_cites_for_citatio
         has_hits=True,
         prompt="Which prior work is RVT attributed to in this paper, and what in-paper citation do they use when introducing it?",
     )
-    assert "[[CITE:s3583e628:1]]" not in out
+    assert "[[CITE:s3583e628:1]]" in out
     assert "[34]" in out
 
 
@@ -180,6 +203,22 @@ def test_sanitize_paper_guide_answer_for_user_strips_structured_cites_for_negati
     )
     assert "[[CITE:" not in out
     assert "does not mention commercial integration" in out
+
+
+def test_sanitize_paper_guide_answer_for_user_rewrites_internal_context_and_empty_cite_shell():
+    out = _sanitize_paper_guide_answer_for_user(
+        "文中明确提到了两类主流重建策略，其优缺点与适用场景如下（依据 、、）：\n\n"
+        "文中明确区分了两类主流重建方法，其优缺点与适用场景如下（均基于）：\n\n"
+        "因此，**依据当前 retrieved context，无法回答该细节**。\n\n"
+        "若需该信息，建议参考其引用文献（如）中的具体方法研究。",
+        has_hits=True,
+        prompt="文中提到的几类主流重建方法分别有什么优缺点？",
+    )
+    assert "retrieved context" not in out
+    assert "依据当前已检索到的原文证据" in out
+    assert "（如）" not in out
+    assert "（依据" not in out
+    assert "（均基于" not in out
 
 
 def test_paper_guide_prompt_family_detects_chinese_overview_method_and_abstract_requests():
@@ -200,8 +239,17 @@ def test_paper_guide_requests_cross_paper_refs_detects_external_library_queries(
     assert _paper_guide_requests_cross_paper_refs(
         "Which other papers in my library mention ADMM?"
     )
+    assert _paper_guide_requests_cross_paper_refs(
+        "\u9664\u4e86\u8fd9\u7bc7\uff0c\u5e93\u91cc\u8fd8\u6709\u54ea\u4e9b\u8bba\u6587\u63d0\u5230 ADMM\uff1f"
+    )
     assert not _paper_guide_requests_cross_paper_refs(
         "Where in this paper is Figure 2 discussed?"
+    )
+    assert not _paper_guide_requests_cross_paper_refs(
+        "\u8fd9\u4e2a APR \u542c\u8d77\u6765\u4e0d\u662f\u4ed6\u4eec\u539f\u521b\u7684\u5427\uff0c\u6e90\u5934\u662f\u54ea\u7bc7\u5de5\u4f5c\uff1f"
+    )
+    assert not _paper_guide_requests_cross_paper_refs(
+        "ADMM-Net \u4e4b\u524d\u662f\u8c01\u505a\u7684\uff1f\u6211\u60f3\u77e5\u9053\u8fd9\u6761\u7ebf\u7d22\u5e94\u8be5\u4ece\u54ea\u7bc7\u5de5\u4f5c\u770b\u8d77\u3002"
     )
 
 
@@ -250,6 +298,31 @@ def test_select_multi_paper_seed_docs_for_display_prefers_cross_paper_grouped_do
     assert [str((item.get("meta") or {}).get("source_path") or "") for item in out] == [
         r"db\OE-2017\OE-2017.en.md"
     ]
+
+
+def test_select_multi_paper_seed_docs_for_display_uses_answer_seed_for_single_question():
+    fast_docs = [
+        {
+            "text": "Fast lexical seed.",
+            "meta": {"ref_show_snippets": ["Fig. 5 mentions Fig. 3 in passing."]},
+        }
+    ]
+    answer_docs = [
+        {
+            "text": "Deep answer seed.",
+            "meta": {"ref_show_snippets": ["Figure 3 caption contains the setup components."]},
+        }
+    ]
+
+    out = _select_multi_paper_seed_docs_for_display(
+        prompt_multi_paper_list=False,
+        paper_guide_cross_paper_refs=False,
+        answer_grouped_docs=answer_docs,
+        grouped_docs=fast_docs,
+    )
+
+    assert out[0]["text"] == "Deep answer seed."
+    assert out[0]["meta"]["ref_show_snippets"][0].startswith("Figure 3 caption")
 
 
 def test_select_answer_seed_for_generation_prefers_cross_paper_grouped_docs():
@@ -306,6 +379,7 @@ def test_build_doc_list_refs_render_payload_forwards_guide_filter_and_allows_emp
     assert payload is not None
     assert sig == "sig-doc-list"
     assert calls["doc_list"] == []
+    assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is True
     assert dict(calls.get("kwargs") or {}).get("guide_mode") is True
     assert dict(calls.get("kwargs") or {}).get("guide_source_name") == "CVPR-2024-SCINeRF.pdf"
 
@@ -362,9 +436,147 @@ def test_build_doc_list_contract_from_rendered_payload_upgrades_surface_but_keep
     assert primary_evidence["source_name"] == "Frontiers-2024.pdf"
 
 
+def test_build_doc_list_contract_from_rendered_payload_prefers_reader_open_primary_surface_when_more_precise():
+    doc_list_contract = [
+        {
+            "source_path": r"db\Demo-Paper\Demo-Paper.en.md",
+            "source_name": "Demo-Paper.pdf",
+            "heading_path": "Overview",
+            "summary_line": "Broad overview sentence.",
+            "primary_evidence": {
+                "selection_reason": "answer_hit_top",
+                "heading_path": "Abstract",
+            },
+        }
+    ]
+    rendered_payload = {
+        "hits": [
+            {
+                "meta": {
+                    "source_path": r"db\Demo-Paper\Demo-Paper.en.md",
+                    "source_name": "Demo-Paper.pdf",
+                },
+                "ui_meta": {
+                    "source_path": r"db\Demo-Paper\Demo-Paper.en.md",
+                    "display_name": "Demo-Paper.pdf",
+                    "heading_path": "",
+                    "summary_line": "",
+                    "primary_evidence": {
+                        "selection_reason": "answer_hit_top",
+                        "heading_path": "Abstract",
+                    },
+                    "reader_open": {
+                        "headingPath": "3 Results / 3.2 Reconstruction quality",
+                        "snippet": "The matched section directly analyzes reconstruction quality under adaptive sampling.",
+                        "highlightSnippet": "The matched section directly analyzes reconstruction quality under adaptive sampling.",
+                        "blockId": "blk_32",
+                        "anchorId": "hd_32",
+                        "strictLocate": True,
+                        "primaryEvidence": {
+                            "selection_reason": "prompt_aligned_block",
+                            "heading_path": "3 Results / 3.2 Reconstruction quality",
+                            "snippet": "The matched section directly analyzes reconstruction quality under adaptive sampling.",
+                            "block_id": "blk_32",
+                            "anchor_id": "hd_32",
+                            "strict_locate": True,
+                        },
+                    },
+                },
+            }
+        ]
+    }
+
+    out = _build_doc_list_contract_from_rendered_payload(
+        doc_list_contract=doc_list_contract,
+        rendered_payload=rendered_payload,
+    )
+
+    assert out[0]["heading_path"] == "3 Results / 3.2 Reconstruction quality"
+    assert out[0]["summary_line"] == "The matched section directly analyzes reconstruction quality under adaptive sampling."
+    assert out[0]["primary_evidence"]["selection_reason"] == "prompt_aligned_block"
+    assert out[0]["primary_evidence"]["block_id"] == "blk_32"
+    assert out[0]["primary_evidence"]["strict_locate"] is True
+
+
+def test_sync_multi_paper_primary_evidence_into_contracts_promotes_top_doc_surface():
+    contracts = {
+        "doc_list": [],
+        "primary_evidence": {
+            "selection_reason": "answer_hit_top",
+            "heading_path": "Abstract",
+        },
+        "render_packet": {
+            "answer_markdown": "demo",
+            "primary_evidence": {
+                "selection_reason": "answer_hit_top",
+                "heading_path": "Abstract",
+            },
+        },
+    }
+    doc_list_contract = [
+        {
+            "source_path": r"db\Demo-Paper\Demo-Paper.en.md",
+            "source_name": "Demo-Paper.pdf",
+            "primary_evidence": {
+                "selection_reason": "prompt_aligned_block",
+                "heading_path": "3 Results / 3.2 Reconstruction quality",
+                "block_id": "blk_32",
+                "snippet": "The matched section directly analyzes reconstruction quality under adaptive sampling.",
+            },
+        },
+        {
+            "source_path": r"db\Other-Paper\Other-Paper.en.md",
+            "source_name": "Other-Paper.pdf",
+            "primary_evidence": {
+                "selection_reason": "prompt_aligned_block",
+                "heading_path": "2 Methods",
+            },
+        },
+    ]
+
+    out = _sync_multi_paper_primary_evidence_into_contracts(
+        paper_guide_contracts=contracts,
+        doc_list_contract=doc_list_contract,
+    )
+
+    assert out["primary_evidence"]["heading_path"] == "3 Results / 3.2 Reconstruction quality"
+    assert out["primary_evidence"]["block_id"] == "blk_32"
+    assert out["render_packet"]["primary_evidence"]["heading_path"] == "3 Results / 3.2 Reconstruction quality"
+
+
+def test_pick_doc_list_contract_primary_evidence_uses_first_available_surface():
+    doc_list_contract = [
+        {
+            "source_path": r"db\Demo-Paper\Demo-Paper.en.md",
+            "source_name": "Demo-Paper.pdf",
+            "primary_evidence": {
+                "selection_reason": "prompt_aligned_block",
+                "heading_path": "3 Results / 3.2 Reconstruction quality",
+                "block_id": "blk_32",
+            },
+        },
+        {
+            "source_path": r"db\Other-Paper\Other-Paper.en.md",
+            "source_name": "Other-Paper.pdf",
+            "primary_evidence": {
+                "selection_reason": "prompt_aligned_block",
+                "heading_path": "2 Methods",
+            },
+        },
+    ]
+
+    out = _pick_doc_list_contract_primary_evidence(doc_list_contract)
+
+    assert out["source_path"] == r"db\Demo-Paper\Demo-Paper.en.md"
+    assert out["source_name"] == "Demo-Paper.pdf"
+    assert out["heading_path"] == "3 Results / 3.2 Reconstruction quality"
+
+
 def test_build_precomputed_refs_render_payload_uses_bounded_full_variant(monkeypatch):
     calls: dict[str, object] = {}
 
+    monkeypatch.delenv("KB_REFS_BACKGROUND_LLM_POLISH", raising=False)
+    monkeypatch.setenv("KB_REFS_CARD_POLISH_USE_LLM", "0")
     monkeypatch.setattr(library_router, "_pdf_dir", lambda: None)
     monkeypatch.setattr(library_router, "_md_dir", lambda: None)
     monkeypatch.setattr(references_router, "_refs_pack_render_signature", lambda **kwargs: "sig-precomputed")
@@ -672,6 +884,43 @@ def test_filter_multi_paper_seed_docs_for_display_does_not_pad_broad_fourier_see
 
     titles = [str(((doc.get("meta") if isinstance(doc.get("meta"), dict) else {}) or {}).get("source_path") or "").strip() for doc in out]
     assert titles == [r"db\OE-2017\OE-2017.en.md"]
+
+
+def test_rebuild_multi_paper_doc_list_contract_from_available_refs_recovers_prompt_aligned_doc():
+    prompt = "哪几篇文章里提到了NeRF"
+    docs = [
+        {
+            "text": "SCINeRF exploits NeRF as its underlying scene representation.",
+            "meta": {
+                "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+                "ref_best_heading_path": "2. Related Work",
+                "ref_show_snippets": [
+                    "SCINeRF exploits NeRF as its underlying scene representation."
+                ],
+            },
+        },
+        {
+            "text": "3D Gaussian splatting method overview.",
+            "meta": {
+                "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+                "ref_best_heading_path": "1. Introduction",
+                "ref_show_snippets": [
+                    "This paper focuses on 3D Gaussian splatting rather than neural radiance fields."
+                ],
+            },
+        },
+    ]
+
+    out = _rebuild_multi_paper_doc_list_contract_from_available_refs(
+        prompt=prompt,
+        seed_docs=docs,
+        answer_hits=docs,
+        evidence_cards=[],
+    )
+
+    assert [str(item.get("source_path") or "") for item in out] == [
+        r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md"
+    ]
 
 
 def test_should_sync_deep_seed_for_display_enables_multi_paper_sci_prompt():
@@ -1346,7 +1595,7 @@ def test_repair_paper_guide_focus_answer_generic_replaces_not_stated_for_citatio
         db_dir=Path("db"),
     )
 
-    assert "states this explicitly" in out
+    assert "Source evidence:" in out
     assert "64,65" in out
 
 
@@ -1444,7 +1693,7 @@ def test_repair_paper_guide_focus_answer_generic_replaces_not_stated_for_box_tar
         db_dir=Path("db"),
     )
 
-    assert "states this explicitly" in out
+    assert "Source evidence:" in out
     assert "M \\ge O(K \\log(N/K))" in out
 
 

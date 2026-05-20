@@ -7,11 +7,17 @@ import {
   type Message,
   type MessagePage,
   type Project,
+  type RefsResponseMeta,
 } from '../api/chat'
 import { api } from '../api/client'
+import { S as zh } from '../i18n/zh'
+import { S as en } from '../i18n/en'
+import { useSettingsStore } from './settingsStore'
 
 let refsPollToken = 0
 let refsPollTimer: number | null = null
+let messagePostprocessPollToken = 0
+let messagePostprocessPollTimer: number | null = null
 let uploadPollToken = 0
 let uploadPollTimer: number | null = null
 let conversationSwitchToken = 0
@@ -51,14 +57,58 @@ interface ConversationOpenPhaseApi {
   getLogs: () => ConversationOpenPhaseEvent[]
   clear: () => void
 }
+interface RefsPayloadSummary {
+  packCount: number
+  hitCount: number
+  pendingPackCount: number
+  fastPackCount: number
+  readyPackCount: number
+  emptyPackCount: number
+  displayStates: Record<string, number>
+}
+interface RefsPerfEvent {
+  ts: number
+  convId: string
+  phase: string
+  token: number
+  durationMs: number
+  attempt?: number
+  reason?: string
+  active?: boolean
+  needsEnrichment?: boolean
+  keepPolling?: boolean
+  nextDelayMs?: number
+  error?: string
+  backendMode?: string
+  backendCounts?: string
+  serverTiming?: string
+  summary?: RefsPayloadSummary
+}
+interface RefsPerfSummary {
+  total: number
+  fetchSuccess: number
+  fetchError: number
+  stale: number
+  avgFetchMs: number
+  lastMode: string
+  lastCounts: string
+}
+interface RefsPerfApi {
+  getLogs: () => RefsPerfEvent[]
+  clear: () => void
+  summary: () => RefsPerfSummary
+}
 interface DebugWindow extends Window {
   __kbSwitchPerf?: SwitchPerfApi
   __kbConversationOpenPerf?: ConversationOpenPhaseApi
+  __kbRefsPerf?: RefsPerfApi
 }
 const switchPerfLog: SwitchPerfEvent[] = []
 const conversationOpenPhaseLog: ConversationOpenPhaseEvent[] = []
+const refsPerfLog: RefsPerfEvent[] = []
 const SWITCH_PERF_LIMIT = 240
 const CONVERSATION_OPEN_PHASE_LIMIT = 480
+const REFS_PERF_LIMIT = 720
 const SIDEBAR_CONVERSATION_LIMIT = 80
 const MESSAGE_PAGE_SIZE = 24
 
@@ -151,6 +201,73 @@ function getSwitchPerfSummary(): SwitchPerfSummary {
   }
 }
 
+function summarizeRefsPayload(refs: Record<string, unknown>): RefsPayloadSummary {
+  const summary: RefsPayloadSummary = {
+    packCount: 0,
+    hitCount: 0,
+    pendingPackCount: 0,
+    fastPackCount: 0,
+    readyPackCount: 0,
+    emptyPackCount: 0,
+    displayStates: {},
+  }
+  for (const value of Object.values(refs || {})) {
+    if (!value || typeof value !== 'object') continue
+    const rec = value as {
+      hits?: unknown[]
+      enrichment_pending?: boolean
+      payload_mode?: string
+      display_state?: string
+    }
+    summary.packCount += 1
+    const hits = Array.isArray(rec.hits) ? rec.hits : []
+    summary.hitCount += hits.length
+    const mode = String(rec.payload_mode || '').trim().toLowerCase()
+    const displayState = String(rec.display_state || '').trim().toLowerCase() || 'unknown'
+    summary.displayStates[displayState] = (summary.displayStates[displayState] || 0) + 1
+    if (mode === 'pending' || Boolean(rec.enrichment_pending)) {
+      summary.pendingPackCount += 1
+    } else if (mode === 'fast') {
+      summary.fastPackCount += 1
+    } else if (hits.length > 0 || displayState === 'ready') {
+      summary.readyPackCount += 1
+    } else {
+      summary.emptyPackCount += 1
+    }
+  }
+  return summary
+}
+
+function getRefsPerfSummary(): RefsPerfSummary {
+  let fetchSuccess = 0
+  let fetchError = 0
+  let stale = 0
+  let fetchDuration = 0
+  let lastMode = ''
+  let lastCounts = ''
+  for (const event of refsPerfLog) {
+    if (event.phase === 'fetch_success' || event.phase === 'poll_success') {
+      fetchSuccess += 1
+      fetchDuration += event.durationMs
+      lastMode = event.backendMode || lastMode
+      lastCounts = event.backendCounts || lastCounts
+    } else if (event.phase === 'fetch_error' || event.phase === 'poll_error') {
+      fetchError += 1
+    } else if (event.phase === 'fetch_stale') {
+      stale += 1
+    }
+  }
+  return {
+    total: refsPerfLog.length,
+    fetchSuccess,
+    fetchError,
+    stale,
+    avgFetchMs: fetchSuccess > 0 ? Number((fetchDuration / fetchSuccess).toFixed(2)) : 0,
+    lastMode,
+    lastCounts,
+  }
+}
+
 function ensureSwitchPerfApi() {
   if (typeof window === 'undefined') return
   const w = window as DebugWindow
@@ -171,6 +288,15 @@ function ensureSwitchPerfApi() {
       },
     }
   }
+  if (!w.__kbRefsPerf) {
+    w.__kbRefsPerf = {
+      getLogs: () => refsPerfLog.slice(),
+      clear: () => {
+        refsPerfLog.length = 0
+      },
+      summary: () => getRefsPerfSummary(),
+    }
+  }
 }
 
 function pushSwitchPerf(event: SwitchPerfEvent) {
@@ -189,6 +315,22 @@ function pushConversationOpenPhase(event: ConversationOpenPhaseEvent) {
   ensureSwitchPerfApi()
 }
 
+function pushRefsPerf(event: RefsPerfEvent) {
+  refsPerfLog.push(event)
+  if (refsPerfLog.length > REFS_PERF_LIMIT) {
+    refsPerfLog.splice(0, refsPerfLog.length - REFS_PERF_LIMIT)
+  }
+  ensureSwitchPerfApi()
+}
+
+function refsBackendPerf(meta?: RefsResponseMeta | null) {
+  return {
+    backendMode: String(meta?.mode || '').trim(),
+    backendCounts: String(meta?.counts || '').trim(),
+    serverTiming: String(meta?.serverTiming || '').trim(),
+  }
+}
+
 if (typeof window !== 'undefined') {
   ensureSwitchPerfApi()
 }
@@ -198,6 +340,14 @@ function stopRefsPolling() {
   if (refsPollTimer !== null) {
     window.clearTimeout(refsPollTimer)
     refsPollTimer = null
+  }
+}
+
+function stopMessagePostprocessPolling() {
+  messagePostprocessPollToken += 1
+  if (messagePostprocessPollTimer !== null) {
+    window.clearTimeout(messagePostprocessPollTimer)
+    messagePostprocessPollTimer = null
   }
 }
 
@@ -338,10 +488,37 @@ async function loadRefsForConversation(
   convId: string,
   set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
   getActiveConvId: () => string | null,
+  shouldKeepPolling?: () => boolean,
+  reason = 'load',
 ) {
+  const startedAt = nowMs()
+  const token = refsPollToken
+  pushRefsPerf({
+    ts: Date.now(),
+    convId,
+    phase: 'fetch_start',
+    token,
+    durationMs: 0,
+    reason,
+    active: getActiveConvId() === convId,
+  })
   try {
-    const refs = await chatApi.getRefs(convId)
-    if (getActiveConvId() !== convId) return
+    const { data: refs, meta } = await chatApi.getRefsWithMeta(convId)
+    const durationMs = Number((nowMs() - startedAt).toFixed(2))
+    if (getActiveConvId() !== convId) {
+      pushRefsPerf({
+        ts: Date.now(),
+        convId,
+        phase: 'fetch_stale',
+        token,
+        durationMs,
+        reason,
+        active: false,
+        ...refsBackendPerf(meta),
+        summary: summarizeRefsPayload(refs),
+      })
+      return
+    }
     set((state) => ({
       refs,
       conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
@@ -349,10 +526,35 @@ async function loadRefsForConversation(
         cachedAt: Date.now(),
       }),
     }))
-    if (needsRefsEnrichment(refs)) {
-      void startRefsPolling(convId, set)
+    const needsEnrichment = needsRefsEnrichment(refs)
+    const keepPolling = Boolean(shouldKeepPolling?.())
+    pushRefsPerf({
+      ts: Date.now(),
+      convId,
+      phase: 'fetch_success',
+      token,
+      durationMs,
+      reason,
+      active: true,
+      needsEnrichment,
+      keepPolling,
+      ...refsBackendPerf(meta),
+      summary: summarizeRefsPayload(refs),
+    })
+    if (needsEnrichment || keepPolling) {
+      void startRefsPolling(convId, set, shouldKeepPolling, `${reason}:followup`)
     }
-  } catch {
+  } catch (err) {
+    pushRefsPerf({
+      ts: Date.now(),
+      convId,
+      phase: 'fetch_error',
+      token,
+      durationMs: Number((nowMs() - startedAt).toFixed(2)),
+      reason,
+      active: getActiveConvId() === convId,
+      error: err instanceof Error ? err.message : String(err || 'unknown'),
+    })
     if (getActiveConvId() === convId) {
       set((state) => ({
         refs: state.activeConvId === convId
@@ -383,7 +585,7 @@ async function loadRefsForConversation(
           cachedAt: Date.now(),
         }),
       }))
-      void startRefsPolling(convId, set)
+      void startRefsPolling(convId, set, shouldKeepPolling, `${reason}:retry_after_error`)
     }
   }
 }
@@ -393,36 +595,72 @@ function scheduleLoadRefsForConversation(
   set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
   getActiveConvId: () => string | null,
   delayMs = 120,
+  shouldKeepPolling?: () => boolean,
+  reason = 'scheduled',
 ) {
+  pushRefsPerf({
+    ts: Date.now(),
+    convId,
+    phase: 'schedule',
+    token: refsPollToken,
+    durationMs: 0,
+    reason,
+    active: getActiveConvId() === convId,
+    nextDelayMs: Math.max(0, delayMs),
+  })
   if (typeof window === 'undefined') {
-    void loadRefsForConversation(convId, set, getActiveConvId)
+    void loadRefsForConversation(convId, set, getActiveConvId, shouldKeepPolling, reason)
     return
   }
   window.setTimeout(() => {
-    if (getActiveConvId() !== convId) return
-    void loadRefsForConversation(convId, set, getActiveConvId)
+    if (getActiveConvId() !== convId) {
+      pushRefsPerf({
+        ts: Date.now(),
+        convId,
+        phase: 'schedule_stale',
+        token: refsPollToken,
+        durationMs: 0,
+        reason,
+        active: false,
+      })
+      return
+    }
+    void loadRefsForConversation(convId, set, getActiveConvId, shouldKeepPolling, reason)
   }, Math.max(0, delayMs))
 }
 
 async function startRefsPolling(
   convId: string,
   set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  shouldKeepPolling?: () => boolean,
+  reason = 'poll',
 ) {
   stopRefsPolling()
   const token = ++refsPollToken
   let tries = 0
-  const maxTries = 60
+  const maxTries = 180
   const nextDelay = () => {
     if (tries <= 6) return 350
     if (tries <= 18) return 700
-    return 1200
+    if (tries <= 60) return 1200
+    return 1800
   }
+
+  pushRefsPerf({
+    ts: Date.now(),
+    convId,
+    phase: 'poll_start',
+    token,
+    durationMs: 0,
+    reason,
+  })
 
   const tick = async () => {
     if (token !== refsPollToken) return
     tries += 1
+    const startedAt = nowMs()
     try {
-      const refs = await chatApi.getRefs(convId)
+      const { data: refs, meta } = await chatApi.getRefsWithMeta(convId)
       if (token !== refsPollToken) return
       set((state) => ({
         refs,
@@ -431,17 +669,211 @@ async function startRefsPolling(
           cachedAt: Date.now(),
         }),
       }))
-      if (!needsRefsEnrichment(refs) || tries >= maxTries) {
+      const keepPolling = Boolean(shouldKeepPolling?.())
+      const needsEnrichment = needsRefsEnrichment(refs)
+      pushRefsPerf({
+        ts: Date.now(),
+        convId,
+        phase: 'poll_success',
+        token,
+        durationMs: Number((nowMs() - startedAt).toFixed(2)),
+        attempt: tries,
+        reason,
+        needsEnrichment,
+        keepPolling,
+        ...refsBackendPerf(meta),
+        summary: summarizeRefsPayload(refs),
+      })
+      if ((!needsEnrichment && !keepPolling) || tries >= maxTries) {
         refsPollTimer = null
+        pushRefsPerf({
+          ts: Date.now(),
+          convId,
+          phase: 'poll_stop',
+          token,
+          durationMs: 0,
+          attempt: tries,
+          reason: tries >= maxTries ? 'max_tries' : 'settled',
+          needsEnrichment,
+          keepPolling,
+        })
+        return
+      }
+    } catch (err) {
+      pushRefsPerf({
+        ts: Date.now(),
+        convId,
+        phase: 'poll_error',
+        token,
+        durationMs: Number((nowMs() - startedAt).toFixed(2)),
+        attempt: tries,
+        reason,
+        error: err instanceof Error ? err.message : String(err || 'unknown'),
+      })
+      if (tries >= maxTries) {
+        refsPollTimer = null
+        pushRefsPerf({
+          ts: Date.now(),
+          convId,
+          phase: 'poll_stop',
+          token,
+          durationMs: 0,
+          attempt: tries,
+          reason: 'max_tries_after_error',
+        })
+        return
+      }
+    }
+    const delay = nextDelay()
+    pushRefsPerf({
+      ts: Date.now(),
+      convId,
+      phase: 'poll_schedule_next',
+      token,
+      durationMs: 0,
+      attempt: tries,
+      reason,
+      nextDelayMs: delay,
+    })
+    refsPollTimer = window.setTimeout(tick, delay)
+  }
+
+  void tick()
+}
+
+function getMessageProvenanceForPostprocess(message: Message | null | undefined): Record<string, unknown> | null {
+  if (!message || typeof message !== 'object') return null
+  if (message.provenance && typeof message.provenance === 'object') {
+    return message.provenance as Record<string, unknown>
+  }
+  const meta = message.meta && typeof message.meta === 'object' ? message.meta : null
+  const nested = meta?.provenance
+  return nested && typeof nested === 'object' ? nested as Record<string, unknown> : null
+}
+
+function getMessageRenderPacketForPostprocess(message: Message | null | undefined): Record<string, unknown> | null {
+  const meta = message?.meta && typeof message.meta === 'object' ? message.meta : null
+  const contracts = meta?.paper_guide_contracts
+  if (!contracts || typeof contracts !== 'object') return null
+  const packet = (contracts as Record<string, unknown>).render_packet
+  return packet && typeof packet === 'object' ? packet as Record<string, unknown> : null
+}
+
+function messageHasReadyLocatePostprocess(message: Message | null | undefined): boolean {
+  if (!message || String(message.role || '').trim().toLowerCase() !== 'assistant') return false
+  const provenance = getMessageProvenanceForPostprocess(message)
+  if (provenance) {
+    const status = String(provenance.status || '').trim().toLowerCase()
+    const segments = Array.isArray(provenance.segments) ? provenance.segments : []
+    const strictIdentityReady = Boolean(provenance.strict_identity_ready)
+    const mustLocateCount = Math.max(
+      0,
+      Number(provenance.must_locate_count || 0) || 0,
+      Number(provenance.must_locate_candidate_count || 0) || 0,
+    )
+    if (status === 'ready' && (strictIdentityReady || segments.length > 0 || mustLocateCount > 0)) {
+      return true
+    }
+    if (!status && (strictIdentityReady || segments.length > 0 || mustLocateCount > 0)) {
+      return true
+    }
+  }
+  const packet = getMessageRenderPacketForPostprocess(message)
+  if (packet) {
+    const segmentIds = Array.isArray(packet.segment_ids) ? packet.segment_ids : []
+    const visibleSegmentIds = Array.isArray(packet.visible_segment_ids) ? packet.visible_segment_ids : []
+    if (
+      packet.locate_target
+      || packet.reader_open
+      || segmentIds.length > 0
+      || visibleSegmentIds.length > 0
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+function messageNeedsPostprocessRefresh(
+  message: Message | null | undefined,
+  opts?: { paperGuideMode?: boolean },
+): boolean {
+  if (!message) return true
+  if (String(message.role || '').trim().toLowerCase() !== 'assistant') return false
+  if (messageHasReadyLocatePostprocess(message)) return false
+  const provenance = getMessageProvenanceForPostprocess(message)
+  const status = String(provenance?.status || '').trim().toLowerCase()
+  if (status && status !== 'ready') return true
+  return Boolean(opts?.paperGuideMode)
+}
+
+async function startMessagePostprocessPolling(
+  convId: string,
+  assistantMsgId: number,
+  set: (patch: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void,
+  getState: () => ChatState,
+  opts?: { paperGuideMode?: boolean; reason?: string },
+) {
+  stopMessagePostprocessPolling()
+  const msgId = Number(assistantMsgId || 0)
+  if (!convId || !Number.isFinite(msgId) || msgId <= 0 || typeof window === 'undefined') return
+  const token = ++messagePostprocessPollToken
+  let tries = 0
+  const maxTries = opts?.paperGuideMode ? 60 : 18
+  const minTries = opts?.paperGuideMode ? 4 : 1
+  const nextDelay = () => {
+    if (tries <= 4) return 350
+    if (tries <= 14) return 700
+    if (tries <= 36) return 1200
+    return 1800
+  }
+
+  const tick = async () => {
+    if (token !== messagePostprocessPollToken) return
+    if (getState().activeConvId !== convId) {
+      messagePostprocessPollTimer = null
+      return
+    }
+    tries += 1
+    try {
+      const { page } = await getMessagesPageWithFallback(convId, {
+        limit: MESSAGE_PAGE_SIZE,
+        renderPacketOnly: false,
+      })
+      if (token !== messagePostprocessPollToken || getState().activeConvId !== convId) return
+      set((state) => {
+        if (state.activeConvId !== convId) return {}
+        const merged = mergeLatestMessagePage(
+          state.messages,
+          state.messagesHasMoreBefore,
+          page,
+        )
+        return {
+          messages: merged.messages,
+          messagesHasMoreBefore: merged.hasMoreBefore,
+          oldestLoadedMessageId: merged.oldestLoadedMessageId,
+          conversationCacheById: upsertConversationViewCache(state.conversationCacheById, convId, {
+            messages: merged.messages,
+            refs: state.refs,
+            messagesHasMoreBefore: merged.hasMoreBefore,
+            oldestLoadedMessageId: merged.oldestLoadedMessageId,
+            cachedAt: Date.now(),
+          }),
+        }
+      })
+      const target = getState().messages.find((item) => Number(item.id || 0) === msgId) || null
+      if ((!messageNeedsPostprocessRefresh(target, opts) && tries >= minTries) || tries >= maxTries) {
+        messagePostprocessPollTimer = null
         return
       }
     } catch {
       if (tries >= maxTries) {
-        refsPollTimer = null
+        messagePostprocessPollTimer = null
         return
       }
     }
-    refsPollTimer = window.setTimeout(tick, nextDelay())
+    if (token !== messagePostprocessPollToken) return
+    messagePostprocessPollTimer = window.setTimeout(tick, nextDelay())
   }
 
   void tick()
@@ -450,9 +882,11 @@ async function startRefsPolling(
 interface GenerationState {
   sessionId: string
   taskId: string
+  traceId?: string
   stage: string
   partial: string
   done: boolean
+  researchTrace?: Record<string, unknown>
 }
 
 interface GuideBinding {
@@ -680,7 +1114,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const current = get()
     if (current.activeConvId === convId) {
       if (Object.keys(current.refs || {}).length === 0) {
-        scheduleLoadRefsForConversation(convId, set, () => get().activeConvId)
+        scheduleLoadRefsForConversation(convId, set, () => get().activeConvId, 120, undefined, 'open_empty_cache')
       }
       pushSwitchPerf({
         ts: Date.now(),
@@ -698,6 +1132,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const cachedConv = findConversationInState(current, convId)
     const cachedView = current.conversationCacheById[convId]
     stopRefsPolling()
+    stopMessagePostprocessPolling()
     stopUploadPolling()
     const cacheShowStartedAt = nowMs()
     set({
@@ -799,7 +1234,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           },
         }))
       }
-      scheduleLoadRefsForConversation(convId, set, () => get().activeConvId)
+      scheduleLoadRefsForConversation(convId, set, () => get().activeConvId, 120, undefined, 'open_after_messages')
       pushConversationOpenPhase({
         ts: Date.now(),
         convId,
@@ -867,8 +1302,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   createConversation: async () => {
     const projectId = get().activeProjectId
-    const { id } = await chatApi.createConversation('新对话', projectId)
+    const locale = useSettingsStore.getState().uiLocale
+    const defaultTitle = locale === 'zh' ? zh.default_new_chat_title : en.default_new_chat_title
+    const { id } = await chatApi.createConversation(defaultTitle, projectId)
     await get().loadSidebarData()
+    stopMessagePostprocessPolling()
     stopUploadPolling()
     set({ generation: null, uploadItems: [], pendingImages: [] })
     await get().selectConversation(id)
@@ -878,9 +1316,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   createPaperGuideConversation: async (opts) => {
     const sourcePath = String(opts.sourcePath || '').trim()
     if (!sourcePath) throw new Error('sourcePath required')
-    const sourceName = String(opts.sourceName || '').trim() || sourcePath.split(/[\\/]/).pop() || '文献'
+    const locale = useSettingsStore.getState().uiLocale
+    const sourceName = String(opts.sourceName || '').trim() || sourcePath.split(/[\\/]/).pop() || (locale === 'zh' ? zh.default_source_fallback : en.default_source_fallback)
     const projectId = opts.projectId ?? get().activeProjectId
-    const titleBase = String(opts.title || '').trim() || `阅读指导 · ${sourceName}`
+    const titleBase = String(opts.title || '').trim() || (locale === 'zh' ? zh.default_guide_title.replace('{name}', sourceName) : en.default_guide_title.replace('{name}', sourceName))
     const { id } = await chatApi.createConversation(titleBase, projectId, {
       mode: 'paper_guide',
       bound_source_path: sourcePath,
@@ -898,6 +1337,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Backward compatible: old backend may not expose /guide.
     }
     await get().loadSidebarData()
+    stopMessagePostprocessPolling()
     stopUploadPolling()
     set((state) => ({
       generation: null,
@@ -932,6 +1372,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   deleteConversation: async (id) => {
     stopRefsPolling()
+    stopMessagePostprocessPolling()
     stopUploadPolling()
     await chatApi.deleteConversation(id)
     const state = get()
@@ -1117,6 +1558,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   sendMessage: async (prompt, opts) => {
+    stopMessagePostprocessPolling()
     let convId = get().activeConvId
     if (!convId) {
       convId = await get().createConversation()
@@ -1139,10 +1581,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const preferredSourcesFinal = preferredSources.slice(0, 4)
     const trimmedPrompt = prompt.trim()
     const userStoreText = trimmedPrompt || `[Image attachment x${pendingImages.length}]`
+    const shouldKeepPollingRefs = () => {
+      const state = get()
+      return state.activeConvId === convId && Boolean(state.generation)
+    }
 
     const res = await api.post<{
       session_id: string
       task_id: string
+      trace_id?: string
       user_msg_id: number
       assistant_msg_id: number
     }>('/api/generate', {
@@ -1172,6 +1619,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       generation: {
         sessionId: res.session_id,
         taskId: res.task_id,
+        traceId: res.trace_id,
         stage: 'starting',
         partial: '',
         done: false,
@@ -1192,6 +1640,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
         : state.conversationCacheById,
     }))
+      scheduleLoadRefsForConversation(
+        convId,
+        set,
+        () => get().activeConvId,
+        350,
+        shouldKeepPollingRefs,
+        'generation_started',
+      )
 
     const ctrl = new AbortController()
     set({ sseController: ctrl })
@@ -1219,9 +1675,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
               generation: {
                 sessionId: res.session_id,
                 taskId: res.task_id,
+                traceId: res.trace_id,
                 stage: data.stage || '',
                 partial: data.partial || '',
                 done: !!data.done,
+                researchTrace: data.research_trace && typeof data.research_trace === 'object'
+                  ? data.research_trace as Record<string, unknown>
+                  : undefined,
               },
             })
             if (data.done) {
@@ -1251,7 +1711,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   }),
                 }
               })
-              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId)
+              scheduleLoadRefsForConversation(convId!, set, () => get().activeConvId, 120, undefined, 'generation_done')
+              const postprocessState = get()
+              const paperGuideMode = Boolean(
+                postprocessState.activeConversation?.mode === 'paper_guide'
+                || postprocessState.guideBindings?.[convId!]?.sourcePath
+                || boundSourcePath,
+              )
+              const assistantMessage = postprocessState.messages.find(
+                (item) => Number(item.id || 0) === Number(res.assistant_msg_id || 0),
+              ) || null
+              if (paperGuideMode || messageNeedsPostprocessRefresh(assistantMessage, { paperGuideMode })) {
+                void startMessagePostprocessPolling(
+                  convId!,
+                  res.assistant_msg_id,
+                  set,
+                  get,
+                  { paperGuideMode, reason: 'generation_done' },
+                )
+              }
               await get().loadSidebarData()
               return
             }
@@ -1275,6 +1753,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         .catch(() => {})
     }
     stopRefsPolling()
+    stopMessagePostprocessPolling()
     set({ generation: null, sseController: null })
   },
 

@@ -19,12 +19,16 @@ from kb.task_runtime import (
 
 
 def _strip_internal_structured_markers(text: str) -> str:
-    """Final safety net: never leak internal structured markers in /api/generate output."""
+    """Final safety net: never leak internal grounding markers in /api/generate output.
+
+    Strips [[SUPPORT:...]] tokens which are internal grounding metadata that should
+    never be user-visible.  Preserves [[CITE:...]] tokens because they are intentionally
+    generated citation markers that the renderer converts to user-visible links.
+    """
     s = str(text or "")
     if not s:
         return s
     s = re.sub(r"\[\[\s*SUPPORT\s*:[^\]]+\]\]", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\[\[\s*CITE\s*:[^\]]+\]\]", "", s, flags=re.IGNORECASE)
     s = re.sub(r"[ \t]{2,}", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s).strip()
     return s
@@ -52,6 +56,7 @@ def start_generation(body: GenerateBody):
     prefs = load_prefs()
     session_id = uuid.uuid4().hex
     task_id = uuid.uuid4().hex
+    trace_id = uuid.uuid4().hex[:16]
     prompt = str(body.prompt or "").strip()
     max_tokens = max(256, min(4096, int(body.max_tokens or 1216)))
     image_attachments = [_normalize_chat_image_attachment(it) for it in list(body.image_attachments or []) if isinstance(it, dict)]
@@ -61,7 +66,10 @@ def start_generation(body: GenerateBody):
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
     user_msg_id = chat_store.append_message(body.conv_id, "user", user_store_text, attachments=image_attachments)
     assistant_msg_id = chat_store.append_message(
-        body.conv_id, "assistant", _live_assistant_text(task_id)
+        body.conv_id,
+        "assistant",
+        _live_assistant_text(task_id),
+        meta={"trace_id": trace_id},
     )
     chat_store.set_title_if_default(body.conv_id, user_store_text[:60])
     conv_meta = chat_store.get_conversation(body.conv_id) or {}
@@ -90,6 +98,7 @@ def start_generation(body: GenerateBody):
 
     task = {
         "id": task_id,
+        "trace_id": trace_id,
         "session_id": session_id,
         "conv_id": body.conv_id,
         "prompt": prompt,
@@ -118,6 +127,7 @@ def start_generation(body: GenerateBody):
     return {
         "session_id": session_id,
         "task_id": task_id,
+        "trace_id": trace_id,
         "user_msg_id": user_msg_id,
         "assistant_msg_id": assistant_msg_id,
     }
@@ -144,9 +154,18 @@ async def stream_generation(session_id: str):
             "answer_contract_v1": bool(t.get("answer_contract_v1", False)),
             "answer_quality": t.get("answer_quality", {}),
             "paper_guide_debug": t.get("paper_guide_debug", {}),
+            "research_trace": t.get("research_trace", {}),
         }
 
     return sse_response(sse_generator(poll, interval=0.15))
+
+
+@router.get("/{session_id}/trace")
+def generation_trace(session_id: str):
+    t = _gen_get_task(session_id)
+    if t is None:
+        raise HTTPException(404, "generation session not found")
+    return t.get("research_trace", {}) or {}
 
 
 @router.post("/{session_id}/cancel")

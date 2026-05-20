@@ -1,6 +1,6 @@
 import { Button, message } from 'antd'
 import { CopyOutlined } from '@ant-design/icons'
-import { S } from '../../i18n/zh'
+import { useT } from '../../i18n'
 
 interface Props {
   text: string
@@ -8,6 +8,7 @@ interface Props {
 }
 
 export function CopyBar({ text, markdown }: Props) {
+  const S = useT()
   const copy = (value: string, doneLabel: string) => {
     navigator.clipboard.writeText(value).then(() => message.success(doneLabel))
   }
@@ -18,7 +19,7 @@ export function CopyBar({ text, markdown }: Props) {
         size="small"
         type="text"
         icon={<CopyOutlined />}
-        onClick={() => copy(text, '已复制文本')}
+        onClick={() => copy(text, S.copied_text)}
       >
         {S.copy_text}
       </Button>
@@ -27,9 +28,9 @@ export function CopyBar({ text, markdown }: Props) {
           size="small"
           type="text"
           icon={<CopyOutlined />}
-          onClick={() => copy(markdown, '已复制 Markdown')}
+          onClick={() => copy(markdown, S.copied_markdown)}
         >
-          Copy Markdown
+          {S.copy_md}
         </Button>
       ) : null}
     </div>

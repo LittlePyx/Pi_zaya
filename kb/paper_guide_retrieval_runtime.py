@@ -485,6 +485,15 @@ def _paper_guide_targeted_source_block_hits(
     explicit_ref_list_request = bool(
         re.search(r"(?i)\b(?:reference\s+list|works?\s+cited|bibliography)\b", q)
     )
+    reconstruction_methods_query = bool(
+        re.search(r"(重建|reconstruction|压缩感知|compress(?:ive|ed)\s+sensing)", q, flags=re.IGNORECASE)
+        and re.search(
+            r"(方法|算法|优缺点|优势|缺点|局限|适用|场景|选择|"
+            r"methods?|algorithms?|pros?|cons?|strengths?|limitations?|trade[\s-]?offs?|when\s+to\s+use)",
+            q,
+            flags=re.IGNORECASE,
+        )
+    )
     require_target_match = bool(explicit_hints) and (not is_citation_lookup)
     if is_citation_lookup and callable(citation_lookup_query_tokens):
         query_tokens = set(citation_lookup_query_tokens(q))
@@ -563,6 +572,60 @@ def _paper_guide_targeted_source_block_hits(
                 score += 5.0
             if any(token in text_low for token in ("figure", "fig.", "panel", "caption")):
                 score += 2.5
+        if reconstruction_methods_query:
+            if any(
+                token in heading_low
+                for token in (
+                    "acquisition and image reconstruction",
+                    "image reconstruction",
+                    "compressed sensing",
+                )
+            ):
+                score += 18.0
+            if any(
+                token in text_low
+                for token in (
+                    "optimization algorithms may",
+                    "optimization algorithm",
+                    "optimization algorithms",
+                    "minimizing the",
+                    "ell_1",
+                    "\\ell_1",
+                    "l1 norm",
+                    "total variation",
+                    "discrete cosine transform",
+                    "curvature",
+                    "reconstruction time",
+                    "real-time performance",
+                    "highest image quality",
+                )
+            ):
+                score += 24.0
+            if any(
+                token in text_low
+                for token in (
+                    "optimization algorithms may",
+                    "total variation",
+                    "reconstruction time to greatly exceed",
+                    "not readily employed",
+                    "offline post-processing",
+                )
+            ):
+                score += 14.0
+            if any(
+                token in text_low
+                for token in (
+                    "hadamard",
+                    "fourier",
+                    "wavelet",
+                    "fast algorithmic transform",
+                    "computationally fast algorithm",
+                    "sub-sampled basis",
+                    "subsampled basis",
+                    "low to moderate image resolutions",
+                )
+            ):
+                score += 16.0
         if "hadamard" in q_low and "hadamard" in text_low:
             score += 12.0
         if "richardson" in q_low and "richardson" in text_low:
@@ -1521,14 +1584,18 @@ def _build_paper_guide_direct_citation_lookup_answer(
 
     ref_label = ", ".join(f"[{int(n)}]" for n in best_refs[:4])
     heading_label = _trim_paper_guide_prompt_field(best_heading, max_chars=96)
-    lines = [f"The paper cites {ref_label} for this point."]
-    if heading_label:
-        lines.append(f"This is stated in {heading_label}:")
+    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", q))
+    if prefer_zh:
+        lines = [f"这条线索对应的文内来源是 {ref_label}。"]
     else:
-        lines.append("This is stated explicitly in the paper:")
+        lines = [f"Use {ref_label} as the cited source for this passage."]
+    if heading_label:
+        lines.append(f"原文位置：{heading_label}。" if prefer_zh else f"Source location: {heading_label}.")
+    else:
+        lines.append("原文位置：当前绑定论文的匹配段落。" if prefer_zh else "Source location: matched passage in the bound paper.")
     lines.append(f"> {best_fragment}")
     if ref_lines:
         lines.append("")
-        lines.append("Reference entries:")
+        lines.append("参考文献条目：" if prefer_zh else "Reference entries:")
         lines.extend(ref_lines)
     return "\n".join(lines).strip()

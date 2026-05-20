@@ -26,7 +26,9 @@ import {
 import { RefsPanel } from '../refs/RefsPanel'
 import type { ChatImageAttachment, Message } from '../../api/chat'
 import { referencesApi, type ReaderDocAnchor } from '../../api/references'
+import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import {
   getMessageCiteDetailRecords,
   getMessageCopyMarkdownValue,
@@ -105,6 +107,7 @@ interface Props {
   refs: Record<string, unknown>
   generationPartial?: string
   generationStage?: string
+  generationTrace?: Record<string, unknown>
   jumpTarget?: { messageId: number; token: number } | null
   onJumpHandled?: (jumpTarget: { messageId: number; token: number }) => void
   trackedMessageIds?: number[]
@@ -146,6 +149,7 @@ interface RefEntryLite {
   hits?: RefHitLite[]
   display_state?: string
   suppression_reason?: string
+  suggestion?: string
   guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
 }
 
@@ -329,16 +333,6 @@ const LOW_CONF_REASON_MAP_EN: Record<string, string> = {
   strict_family_weak_overlap: 'strict question type has weak lexical overlap',
   strict_family_sparse_hits: 'strict question type has sparse evidence hits',
   broad_family_weak_overlap: 'broad summary question has weak evidence overlap',
-}
-const LOW_CONF_REASON_MAP_ZH: Record<string, string> = {
-  empty_hits: '未检索到同文证据片段',
-  target_miss: '未直接命中你指定的目标段落',
-  reference_only_hits: '检索结果主要是参考文献样式片段',
-  weak_signal: '针对该问题的证据信号偏弱',
-  strict_family_without_targeted_support: '严格问题类型缺少定向证据支撑',
-  strict_family_weak_overlap: '严格问题类型与证据词重叠较弱',
-  strict_family_sparse_hits: '严格问题类型命中证据过少',
-  broad_family_weak_overlap: '概览类问题与证据重叠较弱',
 }
 
 function stripMarkdownInline(input: string): string {
@@ -664,6 +658,7 @@ function shouldSuppressNegativeLocateSurface(input: {
 function resolveLowConfidenceMeta(
   metaRaw: Record<string, unknown> | null | undefined,
   localeHintText: string,
+  S: Record<string, string>,
 ): LowConfidenceMetaLite | null {
   const meta = metaRaw && typeof metaRaw === 'object' ? metaRaw : null
   if (!meta) return null
@@ -681,9 +676,20 @@ function resolveLowConfidenceMeta(
     || '',
   ).trim()
   const reasonNorm = reasonCode.toLowerCase()
-  const isZh = hasCjkText(localeHintText)
+  const uiLocale = useSettingsStore.getState().uiLocale
+  const isZh = uiLocale === 'zh' ? true : (uiLocale === 'en' ? false : hasCjkText(localeHintText))
+  const zhMap: Record<string, string> = {
+    empty_hits: S.msg_empty_hits,
+    target_miss: S.msg_target_miss,
+    reference_only_hits: S.msg_reference_only,
+    weak_signal: S.msg_weak_signal,
+    strict_family_without_targeted_support: S.msg_strict_no_support,
+    strict_family_weak_overlap: S.msg_strict_weak_overlap,
+    strict_family_sparse_hits: S.msg_strict_sparse,
+    broad_family_weak_overlap: S.msg_broad_weak_overlap,
+  }
   const reasonText = isZh
-    ? (LOW_CONF_REASON_MAP_ZH[reasonNorm] || reasonNorm || '证据匹配置信度偏低')
+    ? (zhMap[reasonNorm] || reasonNorm || S.msg_low_confidence)
     : (LOW_CONF_REASON_MAP_EN[reasonNorm] || (reasonNorm ? reasonNorm.replace(/_/g, ' ') : 'evidence matching is lower confidence'))
   const refsRaw = Array.isArray(retrievalRecord.candidate_refs_for_notice)
     ? retrievalRecord.candidate_refs_for_notice
@@ -1270,6 +1276,47 @@ function normalizeSourcePathForMatch(input: string): string {
   return String(input || '').trim().replace(/\\/g, '/').toLowerCase()
 }
 
+function sourceDocumentIdentityKey(input: string): string {
+  const normalized = normalizeSourcePathForMatch(input)
+  if (!normalized) return ''
+  const parts = normalized.split('/').map((item) => item.trim()).filter(Boolean)
+  const file = parts[parts.length - 1] || normalized
+  const stem = file
+    .replace(/\.en\.md$/i, '')
+    .replace(/\.md$/i, '')
+    .replace(/\.pdf$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return stem || file
+}
+
+function sourcePathsReferToSameDocument(left: string, right: string): boolean {
+  const leftNorm = normalizeSourcePathForMatch(left)
+  const rightNorm = normalizeSourcePathForMatch(right)
+  if (!leftNorm || !rightNorm) return false
+  if (leftNorm === rightNorm) return true
+  const leftId = sourceDocumentIdentityKey(leftNorm)
+  const rightId = sourceDocumentIdentityKey(rightNorm)
+  return Boolean(leftId && rightId && leftId === rightId)
+}
+
+function sourcePathLookupKeys(input: string): string[] {
+  const exact = String(input || '').trim()
+  const identity = sourceDocumentIdentityKey(exact)
+  return Array.from(new Set([exact, identity].filter(Boolean)))
+}
+
+function lookupGuideCandidatesBySourcePath(
+  map: Map<string, LocateCandidate[]>,
+  sourcePath: string,
+): LocateCandidate[] {
+  for (const key of sourcePathLookupKeys(sourcePath)) {
+    const hit = map.get(key)
+    if (hit && hit.length > 0) return hit
+  }
+  return []
+}
+
 function buildStructuredProvenanceLocateEntries(
   messageProvenance: Record<string, unknown> | null,
   opts: {
@@ -1296,7 +1343,7 @@ function buildStructuredProvenanceLocateEntries(
   if (guideSourcePath) {
     const guideNorm = normalizeSourcePathForMatch(guideSourcePath)
     const sourceNorm = normalizeSourcePathForMatch(sourcePath)
-    if (guideNorm && sourceNorm && guideNorm !== sourceNorm) return []
+    if (guideNorm && sourceNorm && !sourcePathsReferToSameDocument(guideNorm, sourceNorm)) return []
   }
   const sourceName = String(messageProvenance.source_name || '').trim()
     || String(fallbackSourceName || '').trim()
@@ -1335,7 +1382,6 @@ function buildStructuredProvenanceLocateEntries(
     const mustLocate = Boolean(segment.must_locate ?? currentSegment.mustLocate)
     const locatePolicy = String(segment.locate_policy || currentSegment.locatePolicy || '').trim().toLowerCase()
     const locateSurfacePolicy = String(segment.locate_surface_policy || currentSegment.locateSurfacePolicy || '').trim().toLowerCase()
-    if (locatePolicy === 'hidden') continue
     const claimGroupId = String(segment.claim_group_id || rawReaderOpen?.claimGroup?.id || currentSegment.claimGroupId || '').trim()
     const claimGroupKind = String(segment.claim_group_kind || rawReaderOpen?.claimGroup?.kind || currentSegment.claimGroupKind || '').trim().toLowerCase()
     const formulaOrigin = String(segment.formula_origin || currentSegment.formulaOrigin || '').trim().toLowerCase()
@@ -1382,6 +1428,14 @@ function buildStructuredProvenanceLocateEntries(
       ...evidenceBlockIdsRaw.map((item) => String(item || '').trim()).filter(Boolean),
       ...coerceStringArray(rawLocateTarget?.blockId, 1, 120),
     ]
+    const allowHiddenRequiredEvidence = Boolean(
+      locatePolicy === 'hidden'
+      && strictIdentityReady
+      && mustLocate
+      && evidenceMode === 'direct'
+      && blockIdsRaw.length > 0
+    )
+    if (locatePolicy === 'hidden' && !allowHiddenRequiredEvidence) continue
     if (evidenceMode !== 'direct' || blockIdsRaw.length <= 0) continue
     if (claimType === 'shell_sentence' && !mustLocate) continue
 
@@ -2342,6 +2396,7 @@ function buildRenderPacketLocateEntry(
     fallbackSourcePath?: string
     fallbackSourceName?: string
   },
+  S: Record<string, string>,
 ): ProvenanceLocateEntry | null {
   if (!packet) return null
   const readerOpen = coerceReaderOpenPayload(packet.readerOpen)
@@ -2439,7 +2494,7 @@ function buildRenderPacketLocateEntry(
       : undefined)
   return {
     segmentId: String(locateTarget?.segmentId || locateTarget?.sourceSegmentId || `render-packet-${message.id}`).trim(),
-    label: shortSegmentLabel(highlightSnippet || snippet || packet.renderedBody || '原文证据'),
+    label: shortSegmentLabel(highlightSnippet || snippet || packet.renderedBody || S.msg_evidence_label),
     segmentText,
     evidenceQuote,
     locateTarget: locateTarget || undefined,
@@ -2466,6 +2521,110 @@ function buildRenderPacketLocateEntry(
     groupLeadText: String(claimGroup?.leadText || '').trim(),
     groupDistance: toPositiveIntOrUndefined(claimGroup?.distance || 0),
   }
+}
+
+function countDistinctDocLabels(text: string): number {
+  const seen = new Set<string>()
+  for (const match of String(text || '').matchAll(/\bDOC-(\d{1,4})\b/gi)) {
+    const docId = String(match[1] || '').trim()
+    if (docId) seen.add(docId)
+  }
+  return seen.size
+}
+
+function shouldSuppressLooseInlineLocate(args: {
+  guideSourcePath: string
+  bodyContent: string
+  hasRawCiteDetails: boolean
+  hasStructuredProvenance: boolean
+  hasDirectProvenance: boolean
+}): boolean {
+  if (String(args.guideSourcePath || '').trim()) return false
+  if (args.hasRawCiteDetails) return false
+  if (args.hasStructuredProvenance) return false
+  if (args.hasDirectProvenance) return false
+  return countDistinctDocLabels(args.bodyContent) >= 2
+}
+
+function messageLocatePayloadSignature(message: Message, renderPacketValue: unknown): string {
+  const provenance = (message.provenance && typeof message.provenance === 'object')
+    ? message.provenance as Record<string, unknown>
+    : null
+  const renderPacket = renderPacketValue && typeof renderPacketValue === 'object'
+    ? renderPacketValue as Record<string, unknown>
+    : null
+  if (!provenance && !renderPacket) return 'no-locate-payload'
+
+  const provenanceSig = (() => {
+    if (!provenance) return ''
+    const segments = Array.isArray(provenance.segments) ? provenance.segments : []
+    const segmentSig = segments
+      .slice(0, 24)
+      .map((item, idx) => {
+        const seg = item && typeof item === 'object' ? item as Record<string, unknown> : {}
+        const evidenceIds = Array.isArray(seg.evidence_block_ids)
+          ? seg.evidence_block_ids.map((value) => String(value || '').trim()).filter(Boolean).slice(0, 6)
+          : []
+        return [
+          String(seg.segment_id || idx).trim(),
+          String(seg.evidence_mode || '').trim(),
+          String(seg.locate_policy || '').trim(),
+          String(seg.locate_surface_policy || '').trim(),
+          Boolean(seg.must_locate) ? 'must' : '',
+          String(seg.primary_block_id || '').trim(),
+          String(seg.primary_anchor_id || '').trim(),
+          evidenceIds.join(','),
+        ].join(':')
+      })
+      .join(';')
+    const blockMap = provenance.block_map && typeof provenance.block_map === 'object'
+      ? provenance.block_map as Record<string, unknown>
+      : {}
+    return [
+      String(provenance.status || '').trim(),
+      String(provenance.mapping_mode || '').trim(),
+      Boolean(provenance.strict_identity_ready) ? 'strict-ready' : 'strict-pending',
+      String(provenance.source_path || '').trim(),
+      String(provenance.md_path || '').trim(),
+      Number(provenance.must_locate_count || 0) || 0,
+      Number(provenance.must_locate_candidate_count || 0) || 0,
+      Number(provenance.strict_identity_count || 0) || 0,
+      segments.length,
+      Object.keys(blockMap).sort().slice(0, 48).join(','),
+      segmentSig,
+    ].join('|')
+  })()
+
+  const renderPacketSig = (() => {
+    if (!renderPacket) return ''
+    const locateTarget = (
+      renderPacket.locateTarget
+      || renderPacket.locate_target
+      || null
+    ) as Record<string, unknown> | null
+    const readerOpen = (
+      renderPacket.readerOpen
+      || renderPacket.reader_open
+      || null
+    ) as Record<string, unknown> | null
+    const segmentIds = Array.isArray(renderPacket.segment_ids)
+      ? renderPacket.segment_ids.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 24)
+      : []
+    const visibleSegmentIds = Array.isArray(renderPacket.visible_segment_ids)
+      ? renderPacket.visible_segment_ids.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 24)
+      : []
+    return [
+      segmentIds.join(','),
+      visibleSegmentIds.join(','),
+      String(locateTarget?.blockId || locateTarget?.block_id || '').trim(),
+      String(locateTarget?.anchorId || locateTarget?.anchor_id || '').trim(),
+      String(locateTarget?.locatePolicy || locateTarget?.locate_policy || '').trim(),
+      String(readerOpen?.blockId || readerOpen?.block_id || '').trim(),
+      String(readerOpen?.anchorId || readerOpen?.anchor_id || '').trim(),
+    ].join('|')
+  })()
+
+  return `${provenanceSig}::${renderPacketSig}`
 }
 
 function extractFigureNumbersFromText(text: string): number[] {
@@ -2824,7 +2983,7 @@ function getScopedGuideCandidatesForRemap(
     if (!cand || typeof cand !== 'object') return false
     if (String(cand.sourceType || '').trim().toLowerCase() !== 'guide') return false
     const candSourcePath = String(cand.sourcePath || '').trim()
-    if (sourcePath && candSourcePath && normalizeSourcePathForMatch(sourcePath) !== normalizeSourcePathForMatch(candSourcePath)) {
+    if (sourcePath && candSourcePath && !sourcePathsReferToSameDocument(sourcePath, candSourcePath)) {
       return false
     }
     return Boolean(String(cand.blockId || cand.anchorId || '').trim())
@@ -3185,6 +3344,100 @@ function imageAttachmentsOf(message: Message): ChatImageAttachment[] {
   return Array.isArray(message.attachments)
     ? message.attachments.filter((item): item is ChatImageAttachment => Boolean(item && item.path))
     : []
+}
+
+function asTraceRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function getMessageResearchTrace(message: Message): Record<string, unknown> | null {
+  const meta = asTraceRecord(message.meta)
+  const trace = asTraceRecord(meta.research_trace)
+  if (Object.keys(trace).length > 0) return trace
+  const traceId = String(meta.trace_id || '').trim()
+  return traceId ? { trace_id: traceId } : null
+}
+
+function traceNum(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function formatTraceMs(value: unknown): string {
+  const ms = traceNum(value)
+  if (ms <= 0) return '0ms'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s`
+  return `${Math.round(ms)}ms`
+}
+
+function traceSourceLabels(items: unknown): string[] {
+  if (!Array.isArray(items)) return []
+  const out: string[] = []
+  for (const item of items) {
+    const rec = asTraceRecord(item)
+    const label = String(rec.source_name || rec.source_path || '').trim()
+    if (!label) continue
+    out.push(label)
+    if (out.length >= 3) break
+  }
+  return out
+}
+
+function ResearchTracePanel({ trace }: { trace?: Record<string, unknown> | null }) {
+  const tr = asTraceRecord(trace)
+  const traceId = String(tr.trace_id || '').trim()
+  const timings = asTraceRecord(tr.timings_ms)
+  const retrieval = asTraceRecord(tr.retrieval)
+  const answer = asTraceRecord(tr.answer)
+  const refsTrace = asTraceRecord(tr.refs)
+  const citeSystems = asTraceRecord(tr.citation_systems)
+  if (!traceId && Object.keys(timings).length <= 0 && Object.keys(retrieval).length <= 0) {
+    return null
+  }
+  const topSources = traceSourceLabels(retrieval.top_hits)
+  const answerSources = traceSourceLabels(answer.answer_sources)
+  const refSources = traceSourceLabels(refsTrace.final_display_sources || refsTrace.seed_sources)
+  const evidenceMismatch = Boolean(refsTrace.primary_evidence_mismatch)
+  const evidenceHeading = String(refsTrace.primary_evidence_heading || '').trim()
+  const evidenceTerms = Array.isArray(refsTrace.primary_evidence_terms)
+    ? refsTrace.primary_evidence_terms.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
+    : []
+  const evidenceLabel = evidenceHeading ? (evidenceMismatch ? 'weak' : 'ok') : 'n/a'
+  const total = formatTraceMs(timings.total)
+  const status = String(tr.status || '').trim() || 'running'
+  return (
+    <details className="kb-research-trace">
+      <summary>
+        <span>Trace</span>
+        <span>{status}</span>
+        <span>{total}</span>
+      </summary>
+      <div className="kb-research-trace-grid">
+        <div><span>retrieve</span><strong>{formatTraceMs(timings.retrieve)}</strong></div>
+        <div><span>answer</span><strong>{formatTraceMs(timings.llm_answer)}</strong></div>
+        <div><span>refs</span><strong>{formatTraceMs(timings.refs_precompute)}</strong></div>
+        <div><span>hits</span><strong>{traceNum(retrieval.raw_hit_count)}</strong></div>
+        <div><span>answer docs</span><strong>{traceNum(answer.answer_hit_count)}</strong></div>
+        <div><span>cards</span><strong>{traceNum(refsTrace.final_display_count || refsTrace.seed_count)}</strong></div>
+        <div><span>System B</span><strong>{traceNum(citeSystems.system_b_validated_count || citeSystems.system_b_opportunity_count)}</strong></div>
+        <div className={evidenceMismatch ? 'is-warning' : ''}>
+          <span>evidence</span>
+          <strong title={evidenceTerms.join(', ') || evidenceHeading}>{evidenceLabel}</strong>
+        </div>
+        <div><span>refs async</span><strong>{refsTrace.async_will_run ? 'yes' : 'no'}</strong></div>
+      </div>
+      {topSources.length > 0 || answerSources.length > 0 || refSources.length > 0 ? (
+        <div className="kb-research-trace-sources">
+          {topSources.length > 0 ? <div><span>retrieved</span>{topSources.join(' / ')}</div> : null}
+          {answerSources.length > 0 ? <div><span>answer</span>{answerSources.join(' / ')}</div> : null}
+          {refSources.length > 0 ? <div><span>refs</span>{refSources.join(' / ')}</div> : null}
+        </div>
+      ) : null}
+      {traceId ? <div className="kb-research-trace-id">{traceId}</div> : null}
+    </details>
+  )
 }
 
 function AssistantAvatar() {
@@ -3590,6 +3843,23 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.bibliometricsChecked === b.bibliometricsChecked
     && a.summaryLine === b.summaryLine
     && a.summarySource === b.summarySource
+    && a.answerClaim === b.answerClaim
+    && a.headingPath === b.headingPath
+    && a.evidenceQuote === b.evidenceQuote
+    && a.evidenceSource === b.evidenceSource
+    && a.citationContext === b.citationContext
+    && a.citationContextSource === b.citationContextSource
+    && a.upstreamWorkRole === b.upstreamWorkRole
+    && a.userQuestionRelation === b.userQuestionRelation
+    && a.locationLabel === b.locationLabel
+    && a.supportRelation === b.supportRelation
+    && a.whyLine === b.whyLine
+    && a.blockId === b.blockId
+    && a.anchorId === b.anchorId
+    && a.anchorKind === b.anchorKind
+    && a.pageStart === b.pageStart
+    && a.pageEnd === b.pageEnd
+    && a.score === b.score
     && a.note === b.note
     && sameTags(a.tags || [], b.tags || [])
   )
@@ -3676,6 +3946,23 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     conferenceAcronym: preferExistingText(item.conferenceAcronym, live.conferenceAcronym),
     summaryLine: preferRicherField('title', item.summaryLine, live.summaryLine),
     summarySource: preferExistingText(item.summarySource, live.summarySource),
+    answerClaim: preferRicherField('title', item.answerClaim, live.answerClaim),
+    headingPath: preferExistingText(item.headingPath, live.headingPath),
+    evidenceQuote: preferRicherField('title', item.evidenceQuote, live.evidenceQuote),
+    evidenceSource: preferExistingText(item.evidenceSource, live.evidenceSource),
+    citationContext: preferRicherField('title', item.citationContext, live.citationContext),
+    citationContextSource: preferExistingText(item.citationContextSource, live.citationContextSource),
+    upstreamWorkRole: preferExistingText(item.upstreamWorkRole, live.upstreamWorkRole),
+    userQuestionRelation: preferExistingText(item.userQuestionRelation, live.userQuestionRelation),
+    locationLabel: preferExistingText(item.locationLabel, live.locationLabel),
+    supportRelation: preferExistingText(item.supportRelation, live.supportRelation),
+    whyLine: preferExistingText(item.whyLine, live.whyLine),
+    blockId: preferExistingText(item.blockId, live.blockId),
+    anchorId: preferExistingText(item.anchorId, live.anchorId),
+    anchorKind: preferExistingText(item.anchorKind, live.anchorKind),
+    pageStart: preferPositiveNumber(item.pageStart, live.pageStart),
+    pageEnd: preferPositiveNumber(item.pageEnd, live.pageEnd),
+    score: preferPositiveNumber(item.score, live.score),
     citationCount: preferPositiveNumber(item.citationCount, live.citationCount),
     num: preferPositiveNumber(item.num, live.num),
     bibliometricsChecked: Boolean(item.bibliometricsChecked || live.bibliometricsChecked),
@@ -3783,6 +4070,7 @@ export function MessageList({
   refs,
   generationPartial,
   generationStage,
+  generationTrace,
   jumpTarget,
   onJumpHandled,
   trackedMessageIds,
@@ -3797,6 +4085,10 @@ export function MessageList({
   const [popoverPos, setPopoverPos] = useState<{ x: number; y: number } | null>(null)
   const [popoverLoading, setPopoverLoading] = useState(false)
   const [popoverGuideLoading, setPopoverGuideLoading] = useState(false)
+  const [popoverPinned, setPopoverPinned] = useState(false)
+  const citationHoverOpenTimerRef = useRef<number | null>(null)
+  const citationHoverCloseTimerRef = useRef<number | null>(null)
+  const activePopoverRequestKeyRef = useRef('')
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
@@ -3807,6 +4099,7 @@ export function MessageList({
   const assistantLocatePrepCacheRef = useRef(new Map<string, AssistantLocatePrep>())
   const assistantLocatePrepPerfRef = useRef<MessageListPrepPerfEvent | null>(null)
   const [guideDocCandidates, setGuideDocCandidates] = useState<LocateCandidate[]>([])
+  const S = useT()
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
   const activeStorageKeyRef = useRef(shelfStorageKey(activeConvId))
@@ -3817,6 +4110,17 @@ export function MessageList({
     items: [],
   })
   const flushShelfSnapshotRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (citationHoverOpenTimerRef.current !== null) {
+        window.clearTimeout(citationHoverOpenTimerRef.current)
+      }
+      if (citationHoverCloseTimerRef.current !== null) {
+        window.clearTimeout(citationHoverCloseTimerRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const sourcePath = String(paperGuideSourcePath || '').trim()
@@ -4221,6 +4525,9 @@ export function MessageList({
         renderedRefs.add(lastUserMsgId)
       }
     }
+    if (lastUserMsgId > 0 && !renderedRefs.has(lastUserMsgId) && hasRenderableRefs(refs, lastUserMsgId)) {
+      out.push({ kind: 'refs', userMsgId: lastUserMsgId })
+    }
 
     return out
   }, [messages, refs])
@@ -4353,12 +4660,26 @@ export function MessageList({
       })
   }
 
-  const openCitation = (detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
+  const clearCitationHoverTimers = () => {
+    if (citationHoverOpenTimerRef.current !== null) {
+      window.clearTimeout(citationHoverOpenTimerRef.current)
+      citationHoverOpenTimerRef.current = null
+    }
+    if (citationHoverCloseTimerRef.current !== null) {
+      window.clearTimeout(citationHoverCloseTimerRef.current)
+      citationHoverCloseTimerRef.current = null
+    }
+  }
+
+  const showCitationAt = (detail: CiteDetail, position: { x: number; y: number }, pinned: boolean) => {
+    clearCitationHoverTimers()
+    if (!pinned && popoverPinned) return
+    setPopoverPinned(pinned)
     setPopoverDetail(detail)
-    setPopoverPos({ x: event.clientX, y: event.clientY })
+    setPopoverPos(position)
     setPopoverGuideLoading(false)
     const sourcePath = String(detail.sourcePath || '').trim()
-    const isInPaperReference = Number(detail.num || 0) > 0
+    const isInPaperReference = Boolean(detail.isInpaper)
     const shouldFetchCitationMeta = Boolean(sourcePath) && !isInPaperReference
     const hasDoi = Boolean(String(detail.doi || '').trim())
     const shouldFetchBibliometrics = !detail.bibliometricsChecked && (
@@ -4367,6 +4688,7 @@ export function MessageList({
         : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
     )
     if (!shouldFetchCitationMeta && !shouldFetchBibliometrics) {
+      activePopoverRequestKeyRef.current = ''
       setPopoverLoading(false)
       return
     }
@@ -4380,11 +4702,13 @@ export function MessageList({
     }
 
     const itemKey = toShelfItem(detail).key
+    activePopoverRequestKeyRef.current = itemKey
     setPopoverLoading(true)
     Promise.all(reqs)
       .then((metas) => {
         setPopoverDetail((current) => {
           if (!current) return current
+          if (toShelfItem(current).key !== itemKey) return current
           let merged = current
           for (const meta of metas) {
             if (meta && Object.keys(meta).length > 0) {
@@ -4408,7 +4732,57 @@ export function MessageList({
           }
         }))
       })
-      .finally(() => setPopoverLoading(false))
+      .finally(() => {
+        if (activePopoverRequestKeyRef.current === itemKey) {
+          setPopoverLoading(false)
+        }
+      })
+  }
+
+  const openCitation = (detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
+    showCitationAt(detail, { x: event.clientX, y: event.clientY }, true)
+  }
+
+  const previewCitation = (detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
+    if (popoverPinned) return
+    const position = { x: event.clientX, y: event.clientY }
+    if (citationHoverOpenTimerRef.current !== null) {
+      window.clearTimeout(citationHoverOpenTimerRef.current)
+    }
+    if (citationHoverCloseTimerRef.current !== null) {
+      window.clearTimeout(citationHoverCloseTimerRef.current)
+      citationHoverCloseTimerRef.current = null
+    }
+    citationHoverOpenTimerRef.current = window.setTimeout(() => {
+      citationHoverOpenTimerRef.current = null
+      showCitationAt(detail, position, false)
+    }, 180)
+  }
+
+  const scheduleCitationPreviewClose = () => {
+    if (popoverPinned) return
+    if (citationHoverOpenTimerRef.current !== null) {
+      window.clearTimeout(citationHoverOpenTimerRef.current)
+      citationHoverOpenTimerRef.current = null
+    }
+    if (citationHoverCloseTimerRef.current !== null) {
+      window.clearTimeout(citationHoverCloseTimerRef.current)
+    }
+    citationHoverCloseTimerRef.current = window.setTimeout(() => {
+      citationHoverCloseTimerRef.current = null
+      setPopoverDetail(null)
+      setPopoverPos(null)
+      activePopoverRequestKeyRef.current = ''
+      setPopoverLoading(false)
+      setPopoverGuideLoading(false)
+    }, 260)
+  }
+
+  const keepCitationPreviewOpen = () => {
+    if (citationHoverCloseTimerRef.current !== null) {
+      window.clearTimeout(citationHoverCloseTimerRef.current)
+      citationHoverCloseTimerRef.current = null
+    }
   }
 
   const addToShelf = (detail: CiteDetail) => {
@@ -4436,7 +4810,7 @@ export function MessageList({
   }
 
   const startPaperGuideFromDetail = async (detail: CiteDetail) => {
-    const isInPaperReference = Number(detail.num || 0) > 0
+    const isInPaperReference = Boolean(detail.isInpaper)
     if (isInPaperReference) {
       message.info('This item is an in-answer citation. Upload the PDF in Library first, then start paper guide.')
       return
@@ -4455,6 +4829,7 @@ export function MessageList({
         title: `Paper Guide 闂?${sourceName}`,
       })
       message.success('Entered paper guide conversation')
+      setPopoverPinned(false)
       setPopoverDetail(null)
       setPopoverPos(null)
     } catch (err) {
@@ -4474,7 +4849,13 @@ export function MessageList({
     const payload = buildBasicReaderOpenPayload({
       sourcePath,
       sourceName: String(detail.sourceName || detail.title || '').trim(),
-      snippet: String(detail.summaryLine || detail.title || detail.raw || '').trim(),
+      headingPath: String(detail.headingPath || (!detail.isInpaper ? detail.title : '') || '').trim(),
+      snippet: String(detail.evidenceQuote || detail.summaryLine || detail.title || detail.raw || '').trim(),
+      highlightSnippet: String(detail.evidenceQuote || detail.summaryLine || detail.raw || '').trim(),
+      blockId: String(detail.blockId || '').trim(),
+      anchorId: String(detail.anchorId || '').trim(),
+      anchorKind: String(detail.anchorKind || '').trim(),
+      strictLocate: Boolean(detail.blockId || detail.anchorId),
     })
     if (!payload) return
     onOpenReader(payload)
@@ -4496,7 +4877,9 @@ export function MessageList({
     const out = new Set<string>()
     for (const item of guideDocCandidates) {
       const sourcePath = String(item.sourcePath || '').trim()
-      if (sourcePath) out.add(sourcePath)
+      for (const key of sourcePathLookupKeys(sourcePath)) {
+        out.add(key)
+      }
     }
     return out
   }, [guideDocCandidates])
@@ -4506,9 +4889,11 @@ export function MessageList({
     for (const item of guideDocCandidates) {
       const sourcePath = String(item.sourcePath || '').trim()
       if (!sourcePath) continue
-      const list = out.get(sourcePath) || []
-      list.push(item)
-      out.set(sourcePath, list)
+      for (const key of sourcePathLookupKeys(sourcePath)) {
+        const list = out.get(key) || []
+        list.push(item)
+        out.set(key, list)
+      }
     }
     return out
   }, [guideDocCandidates])
@@ -4528,12 +4913,14 @@ export function MessageList({
       assistantCount += 1
       const trace = assistantTraceByMsgId.get(message.id)
       const renderPacket = getMessageRenderPacket(message)
+      const locatePayloadSig = messageLocatePayloadSignature(message, renderPacket)
       const rawBodyContent = getMessageRenderedBodyContent(message)
       const lowConfidenceMeta = resolveLowConfidenceMeta(
         (message.meta && typeof message.meta === 'object')
           ? message.meta as Record<string, unknown>
           : null,
         String(rawBodyContent || ''),
+        S,
       )
       const bodyContent = lowConfidenceMeta
         ? stripLeadingLowConfidenceNotice(rawBodyContent)
@@ -4556,6 +4943,7 @@ export function MessageList({
         const prepKey = [
           message.id,
           String(message.render_cache_key || ''),
+          locatePayloadSig,
           'light',
           refsUserMsgId,
         ].join('::')
@@ -4591,7 +4979,7 @@ export function MessageList({
       )
       const guideDocAvailable = Boolean(guideSourcePath && guideSourcePathSet.has(guideSourcePath))
       const guideCandidateCount = guideSourcePath
-        ? (guideDocCandidatesBySourcePath.get(guideSourcePath) || []).length
+        ? lookupGuideCandidatesBySourcePath(guideDocCandidatesBySourcePath, guideSourcePath).length
         : 0
       const locateSourcePath = (
         guideSourcePath && guideDocAvailable
@@ -4607,6 +4995,7 @@ export function MessageList({
       const prepKey = [
         message.id,
         String(message.render_cache_key || ''),
+        locatePayloadSig,
         guideSourcePath,
         guideCandidateCount,
         locateSourcePath,
@@ -4622,10 +5011,10 @@ export function MessageList({
 
       const refsLocateCandidatesAll = buildRefsLocateCandidatesAll(refHits)
       const guideSourceCandidates = guideSourcePath
-        ? (guideDocCandidatesBySourcePath.get(guideSourcePath) || [])
+        ? lookupGuideCandidatesBySourcePath(guideDocCandidatesBySourcePath, guideSourcePath)
         : []
       const refsScopedCandidates = guideSourcePath
-        ? refsLocateCandidatesAll.filter((item) => item.sourcePath === guideSourcePath)
+        ? refsLocateCandidatesAll.filter((item) => sourcePathsReferToSameDocument(item.sourcePath, guideSourcePath))
         : refsLocateCandidatesAll
       const messageProvenance = (message.provenance && typeof message.provenance === 'object')
         ? message.provenance as Record<string, unknown>
@@ -4658,12 +5047,12 @@ export function MessageList({
       const strictProvenanceLocate = Boolean(effectiveGuideSourcePath)
       const structuredLocateButtonCap = 12
       const effectiveGuideCandidates = effectiveGuideSourcePath
-        ? (guideDocCandidatesBySourcePath.get(effectiveGuideSourcePath) || [])
+        ? lookupGuideCandidatesBySourcePath(guideDocCandidatesBySourcePath, effectiveGuideSourcePath)
         : []
       const renderPacketLocateEntry = buildRenderPacketLocateEntry(message, renderPacket, {
         fallbackSourcePath: effectiveGuideSourcePath || provenanceSourcePath || locateSourcePath || '',
         fallbackSourceName: locateSourceName || provenanceSourceName || guideSourceName,
-      })
+      }, S)
       const provenanceLocateEntries = buildStructuredProvenanceLocateEntries(
         messageProvenance,
         {
@@ -4874,6 +5263,7 @@ export function MessageList({
             const message = row.message
             const isUser = message.role === 'user'
             const trace = assistantTraceByMsgId.get(message.id)
+            const researchTrace = !isUser ? getMessageResearchTrace(message) : null
             const citeDetails = getMessageCiteDetailRecords(message)
               .map(normalizeCiteDetail)
               .filter((detail): detail is CiteDetail => Boolean(detail))
@@ -4895,6 +5285,7 @@ export function MessageList({
                   ? message.meta as Record<string, unknown>
                   : null,
                 String(rawBodyContent || ''),
+                S,
               )
               : null
             const bodyContent = lowConfidenceMeta
@@ -4921,10 +5312,20 @@ export function MessageList({
             const hasStrictMustLocateEntries = prep?.hasStrictMustLocateEntries || false
             const strictStructuredLocateOnly = prep?.strictStructuredLocateOnly || false
             const strictStructuredInlineLocate = prep?.strictStructuredInlineLocate || false
+            const suppressLooseInlineLocate = shouldSuppressLooseInlineLocate({
+              guideSourcePath,
+              bodyContent: String(bodyContent || ''),
+              hasRawCiteDetails: citeDetails.length > 0,
+              hasStructuredProvenance,
+              hasDirectProvenance,
+            })
             const guideInlineTextTailLocate = Boolean(
+              !suppressLooseInlineLocate
+              && (
               guideSourcePath
               && provenanceLocateEntries.length > 0
-              && !strictStructuredLocateOnly,
+              && !strictStructuredLocateOnly
+              ),
             )
             const provenanceModeLabel = prep?.provenanceModeLabel || ''
             const structuredRenderSlotMap = prep?.structuredRenderSlotMap || new Map<number, StructuredRenderLocateSlot>()
@@ -5569,7 +5970,7 @@ export function MessageList({
               const resolvedEntry = remapStructuredEntryToGuideAnchors(
                 entry,
                 sourcePath
-                  ? (guideDocCandidatesBySourcePath.get(sourcePath) || [])
+                  ? lookupGuideCandidatesBySourcePath(guideDocCandidatesBySourcePath, sourcePath)
                   : [],
               )
               const payload = buildStructuredEntryReaderOpenPayload(resolvedEntry, snippet)
@@ -5652,23 +6053,23 @@ export function MessageList({
                       {lowConfidenceMeta ? (
                         <div className="mb-4 rounded-2xl border border-amber-300/70 bg-amber-50/80 px-4 py-3 text-sm text-amber-900 dark:border-amber-300/50 dark:bg-amber-300/10 dark:text-amber-100">
                           <div className="font-medium">
-                            {lowConfidenceMeta.isZh ? '检索置信度较低' : 'Lower retrieval confidence'}
+                            {lowConfidenceMeta.isZh ? S.msg_retrieval_low_confidence : 'Lower retrieval confidence'}
                           </div>
                           <div className="mt-1">
                             {lowConfidenceMeta.isZh
-                              ? `原因：${lowConfidenceMeta.reasonText}`
+                              ? S.msg_retrieval_low_reason.replace('{text}', lowConfidenceMeta.reasonText)
                               : `Reason: ${lowConfidenceMeta.reasonText}.`}
                           </div>
                           {lowConfidenceMeta.candidateRefs.length > 0 ? (
                             <div className="mt-1">
                               {lowConfidenceMeta.isZh
-                                ? `候选参考文献：${lowConfidenceMeta.candidateRefs.map((num) => `[${num}]`).join(', ')}（供交叉核对）`
+                                ? S.msg_retrieval_candidate_refs.replace('{refs}', lowConfidenceMeta.candidateRefs.map((num) => `[${num}]`).join(', '))
                                 : `Candidate refs for cross-check: ${lowConfidenceMeta.candidateRefs.map((num) => `[${num}]`).join(', ')}.`}
                             </div>
                           ) : null}
                         </div>
                       ) : null}
-                      {provenanceModeLabel ? (
+                      {Boolean((globalThis as { __KB_SHOW_PROVENANCE_MODE_LABEL__?: boolean }).__KB_SHOW_PROVENANCE_MODE_LABEL__) && provenanceModeLabel ? (
                         <div className="mb-2">
                           <Text type="secondary" className="text-xs">{provenanceModeLabel}</Text>
                         </div>
@@ -5677,8 +6078,10 @@ export function MessageList({
                         content={bodyContent}
                         citeDetails={citeDetails}
                         onCitationClick={openCitation}
+                        onCitationHover={previewCitation}
+                        onCitationLeave={scheduleCitationPreviewClose}
                         inlineLocateTokenPolicy={enableLocateUi && guideSourcePath ? { quote: true, figure_ref: true } : undefined}
-                        inlineTextLocateEnabled={enableLocateUi ? (!guideSourcePath || strictStructuredInlineLocate) : false}
+                        inlineTextLocateEnabled={enableLocateUi ? ((!guideSourcePath || strictStructuredInlineLocate) && !suppressLooseInlineLocate) : false}
                         inlineTextTailLocateEnabled={enableLocateUi ? guideInlineTextTailLocate : false}
                         locateSurfacePolicy={enableLocateUi && guideSourcePath
                           ? {
@@ -5848,6 +6251,7 @@ export function MessageList({
                           })}
                         </div>
                       ) : null}
+                      <ResearchTracePanel trace={researchTrace} />
                       <CopyBar
                         text={getMessageCopyTextValue(message)}
                         markdown={getMessageCopyMarkdownValue(message)}
@@ -5877,7 +6281,9 @@ export function MessageList({
                   </div>
                 ) : null}
                 {generationPartial ? (
-                  <MarkdownRenderer content={generationPartial} />
+                  <div className="whitespace-pre-wrap break-words text-sm leading-7 text-[var(--text)]">
+                    {generationPartial}
+                  </div>
                 ) : (
                   <div className="flex items-center gap-1 py-1">
                     <span className="typing-dot" />
@@ -5885,6 +6291,7 @@ export function MessageList({
                     <span className="typing-dot" style={{ animationDelay: '0.3s' }} />
                   </div>
                 )}
+                <ResearchTracePanel trace={generationTrace} />
               </div>
             </div>
           ) : null}
@@ -5897,8 +6304,11 @@ export function MessageList({
         guideLoading={popoverGuideLoading}
         inShelf={Boolean(popoverDetail && shelfItems.some((item) => item.key === toShelfItem(popoverDetail).key))}
         onClose={() => {
+          clearCitationHoverTimers()
+          setPopoverPinned(false)
           setPopoverDetail(null)
           setPopoverPos(null)
+          activePopoverRequestKeyRef.current = ''
           setPopoverLoading(false)
           setPopoverGuideLoading(false)
         }}
@@ -5906,6 +6316,8 @@ export function MessageList({
         onOpenShelf={() => setShelfOpen(true)}
         onOpenReader={openReaderFromDetail}
         onStartGuide={startPaperGuideFromDetail}
+        onMouseEnter={keepCitationPreviewOpen}
+        onMouseLeave={scheduleCitationPreviewClose}
       />
       <CiteShelf
         open={shelfOpen}
@@ -5956,4 +6368,3 @@ export function MessageList({
     </>
   )
 }
-

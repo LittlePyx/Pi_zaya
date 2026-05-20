@@ -466,7 +466,7 @@ def test_structured_citation_token_still_produces_clickable_link(monkeypatch):
     assert len(details) == 1
 
 
-def test_structured_citation_remains_clickable_even_when_text_conflicts(monkeypatch):
+def test_structured_citation_is_hidden_when_author_year_conflicts(monkeypatch):
     def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
         del _index_data, _source_path, source_sha1
         if int(ref_num) != 24:
@@ -492,8 +492,9 @@ def test_structured_citation_remains_clickable_even_when_text_conflicts(monkeypa
     hits = [{"meta": {"source_path": "doc.en.md", "source_sha1": "abc"}}]
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
 
-    assert "[24](#" in out
-    assert len(details) == 1
+    assert "[24](#" not in out
+    assert "[[CITE:" not in out
+    assert len(details) == 0
 
 
 def test_structured_citation_is_clickable_without_local_verification(monkeypatch):

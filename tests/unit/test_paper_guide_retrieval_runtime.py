@@ -158,6 +158,49 @@ def test_paper_guide_targeted_source_block_hits_respects_literal_section_title_t
     assert "how a single-pixel camera works" in str((hits[0].get("meta") or {}).get("heading_path") or "").lower()
 
 
+def test_paper_guide_targeted_source_block_hits_prioritizes_reconstruction_method_tradeoffs(tmp_path: Path):
+    source_pdf = tmp_path / "NatPhotonReconstruction.pdf"
+    source_pdf.write_bytes(b"%PDF-1.4\n")
+    db_root = tmp_path / "db"
+    md_dir = db_root / "NatPhotonReconstruction"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    md_main = md_dir / "NatPhotonReconstruction.en.md"
+    md_main.write_text(
+        (
+            "## Results\n\n"
+            "The paper reports acquisition time and a DMD bottleneck.\n\n"
+            "## Acquisition and image reconstruction strategies\n\n"
+            "Unlike raster scanning, compressed sensing uses incoherent random patterns and a "
+            "computationally intensive optimization algorithm to deduce the image. Example "
+            "optimization algorithms may minimize the $\\ell_1$-norm, the discrete cosine "
+            "transform, the spatial gradient (total variation), or curvature. The reconstruction "
+            "time can exceed the acquisition time, so this is not suited to real-time performance, "
+            "but offline post-processing can yield the highest image quality.\n\n"
+            "An alternative approach uses Hadamard, Fourier or wavelet basis patterns with a "
+            "computationally fast algorithmic transform, making it more appropriate for low to "
+            "moderate image resolutions and faster image reconstruction.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    hits = _paper_guide_targeted_source_block_hits(
+        bound_source_path=str(source_pdf),
+        prompt=(
+            "文中提到的几类主流重建方法分别有什么优缺点，适用场景怎么选？ "
+            "acquisition and image reconstruction strategies optimization total variation hadamard fourier wavelet"
+        ),
+        db_dir=db_root,
+        limit=3,
+        citation_lookup_query_tokens=lambda prompt: [tok for tok in prompt.lower().split() if tok],
+        citation_lookup_signal_score=lambda **_kwargs: 0.0,
+        resolve_support_slot_block=lambda **_kwargs: {},
+    )
+    assert hits
+    top_text = str(hits[0].get("text") or "").lower()
+    assert "optimization algorithm" in top_text
+    assert "total variation" in top_text
+
+
 def test_seed_query_tokens_merges_augmented_family_terms_when_prompt_has_cjk_tokens():
     tokens = retrieval_runtime._paper_guide_seed_query_tokens_for_targeted_scan(
         prompt="请解释这个方法的关键步骤",
@@ -580,7 +623,8 @@ def test_build_paper_guide_direct_citation_lookup_answer_prefers_author_attribut
         },
     )
 
-    assert "The paper cites [4]" in out
+    assert "Use [4] as the cited source" in out
+    assert "The paper cites" not in out
     assert "Single-pixel imaging via compressive sampling" in out
 
 
@@ -607,7 +651,8 @@ def test_build_paper_guide_direct_citation_lookup_answer_focuses_on_target_ref_c
         else {"title": f"Reference {int(ref_num)}"},
     )
 
-    assert "The paper cites [50]" in out
+    assert "Use [50] as the cited source" in out
+    assert "The paper cites" not in out
     assert "video Snapshot Compressive Imaging (SCI) [50]" in out
     assert "[5,8]" not in out
 
@@ -636,7 +681,8 @@ def test_build_paper_guide_direct_citation_lookup_answer_focuses_on_target_ref_c
         else {"title": f"Reference {int(ref_num)}"},
     )
 
-    assert "The paper cites [4]" in out
+    assert "Use [4] as the cited source" in out
+    assert "The paper cites" not in out
     assert "ADMM) [4]" in out
     assert "[49]" not in out
 
@@ -678,7 +724,8 @@ def test_build_paper_guide_direct_citation_lookup_answer_merges_targeted_scan_ca
         if int(ref_num) == 17
         else {"title": f"Reference {int(ref_num)}"},
     )
-    assert "The paper cites [17]" in out
+    assert "Use [17] as the cited source" in out
+    assert "The paper cites" not in out
     assert "higher-order spline [17]" in out
     assert "[27]" not in out
 

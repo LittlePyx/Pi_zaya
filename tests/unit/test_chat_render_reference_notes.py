@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from kb.chat_store import ChatStore
 from api.chat_render import (
     _enrich_provenance_segments_for_display,
@@ -405,8 +407,8 @@ def test_sid_markers_are_removed_from_rendered_outputs():
 def test_structured_cite_fallback_does_not_relink_after_safe_downgrade(monkeypatch):
     from api import chat_render
 
-    def fake_primary(_md, _hits, *, anchor_ns=""):
-        del _md, _hits, anchor_ns
+    def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
+        del _md, _hits, anchor_ns, canonical_paths
         # Simulate safety downgrade result from primary annotator:
         # CITE token resolved to plain numeric marker and no details.
         return "Gehm et al. (2007) [24].", []
@@ -448,8 +450,8 @@ def test_structured_cite_fallback_does_not_relink_after_safe_downgrade(monkeypat
 def test_structured_cite_fallback_recovers_links_when_primary_strips_tokens(monkeypatch):
     from api import chat_render
 
-    def fake_primary(_md, _hits, *, anchor_ns=""):
-        del _md, _hits, anchor_ns
+    def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
+        del _md, _hits, anchor_ns, canonical_paths
         return "SPI relies on compressive sensing.", []
 
     def fake_fallback(_md, _hits, *, anchor_ns=""):
@@ -559,6 +561,287 @@ def test_normal_answer_strips_structured_cite_markers_without_linking():
     assert "[[CITE:" not in rendered_body
     assert "[2]" not in rendered_body
     assert msg.get("cite_details") == []
+
+
+def test_normal_answer_preserves_validated_system_b_marker(monkeypatch):
+    from api import chat_render
+
+    def fake_primary(md, hits, *, anchor_ns="", canonical_paths=None):
+        del hits, anchor_ns, canonical_paths
+        assert "[[CITE:s1234abcd:4]]" in md
+        return (
+            "ADMM is prior optimization machinery [4](#kb-cite-demo-4).",
+            [
+                {
+                    "num": 4,
+                    "anchor": "kb-cite-demo-4",
+                    "source_name": "SCINeRF.pdf",
+                    "source_path": r"db\demo\scinerf.en.md",
+                    "title": "Distributed optimization and statistical learning via ADMM",
+                    "is_inpaper": True,
+                }
+            ],
+        )
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+    messages = [
+        {"id": 1, "role": "user", "content": "ADMM 是作者自己发明的吗？"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "ADMM is prior optimization machinery [[CITE:s1234abcd:4]].",
+            "meta": {
+                "answer_quality": {
+                    "prompt_family": "overview",
+                    "output_mode": "reading_guide",
+                    "reference_opportunities": {"count": 1, "mode": "inline", "refs": [4]},
+                    "citation_validation": {"raw_count": 1, "kept": 1, "rewritten": 0},
+                }
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "Most existing methods employ ADMM [4].",
+                    "meta": {"source_path": r"db\demo\scinerf.en.md"},
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-normal-sysb")
+    msg = rendered[-1]
+
+    assert "[[CITE:" not in str(msg.get("rendered_body") or "")
+    assert "#kb-cite-demo-4" in str(msg.get("rendered_body") or "")
+    assert (msg.get("cite_details") or [])[0]["is_inpaper"] is True
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {
+            "name": "zh_overview_freeform_numeric",
+            "user": "这篇论文的核心方法是什么？",
+            "assistant": "该方法把快照压缩成像和 NeRF 训练结合起来 [1]，用于从单帧压缩观测恢复三维表示。",
+            "meta": {"answer_quality": {"prompt_family": "overview", "output_mode": "reading_guide"}},
+        },
+        {
+            "name": "en_comparison_numeric_range",
+            "user": "Which paper compares Hadamard and Fourier single-pixel imaging?",
+            "assistant": "OE-2017 compares Hadamard and Fourier single-pixel imaging [2, 3], but this is a normal library answer.",
+            "meta": {"answer_quality": {"prompt_family": "compare", "output_mode": "reading_guide"}},
+        },
+        {
+            "name": "zh_method_structured_marker",
+            "user": "它是怎么训练 NeRF 的？",
+            "assistant": "论文把物理成像过程写进训练目标 [[CITE:s1234abcd:4]]，但普通方法问答不应保留文内参考链接。",
+            "meta": {"answer_quality": {"prompt_family": "method", "output_mode": "reading_guide"}},
+        },
+        {
+            "name": "no_meta_source_like_numeric",
+            "user": "给我正常概括一下这篇文献。",
+            "assistant": "The answer mentions a source-like marker [5] but has no citation intent metadata.",
+            "meta": {},
+        },
+    ],
+    ids=lambda case: str(case.get("name") or "case"),
+)
+def test_normal_question_variants_do_not_trigger_inpaper_reference_links(case):
+    messages = [
+        {"id": 1, "role": "user", "content": case["user"]},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": case["assistant"],
+            "meta": case["meta"],
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "retrieved evidence",
+                    "meta": {"source_path": r"db\doc\doc.en.md"},
+                }
+            ]
+        }
+    }
+
+    name = str(case.get("name") or "")
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id=f"conv-{name}")
+    msg = rendered[-1]
+    rendered_body = str(msg.get("rendered_body") or "")
+    rendered_content = str(msg.get("rendered_content") or "")
+    copy_markdown = str(msg.get("copy_markdown") or "")
+    cite_details = list(msg.get("cite_details") or [])
+
+    # Structured [[CITE:...]] markers are always stripped in non-paper-guide mode.
+    assert "[[CITE:" not in rendered_body
+    assert "[CITE:" not in rendered_body
+    # Cases with resolvable [n] markers (n <= hit count) get linked.
+    # Cases with unresolvable [2,3] or [5] (only 1 hit) or structured markers get stripped.
+    if name == "zh_overview_freeform_numeric":
+        assert "#kb-cite-" in rendered_body
+        assert len(cite_details) > 0
+    else:
+        assert "#kb-cite-" not in rendered_body
+        assert cite_details == []
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        {"paper_guide_contracts": {"version": 1, "intent": {"family": "citation_lookup"}}},
+        {"answer_quality": {"prompt_family": "citation_lookup", "output_mode": "reading_guide"}},
+        {"answer_quality": {"prompt_family": "overview", "output_mode": "citation_lookup"}},
+    ],
+    ids=["contract_intent", "answer_prompt_family", "answer_output_mode"],
+)
+def test_citation_lookup_variants_trigger_and_preserve_inpaper_reference_links(monkeypatch, meta):
+    from api import chat_render
+
+    calls = []
+
+    def fake_primary(md, hits, *, anchor_ns="", canonical_paths=None):
+        calls.append({"md": md, "hits": hits, "anchor_ns": anchor_ns, "canonical_paths": canonical_paths})
+        return (
+            "SCI relies on compressive sensing [1](#kb-cite-demo-1).",
+            [
+                {
+                    "num": 1,
+                    "anchor": "kb-cite-demo-1",
+                    "source_name": "demo.pdf",
+                    "source_path": "demo.md",
+                    "raw": "Demo reference [1]",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+
+    messages = [
+        {"id": 1, "role": "user", "content": "Which in-paper reference supports SCI?"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "SCI relies on compressive sensing [[CITE:s1234abcd:1]].",
+            "meta": meta,
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "dummy",
+                    "meta": {"source_path": r"db\doc\doc.en.md"},
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-citation-lookup")
+    msg = rendered[-1]
+    packet = (((msg.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+
+    assert calls
+    assert "[1](#kb-cite-demo-1)" in str(msg.get("rendered_body") or "")
+    assert "[[CITE:" not in str(msg.get("rendered_body") or "")
+    assert len(msg.get("cite_details") or []) == 1
+    if (meta.get("paper_guide_contracts") or {}).get("intent"):
+        assert packet.get("rendered_body") == msg.get("rendered_body")
+        assert len(packet.get("cite_details") or []) == 1
+    else:
+        assert packet == {}
+
+
+def test_citation_lookup_rendered_link_points_to_validated_target_reference(monkeypatch):
+    from ui import refs_renderer
+
+    source_path = r"db\doc\paper.en.md"
+    sid = refs_renderer._source_cite_id(source_path)
+
+    refs = {
+        1: {
+            "authors": "Wrong A",
+            "year": "2020",
+            "doi": "10.1000/wrong",
+            "title": "Wrong Reference",
+            "raw": "[1] Wrong A. Wrong Reference. 2020. doi:10.1000/wrong",
+        },
+        24: {
+            "authors": "Gehm M, Brady D",
+            "year": "2007",
+            "doi": "10.1364/OE.15.014013",
+            "title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+            "raw": (
+                "[24] Gehm M, Brady D. Single-shot compressive spectral imaging with "
+                "a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013"
+            ),
+        },
+    }
+
+    def fake_resolve(_index_data, src, ref_num, *, source_sha1=""):
+        del _index_data, source_sha1
+        if str(src) != source_path:
+            return None
+        ref = refs.get(int(ref_num))
+        return {
+            "source_path": source_path,
+            "source_name": "paper.pdf",
+            "ref_num": int(ref_num),
+            "ref": dict(ref),
+        } if isinstance(ref, dict) else None
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "paper.pdf")
+
+    messages = [
+        {"id": 1, "role": "user", "content": "Which in-paper reference supports this DOI?"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": f"This follows DOI 10.1364/OE.15.014013 [[CITE:{sid}:24]].",
+            "meta": {
+                "paper_guide_contracts": {
+                    "version": 1,
+                    "intent": {"family": "citation_lookup"},
+                }
+            },
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "Evidence mentions prior work [24].",
+                    "meta": {
+                        "source_path": source_path,
+                        "source_sha1": "abc",
+                    },
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-target-ref")
+    msg = rendered[-1]
+    packet = (((msg.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    details = list(msg.get("cite_details") or [])
+
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["num"] == 24
+    assert detail["doi"] == "10.1364/OE.15.014013"
+    assert "dual-disperser architecture" in detail["title"]
+    assert "Wrong Reference" not in str(detail)
+    assert f"[24](#{detail['anchor']}" in str(msg.get("rendered_body") or "")
+    assert packet["rendered_body"] == msg.get("rendered_body")
+    assert packet["cite_details"][0]["doi"] == "10.1364/OE.15.014013"
 
 
 def test_non_citation_message_does_not_preserve_stale_existing_render_packet_links():
@@ -1124,8 +1407,8 @@ def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Pa
 
     calls = {"primary": 0}
 
-    def fake_primary(_md, _hits, *, anchor_ns=""):
-        del _hits, anchor_ns
+    def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
+        del _hits, anchor_ns, canonical_paths
         calls["primary"] += 1
         return (
             f"cached::{_md}",
@@ -1172,8 +1455,8 @@ def test_enrich_messages_reuses_persisted_render_cache(monkeypatch, tmp_path: Pa
 def test_render_cache_persists_render_packet_when_contracts_present(monkeypatch, tmp_path: Path):
     from api import chat_render
 
-    def fake_primary(_md, _hits, *, anchor_ns=""):
-        del _hits, anchor_ns
+    def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
+        del _hits, anchor_ns, canonical_paths
         return (
             f"cached::{_md}",
             [{"num": 1, "anchor": "kb-cite-demo-1", "source_name": "demo.pdf"}],
@@ -1207,6 +1490,274 @@ def test_render_cache_persists_render_packet_when_contracts_present(monkeypatch,
 
     assert isinstance(render_packet, dict)
     assert str(render_packet.get("rendered_content") or "").strip()
+
+
+def test_enrich_messages_rebuilds_degraded_numeric_citation_cache(tmp_path: Path):
+    from api import chat_render
+
+    content = (
+        "成像质量提升：深度学习能够改善单像素成像的重建质量 [1]。\n\n"
+        "降低采样率：端到端模型可以在更少测量下恢复目标图像 [2]。"
+    )
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("degraded citation cache")
+    user_id = store.append_message(conv_id, "user", "深度学习对单像素成像有什么好处？")
+    assistant_id = store.append_message(conv_id, "assistant", content)
+    refs_by_user = {
+        user_id: {
+            "prompt_sig": "sig-1",
+            "updated_at": 1.0,
+            "used_query": "single pixel imaging deep learning",
+            "used_translation": False,
+            "hits": [
+                {
+                    "text": "Deep learning improves reconstruction quality in single-pixel imaging.",
+                    "meta": {
+                        "source_path": r"db\LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.en.md",
+                        "heading_path": "Benefits / Image quality",
+                    },
+                },
+                {
+                    "text": "Learning based image reconstruction can reduce the sampling ratio.",
+                    "meta": {
+                        "source_path": r"db\Optics-2024-Part-based image-loop network for single-pixel imaging.en.md",
+                        "heading_path": "Method / Sampling ratio",
+                    },
+                },
+            ],
+        }
+    }
+    cache_key = chat_render._build_message_render_cache_key(
+        conv_id=conv_id,
+        msg_id=assistant_id,
+        role="assistant",
+        content=content,
+        refs_user_msg_id=user_id,
+        ref_pack=refs_by_user[user_id],
+        provenance=None,
+    )
+    store.merge_message_meta(
+        assistant_id,
+        {
+            "render_cache": chat_render._build_render_cache_payload(
+                cache_key=cache_key,
+                notice="",
+                rendered_body=content,
+                rendered_content=content,
+                copy_markdown=content,
+                copy_text=content,
+                cite_details=[],
+                refs_user_msg_id=user_id,
+                render_packet={"rendered_content": content, "cite_details": []},
+            )
+        },
+    )
+
+    rendered = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+    msg = rendered[-1]
+    persisted = store.get_messages(conv_id)[-1]
+    persisted_cache = ((persisted.get("meta") or {}).get("render_cache") or {})
+
+    assert "](#kb-cite-" in str(msg.get("rendered_content") or "")
+    assert len(msg.get("cite_details") or []) == 2
+    assert all(item.get("is_inpaper") is False for item in (msg.get("cite_details") or []))
+    assert len(persisted_cache.get("cite_details") or []) == 2
+
+
+def test_enrich_provenance_surfaces_hidden_derived_formula_source_anchor():
+    provenance = {
+        "source_path": "paper.pdf",
+        "segments": [
+            {
+                "segment_id": "seg-formula",
+                "claim_type": "formula_claim",
+                "formula_origin": "derived",
+                "evidence_mode": "direct",
+                "locate_policy": "hidden",
+                "locate_surface_policy": "hidden",
+                "primary_heading_path": "How a single-pixel camera works",
+                "primary_block_id": "blk-12",
+                "primary_anchor_id": "p-12",
+                "support_locate_anchor": "The single-pixel camera consists of two main components.",
+                "locate_target": {
+                    "segmentId": "seg-formula",
+                    "headingPath": "How a single-pixel camera works",
+                    "snippet": "The single-pixel camera consists of two main components.",
+                    "blockId": "blk-12",
+                    "anchorId": "p-12",
+                    "anchorKind": "equation",
+                    "locatePolicy": "hidden",
+                    "locateSurfacePolicy": "hidden",
+                },
+                "reader_open": {
+                    "sourcePath": "paper.pdf",
+                    "blockId": "blk-12",
+                    "anchorId": "p-12",
+                    "anchorKind": "equation",
+                    "strictLocate": False,
+                    "locateTarget": {
+                        "blockId": "blk-12",
+                        "anchorId": "p-12",
+                        "anchorKind": "equation",
+                        "locatePolicy": "hidden",
+                        "locateSurfacePolicy": "hidden",
+                    },
+                },
+            }
+        ],
+        "block_map": {
+            "blk-12": {
+                "block_id": "blk-12",
+                "anchor_id": "p-12",
+                "heading_path": "How a single-pixel camera works",
+                "text": "The single-pixel camera consists of two main components.",
+                "kind": "paragraph",
+            }
+        },
+    }
+
+    out = _enrich_provenance_segments_for_display(provenance, [], anchor_ns="conv:1:2:test")
+    seg = (out.get("segments") or [])[0]
+
+    assert seg.get("locate_policy") == "required"
+    assert seg.get("locate_surface_policy") == "primary"
+    assert seg.get("locate_target", {}).get("locatePolicy") == "required"
+    assert seg.get("locate_target", {}).get("anchorKind") in {"paragraph", "sentence"}
+    assert seg.get("reader_open", {}).get("strictLocate") is True
+
+
+def test_enrich_messages_refreshes_stale_cached_render_packet_from_provenance(tmp_path: Path):
+    from api import chat_render
+
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("stale cache packet test")
+    user_id = store.append_message(conv_id, "user", "Explain the SPI workflow.")
+    content = "Grounded answer."
+    good_locate_target = {
+        "segmentId": "seg_001",
+        "headingPath": "Abstract / Acquisition and image reconstruction strategies.",
+        "snippet": "Unlike the raster-scan strategy...",
+        "blockId": "blk-good-26",
+        "anchorId": "p-good-19",
+        "anchorKind": "sentence",
+        "hitLevel": "exact",
+        "locatePolicy": "required",
+        "locateSurfacePolicy": "primary",
+    }
+    provenance = {
+        "status": "ready",
+        "strict_identity_ready": True,
+        "must_locate_count": 1,
+        "strict_identity_count": 1,
+        "segments": [
+            {
+                "segment_id": "seg_001",
+                "source_segment_id": "seg_001",
+                "claim_type": "critical_fact_claim",
+                "must_locate": True,
+                "locate_policy": "required",
+                "locate_surface_policy": "primary",
+                "evidence_mode": "direct",
+                "primary_block_id": "blk-good-26",
+                "primary_anchor_id": "p-good-19",
+                "locate_target": good_locate_target,
+                "reader_open": {
+                    "sourcePath": "demo.en.md",
+                    "headingPath": "Abstract / Acquisition and image reconstruction strategies.",
+                    "blockId": "blk-good-26",
+                    "anchorId": "p-good-19",
+                    "anchorKind": "sentence",
+                    "strictLocate": True,
+                    "locateTarget": good_locate_target,
+                },
+            }
+        ],
+    }
+    stale_packet = {
+        "answer_markdown": content,
+        "rendered_body": content,
+        "rendered_content": content,
+        "copy_markdown": content,
+        "copy_text": content,
+        "locate_target": {
+            "segmentId": "seg_001",
+            "snippet": "Grounded answer.",
+            "hitLevel": "none",
+            "locatePolicy": "hidden",
+            "locateSurfacePolicy": "hidden",
+        },
+        "reader_open": {},
+        "visible_segment_ids": [],
+    }
+    assistant_id = store.append_message(
+        conv_id,
+        "assistant",
+        content,
+        meta={
+            "provenance": provenance,
+            "paper_guide_contracts": {
+                "version": 1,
+                "intent": {"family": "paper_guide"},
+                "render_packet": stale_packet,
+            },
+        },
+    )
+    cache_key = chat_render._build_message_render_cache_key(
+        conv_id=conv_id,
+        msg_id=assistant_id,
+        role="assistant",
+        content=content,
+        refs_user_msg_id=user_id,
+        ref_pack=None,
+        provenance=provenance,
+    )
+    store.merge_message_meta(
+        assistant_id,
+        {
+            "render_cache": chat_render._build_render_cache_payload(
+                cache_key=cache_key,
+                notice="",
+                rendered_body=content,
+                rendered_content=content,
+                copy_markdown=content,
+                copy_text=content,
+                cite_details=[],
+                refs_user_msg_id=user_id,
+                render_packet=stale_packet,
+            )
+        },
+    )
+
+    rendered = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_by_user={},
+        conv_id=conv_id,
+        chat_store=store,
+        render_packet_only=True,
+    )
+    packet = (((rendered[-1].get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    persisted = store.get_messages(conv_id)[-1]
+    cache_packet = (((persisted.get("meta") or {}).get("render_cache") or {}).get("render_packet") or {})
+
+    assert packet.get("locate_target", {}).get("blockId") == "blk-good-26"
+    assert packet.get("visible_segment_ids") == ["seg_001"]
+    assert cache_packet.get("locate_target", {}).get("blockId") == "blk-good-26"
+    assert cache_packet.get("visible_segment_ids") == ["seg_001"]
+
+    second = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_by_user={},
+        conv_id=conv_id,
+        chat_store=store,
+        render_packet_only=True,
+    )
+    second_packet = (((second[-1].get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    assert second_packet.get("locate_target", {}).get("blockId") == "blk-good-26"
 
 
 def test_render_packet_only_env_strips_legacy_render_fields(monkeypatch):
@@ -1805,12 +2356,19 @@ def test_enrich_messages_invalidates_render_cache_when_refs_change(monkeypatch, 
 
     calls = {"primary": 0}
 
-    def fake_primary(_md, _hits, *, anchor_ns=""):
-        del _hits, anchor_ns
+    def fake_primary(_md, _hits, *, anchor_ns="", canonical_paths=None):
+        del _hits, anchor_ns, canonical_paths
         calls["primary"] += 1
         return (
             f"render-{calls['primary']}::{_md}",
-            [{"num": calls["primary"], "anchor": f"kb-cite-demo-{calls['primary']}", "source_name": "demo.pdf"}],
+            [
+                {
+                    "num": calls["primary"],
+                    "anchor": f"kb-cite-demo-{calls['primary']}",
+                    "source_name": "demo.pdf",
+                    "is_inpaper": True,
+                }
+            ],
         )
 
     monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)

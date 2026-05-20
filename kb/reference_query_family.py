@@ -161,3 +161,24 @@ def prompt_targets_sci_topic(prompt: str) -> bool:
             flags=re.I,
         )
     )
+
+
+def prompt_likely_cross_paper_refs(prompt: str) -> bool:
+    """True when the prompt asks about library papers beyond the currently bound paper."""
+    text = str(prompt or "").strip().lower()
+    if not text:
+        return False
+    if prompt_explicitly_requests_multi_paper_list(text):
+        return True
+    return bool(
+        re.search(
+            r"\bwhich other papers?\b|\bother papers?\b|\bbesides (?:this|that) paper\b|"
+            r"\banother paper\b|"
+            r"\u9664\u6b64\u4e4b\u5916|\u9664(?:\u4e86)?(?:"
+            r"\u8fd9\u7bc7|\u90a3\u7bc7)|"
+            r"\u5176\u4ed6\u8bba\u6587|\u522b\u7684\u8bba\u6587|"
+            r"\u8fd8\u6709\u54ea\u4e9b\u8bba\u6587|\u53e6\u4e00\u7bc7\u8bba\u6587",
+            text,
+            flags=re.I,
+        )
+    )

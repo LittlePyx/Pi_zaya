@@ -27,6 +27,19 @@ def test_pick_recent_bound_source_hints():
     assert any("LPR-2025" in h for h in hints)
 
 
+def test_should_apply_implicit_source_hints_skips_plain_multi_paper_list_queries():
+    from kb import task_runtime
+
+    assert task_runtime._should_apply_implicit_source_hints(
+        prompt="哪几篇文章里提到了NeRF",
+        paper_guide_mode=False,
+    ) is False
+    assert task_runtime._should_apply_implicit_source_hints(
+        prompt="Besides this paper, what other papers mention ADMM?",
+        paper_guide_mode=True,
+    ) is True
+
+
 def test_collect_doc_figure_assets_and_append_markdown(tmp_path: Path):
     from kb import task_runtime
 

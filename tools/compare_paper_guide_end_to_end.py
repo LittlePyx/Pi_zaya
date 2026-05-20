@@ -113,7 +113,7 @@ def _retrieve_hits(prompt: str, *, db_dir: Path, top_k: int) -> list[dict[str, A
     settings = load_settings()
     chunks = load_all_chunks(db_dir)
     retriever = BM25Retriever(chunks)
-    hits_raw, _scores, _used_query, _used_translation = _search_hits_with_fallback(
+    hits_raw, _scores, _used_query, _used_translation, *_query_variants = _search_hits_with_fallback(
         prompt,
         retriever,
         top_k=top_k,

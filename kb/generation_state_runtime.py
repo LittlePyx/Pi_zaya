@@ -178,12 +178,12 @@ def _gen_store_answer_provenance(
     primary_evidence: dict | None = None,
     chat_store_cls=ChatStore,
     build_answer_provenance=_build_paper_guide_answer_provenance,
-) -> None:
+) -> dict | None:
     if not bool(task.get("paper_guide_mode")):
-        return
+        return None
     source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
     if not source_path:
-        return
+        return None
     chat_db = Path(str(task.get("chat_db") or "")).expanduser()
     chat_store = chat_store_cls(chat_db)
     try:
@@ -191,7 +191,7 @@ def _gen_store_answer_provenance(
     except Exception:
         amid = 0
     if amid <= 0:
-        return
+        return None
     provenance_kwargs = {
         "answer": answer,
         "answer_hits": list(answer_hits or []),
@@ -208,11 +208,12 @@ def _gen_store_answer_provenance(
         **provenance_kwargs,
     )
     if not isinstance(provenance, dict):
-        return
+        return None
     try:
         chat_store.merge_message_meta(amid, {"provenance": provenance})
     except Exception:
         pass
+    return provenance
 
 
 def _gen_store_answer_provenance_fast(
@@ -223,7 +224,7 @@ def _gen_store_answer_provenance_fast(
     support_resolution: list[dict] | None = None,
     primary_evidence: dict | None = None,
     store_answer_provenance=_gen_store_answer_provenance,
-) -> None:
+) -> dict | None:
     task_copy = dict(task or {})
     # Inline LLM refinement is an optional optimization for paper-guide provenance mapping.
     # Keep it opt-in via env flag so unit tests and offline runs remain deterministic.
@@ -241,7 +242,7 @@ def _gen_store_answer_provenance_fast(
     }
     if isinstance(primary_evidence, dict) and primary_evidence:
         store_kwargs["primary_evidence"] = dict(primary_evidence)
-    store_answer_provenance(task_copy, **store_kwargs)
+    return store_answer_provenance(task_copy, **store_kwargs)
 
 
 def _should_run_provenance_async_refine(task: dict, *, environ=None) -> bool:

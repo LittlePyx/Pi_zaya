@@ -2240,6 +2240,34 @@ def _is_likely_claim_group_lead(text: str, *, segment_kind: str = "", segment_ty
     return False
 
 
+def _is_label_only_list_item(text: str, *, segment_kind: str = "") -> bool:
+    kind = str(segment_kind or "").strip().lower()
+    if kind != "list_item":
+        return False
+    raw = _strip_provenance_noise_text(text).replace("\n", " ")
+    raw = normalize_inline_markdown(raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    if not raw or not re.search(r"[:\uFF1A]\s*$", raw):
+        return False
+    label = re.sub(r"[:\uFF1A]\s*$", "", raw).strip(" -*\u2022")
+    if not label:
+        return True
+    latin_words = _LATIN_WORD_RE.findall(label)
+    cjk_terms = _CJK_WORD_RE.findall(label)
+    has_sentence_verb = bool(
+        re.search(
+            r"\b(?:is|are|was|were|has|have|shows?|indicates?|means?|provides?|uses?|including|"
+            r"achieves?|requires?)\b|"
+            r"\u662f|\u4e3a|\u6709|\u8868\u660e|\u8bf4\u660e|\u5305\u62ec|\u91c7\u7528|\u4f7f\u7528|\u9700\u8981",
+            label,
+            flags=re.IGNORECASE,
+        )
+    )
+    if has_sentence_verb:
+        return False
+    return len(label) <= 96 and len(latin_words) <= 10 and len(cjk_terms) <= 14
+
+
 def _is_likely_claim_group_boundary(segment: dict | None) -> bool:
     if not isinstance(segment, dict):
         return True
@@ -2395,6 +2423,7 @@ def _segment_claim_meta(
     anchor_text = ""
     anchor_kind = ""
     claim_type = "critical_fact_claim"
+    label_only_list_item = _is_label_only_list_item(seg_text, segment_kind=kind)
     explicit_non_source = _is_explicit_non_source_segment(raw_md or seg_text)
     explicit_generic_supplement = explicit_non_source and _is_explicit_generic_knowledge_supplement_segment(raw_md or seg_text)
     eq_number = extract_equation_number(raw_md or seg_text) if has_equation_signal(raw_md or seg_text) else 0
@@ -2440,7 +2469,11 @@ def _segment_claim_meta(
             and _inline_formula_value_score(primary_inline_formula) >= 0.72
         )
 
-    if explicit_non_source:
+    if label_only_list_item:
+        claim_type = "shell_sentence"
+        anchor_kind = ""
+        anchor_text = ""
+    elif explicit_non_source:
         if explicit_generic_supplement:
             claim_type = "shell_sentence"
             anchor_kind = ""
@@ -2536,7 +2569,7 @@ def _segment_claim_meta(
         must_locate = False
         # For segments that are still grounded to a concrete source block (direct evidence), allow them to surface
         # as an optional "evidence note" so the UI can offer a locate jump even when the answer is conservative.
-        if mode == "direct" and has_identity and (not broad_figure_summary) and (not explicit_non_source):
+        if mode == "direct" and has_identity and (not broad_figure_summary) and (not explicit_non_source) and (not label_only_list_item):
             claim_type = "evidence_note_claim"
             if not str(anchor_kind or "").strip():
                 anchor_kind = "sentence"
@@ -4230,6 +4263,7 @@ def _build_paper_guide_answer_provenance(
         metrics_probe = probe_text
         summary_tags = _summary_segment_tags(seg_text) if not is_formula else set()
         prefer_kind = "equation" if is_formula else ""
+        label_only_list_item = _is_label_only_list_item(seg_text, segment_kind=seg_kind)
         index_seed_block: dict | None = None
         if is_formula:
             index_seed_block, _ = _select_equation_index_binding(
@@ -4253,17 +4287,32 @@ def _build_paper_guide_answer_provenance(
             rank_limit = max(12, min(24, len(base_blocks or [])))
         else:
             rank_limit = 8 if quote_anchor else 5
-        ranked = match_source_blocks(
-            base_blocks,
-            snippet=probe_text,
-            prefer_kind=prefer_kind,
-            target_number=eq_number,
-            limit=rank_limit,
-            score_floor=(0.12 if summary_tags else None),
-        )
+        quote_seed_block: dict | None = None
+        quote_seed_quote = ""
+        if (not is_formula) and (not label_only_list_item) and (str(seg_kind).strip().lower() == "blockquote" or bool(quote_anchor)):
+            quote_seed_block, quote_seed_quote = _select_quote_claim_binding(
+                {
+                    "kind": seg_kind,
+                    "text": seg_text,
+                    "raw_markdown": raw_markdown,
+                    "anchor_text": quote_anchor or seg_text,
+                    "evidence_quote": quote_anchor or seg_text,
+                },
+                block_lookup=block_lookup,
+            )
+        ranked = []
+        if not label_only_list_item:
+            ranked = match_source_blocks(
+                base_blocks,
+                snippet=probe_text,
+                prefer_kind=prefer_kind,
+                target_number=eq_number,
+                limit=rank_limit,
+                score_floor=(0.12 if summary_tags else None),
+            )
         # Cross-language fallback: if the original probe is CJK-heavy and lexical matching fails,
         # retry with an English keyword expansion probe.
-        if (not is_formula) and (not ranked) and len(probe_variants) >= 2:
+        if (not is_formula) and (not label_only_list_item) and (not ranked) and len(probe_variants) >= 2:
             probe_en = str(probe_variants[1] or "").strip()
             heading_hint = "compressed sensing" if "compressed sensing" in probe_en.lower() else ""
             # Use the full-document block set for translated keyword probes. Retrieval-derived candidate pools can
@@ -4280,7 +4329,7 @@ def _build_paper_guide_answer_provenance(
             if ranked:
                 used_translated_probe = True
                 metrics_probe = probe_en or metrics_probe
-        if (not ranked) and (not is_formula) and quote_anchor and base_blocks is not candidate_blocks:
+        if (not ranked) and (not is_formula) and (not label_only_list_item) and quote_anchor and base_blocks is not candidate_blocks:
             ranked = match_source_blocks(
                 candidate_blocks,
                 snippet=probe_text,
@@ -4351,6 +4400,27 @@ def _build_paper_guide_answer_provenance(
             ranked = ranked_text + ranked_formula
 
         segment_mapping_source = "fast"
+        if isinstance(quote_seed_block, dict):
+            quote_seed_id = str(quote_seed_block.get("block_id") or "").strip()
+            if quote_seed_id:
+                ranked = [
+                    {
+                        "score": 3.4,
+                        "block": quote_seed_block,
+                        "support_score": 1.0,
+                        "quote_score": 1.0,
+                        "support_quote": str(quote_seed_quote or "").strip()
+                        or _best_evidence_quote(quote_anchor or seg_text, quote_seed_block),
+                        "heading_adjust": 0.0,
+                        "generic_heading": False,
+                        "summary_adjust": 0.0,
+                    }
+                ] + [
+                    row
+                    for row in ranked
+                    if str(((row or {}).get("block") or {}).get("block_id") or "").strip() != quote_seed_id
+                ]
+                segment_mapping_source = "quote_exact"
         chosen_ids: list[str] = []
         llm_picked_ids: list[str] = []
         best_score = float(ranked[0].get("score") or 0.0) if ranked else 0.0
@@ -4367,6 +4437,7 @@ def _build_paper_guide_answer_provenance(
             llm_picker is not None
             and llm_calls_used < llm_max_calls
             and len(ranked) >= 2
+            and segment_mapping_source != "quote_exact"
             and (formula_needs_llm or ((best_score < 0.98) and (score_gap < 0.14)))
         ):
             llm_ids = _pick_blocks_with_llm(
@@ -4422,7 +4493,7 @@ def _build_paper_guide_answer_provenance(
         # For cross-language paper-guide answers, the lexical support metrics can be unreliable.
         # When an LLM has already picked the most relevant block(s), avoid rescoring that may
         # mistakenly penalize the correct match.
-        if (not is_formula) and ranked and segment_mapping_source != "llm_refined":
+        if (not is_formula) and ranked and segment_mapping_source not in {"llm_refined", "quote_exact"}:
             rescored: list[dict] = []
             for row in ranked:
                 block0 = row.get("block")
@@ -4614,7 +4685,7 @@ def _build_paper_guide_answer_provenance(
         primary_block_id = str(chosen_ids[0] or "").strip() if chosen_ids else ""
         support_block_ids = [str(item or "").strip() for item in chosen_ids[1:] if str(item or "").strip()]
         primary_block = block_lookup.get(primary_block_id) if primary_block_id else None
-        if primary_block and (not is_formula) and segment_mapping_source != "llm_refined" and (not used_translated_probe):
+        if primary_block and (not is_formula) and segment_mapping_source not in {"llm_refined", "quote_exact"} and (not used_translated_probe):
             support_score = float(primary_support_metrics.get("support_score") or 0.0)
             generic_heading = bool(primary_support_metrics.get("generic_heading"))
             summary_adjust = float(primary_support_metrics.get("summary_adjust") or 0.0)
@@ -4693,17 +4764,17 @@ def _build_paper_guide_answer_provenance(
             }
         )
 
-    # Fallback: if we failed to bind any segment to a direct evidence block, create a single coarse
-    # locate entry so the UI can still jump into the most relevant section of the paper.
-    has_any_direct = any(
-        isinstance(seg, dict)
-        and str(seg.get("evidence_mode") or "").strip().lower() == "direct"
-        and bool(list(seg.get("evidence_block_ids") or []))
-        for seg in (segments_out or [])
-    )
-    # If support slots are present, they can bind segments to concrete blocks after the initial fast pass,
-    # so avoid injecting an extra "fallback_global" segment that would reorder/expand the segment list.
-    if not has_any_direct and blocks_for_match and (not list(support_resolution or [])):
+    def _append_global_fallback_segment_if_needed(current_segments: list[dict]) -> list[dict]:
+        # Fallback: if we failed to bind any segment to a direct evidence block, create a single coarse
+        # locate entry so the UI can still jump into the most relevant section of the paper.
+        has_any_direct = any(
+            isinstance(seg, dict)
+            and str(seg.get("evidence_mode") or "").strip().lower() == "direct"
+            and bool(list(seg.get("evidence_block_ids") or []))
+            for seg in (current_segments or [])
+        )
+        if has_any_direct or not blocks_for_match:
+            return current_segments
         probe_base = normalize_inline_markdown(str(answer or "")).strip()
         if len(probe_base) > 1600:
             probe_base = probe_base[:1600]
@@ -4741,8 +4812,8 @@ def _build_paper_guide_answer_provenance(
                 fb_text = fb_quote or str(fb_block.get("text") or "").strip()
                 if len(fb_text) > 900:
                     fb_text = fb_text[:900]
-                fb_index = int(len(segments_out) + 1)
-                segments_out.append(
+                fb_index = int(len(current_segments) + 1)
+                return list(current_segments or []) + [
                     {
                         "segment_id": f"seg_{fb_index:03d}",
                         "segment_index": fb_index,
@@ -4768,7 +4839,13 @@ def _build_paper_guide_answer_provenance(
                         "anchor_text": fb_quote or fb_text,
                         "equation_number": int(fb_block.get("number") or 0) if fb_kind == "equation" else 0,
                     }
-                )
+                ]
+        return current_segments
+
+    # If support slots are present, they can still bind segments to concrete blocks after the initial fast pass,
+    # so defer the coarse fallback until after support resolution has had a chance to attach exact anchors.
+    if not list(support_resolution or []):
+        segments_out = _append_global_fallback_segment_if_needed(segments_out)
 
     if llm_calls_used > 0:
         mapping_mode = "llm_refined"
@@ -4794,6 +4871,7 @@ def _build_paper_guide_answer_provenance(
         block_lookup=block_lookup,
         anchor_lookup_by_anchor_id=anchor_lookup_by_anchor_id,
     )
+    segments_with_policy = _append_global_fallback_segment_if_needed(segments_with_policy)
     segments_hardened, contract_meta = _apply_provenance_strict_identity_contract(segments_with_policy)
     segments_hardened = [
         _canonicalize_support_segment_heading(seg)

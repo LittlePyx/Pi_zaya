@@ -786,7 +786,6 @@ def _page_chat(
                                         if cite_details:
                                             _render_inpaper_citation_details(
                                                 cite_details,
-                                                key_ns=f"{conv_id}_{idx}_{msg_id}_live",
                                             )
                                     else:
                                         st.markdown("<div class='kb-ai-live-dots'>...</div>", unsafe_allow_html=True)
@@ -825,7 +824,6 @@ def _page_chat(
                                                 st.markdown(_normalize_chat_markdown_for_display(body3))
                                                 _render_inpaper_citation_details(
                                                     cite_details,
-                                                    key_ns=f"{conv_id}_{idx}_{msg_id}_done",
                                                 )
                                         if not copy_done_rendered:
                                             if lite_live:
@@ -871,7 +869,6 @@ def _page_chat(
                                     st.markdown(_normalize_chat_markdown_for_display(body))
                                     _render_inpaper_citation_details(
                                         cite_details,
-                                        key_ns=f"{conv_id}_{idx}_{msg_id}_hist",
                                     )
                             if not copy_hist_rendered:
                                 if lite_live or defer_heavy:

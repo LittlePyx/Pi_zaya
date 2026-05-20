@@ -5,6 +5,7 @@ import re
 
 from kb.generation_citation_validation_runtime import (
     _source_refs_from_index,
+    _validate_freeform_numeric_citations,
     _validate_structured_citations,
 )
 
@@ -384,4 +385,130 @@ def test_validate_structured_citations_extracts_local_ref_from_anchor_index_when
     )
 
     assert answer == f"Implementation detail: APR uses phase correlation [[CITE:{locked_sid}:35]]."
+    assert stats["kept"] == 1
+
+
+# ── Freeform numeric citation validation tests ──────────────────────────
+
+
+def test_validate_freeform_all_valid():
+    """All [n] markers within hit range are kept."""
+    hits = [{"text": f"doc {i}"} for i in range(3)]
+    answer, stats = _validate_freeform_numeric_citations(
+        "Claim from [1] and also [2].",
+        answer_hits=hits,
+    )
+    assert answer == "Claim from [1] and also [2]."
+    assert stats["raw_count"] == 2
+    assert stats["valid_count"] == 2
+    assert stats["out_of_range"] == 0
+    assert stats["dropped"] == 0
+    assert stats["kept"] == 2
+
+
+def test_validate_freeform_out_of_range():
+    """[n] where n > len(answer_hits) is dropped."""
+    hits = [{"text": "doc 1"}, {"text": "doc 2"}, {"text": "doc 3"}]
+    answer, stats = _validate_freeform_numeric_citations(
+        "Claim from [1] and [5] which is hallucinated.",
+        answer_hits=hits,
+    )
+    assert " [5] " not in answer
+    assert "[1]" in answer
+    assert stats["raw_count"] == 2
+    assert stats["out_of_range"] == 1
+    assert stats["dropped"] == 1
+    assert stats["kept"] == 1
+    assert stats["valid_count"] == 1
+
+
+def test_validate_freeform_zero_or_negative():
+    """[0] is dropped (ref num 0 is invalid). [-1] is not matched by the regex."""
+    hits = [{"text": "doc 1"}]
+    answer, stats = _validate_freeform_numeric_citations(
+        "See [0] and [-1].",
+        answer_hits=hits,
+    )
+    # [0] is dropped because 0 is not a valid positive ref num
+    assert "[0]" not in answer
+    assert stats["dropped"] == 1
+    assert stats["raw_count"] == 1  # only [0] is matched, [-1] is not a valid match
+    # 0 fails the n > 0 check in _all_nums_in_spec, not the out_of_range check
+    assert stats["out_of_range"] == 0
+
+
+def test_validate_freeform_no_hits():
+    """When answer_hits is empty, all [n] are out of range."""
+    answer, stats = _validate_freeform_numeric_citations(
+        "Claim from [1] and [2].",
+        answer_hits=[],
+    )
+    assert "[1]" not in answer
+    assert "[2]" not in answer
+    assert stats["raw_count"] == 2
+    assert stats["out_of_range"] == 2
+    assert stats["dropped"] == 2
+    assert stats["hits_available"] == 0
+
+
+def test_validate_freeform_mixed():
+    """Mixed valid and out-of-range markers: valid kept, invalid dropped."""
+    hits = [{"text": "doc 1"}, {"text": "doc 2"}]
+    answer, stats = _validate_freeform_numeric_citations(
+        "Results from [1] and [99] but also [2].",
+        answer_hits=hits,
+    )
+    assert "[1]" in answer
+    assert "[99]" not in answer
+    assert "[2]" in answer
+    assert stats["raw_count"] == 3
+    assert stats["valid_count"] == 2
+    assert stats["out_of_range"] == 1
+    assert stats["dropped"] == 1
+    assert stats["kept"] == 2
+
+
+def test_validate_freeform_no_markers():
+    """Text without any [n] markers is returned unchanged."""
+    hits = [{"text": "doc 1"}]
+    answer, stats = _validate_freeform_numeric_citations(
+        "Plain text without citations.",
+        answer_hits=hits,
+    )
+    assert answer == "Plain text without citations."
+    assert stats["raw_count"] == 0
+    assert stats["dropped"] == 0
+
+
+def test_validate_freeform_empty_hits_list():
+    """Empty answer_hits list behaves the same as no hits."""
+    answer, stats = _validate_freeform_numeric_citations(
+        "Some claim [1] here.",
+        answer_hits=[],
+    )
+    assert "[1]" not in answer
+    assert stats["raw_count"] == 1
+    assert stats["out_of_range"] == 1
+    assert stats["dropped"] == 1
+
+
+def test_validate_freeform_empty_answer():
+    """Empty answer string returns empty."""
+    answer, stats = _validate_freeform_numeric_citations(
+        "",
+        answer_hits=[{"text": "doc 1"}],
+    )
+    assert answer == ""
+    assert stats["raw_count"] == 0
+
+
+def test_validate_freeform_single_hit_valid():
+    """With 1 hit, [1] is valid, [2] is not."""
+    hits = [{"text": "doc 1"}]
+    answer, stats = _validate_freeform_numeric_citations(
+        "See [1] for details.",
+        answer_hits=hits,
+    )
+    assert "[1]" in answer
+    assert stats["valid_count"] == 1
     assert stats["kept"] == 1

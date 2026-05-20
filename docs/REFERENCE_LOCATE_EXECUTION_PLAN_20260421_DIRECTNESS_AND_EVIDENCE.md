@@ -326,3 +326,123 @@ Validation run for this cleanup:
   - ADMM negative filtering
   - SCI authoritative doc-list behavior
   - rendered-payload to `doc_list` surface sync
+
+Latest narrow cleanup after the shared intent layer:
+
+- the next remaining drift was not paper identity, but the fact that answer-side multi-paper state still only partially consumed the final rendered refs surface
+- specifically:
+  - `doc_list` rebuild from rendered refs already synced `heading_path` and `summary_line`
+  - but it could still miss a stronger final `reader_open.primaryEvidence` surface for the same paper
+  - and `paper_guide_contracts.primary_evidence` could remain on an older pre-render surface even after the final doc-list render had stabilized
+- this is now tightened in `kb/task_runtime.py` by:
+  - extracting the strongest rendered primary-evidence surface from each final rendered hit before rebuilding the authoritative `doc_list`
+  - allowing `reader_open.primaryEvidence` to upgrade a weaker answer-side `primary_evidence` when it is clearly more precise
+  - and syncing the top doc-list primary evidence back into `paper_guide_contracts.primary_evidence` and `render_packet.primary_evidence`
+- this keeps the final multi-paper answer/doc-list/contract/provenance stack closer to the same top-paper surface without introducing any paper-specific prompt literals or per-library exceptions
+
+Validation run for this cleanup:
+
+- targeted `task_runtime` regression tests for:
+  - rendered payload preferring stronger `reader_open.primaryEvidence`
+  - top doc-list primary evidence syncing back into contracts
+  - first-available doc-list primary evidence extraction
+- plus the prior high-signal regressions for:
+  - query-family intent helpers
+  - pending compare filtering
+  - authoritative doc-list behavior
+  - SCI/Fourier seed stabilization
+
+Latest narrow cleanup after the rendered-surface sync:
+
+- the next remaining regressions were no longer wrong-paper issues, but low-quality summary copy on otherwise-correct refs cards
+- two concrete failure shapes showed up in bounded replay and targeted tests:
+  - fragmentary summaries such as `Fourier single-pixel imaging: of Fourier coefficients.`
+  - doc-list authoritative cards that degraded into title echoes or partial why-line tails instead of a real summary sentence
+- this is now tightened in `api/reference_ui.py` by adding a generic summary-quality layer that:
+  - rejects fragmentary summary tails
+  - rejects why-line-shaped summary copy
+  - treats truncated title echoes from file-style paper names as low-quality summaries
+  - keeps these checks generic and query-shape-based rather than paper-specific
+- the doc-list authoritative path now also reuses the mature summary rescue stack more consistently:
+  - if a doc-list card summary is structurally bad, it first tries the existing deterministic summary-candidate fallback over authoritative evidence text
+  - if that still fails, it falls back to a short prompt-aligned summary sentence derived from the query family and authoritative heading, instead of leaving a title echo or why-line fragment in place
+- an important constraint was kept during this cleanup:
+  - the new summary rescue only fires for structurally bad summaries
+  - it does not overwrite honest but imperfect predecessor summaries such as the SCI-related `OE-2007` case
+
+Validation run for this cleanup:
+
+- targeted `reference_ui` regressions for:
+  - fragmentary focus-prefixed summaries
+  - why-like summaries leaking into `summary_line`
+  - doc-list title-echo repair from authoritative evidence
+  - SCI predecessor copy staying honest
+- broader high-signal regression slice:
+  - `66 passed, 1 skipped`
+  - coverage included Fourier, single-photon, dynamic supersampling, ADMM negative, compare, pending, authoritative doc-list, and primary-evidence sync paths
+
+Latest bounded in-process replay after the above cleanup:
+
+- `GUIDE_OTHER_PAPERS_FOURIER`
+  - still keeps only `OE-2017`
+  - final refs heading stays on `3. Comparison of experiment / 3.1 Numerical simulations`
+  - final refs summary now lands on a deterministic grounded summary sentence instead of a title echo or a why-line fragment
+- `NORMAL_DYNAMIC_SUPERSAMPLING_DEFINE`
+  - still passes on `SciAdv-2017`
+  - no paper-identity regression was introduced by the new summary-quality gates
+
+Remaining polish gap worth watching:
+
+- the dynamic supersampling real replay still uses a focus-prefixed/truncated sentence in the final card summary
+- this is smaller than the previous title-echo / why-line regression, but if we continue the next narrow step should be:
+  - improve section-grounded summary compression for long definition-style evidence without breaking authoritative section alignment
+
+Latest narrow cleanup after the above note:
+
+- the remaining dynamic-supersampling gap was narrowed to a single class of definition-style source sentences that were still technically grounded but not reader-friendly:
+  - long `If ... then ...` explanatory sentences under a definition section
+  - and fallback excerpts that kept the heading/focus prefix instead of turning the evidence into a clean one-line definition summary
+- this is now tightened in `api/reference_ui.py` by adding a narrow deterministic rewrite layer for definition prompts:
+  - when a matched sentence behaves like a definition/explanation clause, the summary-candidate stack now generates an explicit reader-facing sentence such as `The paper defines ... by ...`
+  - the rewrite is added as an extra candidate rather than replacing the existing raw evidence path
+  - the same narrow rewrite is also available to the generic fallback summary picker, so bad long definition excerpts do not survive just because the prompt-aligned path missed them
+- result:
+  - long dynamic-supersampling definition snippets now prefer a clean section-grounded summary instead of a focus-prefixed/truncated copy
+  - compare/discuss paths are unaffected because the new rewrite only activates for definition-family prompts
+
+Validation run for this cleanup:
+
+- targeted `reference_ui` regressions for:
+  - long dynamic definition snippet rewrite
+  - dynamic definition fallback rewrite
+  - existing define-style prefixed-copy rejection
+  - dynamic refs-card LLM/deterministic polish behavior
+  - ADMM negative and compare filtering sanity checks
+
+Latest narrow cleanup after the above validation:
+
+- the next real replay failure was no longer the wording of the dynamic-supersampling card, but a harder evidence-surface consistency bug:
+  - card `heading_path` was already correct: `INTRODUCTION / Spatially variant digital supersampling`
+  - but `reader_open` and `primary_evidence` could still drift back to an unrelated sibling section such as `INTRODUCTION / Foveated single-pixel imaging`
+- the root cause was twofold:
+  - source-block authority was not preserved strongly enough when a prompt-aligned summary had already been chosen
+  - and exact locate ranking could still keep an unrelated sibling-heading block ahead of a same-heading candidate, even when the card heading had already stabilized
+- this is now tightened in `api/reference_ui.py` by:
+  - carrying source-block metadata (`block_id`, `anchor_id`, `block_text`, etc.) on prompt-aligned source-block candidates
+  - allowing `primary_evidence` selection to synthesize a preferred exact candidate from a source-block-aligned summary when one is trustworthy
+  - preferring exact candidates that stay on the same heading branch as the final card heading for strict focus-match prompts without explicit anchor targets
+  - and rejecting empty `{}` reader-open candidates from exact-candidate queues so they cannot silently become the `primary_exact` placeholder
+- result:
+  - dynamic-supersampling refs cards now keep `heading_path`, `reader_open`, and `primary_evidence` on the same section surface
+  - the fix is narrow to strict focus-match non-anchor prompts, so equation/figure locate paths keep their existing exact-anchor behavior
+
+Validation run for this cleanup:
+
+- targeted `reference_ui` regressions for:
+  - authoritative source-block exact-candidate preference
+  - heading-related exact-candidate reordering
+  - existing exact reader-open identity resolution
+  - dynamic definition paragraph-vs-caption exact selection
+- bounded in-process replay:
+  - `NORMAL_DYNAMIC_SUPERSAMPLING_DEFINE`: `PASS`
+  - 3-case slice `NORMAL_DYNAMIC_SUPERSAMPLING_DEFINE`, `NORMAL_ADMM_NEGATIVE`, `GUIDE_OTHER_PAPERS_FOURIER`: `PASS`

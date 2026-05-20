@@ -426,6 +426,61 @@ def test_build_paper_guide_render_packet_model_suppresses_negative_evidence_note
     assert out.visible_segment_ids == ["seg-neg"]
 
 
+def test_build_paper_guide_render_packet_model_surfaces_hidden_derived_formula_source_anchor():
+    out = _build_paper_guide_render_packet_model(
+        answer_markdown="Workflow answer with a derived reconstruction formula.",
+        provenance_segments=[
+            {
+                "segment_id": "seg-formula",
+                "claim_type": "formula_claim",
+                "formula_origin": "derived",
+                "evidence_mode": "direct",
+                "locate_policy": "hidden",
+                "locate_surface_policy": "hidden",
+                "primary_block_id": "blk-26",
+                "primary_anchor_id": "p-19",
+                "support_locate_anchor": "An alternative approach is to perform sampling using the Hadamard, Fourier or wavelet basis.",
+                "locate_target": {
+                    "segmentId": "seg-formula",
+                    "headingPath": "Acquisition and image reconstruction strategies.",
+                    "snippet": "An alternative approach is to perform sampling using the Hadamard, Fourier or wavelet basis.",
+                    "highlightSnippet": "An alternative approach is to perform sampling using the Hadamard, Fourier or wavelet basis.",
+                    "blockId": "blk-26",
+                    "anchorId": "p-19",
+                    "anchorKind": "equation",
+                    "locatePolicy": "hidden",
+                    "locateSurfacePolicy": "hidden",
+                },
+                "reader_open": {
+                    "sourcePath": "paper.pdf",
+                    "headingPath": "Acquisition and image reconstruction strategies.",
+                    "snippet": "An alternative approach is to perform sampling using the Hadamard, Fourier or wavelet basis.",
+                    "blockId": "blk-26",
+                    "anchorId": "p-19",
+                    "anchorKind": "equation",
+                    "strictLocate": False,
+                    "locateTarget": {
+                        "segmentId": "seg-formula",
+                        "blockId": "blk-26",
+                        "anchorId": "p-19",
+                        "anchorKind": "equation",
+                        "locatePolicy": "hidden",
+                        "locateSurfacePolicy": "hidden",
+                    },
+                },
+            }
+        ],
+    )
+
+    assert out.visible_segment_ids == ["seg-formula"]
+    assert out.locate_target["blockId"] == "blk-26"
+    assert out.locate_target["locatePolicy"] == "required"
+    assert out.locate_target["locateSurfacePolicy"] == "primary"
+    assert out.locate_target["anchorKind"] == "paragraph"
+    assert out.reader_open["strictLocate"] is True
+    assert out.reader_open["locateTarget"]["anchorKind"] == "paragraph"
+
+
 def test_should_suppress_render_locate_keeps_formula_and_figure_claims():
     assert _paper_guide_should_suppress_render_locate(
         {"claim_type": "formula_claim", "text": "Equation (1) is not found in the appendix.", "anchor_kind": "equation"},

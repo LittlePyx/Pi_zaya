@@ -39,6 +39,18 @@ export interface Message {
   render_cache_key?: string
 }
 
+export interface RefsResponseMeta {
+  serverTiming: string
+  mode: string
+  counts: string
+  durationMs: number
+}
+
+export interface RefsResponseWithMeta {
+  data: Record<string, unknown>
+  meta: RefsResponseMeta
+}
+
 export interface MessageMeta {
   provenance?: MessageProvenance
   answer_quality?: Record<string, unknown>
@@ -74,6 +86,25 @@ export interface MessageCitationDetail {
   doi?: string
   doi_url?: string
   cite_fmt?: string
+  heading_path?: string
+  evidence_quote?: string
+  why_line?: string
+  summary_line?: string
+  summary_source?: string
+  answer_claim?: string
+  evidence_source?: string
+  citation_context?: string
+  citation_context_source?: string
+  upstream_work_role?: string
+  user_question_relation?: string
+  location_label?: string
+  support_relation?: string
+  block_id?: string
+  anchor_id?: string
+  anchor_kind?: string
+  page_start?: number
+  page_end?: number
+  score?: number
   [key: string]: unknown
 }
 
@@ -235,6 +266,44 @@ export interface MessageProvenance {
   segments?: MessageProvenanceSegment[]
 }
 
+const refsNowMs = () => (
+  typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+)
+
+async function getRefsWithMeta(convId: string): Promise<RefsResponseWithMeta> {
+  const startedAt = refsNowMs()
+  let res: Response
+  try {
+    res = await fetch(`/api/references/conversation/${convId}`)
+  } catch {
+    throw new Error(
+      'Cannot connect to backend. Ensure the backend is running and Vite proxy /api targets the correct port.',
+    )
+  }
+  if (!res.ok) {
+    let detail = ''
+    try {
+      const text = (await res.text()).trim()
+      detail = text ? `: ${text}` : ''
+    } catch {
+      detail = ''
+    }
+    throw new Error(`${res.status} ${res.statusText}${detail}`)
+  }
+  const data = await res.json() as Record<string, unknown>
+  return {
+    data,
+    meta: {
+      serverTiming: res.headers.get('server-timing') || '',
+      mode: res.headers.get('x-kb-refs-mode') || '',
+      counts: res.headers.get('x-kb-refs-counts') || '',
+      durationMs: Number((refsNowMs() - startedAt).toFixed(2)),
+    },
+  }
+}
+
 export interface ChatImageAttachment {
   sha1: string
   path: string
@@ -280,7 +349,7 @@ export const chatApi = {
   getConversation: (convId: string) =>
     api.get<Conversation>(`/api/conversations/${convId}`),
   createConversation: (
-    title = '新对话',
+    title: string,
     projectId?: string | null,
     guide?: {
       mode?: 'normal' | 'paper_guide'
@@ -334,8 +403,9 @@ export const chatApi = {
     api.post<{ item: ChatUploadItem }>('/api/chat/uploads/quality/retry', { job_id: jobId }),
   cancelUploadJob: (jobId: string) =>
     api.post<{ item: ChatUploadItem }>('/api/chat/uploads/cancel', { job_id: jobId }),
-  getRefs: (convId: string) =>
-    api.get<Record<string, unknown>>(`/api/references/conversation/${convId}`),
+  getRefsWithMeta,
+  getRefs: async (convId: string) =>
+    (await getRefsWithMeta(convId)).data,
   updateTitle: (convId: string, title: string) =>
     api.patch(`/api/conversations/${convId}/title`, { title }),
   updateConversationProject: (convId: string, projectId?: string | null) =>

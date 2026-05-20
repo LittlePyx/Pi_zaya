@@ -48,6 +48,8 @@ _EQ_NUMBER_RE = re.compile(
 )
 _EQ_TAG_RE = re.compile(r"\\tag\{\s*(\d{1,4})\s*\}", re.IGNORECASE)
 _FIG_NUMBER_RE = re.compile(r"(?:\bfig(?:ure)?\.?\s*#?\s*|图\s*|第\s*)(\d{1,4})(?:\s*张图)?", re.IGNORECASE)
+_TABLE_NUMBER_RE = re.compile(r"(?:\btable\.?\s*#?\s*|表\s*|第\s*)(\d{1,4})(?:\s*张表)?", re.IGNORECASE)
+_ANCHOR_HEADING_TAIL_RE = re.compile(r"\s*/\s*(?:Figure|Table|Equation|图|表|公式)\s*\d+\s*$", re.IGNORECASE)
 _INLINE_EQ_RE = re.compile(r"\$[^$]{1,280}\$")
 _DISPLAY_EQ_RE = re.compile(r"\$\$[\s\S]{1,6000}\$\$")
 _EQ_ENV_RE = re.compile(r"\\begin\{(?:equation|align|gather|multline|eqnarray)\*?\}", re.IGNORECASE)
@@ -520,7 +522,41 @@ def build_source_blocks(
         raw = "\n".join(table_buf).strip()
         table_buf = []
         if raw:
-            push("table", raw, line_start=table_start, line_end=end_line)
+            table_number = 0
+            caption = ""
+            # Scan backward (line before table_start), table buffer, and up to 3 lines
+            # after the table for number + caption.
+            candidates = [raw]
+            try:
+                if table_start > 1 and (table_start - 2) < len(lines):
+                    prev = str(lines[table_start - 2]).strip()
+                    if prev and not _MD_TABLE_RE.match(prev):
+                        candidates.insert(0, prev)
+            except Exception:
+                pass
+            try:
+                for ahead in range(end_line, min(end_line + 4, len(lines))):
+                    candidate = str(lines[ahead] if ahead < len(lines) else "").strip()
+                    if candidate:
+                        candidates.append(candidate)
+            except Exception:
+                pass
+            for candidate in candidates:
+                m = _TABLE_NUMBER_RE.search(candidate)
+                if m:
+                    try:
+                        table_number = int(m.group(1))
+                    except Exception:
+                        table_number = 0
+                    if not caption:
+                        caption = candidate.strip()[:300]
+                    if table_number > 0:
+                        break
+            extras = {}
+            if table_number > 0:
+                extras["table_number"] = table_number
+                extras["caption_text"] = normalize_inline_markdown(caption or raw[:300])
+            push("table", raw, line_start=table_start, line_end=end_line, number=table_number, extras=extras or None)
 
     def flush_code(end_line: int) -> None:
         nonlocal code_buf, code_start
@@ -702,6 +738,121 @@ def build_source_blocks(
     return blocks
 
 
+def build_anchor_index(blocks: list[SourceBlock]) -> dict[str, list[dict]]:
+    """Build a pre-indexed anchor lookup from SourceBlocks.
+
+    Returns a dict keyed by anchor kind ("figures", "tables", "equations"),
+    each containing a list of entries with number, caption, block_id, heading_path.
+
+    Caption blocks (paragraphs with figure_role="caption") are merged into the
+    figure entry with the same paper_figure_number so the full caption text is
+    available without scanning paragraphs at query time.
+    """
+    index: dict[str, list[dict]] = {"figures": [], "tables": [], "equations": []}
+    seen_texts: dict[str, set[str]] = {"figures": set(), "tables": set(), "equations": set()}
+
+    # First pass: collect figure-anchor blocks and caption blocks separately.
+    figure_entries: dict[int, dict] = {}
+    caption_blocks: list[SourceBlock] = []
+
+    for block in blocks or []:
+        kind = str(block.get("kind") or "").strip().lower()
+        if kind == "figure":
+            number = int(block.get("paper_figure_number") or block.get("number") or 0)
+            if number <= 0:
+                continue
+            caption = str(block.get("caption_text") or block.get("text") or "").strip()
+            parent_heading = _ANCHOR_HEADING_TAIL_RE.sub("", str(block.get("heading_path") or "").strip()).strip()
+            entry = {
+                "number": number,
+                "caption_text": caption,
+                "block_id": str(block.get("block_id") or "").strip(),
+                "heading_path": parent_heading or str(block.get("heading_path") or "").strip(),
+                "line_start": int(block.get("line_start") or 0),
+                "line_end": int(block.get("line_end") or 0),
+                "kind": "figure",
+            }
+            if number not in figure_entries:
+                figure_entries[number] = entry
+        elif kind == "table":
+            number = int(block.get("number") or 0)
+            if number <= 0:
+                continue
+            caption = str(block.get("caption_text") or "").strip()
+            if not caption:
+                caption = str(block.get("text") or "").strip()[:200]
+            dedup_key = f"{number}|{caption}"
+            if dedup_key in seen_texts["tables"]:
+                continue
+            seen_texts["tables"].add(dedup_key)
+            index["tables"].append({
+                "number": number,
+                "caption_text": caption,
+                "block_id": str(block.get("block_id") or "").strip(),
+                "heading_path": str(block.get("heading_path") or "").strip(),
+                "line_start": int(block.get("line_start") or 0),
+                "line_end": int(block.get("line_end") or 0),
+                "kind": "table",
+            })
+        elif kind == "equation":
+            number = int(block.get("number") or 0)
+            if number <= 0:
+                continue
+            text = str(block.get("text") or "").strip()
+            dedup_key = f"{number}|{text[:80]}"
+            if dedup_key in seen_texts["equations"]:
+                continue
+            seen_texts["equations"].add(dedup_key)
+            index["equations"].append({
+                "number": number,
+                "text_fragment": text[:200],
+                "block_id": str(block.get("block_id") or "").strip(),
+                "heading_path": str(block.get("heading_path") or "").strip(),
+                "line_start": int(block.get("line_start") or 0),
+                "line_end": int(block.get("line_end") or 0),
+                "kind": "equation",
+            })
+        elif kind == "paragraph" and int(block.get("paper_figure_number") or 0) > 0:
+            caption_blocks.append(block)
+
+    # Merge caption blocks into figure entries.
+    for cb in caption_blocks:
+        number = int(cb.get("paper_figure_number") or 0)
+        caption_text = str(cb.get("caption_text") or "").strip()
+        if not caption_text:
+            caption_text = str(cb.get("text") or "").strip()[:300]
+        if number > 0 and caption_text:
+            if number in figure_entries:
+                existing = figure_entries[number]
+                existing_caption = str(existing.get("caption_text") or "").strip()
+                # Only replace if the caption block has richer text.
+                if len(caption_text) > len(existing_caption):
+                    existing["caption_text"] = caption_text
+            else:
+                caption_parent_heading = _ANCHOR_HEADING_TAIL_RE.sub("", str(cb.get("heading_path") or "").strip()).strip()
+                figure_entries[number] = {
+                    "number": number,
+                    "caption_text": caption_text,
+                    "block_id": str(cb.get("block_id") or "").strip(),
+                    "heading_path": caption_parent_heading or str(cb.get("heading_path") or "").strip(),
+                    "line_start": int(cb.get("line_start") or 0),
+                    "line_end": int(cb.get("line_end") or 0),
+                    "kind": "figure",
+                }
+
+    # Add deduplicated figure entries to index.
+    for number in sorted(figure_entries.keys()):
+        entry = figure_entries[number]
+        caption = str(entry.get("caption_text") or "").strip()
+        dedup_key = f"{number}|{caption}"
+        if dedup_key in seen_texts["figures"]:
+            continue
+        seen_texts["figures"].add(dedup_key)
+        index["figures"].append(entry)
+
+    return index
+
+
 def source_blocks_to_reader_anchors(blocks: list[SourceBlock]) -> list[dict]:
     out: list[dict] = []
     for block in blocks or []:
@@ -775,14 +926,52 @@ def load_source_blocks_cached(md_path: Path | str) -> list[SourceBlock]:
         figure_meta_by_asset=figure_meta_by_asset,
     ) if md_text else []
 
+    # Also build and cache the anchor index alongside the blocks.
+    anchor_idx = build_anchor_index(blocks)
+
     with lock:
         bucket = cache.setdefault("source_blocks_v1", {})
         bucket[key] = blocks
+        bucket[key + "//anchor_idx"] = anchor_idx
         if len(bucket) > 120:
             # Drop oldest insertion order (Py>=3.7).
             for k in list(bucket.keys())[: max(1, len(bucket) // 2)]:
                 bucket.pop(k, None)
     return blocks
+
+
+def load_anchor_index_cached(md_path: Path | str) -> dict[str, list[dict]]:
+    """Return the anchor index for *md_path*, built+cached alongside SourceBlocks."""
+    path = Path(str(md_path or "")).expanduser()
+    figure_index_path = path.parent / "assets" / "figure_index.json"
+    try:
+        st = path.stat()
+        key = f"{str(path)}|{int(st.st_mtime)}|{int(st.st_size)}"
+        try:
+            fig_st = figure_index_path.stat()
+            key += f"|{int(fig_st.st_mtime)}|{int(fig_st.st_size)}"
+        except Exception:
+            pass
+    except Exception:
+        key = str(path)
+
+    lock: threading.Lock = getattr(RUNTIME, "CACHE_LOCK", threading.Lock())
+    cache: dict = getattr(RUNTIME, "CACHE", {})
+    with lock:
+        bucket = cache.setdefault("source_blocks_v1", {})
+        cached = bucket.get(key + "//anchor_idx")
+        if isinstance(cached, dict) and (cached.get("figures") or cached.get("tables") or cached.get("equations")):
+            return cached
+
+    # Build blocks (which also caches both blocks and anchor index).
+    load_source_blocks_cached(path)
+    # Second read is now cached.
+    with lock:
+        bucket = cache.setdefault("source_blocks_v1", {})
+        cached = bucket.get(key + "//anchor_idx")
+        if isinstance(cached, dict):
+            return cached
+    return {"figures": [], "tables": [], "equations": []}
 
 
 def match_source_blocks(

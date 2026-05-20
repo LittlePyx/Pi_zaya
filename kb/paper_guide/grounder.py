@@ -370,11 +370,19 @@ def _build_paper_guide_segment_locate_target(
         if str(item or "").strip()
     ]
     anchor_number = _extract_paper_guide_segment_anchor_number(seg)
+    support_locate_anchor = str(seg.get("support_locate_anchor") or "").strip()
     primary_snippet = (
         str(panel_clause_snippet or "").strip()
+        or support_locate_anchor
         or str(seg.get("evidence_quote") or "").strip()
         or str(seg.get("anchor_text") or "").strip()
         or str(seg.get("text") or "").strip()
+    )
+    evidence_quote = support_locate_anchor or str(seg.get("evidence_quote") or "").strip()
+    anchor_text = (
+        str(panel_clause_snippet or "").strip()
+        or support_locate_anchor
+        or str(seg.get("anchor_text") or "").strip()
     )
     locate_target = {
         "segmentId": str(seg.get("segment_id") or "").strip() or None,
@@ -382,10 +390,8 @@ def _build_paper_guide_segment_locate_target(
         "headingPath": str(seg.get("primary_heading_path") or "").strip() or None,
         "snippet": primary_snippet or None,
         "highlightSnippet": primary_snippet or None,
-        "evidenceQuote": str(seg.get("evidence_quote") or "").strip() or None,
-        "anchorText": (
-            str(panel_clause_snippet or "").strip() or str(seg.get("anchor_text") or "").strip() or None
-        ),
+        "evidenceQuote": evidence_quote or None,
+        "anchorText": anchor_text or None,
         "hitLevel": str(seg.get("hit_level") or "").strip() or None,
         "blockId": str(seg.get("primary_block_id") or "").strip() or None,
         "anchorId": str(seg.get("primary_anchor_id") or "").strip() or None,

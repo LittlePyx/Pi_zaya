@@ -18,17 +18,33 @@ from kb.paper_guide_contracts import (
     _paper_guide_model_dump,
 )
 from kb.paper_guide.router import _resolve_paper_guide_intent
+from kb.paper_guide_prompting import _paper_guide_prompt_requests_naive_source_trace
 from kb.paper_guide_postprocess import (
     _sanitize_paper_guide_answer_for_user,
     _sanitize_structured_cite_tokens,
     _strip_model_ref_section,
 )
+from kb.paper_guide_answer_repair import repair_template_only_paper_guide_answer as _repair_template_only_paper_guide_answer
+from kb.paper_guide_reference_opportunities import (
+    apply_reference_opportunities_to_answer,
+    detect_paper_guide_reference_opportunities,
+    detect_text_reference_opportunities,
+    merge_reference_opportunity_candidate_refs,
+    strip_reference_opportunity_note,
+)
 from kb.reference_query_family import (
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
     prompt_explicitly_requests_multi_paper_list,
+    prompt_likely_cross_paper_refs,
     prompt_prefers_zh,
     prompt_requires_reference_focus_match as _shared_prompt_requires_reference_focus_match,
     prompt_targets_sci_topic as _shared_prompt_targets_sci_topic,
+)
+from kb.config import CITATION_OFFSET
+from kb.paper_guide_shared import _cite_source_id
+from kb.reference_index import (
+    load_reference_index as _load_reference_index,
+    resolve_reference_entry as _resolve_reference_entry,
 )
 from kb.source_blocks import normalize_inline_markdown
 from ui.chat_widgets import _normalize_math_markdown
@@ -50,15 +66,28 @@ _SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNOR
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{4,24}$")
 _INLINE_REF_NUM_RE = re.compile(r"\[(\d{1,4})\]")
 _FREEFORM_NUMERIC_CITE_RE = re.compile(
-    r"(?<![!\\])\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\](?!\()"
+    r"(?<![!\\])\[(\d{1,5}(?:\s*(?:-|–|—|,)\s*\d{1,5})*)\](?!\()"
 )
-_DOC_HEADING_LINE_RE = re.compile(r"(?im)^\s*DOC-\d{1,3}(?:-S\d{1,3})?\s*[:：]\s*$")
+_DOC_HEADING_LINE_RE = re.compile(
+    r"(?im)^\s*(?:>\s*)?(?:\*{1,2}\s*)?DOC-\d{1,3}(?:-S\d{1,3})?(?:\s*\*{1,2})?\s*[:：]\s*$"
+)
 _DOC_TITLE_LINE_RE = re.compile(r"(?im)^\s*(?:title|标题)\s*[:：]\s*(.+?)\s*$")
 _DOC_DIAGNOSTIC_LINE_RE = re.compile(
-    r"(?im)^\s*(?:note|注意|说明)\s*[:：]?\s*DOC-\d{1,3}(?:-S\d{1,3})?[^\n]*$"
+    r"(?im)^\s*(?:>\s*)?(?:note|注意|说明)\s*[:：]?\s*DOC-\d{1,3}(?:-S\d{1,3})?[^\n]*$"
 )
 _DOC_RESULT_PREAMBLE_RE = re.compile(
     r"(?im)^\s*(?:based on the retrieved results|according to the retrieved results|根据提供的检索结果|根据检索结果)[^:：\n]*[:：]?\s*$"
+)
+_DOC_INLINE_TITLE_LINE_RE = re.compile(
+    r"(?ix)^\s*(?:>\s*)?(?:[-*+]\s+|\d+[.)]\s+)?"
+    r"(?:\*{1,2}\s*)?DOC-\d{1,3}(?:-S\d{1,3})?(?:\s*\*{1,2})?"
+    r"(?:\s*[\(\[\{（【][^\)\]\}）】]{0,24}[\)\]\}）】])?"
+    r"\s*[:：-]\s*(?P<title>\S.*)\s*$"
+)
+_DOC_LABEL_TOKEN_RE = re.compile(r"(?i)\*{0,2}DOC-\d{1,3}(?:-S\d{1,3})?\*{0,2}")
+_DOC_LABEL_GROUP_IN_PARENS_RE = re.compile(
+    r"(?i)[\(\[（【]\s*(?:(?:\*{0,2}DOC-\d{1,3}(?:-S\d{1,3})?\*{0,2})"
+    r"\s*(?:[,/、，]|\band\b|\bor\b|及|和|与)?\s*)+[\)\]）】]"
 )
 _PAPER_GUIDE_NEGATIVE_SHELL_RE = re.compile(
     r"(?i)\b(?:not stated|does not state|do not state|does not specify|do not specify|"
@@ -80,15 +109,231 @@ _PAPER_GUIDE_SUPPLEMENT_DISCLAIMER_RE = re.compile(
 _STRUCTURED_ANSWER_SECTION_RE = re.compile(
     r"(?im)^\s*(Conclusion|Evidence|Limits|Next Steps|结论|依据|证据|边界|限制|局限|下一步建议|下一步)\s*[:：]"
 )
-_CROSS_PAPER_QUERY_RE = re.compile(
-    r"(\bwhich other papers?\b|\bother papers?\b|\bbesides this paper\b|\banother paper\b|"
-    r"除此之外|除(?:了)?这篇|其他论文|别的论文|还有哪些论文|另一篇论文)",
-    flags=re.IGNORECASE,
-)
-
-
+_SINGLE_NUM_CITE_RE = re.compile(r"(?<![!\\])\[(\d{1,4})\](?!\()")
 def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _promote_numeric_inpaper_refs(
+    answer: str,
+    *,
+    answer_hits: list[dict],
+    db_dir: Path | None,
+    paper_guide_mode: bool = False,
+) -> str:
+    """Convert [n] (where n < CITATION_OFFSET) to structured [[CITE:<sid>:n]].
+
+    With the offset numbering scheme, hit citations use [OFFSET+1], [OFFSET+2],
+    ... while any bare [n] with n < CITATION_OFFSET is necessarily an in-paper
+    bibliography reference \u2014 there is no overlap.  Each candidate [n] is verified
+    against the reference index of the source documents before promotion.
+
+    Skipped in paper_guide mode where the LLM already emits [[CITE:...]] natively.
+    """
+    if paper_guide_mode:
+        return answer
+    hit_count = len(list(answer_hits or []))
+    if hit_count == 0 or "[" not in answer:
+        return answer
+
+    # Collect unique source paths + their SIDs.
+    unique_sources: list[tuple[str, str]] = []
+    seen_sp: set[str] = set()
+    for h in answer_hits or []:
+        meta = h.get("meta", {}) or {}
+        sp = str(meta.get("source_path") or "").strip()
+        if sp and sp not in seen_sp:
+            seen_sp.add(sp)
+            sid = _cite_source_id(sp)
+            unique_sources.append((sp, sid))
+    if not unique_sources:
+        return answer
+
+    # Load reference index once.
+    try:
+        _idx = _load_reference_index(Path(db_dir).expanduser()) if db_dir else {}
+    except Exception:
+        _idx = {}
+    if not isinstance(_idx, dict):
+        _idx = {}
+
+    # Scan answer for [n] where n < CITATION_OFFSET \u2014 these are in-paper
+    # bibliography references (hit citations use OFFSET+1 etc.).
+    candidates: set[int] = set()
+    for m in _FREEFORM_NUMERIC_CITE_RE.finditer(answer):
+        for chunk in re.findall(r"\d+", m.group(1)):
+            n = int(chunk)
+            if n < CITATION_OFFSET:
+                candidates.add(n)
+    if not candidates:
+        return answer
+
+    # Resolve each candidate ref number against each source's reference index.
+    # When exactly ONE source has this ref -> promote.
+    # 0 matches -> not a bibliography ref (probably a hit citation), leave as [n].
+    # >1 matches -> try proximity disambiguation: check which source name
+    # appears near [n] in the answer text.  If still ambiguous, leave as [n].
+    ref_valid: dict[int, tuple[str, str]] = {}  # n -> (source_path, sid)
+
+    # Pre-build display-name tokens for each unique source.
+    source_name_tokens: dict[str, tuple[str, set[str]]] = {}  # sp -> (sid, tokens)
+    _doc_idx_by_sp: dict[str, int] = {}  # sp -> 0-based index in unique_sources
+    for idx, (sp, sid) in enumerate(unique_sources):
+        stem = Path(sp).stem.lower()
+        for sfx in ('.en', '.zh', '.md'):
+            if stem.endswith(sfx):
+                stem = stem[:-len(sfx)]
+        tokens = {t for t in re.split(r'[\s\-_.,;:()\[\]{}]+', stem) if len(t) >= 4}
+        source_name_tokens[sp] = (sid, tokens)
+        _doc_idx_by_sp[sp] = idx
+
+    for n in sorted(candidates):
+        matched: list[tuple[str, str]] = []  # (sp, sid)
+        for sp, sid in unique_sources:
+            try:
+                entry = _resolve_reference_entry(_idx, sp, n)
+                if isinstance(entry, dict) and entry.get("ref"):
+                    matched.append((sp, sid))
+            except Exception:
+                pass
+        if len(matched) == 1:
+            ref_valid[n] = matched[0]
+        elif len(matched) > 1:
+            # Two disambiguation strategies, tried in order:
+            #
+            # Strategy A \u2014 DOC-k label: the answer often refers to sources as
+            # DOC-1 / DOC-2 / DOC-3 (these internal labels predate sanitization).
+            # If a DOC-k label appears within 300 chars of [n], map it to the
+            # k-th source in unique_sources (0-indexed: DOC-3 -> sources[2]).
+            #
+            # Strategy B \u2014 stem-token proximity: check which source's file-stem
+            # tokens (e.g. "NatPhoton" from "NatPhoton-2025-Structured-...") appear
+            # most frequently near [n] in the answer text.
+            best_sid: str | None = None
+            best_score = 0
+            for m in _FREEFORM_NUMERIC_CITE_RE.finditer(answer):
+                spec = str(m.group(1) or "")
+                nums_in_spec = {int(x) for x in re.split(r"\s*(?:-|\u2013|\u2014|,)\s*", spec) if x.strip()}
+                if n not in nums_in_spec:
+                    continue
+                ctx_start = max(0, m.start() - 300)
+                ctx_end = min(len(answer), m.end() + 300)
+                ctx = answer[ctx_start:ctx_end].lower()
+
+                # Strategy A: DOC-k label
+                doc_m = re.search(r'doc[-\s]*(\d+)', ctx)
+                if doc_m:
+                    doc_idx = int(doc_m.group(1)) - 1
+                    if 0 <= doc_idx < len(unique_sources):
+                        doc_sp, doc_sid = unique_sources[doc_idx]
+                        if doc_sid in {sid for _, sid in matched}:
+                            if best_score < 999:
+                                best_score = 999
+                                best_sid = doc_sid
+
+                # Strategy B: stem-token proximity
+                for sp, sid in matched:
+                    _, tokens = source_name_tokens[sp]
+                    score = sum(1 for t in tokens if t in ctx)
+                    if score > best_score:
+                        best_score = score
+                        best_sid = sid
+            if best_sid:
+                ref_valid[n] = next((sp, sid) for sp, sid in matched if sid == best_sid)
+
+    if not ref_valid:
+        return answer
+
+    # Replace each matched spec (single, range, or comma-separated) with
+    # individual [[CITE:...]] markers when ALL numbers in the spec are
+    # verified in-paper refs.  If any number is >= CITATION_OFFSET or
+    # unresolvable, keep the spec unchanged (it will be stripped or
+    # processed by subsequent pipeline steps).
+    def _repl(m: re.Match) -> str:
+        spec = str(m.group(1) or "").strip()
+        nums = [int(x) for x in re.split(r"\s*(?:-|\u2013|\u2014|,)\s*", spec) if x.strip()]
+        if not nums:
+            return m.group(0)
+
+        # ALL numbers must be < CITATION_OFFSET (in-paper refs).
+        if any(n >= CITATION_OFFSET for n in nums):
+            return m.group(0)
+
+        # ALL numbers must be resolvable in the reference index.
+        parts: list[str] = []
+        for n in nums:
+            pair = ref_valid.get(n)
+            if not pair:
+                return m.group(0)
+            parts.append(f"[[CITE:{pair[1]}:{n}]]")
+        return "".join(parts)
+
+    # Protect existing [[CITE:...]] markers so inner [<n>] isn't re-processed.
+    _cite_holder: dict[str, str] = {}
+    _cite_counter = 0
+    def _capture_cite(m: re.Match) -> str:
+        nonlocal _cite_counter
+        key = f"\x00C{_cite_counter}\x00"
+        _cite_counter += 1
+        _cite_holder[key] = m.group(0)
+        return key
+    protected = _CITE_CANON_RE.sub(_capture_cite, answer)
+    result = _FREEFORM_NUMERIC_CITE_RE.sub(_repl, protected)
+    for key, original in _cite_holder.items():
+        result = result.replace(key, original)
+    return result
+
+
+# Regex: LaTeX superscript/subscript footnote markers that leak from paper text.
+# Matches $^4$, $_n$, $^{14}$, $_{label}$ — short single-token footnotes.
+_LATEX_FOOTNOTE_RE = re.compile(r"\$[\^_](?:\d{1,2}|[A-Za-z]|\{[^}]{1,12}\})\$")
+
+
+def _strip_latex_footnote_markers(answer: str) -> str:
+    """Strip isolated LaTeX footnote/endnote markers like $^n$ or $_{xx}$.
+
+    These leak from the original paper text through the LLM output when the
+    paper uses LaTeX superscript markers for footnotes (e.g., ``$^4$`` in
+    ``Duarte et al.$^4$ showed...``).  They are NOT real math and should not
+    appear in the user-visible answer.
+
+    Only single-token markers are stripped — multi-token math expressions
+    like $x^2 + y^2$ are preserved as-is.
+    """
+    if not answer or "$" not in answer:
+        return answer
+    return _LATEX_FOOTNOTE_RE.sub("", answer)
+
+
+def _strip_citation_offset(
+    answer: str,
+) -> str:
+    """Convert offset citation numbers back to 1-based for storage/rendering.
+
+    After _promote_numeric_inpaper_refs has promoted in-paper refs to
+    [[CITE:...]], this pass rewrites [OFFSET+1], [OFFSET+2], ... back to
+    [1], [2], ... so the renderer's _resolve_n_from_hits works unchanged.
+
+    Only specs where ALL numbers are >= CITATION_OFFSET are converted.
+    Mixed specs (e.g. [10001,35]) are left untouched.
+    """
+    if not answer or "[" not in answer:
+        return answer
+
+    def _repl(m: re.Match) -> str:
+        spec = str(m.group(1) or "").strip()
+        nums = [int(x) for x in re.split(r"\s*(?:-|\u2013|\u2014|,)\s*", spec) if x.strip()]
+        if not nums:
+            return m.group(0)
+
+        # Only convert when ALL numbers carry the offset.
+        if any(n < CITATION_OFFSET for n in nums):
+            return m.group(0)
+
+        new_nums = [n - CITATION_OFFSET for n in nums]
+        return "[" + ",".join(str(n) for n in new_nums) + "]"
+
+    return _FREEFORM_NUMERIC_CITE_RE.sub(_repl, answer)
 
 
 def _as_positive_int(value: object) -> int:
@@ -159,6 +404,11 @@ def _prompt_explicitly_requests_citation_lookup(prompt: str) -> bool:
     text = str(prompt or "").strip().lower()
     if not text:
         return False
+    try:
+        if _paper_guide_prompt_requests_naive_source_trace(prompt):
+            return True
+    except Exception:
+        pass
     patterns = (
         "citation",
         "cited",
@@ -178,12 +428,225 @@ def _prompt_explicitly_requests_citation_lookup(prompt: str) -> bool:
     return any(pattern in text for pattern in patterns)
 
 
+def _prompt_prefers_chinese_answer(prompt: str) -> bool:
+    text = str(prompt or "").strip()
+    if not text:
+        return False
+    if _contains_cjk(text):
+        return True
+    return bool(re.search(r"\b(answer|respond|reply)\s+in\s+chinese\b|\bchinese\b", text, flags=re.I))
+
+
+def _sanitize_empty_markdown_label_fragments(answer: str) -> str:
+    text = str(answer or "")
+    if not text:
+        return text
+    text = re.sub(r"(?m)^\s*\*{4,}\s*[:：]\s*", "", text)
+    text = re.sub(r"(?m)(^|\n)(\s*[-*+]\s*)?\*{4,}\s*[:：]\s*", r"\1", text)
+    text = re.sub(r"(?<!\*)\*{4,}\s*[:：]\s*", "", text)
+    text = re.sub(r"[ \t]+([,.;:!?，。；：！？])", r"\1", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _candidate_sources_for_inpaper_lookup(
+    *,
+    answer_hits: list[dict],
+    locked_citation_source: dict | None,
+    prompt: str,
+) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(source_path: object, source_sha1: object = "") -> None:
+        sp = str(source_path or "").strip()
+        if not sp or sp in seen:
+            return
+        seen.add(sp)
+        rows.append((sp, str(source_sha1 or "").strip().lower()))
+
+    if isinstance(locked_citation_source, dict):
+        _add(locked_citation_source.get("source_path"), locked_citation_source.get("source_sha1"))
+    for hit in list(answer_hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        _add((meta or {}).get("source_path"), (meta or {}).get("source_sha1"))
+
+    prompt_norm = re.sub(r"[^a-z0-9]+", " ", str(prompt or "").lower()).strip()
+    if "scinerf" in prompt_norm:
+        exact = [(sp, sha) for sp, sha in rows if "scinerf" in re.sub(r"[^a-z0-9]+", " ", sp.lower())]
+        if exact:
+            return exact
+    return rows
+
+
+def _prompt_requested_reference_targets(prompt: str) -> list[tuple[str, tuple[tuple[str, ...], ...]]]:
+    low = str(prompt or "").strip().lower()
+    if not low or not _prompt_explicitly_requests_citation_lookup(low):
+        return []
+    targets: list[tuple[str, tuple[tuple[str, ...], ...]]] = []
+    has_admm_net = bool("admm-net" in low or "admm net" in low or "deep tensor" in low)
+    has_standalone_admm = bool(
+        re.search(r"(?<![a-z0-9])admm(?!\s*[- ]?\s*net)(?![a-z0-9])", low)
+        or "alternating direction method" in low
+    )
+    if has_standalone_admm:
+        targets.append(
+            (
+                "ADMM",
+                (
+                    ("alternating direction method of multipliers",),
+                    ("distributed optimization", "multipliers"),
+                ),
+            )
+        )
+    if has_admm_net:
+        targets.append(
+            (
+                "ADMM-Net",
+                (
+                    ("admm net",),
+                    ("deep tensor admm",),
+                    ("snapshot compressive imaging", "admm"),
+                ),
+            )
+        )
+    return targets
+
+
+def _reference_surface(ref: dict) -> str:
+    if not isinstance(ref, dict):
+        return ""
+    parts = [
+        str(ref.get("title") or ""),
+        str(ref.get("raw") or ""),
+        str(ref.get("authors") or ""),
+        str(ref.get("venue") or ""),
+        str(ref.get("year") or ""),
+    ]
+    return re.sub(r"[^a-z0-9]+", " ", " ".join(parts).lower()).strip()
+
+
+def _find_reference_num_by_terms(
+    index_data: dict,
+    source_path: str,
+    source_sha1: str,
+    alternatives: tuple[tuple[str, ...], ...],
+) -> int:
+    best_num = 0
+    best_score = -1.0
+    for n in range(1, 501):
+        try:
+            got = _resolve_reference_entry(index_data, source_path, n, source_sha1=source_sha1)
+        except Exception:
+            got = None
+        ref = got.get("ref") if isinstance(got, dict) and isinstance(got.get("ref"), dict) else None
+        if not isinstance(ref, dict):
+            continue
+        surface = _reference_surface(ref)
+        if not surface:
+            continue
+        for alt in alternatives:
+            terms = [re.sub(r"[^a-z0-9]+", " ", str(term or "").lower()).strip() for term in alt]
+            terms = [term for term in terms if term]
+            if not terms or not all(term in surface for term in terms):
+                continue
+            score = 10.0 + float(sum(len(term) for term in terms)) / 100.0
+            title_surface = re.sub(r"[^a-z0-9]+", " ", str(ref.get("title") or "").lower()).strip()
+            if title_surface and all(term in title_surface for term in terms):
+                score += 2.0
+            if score > best_score:
+                best_score = score
+                best_num = int(n)
+    return best_num
+
+
+def _strip_conflicting_missing_reference_notes(answer: str, labels: list[str]) -> str:
+    text = str(answer or "")
+    if not text or not labels:
+        return text
+    label_patterns = [re.escape(str(label or "").lower()) for label in labels if str(label or "").strip()]
+    if not label_patterns:
+        return text
+    label_re = re.compile("|".join(label_patterns), flags=re.I)
+    missing_re = re.compile(
+        r"not\s+(?:appear|included|found)|not\s+in\s+the\s+(?:current\s+)?(?:retrieved|candidate)|"
+        r"未出现在|没有出现在|未检索到|当前检索片段|候选列表",
+        flags=re.I,
+    )
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = str(line or "").strip()
+        if stripped and label_re.search(stripped) and missing_re.search(stripped):
+            continue
+        out.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def _maybe_append_prompt_requested_inpaper_refs(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict],
+    db_dir: Path | None,
+    locked_citation_source: dict | None,
+) -> str:
+    text = str(answer or "").strip()
+    targets = _prompt_requested_reference_targets(prompt)
+    if not text or not targets:
+        return text
+    try:
+        index_data = _load_reference_index(Path(db_dir).expanduser()) if db_dir else {}
+    except Exception:
+        index_data = {}
+    if not isinstance(index_data, dict) or not index_data:
+        return text
+    sources = _candidate_sources_for_inpaper_lookup(
+        answer_hits=list(answer_hits or []),
+        locked_citation_source=locked_citation_source,
+        prompt=prompt,
+    )
+    if not sources:
+        return text
+    existing: set[int] = set(_collect_inline_reference_numbers(text, max_items=24))
+    for m in _CITE_CANON_RE.finditer(text):
+        try:
+            existing.add(int(m.group(2) or 0))
+        except Exception:
+            pass
+    resolved: list[tuple[str, int, str]] = []
+    seen_nums: set[int] = set()
+    for label, alternatives in targets:
+        for source_path, source_sha1 in sources:
+            ref_num = _find_reference_num_by_terms(index_data, source_path, source_sha1, alternatives)
+            if ref_num <= 0 or ref_num in seen_nums or ref_num in existing:
+                continue
+            sid = _cite_source_id(source_path)
+            resolved.append((label, int(ref_num), sid))
+            seen_nums.add(int(ref_num))
+            break
+    if not resolved:
+        return text
+    text = _strip_conflicting_missing_reference_notes(text, [label for label, _, _ in resolved])
+    prefer_zh = _prompt_prefers_chinese_answer(prompt)
+    cites = "\u3001".join(f"{label} [[CITE:{sid}:{num}]]" for label, num, sid in resolved)
+    if prefer_zh:
+        line = f"\u53ef\u4ee5\u4f18\u5148\u70b9\u5f00\u7684\u539f\u8bba\u6587\u6765\u6e90\uff1a{cites}\u3002"
+    else:
+        line = f"Original cited sources worth opening first: {cites}."
+    if line in text:
+        return text
+    return f"{text}\n\n{line}".strip()
+
+
 def _should_preserve_final_answer_numeric_citations(
     *,
     prompt: str,
     answer_output_mode: str,
     paper_guide_mode: bool,
     prompt_family: str,
+    has_hits: bool = False,
 ) -> bool:
     if str(prompt_family or "").strip().lower() == "citation_lookup":
         return True
@@ -191,19 +654,50 @@ def _should_preserve_final_answer_numeric_citations(
         return True
     if paper_guide_mode and _prompt_explicitly_requests_citation_lookup(prompt):
         return True
+    # Classic RAG with hits: preserve [n] markers so the renderer can link them.
+    if not paper_guide_mode and has_hits:
+        return True
     return False
 
 
-def _strip_final_answer_citation_markers(answer: str, *, preserve_numeric_markers: bool) -> str:
+def _should_preserve_final_answer_structured_citations(
+    *,
+    prompt: str,
+    answer_output_mode: str,
+    paper_guide_mode: bool,
+    prompt_family: str,
+    allow_paper_guide_structured_refs: bool = False,
+) -> bool:
+    if bool(allow_paper_guide_structured_refs):
+        return True
+    if str(prompt_family or "").strip().lower() == "citation_lookup":
+        return True
+    if _prompt_explicitly_requests_citation_lookup(prompt):
+        return True
+    if bool(paper_guide_mode) and _prompt_explicitly_requests_citation_lookup(prompt):
+        return True
+    if bool(paper_guide_mode) and "citation" in str(answer_output_mode or "").strip().lower():
+        return True
+    return False
+
+
+def _strip_final_answer_citation_markers(
+    answer: str,
+    *,
+    preserve_numeric_markers: bool,
+    preserve_structured_markers: bool = False,
+) -> str:
     text = str(answer or "")
     if not text:
         return text
     out = _sanitize_structured_cite_tokens(text)
-    out = _CITE_CANON_RE.sub("", out)
+    # Always strip malformed / incomplete CITE tokens (these are never valid).
     out = _STRUCT_CITE_SINGLE_RE.sub("", out)
     out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
-    out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
     out = _SID_INLINE_RE.sub("", out)
+    if not preserve_structured_markers:
+        out = _CITE_CANON_RE.sub("", out)
+        out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
     if not preserve_numeric_markers:
         out = _FREEFORM_NUMERIC_CITE_RE.sub("", out)
     out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
@@ -211,6 +705,21 @@ def _strip_final_answer_citation_markers(answer: str, *, preserve_numeric_marker
     out = re.sub(r"[ \t]+\n", "\n", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
+
+
+def _strip_internal_doc_label_mentions(text: str) -> str:
+    out = str(text or "")
+    if not out or ("DOC-" not in out.upper()):
+        return out.strip()
+    out = _DOC_LABEL_GROUP_IN_PARENS_RE.sub("", out)
+    out = _DOC_LABEL_TOKEN_RE.sub("", out)
+    out = re.sub(r"[\(\[（【]\s*[\)\]）】]", "", out)
+    out = re.sub(r"(?m)^\s*(?:>\s*)?(?:[-*+]\s+|\d+[.)]\s+)?[:：-]\s*", "", out)
+    out = re.sub(r"\s+([,.;:!?，。；：！？])", r"\1", out)
+    out = re.sub(r"([(\[（【])\s+", r"\1", out)
+    out = re.sub(r"\s+([)\]）】])", r"\1", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out.strip(" \t:-")
 
 
 def _sanitize_internal_doc_label_blocks(answer: str) -> str:
@@ -237,29 +746,36 @@ def _sanitize_internal_doc_label_blocks(answer: str) -> str:
             converted = True
             idx += 1
             continue
-        if not _DOC_HEADING_LINE_RE.match(line):
-            _push_block(lines[idx])
+        inline_title_match = _DOC_INLINE_TITLE_LINE_RE.match(line)
+        if not _DOC_HEADING_LINE_RE.match(line) and not inline_title_match:
+            cleaned_line = _strip_internal_doc_label_mentions(lines[idx])
+            if cleaned_line != lines[idx].strip():
+                converted = True
+            _push_block(cleaned_line)
             idx += 1
             continue
 
         converted = True
         idx += 1
         title = ""
+        if inline_title_match:
+            title = _strip_internal_doc_label_mentions(inline_title_match.group("title"))
         body_lines: list[str] = []
         while idx < len(lines):
             current = lines[idx].strip()
-            if _DOC_HEADING_LINE_RE.match(current):
+            if _DOC_HEADING_LINE_RE.match(current) or _DOC_INLINE_TITLE_LINE_RE.match(current):
                 break
             if _DOC_DIAGNOSTIC_LINE_RE.match(current):
                 idx += 1
                 continue
             title_match = _DOC_TITLE_LINE_RE.match(current)
             if title_match and not title:
-                title = str(title_match.group(1) or "").strip()
+                title = _strip_internal_doc_label_mentions(title_match.group(1))
                 idx += 1
                 continue
-            if current:
-                body_lines.append(current)
+            cleaned_current = _strip_internal_doc_label_mentions(current)
+            if cleaned_current:
+                body_lines.append(cleaned_current)
             idx += 1
 
         body = re.sub(r"\s+", " ", " ".join(body_lines)).strip()
@@ -393,6 +909,13 @@ def _surface_has_token_sequence(surface_norm: str, token_seq: list[str]) -> bool
     return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", surface_norm, flags=re.I))
 
 
+def _multi_paper_term_presence_pattern(term: str) -> str:
+    token = str(term or "").strip()
+    if not token:
+        return ""
+    return rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])"
+
+
 def _is_informative_multi_paper_focus_token(token: str) -> bool:
     low = str(token or "").strip().lower()
     if not low:
@@ -427,7 +950,9 @@ def _multi_paper_segment_matches(
     surface_token_set = set(surface_tokens)
     if len(seg_tokens) == 1:
         token = str(seg_tokens[0] or "")
-        return bool(token in surface_token_set) and (not _multi_paper_focus_term_only_negated(token, raw_low))
+        return _surface_has_token_sequence(surface_norm, [token]) and (
+            not _multi_paper_focus_term_only_negated(token, raw_low)
+        )
     if _surface_has_token_sequence(surface_norm, seg_tokens):
         return not _multi_paper_focus_term_only_negated(" ".join(seg_tokens), raw_low)
     non_negated_tokens = [
@@ -543,7 +1068,11 @@ def _multi_paper_topic_score(
     ]
     if topic_tokens:
         surface_token_set = set(surface_norm.split())
-        overlap_tokens = [tok for tok in topic_tokens if tok in surface_token_set]
+        overlap_tokens = [
+            tok
+            for tok in topic_tokens
+            if (tok in surface_token_set) or _surface_has_token_sequence(surface_norm, [tok])
+        ]
         overlap = len(overlap_tokens)
         non_negated_overlap = [
             tok for tok in overlap_tokens
@@ -935,6 +1464,30 @@ def _pick_multi_paper_card_raw_summary(
     return primary_summary or card_summary or deepread_summary
 
 
+def _pick_multi_paper_doc_list_llm_pack_copy(
+    *,
+    prompt: str,
+    meta: dict | None,
+    source_name: str,
+) -> tuple[str, str]:
+    ref_pack = dict((meta or {}).get("ref_pack") or {}) if isinstance((meta or {}).get("ref_pack"), dict) else {}
+    if not ref_pack:
+        return "", ""
+    summary_line = _single_line_summary(
+        str(ref_pack.get("what") or "").strip(),
+        source_name=source_name,
+    )
+    why_line = _single_line_summary(
+        str(ref_pack.get("why") or "").strip(),
+        source_name=source_name,
+    )
+    if summary_line and _looks_generic_multi_paper_support_text(summary_line, prompt=prompt):
+        summary_line = ""
+    if why_line and _looks_generic_multi_paper_support_text(why_line, prompt=prompt):
+        why_line = ""
+    return summary_line, why_line
+
+
 def _build_multi_paper_doc_list_contract(
     *,
     prompt: str,
@@ -951,6 +1504,9 @@ def _build_multi_paper_doc_list_contract(
         source_name: str,
         heading_path: str,
         summary: str,
+        summary_generation: str,
+        why_line: str,
+        why_generation: str,
         primary_evidence: dict | None,
         rank: int,
     ) -> None:
@@ -1008,6 +1564,21 @@ def _build_multi_paper_doc_list_contract(
             )
         ):
             entry["summary_line"] = new_summary
+            if str(summary_generation or "").strip():
+                entry["summary_generation"] = str(summary_generation or "").strip()
+
+        new_why = str(why_line or "").strip()
+        cur_why = str(entry.get("why_line") or "").strip()
+        if new_why and (
+            (not cur_why)
+            or (
+                int(rank) >= 2
+                and len(new_why) >= max(24, len(cur_why))
+            )
+        ):
+            entry["why_line"] = new_why
+            if str(why_generation or "").strip():
+                entry["why_generation"] = str(why_generation or "").strip()
 
         if isinstance(primary_evidence, dict) and primary_evidence:
             norm_primary = {k: v for k, v in dict(primary_evidence).items() if v not in ("", None, [], {})}
@@ -1029,9 +1600,13 @@ def _build_multi_paper_doc_list_contract(
                     )
                     if snippet and (
                         (not str(entry.get("summary_line") or "").strip())
-                        or norm_primary_score >= current_primary_score
+                        or (
+                            norm_primary_score >= current_primary_score
+                            and str(entry.get("summary_generation") or "").strip().lower() != "llm_pack"
+                        )
                     ):
                         entry["summary_line"] = snippet
+                        entry.pop("summary_generation", None)
 
     for doc in list(seed_docs or []):
         if not isinstance(doc, dict):
@@ -1039,6 +1614,11 @@ def _build_multi_paper_doc_list_contract(
         meta = doc.get("meta") if isinstance(doc.get("meta"), dict) else {}
         source_path = str((meta or {}).get("source_path") or "").strip()
         source_name = _source_name_from_path_like(source_path)
+        llm_summary, llm_why = _pick_multi_paper_doc_list_llm_pack_copy(
+            prompt=prompt,
+            meta=meta,
+            source_name=source_name,
+        )
         raw_summary = str((((meta or {}).get("ref_show_snippets") or [None])[0]) or doc.get("text") or "").strip()
         heading_path_raw = (
             str((meta or {}).get("ref_best_heading_path") or "").strip()
@@ -1062,7 +1642,10 @@ def _build_multi_paper_doc_list_contract(
             source_path=source_path,
             source_name=source_name,
             heading_path=heading_path,
-            summary=summary,
+            summary=llm_summary or summary,
+            summary_generation="llm_pack" if llm_summary else "",
+            why_line=llm_why,
+            why_generation="llm_pack" if llm_why else "",
             primary_evidence=primary_evidence,
             rank=1,
         )
@@ -1097,6 +1680,9 @@ def _build_multi_paper_doc_list_contract(
             source_name=source_name,
             heading_path=heading_path,
             summary=summary,
+            summary_generation="",
+            why_line="",
+            why_generation="",
             primary_evidence=normalized_primary,
             rank=3,
         )
@@ -1107,6 +1693,11 @@ def _build_multi_paper_doc_list_contract(
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         source_path = str((meta or {}).get("source_path") or "").strip()
         source_name = _source_name_from_path_like(source_path)
+        llm_summary, llm_why = _pick_multi_paper_doc_list_llm_pack_copy(
+            prompt=prompt,
+            meta=meta,
+            source_name=source_name,
+        )
         raw_summary = str((((meta or {}).get("ref_show_snippets") or [None])[0]) or hit.get("text") or "").strip()
         heading_path_raw = (
             str((meta or {}).get("ref_best_heading_path") or "").strip()
@@ -1130,7 +1721,10 @@ def _build_multi_paper_doc_list_contract(
             source_path=source_path,
             source_name=source_name,
             heading_path=heading_path,
-            summary=summary,
+            summary=llm_summary or summary,
+            summary_generation="llm_pack" if llm_summary else "",
+            why_line=llm_why,
+            why_generation="llm_pack" if llm_why else "",
             primary_evidence=primary_evidence,
             rank=2,
         )
@@ -1256,20 +1850,35 @@ def _multi_paper_focus_term_only_negated(term: str, surface: str) -> bool:
     normalized_surface = str(surface or "").strip().lower()
     if not token or not normalized_surface:
         return False
-    escaped = re.escape(token)
-    all_count = len(re.findall(rf"\b{escaped}\b", normalized_surface, flags=re.I))
-    if all_count <= 0:
+    term_pattern = _multi_paper_term_presence_pattern(token)
+    if not term_pattern:
         return False
-    neg_patterns = (
-        rf"\b(?:without|not|no|lack(?:s|ing)?|avoid(?:s|ed|ing)?|rather than|instead of|does not mention|doesn't mention|does not discuss|doesn't discuss)\b[^.!?;\n]{{0,32}}\b{escaped}\b",
-        rf"\b(?:\u672a\u63d0\u53ca|\u4e0d\u6d89\u53ca|\u6ca1\u6709|\u5e76\u672a|\u4e0d\u662f)\b[^\u3002\uff01\uff1f\uff1b\n]{{0,20}}{escaped}\b",
-        rf"\b{escaped}\b[^.!?;\n]{{0,24}}\b(?:not|absent|omitted)\b",
+    matches = list(re.finditer(term_pattern, normalized_surface, flags=re.I))
+    if not matches:
+        return False
+    english_before_re = re.compile(
+        r"\b(?:without|not|no|lack(?:s|ing)?|avoid(?:s|ed|ing)?|rather than|instead of|"
+        r"does not mention|doesn't mention|does not discuss|doesn't discuss)\b"
+        r"[^.!?;\n]{0,32}$",
+        flags=re.I,
     )
-    negated_count = sum(
-        len(re.findall(pattern, normalized_surface, flags=re.I))
-        for pattern in neg_patterns
+    chinese_before_re = re.compile(
+        r"(?:\u672a\u63d0\u53ca|\u4e0d\u6d89\u53ca|\u6ca1\u6709|\u5e76\u672a|\u4e0d\u662f)"
+        r"[^\u3002\uff01\uff1f\uff1b\n]{0,20}$",
+        flags=re.I,
     )
-    return negated_count >= all_count
+    english_after_re = re.compile(r"^[^.!?;\n]{0,24}\b(?:not|absent|omitted)\b", flags=re.I)
+    negated_count = 0
+    for match in matches:
+        prefix = normalized_surface[max(0, match.start() - 40) : match.start()]
+        suffix = normalized_surface[match.end() : min(len(normalized_surface), match.end() + 28)]
+        if (
+            english_before_re.search(prefix)
+            or chinese_before_re.search(prefix)
+            or english_after_re.search(suffix)
+        ):
+            negated_count += 1
+    return negated_count >= len(matches)
 
 
 def _prompt_targets_sci_topic(prompt: str) -> bool:
@@ -1610,7 +2219,7 @@ def _maybe_append_paper_guide_supplement_block(
         return text
     if _STRUCTURED_ANSWER_SECTION_RE.search(text):
         return text
-    if _CROSS_PAPER_QUERY_RE.search(str(prompt_text or "")):
+    if prompt_likely_cross_paper_refs(str(prompt_text or "")):
         return text
     # When the grounded answer is explicitly a "not stated / does not specify" response,
     # avoid adding generic supplement blocks. Users asking for a concrete paper detail
@@ -1675,6 +2284,79 @@ def _maybe_append_paper_guide_supplement_block(
     block = [header, disclaimer]
     block.extend(f"> - {line}" for line in lines[:3] if str(line or "").strip())
     return f"{text}\n\n" + "\n".join(block).strip()
+
+
+def _finalize_user_visible_citation_markers(
+    answer: str,
+    *,
+    prompt: str,
+    answer_output_mode: str,
+    paper_guide_mode: bool,
+    prompt_family: str,
+    has_hits: bool,
+    answer_hits: list[dict],
+    db_dir: Path | None,
+    locked_citation_source: dict | None,
+    support_resolution: list[dict] | None,
+    candidate_refs_by_source: dict[str, list[int]] | None,
+    retrieval_confidence_hint: dict[str, object] | None,
+    allow_paper_guide_structured_refs: bool = False,
+) -> str:
+    text = str(answer or "").strip()
+    if bool(paper_guide_mode):
+        text = _sanitize_paper_guide_answer_for_user(
+            text,
+            has_hits=bool(has_hits),
+            prompt=prompt,
+            prompt_family=prompt_family,
+            preserve_structured_cites=True if allow_paper_guide_structured_refs else None,
+        )
+        text = _maybe_ensure_minimum_paper_guide_citation(
+            text,
+            paper_guide_mode=True,
+            prompt_family=prompt_family,
+            has_hits=bool(has_hits),
+            support_resolution=list(support_resolution or []),
+            candidate_refs_by_source=dict(candidate_refs_by_source or {}),
+            retrieval_confidence_hint=dict(retrieval_confidence_hint or {}),
+            locked_citation_source=locked_citation_source,
+        )
+        text = _maybe_append_prompt_requested_inpaper_refs(
+            text,
+            prompt=prompt,
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            locked_citation_source=locked_citation_source,
+        )
+        text = _sanitize_paper_guide_answer_for_user(
+            text,
+            has_hits=bool(has_hits),
+            prompt=prompt,
+            prompt_family=prompt_family,
+            preserve_structured_cites=True if allow_paper_guide_structured_refs else None,
+        )
+
+    text = _sanitize_internal_doc_label_blocks(text)
+    preserve_numeric_citations = _should_preserve_final_answer_numeric_citations(
+        prompt=prompt,
+        answer_output_mode=answer_output_mode,
+        paper_guide_mode=bool(paper_guide_mode),
+        prompt_family=prompt_family,
+        has_hits=bool(has_hits),
+    )
+    preserve_structured_citations = _should_preserve_final_answer_structured_citations(
+        prompt=prompt,
+        answer_output_mode=answer_output_mode,
+        paper_guide_mode=bool(paper_guide_mode),
+        prompt_family=prompt_family,
+        allow_paper_guide_structured_refs=bool(allow_paper_guide_structured_refs),
+    )
+    text = _strip_final_answer_citation_markers(
+        text,
+        preserve_numeric_markers=preserve_numeric_citations,
+        preserve_structured_markers=preserve_structured_citations,
+    )
+    return _sanitize_empty_markdown_label_fragments(text)
 
 
 def _build_paper_guide_contract_snapshot(
@@ -1885,6 +2567,7 @@ def _finalize_generation_answer(
     maybe_append_library_figure_markdown,
     validate_structured_citations,
     build_paper_guide_supplement_lines=None,
+    validate_freeform_numeric_citations=None,
 ) -> dict:
     resolved_paper_guide_intent = _resolve_paper_guide_intent(
         prompt_for_user or prompt,
@@ -1906,6 +2589,7 @@ def _finalize_generation_answer(
     answer = _normalize_math_markdown(
         _strip_model_ref_section(_sanitize_structured_cite_tokens(partial or ""))
     ).strip() or "(No text returned)"
+    answer = _sanitize_empty_markdown_label_fragments(answer)
     answer = _reconcile_kb_notice(answer, has_hits=bool(answer_hits))
     shared_primary_evidence = _pick_shared_primary_evidence(
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
@@ -1952,53 +2636,151 @@ def _finalize_generation_answer(
         answer_hits=answer_hits,
         bound_source_path=paper_guide_bound_source_path,
     )
+    template_repair_meta: dict[str, object] = {"changed": False}
+    if paper_guide_mode:
+        answer, template_repair_meta = _repair_template_only_paper_guide_answer(
+            answer,
+            prompt=prompt_for_user or prompt,
+            prompt_family=sanitize_paper_guide_family,
+            support_resolution=list(paper_guide_support_resolution or []),
+            cards=list(paper_guide_evidence_cards or []),
+            fallback_source_path=str(paper_guide_bound_source_path or paper_guide_direct_source_path or paper_guide_focus_source_path or ""),
+        )
+    # Step 1: Promote bare [n] where n < CITATION_OFFSET to structured
+    # [[CITE:<sid>:n]] — these are in-paper bibliography references (System B).
+    # Hit citations use [OFFSET+1] numbers and are handled in step 2.
+    if not paper_guide_mode:
+        answer = _promote_numeric_inpaper_refs(
+            answer,
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            paper_guide_mode=False,
+        )
+    # Step 2: Strip the citation offset so System A markers like [10001], [10002]
+    # become [1], [2] for standard rendering.  After this, all remaining [n] are
+    # 1-based hit citations; System B refs are already [[CITE:...]].
+    if not paper_guide_mode:
+        answer = _strip_citation_offset(answer)
+    # Step 3: Strip LaTeX footnote markers ($^n$, $_{xx}$) that leak from paper text.
+    answer = _strip_latex_footnote_markers(answer)
+    answer = _maybe_append_prompt_requested_inpaper_refs(
+        answer,
+        prompt=prompt_for_user or prompt,
+        answer_hits=answer_hits,
+        db_dir=db_dir,
+        locked_citation_source=locked_citation_source,
+    )
+    paper_guide_reference_opportunities: list[dict[str, object]] = [
+        dict(item)
+        for item in list((paper_guide_contracts_seed or {}).get("reference_opportunities") or [])
+        if isinstance(item, dict)
+    ]
+    paper_guide_reference_apply_meta: dict[str, object] = {"mode": "none", "tail_used": False}
+    paper_guide_candidate_refs_effective = dict(paper_guide_candidate_refs_by_source or {})
+    if bool(paper_guide_mode):
+        reference_source_path = str(
+            paper_guide_bound_source_path
+            or paper_guide_direct_source_path
+            or paper_guide_focus_source_path
+            or ""
+        ).strip()
+        paper_guide_reference_opportunities = detect_paper_guide_reference_opportunities(
+            prompt=prompt_for_user or prompt,
+            answer=answer,
+            prompt_family=sanitize_paper_guide_family,
+            source_path=reference_source_path,
+            support_resolution=list(paper_guide_support_resolution or []),
+            support_slots=list(paper_guide_support_slots or []),
+            cards=list(paper_guide_evidence_cards or []),
+            max_items=3,
+        )
+    else:
+        text_reference_opportunities = detect_text_reference_opportunities(
+            prompt=prompt_for_user or prompt,
+            answer=answer,
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            max_items=3,
+        )
+        if text_reference_opportunities:
+            seen_opp = {
+                (
+                    str(item.get("sid") or "").strip().lower(),
+                    int(item.get("ref_num") or 0),
+                )
+                for item in paper_guide_reference_opportunities
+                if isinstance(item, dict)
+            }
+            for item in text_reference_opportunities:
+                key = (
+                    str(item.get("sid") or "").strip().lower(),
+                    int(item.get("ref_num") or 0),
+                )
+                if key in seen_opp:
+                    continue
+                seen_opp.add(key)
+                paper_guide_reference_opportunities.append(dict(item))
+    if paper_guide_reference_opportunities:
+        answer, paper_guide_reference_apply_meta = apply_reference_opportunities_to_answer(
+            answer,
+            prompt=prompt_for_user or prompt,
+            opportunities=paper_guide_reference_opportunities,
+        )
+        paper_guide_candidate_refs_effective = merge_reference_opportunity_candidate_refs(
+            paper_guide_candidate_refs_effective,
+            paper_guide_reference_opportunities,
+        )
     answer, citation_validation = validate_structured_citations(
         answer,
         answer_hits=answer_hits,
         db_dir=db_dir,
         locked_source=locked_citation_source,
         paper_guide_mode=bool(paper_guide_mode),
-        paper_guide_candidate_refs_by_source=dict(paper_guide_candidate_refs_by_source or {}),
+        paper_guide_candidate_refs_by_source=dict(paper_guide_candidate_refs_effective or {}),
         paper_guide_support_slots=list(paper_guide_support_slots or []),
         paper_guide_support_resolution=list(paper_guide_support_resolution or []),
     )
-    # Citation validation may legitimately rewrite or inject structured cite markers for grounding,
-    # but the final user-facing paper-guide answer still needs the same family-aware sanitization pass.
-    if paper_guide_mode:
-        answer = _sanitize_paper_guide_answer_for_user(
-            answer,
-            has_hits=bool(answer_hits),
-            prompt=prompt_for_user or prompt,
-            prompt_family=sanitize_paper_guide_family,
+    structured_refs_allowed = bool(
+        bool(paper_guide_reference_opportunities)
+        or sanitize_paper_guide_family == "citation_lookup"
+        or _prompt_explicitly_requests_citation_lookup(prompt_for_user or prompt)
+        or (bool(paper_guide_mode) and "citation" in str(answer_output_mode or "").strip().lower())
+    )
+    # Standard RAG [n] citation validation — catch hallucinated ref nums.
+    paper_guide_validated_structured_refs = bool(
+        structured_refs_allowed
+        and _has_structured_cite_marker(answer)
+        and (
+            int(dict(citation_validation or {}).get("kept") or 0) > 0
+            or int(dict(citation_validation or {}).get("rewritten") or 0) > 0
         )
-        answer = _maybe_ensure_minimum_paper_guide_citation(
+    )
+    if (
+        paper_guide_reference_opportunities
+        and not paper_guide_validated_structured_refs
+        and bool(paper_guide_reference_apply_meta.get("tail_used"))
+    ):
+        answer = strip_reference_opportunity_note(answer)
+    if callable(validate_freeform_numeric_citations):
+        answer, freeform_validation = validate_freeform_numeric_citations(
             answer,
-            paper_guide_mode=bool(paper_guide_mode),
-            prompt_family=sanitize_paper_guide_family,
-            has_hits=bool(answer_hits),
-            support_resolution=list(paper_guide_support_resolution or []),
-            candidate_refs_by_source=dict(paper_guide_candidate_refs_by_source or {}),
-            retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
-            locked_citation_source=locked_citation_source,
+            answer_hits=answer_hits,
         )
-        # The minimum-citation helper may append structured markers for internal grounding.
-        # Always re-sanitize for the final user-facing string so raw tokens never leak.
-        answer = _sanitize_paper_guide_answer_for_user(
-            answer,
-            has_hits=bool(answer_hits),
-            prompt=prompt_for_user or prompt,
-            prompt_family=sanitize_paper_guide_family,
-        )
-    answer = _sanitize_internal_doc_label_blocks(answer)
-    preserve_numeric_citations = _should_preserve_final_answer_numeric_citations(
+        citation_validation["freeform"] = freeform_validation
+    answer = _finalize_user_visible_citation_markers(
+        answer,
         prompt=prompt_for_user or prompt,
         answer_output_mode=answer_output_mode,
         paper_guide_mode=bool(paper_guide_mode),
         prompt_family=sanitize_paper_guide_family,
-    )
-    answer = _strip_final_answer_citation_markers(
-        answer,
-        preserve_numeric_markers=preserve_numeric_citations,
+        has_hits=bool(answer_hits),
+        answer_hits=answer_hits,
+        db_dir=db_dir,
+        locked_citation_source=locked_citation_source,
+        support_resolution=list(paper_guide_support_resolution or []),
+        candidate_refs_by_source=dict(paper_guide_candidate_refs_effective or {}),
+        retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
+        allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
     if multi_paper_list_prompt and multi_paper_doc_list:
         formatted_multi_paper_answer = _format_multi_paper_list_answer_v2(
@@ -2015,7 +2797,7 @@ def _finalize_generation_answer(
         prompt_family=sanitize_paper_guide_family,
         retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
         support_resolution=list(paper_guide_support_resolution or []),
-        candidate_refs_by_source=dict(paper_guide_candidate_refs_by_source or {}),
+        candidate_refs_by_source=dict(paper_guide_candidate_refs_effective or {}),
     )
     answer = _maybe_append_paper_guide_supplement_block(
         answer,
@@ -2034,7 +2816,7 @@ def _finalize_generation_answer(
         answer_markdown=grounded_answer,
         final_answer_markdown=answer,
         evidence_cards=list(paper_guide_evidence_cards or []),
-        candidate_refs_by_source=dict(paper_guide_candidate_refs_by_source or {}),
+        candidate_refs_by_source=dict(paper_guide_candidate_refs_effective or {}),
         support_slots=list(paper_guide_support_slots or []),
         support_resolution=list(paper_guide_support_resolution or []),
         needs_supplement=bool(_PAPER_GUIDE_SUPPLEMENT_BLOCK_MARKER_RE.search(answer)),
@@ -2053,15 +2835,30 @@ def _finalize_generation_answer(
         prompt_family=sanitize_paper_guide_family,
     )
     retrieval_confidence = dict(paper_guide_retrieval_confidence_hint or {})
+    if bool(template_repair_meta.get("changed")):
+        answer_quality["template_repair"] = dict(template_repair_meta)
     if bool(retrieval_confidence.get("low_confidence")):
         refs_for_notice = _collect_low_confidence_candidate_refs(
             support_resolution=list(paper_guide_support_resolution or []),
-            candidate_refs_by_source=dict(paper_guide_candidate_refs_by_source or {}),
+            candidate_refs_by_source=dict(paper_guide_candidate_refs_effective or {}),
             retrieval_confidence_hint=retrieval_confidence,
             max_items=6,
         )
         if refs_for_notice:
             retrieval_confidence["candidate_refs_for_notice"] = list(refs_for_notice)
+    if paper_guide_reference_opportunities:
+        answer_quality["reference_opportunities"] = {
+            "count": int(len(paper_guide_reference_opportunities)),
+            "mode": str(paper_guide_reference_apply_meta.get("mode") or "none"),
+            "injected_refs": list(paper_guide_reference_apply_meta.get("injected_refs") or []),
+            "refs": [
+                int(item.get("ref_num") or 0)
+                for item in paper_guide_reference_opportunities
+                if isinstance(item, dict) and int(item.get("ref_num") or 0) > 0
+            ],
+        }
+    if dict(citation_validation or {}).get("raw_count"):
+        answer_quality["citation_validation"] = dict(citation_validation or {})
     answer_quality["retrieval_confidence"] = retrieval_confidence
     return {
         "answer": answer,

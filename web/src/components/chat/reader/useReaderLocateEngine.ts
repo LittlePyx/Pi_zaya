@@ -264,7 +264,8 @@ export function useReaderLocateEngine({
     let cancelled = false
     let attempts = 0
     let locateRaf = 0
-    let scrollRaf = 0
+    let scrollRafIds: number[] = []
+    let scrollTimerIds: number[] = []
     let retryTimer = 0
     let observer: MutationObserver | null = null
     // Strict locate may need more time for KaTeX and large markdown to fully render/bind anchors.
@@ -287,6 +288,37 @@ export function useReaderLocateEngine({
       observer?.disconnect()
       window.cancelAnimationFrame(locateRaf)
       window.clearTimeout(retryTimer)
+    }
+    const clearScheduledScrolls = () => {
+      scrollRafIds.forEach((id) => window.cancelAnimationFrame(id))
+      scrollTimerIds.forEach((id) => window.clearTimeout(id))
+      scrollRafIds = []
+      scrollTimerIds = []
+    }
+    const scheduleReliableScroll = (root: HTMLElement, target: HTMLElement, force = false) => {
+      clearScheduledScrolls()
+      const run = () => {
+        if (cancelled) return
+        scrollReaderTargetIntoView(root, target, { force })
+      }
+      const first = window.requestAnimationFrame(() => {
+        run()
+        const second = window.requestAnimationFrame(run)
+        scrollRafIds.push(second)
+      })
+      scrollRafIds.push(first)
+      ;[120, 320, 720, 1280, 2200, 3400].forEach((delay) => {
+        const timer = window.setTimeout(run, delay)
+        scrollTimerIds.push(timer)
+      })
+    }
+    const needsComfortScroll = (root: HTMLElement, target: HTMLElement) => {
+      const rootRect = root.getBoundingClientRect()
+      const targetRect = target.getBoundingClientRect()
+      if (rootRect.height <= 0 || targetRect.height <= 0) return true
+      const topPadding = Math.max(20, Math.min(52, root.clientHeight * 0.08))
+      const comfortableBottom = rootRect.top + Math.max(180, root.clientHeight * 0.55)
+      return targetRect.top < rootRect.top + topPadding || targetRect.top > comfortableBottom
     }
     const retryLocate = () => {
       if (Date.now() >= deadline) return false
@@ -664,12 +696,10 @@ export function useReaderLocateEngine({
         strictLocate,
       }
       const autoScrollKey = `${locateRequestId}::${activeAltIndex}`
-      if (lastAutoScrollKeyRef.current !== autoScrollKey) {
+      if (lastAutoScrollKeyRef.current !== autoScrollKey || needsComfortScroll(root, focusNode)) {
         lastAutoScrollKeyRef.current = autoScrollKey
-        scrollRaf = window.requestAnimationFrame(() => {
-          if (cancelled) return
-          scrollReaderTargetIntoView(root, focusNode)
-        })
+        const forceScroll = Boolean(usedHeadingFallback || (!activeFocusSnippet && activeHeadingPath))
+        scheduleReliableScroll(root, focusNode, forceScroll)
       }
 
       if (strictLocate) {
@@ -719,7 +749,7 @@ export function useReaderLocateEngine({
     return () => {
       cancelled = true
       finishLocate()
-      window.cancelAnimationFrame(scrollRaf)
+      clearScheduledScrolls()
     }
   }, [
     open,

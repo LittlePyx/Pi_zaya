@@ -41,7 +41,256 @@ def test_effective_ui_score_penalizes_weak_evidence_high_llm_score():
     assert score < 6.0
 
 
-def test_enrich_refs_payload_filters_bound_source_by_guide_name_without_bound_path():
+def test_heading_sanitizer_drops_pdf_shell_noise_without_hiding_real_abstract():
+    source_path = r"db\Demo\Demo.en.md"
+
+    assert reference_ui._sanitize_heading_path_ui(
+        "A B S T R A C T / 2. Method",
+        prompt="How does the method work?",
+        source_path=source_path,
+    ) == "2. Method"
+    assert reference_ui._sanitize_heading_path_ui(
+        "ARTICLE INFO / 3. Results",
+        prompt="Where are the results?",
+        source_path=source_path,
+    ) == "3. Results"
+    assert reference_ui._sanitize_heading_path_ui(
+        "Abstract",
+        prompt="Which papers discuss deep learning?",
+        source_path=source_path,
+    ) == "Abstract"
+
+
+def test_reader_open_exact_anchor_prefers_requested_caption_over_later_reference(tmp_path: Path):
+    md = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                "",
+                "## 4. Experiments",
+                "### 4.1. Experimental Setup",
+                "![Figure 3](./assets/fig3.png)",
+                "**Figure 3.** Experimental setup for real dataset collection. This SCI imaging system contains a CCD camera, primary and relay lens, and a DMD.",
+                "",
+                "### 4.2. Additional Study",
+                "![Figure 5](./assets/fig5.png)",
+                "**Figure 5.** Qualitative evaluations on the real dataset captured by our system in Fig. 3.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    reader_open = reference_ui._build_refs_reader_open_payload(
+        meta={
+            "ref_show_snippets": [
+                "**Figure 3.** Experimental setup for real dataset collection. This SCI imaging system contains a CCD camera, primary and relay lens, and a DMD.",
+            ],
+            "ref_locs": [
+                {"heading_path": "4. Experiments / 4.1. Experimental Setup"},
+            ],
+        },
+        prompt="SCINeRF hardware setup Figure 3",
+        source_path=str(md),
+        display_name="SCINeRF",
+        heading_path="4. Experiments / 4.1. Experimental Setup",
+        heading="4.1. Experimental Setup",
+        summary_line="This card discusses SCINeRF in Experimental Setup.",
+        why_line="",
+        anchor_target_kind="figure",
+        anchor_target_number=3,
+        allow_llm_disambiguation=False,
+        allow_exact_locate=True,
+    )
+
+    assert "Figure 3" in str(reader_open.get("headingPath") or "")
+    assert "Figure 5" not in str(reader_open.get("headingPath") or "")
+
+
+def test_build_hit_ui_meta_anchor_heading_not_rebound_to_unrelated_summary(monkeypatch, tmp_path: Path):
+    md = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                "",
+                "## 4. Experiments",
+                "### 4.1. Experimental Setup",
+                "![Figure 3](./assets/fig3.png)",
+                "**Figure 3.** Experimental setup for real dataset collection. This SCI imaging system contains a CCD camera, primary and relay lens, and a DMD.",
+                "",
+                "## 5. Conclusion",
+                "SCINeRF is a novel approach for 3D scene representation learning from a snapshot compressed image.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reference_ui,
+        "_choose_prompt_aligned_ref_summary_candidate",
+        lambda *args, **kwargs: {
+            "summary": "SCINeRF is a novel approach for 3D scene representation learning.",
+            "heading_path": "5. Conclusion",
+        },
+    )
+
+    ui_meta = build_hit_ui_meta(
+        {
+            "text": "**Figure 3.** Experimental setup for real dataset collection.",
+            "score": 28.0,
+            "meta": {
+                "source_path": str(md),
+                "ref_best_heading_path": "4. Experiments / 4.1. Experimental Setup",
+                "top_heading": "4.1. Experimental Setup",
+                "anchor_target_kind": "figure",
+                "anchor_target_number": 3,
+                "anchor_match_score": 28.0,
+                "explicit_doc_match_score": 8.0,
+                "ref_show_snippets": [
+                    "**Figure 3.** Experimental setup for real dataset collection. This SCI imaging system contains a CCD camera, primary and relay lens, and a DMD.",
+                ],
+                "ref_rank": {"bm25": 8.0, "deep": 2.0, "llm": 0.0, "term_bonus": 0.0, "semantic_score": 0.0},
+            },
+        },
+        prompt="SCINeRF hardware setup Figure 3",
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+        allow_exact_locate=False,
+    )
+
+    assert str(ui_meta["heading_path"]).startswith("4. Experiments / 4.1. Experimental Setup")
+    assert "5. Conclusion" not in str(ui_meta["heading_path"])
+
+
+def test_build_hit_ui_meta_infers_prompt_figure_anchor_for_stale_hit(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    md = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                "",
+                "## 4. Experiments",
+                "### 4.1. Experimental Setup",
+                "Real-world datasets. The setup consists of an iRAYPLE A5402MU90 camera and a FLDISCOVERY F4110 DMD. Fig. 3 shows the experimental setup we used to collect real dataset.",
+                "",
+                "![Figure 3](./assets/fig3.png)",
+                "**Figure 3.** Experimental setup for real dataset collection. This SCI imaging system contains a CCD camera, primary and relay lens, and a DMD.",
+                "",
+                "### 4.2. Additional Study",
+                "**Figure 5.** Qualitative evaluations on the real dataset captured by our system in Fig. 3.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    hit = {
+        "meta": {
+            "source_path": str(md),
+            "ref_best_heading_path": "4. Experiments / 4.1. Experimental Setup",
+            "ref_section": "4. Experiments",
+            "ref_subsection": "4.1. Experimental Setup",
+            "ref_show_snippets": [
+                "High compression ratio We study the performance of our SCINeRF under different compression ratios.",
+            ],
+            "ref_rank": {
+                "llm": 78.0,
+                "bm25": 4.7,
+                "deep": 1.2,
+                "term_bonus": 0.5,
+                "semantic_score": 7.4,
+            },
+        }
+    }
+
+    ui_meta = build_hit_ui_meta(
+        hit,
+        prompt=(
+            "SCINeRF\u7684\u771f\u5b9e\u786c\u4ef6\u5b9e\u9a8c\u88c5\u7f6e\u5305\u542b"
+            "\u54ea\u4e9b\u90e8\u4ef6\uff1f\u8bf7\u5bf9\u5e94\u5230\u539f\u6587\u56fe3"
+            "\u6216\u5b9e\u9a8c\u8bbe\u7f6e\u3002"
+        ),
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+        allow_exact_locate=True,
+    )
+
+    summary = str(ui_meta.get("summary_line") or "")
+    reader_open = ui_meta.get("reader_open") or {}
+    assert "iRAYPLE A5402MU90" in summary or "CCD camera" in summary
+    assert "Figure 5" not in summary
+    assert str(reader_open.get("anchorKind") or "") == "figure"
+    assert int(reader_open.get("anchorNumber") or 0) == 3
+    assert "Figure 3" in str(reader_open.get("headingPath") or "")
+
+
+def test_single_source_prompt_filters_other_papers_that_only_mention_source():
+    prompt = (
+        "SCINeRF\u7684\u771f\u5b9e\u786c\u4ef6\u5b9e\u9a8c\u88c5\u7f6e\u5305\u542b"
+        "\u54ea\u4e9b\u90e8\u4ef6\uff1f\u8bf7\u5bf9\u5e94\u5230\u539f\u6587\u56fe3"
+        "\u6216\u5b9e\u9a8c\u8bbe\u7f6e\u3002"
+    )
+    scinerf_hit = {
+        "text": "Figure 3 describes the real-world SCI setup.",
+        "meta": {
+            "source_path": (
+                r"db\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
+                r"\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+            ),
+        },
+        "ui_meta": {
+            "display_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+            "summary_line": "This SCI imaging system contains a CCD camera, primary and relay lens, and a DMD.",
+        },
+    }
+    scigs_hit = {
+        "text": "SCIGS compares its reconstruction quality against SCINeRF on static datasets.",
+        "meta": {
+            "source_path": (
+                r"db\ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image"
+                r"\ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.en.md"
+            ),
+        },
+        "ui_meta": {
+            "display_name": "ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.pdf",
+            "summary_line": "The existing SOTA SCI image decoding methods and SCINeRF are compared.",
+        },
+    }
+
+    filtered = reference_ui._filter_refs_hits_by_prompt_focus(prompt, [scigs_hit, scinerf_hit])
+
+    assert filtered == [scinerf_hit]
+
+
+def test_cross_paper_prompt_does_not_apply_single_source_binding():
+    prompt = "Which papers discuss SCINeRF?"
+    scinerf_hit = {
+        "text": "SCINeRF proposes neural radiance fields from a snapshot compressed image.",
+        "meta": {
+            "source_path": (
+                r"db\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image"
+                r"\CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+            ),
+        },
+        "ui_meta": {"display_name": "CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.pdf"},
+    }
+    scigs_hit = {
+        "text": "SCIGS compares against SCINeRF.",
+        "meta": {
+            "source_path": (
+                r"db\ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image"
+                r"\ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.en.md"
+            ),
+        },
+        "ui_meta": {"display_name": "ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.pdf"},
+    }
+
+    assert reference_ui._prompt_explicitly_binds_single_source(prompt, [scinerf_hit, scigs_hit]) == []
+
+
+def test_enrich_refs_payload_keeps_bound_source_for_guide_evidence_location():
     refs = {
         5: {
             "prompt": "Summarize Figure 1.",
@@ -75,17 +324,17 @@ def test_enrich_refs_payload_filters_bound_source_by_guide_name_without_bound_pa
     )
 
     entry = out.get(5) or {}
-    assert list(entry.get("hits") or []) == []
+    assert len(list(entry.get("hits") or [])) == 1
     guide_filter = entry.get("guide_filter", {}) or {}
     assert guide_filter.get("active") is True
-    assert guide_filter.get("hidden_self_source") is True
-    assert int(guide_filter.get("filtered_hit_count") or 0) == 1
-    assert str(entry.get("display_state") or "") == "hidden_by_guide"
-    assert str(entry.get("suppression_reason") or "") == "guide_self_source_only"
+    assert guide_filter.get("hidden_self_source") is False
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 0
+    assert str(entry.get("display_state") or "") == "ready"
+    assert str(entry.get("suppression_reason") or "") == ""
     pipeline_debug = entry.get("pipeline_debug", {}) or {}
-    assert int(pipeline_debug.get("raw_hit_count") or 0) == 0
-    assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 1
-    assert int(pipeline_debug.get("final_hit_count") or 0) == 0
+    assert int(pipeline_debug.get("raw_hit_count") or 0) == 1
+    assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 0
+    assert int(pipeline_debug.get("final_hit_count") or 0) == 1
 
 
 def test_enrich_refs_payload_keeps_external_hits_while_filtering_bound_source(monkeypatch):
@@ -224,6 +473,41 @@ def test_enrich_refs_payload_keeps_anchor_grounded_hit_even_when_score_is_low():
     badges = list(ui_meta.get("semantic_badges") or [])
     assert badges
     assert str(badges[0].get("text") or "").strip()
+
+
+def test_sort_refs_hits_prefers_decisive_raw_retrieval_leader_for_general_prompt():
+    prompt = "结构化探测在激光扫描显微中主要解决什么矛盾？与传统ISM或共聚焦的权衡有什么不同？"
+    target = {
+        "text": "Structured detection overcomes the trade-off between optical sectioning and super-resolution.",
+        "meta": {
+            "source_path": r"db\NatPhoton-2025-Structured detection\NatPhoton-2025.en.md",
+            "ref_rank": {"display_score": 26.3, "score": 26.3},
+        },
+        "ui_meta": {
+            "display_name": "NatPhoton-2025-Structured detection.pdf",
+            "summary_line": "Structured detection for laser scanning microscopy.",
+            "score": 5.72,
+            "source_path": r"db\NatPhoton-2025-Structured detection\NatPhoton-2025.en.md",
+        },
+    }
+    loose_ism = {
+        "text": "This ISM microscope enables fluorescence detection.",
+        "meta": {
+            "source_path": r"db\LSA-2026-Interferometric Image Scanning\LSA-2026.en.md",
+            "ref_rank": {"display_score": 21.9, "score": 21.9},
+        },
+        "ui_meta": {
+            "display_name": "LSA-2026-Interferometric Image Scanning.pdf",
+            "summary_line": "An ISM microscope setup.",
+            "score": 6.1,
+            "source_path": r"db\LSA-2026-Interferometric Image Scanning\LSA-2026.en.md",
+        },
+    }
+
+    ordered = reference_ui._sort_refs_hits_for_display(prompt=prompt, hits=[loose_ism, target])
+
+    assert ordered[0] is target
+    assert reference_ui._refs_has_decisive_raw_retrieval_leader(prompt, ordered) is True
 
 
 def test_enrich_refs_payload_prefetches_citation_meta(monkeypatch):
@@ -515,6 +799,203 @@ def test_build_hit_ui_meta_prefers_prompt_aligned_summary_snippet(monkeypatch):
     assert "ADMM" in str(reader_open.get("snippet") or "")
 
 
+def test_chinese_prompt_focus_aliases_select_deep_learning_evidence(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    prompt = (
+        "\u54ea\u4e9b\u6587\u732e\u8ba8\u8bba\u4e86\u5355\u50cf\u7d20\u6210\u50cf\u4e2d\u7684"
+        "\u6df1\u5ea6\u5b66\u4e60\uff1f"
+    )
+    assert "deep learning" in reference_ui._refs_prompt_focus_terms(prompt)
+
+    hit = {
+        "meta": {
+            "source_path": r"db\ILNet\ILNet.en.md",
+            "ref_best_heading_path": "Abstract",
+            "ref_section": "Abstract",
+            "ref_show_snippets": [
+                "The self-supervised image-loop neural network (ILNet) uses deep learning for single-pixel imaging at an ultra-low sampling rate without ground-truth images.",
+            ],
+            "ref_snippets": [
+                "The method addresses low sampling rates and the lack of labeled training data in single-pixel imaging.",
+            ],
+            "ref_rank": {
+                "llm": 78.0,
+                "bm25": 5.1,
+                "deep": 1.4,
+                "term_bonus": 0.4,
+                "semantic_score": 7.7,
+            },
+        }
+    }
+
+    ui_meta = build_hit_ui_meta(
+        hit,
+        prompt=prompt,
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+        allow_exact_locate=False,
+    )
+
+    summary = str(ui_meta.get("summary_line") or "")
+    assert "\u76f8\u5173\u5185\u5bb9\u4f4d\u4e8e" not in summary
+    assert "The relevant discussion appears" not in summary
+    assert "deep learning" in summary
+    assert "low sampling" in summary or "ground-truth" in summary
+
+
+def test_chinese_prompt_focus_aliases_keep_structured_detection_evidence(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    prompt = (
+        "\u7ed3\u6784\u5316\u63a2\u6d4b\u5728\u6fc0\u5149\u626b\u63cf\u663e\u5fae\u4e2d"
+        "\u4e3b\u8981\u89e3\u51b3\u4ec0\u4e48\u77db\u76fe\uff1f"
+        "\u4e0e\u4f20\u7edfISM\u6216\u5171\u805a\u7126\u7684\u6743\u8861\u6709\u4ec0\u4e48\u4e0d\u540c\uff1f"
+    )
+    focus_terms = reference_ui._refs_prompt_focus_terms(prompt)
+    assert "structured detection" in focus_terms
+    assert any("confocal" in term for term in focus_terms)
+
+    hit = {
+        "meta": {
+            "source_path": r"db\NatPhoton-2025\s2ISM.en.md",
+            "ref_best_heading_path": "Experimental validation of s2ISM",
+            "ref_section": "Experimental validation of s2ISM",
+            "ref_show_snippets": [
+                "Structured detection in laser scanning microscopy resolves the trade-off between optical sectioning and signal-to-noise ratio compared with conventional ISM or confocal microscopy.",
+            ],
+            "ref_snippets": [
+                "The s2ISM implementation preserves optical sectioning while improving SNR over standard image scanning microscopy.",
+            ],
+            "ref_rank": {
+                "llm": 82.0,
+                "bm25": 5.7,
+                "deep": 1.8,
+                "term_bonus": 0.7,
+                "semantic_score": 8.4,
+            },
+        }
+    }
+
+    ui_meta = build_hit_ui_meta(
+        hit,
+        prompt=prompt,
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+        allow_exact_locate=False,
+    )
+
+    summary = str(ui_meta.get("summary_line") or "")
+    assert "\u76f8\u5173\u5185\u5bb9\u4f4d\u4e8e" not in summary
+    assert "The relevant discussion appears" not in summary
+    assert "Structured detection" in summary
+    assert "trade-off" in summary or "optical sectioning" in summary
+
+
+def test_chinese_multi_paper_focus_filter_requires_primary_concept():
+    prompt = (
+        "\u54ea\u4e9b\u6587\u732e\u8ba8\u8bba\u4e86\u5355\u50cf\u7d20\u6210\u50cf\u4e2d\u7684"
+        "\u6df1\u5ea6\u5b66\u4e60\uff1f"
+    )
+    deep_learning_hit = {
+        "text": "The paper discusses deep learning for single-pixel imaging.",
+        "meta": {"source_path": r"db\LPR-2025\LPR-2025.en.md"},
+        "ui_meta": {
+            "display_name": "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+            "summary_line": "Deep learning is used to improve single-pixel imaging reconstruction.",
+        },
+    }
+    single_pixel_only_hit = {
+        "text": "A single-pixel camera measures scenes with spatial patterns.",
+        "meta": {"source_path": r"db\NatPhoton-2019\NatPhoton-2019.en.md"},
+        "ui_meta": {
+            "display_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+            "summary_line": "The paper explains how single-pixel cameras work.",
+        },
+    }
+
+    filtered = reference_ui._filter_refs_hits_by_prompt_focus(
+        prompt,
+        [single_pixel_only_hit, deep_learning_hit],
+    )
+
+    assert filtered == [deep_learning_hit]
+
+
+def test_prompt_aligned_summary_can_use_late_focus_sentence(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    prompt = (
+        "\u54ea\u4e9b\u6587\u732e\u8ba8\u8bba\u4e86\u5355\u50cf\u7d20\u6210\u50cf\u4e2d\u7684"
+        "\u6df1\u5ea6\u5b66\u4e60\uff1f"
+    )
+    filler_sentences = [
+        f"The system discussion sentence {idx} describes detector memory, laser power, and holographic alignment."
+        for idx in range(10)
+    ]
+    late_focus_sentence = (
+        "Real-time imaging remains difficult, but this constraint can be alleviated through the assistance of deep learning and compressive sensing."
+    )
+    hit = {
+        "meta": {
+            "source_path": r"db\NatCommun-2021\NatCommun-2021.en.md",
+            "ref_best_heading_path": "ARTICLE / Discussion",
+            "ref_section": "Discussion",
+            "ref_snippets": ["## Discussion\n" + " ".join(filler_sentences + [late_focus_sentence])],
+            "ref_rank": {
+                "llm": 74.0,
+                "bm25": 4.9,
+                "deep": 1.1,
+                "term_bonus": 0.3,
+                "semantic_score": 7.0,
+            },
+        }
+    }
+
+    ui_meta = build_hit_ui_meta(
+        hit,
+        prompt=prompt,
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+        allow_exact_locate=False,
+    )
+
+    summary = str(ui_meta.get("summary_line") or "")
+    assert "deep learning" in summary
+    assert "detector memory" not in summary
+
+
+def test_compare_focus_filter_drops_one_term_tradeoff_noise():
+    prompt = (
+        "\u7ed3\u6784\u5316\u63a2\u6d4b\u5728\u6fc0\u5149\u626b\u63cf\u663e\u5fae\u4e2d"
+        "\u4e3b\u8981\u89e3\u51b3\u4ec0\u4e48\u77db\u76fe\uff1f"
+        "\u4e0e\u4f20\u7edfISM\u6216\u5171\u805a\u7126\u7684\u6743\u8861\u6709\u4ec0\u4e48\u4e0d\u540c\uff1f"
+    )
+    direct_hit = {
+        "text": "Structured detection in laser scanning microscopy overcomes the trade-off between SNR and optical sectioning in confocal microscopy.",
+        "meta": {"source_path": r"db\NatPhoton-2025\s2ISM.en.md"},
+        "ui_meta": {
+            "display_name": "NatPhoton-2025-Structured detection for laser scanning microscopy.pdf",
+            "summary_line": "Structured detection compares ISM and confocal microscopy trade-offs.",
+        },
+    }
+    loose_hit = {
+        "text": "A broad comparison of scanning modalities shows a trade-off with detector dynamic range.",
+        "meta": {"source_path": r"db\NatPhoton-2019\single-pixel.en.md"},
+        "ui_meta": {
+            "display_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+            "summary_line": "The paper mentions a trade-off in scanning modalities.",
+        },
+    }
+
+    filtered = reference_ui._filter_refs_hits_by_prompt_focus(prompt, [loose_hit, direct_hit])
+
+    assert filtered == [direct_hit]
+
+
 def test_build_hit_ui_meta_prefers_anchor_number_aligned_summary(monkeypatch):
     monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
 
@@ -666,7 +1147,7 @@ def test_build_hit_ui_meta_skips_exact_reader_open_resolution_while_pending(monk
     assert list(reader_open.get("visibleAlternatives") or [])
 
 
-def test_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_pack_missing(monkeypatch):
+def _legacy_mojibake_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_pack_missing(monkeypatch):
     monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
 
     hit = {
@@ -701,6 +1182,51 @@ def test_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_pack_missing(
     )
 
     assert "当前仅检索到文献元数据" in str(ui_meta.get("summary_line") or "")
+    assert str(ui_meta.get("why_line") or "").strip()
+
+
+def test_build_hit_ui_meta_falls_back_to_citation_summary_when_ref_pack_missing_utf8_safe(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    hit = {
+        "meta": {
+            "source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "ref_best_heading_path": "3. Method / 3.1. Background on NeRF",
+            "ref_section": "3. Method",
+            "ref_subsection": "3.1. Background on NeRF",
+            "ref_show_snippets": [],
+            "ref_overview_snippets": [],
+            "ref_rank": {
+                "llm": 0.0,
+                "bm25": 4.2,
+                "deep": 0.0,
+                "term_bonus": 0.0,
+                "semantic_score": 0.0,
+            },
+        }
+    }
+
+    ui_meta = build_hit_ui_meta(
+        hit,
+        prompt="\u8fd9\u4e2a\u65b9\u6cd5\u548c\u5f53\u524d\u95ee\u9898\u6709\u4ec0\u4e48\u5173\u7cfb\uff1f",
+        pdf_root=None,
+        lib_store=None,
+        preloaded_citation_meta={
+            r"db\SCINeRF\SCINeRF.en.md": {
+                "title": "SCINeRF",
+                "summary_line": (
+                    "\u5f53\u524d\u4ec5\u68c0\u7d22\u5230\u6587\u732e\u5143\u6570\u636e\uff1a"
+                    "\u8be5\u5de5\u4f5c\u53d1\u8868\u4e8e 2024\u3002"
+                    "\u7531\u4e8e\u7f3a\u5c11\u53ef\u7528\u6458\u8981\u6587\u672c\uff0c"
+                    "\u6682\u65e0\u6cd5\u53ef\u9760\u63d0\u70bc\u5176\u65b9\u6cd5\u7ec6\u8282"
+                    "\u4e0e\u5b9e\u9a8c\u7ed3\u8bba\uff0c\u5efa\u8bae\u901a\u8fc7 DOI "
+                    "\u67e5\u770b\u539f\u6587\u6458\u8981\u4e0e\u6b63\u6587\u3002"
+                ),
+            }
+        },
+    )
+
+    assert "\u5f53\u524d\u4ec5\u68c0\u7d22\u5230\u6587\u732e\u5143\u6570\u636e" in str(ui_meta.get("summary_line") or "")
     assert str(ui_meta.get("why_line") or "").strip()
 
 
@@ -838,7 +1364,7 @@ def test_effective_ui_score_breaks_identical_decimal_tails_with_stable_jitter():
     assert abs(score_a - score_b) <= 0.09
 
 
-def test_enrich_refs_payload_hides_bound_paper_for_paper_guide_mode():
+def test_enrich_refs_payload_keeps_bound_paper_for_paper_guide_evidence_mode():
     refs = {
         21: {
             "prompt": "Explain the bound paper only.",
@@ -874,11 +1400,12 @@ def test_enrich_refs_payload_hides_bound_paper_for_paper_guide_mode():
     )
 
     entry = out.get(21) or {}
-    assert list(entry.get("hits") or []) == []
+    assert len(list(entry.get("hits") or [])) == 1
     guide_filter = entry.get("guide_filter") or {}
-    assert guide_filter.get("hidden_self_source") is True
-    assert int(guide_filter.get("filtered_hit_count") or 0) == 1
+    assert guide_filter.get("hidden_self_source") is False
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 0
     assert str(guide_filter.get("guide_source_name") or "") == "SCINeRF.pdf"
+    assert str(entry.get("display_state") or "") == "ready"
 
 
 def test_enrich_refs_payload_keeps_non_bound_paper_hits_in_paper_guide_mode():
@@ -1489,24 +2016,24 @@ def test_enrich_refs_payload_direct_focus_query_drops_scattered_token_false_posi
     )
 
 
-def test_basis_meta_auto_uses_existing_card_language_even_for_english_prompt(monkeypatch):
+def test_basis_meta_auto_prefers_prompt_language_over_existing_card_language(monkeypatch):
     monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
     monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
 
     why_meta = reference_ui._build_ref_why_basis_meta(
         prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
         why_generation="deterministic_grounded",
-        why_line="这条命中直接比较了 Hadamard 与 Fourier 两种 single-pixel imaging 方案。",
+        why_line="该文比较了 Hadamard 与 Fourier 单像素成像。",
     )
     summary_meta = reference_ui._build_ref_summary_basis_meta(
         prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
         summary_kind="guide",
         summary_generation="deterministic_grounded",
-        summary_line="这篇论文系统比较了 Hadamard single-pixel imaging 和 Fourier single-pixel imaging。",
+        summary_line="该文讨论了 Hadamard single-pixel imaging 与 Fourier single-pixel imaging。",
     )
 
-    assert "focus-term alignment" not in str(why_meta.get("why_basis") or "")
-    assert "matched section evidence" not in str(summary_meta.get("summary_basis") or "")
+    assert "focus-term alignment" in str(why_meta.get("why_basis") or "")
+    assert "matched section evidence" in str(summary_meta.get("summary_basis") or "")
     assert str(why_meta.get("why_basis") or "").strip()
     assert str(summary_meta.get("summary_basis") or "").strip()
 
@@ -1516,7 +2043,7 @@ def test_basis_meta_auto_uses_ui_locale_when_no_card_language_signal(monkeypatch
     monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "zh")
 
     why_meta = reference_ui._build_ref_why_basis_meta(
-        prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
+        prompt="",
         why_generation="deterministic_grounded",
         why_line="This hit directly compares Hadamard and Fourier single-pixel imaging.",
     )
@@ -1885,8 +2412,140 @@ def test_enrich_refs_payload_polishes_top_hit_card_copy_with_llm(monkeypatch):
 
     assert len(hits) == 1
     ui_meta = (hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {}
-    assert "Fourier 单像素成像" in str(ui_meta.get("summary_line") or "")
+    assert "Fourier" in str(ui_meta.get("summary_line") or "")
+    assert "单像素" in str(ui_meta.get("summary_line") or "")
     assert "直接对齐" in str(ui_meta.get("why_line") or "")
+    assert str(ui_meta.get("summary_generation") or "") == "llm_grounded"
+    assert str(ui_meta.get("why_generation") or "") == "llm_grounded"
+
+
+def test_enrich_refs_payload_prefers_llm_grounded_guide_summary_over_english_surface_copy(monkeypatch):
+    refs = {
+        39: {
+            "prompt": "Give me a guide-style summary of what the SCINeRF paper is about.",
+            "hits": [
+                {
+                    "text": (
+                        "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single "
+                        "compressed snapshot can recover the underlying 3D scene representation."
+                    ),
+                    "meta": {
+                        "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_show_snippets": [
+                            "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single compressed snapshot can recover the underlying 3D scene representation.",
+                            "The method models the scene with neural radiance fields and optimizes reconstruction from one coded measurement.",
+                        ],
+                        "ref_rank": {"llm": 85.0, "bm25": 5.2, "deep": 1.6, "term_bonus": 0.4, "semantic_score": 7.9},
+                    },
+                }
+            ],
+        }
+    }
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        source_path = str((((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get("source_path") or "")).strip()
+        return {
+            "display_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "Abstract",
+            "summary_line": (
+                "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single "
+                "compressed snapshot can recover the underlying 3D scene representation."
+            ),
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "The abstract is a useful reading entry for understanding the paper.",
+            "why_generation": "deterministic_grounded",
+            "score": 8.5,
+            "reader_open": {"sourcePath": source_path},
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_prefetch_refs_citation_meta", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
+    monkeypatch.setattr(reference_ui, "_prefer_zh_ref_card_locale", lambda *args: True)
+    monkeypatch.setattr(reference_ui, "_maybe_llm_filter_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
+    monkeypatch.setattr(reference_ui, "_maybe_llm_rerank_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
+    monkeypatch.setattr(
+        reference_ui,
+        "_pick_ref_card_summary_fallback",
+        lambda **kwargs: (
+            "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single "
+            "compressed snapshot can recover the underlying 3D scene representation."
+        ),
+    )
+    monkeypatch.setattr(reference_ui, "_llm_ground_ref_why_line", lambda **kwargs: "")
+    monkeypatch.setattr(
+        reference_ui,
+        "_llm_polish_ref_card_copy_v2",
+        lambda **kwargs: (
+            "SCINeRF treats snapshot compressive imaging as a 3D scene reconstruction problem and solves it with a NeRF-based scene model learned from one coded measurement.",
+            "The abstract is relevant because it states the paper's core task and NeRF-based reconstruction strategy directly.",
+        ),
+    )
+
+    out = enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
+    hits = list((out.get(39) or {}).get("hits") or [])
+
+    assert len(hits) == 1
+    ui_meta = (hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {}
+    assert "NeRF" in str(ui_meta.get("summary_line") or "")
+    assert "core task" in str(ui_meta.get("why_line") or "")
+    assert str(ui_meta.get("summary_generation") or "") == "llm_grounded"
+    assert str(ui_meta.get("why_generation") or "") == "llm_grounded"
+    assert "LLM" in str(ui_meta.get("summary_basis") or "")
+    assert "This paper proposes" not in str(ui_meta.get("summary_line") or "")
+def test_maybe_polish_single_ref_hit_card_strict_mode_uses_llm_output_without_rule_fallback(monkeypatch):
+    hit = {
+        "text": (
+            "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single "
+            "compressed snapshot can recover the underlying 3D scene representation."
+        ),
+        "meta": {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "ref_show_snippets": [
+                (
+                    "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single "
+                    "compressed snapshot can recover the underlying 3D scene representation."
+                )
+            ],
+        },
+    }
+    ui_meta = {
+        "display_name": "CVPR-2024-SCINeRF.pdf",
+        "heading_path": "Abstract",
+        "summary_line": (
+            "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single "
+            "compressed snapshot can recover the underlying 3D scene representation."
+        ),
+        "summary_kind": "guide",
+        "summary_generation": "section_grounded",
+        "why_line": "The abstract is a useful reading entry for understanding the paper.",
+        "why_generation": "deterministic_grounded",
+    }
+
+    monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
+    monkeypatch.setattr(
+        reference_ui,
+        "_llm_polish_ref_card_copy_v2",
+        lambda **kwargs: (
+            "This paper proposes a NeRF-based SCI reconstruction pipeline and shows that a single compressed snapshot can recover the underlying 3D scene representation.",
+            "This hit is directly relevant because it is a good entry point for the user's question.",
+        ),
+    )
+
+    out = reference_ui._maybe_polish_single_ref_hit_card(
+        prompt="Give me a guide-style summary of what the SCINeRF paper is about.",
+        hit=hit,
+        ui_meta=ui_meta,
+        allow_expensive_llm=True,
+    )
+
+    assert str(out.get("summary_line") or "") == str(ui_meta.get("summary_line") or "")
+    assert str(out.get("why_line") or "") == "This hit is directly relevant because it is a good entry point for the user's question."
+    assert str(out.get("summary_generation") or "") == "llm_grounded"
+    assert str(out.get("why_generation") or "") == "llm_grounded"
 
 
 def test_enrich_refs_payload_upgrades_generic_why_line_deterministically_without_llm(monkeypatch):
@@ -1961,7 +2620,9 @@ def test_build_prompt_aligned_ref_why_line_v3_keeps_english_for_strong_english_p
         why_line="",
     )
 
-    assert "This hit directly compares" in str(out or "")
+    assert "compares" in str(out or "")
+    assert "directly relevant" not in str(out or "").lower()
+    assert "good entry point" not in str(out or "").lower()
 
 
 def test_build_hit_ui_meta_prefers_prompt_aligned_why_when_navigation_why_omits_focus_term(monkeypatch):
@@ -2133,10 +2794,175 @@ def test_build_hit_ui_meta_rebinds_summary_heading_to_exact_loc_path(monkeypatch
     assert str(ui.get("subsection_label") or "") == "2.2 Basis patterns generation"
     primary_evidence = ui.get("primary_evidence") or {}
     assert str(primary_evidence.get("heading_path") or "") == "2. Comparison of theory / 2.2 Basis patterns generation"
-    assert str(primary_evidence.get("selection_reason") or "") == "prompt_aligned"
+    assert str(primary_evidence.get("selection_reason") or "") == "prompt_aligned_block"
     reader_open = ui.get("reader_open") or {}
     assert str(reader_open.get("headingPath") or "") == "2. Comparison of theory / 2.2 Basis patterns generation"
     assert (reader_open.get("primaryEvidence") or {}) == primary_evidence
+
+
+def test_build_hit_ui_meta_prefers_authoritative_source_block_for_reader_open(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    prompt = "Which paper in my library most directly defines dynamic supersampling? Please point me to the source section."
+    source_path = (
+        r"db\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling"
+        r"\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md"
+    )
+    authoritative_candidate = {
+        "summary": (
+            "The paper defines dynamic supersampling by explaining that because the pixel geometry of each frame "
+            "in the single-pixel imaging system is defined by the masking patterns applied to the DMD and used to "
+            "measure the image, it is possible to perform digital supersampling."
+        ),
+        "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+        "raw_focus_surface": (
+            "INTRODUCTION / Spatially variant digital supersampling "
+            "If the positions of the pixel boundaries are modified from one frame to the next, then each frame "
+            "samples a different subset of the spatial information in the scene."
+        ),
+        "source_kind": "source_block",
+        "block_id": "blk_dynamic_define",
+        "anchor_id": "a_dynamic_define",
+        "block_kind": "paragraph",
+        "block_number": 0,
+        "block_text": (
+            "If the positions of the pixel boundaries are modified from one frame to the next, then each frame "
+            "samples a different subset of the spatial information in the scene. Consequently, successive frames "
+            "capture complementary spatial information."
+        ),
+    }
+
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_ref_navigation",
+        lambda *args, **kwargs: {"what": "", "summary_line": "", "why": "", "find": []},
+    )
+    monkeypatch.setattr(
+        reference_ui,
+        "_fallback_ref_ui_summary_line",
+        lambda *args, **kwargs: (
+            "dynamic supersampling: Because the pixel geometry of each frame in our single-pixel imaging system "
+            "is defined by the masking patterns applied to the DMD and used to measure the image, it is possible "
+            "to perform digital supersampling."
+        ),
+    )
+    monkeypatch.setattr(reference_ui, "_choose_prompt_aligned_ref_summary_candidate", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        reference_ui,
+        "_choose_prompt_aligned_ref_summary_candidate_from_source_blocks",
+        lambda **kwargs: dict(authoritative_candidate),
+    )
+    monkeypatch.setattr(
+        reference_ui,
+        "_pick_best_prompt_aligned_ref_summary_candidate",
+        lambda candidates, **kwargs: next(
+            (dict(item) for item in candidates if isinstance(item, dict) and item),
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        reference_ui,
+        "_resolve_refs_exact_candidates",
+        lambda **kwargs: [
+            {
+                "headingPath": "INTRODUCTION / Foveated single-pixel imaging",
+                "snippet": "Foveated single-pixel imaging adapts spatial resolution over the field of view.",
+                "highlightSnippet": "Foveated single-pixel imaging adapts spatial resolution over the field of view.",
+                "blockId": "blk_foveated",
+                "anchorId": "a_foveated",
+                "anchorKind": "paragraph",
+            }
+        ],
+    )
+
+    ui = build_hit_ui_meta(
+        {
+            "meta": {
+                "source_path": source_path,
+                "ref_pack_state": "ready",
+                "ref_best_heading_path": "INTRODUCTION / Foveated single-pixel imaging",
+                "ref_section": "INTRODUCTION",
+                "ref_rank": {
+                    "llm": 81.0,
+                    "bm25": 5.2,
+                    "deep": 12.4,
+                    "term_bonus": 1.0,
+                    "semantic_score": 8.0,
+                },
+            }
+        },
+        prompt=prompt,
+        pdf_root=None,
+        lib_store=None,
+        allow_expensive_llm=False,
+    )
+
+    assert str(ui.get("heading_path") or "") == "INTRODUCTION / Spatially variant digital supersampling"
+    assert str(ui.get("summary_line") or "").startswith("The paper defines dynamic supersampling")
+
+    reader_open = dict(ui.get("reader_open") or {})
+    reader_primary = dict(reader_open.get("primaryEvidence") or {})
+    assert str(reader_open.get("blockId") or "") == "blk_dynamic_define"
+    assert str(reader_open.get("headingPath") or "") == "INTRODUCTION / Spatially variant digital supersampling"
+    assert str(reader_primary.get("block_id") or "") == "blk_dynamic_define"
+    assert str(reader_primary.get("heading_path") or "") == "INTRODUCTION / Spatially variant digital supersampling"
+
+    alternatives = list(reader_open.get("alternatives") or [])
+    assert any(str(item.get("blockId") or "") == "blk_foveated" for item in alternatives)
+
+
+def test_build_refs_reader_open_payload_prefers_exact_candidate_related_to_card_heading(monkeypatch):
+    prompt = "Which paper in my library most directly defines dynamic supersampling? Please point me to the source section."
+    source_path = (
+        r"db\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling"
+        r"\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md"
+    )
+
+    monkeypatch.setattr(
+        reference_ui,
+        "_resolve_refs_exact_candidates",
+        lambda **kwargs: [
+            {
+                "headingPath": "INTRODUCTION / Foveated single-pixel imaging",
+                "snippet": "The paper defines dynamic supersampling by explaining that because the pixel geometry of each frame is defined by the masking patterns, it is possible to perform digital supersampling.",
+                "highlightSnippet": "The paper defines dynamic supersampling by explaining that because the pixel geometry of each frame is defined by the masking patterns, it is possible to perform digital supersampling.",
+                "blockId": "blk_foveated",
+                "anchorId": "a_foveated",
+                "anchorKind": "paragraph",
+            },
+            {
+                "headingPath": "INTRODUCTION / Spatially variant digital supersampling",
+                "snippet": "The paper defines dynamic supersampling by explaining that because the pixel geometry of each frame is defined by the masking patterns, it is possible to perform digital supersampling.",
+                "highlightSnippet": "The paper defines dynamic supersampling by explaining that because the pixel geometry of each frame is defined by the masking patterns, it is possible to perform digital supersampling.",
+                "blockId": "blk_dynamic_define",
+                "anchorId": "a_dynamic_define",
+                "anchorKind": "paragraph",
+            },
+        ],
+    )
+
+    out = reference_ui._build_refs_reader_open_payload(
+        meta={"ref_pack_state": "ready"},
+        prompt=prompt,
+        source_path=source_path,
+        display_name="SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+        heading_path="INTRODUCTION / Spatially variant digital supersampling",
+        heading="INTRODUCTION",
+        summary_line=(
+            "The paper defines dynamic supersampling by explaining that because the pixel geometry of each frame "
+            "is defined by the masking patterns, it is possible to perform digital supersampling."
+        ),
+        why_line="",
+        anchor_target_kind="",
+        anchor_target_number=0,
+        allow_llm_disambiguation=False,
+        allow_exact_locate=True,
+    )
+
+    assert out.get("strictLocate") is True
+    assert str(out.get("blockId") or "") == "blk_dynamic_define"
+    assert str(out.get("headingPath") or "") == "INTRODUCTION / Spatially variant digital supersampling"
+    assert str(((out.get("locateTarget") or {}).get("headingPath")) or "") == "INTRODUCTION / Spatially variant digital supersampling"
 
 
 def test_select_primary_ref_evidence_prefers_prompt_aligned_heading_over_fallback_compare_summary(monkeypatch):
@@ -2162,7 +2988,7 @@ def test_select_primary_ref_evidence_prefers_prompt_aligned_heading_over_fallbac
         reference_ui,
         "_choose_prompt_aligned_ref_summary_candidate",
         lambda *args, **kwargs: {
-            "summary": "本节介绍了基模式的生成方法，通过图1对比了哈达玛（Hadamard）与傅里叶（Fourier）基模式的特性差异。",
+            "summary": "本节介绍了基模式的生成方法，并对比了哈达玛（Hadamard）与傅里叶（Fourier）基模式的特性差异。",
             "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
         },
     )
@@ -2688,6 +3514,153 @@ def test_resolve_refs_exact_candidates_prefers_primary_heading_match_when_scores
     assert str(out[0].get("blockId") or "") == "blk_22"
 
 
+def test_resolve_refs_exact_candidates_demotes_title_echo_heading_block(tmp_path, monkeypatch):
+    md_path = tmp_path / "compare_exact_title_echo.en.md"
+    md_path.write_text("# Compare\n", encoding="utf-8")
+
+    blocks = [
+        {
+            "block_id": "blk_bad_title",
+            "anchor_id": "a_bad_title",
+            "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "kind": "heading",
+            "text": "Hadamard single-pixel imaging versus Fourier single-pixel imaging ZIBANG ZHANG OCIS codes",
+        },
+        {
+            "block_id": "blk_bad_caption",
+            "anchor_id": "a_bad_caption",
+            "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "kind": "paragraph",
+            "text": "(A) Numerical simulations comparing Hadamard and Fourier basis patterns.",
+        },
+        {
+            "block_id": "blk_good_compare",
+            "anchor_id": "a_good_compare",
+            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+            "kind": "paragraph",
+            "text": (
+                "Instead of using random patterns, basis-scanning single-pixel imaging techniques use deterministic basis "
+                "patterns for illumination. Figure 1 shows the comparison between the Hadamard and Fourier basis patterns."
+            ),
+        },
+    ]
+
+    def fake_load_source_blocks(_path):
+        return blocks
+
+    def fake_match_source_blocks(_blocks, *, snippet="", heading_path="", **kwargs):
+        del _blocks, snippet, kwargs
+        if "3.1 Numerical simulations" in str(heading_path or ""):
+            return [
+                {"score": 0.96, "block": blocks[0]},
+                {"score": 0.93, "block": blocks[1]},
+                {"score": 0.91, "block": blocks[2]},
+            ]
+        return [
+            {"score": 0.92, "block": blocks[2]},
+            {"score": 0.89, "block": blocks[0]},
+            {"score": 0.87, "block": blocks[1]},
+        ]
+
+    monkeypatch.setattr(reference_ui, "load_source_blocks", fake_load_source_blocks)
+    monkeypatch.setattr(reference_ui, "match_source_blocks", fake_match_source_blocks)
+
+    out = reference_ui._resolve_refs_exact_candidates(
+        prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
+        source_path=str(md_path),
+        display_name="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        anchor_target_kind="",
+        anchor_target_number=0,
+        primary_candidate={
+            "headingPath": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "snippet": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+            "highlightSnippet": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+        },
+        secondary_candidates=[
+            {
+                "headingPath": "2. Comparison of theory / 2.2 Basis patterns generation",
+                "snippet": "Figure 1 shows the comparison between the Hadamard and Fourier basis patterns.",
+                "highlightSnippet": "Figure 1 shows the comparison between the Hadamard and Fourier basis patterns.",
+            }
+        ],
+        allow_llm_disambiguation=False,
+    )
+
+    assert out
+    assert str(out[0].get("blockId") or "") == "blk_good_compare"
+    assert str(out[0].get("headingPath") or "") == "2. Comparison of theory / 2.2 Basis patterns generation"
+    assert "comparison between the Hadamard and Fourier basis patterns" in str(out[0].get("snippet") or "")
+    assert "OCIS codes" not in str(out[0].get("snippet") or "")
+
+
+def test_resolve_refs_exact_candidates_prefers_definition_paragraph_over_caption_fragment(tmp_path, monkeypatch):
+    md_path = tmp_path / "dynamic_exact_caption.en.md"
+    md_path.write_text("# Dynamic\n", encoding="utf-8")
+
+    blocks = [
+        {
+            "block_id": "blk_dynamic_heading",
+            "anchor_id": "a_dynamic_heading",
+            "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+            "kind": "heading",
+            "text": "Spatially variant digital supersampling",
+        },
+        {
+            "block_id": "blk_dynamic_define",
+            "anchor_id": "a_dynamic_define",
+            "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+            "kind": "paragraph",
+            "text": (
+                "If the positions of the pixel boundaries are modified from one frame to the next, then each frame samples "
+                "a different subset of the spatial information in the scene. Consequently, successive frames capture "
+                "complementary spatial information."
+            ),
+        },
+        {
+            "block_id": "blk_dynamic_caption",
+            "anchor_id": "a_dynamic_caption",
+            "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+            "kind": "paragraph",
+            "text": "(A) Four subframes, each with the foveal cells shifted by half a cell in x and/or y with respect to one another.",
+        },
+    ]
+
+    def fake_load_source_blocks(_path):
+        return blocks
+
+    def fake_match_source_blocks(_blocks, *, snippet="", heading_path="", **kwargs):
+        del _blocks, snippet, heading_path, kwargs
+        return [
+            {"score": 0.95, "block": blocks[2]},
+            {"score": 0.92, "block": blocks[1]},
+            {"score": 0.88, "block": blocks[0]},
+        ]
+
+    monkeypatch.setattr(reference_ui, "load_source_blocks", fake_load_source_blocks)
+    monkeypatch.setattr(reference_ui, "match_source_blocks", fake_match_source_blocks)
+
+    out = reference_ui._resolve_refs_exact_candidates(
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        source_path=str(md_path),
+        display_name="SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+        anchor_target_kind="",
+        anchor_target_number=0,
+        primary_candidate={
+            "headingPath": "INTRODUCTION / Spatially variant digital supersampling",
+            "snippet": "dynamic supersampling: Because the pixel geometry of each frame in our single-pixel imaging system is defined by the masking patterns applied to the DMD and used to measure the image, it is possible to perform digital supersampling.",
+            "highlightSnippet": "dynamic supersampling: Because the pixel geometry of each frame in our single-pixel imaging system is defined by the masking patterns applied to the DMD and used to measure the image, it is possible to perform digital supersampling.",
+        },
+        secondary_candidates=[],
+        allow_llm_disambiguation=False,
+    )
+
+    assert out
+    assert str(out[0].get("blockId") or "") == "blk_dynamic_define"
+    assert str(out[0].get("headingPath") or "") == "INTRODUCTION / Spatially variant digital supersampling"
+    assert str(out[0].get("snippet") or "").startswith("If the positions of the pixel boundaries are modified")
+    assert not str(out[0].get("snippet") or "").startswith("(A)")
+
+
 def test_choose_prompt_aligned_ref_summary_prefers_definition_heading_with_explanatory_sentence(monkeypatch):
     monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
 
@@ -2708,6 +3681,33 @@ def test_choose_prompt_aligned_ref_summary_prefers_definition_heading_with_expla
     out_low = str(out or "").lower()
     assert "dynamic supersampling" in out_low
     assert ("pixel boundaries" in out_low) or ("samples a different subset" in out_low)
+
+
+def test_choose_prompt_aligned_ref_summary_rewrites_long_definition_style_snippet(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+
+    meta = {
+        "ref_show_snippets": [
+            (
+                "## Spatially variant digital supersampling\n"
+                "If the positions of the pixel boundaries are modified from one frame to the next, "
+                "then each frame samples a different subset of the spatial information in the scene. "
+                "Consequently, successive frames are capturing not only information about the temporal "
+                "variation of the scene but also additional complementary information about the spatial "
+                "structure of the scene."
+            ),
+        ]
+    }
+
+    out = reference_ui._choose_prompt_aligned_ref_summary(
+        meta,
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        source_path=r"db\SciAdv-2017\SciAdv-2017.en.md",
+        citation_meta={"title": "Adaptive foveated single-pixel imaging with dynamic supersampling"},
+    )
+
+    assert str(out or "").startswith("The paper defines dynamic supersampling")
+    assert "when the positions of the pixel boundaries are modified" in str(out or "")
 
 
 def test_choose_prompt_aligned_ref_summary_candidate_skips_partial_dynamic_match_for_definition_prompt(monkeypatch):
@@ -2752,6 +3752,26 @@ def test_choose_prompt_aligned_ref_summary_prefers_fourier_specific_sentence(mon
     out_low = str(out or "").lower()
     assert "fourier" in out_low
     assert ("hadamard" in out_low) or ("comparison" in out_low)
+
+
+def test_pick_ref_card_summary_fallback_rewrites_long_definition_excerpt():
+    raw = (
+        "## Spatially variant digital supersampling\n"
+        "If the positions of the pixel boundaries are modified from one frame to the next, "
+        "then each frame samples a different subset of the spatial information in the scene. "
+        "Consequently, successive frames are capturing not only information about the temporal "
+        "variation of the scene but also additional complementary information about the spatial "
+        "structure of the scene."
+    )
+
+    out = reference_ui._pick_ref_card_summary_fallback(
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        title="SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+        candidates=[raw],
+    )
+
+    assert str(out or "").startswith("The paper defines dynamic supersampling")
+    assert "Spatially variant digital supersampling:" not in str(out or "")
 
 
 def test_expand_ref_summary_candidates_does_not_prefix_physics_informed_focus_without_informative_hit(monkeypatch):
@@ -2927,6 +3947,7 @@ def test_enrich_refs_payload_bounded_full_skips_heavy_refine_but_keeps_exact_loc
         md_root=None,
         lib_store=None,
         render_variant="bounded_full",
+        allow_expensive_llm_for_ready=False,
     )
 
     hits = list((out.get(101) or {}).get("hits") or [])
@@ -3142,7 +4163,7 @@ def test_enrich_refs_payload_keeps_multiple_hits_for_multi_paper_list_despite_la
     assert debug.get("prompt_explicitly_requests_multi_paper_list") is True
 
 
-def test_build_doc_list_refs_payload_reuses_mature_card_pipeline_for_doc_list_docs(monkeypatch):
+def test_build_doc_list_refs_payload_uses_lightweight_authoritative_seed_when_doc_list_evidence_is_strong(monkeypatch):
     pack = {
         "prompt": "Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
     }
@@ -3152,32 +4173,20 @@ def test_build_doc_list_refs_payload_reuses_mature_card_pipeline_for_doc_list_do
             "source_name": "ICIP-2025-SCIGS.pdf",
             "heading_path": "1. Introduction",
             "summary_line": "The paper introduces Snapshot Compressive Imaging (SCI) in the introduction.",
+            "primary_evidence": {
+                "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+                "source_name": "ICIP-2025-SCIGS.pdf",
+                "heading_path": "1. Introduction",
+                "snippet": "Snapshot Compressive Imaging (SCI) is introduced for recovering dynamic scene information.",
+                "highlight_snippet": "Snapshot Compressive Imaging (SCI) is introduced for recovering dynamic scene information.",
+                "block_id": "blk-scigs-intro",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
         }
     ]
-    calls: dict[str, object] = {}
 
-    def fake_build_hit_ui_meta(hit, **kwargs):
-        del kwargs
-        calls["hit"] = hit
-        return {
-            "display_name": "ICIP-2025-SCIGS.pdf",
-            "heading_path": "1. Introduction",
-            "summary_line": "This paper introduces Snapshot Compressive Imaging for high-speed video recovery.",
-            "summary_kind": "guide",
-            "summary_label": "Guide",
-            "summary_title": "What This Matched Section Covers",
-            "summary_generation": "section_grounded",
-            "summary_basis": "Section-grounded summary",
-            "why_line": "This hit directly discusses Snapshot Compressive Imaging (SCI).",
-            "why_generation": "deterministic_grounded",
-            "why_basis": "Prompt-aligned relevance",
-            "score": 8.9,
-            "score_pending": False,
-            "score_tier": "high",
-            "reader_open": {"sourcePath": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md"},
-        }
-
-    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not call heavy build_hit_ui_meta")))
     monkeypatch.setattr(
         reference_ui,
         "_maybe_polish_single_ref_hit_card",
@@ -3192,10 +4201,10 @@ def test_build_doc_list_refs_payload_reuses_mature_card_pipeline_for_doc_list_do
 
     hit = list(out.get("hits") or [])[0]
     ui = dict(hit.get("ui_meta") or {})
-    assert "hit" in calls
-    assert ui.get("summary_line") == "This paper introduces Snapshot Compressive Imaging for high-speed video recovery."
-    assert ui.get("why_line") == "This hit directly discusses Snapshot Compressive Imaging (SCI)."
-    assert ui.get("summary_generation") == "section_grounded"
+    assert ui.get("heading_path") == "1. Introduction"
+    assert "Snapshot Compressive Imaging" in str(ui.get("summary_line") or "")
+    assert "sci" in str(ui.get("why_line") or "").lower()
+    assert ui.get("summary_generation") in {"section_grounded", "deterministic_grounded"}
     assert ui.get("why_generation") == "deterministic_grounded"
     assert "direct library matches" not in str(ui.get("why_line") or "")
 
@@ -3444,9 +4453,236 @@ def test_build_doc_list_refs_payload_polishes_each_doc_list_hit(monkeypatch):
     hits = [hit for hit in list(out.get("hits") or []) if isinstance(hit, dict)]
     titles = [str(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("display_name") or "").strip() for hit in hits]
     why_lines = [str(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("why_line") or "").strip() for hit in hits]
-    assert polished_titles == titles
+    assert sorted(polished_titles) == sorted(titles)
     assert allow_flags == [False, False, False]
     assert why_lines == [f"polished::{title}" for title in titles]
+
+
+def test_build_doc_list_refs_payload_reuses_llm_pack_copy_without_repolish(monkeypatch):
+    pack = {
+        "prompt": "Which papers in my library mention SCI (Snapshot Compressive Imaging)?",
+    }
+    source_path = r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md"
+    doc_list = [
+        {
+            "source_path": source_path,
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "Abstract",
+            "summary_line": "The work uses Snapshot Compressive Imaging (SCI) as the sensing setup and recovers a 3D scene representation from a single compressed observation.",
+            "summary_generation": "llm_pack",
+            "why_line": "Because the abstract explicitly names Snapshot Compressive Imaging (SCI), it is a direct match for papers that mention SCI.",
+            "why_generation": "llm_pack",
+            "primary_evidence": {
+                "source_path": source_path,
+                "source_name": "CVPR-2024-SCINeRF.pdf",
+                "heading_path": "Abstract",
+                "snippet": "We explore Snapshot Compressive Imaging for recovering the underlying 3D scene representation from a single temporal compressed image.",
+                "highlight_snippet": "We explore Snapshot Compressive Imaging for recovering the underlying 3D scene representation from a single temporal compressed image.",
+                "block_id": "blk-scinerf-abstract",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
+        }
+    ]
+
+    monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
+
+    def fail_force_llm(**kwargs):
+        raise AssertionError(f"unexpected repolish for {kwargs.get('ui_meta')}")
+
+    monkeypatch.setattr(reference_ui, "_force_llm_ground_ref_hit_card_copy", fail_force_llm)
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=2719,
+        pack=pack,
+        doc_list=doc_list,
+        allow_expensive_llm=True,
+        apply_copy_polish=True,
+    )
+
+    hits = [hit for hit in list(out.get("hits") or []) if isinstance(hit, dict)]
+    assert len(hits) == 1
+    ui = dict(hits[0].get("ui_meta") or {})
+    assert ui.get("summary_generation") == "llm_pack"
+    assert ui.get("why_generation") == "llm_pack"
+    assert "Snapshot Compressive Imaging (SCI)" in str(ui.get("summary_line") or "")
+    assert "Snapshot Compressive Imaging (SCI)" in str(ui.get("why_line") or "")
+
+
+def test_maybe_polish_refs_card_copy_parallel_preserves_hit_order(monkeypatch):
+    hits = [
+        {
+            "ui_meta": {
+                "display_name": "Paper A.pdf",
+                "summary_line": "Summary A",
+                "summary_kind": "guide",
+                "why_line": "Why A",
+            }
+        },
+        {
+            "ui_meta": {
+                "display_name": "Paper B.pdf",
+                "summary_line": "Summary B",
+                "summary_kind": "guide",
+                "why_line": "Why B",
+            }
+        },
+        {
+            "ui_meta": {
+                "display_name": "Paper C.pdf",
+                "summary_line": "Summary C",
+                "summary_kind": "guide",
+                "why_line": "Why C",
+            }
+        },
+    ]
+    observed: dict[str, object] = {"submitted": []}
+
+    class FakeFuture:
+        def __init__(self, result):
+            self._result = result
+
+        def result(self):
+            return self._result
+
+    class FakeExecutor:
+        def __init__(self, *, max_workers):
+            observed["max_workers"] = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def submit(self, fn, *args):
+            submitted = observed.get("submitted")
+            if isinstance(submitted, list):
+                submitted.append(args[0])
+            return FakeFuture(fn(*args))
+
+    def fake_polish_single_ref_hit_card(*, prompt, hit, ui_meta, allow_expensive_llm):
+        del prompt, hit, allow_expensive_llm
+        ui = dict(ui_meta or {})
+        ui["why_line"] = f"polished::{ui.get('display_name')}"
+        return ui
+
+    monkeypatch.setenv("KB_REFS_CARD_POLISH_TOP_N", "4")
+    monkeypatch.setenv("KB_REFS_CARD_POLISH_MAX_WORKERS", "3")
+    monkeypatch.setattr(reference_ui, "ThreadPoolExecutor", FakeExecutor)
+    monkeypatch.setattr(reference_ui, "as_completed", lambda futs: list(reversed(list(futs))))
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", fake_polish_single_ref_hit_card)
+
+    out = reference_ui._maybe_polish_refs_card_copy(
+        prompt="Which papers discuss SCI?",
+        hits=hits,
+        guide_mode=False,
+    )
+
+    titles = [str(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("display_name") or "").strip() for hit in out]
+    why_lines = [str(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("why_line") or "").strip() for hit in out]
+    assert observed.get("max_workers") == 3
+    assert observed.get("submitted") == [0, 1, 2]
+    assert titles == ["Paper A.pdf", "Paper B.pdf", "Paper C.pdf"]
+    assert why_lines == [f"polished::{title}" for title in titles]
+
+
+def test_build_doc_list_refs_payload_batches_authoritative_card_polish(monkeypatch):
+    pack = {
+        "prompt": "How does the library evidence around Snapshot Compressive Imaging (SCI) line up?",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "Abstract",
+            "summary_line": "Snapshot Compressive Imaging (SCI) is used for 3D scene recovery.",
+            "primary_evidence": {
+                "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+                "source_name": "CVPR-2024-SCINeRF.pdf",
+                "heading_path": "Abstract",
+                "snippet": "Snapshot Compressive Imaging (SCI) is used for 3D scene recovery.",
+                "highlight_snippet": "Snapshot Compressive Imaging (SCI) is used for 3D scene recovery.",
+                "block_id": "blk-scinerf-abstract",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
+        },
+        {
+            "source_path": r"db\OE-2007\OE-2007.en.md",
+            "source_name": "OE-2007.pdf",
+            "heading_path": "5. Conclusions",
+            "summary_line": "The paper presents single-shot compressive spectral imaging.",
+            "primary_evidence": {
+                "source_path": r"db\OE-2007\OE-2007.en.md",
+                "source_name": "OE-2007.pdf",
+                "heading_path": "5. Conclusions",
+                "snippet": "The paper presents single-shot compressive spectral imaging.",
+                "highlight_snippet": "The paper presents single-shot compressive spectral imaging.",
+                "block_id": "blk-oe-conclusion",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
+        },
+        {
+            "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+            "source_name": "ICIP-2025-SCIGS.pdf",
+            "heading_path": "Abstract",
+            "summary_line": "SCI is framed as a way to capture dynamic scenes efficiently.",
+            "primary_evidence": {
+                "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
+                "source_name": "ICIP-2025-SCIGS.pdf",
+                "heading_path": "Abstract",
+                "snippet": "SCI is framed as a way to capture dynamic scenes efficiently.",
+                "highlight_snippet": "SCI is framed as a way to capture dynamic scenes efficiently.",
+                "block_id": "blk-scigs-abstract",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
+        },
+    ]
+    observed: dict[str, object] = {}
+    fallback_calls: list[str] = []
+
+    def fake_batch_polish(*, prompt, cards_payload, card_count):
+        observed["prompt"] = prompt
+        observed["card_count"] = card_count
+        observed["cards_payload"] = cards_payload
+        return (
+            (1, "The paper uses SCI to recover 3D scenes with a NeRF formulation.", "It explicitly names SCI in the abstract."),
+            (2, "The paper presents single-shot compressive spectral imaging as an SCI-related predecessor.", "It is relevant as an early compressive imaging precursor to SCI."),
+            (3, "The paper frames SCI as an efficient way to capture dynamic scenes before reconstruction.", "It directly discusses SCI in the abstract."),
+        )
+
+    monkeypatch.setattr(reference_ui, "_llm_batch_polish_ref_card_copy_v1", fake_batch_polish)
+
+    def fake_single_polish(**kwargs):
+        ui = dict(kwargs["ui_meta"])
+        title = str(ui.get("display_name") or "")
+        fallback_calls.append(title)
+        ui["summary_line"] = f"Single LLM summary::{title}"
+        ui["summary_generation"] = "llm_grounded"
+        ui["why_line"] = f"Single LLM why::{title}"
+        ui["why_generation"] = "llm_grounded"
+        return ui
+
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", fake_single_polish)
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=4010,
+        pack=pack,
+        doc_list=doc_list,
+        allow_expensive_llm=True,
+        apply_copy_polish=True,
+    )
+
+    hits = [hit for hit in list(out.get("hits") or []) if isinstance(hit, dict)]
+    assert observed.get("card_count") == 3
+    assert "Card 1" in str(observed.get("cards_payload") or "")
+    assert len(hits) == 3
+    assert len(fallback_calls) < 3
+    assert all(str(((hit.get("ui_meta") or {}).get("summary_generation")) or "") == "llm_grounded" for hit in hits)
+    assert all(str(((hit.get("ui_meta") or {}).get("why_generation")) or "") == "llm_grounded" for hit in hits)
 
 
 def test_build_doc_list_refs_payload_keeps_sci_predecessor_why_line_honest_after_polish(monkeypatch):
@@ -3581,6 +4817,72 @@ def test_pick_best_prompt_aligned_ref_summary_candidate_prefers_reader_friendly_
 
     assert str(chosen.get("heading_path") or "") == "1. Introduction"
     assert str(chosen.get("summary") or "").startswith("Video Snapshot Compressive Imaging (SCI) technology has been developed.")
+
+
+def test_pick_best_prompt_aligned_ref_summary_candidate_skips_fragmentary_focus_prefixed_copy():
+    prompt = "Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?"
+    title = "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf"
+    source_path = (
+        r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+        r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+    )
+
+    chosen = reference_ui._pick_best_prompt_aligned_ref_summary_candidate(
+        [
+            {
+                "summary": "Fourier single-pixel imaging: of Fourier coefficients.",
+                "heading_path": "2. Comparison of theory / 2.1 Principle of HSI and FSI",
+                "raw_focus_surface": "2.1 Principle of HSI and FSI of Fourier coefficients.",
+                "source_kind": "source_block",
+            },
+            {
+                "summary": "The paper compares Hadamard and Fourier single-pixel imaging and explains how Fourier coefficients are sampled in the reconstruction process.",
+                "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                "raw_focus_surface": "2.2 Basis patterns generation The paper compares Hadamard and Fourier single-pixel imaging and explains how Fourier coefficients are sampled.",
+                "source_kind": "source_block",
+            },
+        ],
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        anchor_target_kind="",
+        anchor_target_number=0,
+    )
+
+    assert str(chosen.get("heading_path") or "") == "2. Comparison of theory / 2.2 Basis patterns generation"
+    assert "compares Hadamard and Fourier" in str(chosen.get("summary") or "")
+
+
+def test_pick_best_prompt_aligned_ref_summary_candidate_skips_define_style_focus_prefixed_copy():
+    prompt = "Which paper in my library most directly defines dynamic supersampling? Please point me to the source section."
+    title = "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf"
+    source_path = (
+        r"db\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling"
+        r"\SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md"
+    )
+
+    chosen = reference_ui._pick_best_prompt_aligned_ref_summary_candidate(
+        [
+            {
+                "summary": "dynamic supersampling: Because the pixel geometry of each frame in our single-pixel imaging system is defined by the masking patterns applied to the DMD and used to measure the image, it is possible to perform digital supersampling.",
+                "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+                "raw_focus_surface": "INTRODUCTION / Spatially variant digital supersampling dynamic supersampling: Because the pixel geometry of each frame...",
+            },
+            {
+                "summary": "The paper defines dynamic supersampling by shifting the effective pixel boundaries between frames so complementary spatial information can be fused for higher-resolution reconstruction.",
+                "heading_path": "INTRODUCTION / Spatially variant digital supersampling",
+                "raw_focus_surface": "INTRODUCTION / Spatially variant digital supersampling The paper defines dynamic supersampling by shifting the effective pixel boundaries between frames.",
+                "source_kind": "source_block",
+            },
+        ],
+        prompt=prompt,
+        source_path=source_path,
+        title=title,
+        anchor_target_kind="",
+        anchor_target_number=0,
+    )
+
+    assert str(chosen.get("summary") or "").startswith("The paper defines dynamic supersampling")
 
 
 def test_choose_prompt_aligned_ref_summary_candidate_from_source_blocks_skips_title_like_block(monkeypatch):
@@ -3744,6 +5046,151 @@ def test_build_doc_list_refs_payload_filters_bound_source_in_guide_mode(monkeypa
     assert str(out.get("display_state") or "") == "ready"
 
 
+def test_build_doc_list_refs_payload_repairs_title_echo_summary_from_primary_evidence(monkeypatch):
+    pack = {
+        "prompt": "Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+    }
+    doc_list = [
+        {
+            "source_path": (
+                r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+            ),
+            "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "summary_line": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+            "primary_evidence": {
+                "source_path": (
+                    r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+                ),
+                "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+                "snippet": (
+                    "The paper analyzes reconstruction quality, efficiency, and robustness for "
+                    "Hadamard and Fourier single-pixel imaging in numerical simulations."
+                ),
+                "selection_reason": "answer_hit_top",
+            },
+        }
+    ]
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del hit, kwargs
+        return {
+            "display_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "summary_line": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+            "why_line": "placeholder",
+            "score": 8.8,
+            "score_pending": False,
+            "score_tier": "high",
+            "reader_open": {
+                "sourcePath": (
+                    r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+                )
+            },
+            "source_path": (
+                r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+            ),
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", lambda **kwargs: dict(kwargs["ui_meta"]))
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=3003,
+        pack=pack,
+        doc_list=doc_list,
+        guide_mode=True,
+        guide_source_path=r"db\NatPhoton-2019-Principles and prospects for single-pixel imaging\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+        guide_source_name="NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+    )
+
+    hits = list(out.get("hits") or [])
+    assert len(hits) == 1
+    ui = dict((hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {})
+    summary_line = str(ui.get("summary_line") or "")
+    assert "reconstruction quality" in summary_line
+    assert "Hadamard single-pixel imaging versus Fourier single-pixel imaging" != summary_line
+
+
+def test_build_doc_list_refs_payload_replaces_why_like_summary_with_prompt_aligned_fallback(monkeypatch):
+    pack = {
+        "prompt": "Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+    }
+    doc_list = [
+        {
+            "source_path": (
+                r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+            ),
+            "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "summary_line": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+            "primary_evidence": {
+                "source_path": (
+                    r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+                ),
+                "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+                "snippet": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                "selection_reason": "prompt_aligned_block",
+                "strict_locate": True,
+            },
+        }
+    ]
+
+    why_like_summary = (
+        "This hit directly covers 'Fourier single-pixel imaging' in "
+        "'3. Comparison of experiment / 3.1 Numerical simulations', so it is a good entry point."
+    )
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del hit, kwargs
+        return {
+            "display_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+            "summary_line": why_like_summary,
+            "why_line": why_like_summary,
+            "score": 8.8,
+            "score_pending": False,
+            "score_tier": "high",
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "reader_open": {
+                "sourcePath": (
+                    r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                    r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+                )
+            },
+            "source_path": (
+                r"db\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging"
+                r"\OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.en.md"
+            ),
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", lambda **kwargs: dict(kwargs["ui_meta"]))
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=3004,
+        pack=pack,
+        doc_list=doc_list,
+        guide_mode=True,
+        guide_source_path=r"db\NatPhoton-2019-Principles and prospects for single-pixel imaging\NatPhoton-2019-Principles and prospects for single-pixel imaging.en.md",
+        guide_source_name="NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+    )
+
+    hits = list(out.get("hits") or [])
+    assert len(hits) == 1
+    ui = dict((hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {})
+    summary_line = str(ui.get("summary_line") or "")
+    assert "good entry point" not in summary_line.lower()
+    assert ("The paper discusses" in summary_line) or ("讨论了" in summary_line)
+
+
 def test_build_doc_list_refs_payload_hides_self_only_guide_doc_list(monkeypatch):
     pack = {
         "prompt": "Besides this paper, what other papers in my library discuss ADMM?",
@@ -3779,6 +5226,43 @@ def test_build_doc_list_refs_payload_hides_self_only_guide_doc_list(monkeypatch)
     assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 1
     assert str(out.get("display_state") or "") == "hidden_by_guide"
     assert str(out.get("suppression_reason") or "") == "guide_self_source_only"
+
+
+def test_build_doc_list_refs_payload_keeps_bound_source_for_guide_location(monkeypatch):
+    pack = {
+        "prompt": "Summarize Figure 1 in this paper and point me to the source section.",
+    }
+    doc_list = [
+        {
+            "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+            "source_name": "CVPR-2024-SCINeRF.pdf",
+            "heading_path": "3. Method",
+            "summary_line": "Figure 1 explains the SCINeRF pipeline.",
+        }
+    ]
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_maybe_polish_single_ref_hit_card", lambda **kwargs: dict(kwargs["ui_meta"]))
+
+    out = reference_ui.build_doc_list_refs_payload(
+        user_msg_id=3004,
+        pack=pack,
+        doc_list=doc_list,
+        guide_mode=True,
+        guide_source_path=r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
+        guide_source_name="CVPR-2024-SCINeRF.pdf",
+    )
+
+    assert len(list(out.get("hits") or [])) == 1
+    guide_filter = dict(out.get("guide_filter") or {})
+    assert guide_filter.get("active") is True
+    assert guide_filter.get("hidden_self_source") is False
+    assert int(guide_filter.get("filtered_hit_count") or 0) == 0
+    pipeline_debug = dict(out.get("pipeline_debug") or {})
+    assert int(pipeline_debug.get("raw_hit_count") or 0) == 1
+    assert int(pipeline_debug.get("filtered_self_hit_count") or 0) == 0
+    assert str(out.get("display_state") or "") == "ready"
+    assert str(out.get("suppression_reason") or "") == ""
 
 
 def test_build_doc_list_refs_payload_marks_empty_authoritative_guide_doc_list():
@@ -3869,6 +5353,59 @@ def test_summary_line_needs_polish_for_surface_like_caption_and_raw_heading():
         prompt=prompt,
         title=title,
         summary_line="## Spatially variant digital supersampling If the positions of the pixel boundaries are modified from one frame to the next, then each frame samples a different subset of the spatial information in the scene.",
+    )
+
+
+def test_summary_line_needs_polish_for_fragmentary_focus_prefixed_clause():
+    assert reference_ui._summary_line_needs_polish(
+        prompt="Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+        title="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        summary_line="Fourier single-pixel imaging: of Fourier coefficients.",
+    )
+
+
+def test_summary_line_needs_polish_for_compare_style_focus_prefixed_copy():
+    assert reference_ui._summary_line_needs_polish(
+        prompt="Which paper in my library directly compares Hadamard single-pixel imaging and Fourier single-pixel imaging?",
+        title="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        summary_line="Hadamard single-pixel imaging and Fourier single-pixel imaging: Figure 1 shows the comparison between the Hadamard and Fourier basis patterns.",
+    )
+
+
+def test_summary_line_needs_polish_for_define_style_focus_prefixed_copy():
+    assert reference_ui._summary_line_needs_polish(
+        prompt="Which paper in my library most directly defines dynamic supersampling? Please point me to the source section.",
+        title="SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+        summary_line="dynamic supersampling: Because the pixel geometry of each frame in our single-pixel imaging system is defined by the masking patterns applied to the DMD and used to measure the image, it is possible to perform digital supersampling.",
+    )
+
+
+def test_summary_line_allows_complete_lowercase_technical_sentence():
+    assert not reference_ui._summary_line_needs_polish(
+        prompt="Which papers in my library mention single-photon imaging?",
+        title="Frontiers-2024-Emerging single-photon detection technique for high-performance photodetector.pdf",
+        summary_line=(
+            "single-photon imaging can reconstruct object images from photon timing signals in the optical imaging section."
+        ),
+    )
+
+
+def test_summary_line_needs_polish_for_why_like_copy():
+    assert reference_ui._summary_line_needs_polish(
+        prompt="Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+        title="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        summary_line=(
+            "This hit directly covers 'Fourier single-pixel imaging' in "
+            "'3. Comparison of experiment / 3.1 Numerical simulations', so it is a good entry point."
+        ),
+    )
+
+
+def test_summary_line_needs_polish_for_missing_subject_template_tail():
+    assert reference_ui._summary_line_needs_polish(
+        prompt="Besides this paper, what other papers in my library discuss Fourier single-pixel imaging?",
+        title="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        summary_line="Comparison of experiment / 3.1 Numerical simulations”讨论了“Fourier single-pixel imaging”。",
     )
 
 
@@ -3984,17 +5521,38 @@ def test_build_ref_summary_surface_meta_uses_guide_label_for_non_abstract_cards(
         summary_kind="guide",
     )
     assert out["summary_label"] == "导读"
-    assert "命中章节" in out["summary_title"]
+    assert out["summary_title"] == "这条证据说明什么"
 
 
-def test_build_ref_summary_surface_meta_auto_uses_summary_language(monkeypatch):
+def test_build_ref_summary_surface_meta_auto_prefers_prompt_language(monkeypatch):
     monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
     out = reference_ui._build_ref_summary_surface_meta(
         prompt="Which paper in my library discusses dynamic supersampling?",
         summary_kind="guide",
         summary_line="该研究提出了一种空间可变的数字超采样方法。",
     )
-    assert out["summary_label"] == "导读"
+    assert out["summary_label"] == "Guide"
+
+
+def test_align_ref_card_copy_to_user_locale_prefers_chinese_prompt(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "auto")
+    monkeypatch.setattr(reference_ui, "_refs_card_ui_locale_pref", lambda: "")
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: f"中文概括：{text}")
+
+    summary_line, why_line = reference_ui._align_ref_card_copy_to_user_locale(
+        prompt="哪篇文章最直接定义了 dynamic supersampling？",
+        display_name="SciAdv-2017.pdf",
+        heading_path="INTRODUCTION / Spatially variant digital supersampling",
+        summary_line="The paper defines dynamic supersampling by shifting the effective pixel boundaries between frames.",
+        why_line="This hit directly defines dynamic supersampling in this section.",
+        summary_kind="guide",
+        allow_llm_translate=True,
+    )
+
+    assert "中文概括" in str(summary_line or "")
+    assert reference_ui._has_cjk_text(str(summary_line or ""))
+    assert reference_ui._has_cjk_text(str(why_line or ""))
 
 
 def test_metadata_summary_line_for_ref_card_explains_missing_abstract(monkeypatch):
@@ -4015,7 +5573,7 @@ def test_metadata_summary_line_for_ref_card_explains_missing_abstract(monkeypatc
 def test_build_ref_summary_basis_meta_describes_llm_abstract(monkeypatch):
     monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "zh")
     out = reference_ui._build_ref_summary_basis_meta(
-        prompt="请总结这篇论文。",
+        prompt="请总结这篇论文？",
         summary_kind="abstract",
         summary_generation="llm_abstract",
         summary_line="该研究提出了一种新的成像方法。",
@@ -4025,7 +5583,7 @@ def test_build_ref_summary_basis_meta_describes_llm_abstract(monkeypatch):
     assert "abstract" in str(out["summary_basis"] or "")
 
 
-def test_build_ref_why_basis_meta_describes_llm_grounded_reason(monkeypatch):
+def _legacy_mojibake_build_ref_why_basis_meta_describes_llm_grounded_reason(monkeypatch):
     monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "zh")
     out = reference_ui._build_ref_why_basis_meta(
         prompt="为什么这篇文献和我的问题相关？",
@@ -4035,6 +5593,18 @@ def test_build_ref_why_basis_meta_describes_llm_grounded_reason(monkeypatch):
     assert out["why_generation"] == "llm_grounded"
     assert "LLM" in str(out["why_basis"] or "")
     assert "相关性说明" in str(out["why_basis"] or "")
+
+
+def test_build_ref_why_basis_meta_describes_llm_grounded_reason_utf8_safe(monkeypatch):
+    monkeypatch.setattr(reference_ui, "_refs_card_locale_pref", lambda: "zh")
+    out = reference_ui._build_ref_why_basis_meta(
+        prompt="\u4e3a\u4ec0\u4e48\u8fd9\u7bc7\u6587\u732e\u548c\u6211\u7684\u95ee\u9898\u76f8\u5173\uff1f",
+        why_generation="llm_grounded",
+        why_line="\u8fd9\u6761\u547d\u4e2d\u76f4\u63a5\u89e3\u91ca\u4e86 dynamic supersampling \u7684\u5b9a\u4e49\u548c\u7528\u9014\u3002",
+    )
+    assert out["why_generation"] == "llm_grounded"
+    assert "LLM" in str(out["why_basis"] or "")
+    assert "\u76f8\u5173\u6027\u8bf4\u660e" in str(out["why_basis"] or "")
 
 
 def test_finalize_abstract_summary_line_prefers_llm_summary(monkeypatch):
@@ -4100,10 +5670,14 @@ def test_enrich_refs_payload_uses_grounded_llm_for_why_basis_when_hits_are_ready
         }
     }
     monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
+    monkeypatch.setattr(reference_ui, "_maybe_llm_filter_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
     monkeypatch.setattr(
         reference_ui,
-        "_llm_ground_ref_why_line",
-        lambda **kwargs: "This hit is directly relevant because the section explicitly defines dynamic supersampling rather than merely citing it.",
+        "_llm_polish_ref_card_copy_v2",
+        lambda **kwargs: (
+            "The section defines dynamic supersampling as shifting pixel boundaries across frames to accumulate complementary spatial samples.",
+            "This section is relevant because it explains the definition of dynamic supersampling itself rather than mentioning it in passing.",
+        ),
     )
     monkeypatch.setattr(reference_ui, "_maybe_llm_rerank_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
 
@@ -4112,6 +5686,54 @@ def test_enrich_refs_payload_uses_grounded_llm_for_why_basis_when_hits_are_ready
 
     assert len(hits) == 1
     ui_meta = (hits[0].get("ui_meta") if isinstance(hits[0].get("ui_meta"), dict) else {}) or {}
-    assert "explicitly defines dynamic supersampling" in str(ui_meta.get("why_line") or "")
+    assert "definition of dynamic supersampling" in str(ui_meta.get("why_line") or "")
     assert str(ui_meta.get("why_generation") or "") == "llm_grounded"
     assert "LLM" in str(ui_meta.get("why_basis") or "")
+
+
+def test_enrich_refs_payload_skips_llm_filter_for_single_ready_hit(monkeypatch):
+    refs = {
+        44: {
+            "prompt": "Which paper in my library most directly defines dynamic supersampling?",
+            "hits": [
+                {
+                    "text": "Spatially variant digital supersampling shifts pixel boundaries frame by frame to capture complementary spatial samples.",
+                    "meta": {
+                        "source_path": r"db\\SciAdv-2017\\SciAdv-2017.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {"llm": 83.5, "bm25": 4.9, "deep": 1.3, "term_bonus": 0.2, "semantic_score": 7.7},
+                    },
+                }
+            ],
+        }
+    }
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        source_path = str((((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get("source_path") or "")).strip()
+        return {
+            "display_name": "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+            "heading_path": "3. Spatially variant digital supersampling",
+            "summary_line": "The section defines dynamic supersampling through frame-varying pixel boundaries.",
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "This section explains the definition of dynamic supersampling.",
+            "why_generation": "deterministic_grounded",
+            "score": 8.5,
+            "reader_open": {"sourcePath": source_path},
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_prefetch_refs_citation_meta", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
+    monkeypatch.setattr(
+        reference_ui,
+        "_maybe_llm_filter_refs_hits",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("single ready hit should not call llm filter")),
+    )
+    monkeypatch.setattr(reference_ui, "_maybe_polish_refs_card_copy", lambda **kwargs: list(kwargs.get("hits") or []))
+
+    out = reference_ui.enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
+    hits = list((out.get(44) or {}).get("hits") or [])
+
+    assert len(hits) == 1

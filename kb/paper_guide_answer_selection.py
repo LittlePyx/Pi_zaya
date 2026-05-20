@@ -384,6 +384,7 @@ def _select_paper_guide_answer_hits(
         src = str(meta.get("source_path") or "").strip()
         focus = str(meta.get("top_heading") or meta.get("heading_path") or "").strip()
         block_id = str(meta.get("block_id") or "").strip()
+        is_targeted_block = bool(meta.get("paper_guide_targeted_block"))
         focus_norm = normalize_match_text(focus)
         if has_target_ranked and (not _matches_effective_target(hit)):
             continue
@@ -391,7 +392,7 @@ def _select_paper_guide_answer_hits(
             continue
         if _looks_like_title_only_hit(hit) and out:
             continue
-        out_key = (src, block_id or focus_norm) if target_filtered else (src, focus_norm)
+        out_key = (src, block_id or focus_norm) if (target_filtered or is_targeted_block) else (src, focus_norm)
         if out_key in seen_out:
             continue
         seen_out.add(out_key)

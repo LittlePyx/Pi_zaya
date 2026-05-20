@@ -11,6 +11,16 @@ interface ReaderCandidateOption {
   targetIndex: number
   label: string
   distinctKey: string
+  roleLabel?: string
+  roleTone?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
+}
+
+interface ReaderMetaBadge {
+  key: string
+  label: string
+  title?: string
+  tone?: 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
+  testId?: string
 }
 
 interface ReaderSelectionBubbleState {
@@ -23,8 +33,11 @@ interface ReaderSelectionBubbleState {
 interface PaperGuideReaderPanelProps {
   metaLocationText: string
   activeHeadingPath: string
+  locateBadges: ReaderMetaBadge[]
   statusTextCompact: string
   statusTextFull: string
+  decisionText: string
+  decisionTitle?: string
   selectionText: string
   hasOutline: boolean
   outlineOpen: boolean
@@ -71,8 +84,11 @@ interface PaperGuideReaderPanelProps {
 export function PaperGuideReaderPanel({
   metaLocationText,
   activeHeadingPath,
+  locateBadges,
   statusTextCompact,
   statusTextFull,
+  decisionText,
+  decisionTitle,
   selectionText,
   hasOutline,
   outlineOpen,
@@ -126,7 +142,7 @@ export function PaperGuideReaderPanel({
         >
           {metaLocationText}
         </div>
-        {hasOutline || statusTextCompact || selectionText || hasDistinctAlternatives ? (
+        {hasOutline || locateBadges.length > 0 || statusTextCompact || selectionText || hasDistinctAlternatives ? (
           <div className="kb-reader-meta-side">
             {hasOutline ? (
               <button
@@ -160,8 +176,22 @@ export function PaperGuideReaderPanel({
                 onGoNext={onGoNextEvidence}
               />
             ) : null}
+            {locateBadges.map((badge) => (
+              <span
+                key={badge.key}
+                className={`kb-reader-meta-pill is-${badge.tone || 'neutral'}`}
+                title={badge.title || badge.label}
+                data-testid={badge.testId}
+              >
+                {badge.label}
+              </span>
+            ))}
             {statusTextCompact ? (
-              <span className="kb-reader-meta-pill" title={statusTextFull} data-testid="reader-locate-status">
+              <span
+                className="kb-reader-meta-pill"
+                title={statusTextFull}
+                data-testid="reader-locate-status"
+              >
                 {statusTextCompact}
               </span>
             ) : null}
@@ -197,10 +227,24 @@ export function PaperGuideReaderPanel({
                   data-testid={`reader-candidate-chip-${option.displayIndex}`}
                 >
                   <span className="kb-reader-candidate-index">{option.displayIndex + 1}</span>
+                  {option.roleLabel ? (
+                    <span className={`kb-reader-candidate-role is-${option.roleTone || 'neutral'}`}>
+                      {option.roleLabel}
+                    </span>
+                  ) : null}
                   <span className="kb-reader-candidate-label">{option.label}</span>
                 </button>
               )
             })}
+          </div>
+        ) : null}
+        {decisionText ? (
+          <div
+            className="kb-reader-locate-note"
+            title={decisionTitle || decisionText}
+            data-testid="reader-locate-decision"
+          >
+            {decisionText}
           </div>
         ) : null}
       </div>

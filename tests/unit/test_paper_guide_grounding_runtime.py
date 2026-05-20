@@ -15,6 +15,10 @@ from kb.paper_guide.grounder import (
     _resolve_paper_guide_support_markers,
     _resolve_paper_guide_support_ref_num,
 )
+from kb.paper_guide_grounding_runtime import (
+    _paper_guide_support_focus_tokens,
+    _score_paper_guide_evidence_atom,
+)
 
 
 def test_extract_inline_reference_specs_supports_brackets_and_superscripts():
@@ -61,6 +65,115 @@ def test_paper_guide_support_claim_type_does_not_force_prior_work_for_overview_w
 
     assert claim_type == "own_result"
     assert _paper_guide_support_cite_policy(claim_type=claim_type, prompt_family="overview") == "locate_only"
+
+
+def test_paper_guide_support_claim_type_does_not_force_prior_work_for_strength_limits_refs():
+    claim_type = _paper_guide_support_claim_type(
+        prompt_family="strength_limits",
+        heading="Acquisition and image reconstruction strategies",
+        snippet="A subset strategy may use prior information [16], while optimization algorithms may use the l1-norm [60,61] or total variation [62], but reconstruction time can exceed acquisition time.",
+        candidate_refs=[16, 60, 61, 62],
+        ref_spans=[{"text": "prior information [16]", "nums": [16], "scope": "same_sentence"}],
+    )
+
+    assert claim_type == "own_result"
+    assert _paper_guide_support_cite_policy(claim_type=claim_type, prompt_family="strength_limits") == "locate_only"
+
+
+def test_score_paper_guide_evidence_atom_prefers_sentence_over_ref_span_for_own_result():
+    probe = "计算开销仍不可忽略（“computational overhead is not negligible”）；"
+    sentence_score, _ = _score_paper_guide_evidence_atom(
+        {
+            "atom_kind": "sentence",
+            "text": "Still, the computational overhead is not negligible, and there is a hotbed of alternative minimization strategies.",
+            "heading_path": "Understanding compressed sensing",
+            "inline_refs": [],
+        },
+        probe=probe,
+        heading="Understanding compressed sensing",
+        prompt_family="strength_limits",
+        claim_type="own_result",
+    )
+    ref_score, _ = _score_paper_guide_evidence_atom(
+        {
+            "atom_kind": "ref_span",
+            "text": "hence depth [26,27,29,49]",
+            "heading_path": "Applications and future potential / Figure 5",
+            "inline_refs": [26, 27, 29, 49],
+        },
+        probe=probe,
+        heading="Understanding compressed sensing",
+        prompt_family="strength_limits",
+        claim_type="own_result",
+    )
+
+    assert sentence_score > ref_score
+
+
+def test_score_paper_guide_evidence_atom_prefers_exact_quality_tradeoff_sentence():
+    probe = "优点：在显著欠采样下仍能获得最高图像质量和高帧率视频；适合压缩数据的离线后处理。"
+    query_tokens = _paper_guide_support_focus_tokens(probe)
+    exact_score, _ = _score_paper_guide_evidence_atom(
+        {
+            "atom_kind": "sentence",
+            "text": "Nonetheless, for applications that permit post-processing offline, this strategy typically yields highest image quality and highest frame-rate video from significantly compressed data.",
+            "heading_path": "Understanding compressed sensing",
+            "inline_refs": [],
+        },
+        probe=probe,
+        heading="Understanding compressed sensing",
+        prompt_family="strength_limits",
+        claim_type="own_result",
+        query_tokens=query_tokens,
+    )
+    generic_score, _ = _score_paper_guide_evidence_atom(
+        {
+            "atom_kind": "sentence",
+            "text": "When used to recover an image from data where M=N, one can invert the measurement matrix and recover the image.",
+            "heading_path": "Single-pixel imaging overview",
+            "inline_refs": [],
+        },
+        probe=probe,
+        heading="Understanding compressed sensing",
+        prompt_family="strength_limits",
+        claim_type="own_result",
+        query_tokens=query_tokens,
+    )
+
+    assert exact_score > generic_score
+
+
+def test_score_paper_guide_evidence_atom_prefers_fast_low_resolution_sentence():
+    probe = "适用场景：低/中分辨率成像、需快速反馈的应用（如视频流、动态目标跟踪）。"
+    query_tokens = _paper_guide_support_focus_tokens(probe)
+    fast_score, _ = _score_paper_guide_evidence_atom(
+        {
+            "atom_kind": "sentence",
+            "text": "In general, a sub-sampled basis is most appropriate to applications that require low to moderate image resolutions as well as faster, or even real-time, image reconstruction.",
+            "heading_path": "Acquisition and image reconstruction strategies",
+            "inline_refs": [],
+        },
+        probe=probe,
+        heading="Acquisition and image reconstruction strategies",
+        prompt_family="strength_limits",
+        claim_type="own_result",
+        query_tokens=query_tokens,
+    )
+    offline_score, _ = _score_paper_guide_evidence_atom(
+        {
+            "atom_kind": "sentence",
+            "text": "Nonetheless, for applications that permit post-processing offline, this strategy typically yields highest image quality and highest frame-rate video from significantly compressed data.",
+            "heading_path": "Acquisition and image reconstruction strategies",
+            "inline_refs": [],
+        },
+        probe=probe,
+        heading="Acquisition and image reconstruction strategies",
+        prompt_family="strength_limits",
+        claim_type="own_result",
+        query_tokens=query_tokens,
+    )
+
+    assert fast_score > offline_score
 
 
 def test_build_paper_guide_support_slots_assigns_unique_markers_and_block_renders(tmp_path: Path):
@@ -225,6 +338,50 @@ def test_resolve_paper_guide_support_markers_rewrites_to_structured_cite():
     assert "[[CITE:s1:34]]" in answer
     assert len(resolutions) == 1
     assert resolutions[0]["resolved_ref_num"] == 34
+
+
+def test_resolve_paper_guide_support_markers_drops_broad_summary_markers():
+    answer, resolutions = _resolve_paper_guide_support_markers(
+        "文中明确提到了两类主流重建策略，其优缺点与适用场景如下：[[SUPPORT:DOC-1]][[SUPPORT:DOC-2]]",
+        support_slots=[
+            {
+                "doc_idx": 1,
+                "support_id": "DOC-1",
+                "support_example": "[[SUPPORT:DOC-1]]",
+                "sid": "s1",
+                "source_path": r"db\demo\paper.en.md",
+                "heading": "Applications",
+                "heading_path": "Applications",
+                "snippet": "Single-pixel cameras have also been demonstrated at terahertz frequencies.",
+                "locate_anchor": "Single-pixel cameras have also been demonstrated at terahertz frequencies.",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "candidate_refs": [],
+                "ref_spans": [],
+            },
+            {
+                "doc_idx": 2,
+                "support_id": "DOC-2",
+                "support_example": "[[SUPPORT:DOC-2]]",
+                "sid": "s1",
+                "source_path": r"db\demo\paper.en.md",
+                "heading": "Randomness",
+                "heading_path": "Randomness",
+                "snippet": "Random number sequences are central to cryptography.",
+                "locate_anchor": "Random number sequences are central to cryptography.",
+                "claim_type": "own_result",
+                "cite_policy": "locate_only",
+                "candidate_refs": [],
+                "ref_spans": [],
+            },
+        ],
+        prompt_family="strength_limits",
+        db_dir=None,
+    )
+
+    assert "[[SUPPORT:" not in answer
+    assert "两类主流重建策略" in answer
+    assert resolutions == []
 
 
 def test_inject_paper_guide_support_markers_skips_nested_figure_color_bullets():

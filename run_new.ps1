@@ -67,6 +67,23 @@ if (!(Test-Path $webDir)) {
 }
 Set-Location $here
 
+$envPath = Join-Path $here ".env"
+if (Test-Path $envPath) {
+  Write-Info "Loading environment from .env ..."
+  Get-Content $envPath | ForEach-Object {
+    $line = $_.Trim()
+    if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith("#") -or ($line -notmatch "=")) {
+      return
+    }
+    $parts = $line.Split("=", 2)
+    $name = $parts[0].Trim()
+    $value = $parts[1].Trim().Trim('"').Trim("'")
+    if (-not [string]::IsNullOrWhiteSpace($name)) {
+      [Environment]::SetEnvironmentVariable($name, $value, "Process")
+    }
+  }
+}
+
 $venvPython = Join-Path $here ".venv\Scripts\python.exe"
 if (Test-Path $venvPython) {
   $pythonExe = $venvPython

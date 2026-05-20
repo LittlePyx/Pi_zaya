@@ -101,6 +101,44 @@ def test_select_paper_guide_answer_hits_prefers_target_paragraph_over_heading_on
     assert str((out[0].get("meta") or {}).get("block_id") or "") == "blk_para"
 
 
+def test_select_paper_guide_answer_hits_keeps_multiple_targeted_blocks_in_same_heading():
+    src = r"db\demo\nat.en.md"
+    hits = [
+        {
+            "score": 99.0,
+            "text": "Optimization algorithms may minimize the l1 norm or total variation; reconstruction time can exceed acquisition time.",
+            "meta": {
+                "source_path": src,
+                "heading_path": "Abstract / Acquisition and image reconstruction strategies",
+                "block_id": "blk_optimization",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 86.0,
+            "text": "Hadamard, Fourier or wavelet basis patterns can be reconstructed with a computationally fast transform.",
+            "meta": {
+                "source_path": src,
+                "heading_path": "Abstract / Acquisition and image reconstruction strategies",
+                "block_id": "blk_fast_basis",
+                "paper_guide_targeted_block": True,
+            },
+        },
+    ]
+
+    out = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=hits,
+        prompt="文中提到的几类主流重建方法分别有什么优缺点，适用场景怎么选？",
+        top_n=3,
+    )
+
+    assert [str((hit.get("meta") or {}).get("block_id") or "") for hit in out] == [
+        "blk_optimization",
+        "blk_fast_basis",
+    ]
+
+
 def test_select_paper_guide_answer_hits_prefers_intext_attribution_over_reference_list():
     src = r"db\demo\paper.en.md"
     hits = [
