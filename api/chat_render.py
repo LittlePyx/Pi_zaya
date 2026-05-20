@@ -7,6 +7,17 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
+from api.message_render_contract import (
+    build_render_cache_payload as _contract_build_render_cache_payload,
+    content_has_linkable_answer_citations as _contract_content_has_linkable_answer_citations,
+    count_linkable_source_hits as _contract_count_linkable_source_hits,
+    iter_numeric_citation_numbers as _contract_iter_numeric_citation_numbers,
+    normalize_render_cache_payload,
+    project_render_packet_to_record,
+    render_payload_has_citation_links,
+    render_payload_is_degraded_for_citations,
+    strip_legacy_render_fields,
+)
 from kb import task_runtime
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
@@ -521,59 +532,23 @@ def _build_message_render_cache_key(
 
 
 def _iter_numeric_citation_numbers(text: str) -> list[int]:
-    nums: list[int] = []
-    for m in _VISIBLE_NUMERIC_CITE_RE.finditer(str(text or "")):
-        for raw in re.findall(r"\d{1,4}", str(m.group(0) or "")):
-            try:
-                n = int(raw)
-            except Exception:
-                continue
-            if n > 0:
-                nums.append(n)
-    return nums
+    return _contract_iter_numeric_citation_numbers(text)
 
 
 def _count_linkable_source_hits(hits: list[dict] | None) -> int:
-    count = 0
-    for h in list(hits or []):
-        if not isinstance(h, dict):
-            continue
-        meta = h.get("meta") if isinstance(h.get("meta"), dict) else {}
-        if str(meta.get("source_path") or "").strip():
-            count += 1
-    return count
+    return _contract_count_linkable_source_hits(hits)
 
 
 def _content_has_linkable_answer_citations(content: str, hits: list[dict] | None) -> bool:
-    raw = str(content or "")
-    if not raw or "[" not in raw:
-        return False
-    hit_count = _count_linkable_source_hits(hits)
-    if hit_count <= 0:
-        return False
-    return any(1 <= int(n) <= hit_count for n in _iter_numeric_citation_numbers(raw))
+    return _contract_content_has_linkable_answer_citations(content, hits)
 
 
 def _cache_has_rendered_citation_links(cache: dict) -> bool:
-    cite_details = cache.get("cite_details")
-    if isinstance(cite_details, list) and any(isinstance(item, dict) for item in cite_details):
-        return True
-    render_packet = cache.get("render_packet") if isinstance(cache.get("render_packet"), dict) else {}
-    packet_cites = render_packet.get("cite_details") if isinstance(render_packet, dict) else None
-    if isinstance(packet_cites, list) and any(isinstance(item, dict) for item in packet_cites):
-        return True
-    for key in ("rendered_content", "rendered_body", "copy_markdown"):
-        if "#kb-cite-" in str(cache.get(key) or ""):
-            return True
-        if isinstance(render_packet, dict) and "#kb-cite-" in str(render_packet.get(key) or ""):
-            return True
-    return False
+    return render_payload_has_citation_links(cache)
 
 
 def _render_cache_is_degraded_for_citations(cache: dict, *, raw_content: str, hits: list[dict] | None) -> bool:
-    if not _content_has_linkable_answer_citations(raw_content, hits):
-        return False
-    return not _cache_has_rendered_citation_links(cache)
+    return render_payload_is_degraded_for_citations(cache, raw_content=raw_content, hits=hits)
 
 
 def _extract_render_cache(
@@ -585,38 +560,20 @@ def _extract_render_cache(
 ) -> dict | None:
     if not isinstance(meta, dict):
         return None
-    cache = meta.get("render_cache")
-    if not isinstance(cache, dict):
+    payload = normalize_render_cache_payload(
+        meta.get("render_cache"),
+        schema=_RENDER_CACHE_SCHEMA_VERSION,
+        expected_key=expected_key,
+    )
+    if payload is None:
         return None
-    if int(cache.get("schema") or 0) != _RENDER_CACHE_SCHEMA_VERSION:
-        return None
-    if str(cache.get("cache_key") or "").strip() != str(expected_key or "").strip():
-        return None
-    cite_details = cache.get("cite_details")
-    if not isinstance(cite_details, list):
-        cite_details = []
-    render_packet = cache.get("render_packet")
-    if not isinstance(render_packet, dict):
-        render_packet = {}
-    packet_cite_details = render_packet.get("cite_details") if isinstance(render_packet.get("cite_details"), list) else []
-    normalized = {
-        "notice": str(cache.get("notice") or render_packet.get("notice") or ""),
-        "rendered_body": str(cache.get("rendered_body") or render_packet.get("rendered_body") or ""),
-        "rendered_content": str(cache.get("rendered_content") or render_packet.get("rendered_content") or ""),
-        "copy_markdown": str(cache.get("copy_markdown") or render_packet.get("copy_markdown") or ""),
-        "copy_text": str(cache.get("copy_text") or render_packet.get("copy_text") or ""),
-        "cite_details": [dict(item) for item in cite_details if isinstance(item, dict)],
-        "refs_user_msg_id": int(cache.get("refs_user_msg_id") or 0),
-        "render_packet": dict(render_packet),
-    }
-    if not normalized["cite_details"] and isinstance(packet_cite_details, list):
-        normalized["cite_details"] = [dict(item) for item in packet_cite_details if isinstance(item, dict)]
+    normalized = payload.as_dict()
     if str(raw_content or "").strip() and not (
         str(normalized.get("rendered_content") or "").strip()
         or str(normalized.get("rendered_body") or "").strip()
     ):
         return None
-    if _render_cache_is_degraded_for_citations(normalized, raw_content=raw_content, hits=hits):
+    if render_payload_is_degraded_for_citations(payload, raw_content=raw_content, hits=hits):
         return None
     return normalized
 
@@ -633,18 +590,18 @@ def _build_render_cache_payload(
     refs_user_msg_id: int,
     render_packet: dict | None = None,
 ) -> dict:
-    return {
-        "schema": _RENDER_CACHE_SCHEMA_VERSION,
-        "cache_key": str(cache_key or ""),
-        "notice": str(notice or ""),
-        "rendered_body": str(rendered_body or ""),
-        "rendered_content": str(rendered_content or ""),
-        "copy_markdown": str(copy_markdown or ""),
-        "copy_text": str(copy_text or ""),
-        "cite_details": [dict(item) for item in (cite_details or []) if isinstance(item, dict)],
-        "refs_user_msg_id": int(refs_user_msg_id or 0),
-        "render_packet": dict(render_packet or {}) if isinstance(render_packet, dict) else {},
-    }
+    return _contract_build_render_cache_payload(
+        schema=_RENDER_CACHE_SCHEMA_VERSION,
+        cache_key=cache_key,
+        notice=notice,
+        rendered_body=rendered_body,
+        rendered_content=rendered_content,
+        copy_markdown=copy_markdown,
+        copy_text=copy_text,
+        cite_details=cite_details,
+        refs_user_msg_id=refs_user_msg_id,
+        render_packet=render_packet,
+    )
 
 
 def _sync_render_cache_packet(meta: dict, render_packet: dict) -> bool:
@@ -832,18 +789,8 @@ def _project_render_packet_compat_fields(rec: dict) -> None:
     meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
     contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
     packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
-    if not packet:
+    if not project_render_packet_to_record(rec, packet):
         return
-    rec["notice"] = str(packet.get("notice") or "")
-    rec["rendered_body"] = str(packet.get("rendered_body") or "")
-    rec["rendered_content"] = str(packet.get("rendered_content") or "")
-    rec["copy_markdown"] = str(packet.get("copy_markdown") or "")
-    rec["copy_text"] = str(packet.get("copy_text") or "")
-    rec["cite_details"] = [
-        dict(item)
-        for item in list(packet.get("cite_details") or [])
-        if isinstance(item, dict)
-    ]
     rec["meta"] = meta
 
 
@@ -851,15 +798,7 @@ def _maybe_strip_legacy_render_fields(rec: dict, *, enabled: bool) -> None:
     if not enabled and not _env_flag("KB_CHAT_RENDER_PACKET_ONLY", "0"):
         return
     # Keep core identity fields; strip legacy render projections from response payload.
-    for key in (
-        "notice",
-        "rendered_body",
-        "rendered_content",
-        "copy_markdown",
-        "copy_text",
-        "cite_details",
-    ):
-        rec.pop(key, None)
+    strip_legacy_render_fields(rec)
 
 
 def _restore_render_packet_contract_from_cache(rec: dict, cached: dict | None) -> None:
