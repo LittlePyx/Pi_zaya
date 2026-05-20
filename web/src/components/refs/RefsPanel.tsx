@@ -37,6 +37,11 @@ interface RefUiMeta {
   summary_title?: string
   summary_generation?: string
   summary_basis?: string
+  polish_status?: string
+  polish_source?: string
+  polish_detail?: string
+  summary_polish_status?: string
+  why_polish_status?: string
   why_line?: string
   why_generation?: string
   why_basis?: string
@@ -244,6 +249,20 @@ function looksNegativeReasonText(text: string) {
     '无法定位',
     '不能指向',
   ].some((token) => low.includes(token))
+}
+
+function normalizePolishStatus(input: unknown) {
+  const status = String(input || '').trim().toLowerCase()
+  if (status === 'full' || status === 'heuristic' || status === 'pending' || status === 'failed') return status
+  return ''
+}
+
+function polishStatusLabel(status: string, S: ReturnType<typeof useT>) {
+  if (status === 'full') return S.refs_polish_full
+  if (status === 'pending') return S.refs_polish_pending
+  if (status === 'failed') return S.refs_polish_failed
+  if (status === 'heuristic') return S.refs_polish_heuristic
+  return ''
 }
 
 function shouldSuppressRefHitCard(prompt: string, hit: RefHit) {
@@ -508,6 +527,8 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                   const summaryLabel = String(ui.summary_label || '').trim() || S.refs_summary_label
                   const summaryTitle = String(ui.summary_title || '').trim() || S.refs_summary_title
                   const why = String(ui.why_line || '').trim()
+                  const polishStatus = normalizePolishStatus(ui.polish_status)
+                  const polishLabel = polishStatusLabel(polishStatus, S)
                   const semanticBadges = (Array.isArray(ui.semantic_badges) ? ui.semantic_badges : [])
                     .map((badge) => ({
                       text: String(badge?.text || '').trim(),
@@ -544,6 +565,16 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                                 {heading ? <span>{heading}</span> : null}
                                 {scorePending ? <span className="kb-ref-score">{S.refs_score_pending}</span> : null}
                                 {!scorePending && score ? <span className="kb-ref-score">{S.refs_score_label.replace('{score}', score)}</span> : null}
+                                {polishStatus && polishLabel ? (
+                                  <span
+                                    className={`kb-ref-polish is-${polishStatus}`}
+                                    data-testid={`refs-panel-polish-status-${index}`}
+                                    data-status={polishStatus}
+                                    title={String(ui.polish_detail || '')}
+                                  >
+                                    {polishLabel}
+                                  </span>
+                                ) : null}
                                 {semanticBadges.map((badge, badgeIndex) => {
                                   const text = String(badge.text || '').trim()
                                   if (!text) return null

@@ -62,6 +62,16 @@ test('refs panel renders provisional cards while refs enrichment is pending', as
   await expect(page.getByTestId('refs-panel-open-payload')).toContainText('"strictLocate": false')
 })
 
+test('refs panel surfaces reference-card polish status', async ({ page }) => {
+  await page.goto('/__refs_panel_test__?scenario=polish-status')
+
+  await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('polish-status')
+  await page.getByRole('button').first().click()
+  await expect(page.getByTestId('refs-panel-polish-status-0')).toHaveAttribute('data-status', 'full')
+  await expect(page.getByTestId('refs-panel-polish-status-0')).toContainText('LLM')
+  await expect(page.getByTestId('refs-panel-polish-status-1')).toHaveAttribute('data-status', 'heuristic')
+})
+
 test('refs panel can render a section-level strict locate card directly in the page', async ({ page }) => {
   await page.goto('/__refs_panel_test__?scenario=section-target')
 

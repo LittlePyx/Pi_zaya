@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from api.reference_card_quality import attach_ref_card_polish_contract
+
 
 def _as_dict(value: Mapping[str, Any] | None) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
@@ -54,7 +56,7 @@ def build_ref_card_ui_payload(
     summary_basis = _as_dict(summary_basis_meta)
     why_basis = _as_dict(why_basis_meta)
 
-    return {
+    payload = {
         "display_name": display_name,
         "heading_path": heading_path,
         "section_label": section_label,
@@ -87,3 +89,4 @@ def build_ref_card_ui_payload(
         "source_path": source_path,
         "reader_open": _as_dict(reader_open),
     }
+    return attach_ref_card_polish_contract(payload)

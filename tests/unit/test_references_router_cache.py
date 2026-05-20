@@ -176,10 +176,12 @@ def test_get_conversation_refs_invalidates_fast_cache_when_full_render_payload_a
     assert out1[12]["display_state"] == "ready"
     assert out1[12]["enrichment_pending"] is True
     assert out1[12]["payload_mode"] == "fast"
-    assert out1[12]["hits"] == [{"ui_meta": {"summary_line": "fast-only"}}]
+    assert out1[12]["hits"][0]["ui_meta"]["summary_line"] == "fast-only"
+    assert out1[12]["hits"][0]["ui_meta"]["polish_status"] == "heuristic"
 
     assert out2[12]["display_state"] == "ready"
-    assert out2[12]["hits"] == [{"ui_meta": {"summary_line": "full-persisted"}}]
+    assert out2[12]["hits"][0]["ui_meta"]["summary_line"] == "full-persisted"
+    assert out2[12]["hits"][0]["ui_meta"]["polish_status"] == "heuristic"
     assert out2[12]["render_status"] == "full"
 
 
@@ -254,7 +256,8 @@ def test_get_conversation_refs_treats_stale_pending_pack_as_fast_ready(monkeypat
 
     assert out[17]["display_state"] == "ready"
     assert out[17]["payload_mode"] == "fast"
-    assert out[17]["hits"] == [{"ui_meta": {"summary_line": "fast-ready"}}]
+    assert out[17]["hits"][0]["ui_meta"]["summary_line"] == "fast-ready"
+    assert out[17]["hits"][0]["ui_meta"]["polish_status"] == "heuristic"
     assert warm_calls["n"] == 1
 
 
@@ -1017,14 +1020,11 @@ def test_get_conversation_refs_uses_persisted_full_payload_without_reenrich(monk
 
     out = references_router.get_conversation_refs("conv-rendered")
 
-    assert out == {
-        11: {
-            "display_state": "ready",
-            "hits": [{"ui_meta": {"summary_line": "full-persisted"}}],
-            "render_status": "full",
-            "render_attempts": 1,
-        }
-    }
+    assert out[11]["display_state"] == "ready"
+    assert out[11]["render_status"] == "full"
+    assert out[11]["render_attempts"] == 1
+    assert out[11]["hits"][0]["ui_meta"]["summary_line"] == "full-persisted"
+    assert out[11]["hits"][0]["ui_meta"]["polish_status"] == "heuristic"
 
 
 def test_stored_rendered_payload_is_stale_when_answer_source_disappears():
@@ -1147,16 +1147,13 @@ def test_get_conversation_refs_returns_fast_ready_payload_and_kicks_background_w
 
     out = references_router.get_conversation_refs("conv-fast")
 
-    assert out == {
-        3: {
-            "mode": "fast",
-            "payload_mode": "fast",
-            "render_status": "failed",
-            "render_error": "render_payload_empty",
-            "display_state": "ready",
-            "hits": [{"ui_meta": {"summary_line": "fast"}}],
-        }
-    }
+    assert out[3]["mode"] == "fast"
+    assert out[3]["payload_mode"] == "fast"
+    assert out[3]["render_status"] == "failed"
+    assert out[3]["render_error"] == "render_payload_empty"
+    assert out[3]["display_state"] == "ready"
+    assert out[3]["hits"][0]["ui_meta"]["summary_line"] == "fast"
+    assert out[3]["hits"][0]["ui_meta"]["polish_status"] == "failed"
     assert warm_calls == []
     assert fast_kwargs.get("render_variant") == "fast"
     assert fast_kwargs.get("allow_expensive_llm_for_ready") is False

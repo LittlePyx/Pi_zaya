@@ -27,6 +27,7 @@ from api.reference_ui import (
     ensure_source_citation_meta,
     open_reference_source,
 )
+from api.reference_card_quality import refs_pack_has_full_llm_copy
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
@@ -49,7 +50,7 @@ router = APIRouter(prefix="/api/references", tags=["references"])
 _REFS_CONVERSATION_CACHE: dict[str, dict] = {}
 _REFS_CONVERSATION_WARMING: set[str] = set()
 _REFS_CONVERSATION_WARMING_LOCK = threading.Lock()
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 8
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 9
 
 
 def _md_dir() -> Path:
@@ -589,23 +590,7 @@ def _payload_source_paths(payload_pack: dict | None) -> list[str]:
 
 
 def _payload_refs_card_copy_has_llm_result(payload_pack: dict | None) -> bool:
-    if not isinstance(payload_pack, dict):
-        return False
-    hits = [hit for hit in list(payload_pack.get("hits") or []) if isinstance(hit, dict)]
-    if not hits:
-        return True
-    summary_llm = {"llm_grounded", "llm_pack", "llm_abstract"}
-    why_llm = {"llm_grounded", "llm_pack"}
-    for hit in hits:
-        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
-        summary_kind = str((ui_meta or {}).get("summary_kind") or "").strip().lower()
-        if summary_kind and summary_kind != "guide":
-            continue
-        if str((ui_meta or {}).get("summary_generation") or "").strip().lower() not in summary_llm:
-            return False
-        if str((ui_meta or {}).get("why_generation") or "").strip().lower() not in why_llm:
-            return False
-    return True
+    return refs_pack_has_full_llm_copy(payload_pack)
 
 
 def _payload_is_authoritative_doc_list_pack(payload_pack: dict | None, authoritative_doc_list: list[dict] | None) -> bool:

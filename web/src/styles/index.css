@@ -2688,6 +2688,40 @@ body.kb-reader-resizing .kb-reader-content {
   font-weight: 700;
 }
 
+.kb-ref-polish {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 78%, var(--bg));
+  color: color-mix(in srgb, var(--muted-text) 86%, var(--text-main));
+  padding: 1px 6px;
+  font-size: 10.8px;
+  font-weight: 700;
+}
+
+.kb-ref-polish.is-full {
+  border-color: color-mix(in srgb, #4d7d5c 24%, var(--border));
+  background: color-mix(in srgb, #5d8a68 11%, var(--panel));
+  color: color-mix(in srgb, #4d7d5c 88%, var(--text-main));
+}
+
+.kb-ref-polish.is-heuristic {
+  border-color: color-mix(in srgb, #8a7a48 22%, var(--border));
+  background: color-mix(in srgb, #a99556 10%, var(--panel));
+  color: color-mix(in srgb, #7c6b3d 88%, var(--text-main));
+}
+
+.kb-ref-polish.is-pending {
+  border-color: color-mix(in srgb, var(--refs-accent) 18%, var(--border));
+  background: color-mix(in srgb, var(--refs-accent-soft) 78%, var(--panel));
+  color: color-mix(in srgb, var(--refs-accent) 78%, var(--text-main));
+}
+
+.kb-ref-polish.is-failed {
+  border-color: color-mix(in srgb, #aa6a58 22%, var(--border));
+  background: color-mix(in srgb, #aa6a58 10%, var(--panel));
+  color: color-mix(in srgb, #955a4a 88%, var(--text-main));
+}
+
 .kb-ref-actions {
   display: flex;
   flex-wrap: wrap;

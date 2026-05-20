@@ -22,6 +22,13 @@ from api.reference_card_copy import (
     looks_templated_ref_why_line as _card_copy_looks_templated_ref_why_line,
 )
 from api.reference_card_payload import build_ref_card_ui_payload as _build_ref_card_ui_payload
+from api.reference_card_quality import (
+    LLM_SUMMARY_GENERATIONS,
+    LLM_WHY_GENERATIONS,
+    attach_refs_pack_polish_contract,
+    ref_card_polish_status,
+    refs_pack_has_full_llm_copy,
+)
 from api.reference_intent import (
     refs_prompt_section_intent as _intent_prompt_section_intent,
     refs_prompt_topic_terms as _intent_prompt_topic_terms,
@@ -3119,33 +3126,19 @@ def _refs_card_polish_top_n() -> int:
 
 
 def _is_llm_ref_summary_generation(generation: str) -> bool:
-    return str(generation or "").strip().lower() in {"llm_grounded", "llm_pack", "llm_abstract"}
+    return str(generation or "").strip().lower() in LLM_SUMMARY_GENERATIONS
 
 
 def _is_llm_ref_why_generation(generation: str) -> bool:
-    return str(generation or "").strip().lower() in {"llm_grounded", "llm_pack"}
+    return str(generation or "").strip().lower() in LLM_WHY_GENERATIONS
 
 
 def _ref_card_has_llm_copy(ui_meta: dict | None) -> bool:
-    ui = ui_meta if isinstance(ui_meta, dict) else {}
-    summary_kind = str((ui or {}).get("summary_kind") or "").strip().lower()
-    if summary_kind and summary_kind not in ("guide", "section_grounded"):
-        return True
-    return bool(
-        _is_llm_ref_summary_generation(str((ui or {}).get("summary_generation") or ""))
-        and _is_llm_ref_why_generation(str((ui or {}).get("why_generation") or ""))
-    )
+    return str(ref_card_polish_status(ui_meta).get("polish_status") or "") == "full"
 
 
 def _refs_hits_have_llm_copy(hits: list[dict] | None) -> bool:
-    rows = [hit for hit in list(hits or []) if isinstance(hit, dict)]
-    if not rows:
-        return True
-    for hit in rows:
-        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
-        if not _ref_card_has_llm_copy(ui_meta):
-            return False
-    return True
+    return refs_pack_has_full_llm_copy({"hits": [hit for hit in list(hits or []) if isinstance(hit, dict)]})
 
 
 def _suppress_non_llm_ref_card_copy(
@@ -5872,7 +5865,7 @@ def _attach_pack_display_contract(pack: dict | None) -> dict:
     else:
         pack2.pop("suppression_reason", None)
         pack2.pop("suggestion", None)
-    return pack2
+    return attach_refs_pack_polish_contract(pack2)
 
 
 def _doc_list_ref_why_line(*, prompt: str, heading_path: str, prefer_zh: bool) -> str:

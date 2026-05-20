@@ -295,6 +295,52 @@ const REFS_PANEL_AUTO_CITATION_META_PAYLOAD: Record<string, unknown> = {
   },
 }
 
+const REFS_PANEL_POLISH_STATUS_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: 'Which papers help me understand single-pixel imaging reconstruction quality?',
+    display_state: 'ready',
+    polish_status: 'heuristic',
+    hits: [
+      {
+        text: 'A polished card grounded in matched evidence.',
+        meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Fixture Paper / 3. Results',
+          summary_line: 'The results section reports reconstruction quality improvements under the tested imaging setup.',
+          summary_generation: 'llm_grounded',
+          why_line: 'This card lets the user verify where reconstruction quality is evaluated and what evidence supports it.',
+          why_generation: 'llm_grounded',
+          polish_status: 'full',
+          polish_detail: 'summary:llm_grounded->full;why:llm_grounded->full',
+        },
+      },
+      {
+        text: 'A deterministic fallback card grounded in section evidence.',
+        meta: {
+          source_path: 'F:\\library\\Fallback.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'Fallback Paper.pdf',
+          source_path: 'F:\\library\\Fallback.en.md',
+          heading_path: 'Fallback Paper / 2. Method',
+          summary_line: 'The method section describes the reconstruction pipeline used by the paper.',
+          summary_generation: 'deterministic_grounded',
+          why_line: 'Use this section to check the source wording for the reconstruction pipeline.',
+          why_generation: 'deterministic_grounded',
+          polish_status: 'heuristic',
+          polish_detail: 'summary:deterministic_grounded->heuristic;why:deterministic_grounded->heuristic',
+        },
+      },
+    ],
+  },
+}
+
 export default function RefsPanelRegressionPage() {
   const scenarioParam = (() => {
     if (typeof window === 'undefined') return ''
@@ -308,6 +354,8 @@ export default function RefsPanelRegressionPage() {
         ? 'section-target'
         : scenarioParam === 'auto-citation-meta'
           ? 'auto-citation-meta'
+          : scenarioParam === 'polish-status'
+            ? 'polish-status'
           : scenarioParam === 'pending-with-hits'
             ? 'pending-with-hits'
         : 'rich-reader-open'
@@ -321,6 +369,8 @@ export default function RefsPanelRegressionPage() {
         ? REFS_PANEL_SECTION_TARGET_PAYLOAD
         : scenario === 'auto-citation-meta'
           ? REFS_PANEL_AUTO_CITATION_META_PAYLOAD
+          : scenario === 'polish-status'
+            ? REFS_PANEL_POLISH_STATUS_PAYLOAD
           : scenario === 'pending-with-hits'
             ? REFS_PANEL_PENDING_WITH_HITS_PAYLOAD
       : REFS_PANEL_PAYLOAD
