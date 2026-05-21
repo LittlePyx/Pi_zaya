@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from kb.evidence_text import pick_readable_evidence_text
 from kb.source_blocks import normalize_inline_markdown
 
 
@@ -233,39 +234,14 @@ def _pick_system_a_evidence(
     heading: str = "",
     max_len: int = 460,
 ) -> str:
-    text = _strip_system_a_metadata_prefix(_clean_text(value, max_len=1400), source=source, title=title)
-    if not text:
-        return ""
-    sentences = _split_sentences(text)
-    while sentences and not _usable_evidence_sentence(sentences[0]):
-        sentences.pop(0)
-    if not sentences:
-        return ""
-    usable = [
-        idx
-        for idx, sentence in enumerate(sentences[:8])
-        if _usable_evidence_sentence(sentence)
-    ]
-    if usable:
-        first_idx = usable[0]
-        scored = [
-            (_sentence_quality(sentences[idx], claim=claim, heading=heading), idx)
-            for idx in usable
-        ]
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        best_score, best_idx = scored[0]
-        first_score = _sentence_quality(sentences[first_idx], claim=claim, heading=heading)
-        center_idx = best_idx if best_idx > first_idx and best_score >= first_score + 1.0 else first_idx
-        window = _join_evidence_window(
-            sentences,
-            center_idx=center_idx,
-            claim=claim,
-            heading=heading,
-            max_len=max_len,
-        )
-        if window:
-            text = window
-    return _clean_text(text, max_len=max_len)
+    return pick_readable_evidence_text(
+        value,
+        source=source,
+        title=title,
+        claim=claim,
+        heading=heading,
+        max_len=max_len,
+    )
 
 
 def _first_text(rec: Mapping[str, Any], *keys: str, max_len: int = 520) -> str:
@@ -501,6 +477,8 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
         max_len=460,
     )
     takeaway = _system_a_takeaway(claim=claim, evidence=evidence, heading=heading)
+    if takeaway and (_sameish(takeaway, evidence) or _sameish(takeaway, claim)):
+        takeaway = ""
     locator = _locator(rec)
     subtitle = locator or (heading if heading and heading != title else "")
     binding_status = str(rec.get("binding_status") or "").strip().lower()
@@ -578,7 +556,15 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         if part
     )
     claim = _first_text(rec, "answer_claim", max_len=420)
-    context = _first_text(rec, "citation_context", "evidence_quote", "summary_line", max_len=520)
+    context_raw = _first_text(rec, "citation_context", "evidence_quote", "summary_line", max_len=1400)
+    context = pick_readable_evidence_text(
+        context_raw,
+        source=source,
+        title=title,
+        claim=claim,
+        heading=_first_text(rec, "heading_path", "location_label", max_len=180),
+        max_len=520,
+    ) or context_raw
     context_source = str(rec.get("citation_context_source") or rec.get("evidence_source") or "").strip().lower()
     answer_context_only = bool(context and context_source == "answer_context")
     locator = _locator(rec) or source

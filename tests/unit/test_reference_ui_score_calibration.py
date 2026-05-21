@@ -5467,6 +5467,252 @@ def test_enrich_refs_payload_can_polish_from_hit_text_without_extra_snippets(mon
     assert "directly relevant" in str(ui_meta.get("why_line") or "").lower()
 
 
+def test_enrich_refs_payload_polishes_explicit_multi_paper_list(monkeypatch):
+    refs = {
+        45: {
+            "prompt": "Which papers should I read first for single-pixel imaging? Please list several papers and what each one is useful for.",
+            "hits": [
+                {
+                    "text": "This review introduces single-pixel imaging principles and explains compressed sensing trade-offs.",
+                    "meta": {
+                        "source_path": r"db\NatPhoton-2019\NatPhoton-2019.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {"llm": 81.0, "bm25": 5.0, "semantic_score": 8.0},
+                    },
+                },
+                {
+                    "text": "This paper proposes adaptive foveated single-pixel imaging with dynamic supersampling.",
+                    "meta": {
+                        "source_path": r"db\SciAdv-2017\SciAdv-2017.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_rank": {"llm": 79.0, "bm25": 4.8, "semantic_score": 7.8},
+                    },
+                },
+            ],
+        }
+    }
+    polish_calls: list[list[str]] = []
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        source_path = str((((hit.get("meta") if isinstance(hit.get("meta"), dict) else {}) or {}).get("source_path") or "")).strip()
+        title = source_path.rsplit("\\", 1)[-1].replace(".en.md", ".pdf")
+        return {
+            "display_name": title,
+            "source_path": source_path,
+            "heading_path": "Abstract",
+            "summary_line": str(hit.get("text") or "").strip(),
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "This hit is directly relevant because it answers the user's question.",
+            "why_generation": "deterministic_grounded",
+            "score": 8.0,
+            "score_pending": False,
+            "reader_open": {"sourcePath": source_path},
+        }
+
+    def fake_polish_refs_card_copy(*, prompt, hits, guide_mode):
+        del prompt, guide_mode
+        titles = [
+            str(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("display_name") or "")
+            for hit in hits
+        ]
+        polish_calls.append(titles)
+        out = []
+        for hit in hits:
+            hit2 = dict(hit)
+            ui = dict(hit2.get("ui_meta") or {})
+            ui["summary_line"] = f"LLM summary::{ui.get('display_name')}"
+            ui["summary_generation"] = "llm_grounded"
+            ui["why_line"] = f"LLM why::{ui.get('display_name')}"
+            ui["why_generation"] = "llm_grounded"
+            hit2["ui_meta"] = ui
+            out.append(hit2)
+        return out
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_prefetch_refs_citation_meta", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_maybe_polish_refs_card_copy", fake_polish_refs_card_copy)
+
+    out = reference_ui.enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
+    pack = out.get(45) or {}
+    hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
+
+    assert pack.get("pipeline_debug", {}).get("prompt_explicitly_requests_multi_paper_list") is True
+    assert pack.get("pipeline_debug", {}).get("llm_polish_allowed") is True
+    assert polish_calls and len(polish_calls[0]) == 2
+    assert len(hits) == 2
+    assert all(str(((hit.get("ui_meta") or {}).get("summary_generation")) or "") == "llm_grounded" for hit in hits)
+    assert all(str(((hit.get("ui_meta") or {}).get("why_generation")) or "") == "llm_grounded" for hit in hits)
+
+
+def test_dedupe_refs_hits_merges_same_section_duplicate_and_prefers_precise_locate():
+    prompt = "Which paper explains ADMM reconstruction?"
+    loose_hit = {
+        "text": "Most existing methods employ ADMM-based optimization for reconstruction.",
+        "meta": {
+            "source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "ref_best_heading_path": "2. Related Work",
+        },
+        "ui_meta": {
+            "source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "display_name": "SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "summary_line": "Most existing methods employ ADMM-based optimization for reconstruction.",
+            "why_line": "This section mentions ADMM reconstruction.",
+            "score": 9.2,
+        },
+    }
+    precise_hit = {
+        "text": "Most existing methods employ ADMM-based optimization for reconstruction.",
+        "meta": {
+            "source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "ref_best_heading_path": "2. Related Work",
+        },
+        "ui_meta": {
+            "source_path": r"db\SCINeRF\SCINeRF.en.md",
+            "display_name": "SCINeRF.pdf",
+            "heading_path": "2. Related Work",
+            "summary_line": "Most existing methods employ ADMM-based optimization for reconstruction.",
+            "why_line": "This section mentions ADMM reconstruction.",
+            "score": 7.1,
+            "reader_open": {
+                "sourcePath": r"db\SCINeRF\SCINeRF.en.md",
+                "headingPath": "2. Related Work",
+                "snippet": "Most existing methods employ ADMM-based optimization for reconstruction.",
+                "strictLocate": True,
+                "blockId": "blk-related-admm",
+                "anchorId": "sent-admm",
+                "anchorKind": "sentence",
+            },
+        },
+    }
+
+    hits, removed = reference_ui._dedupe_refs_hits_for_display(
+        prompt=prompt,
+        hits=[loose_hit, precise_hit],
+    )
+
+    assert removed == 1
+    assert len(hits) == 1
+    ui = dict(hits[0].get("ui_meta") or {})
+    assert ui.get("merged_duplicate_count") == 1
+    assert str((ui.get("reader_open") or {}).get("blockId") or "") == "blk-related-admm"
+
+
+def test_sort_refs_hits_prefers_precise_llm_card_over_higher_raw_score():
+    prompt = "Which paper explains ADMM reconstruction?"
+    high_score_loose = {
+        "text": "ADMM appears in related work.",
+        "meta": {
+            "source_path": "paper-a.en.md",
+            "ref_best_heading_path": "Related Work",
+            "ref_rank": {"display_score": 98.0},
+        },
+        "ui_meta": {
+            "display_name": "Paper A.pdf",
+            "heading_path": "Related Work",
+            "summary_line": "ADMM appears in related work.",
+            "summary_generation": "section_grounded",
+            "why_line": "ADMM appears here.",
+            "why_generation": "deterministic_grounded",
+            "score": 9.8,
+        },
+    }
+    lower_score_precise = {
+        "text": "ADMM is used as reconstruction machinery.",
+        "meta": {
+            "source_path": "paper-b.en.md",
+            "ref_best_heading_path": "2. Related Work",
+            "ref_rank": {"display_score": 80.0},
+        },
+        "ui_meta": {
+            "display_name": "Paper B.pdf",
+            "heading_path": "2. Related Work",
+            "summary_line": "The section explains ADMM as reconstruction machinery.",
+            "summary_generation": "llm_grounded",
+            "why_line": "The matched sentence shows how ADMM is used for reconstruction.",
+            "why_generation": "llm_grounded",
+            "score": 7.0,
+            "reader_open": {
+                "sourcePath": "paper-b.en.md",
+                "headingPath": "2. Related Work",
+                "strictLocate": True,
+                "blockId": "blk-admm",
+                "anchorId": "sent-admm",
+            },
+        },
+    }
+
+    out = reference_ui._sort_refs_hits_for_display(
+        prompt=prompt,
+        hits=[high_score_loose, lower_score_precise],
+    )
+
+    assert str(((out[0].get("ui_meta") or {}).get("display_name")) or "") == "Paper B.pdf"
+
+
+def test_enrich_refs_payload_records_deduped_duplicate_count(monkeypatch):
+    refs = {
+        46: {
+            "prompt": "Which paper explains ADMM reconstruction?",
+            "hits": [
+                {
+                    "text": "Most existing methods employ ADMM-based optimization for reconstruction.",
+                    "meta": {
+                        "source_path": r"db\SCINeRF\SCINeRF.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_best_heading_path": "2. Related Work",
+                        "explicit_doc_match_score": 8.0,
+                        "ref_rank": {"display_score": 9.2, "bm25": 6.0, "deep": 12.0},
+                    },
+                },
+                {
+                    "text": "Most existing methods employ ADMM-based optimization for reconstruction.",
+                    "meta": {
+                        "source_path": r"db\SCINeRF\SCINeRF.en.md",
+                        "ref_pack_state": "ready",
+                        "ref_best_heading_path": "2. Related Work",
+                        "explicit_doc_match_score": 8.0,
+                        "ref_rank": {"display_score": 8.8, "bm25": 5.8, "deep": 11.5},
+                    },
+                },
+            ],
+        }
+    }
+
+    def fake_build_hit_ui_meta(hit, **kwargs):
+        del kwargs
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        return {
+            "display_name": "SCINeRF.pdf",
+            "source_path": str(meta.get("source_path") or ""),
+            "heading_path": str(meta.get("ref_best_heading_path") or ""),
+            "summary_line": str(hit.get("text") or ""),
+            "summary_kind": "guide",
+            "summary_generation": "section_grounded",
+            "why_line": "This hit is directly relevant because it answers the user's question.",
+            "why_generation": "deterministic_grounded",
+            "score": 8.0,
+            "reader_open": {"sourcePath": str(meta.get("source_path") or ""), "headingPath": str(meta.get("ref_best_heading_path") or "")},
+        }
+
+    monkeypatch.setattr(reference_ui, "build_hit_ui_meta", fake_build_hit_ui_meta)
+    monkeypatch.setattr(reference_ui, "_prefetch_refs_citation_meta", lambda *args, **kwargs: {})
+    monkeypatch.setattr(reference_ui, "_maybe_llm_rerank_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
+    monkeypatch.setattr(reference_ui, "_maybe_llm_filter_refs_hits", lambda **kwargs: list(kwargs.get("hits") or []))
+    monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: False)
+
+    out = reference_ui.enrich_refs_payload(refs, pdf_root=None, md_root=None, lib_store=None)
+    pack = out.get(46) or {}
+    hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
+    ui = dict(hits[0].get("ui_meta") or {}) if hits else {}
+
+    assert len(hits) == 1
+    assert ui.get("merged_duplicate_count") == 1
+    assert pack.get("pipeline_debug", {}).get("deduped_duplicate_hit_count") == 1
+
+
 def test_enrich_refs_payload_skips_expensive_llm_refine_while_hits_are_pending(monkeypatch):
     refs = {
         43: {
@@ -5737,3 +5983,69 @@ def test_enrich_refs_payload_skips_llm_filter_for_single_ready_hit(monkeypatch):
     hits = list((out.get(44) or {}).get("hits") or [])
 
     assert len(hits) == 1
+
+
+def test_primary_ref_evidence_payload_cleans_markdown_heading_and_keeps_body_sentence():
+    reader_open = {
+        "sourcePath": r"db\\SciAdv-2017\\paper.en.md",
+        "sourceName": "SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+        "headingPath": "INTRODUCTION / Foveated single-pixel imaging",
+        "snippet": (
+            "## Foveated single-pixel imaging\n"
+            "Single-pixel imaging is based on the measurement of the level of correlation between the scene and a series of patterns."
+        ),
+        "highlightSnippet": (
+            "## Foveated single-pixel imaging\n"
+            "Single-pixel imaging is based on structured illumination and detector measurements."
+        ),
+        "blockId": "blk_intro",
+        "anchorId": "p_001",
+        "strictLocate": True,
+    }
+
+    out = reference_ui._build_primary_ref_evidence_payload(
+        source_path=r"db\\SciAdv-2017\\paper.en.md",
+        display_name="SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf",
+        reader_open=reader_open,
+        selection_reason="prompt_aligned_block",
+        score=9.1,
+        prompt="我刚开始看单像素成像，先看什么？",
+    )
+
+    assert out["snippet"].startswith("Single-pixel imaging is based")
+    assert out["highlight_snippet"].startswith("Single-pixel imaging is based")
+    assert "##" not in out["snippet"]
+    assert "Foveated single-pixel imaging Single-pixel imaging" not in out["snippet"]
+    assert out["block_id"] == "blk_intro"
+    assert out["strict_locate"] is True
+
+
+def test_source_block_answer_primary_evidence_strips_title_author_prefix():
+    block = {
+        "block_id": "blk_lpr_abs",
+        "anchor_id": "p_abs",
+        "kind": "paragraph",
+        "heading_path": "Abstract",
+        "text": (
+            "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning "
+            "Kai Song, Yaoxing Bian,\\ Dong Wang, Runrui Li, Ku Wu, Hongrui Liu, "
+            "Chengbing Qin, Jianyong Hu,\\ and Liantuan Xiao* "
+            "Single-pixel imaging technology can capture images at wavelengths outside the reach of conventional focal plane array detectors. "
+            "However, the limited image quality and lengthy computational times still hinder practical application."
+        ),
+    }
+
+    out = reference_ui._source_block_to_answer_primary_evidence(
+        block=block,
+        prompt="深度学习为什么会用于单像素成像？",
+        source_path=r"db\\LPR-2025\\paper.en.md",
+        display_name="LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+        terms=["single-pixel imaging", "deep learning"],
+    )
+
+    text = str(out.get("highlight_snippet") or out.get("snippet") or "")
+    assert text.startswith("Single-pixel imaging technology can capture")
+    assert "Kai Song" not in text
+    assert "Yaoxing" not in text
+    assert "\\" not in text
+    assert "Advances and Challenges" not in text

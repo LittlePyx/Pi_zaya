@@ -529,7 +529,7 @@ def _warm_refs_citation_meta_background(source_paths: list[str], *, library_db_p
 def _refs_background_llm_polish_enabled() -> bool:
     raw = str(os.environ.get("KB_REFS_BACKGROUND_LLM_POLISH", "") or "").strip().lower()
     if not raw:
-        raw = str(os.environ.get("KB_REFS_CARD_POLISH_USE_LLM", "0") or "").strip().lower()
+        raw = str(os.environ.get("KB_REFS_CARD_POLISH_USE_LLM", "1") or "").strip().lower()
     return raw in {"1", "true", "on", "yes"}
 
 

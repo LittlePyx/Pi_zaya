@@ -45,7 +45,7 @@ def test_system_a_card_composer_strips_markdown_source_markup() -> None:
         }
     )
 
-    assert detail["card_evidence"].startswith("Foveated single-pixel imaging Single-pixel imaging")
+    assert detail["card_evidence"].startswith("Single-pixel imaging is based")
     assert "##" not in detail["card_evidence"]
 
 
@@ -124,6 +124,24 @@ def test_system_a_card_composer_keeps_readable_evidence_window() -> None:
     assert "Deep learning models map low-dimensional measurements" in detail["card_evidence"]
     assert "This reduces the required sampling ratio" in detail["card_evidence"]
     assert "Implementation details are discussed later" not in detail["card_evidence"]
+
+
+def test_system_a_card_composer_avoids_duplicate_takeaway() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Deep-SPI.pdf",
+            "heading_path": "Deep learning / Reconstruction",
+            "answer_claim": "深度学习能在低采样率下提升单像素成像质量。",
+            "evidence_quote": "Deep learning can improve single-pixel imaging reconstruction quality at lower sampling ratios.",
+            "location_label": "Deep learning / Reconstruction",
+            "binding_status": "grounded",
+            "binding_confidence": 0.86,
+        }
+    )
+
+    assert detail["card_evidence"].startswith("Deep learning can improve")
+    assert detail["card_takeaway"] != detail["card_evidence"]
 
 
 def test_system_b_card_composer_marks_answer_context_only() -> None:

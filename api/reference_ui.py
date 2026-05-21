@@ -38,6 +38,8 @@ from api.reference_intent import (
 from kb.answer_contract import _prefer_zh_locale
 from kb.config import load_settings
 from kb.citation_meta import fetch_best_crossref_for_reference, fetch_best_crossref_meta, fetch_crossref_work_by_doi
+from kb.evidence_text import clean_display_text as _clean_evidence_display_text
+from kb.evidence_text import pick_readable_evidence_text as _pick_readable_evidence_text
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
@@ -3091,7 +3093,7 @@ def _reuse_existing_llm_guide_copy(
 
 
 def _refs_card_polish_llm_enabled() -> bool:
-    raw_flag = str(os.environ.get("KB_REFS_CARD_POLISH_USE_LLM", "0") or "").strip().lower()
+    raw_flag = str(os.environ.get("KB_REFS_CARD_POLISH_USE_LLM", "1") or "").strip().lower()
     if raw_flag in {"0", "false", "off", "no"}:
         return False
     # The generation pipeline already validates the API key before reaching
@@ -3100,28 +3102,28 @@ def _refs_card_polish_llm_enabled() -> bool:
     return True
 
 
-def _refs_card_polish_timeout_s(default_s: float = 8.0) -> float:
+def _refs_card_polish_timeout_s(default_s: float = 14.0) -> float:
     try:
         raw = float(str(os.environ.get("KB_REFS_CARD_POLISH_TIMEOUT_S", str(default_s)) or str(default_s)))
     except Exception:
         raw = float(default_s)
-    return max(2.0, min(20.0, raw))
+    return max(2.0, min(45.0, raw))
 
 
 def _refs_card_polish_max_retries() -> int:
     try:
-        raw = int(str(os.environ.get("KB_REFS_CARD_POLISH_MAX_RETRIES", "0") or "0"))
+        raw = int(str(os.environ.get("KB_REFS_CARD_POLISH_MAX_RETRIES", "1") or "1"))
     except Exception:
-        raw = 0
-    return max(0, min(1, raw))
+        raw = 1
+    return max(0, min(2, raw))
 
 
 def _refs_card_polish_top_n() -> int:
     try:
-        raw = int(str(os.environ.get("KB_REFS_CARD_POLISH_TOP_N", "1") or "1"))
+        raw = int(str(os.environ.get("KB_REFS_CARD_POLISH_TOP_N", "6") or "6"))
     except Exception:
-        raw = 1
-    return max(0, min(4, raw))
+        raw = 6
+    return max(0, min(8, raw))
 
 
 
@@ -3254,7 +3256,7 @@ def _llm_polish_ref_card_copy(
     try:
         fast_settings = replace(
             settings,
-            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s(8.0)),
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s()),
             max_retries=_refs_card_polish_max_retries(),
         )
     except Exception:
@@ -3333,7 +3335,7 @@ def _llm_polish_ref_card_copy_v2(
     try:
         fast_settings = replace(
             settings,
-            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s(8.0)),
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s()),
             max_retries=_refs_card_polish_max_retries(),
         )
     except Exception:
@@ -3419,7 +3421,7 @@ def _llm_ground_ref_why_line(
     try:
         fast_settings = replace(
             settings,
-            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s(6.0)),
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s(12.0)),
             max_retries=_refs_card_polish_max_retries(),
         )
     except Exception:
@@ -3609,7 +3611,7 @@ def _llm_batch_polish_ref_card_copy_v1(
     try:
         fast_settings = replace(
             settings,
-            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s(8.0)),
+            timeout_s=min(float(getattr(settings, "timeout_s", 60.0) or 60.0), _refs_card_polish_timeout_s()),
             max_retries=_refs_card_polish_max_retries(),
         )
     except Exception:
@@ -4040,9 +4042,9 @@ def _maybe_polish_single_ref_hit_card(
 
 def _refs_card_polish_max_workers(job_count: int) -> int:
     try:
-        configured = int(str(os.environ.get("KB_REFS_CARD_POLISH_MAX_WORKERS", "1") or "1"))
+        configured = int(str(os.environ.get("KB_REFS_CARD_POLISH_MAX_WORKERS", "2") or "2"))
     except Exception:
-        configured = 1
+        configured = 2
     configured = max(1, min(8, configured))
     return max(1, min(int(job_count or 0), configured))
 
@@ -4230,6 +4232,30 @@ def _refs_heading_anchor_number(anchor_kind: str, heading_path: str) -> int:
     return 0
 
 
+def _clean_refs_evidence_snippet(
+    raw: str,
+    *,
+    prompt: str,
+    source_path: str,
+    display_name: str = "",
+    heading_path: str = "",
+    max_len: int = 360,
+) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    title_hint = str(display_name or Path(str(source_path or "")).name or "").strip()
+    picked = _pick_readable_evidence_text(
+        text,
+        source=source_path,
+        title=title_hint,
+        claim=prompt,
+        heading=heading_path,
+        max_len=max_len,
+    )
+    return picked or _clean_evidence_display_text(text, max_len=max_len)
+
+
 def _build_refs_reader_open_candidate(
     *,
     prompt: str,
@@ -4245,8 +4271,20 @@ def _build_refs_reader_open_candidate(
         source_path=source_path,
         heading_path=heading_path,
     )
-    snippet_text = _compact_reader_open_text(snippet)
-    highlight_text = _compact_reader_open_text(highlight_snippet or snippet_text)
+    snippet_text = _clean_refs_evidence_snippet(
+        snippet,
+        prompt=prompt,
+        source_path=source_path,
+        heading_path=heading,
+        max_len=360,
+    )
+    highlight_text = _clean_refs_evidence_snippet(
+        highlight_snippet or snippet_text,
+        prompt=prompt,
+        source_path=source_path,
+        heading_path=heading,
+        max_len=360,
+    )
     candidate = {
         "headingPath": heading or None,
         "snippet": snippet_text or None,
@@ -5069,6 +5107,7 @@ def _build_primary_ref_evidence_payload(
     reader_open: dict,
     selection_reason: str,
     score: float | None,
+    prompt: str = "",
 ) -> dict:
     if not isinstance(reader_open, dict):
         return {}
@@ -5076,14 +5115,31 @@ def _build_primary_ref_evidence_payload(
     def _candidate_to_evidence(candidate: dict | None) -> dict | None:
         if not isinstance(candidate, dict):
             return None
+        heading_path = str(candidate.get("headingPath") or "").strip()
+        snippet = _clean_refs_evidence_snippet(
+            str(candidate.get("snippet") or "").strip(),
+            prompt=prompt,
+            source_path=source_path,
+            display_name=display_name,
+            heading_path=heading_path,
+            max_len=460,
+        )
+        highlight_snippet = _clean_refs_evidence_snippet(
+            str(candidate.get("highlightSnippet") or snippet or "").strip(),
+            prompt=prompt,
+            source_path=source_path,
+            display_name=display_name,
+            heading_path=heading_path,
+            max_len=460,
+        )
         evidence = {
             "source_path": str(source_path or "").strip() or None,
             "source_name": str(display_name or "").strip() or None,
             "block_id": str(candidate.get("blockId") or "").strip() or None,
             "anchor_id": str(candidate.get("anchorId") or "").strip() or None,
-            "heading_path": str(candidate.get("headingPath") or "").strip() or None,
-            "snippet": str(candidate.get("snippet") or "").strip() or None,
-            "highlight_snippet": str(candidate.get("highlightSnippet") or "").strip() or None,
+            "heading_path": heading_path or None,
+            "snippet": snippet or None,
+            "highlight_snippet": highlight_snippet or None,
             "anchor_kind": str(candidate.get("anchorKind") or "").strip().lower() or None,
             "anchor_number": _positive_int(candidate.get("anchorNumber")) or None,
         }
@@ -5418,6 +5474,7 @@ def _candidate_primary_from_reader_open(
             reader_open=reader_open if isinstance(reader_open, dict) else {},
             selection_reason=selection_reason,
             score=score,
+            prompt="",
         )
     )
 
@@ -5538,6 +5595,14 @@ def _source_block_to_answer_primary_evidence(
     snippet = _answer_aligned_block_snippet(block_text, terms=list(terms or []))
     if not snippet:
         snippet = _summary_excerpt(block_text, max_sentences=2, max_len=420) or _compact_reader_open_text(block_text)
+    snippet = _clean_refs_evidence_snippet(
+        snippet,
+        prompt=prompt,
+        source_path=source_path,
+        display_name=display_name,
+        heading_path=heading_path,
+        max_len=460,
+    )
     evidence = {
         "source_path": str(source_path or "").strip() or None,
         "source_name": str(display_name or "").strip() or None,
@@ -5895,7 +5960,14 @@ def _collect_doc_list_ref_text_candidates(*, raw_item: dict, primary_evidence: d
     seen: set[str] = set()
 
     def _push(value: str) -> None:
-        text = str(value or "").strip()
+        text = _clean_refs_evidence_snippet(
+            str(value or "").strip(),
+            prompt="",
+            source_path=str(raw_item.get("source_path") or primary_evidence.get("source_path") or "").strip(),
+            display_name=str(raw_item.get("source_name") or primary_evidence.get("source_name") or "").strip(),
+            heading_path=str(raw_item.get("heading_path") or primary_evidence.get("heading_path") or "").strip(),
+            max_len=460,
+        )
         if not text:
             return
         key = text.lower()
@@ -5919,8 +5991,13 @@ def _primary_ref_evidence_summary_seed(primary_evidence: dict | None) -> str:
     primary = _normalize_primary_ref_evidence_payload(primary_evidence if isinstance(primary_evidence, dict) else {})
     if not primary:
         return ""
-    return _compact_reader_open_text(
-        str(primary.get("highlight_snippet") or primary.get("snippet") or "").strip()
+    return _clean_refs_evidence_snippet(
+        str(primary.get("highlight_snippet") or primary.get("snippet") or "").strip(),
+        prompt="",
+        source_path=str(primary.get("source_path") or "").strip(),
+        display_name=str(primary.get("source_name") or "").strip(),
+        heading_path=str(primary.get("heading_path") or "").strip(),
+        max_len=360,
     )
 
 
@@ -6205,8 +6282,12 @@ def _build_doc_list_ref_locs(*, heading_path: str, primary_evidence: dict) -> li
         if not isinstance(candidate, dict):
             return
         loc_heading = str(candidate.get("heading_path") or heading_path or "").strip()
-        snippet = _compact_reader_open_text(
-            str(candidate.get("highlight_snippet") or candidate.get("snippet") or "").strip()
+        snippet = _clean_refs_evidence_snippet(
+            str(candidate.get("highlight_snippet") or candidate.get("snippet") or "").strip(),
+            prompt="",
+            source_path=str(candidate.get("source_path") or "").strip(),
+            heading_path=loc_heading,
+            max_len=360,
         )
         if (not loc_heading) and (not snippet):
             return
@@ -6312,11 +6393,21 @@ def _build_doc_list_reader_open_payload(
     if source_name:
         out["sourceName"] = source_name
     auth_heading = str(primary.get("heading_path") or heading_path or out.get("headingPath") or "").strip()
-    auth_snippet = _compact_reader_open_text(
-        str(primary.get("snippet") or out.get("snippet") or summary_line or "").strip()
+    auth_snippet = _clean_refs_evidence_snippet(
+        str(primary.get("snippet") or out.get("snippet") or summary_line or "").strip(),
+        prompt="",
+        source_path=source_path,
+        display_name=source_name,
+        heading_path=auth_heading,
+        max_len=460,
     )
-    auth_highlight = _compact_reader_open_text(
-        str(primary.get("highlight_snippet") or auth_snippet or out.get("highlightSnippet") or "").strip()
+    auth_highlight = _clean_refs_evidence_snippet(
+        str(primary.get("highlight_snippet") or auth_snippet or out.get("highlightSnippet") or "").strip(),
+        prompt="",
+        source_path=source_path,
+        display_name=source_name,
+        heading_path=auth_heading,
+        max_len=460,
     )
     if auth_heading:
         out["headingPath"] = auth_heading
@@ -7661,6 +7752,7 @@ def build_hit_ui_meta(
         reader_open=reader_open if isinstance(reader_open, dict) else {},
         selection_reason=summary_source,
         score=score,
+        prompt=prompt,
     )
     if isinstance(reader_open, dict) and primary_evidence:
         reader_open = dict(reader_open)
@@ -8897,6 +8989,241 @@ def _prompt_requires_explicit_focus_match(prompt: str) -> bool:
     )
 
 
+def _refs_hit_ui_meta(hit: dict | None) -> dict:
+    return (hit or {}).get("ui_meta") if isinstance((hit or {}).get("ui_meta"), dict) else {}
+
+
+def _refs_hit_meta(hit: dict | None) -> dict:
+    return (hit or {}).get("meta") if isinstance((hit or {}).get("meta"), dict) else {}
+
+
+def _refs_hit_reader_open(hit: dict | None) -> dict:
+    ui_meta = _refs_hit_ui_meta(hit)
+    reader_open = ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {}
+    if reader_open:
+        return reader_open
+    raw = (hit or {}).get("reader_open") if isinstance((hit or {}).get("reader_open"), dict) else {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _refs_norm_key_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", str(value or "").lower()).strip()
+
+
+def _refs_hit_source_key(hit: dict | None) -> str:
+    ui_meta = _refs_hit_ui_meta(hit)
+    meta = _refs_hit_meta(hit)
+    source = (
+        str(ui_meta.get("source_path") or "").strip()
+        or str(meta.get("source_path") or "").strip()
+        or str(_refs_hit_reader_open(hit).get("sourcePath") or "").strip()
+        or str(ui_meta.get("display_name") or "").strip()
+    )
+    return _refs_norm_key_text(source.replace("\\", "/"))
+
+
+def _refs_hit_heading_key(hit: dict | None) -> str:
+    ui_meta = _refs_hit_ui_meta(hit)
+    meta = _refs_hit_meta(hit)
+    reader_open = _refs_hit_reader_open(hit)
+    heading = (
+        str(ui_meta.get("heading_path") or "").strip()
+        or str(ui_meta.get("section_label") or "").strip()
+        or str(meta.get("ref_best_heading_path") or "").strip()
+        or str(meta.get("heading_path") or "").strip()
+        or str(reader_open.get("headingPath") or "").strip()
+    )
+    return _refs_norm_key_text(heading)
+
+
+def _refs_hit_locate_key(hit: dict | None) -> str:
+    reader_open = _refs_hit_reader_open(hit)
+    ui_meta = _refs_hit_ui_meta(hit)
+    primary = reader_open.get("primaryEvidence") if isinstance(reader_open.get("primaryEvidence"), dict) else {}
+    primary_ui = ui_meta.get("primary_evidence") if isinstance(ui_meta.get("primary_evidence"), dict) else {}
+    block_id = str(reader_open.get("blockId") or primary.get("block_id") or primary_ui.get("block_id") or "").strip()
+    anchor_id = str(reader_open.get("anchorId") or primary.get("anchor_id") or primary_ui.get("anchor_id") or "").strip()
+    anchor_kind = str(reader_open.get("anchorKind") or "").strip().lower()
+    anchor_num = str(reader_open.get("anchorNumber") or "").strip()
+    if block_id or anchor_id:
+        return "loc:" + "|".join([block_id, anchor_id, anchor_kind, anchor_num])
+    return ""
+
+
+def _refs_hit_exact_locate_score(hit: dict | None) -> float:
+    ui_meta = _refs_hit_ui_meta(hit)
+    reader_open = _refs_hit_reader_open(hit)
+    primary = reader_open.get("primaryEvidence") if isinstance(reader_open.get("primaryEvidence"), dict) else {}
+    primary_ui = ui_meta.get("primary_evidence") if isinstance(ui_meta.get("primary_evidence"), dict) else {}
+    score = 0.0
+    if bool(reader_open.get("strictLocate")):
+        score += 0.55
+    if str(reader_open.get("blockId") or primary.get("block_id") or primary_ui.get("block_id") or "").strip():
+        score += 0.30
+    if str(reader_open.get("anchorId") or primary.get("anchor_id") or primary_ui.get("anchor_id") or "").strip():
+        score += 0.20
+    if str(reader_open.get("anchorKind") or "").strip() or _positive_int(reader_open.get("anchorNumber")) > 0:
+        score += 0.10
+    if bool(primary or primary_ui):
+        score += 0.15
+    return min(1.30, score)
+
+
+def _refs_hit_polish_score(hit: dict | None) -> float:
+    ui_meta = _refs_hit_ui_meta(hit)
+    if not ui_meta:
+        return 0.0
+    status = str(ref_card_polish_status(ui_meta).get("polish_status") or "").strip().lower()
+    if status == "full":
+        return 0.60
+    if status == "heuristic":
+        return 0.20
+    if status == "pending":
+        return 0.05
+    if status == "failed":
+        return -0.20
+    return 0.0
+
+
+def _refs_hit_evidence_text(hit: dict | None) -> str:
+    ui_meta = _refs_hit_ui_meta(hit)
+    meta = _refs_hit_meta(hit)
+    reader_open = _refs_hit_reader_open(hit)
+    primary = ui_meta.get("primary_evidence") if isinstance(ui_meta.get("primary_evidence"), dict) else {}
+    reader_primary = reader_open.get("primaryEvidence") if isinstance(reader_open.get("primaryEvidence"), dict) else {}
+    parts: list[str] = []
+    for value in (
+        primary.get("highlight_snippet"),
+        primary.get("snippet"),
+        reader_primary.get("highlight_snippet"),
+        reader_primary.get("snippet"),
+        reader_open.get("highlightSnippet"),
+        reader_open.get("snippet"),
+        ui_meta.get("summary_line"),
+        ui_meta.get("why_line"),
+        (hit or {}).get("text"),
+    ):
+        text = str(value or "").strip()
+        if text:
+            parts.append(text)
+    for key in ("ref_show_snippets", "ref_snippets", "ref_overview_snippets"):
+        arr = meta.get(key)
+        if isinstance(arr, list):
+            for item in arr[:3]:
+                text = str(item or "").strip()
+                if text:
+                    parts.append(text)
+    return " ".join(parts)
+
+
+def _refs_dedupe_tokens(text: str) -> set[str]:
+    tokens = re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", str(text or "").lower())
+    stop = {
+        "the", "and", "for", "with", "that", "this", "paper", "section", "method",
+        "these", "those", "from", "into", "where", "which", "what", "how",
+        "这条", "命中", "证据", "论文", "章节", "方法", "相关", "可以", "用于",
+    }
+    return {token for token in tokens if token not in stop}
+
+
+def _refs_evidence_similarity(left: str, right: str) -> float:
+    a = _refs_dedupe_tokens(left)
+    b = _refs_dedupe_tokens(right)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / max(1, min(len(a), len(b)))
+
+
+def _refs_evidence_fingerprint(text: str) -> str:
+    tokens = sorted(_refs_dedupe_tokens(text))
+    if not tokens:
+        return ""
+    return hashlib.sha1(" ".join(tokens[:32]).encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+
+def _refs_hits_are_near_duplicates(left: dict, right: dict) -> bool:
+    left_source = _refs_hit_source_key(left)
+    right_source = _refs_hit_source_key(right)
+    if not left_source or left_source != right_source:
+        return False
+    left_loc = _refs_hit_locate_key(left)
+    right_loc = _refs_hit_locate_key(right)
+    if left_loc and right_loc and left_loc == right_loc:
+        return True
+    left_heading = _refs_hit_heading_key(left)
+    right_heading = _refs_hit_heading_key(right)
+    if left_heading and right_heading and left_heading != right_heading:
+        return False
+    left_text = _refs_hit_evidence_text(left)
+    right_text = _refs_hit_evidence_text(right)
+    if left_heading and right_heading and (not left_text or not right_text):
+        return True
+    left_fp = _refs_evidence_fingerprint(left_text)
+    right_fp = _refs_evidence_fingerprint(right_text)
+    if left_fp and left_fp == right_fp:
+        return True
+    return _refs_evidence_similarity(left_text, right_text) >= 0.72
+
+
+def _refs_hit_duplicate_rank(*, prompt: str, hit: dict, idx: int) -> tuple[float, float, float, float, float, float, int]:
+    meta = _refs_hit_meta(hit)
+    answer_source_boost = 1.0 if str((meta or {}).get("ref_display_reason") or "").strip().lower() == "answer_hit_top" else 0.0
+    return (
+        answer_source_boost,
+        float(_refs_hit_focus_match_count(prompt, hit)),
+        float(_refs_hit_section_intent_score(prompt, hit)),
+        _refs_hit_exact_locate_score(hit),
+        _refs_hit_polish_score(hit),
+        _refs_hit_display_score(hit),
+        -int(idx),
+    )
+
+
+def _merge_refs_duplicate_into(keeper: dict, duplicate: dict) -> dict:
+    hit = dict(keeper or {})
+    ui = dict(_refs_hit_ui_meta(hit))
+    ui["merged_duplicate_count"] = _positive_int(ui.get("merged_duplicate_count")) + 1
+    headings = [
+        str(item or "").strip()
+        for item in list(ui.get("merged_duplicate_headings") or [])
+        if str(item or "").strip()
+    ]
+    duplicate_heading = str(_refs_hit_ui_meta(duplicate).get("heading_path") or "").strip()
+    if duplicate_heading and duplicate_heading not in headings:
+        headings.append(duplicate_heading)
+    if headings:
+        ui["merged_duplicate_headings"] = headings[:6]
+    hit["ui_meta"] = ui
+    meta = dict(_refs_hit_meta(hit))
+    meta["merged_duplicate_count"] = _positive_int(meta.get("merged_duplicate_count")) + 1
+    hit["meta"] = meta
+    return hit
+
+
+def _dedupe_refs_hits_for_display(*, prompt: str, hits: list[dict]) -> tuple[list[dict], int]:
+    rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    if len(rows) <= 1:
+        return rows, 0
+    kept: list[tuple[int, dict]] = []
+    removed = 0
+    for idx, hit in enumerate(rows):
+        match_pos = -1
+        for pos, (_keeper_idx, keeper) in enumerate(kept):
+            if _refs_hits_are_near_duplicates(keeper, hit):
+                match_pos = pos
+                break
+        if match_pos < 0:
+            kept.append((idx, hit))
+            continue
+        keeper_idx, keeper = kept[match_pos]
+        if _refs_hit_duplicate_rank(prompt=prompt, hit=hit, idx=idx) > _refs_hit_duplicate_rank(prompt=prompt, hit=keeper, idx=keeper_idx):
+            kept[match_pos] = (idx, _merge_refs_duplicate_into(hit, keeper))
+        else:
+            kept[match_pos] = (keeper_idx, _merge_refs_duplicate_into(keeper, hit))
+        removed += 1
+    return [hit for _idx, hit in kept], removed
+
+
 def _looks_negative_ref_reason_text(text: str) -> bool:
     low = str(text or "").strip().lower()
     if not low:
@@ -9084,7 +9411,7 @@ def _filter_refs_hits_by_prompt_focus(prompt: str, hits: list[dict]) -> list[dic
 
 
 def _sort_refs_hits_for_display(*, prompt: str, hits: list[dict]) -> list[dict]:
-    decorated: list[tuple[float, float, float, float, float, float, float, float, int, dict]] = []
+    decorated: list[tuple] = []
     prefer_raw_order = not (
         _prompt_requires_explicit_focus_match(prompt)
         or _prompt_likely_cross_paper_refs(prompt)
@@ -9106,12 +9433,14 @@ def _sort_refs_hits_for_display(*, prompt: str, hits: list[dict]) -> list[dict]:
         focus_count = float(_refs_hit_focus_match_count(prompt, hit))
         prompt_source_boost = float(_refs_prompt_source_match_boost(prompt, hit))
         section_score = float(_refs_hit_section_intent_score(prompt, hit))
+        locate_score = _refs_hit_exact_locate_score(hit)
+        polish_score = _refs_hit_polish_score(hit)
         if prefer_raw_order:
-            decorated.append((answer_source_boost, section_score, raw_score, focus_count, prompt_source_boost, score, anchor_score, doc_score, -idx, hit))
+            decorated.append((answer_source_boost, section_score, raw_score, focus_count, prompt_source_boost, locate_score, polish_score, score, anchor_score, doc_score, -idx, hit))
         else:
-            decorated.append((answer_source_boost, focus_count, section_score, prompt_source_boost, score, anchor_score, doc_score, raw_score, -idx, hit))
-    decorated.sort(key=lambda item: item[:9], reverse=True)
-    return [item[9] for item in decorated]
+            decorated.append((answer_source_boost, focus_count, section_score, prompt_source_boost, locate_score, polish_score, score, anchor_score, doc_score, raw_score, -idx, hit))
+    decorated.sort(key=lambda item: item[:-1], reverse=True)
+    return [item[-1] for item in decorated]
 
 
 def _prompt_explicitly_requests_multi_paper_list(prompt: str) -> bool:
@@ -9787,6 +10116,11 @@ def enrich_refs_payload(
                 guide_mode=guide_active,
             )
         post_llm_filter_hit_count = int(len(hits))
+        deduped_duplicate_hit_count = 0
+        if hits and len(hits) > 1 and (not has_pending):
+            hits, deduped_duplicate_hit_count = _dedupe_refs_hits_for_display(prompt=prompt, hits=hits)
+            if len(hits) > 1:
+                hits = _sort_refs_hits_for_display(prompt=prompt, hits=hits)
         display_cap = 0
         if prompt_multi_paper_list:
             display_cap = 6
@@ -9799,7 +10133,7 @@ def enrich_refs_payload(
             allow_expensive_llm_for_ready
             and (not _refs_payload_deadline_near(deadline_at, 0.35))
         )
-        llm_polish_allowed = bool(hits and (not has_pending) and slow_allowed and (not prompt_multi_paper_list))
+        llm_polish_allowed = bool(hits and (not has_pending) and slow_allowed)
         t_polish_start = time.time()
         if llm_polish_allowed:
             hits = _maybe_polish_refs_card_copy(
@@ -9807,6 +10141,8 @@ def enrich_refs_payload(
                 hits=hits,
                 guide_mode=guide_active,
             )
+            if len(hits) > 1:
+                hits = _sort_refs_hits_for_display(prompt=prompt, hits=hits)
         t_done = time.time()
         pack2 = dict(pack)
         pack2["hits"] = hits
@@ -9817,6 +10153,7 @@ def enrich_refs_payload(
             "post_score_gate_hit_count": int(post_score_gate_hit_count),
             "post_focus_filter_hit_count": int(post_focus_filter_hit_count),
             "post_llm_filter_hit_count": int(post_llm_filter_hit_count),
+            "deduped_duplicate_hit_count": int(deduped_duplicate_hit_count),
             "final_hit_count": int(len(hits)),
             "display_cap": int(display_cap),
             "filtered_self_hit_count": int(filtered_self_hits),
@@ -9834,7 +10171,7 @@ def enrich_refs_payload(
             "llm_polish_allowed": bool(llm_polish_allowed),
             "llm_polish_enabled": bool(_refs_card_polish_llm_enabled()),
             "llm_polish_top_n": int(_refs_card_polish_top_n()),
-            "llm_polish_timeout_s": float(_refs_card_polish_timeout_s(8.0)),
+            "llm_polish_timeout_s": float(_refs_card_polish_timeout_s()),
             "llm_polish_max_retries": int(_refs_card_polish_max_retries()),
             "deadline_exhausted": bool(_refs_payload_deadline_near(deadline_at, 0.0)),
             "query_variants": list(pack.get("query_variants") or []),
