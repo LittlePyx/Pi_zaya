@@ -110,6 +110,181 @@ def test_numeric_citation_without_identity_signal_stays_clickable(monkeypatch):
     assert len(details) == 1
 
 
+def test_numeric_router_prefers_system_b_for_upstream_origin_context(monkeypatch):
+    source_path = "scinerf.en.md"
+
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) != 1:
+            return None
+        return {
+            "source_path": source_path,
+            "source_name": "SCINeRF.pdf",
+            "ref_num": 1,
+            "ref": {
+                "authors": "Boyd S",
+                "year": "2011",
+                "title": "Distributed Optimization and Statistical Learning via ADMM",
+                "raw": "[1] Boyd S. Distributed Optimization and Statistical Learning via ADMM. 2011.",
+            },
+        }
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "SCINeRF.pdf")
+
+    md = "ADMM was not invented by this paper; it comes from prior optimization work [1]."
+    hits = [
+        {
+            "text": "SCINeRF uses ADMM for optimization in its reconstruction pipeline.",
+            "meta": {"source_path": source_path, "source_sha1": "abc"},
+        }
+    ]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[1](#kb-cite-" in out
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["is_inpaper"] is True
+    assert detail["citation_route"] == "system_b"
+    assert "ADMM" in " ".join([str(detail.get("title") or ""), str(detail.get("raw") or "")])
+    assert "upstream" in detail["routing_reason"].lower() or "prior work" in detail["routing_reason"].lower()
+
+
+def test_numeric_router_uses_citation_plan_for_system_b(monkeypatch):
+    source_path = "scinerf.en.md"
+
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) != 1:
+            return None
+        return {
+            "source_path": source_path,
+            "source_name": "SCINeRF.pdf",
+            "ref_num": 1,
+            "ref": {
+                "authors": "Boyd S",
+                "year": "2011",
+                "title": "Distributed Optimization and Statistical Learning via ADMM",
+                "raw": "[1] Boyd S. Distributed Optimization and Statistical Learning via ADMM. 2011.",
+            },
+        }
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "SCINeRF.pdf")
+
+    md = "ADMM is the optimization machinery discussed here [1]."
+    hits = [
+        {
+            "text": "SCINeRF uses ADMM for optimization in its reconstruction pipeline.",
+            "meta": {"source_path": source_path, "source_sha1": "abc"},
+        }
+    ]
+    plan = {
+        "intent": "beginner_overview",
+        "budget": {"system_a": 2, "system_b": 1},
+        "system_b_enabled": True,
+        "slots": [{"preferred_system": "system_b", "candidate_refs": [1]}],
+    }
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        md,
+        hits,
+        anchor_ns="t",
+        citation_plan=plan,
+    )
+
+    assert "[1](#kb-cite-" in out
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_b"
+    assert details[0]["routing_reason"] == "citation_plan"
+
+
+def test_citation_router_applies_per_paragraph_budget_for_system_a(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "doc.pdf")
+
+    md = (
+        "Structured detection improves optical sectioning [1], dynamic supersampling "
+        "changes sampling [2], and light field microscopy captures 3D context [3]."
+    )
+    hits = [
+        {
+            "text": "Structured detection improves optical sectioning.",
+            "meta": {
+                "source_path": "doc.en.md",
+                "heading_path": "A",
+                "evidence_quote": "Structured detection improves optical sectioning.",
+                "primary_block_id": "a",
+            },
+        },
+        {
+            "text": "Dynamic supersampling changes the sampling pattern.",
+            "meta": {
+                "source_path": "doc.en.md",
+                "heading_path": "B",
+                "evidence_quote": "Dynamic supersampling changes the sampling pattern.",
+                "primary_block_id": "b",
+            },
+        },
+        {
+            "text": "Light field microscopy captures 3D context.",
+            "meta": {
+                "source_path": "doc.en.md",
+                "heading_path": "C",
+                "evidence_quote": "Light field microscopy captures 3D context.",
+                "primary_block_id": "c",
+            },
+        },
+    ]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert out.count("#kb-cite-") == 2
+    assert "[3](#kb-cite-" not in out
+    assert len(details) == 2
+    assert all(item["citation_route"] == "system_a" for item in details)
+
+
+def test_citation_router_reads_system_a_budget_from_citation_plan(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "doc.pdf")
+
+    md = "Structured detection improves sectioning [1], and dynamic supersampling changes sampling [2]."
+    hits = [
+        {
+            "text": "Structured detection improves optical sectioning.",
+            "meta": {
+                "source_path": "doc.en.md",
+                "heading_path": "A",
+                "evidence_quote": "Structured detection improves optical sectioning.",
+                "primary_block_id": "a",
+            },
+        },
+        {
+            "text": "Dynamic supersampling changes the sampling pattern.",
+            "meta": {
+                "source_path": "doc.en.md",
+                "heading_path": "B",
+                "evidence_quote": "Dynamic supersampling changes the sampling pattern.",
+                "primary_block_id": "b",
+            },
+        },
+    ]
+    plan = {"intent": "origin_lookup", "budget": {"system_a": 1, "system_b": 0}, "slots": []}
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        md,
+        hits,
+        anchor_ns="t",
+        citation_plan=plan,
+    )
+
+    assert out.count("#kb-cite-") == 1
+    assert "[2](#kb-cite-" not in out
+    assert len(details) == 1
+
+
 def test_structured_citation_is_hidden_when_context_doi_conflicts(monkeypatch):
     source_path = "doc.en.md"
     sid = refs_renderer._source_cite_id(source_path)

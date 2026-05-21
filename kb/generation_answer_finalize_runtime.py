@@ -2381,7 +2381,14 @@ def _build_paper_guide_contract_snapshot(
         evidence_cards=evidence_cards,
     )
     render_packet_seed = seed.get("render_packet") if isinstance(seed.get("render_packet"), dict) else {}
-    if (not paper_guide_mode) and (not primary_evidence) and (not render_packet_seed) and (not doc_list):
+    citation_plan_seed = seed.get("citation_plan") if isinstance(seed.get("citation_plan"), dict) else {}
+    if (
+        (not paper_guide_mode)
+        and (not primary_evidence)
+        and (not render_packet_seed)
+        and (not doc_list)
+        and (not citation_plan_seed)
+    ):
         return {}
 
     snapshot = {"version": 1}
@@ -2411,6 +2418,8 @@ def _build_paper_guide_contract_snapshot(
             snapshot["primary_evidence"] = dict(primary_evidence)
         if doc_list:
             snapshot["doc_list"] = doc_list
+        if citation_plan_seed:
+            snapshot["citation_plan"] = dict(citation_plan_seed)
         return {
             key: value
             for key, value in snapshot.items()
@@ -2455,6 +2464,8 @@ def _build_paper_guide_contract_snapshot(
     prompt_context = seed.get("prompt_context") if isinstance(seed.get("prompt_context"), dict) else {}
     if prompt_context:
         snapshot["prompt_context"] = dict(prompt_context)
+    if citation_plan_seed:
+        snapshot["citation_plan"] = dict(citation_plan_seed)
     render_packet_model = _build_paper_guide_render_packet_model(
         answer_markdown=str(render_packet_seed.get("answer_markdown") or final_answer_markdown or "").strip(),
         notice=str(render_packet_seed.get("notice") or "").strip(),
@@ -2835,6 +2846,13 @@ def _finalize_generation_answer(
         prompt_family=sanitize_paper_guide_family,
     )
     retrieval_confidence = dict(paper_guide_retrieval_confidence_hint or {})
+    citation_plan = (
+        dict((paper_guide_contracts_seed or {}).get("citation_plan") or {})
+        if isinstance((paper_guide_contracts_seed or {}).get("citation_plan"), dict)
+        else {}
+    )
+    if citation_plan:
+        answer_quality["citation_plan"] = dict(citation_plan)
     if bool(template_repair_meta.get("changed")):
         answer_quality["template_repair"] = dict(template_repair_meta)
     if bool(retrieval_confidence.get("low_confidence")):

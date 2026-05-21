@@ -16,6 +16,7 @@ import streamlit as st
 import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
+from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.inpaper_citation_grounding import (
@@ -3366,10 +3367,289 @@ _SYSTEM_B_METHOD_CONTEXT_RE = re.compile(
     r"(?i)\b(?:method|model|framework|algorithm|optimization|implementation|reconstruction|machinery|tool)\b|"
     r"(?:方法|模型|框架|算法|优化|实现|重建|工具|机制)"
 )
+_SYSTEM_B_UPSTREAM_INTENT_RE = re.compile(
+    r"(?i)\b(?:where\s+(?:did|does).{0,40}(?:come\s+from|originate)|"
+    r"come\s+from|origin|source|upstream|prior|previous|earlier|existing|"
+    r"borrowed|inspired|based\s+on|extends?|cited|citing|citation|references?|"
+    r"not\s+(?:original|new)|who\s+(?:proposed|invented|introduced))\b|"
+    r"(?:怎么来|从哪(?:里)?来|源头|来源|出处|上游|前人|已有|先前|之前|早期|"
+    r"借鉴|引用|参考|基于|沿用|延续|谁(?:提出|发明|做的)|不是.{0,16}(?:原创|新提出|自己))"
+)
+
+_SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
+    ("iscat", re.compile(r"(?i)\biscat\b|干涉散射")),
+    ("interferometric", re.compile(r"(?i)\binterferometric\b|干涉检测|干涉散射")),
+    ("structured detection", re.compile(r"(?i)\bstructured\s+detection\b|结构检测")),
+    ("image scanning microscopy", re.compile(r"(?i)\bimage\s+scanning\s+microscopy\b|\bISM\b|共聚焦|扫描显微")),
+    ("light field", re.compile(r"(?i)\blight[-\s]?field\b|光场")),
+    ("single-pixel imaging", re.compile(r"(?i)\bsingle[-\s]?pixel\b|单像素")),
+    ("foveated", re.compile(r"(?i)\bfoveated\b|中央凹|自适应采样")),
+    ("dynamic supersampling", re.compile(r"(?i)\bdynamic\s+supersampling\b|\bsupersampling\b|超采样")),
+    ("optical sectioning", re.compile(r"(?i)\boptical\s+sectioning\b|光学切片")),
+    ("neural radiance fields", re.compile(r"(?i)\bnerf\b|neural\s+radiance\s+fields?|神经辐射场")),
+    ("3d gaussian splatting", re.compile(r"(?i)\b3dgs\b|gaussian\s+splatting|高斯泼溅|高斯溅射")),
+    ("snapshot compressive imaging", re.compile(r"(?i)\bsci\b|snapshot\s+compressive|压缩快照")),
+    ("cassi", re.compile(r"(?i)\bcassi\b|coded\s+aperture\s+snapshot|编码孔径")),
+    ("admm", re.compile(r"(?i)\badmm\b|交替方向乘子")),
+)
+_SYSTEM_A_STRONG_BINDING_TERMS = {
+    "iscat",
+    "interferometric",
+    "structured detection",
+    "image scanning microscopy",
+    "light field",
+    "foveated",
+    "dynamic supersampling",
+    "neural radiance fields",
+    "3d gaussian splatting",
+    "cassi",
+    "admm",
+}
+_SYSTEM_A_TOKEN_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "these",
+    "those",
+    "method",
+    "methods",
+    "paper",
+    "answer",
+    "source",
+    "evidence",
+    "section",
+    "result",
+    "results",
+    "using",
+    "used",
+    "based",
+    "through",
+    "between",
+    "different",
+    "mainly",
+    "problem",
+    "problems",
+}
 
 
 def _system_b_prefers_zh(*texts: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", " ".join(str(text or "") for text in texts)))
+
+
+def _system_a_prefers_zh(*texts: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", " ".join(str(text or "") for text in texts)))
+
+
+def _system_b_has_upstream_intent(*texts: str) -> bool:
+    raw = " ".join(str(text or "") for text in texts).strip()
+    return bool(raw and _SYSTEM_B_UPSTREAM_INTENT_RE.search(raw))
+
+
+def _system_b_route_reason(context_line: str, ref_rec: dict | None = None) -> str:
+    prefer_zh = _system_b_prefers_zh(context_line)
+    if prefer_zh:
+        return "这句话在追问方法、概念或判断的上游来源，优先链接当前论文引用的参考文献。"
+    return "This sentence asks about upstream origin or prior work, so the citation is routed to the paper's bibliography reference."
+
+
+def _should_route_numeric_to_system_b(context_line: str, ref_rec: dict | None = None) -> bool:
+    if not isinstance(ref_rec, dict):
+        ref_rec = {}
+    return _system_b_has_upstream_intent(
+        context_line,
+        str(ref_rec.get("title") or ""),
+        str(ref_rec.get("raw") or ""),
+    )
+
+
+def _system_a_domain_terms(text: str) -> set[str]:
+    raw = str(text or "")
+    if not raw:
+        return set()
+    return {name for name, pattern in _SYSTEM_A_DOMAIN_PATTERNS if pattern.search(raw)}
+
+
+def _system_a_keyword_terms(text: str, *, limit: int = 18) -> set[str]:
+    raw = str(text or "")
+    out: set[str] = set()
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9+.-]{2,}", raw):
+        t = token.strip().lower().strip(".-")
+        if not t or t in _SYSTEM_A_TOKEN_STOPWORDS:
+            continue
+        if t.isdigit():
+            continue
+        out.add(t)
+        if len(out) >= max(1, int(limit)):
+            break
+    for token in re.findall(r"[\u4e00-\u9fff]{2,8}", raw):
+        if token in {"这个", "这种", "主要", "问题", "方法", "论文", "答案", "来源", "证据"}:
+            continue
+        out.add(token)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def _system_a_term_label(terms: set[str] | list[str] | tuple[str, ...], *, max_terms: int = 4) -> str:
+    vals = [str(x or "").strip() for x in list(terms or []) if str(x or "").strip()]
+    vals = sorted(dict.fromkeys(vals))
+    return " / ".join(vals[: max(1, int(max_terms))])
+
+
+def _system_a_fp_text(text: str, *, max_len: int = 360) -> str:
+    raw = normalize_inline_markdown(str(text or ""))
+    raw = re.sub(r"\[[Rr]?\d{1,4}(?:\s*[,，、]\s*[Rr]?\d{1,4})*\]", "", raw)
+    raw = re.sub(r"\s+", " ", raw).strip().lower()
+    return raw[: max(32, int(max_len))]
+
+
+def _system_a_evidence_fingerprint(
+    *,
+    source_path: str,
+    heading: str,
+    evidence_quote: str,
+    snippet: str,
+    block_id: str,
+    anchor_id: str,
+    page_start: int,
+    page_end: int,
+) -> str:
+    src = str(source_path or "").strip().lower()
+    head = _system_a_fp_text(heading, max_len=180)
+    block = str(block_id or "").strip().lower()
+    anchor = str(anchor_id or "").strip().lower()
+    page = f"{int(page_start or 0)}-{int(page_end or 0)}"
+    if block or anchor:
+        basis = f"loc|{src}|{head}|{page}|{block}|{anchor}"
+    else:
+        evidence = _system_a_fp_text(evidence_quote or snippet, max_len=520)
+        digest = hashlib.sha1(evidence.encode("utf-8", errors="ignore")).hexdigest()[:16] if evidence else ""
+        basis = f"text|{src}|{head}|{page}|{digest}"
+    return hashlib.sha1(basis.encode("utf-8", errors="ignore")).hexdigest()[:20]
+
+
+def _system_a_add_linked_num(rec: dict, n: int) -> None:
+    try:
+        num = int(n)
+    except Exception:
+        return
+    vals: list[int] = []
+    for raw in rec.get("linked_nums") or []:
+        try:
+            k = int(raw)
+        except Exception:
+            continue
+        if k > 0:
+            vals.append(k)
+    try:
+        primary = int(rec.get("num") or 0)
+    except Exception:
+        primary = 0
+    if primary > 0:
+        vals.append(primary)
+    if num > 0:
+        vals.append(num)
+    deduped = sorted(dict.fromkeys(vals))
+    if deduped:
+        rec["linked_nums"] = deduped
+
+
+def _assess_system_a_hit_binding(
+    *,
+    answer_claim: str,
+    hit: dict,
+    meta: dict,
+    heading: str,
+    evidence_quote: str,
+    source_name: str,
+) -> dict:
+    claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
+    evidence_surface = " ".join(
+        [
+            str(evidence_quote or ""),
+            str((hit or {}).get("text") or ""),
+            str(heading or ""),
+            str(source_name or ""),
+            str((meta or {}).get("why_line") or ""),
+        ]
+    )
+    claim_domains = _system_a_domain_terms(claim)
+    evidence_domains = _system_a_domain_terms(evidence_surface)
+    domain_overlap = claim_domains & evidence_domains
+    claim_keywords = _system_a_keyword_terms(claim)
+    evidence_keywords = _system_a_keyword_terms(evidence_surface)
+    keyword_overlap = claim_keywords & evidence_keywords
+    prefer_zh = _system_a_prefers_zh(claim)
+
+    strong_claim_terms = claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
+    if strong_claim_terms and not domain_overlap:
+        missing = _system_a_term_label(strong_claim_terms)
+        evidence_label = _system_a_term_label(evidence_domains) or "retrieved passage"
+        reason = (
+            f"答案句的关键术语“{missing}”没有出现在该命中证据中；该命中更像是在讨论“{evidence_label}”。"
+            if prefer_zh
+            else f'The answer sentence names "{missing}", but this hit does not contain that concept; it appears to discuss "{evidence_label}".'
+        )
+        return {
+            "status": "mismatch",
+            "confidence": 0.0,
+            "suppress_link": True,
+            "reason": reason,
+            "overlap_terms": [],
+            "missing_terms": sorted(strong_claim_terms),
+        }
+
+    if domain_overlap:
+        terms = sorted(domain_overlap)
+        term_label = _system_a_term_label(terms)
+        reason = (
+            f"答案句和原文命中都明确出现“{term_label}”，可据此核对这句话。"
+            if prefer_zh
+            else f'The answer sentence and retrieved passage both mention "{term_label}", so this is a grounded evidence link.'
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.85,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": terms,
+            "missing_terms": [],
+        }
+
+    if len(keyword_overlap) >= 2:
+        terms = sorted(keyword_overlap)
+        term_label = _system_a_term_label(terms)
+        reason = (
+            f"答案句和原文命中共享“{term_label}”等关键词；建议打开原文核对完整语境。"
+            if prefer_zh
+            else f'The answer sentence and retrieved passage share keywords such as "{term_label}"; open the source to verify the full context.'
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.65,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": terms,
+            "missing_terms": [],
+        }
+
+    reason = (
+        "这条引用只能作为候选依据：答案句和命中片段的术语重合很弱，需要打开原文再确认。"
+        if prefer_zh
+        else "This citation is only a candidate source: term overlap between the answer sentence and retrieved passage is weak, so verify it in the original text."
+    )
+    return {
+        "status": "candidate",
+        "confidence": 0.35,
+        "suppress_link": False,
+        "reason": reason,
+        "overlap_terms": sorted(keyword_overlap),
+        "missing_terms": sorted(strong_claim_terms - evidence_domains),
+    }
 
 
 def _system_b_upstream_role(context_line: str, ref_rec: dict) -> str:
@@ -3412,6 +3692,7 @@ def _annotate_inpaper_citations_with_hover_meta(
     *,
     anchor_ns: str = "",
     canonical_paths: list[str] | None = None,
+    citation_plan: dict | None = None,
 ) -> tuple[str, list[dict]]:
     s = (md or "")
     if not s or "[" not in s:
@@ -3469,6 +3750,17 @@ def _annotate_inpaper_citations_with_hover_meta(
     resolved_cache: dict[tuple[int, str], tuple[str, str, dict] | None] = {}
     candidate_cache: dict[tuple[int, str], list[tuple[str, str, dict]]] = {}
     detail_by_key: dict[str, dict] = {}
+    system_a_detail_by_fingerprint: dict[str, dict] = {}
+    visible_detail_anchors: set[str] = set()
+    plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
+
+    def _plan_budget(system_name: str, default: int) -> int:
+        budget = plan.get("budget") if isinstance(plan.get("budget"), dict) else {}
+        try:
+            value = int((budget or {}).get(system_name) if system_name in (budget or {}) else default)
+        except Exception:
+            value = int(default)
+        return max(0, value)
 
     def _resolve_num_candidates(n: int, preferred_sp: str = "") -> list[tuple[str, str, dict]]:
         pref = str(preferred_sp or "").strip()
@@ -3532,6 +3824,9 @@ def _annotate_inpaper_citations_with_hover_meta(
         rec = {
             "num": int(n),
             "anchor": anchor,
+            "citation_route": "system_b",
+            "routing_reason": "structured_cite",
+            "routing_confidence": 0.9,
             "source_name": str(source_name or "").strip(),
             "source_path": str(source_path or "").strip(),
             "raw": raw_text,
@@ -3553,6 +3848,12 @@ def _annotate_inpaper_citations_with_hover_meta(
         structured_seen = False
         unresolved_struct_refs: set[int] = set()
         resolved_struct_refs: set[int] = set()
+        system_a_budget = _plan_budget("system_a", 2)
+        system_b_budget = _plan_budget("system_b", 1 if plan else 40)
+        used_system_a_keys: set[str] = set()
+        used_system_b_keys: set[str] = set()
+        used_system_a_count = 0
+        used_system_b_count = 0
 
         def _preferred_source_by_context(pos: int) -> str:
             try:
@@ -3579,6 +3880,37 @@ def _annotate_inpaper_citations_with_hover_meta(
                 return f"[{int(n)}](#{anchor})"
             t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
             return f"[{int(n)}](#{anchor} \"{t_attr}\")"
+
+        def _citation_budget_key(detail: dict) -> str:
+            if bool(detail.get("is_inpaper")):
+                return str(detail.get("anchor") or "").strip()
+            return str(detail.get("evidence_fingerprint") or detail.get("anchor") or "").strip()
+
+        def _claim_citation_budget(detail: dict) -> bool:
+            nonlocal used_system_a_count, used_system_b_count
+            key = _citation_budget_key(detail)
+            if not key:
+                return False
+            anchor = str(detail.get("anchor") or "").strip()
+            if bool(detail.get("is_inpaper")):
+                if key in used_system_b_keys:
+                    return False
+                if used_system_b_count >= system_b_budget:
+                    return False
+                used_system_b_keys.add(key)
+                used_system_b_count += 1
+                if anchor:
+                    visible_detail_anchors.add(anchor)
+                return True
+            if key in used_system_a_keys:
+                return False
+            if used_system_a_count >= system_a_budget:
+                return False
+            used_system_a_keys.add(key)
+            used_system_a_count += 1
+            if anchor:
+                visible_detail_anchors.add(anchor)
+            return True
 
         def _citation_context_line(*, token_start: int, token_end: int) -> str:
             try:
@@ -3707,7 +4039,12 @@ def _annotate_inpaper_citations_with_hover_meta(
             src_name = _display_source_name(sp)
             detail = _remember_detail(int(n), sp, src_name, ref)
             detail["is_inpaper"] = True  # Mark as System B (in-paper bibliography ref)
+            detail["citation_route"] = "system_b"
+            detail["routing_reason"] = "structured_cite"
+            detail["routing_confidence"] = 0.9
             _enrich_system_b_detail_from_answer_context(detail, token_start=int(pos), token_end=token_end)
+            if not _claim_citation_budget(detail):
+                return ""
             title_attr = _citation_hover_title(src_name, int(n), ref)
             anchor = str(detail.get("anchor") or "").strip()
             t_attr = str(title_attr or "").replace('"', "'").replace("\n", " ").strip()
@@ -3805,6 +4142,23 @@ def _annotate_inpaper_citations_with_hover_meta(
             answer_claim = ""
             if int(token_start) >= 0:
                 answer_claim = _citation_context_line(token_start=int(token_start), token_end=int(token_end))
+            binding = _assess_system_a_hit_binding(
+                answer_claim=answer_claim,
+                hit=hit or {},
+                meta=meta_h,
+                heading=heading,
+                evidence_quote=evidence_quote,
+                source_name=src_name,
+            )
+            if bool(binding.get("suppress_link")):
+                return {
+                    "_suppress_link": True,
+                    "num": int(n),
+                    "binding_status": str(binding.get("status") or "mismatch"),
+                    "binding_confidence": float(binding.get("confidence") or 0.0),
+                    "binding_reason": str(binding.get("reason") or "").strip(),
+                    "binding_overlap_terms": list(binding.get("overlap_terms") or []),
+                }
             location_bits: list[str] = []
             if heading:
                 location_bits.append(heading)
@@ -3813,25 +4167,46 @@ def _annotate_inpaper_citations_with_hover_meta(
                     location_bits.append(f"pp. {int(min(p0, p1))}-{int(max(p0, p1))}")
                 else:
                     location_bits.append(f"p. {int(p0)}")
+            block_id = str(meta_h.get("primary_block_id") or meta_h.get("block_id") or "").strip()
+            anchor_id = str(meta_h.get("primary_anchor_id") or meta_h.get("anchor_id") or "").strip()
             anchor_kind = str(meta_h.get("anchor_kind") or "").strip()
             if anchor_kind:
                 location_bits.append(anchor_kind)
             why_line = str(ref_rank.get("why") or meta_h.get("why_line") or "").strip()[:320]
             support_relation = why_line
             if not support_relation:
-                support_relation = (
-                    "This retrieval hit is the source evidence for the cited answer sentence; "
-                    "open it to verify the original wording and section context."
-                )
+                support_relation = str(binding.get("reason") or "").strip()
+            evidence_fp = _system_a_evidence_fingerprint(
+                source_path=sp,
+                heading=heading,
+                evidence_quote=evidence_quote,
+                snippet=snippet,
+                block_id=block_id,
+                anchor_id=anchor_id,
+                page_start=int(p0 or 0),
+                page_end=int(p1 or 0),
+            )
+            existing = system_a_detail_by_fingerprint.get(evidence_fp)
+            if isinstance(existing, dict):
+                _system_a_add_linked_num(existing, int(n))
+                if answer_claim and not str(existing.get("answer_claim") or "").strip():
+                    existing["answer_claim"] = answer_claim[:420]
+                detail_by_key[skey] = existing
+                return existing
             anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=src_name)
             rec = {
                 "num": int(n),
+                "linked_nums": [int(n)],
                 "anchor": anchor,
+                "evidence_fingerprint": evidence_fp,
                 "source_name": src_name,
                 "source_path": sp,
                 "raw": snippet[:520],
                 "title": heading or src_name,
                 "is_inpaper": False,  # System A (hit citation)
+                "citation_route": "system_a",
+                "routing_reason": "retrieval_hit",
+                "routing_confidence": float(binding.get("confidence") or 0.0),
                 "heading_path": heading,
                 "summary_line": evidence_quote[:360] or snippet[:360],
                 "summary_source": "retrieval_hit",
@@ -3841,14 +4216,19 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "location_label": " · ".join([part for part in location_bits if str(part or "").strip()])[:260],
                 "support_relation": support_relation,
                 "why_line": why_line,
-                "block_id": str(meta_h.get("primary_block_id") or meta_h.get("block_id") or "").strip(),
-                "anchor_id": str(meta_h.get("primary_anchor_id") or meta_h.get("anchor_id") or "").strip(),
+                "block_id": block_id,
+                "anchor_id": anchor_id,
                 "anchor_kind": anchor_kind,
                 "page_start": int(p0 or 0),
                 "page_end": int(p1 or 0),
                 "score": score_value,
+                "binding_status": str(binding.get("status") or "").strip(),
+                "binding_confidence": float(binding.get("confidence") or 0.0),
+                "binding_reason": str(binding.get("reason") or "").strip(),
+                "binding_overlap_terms": list(binding.get("overlap_terms") or []),
             }
             detail_by_key[skey] = rec
+            system_a_detail_by_fingerprint[evidence_fp] = rec
             return rec
 
         def _repl_any(m: re.Match) -> str:
@@ -3885,31 +4265,71 @@ def _annotate_inpaper_citations_with_hover_meta(
                     items.append(f"[{int(n)}]")
                     changed = True
                     continue
+                context_line = _citation_context_line(
+                    token_start=int(m.start()),
+                    token_end=int(m.end()),
+                )
                 hit_detail = _resolve_n_from_hits(
                     int(n),
                     token_start=int(m.start()),
                     token_end=int(m.end()),
                 )
-                if hit_detail:
-                    detail = hit_detail
-                else:
+                plan_prefers_b = citation_plan_prefers_system_b(
+                    plan,
+                    context=context_line,
+                    ref_num=int(n),
+                )
+                picked: tuple[str, str, dict] | None = None
+                should_try_system_b = bool(
+                    plan_prefers_b
+                    or
+                    (not hit_detail)
+                    or _should_route_numeric_to_system_b(context_line)
+                )
+                if should_try_system_b:
                     picked = _pick_grounded_numeric_candidate(
                         int(n),
                         pos=int(m.start()),
                         target_sp=target_sp,
                     )
-                    if not picked:
-                        if not _STRICT_STRUCTURED_CITATION_LINKING:
-                            items.append(f"[{int(n)}]")
-                        continue
+                if picked and (plan_prefers_b or _should_route_numeric_to_system_b(context_line, picked[2])):
                     sp, src_name, ref = picked
                     detail = _remember_detail(int(n), sp, src_name, ref)
                     detail["is_inpaper"] = True
+                    detail["citation_route"] = "system_b"
+                    detail["routing_reason"] = "citation_plan" if plan_prefers_b else _system_b_route_reason(context_line, ref)
+                    detail["routing_confidence"] = 0.82 if plan_prefers_b else 0.75
                     _enrich_system_b_detail_from_answer_context(
                         detail,
                         token_start=int(m.start()),
                         token_end=int(m.end()),
                     )
+                elif hit_detail:
+                    if bool(hit_detail.get("_suppress_link")):
+                        if not _STRICT_STRUCTURED_CITATION_LINKING:
+                            items.append(f"[{int(n)}]")
+                        changed = True
+                        continue
+                    detail = hit_detail
+                elif picked:
+                    sp, src_name, ref = picked
+                    detail = _remember_detail(int(n), sp, src_name, ref)
+                    detail["is_inpaper"] = True
+                    detail["citation_route"] = "system_b"
+                    detail["routing_reason"] = "reference_index_fallback"
+                    detail["routing_confidence"] = 0.55
+                    _enrich_system_b_detail_from_answer_context(
+                        detail,
+                        token_start=int(m.start()),
+                        token_end=int(m.end()),
+                    )
+                else:
+                    if not _STRICT_STRUCTURED_CITATION_LINKING:
+                        items.append(f"[{int(n)}]")
+                    continue
+                if not _claim_citation_budget(detail):
+                    changed = True
+                    continue
                 title_attr = _citation_hover_title(
                     str(detail.get("source_name") or ""),
                     int(n),
@@ -3973,7 +4393,35 @@ def _annotate_inpaper_citations_with_hover_meta(
             rebuilt_code.append("".join(rebuilt_math))
         out_lines.append("".join(rebuilt_code))
 
-    details = sorted(detail_by_key.values(), key=lambda x: (int(x.get("num") or 0), str(x.get("source_name") or "")))
+    unique_details: dict[str, dict] = {}
+    for rec in detail_by_key.values():
+        if not isinstance(rec, dict):
+            continue
+        anchor = str(rec.get("anchor") or "").strip()
+        if not anchor:
+            continue
+        if anchor not in visible_detail_anchors:
+            continue
+        unique_details[anchor] = rec
+
+    def _detail_sort_key(rec: dict) -> tuple[int, str]:
+        nums: list[int] = []
+        for raw in rec.get("linked_nums") or []:
+            try:
+                k = int(raw)
+            except Exception:
+                continue
+            if k > 0:
+                nums.append(k)
+        try:
+            primary = int(rec.get("num") or 0)
+        except Exception:
+            primary = 0
+        if primary > 0:
+            nums.append(primary)
+        return (min(nums) if nums else 0, str(rec.get("source_name") or ""))
+
+    details = sorted(unique_details.values(), key=_detail_sort_key)
     return "\n".join(out_lines), details
 
 
@@ -4000,8 +4448,13 @@ def _render_inpaper_citation_details(
             continue
         payload = {
             "num": int(n),
+            "linked_nums": list(rec.get("linked_nums") or []),
             "source_name": str(rec.get("source_name") or "").strip(),
             "source_path": str(rec.get("source_path") or "").strip(),
+            "evidence_fingerprint": str(rec.get("evidence_fingerprint") or "").strip(),
+            "citation_route": str(rec.get("citation_route") or "").strip(),
+            "routing_reason": str(rec.get("routing_reason") or "").strip(),
+            "routing_confidence": float(rec.get("routing_confidence") or 0.0),
             "raw": str(rec.get("raw") or "").strip(),
             "cite_fmt": str(rec.get("cite_fmt") or "").strip(),
             "title": str(rec.get("title") or "").strip(),

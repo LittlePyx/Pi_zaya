@@ -41,6 +41,7 @@ from kb.paper_guide_structured_index_runtime import (
     load_paper_guide_figure_index,
 )
 from kb.citation_meta import extract_first_doi
+from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
 from ui.chat_widgets import _md_to_plain_text, _normalize_copy_citation_links, _normalize_math_markdown
@@ -49,6 +50,7 @@ from ui.refs_renderer import (
     _annotate_inpaper_citations_with_hover_meta,
     _normalize_reference_for_popup,
     _source_cite_id,
+    _system_b_has_upstream_intent,
 )
 
 _STRUCT_CITE_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]", re.IGNORECASE)
@@ -66,7 +68,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
-_RENDER_CACHE_SCHEMA_VERSION = 5
+_RENDER_CACHE_SCHEMA_VERSION = 8
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -417,6 +419,31 @@ def _message_answer_output_mode(rec: dict | None) -> str:
     return str(answer_quality.get("output_mode") or "").strip().lower()
 
 
+def _message_citation_plan(rec: dict | None) -> dict:
+    if not isinstance(rec, dict):
+        return {}
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    answer_quality = dict(meta.get("answer_quality") or {}) if isinstance(meta.get("answer_quality"), dict) else {}
+    plan = answer_quality.get("citation_plan")
+    if isinstance(plan, dict) and plan:
+        return dict(plan)
+    contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+    plan = contracts.get("citation_plan")
+    if isinstance(plan, dict) and plan:
+        return dict(plan)
+    return {}
+
+
+def _citation_plan_system_b_budget(plan: dict | None) -> int:
+    if not isinstance(plan, dict):
+        return 1
+    budget = plan.get("budget") if isinstance(plan.get("budget"), dict) else {}
+    try:
+        return int((budget or {}).get("system_b") if "system_b" in (budget or {}) else 1)
+    except Exception:
+        return 1
+
+
 def _message_has_validated_structured_cites(rec: dict | None) -> bool:
     if not isinstance(rec, dict):
         return False
@@ -447,6 +474,14 @@ def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str
         return True
     if hits and _STRUCT_CITE_RE.search(raw) and _message_has_validated_structured_cites(rec):
         return True
+    if hits and (
+        _STRUCT_CITE_RE.search(raw)
+        or _STRUCT_CITE_SINGLE_RE.search(raw)
+        or _STRUCT_CITE_SID_ONLY_RE.search(raw)
+    ):
+        citation_plan = _message_citation_plan(rec)
+        if _system_b_has_upstream_intent(raw) or citation_plan_prefers_system_b(citation_plan, context=raw):
+            return True
     # Classic RAG with [n] markers and available hits → link citations.
     if hits and re.search(r"\[\d{1,4}\]", raw):
         return True
@@ -545,6 +580,27 @@ def _content_has_linkable_answer_citations(content: str, hits: list[dict] | None
 
 def _cache_has_rendered_citation_links(cache: dict) -> bool:
     return render_payload_has_citation_links(cache)
+
+
+def _existing_render_packet_from_record(rec: dict | None) -> dict:
+    if not isinstance(rec, dict):
+        return {}
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
+    packet = contracts.get("render_packet")
+    return dict(packet) if isinstance(packet, dict) else {}
+
+
+def _message_render_source_markdown(rec: dict | None, content: str) -> str:
+    raw_content = str(content or "").strip()
+    if raw_content:
+        return raw_content
+    packet = _existing_render_packet_from_record(rec)
+    for key in ("answer_markdown", "rendered_body", "rendered_content", "copy_markdown"):
+        value = str(packet.get(key) or "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _render_cache_is_degraded_for_citations(cache: dict, *, raw_content: str, hits: list[dict] | None) -> bool:
@@ -699,6 +755,7 @@ def _merge_render_packet_contract_meta(
     )
     existing_notice = str(existing_packet.get("notice") or "").strip()
     current_notice = str(rec.get("notice") or "").strip()
+    answer_markdown = _message_render_source_markdown(rec, str(rec.get("content") or ""))
     provenance_segments = list((enriched_provenance or {}).get("segments") or [])
     provenance_primary_evidence = _merge_render_packet_primary_evidence(
         contract_primary=(
@@ -730,7 +787,7 @@ def _merge_render_packet_contract_meta(
     # KB-miss) just because the existing packet had no notice.
     notice = existing_notice if (preserve_existing_render and existing_notice) else current_notice
     render_packet_model = _build_paper_guide_render_packet_model(
-        answer_markdown=str(rec.get("content") or "").strip(),
+        answer_markdown=answer_markdown,
         notice=notice,
         rendered_body=rendered_body,
         rendered_content=rendered_content,
@@ -1256,6 +1313,7 @@ def enrich_messages_with_reference_render(
         rec = dict(msg or {})
         role = str(rec.get("role") or "")
         content = str(rec.get("content") or "")
+        render_source = _message_render_source_markdown(rec, content)
         try:
             msg_id = int(rec.get("id") or 0)
         except Exception:
@@ -1275,7 +1333,7 @@ def enrich_messages_with_reference_render(
             conv_id=conv_id,
             msg_id=msg_id,
             role=role,
-            content=content,
+            content=render_source,
             refs_user_msg_id=int(last_user_msg_id or 0),
             ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
             provenance=provenance_raw if isinstance(provenance_raw, dict) else None,
@@ -1283,7 +1341,7 @@ def enrich_messages_with_reference_render(
         cached = _extract_render_cache(
             rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
             expected_key=render_cache_key,
-            raw_content=content,
+            raw_content=render_source,
             hits=hits,
         )
         if cached:
@@ -1296,18 +1354,19 @@ def enrich_messages_with_reference_render(
             rec["rendered_body"] = str(cached.get("rendered_body") or "")
             rec["refs_user_msg_id"] = int(cached.get("refs_user_msg_id") or last_user_msg_id or 0)
         else:
-            notice, body = _split_kb_miss_notice(content)
+            notice, body = _split_kb_miss_notice(render_source)
             if notice and hits:
                 notice = ""
-                body = content
+                body = render_source
             cite_details: list[dict] = []
             rendered_body = str(body or "")
             raw_body = rendered_body
             allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
                 rec=rec,
-                content=content,
+                content=render_source,
                 hits=hits,
             )
+            citation_plan = _message_citation_plan(rec)
             if rendered_body.strip():
                 rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
                 rendered_body = _normalize_equation_source_notes(rendered_body)
@@ -1316,17 +1375,22 @@ def enrich_messages_with_reference_render(
                     # the same source the LLM referenced during generation.
                     _rec_meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
                     _canon_paths = list(_rec_meta.get("canonical_hit_paths") or []) if isinstance(_rec_meta.get("canonical_hit_paths"), list) else []
+                    annotate_kwargs = {
+                        "anchor_ns": f"{conv_id}:{idx}:{msg_id}:api",
+                        "canonical_paths": _canon_paths or None,
+                    }
+                    if citation_plan:
+                        annotate_kwargs["citation_plan"] = citation_plan
                     rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
                         rendered_body,
                         hits,
-                        anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
-                        canonical_paths=_canon_paths or None,
+                        **annotate_kwargs,
                     )
                     if _should_retry_structured_cite_fallback(
                         raw_body=raw_body,
                         rendered_body=rendered_body,
                         cite_details=cite_details,
-                    ):
+                    ) and _citation_plan_system_b_budget(citation_plan) > 0:
                         rendered_body, cite_details = _fallback_render_structured_citations(
                             raw_body,
                             hits,
@@ -1344,7 +1408,7 @@ def enrich_messages_with_reference_render(
             elif rendered_body:
                 rendered_full = rendered_body
             else:
-                rendered_full = content
+                rendered_full = render_source or content
 
             rendered_markdown, rendered_body_norm, copy_markdown, copy_text = _build_render_texts(
                 rendered_full=rendered_full,

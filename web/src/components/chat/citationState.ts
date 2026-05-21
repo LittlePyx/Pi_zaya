@@ -19,6 +19,11 @@ export interface CiteDetail {
   pages: string
   doi: string
   doiUrl: string
+  linkedNums: number[]
+  evidenceFingerprint: string
+  citationRoute: string
+  routingReason: string
+  routingConfidence: number
   citationCount: number
   citationSource: string
   venueKind: string
@@ -53,6 +58,10 @@ export interface CiteDetail {
   pageStart: number
   pageEnd: number
   score: number
+  bindingStatus: string
+  bindingConfidence: number
+  bindingReason: string
+  bindingOverlapTerms: string[]
 }
 
 export interface CiteShelfItem extends CiteDetail {
@@ -122,6 +131,33 @@ function pickNumber(rec: Record<string, unknown>, ...keys: string[]): number {
     if (value) return value
   }
   return 0
+}
+
+function pickStringArray(rec: Record<string, unknown>, ...keys: string[]): string[] {
+  for (const key of keys) {
+    const value = rec[key]
+    if (!Array.isArray(value)) continue
+    const out = value
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+    if (out.length > 0) return out
+  }
+  return []
+}
+
+function pickNumberArray(rec: Record<string, unknown>, ...keys: string[]): number[] {
+  for (const key of keys) {
+    const value = rec[key]
+    if (!Array.isArray(value)) continue
+    const out: number[] = []
+    for (const item of value) {
+      const num = typeof item === 'number' ? item : Number.parseInt(String(item || ''), 10)
+      if (Number.isFinite(num) && num > 0) out.push(num)
+    }
+    const deduped = Array.from(new Set(out)).sort((a, b) => a - b)
+    if (deduped.length > 0) return deduped
+  }
+  return []
 }
 
 function stripLeadCitationLabel(value: string): string {
@@ -196,6 +232,11 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     pages: pickText(rec, 'pages'),
     doi: pickText(rec, 'doi'),
     doiUrl: pickText(rec, 'doi_url', 'doiUrl'),
+    linkedNums: pickNumberArray(rec, 'linked_nums', 'linkedNums'),
+    evidenceFingerprint: pickText(rec, 'evidence_fingerprint', 'evidenceFingerprint'),
+    citationRoute: pickText(rec, 'citation_route', 'citationRoute'),
+    routingReason: pickText(rec, 'routing_reason', 'routingReason'),
+    routingConfidence: pickNumber(rec, 'routing_confidence', 'routingConfidence'),
     citationCount: pickNumber(rec, 'citation_count', 'citationCount'),
     citationSource: pickText(rec, 'citation_source', 'citationSource'),
     venueKind: pickText(rec, 'venue_kind', 'venueKind'),
@@ -230,6 +271,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     pageStart: pickNumber(rec, 'page_start', 'pageStart'),
     pageEnd: pickNumber(rec, 'page_end', 'pageEnd'),
     score: pickNumber(rec, 'score'),
+    bindingStatus: pickText(rec, 'binding_status', 'bindingStatus'),
+    bindingConfidence: pickNumber(rec, 'binding_confidence', 'bindingConfidence'),
+    bindingReason: pickText(rec, 'binding_reason', 'bindingReason'),
+    bindingOverlapTerms: pickStringArray(rec, 'binding_overlap_terms', 'bindingOverlapTerms'),
   }
 }
 

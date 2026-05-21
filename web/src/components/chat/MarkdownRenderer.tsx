@@ -126,6 +126,83 @@ function normalize(text: string) {
     .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$')
 }
 
+function resolvePlainCitationDetail(
+  marker: string,
+  byNum: Map<number, CiteDetail[]>,
+): CiteDetail | null {
+  const raw = String(marker || '').trim()
+  const wantsInpaper = /^r/i.test(raw)
+  const num = Number(raw.replace(/^r/i, ''))
+  if (!Number.isFinite(num) || num <= 0) return null
+  const candidates = byNum.get(num) || []
+  if (candidates.length <= 0) return null
+  if (wantsInpaper) {
+    return candidates.find((detail) => detail.isInpaper) || (candidates.length === 1 ? candidates[0] : null)
+  }
+  if (candidates.length === 1) return candidates[0]
+  const direct = candidates.filter((detail) => !detail.isInpaper)
+  if (direct.length === 1) return direct[0]
+  const inpaper = candidates.filter((detail) => detail.isInpaper)
+  if (direct.length <= 0 && inpaper.length === 1) return inpaper[0]
+  return null
+}
+
+function linkifyPlainCitationSegment(segment: string, byNum: Map<number, CiteDetail[]>): string {
+  if (!segment || byNum.size <= 0 || !/\[[Rr]?\d/.test(segment)) return segment
+  return segment.replace(
+    /(!?)\[([Rr]?\d{1,4}(?:\s*[,，、]\s*[Rr]?\d{1,4})*)\](?!\()/g,
+    (match, imageBang: string, body: string, offset: number, full: string) => {
+      if (imageBang) return match
+      const prev = offset > 0 ? full[offset - 1] : ''
+      if (prev === '[' || prev === '\\') return match
+      let changed = false
+      const linked = String(body || '').replace(/[Rr]?\d{1,4}/g, (token) => {
+        const detail = resolvePlainCitationDetail(token, byNum)
+        if (!detail?.anchor) return token
+        changed = true
+        return `[${token}](#${detail.anchor})`
+      })
+      return changed ? linked : match
+    },
+  )
+}
+
+function linkifyPlainCitationMarkers(text: string, citeDetails: CiteDetail[]): string {
+  if (!text || citeDetails.length <= 0 || !/\[[Rr]?\d/.test(text)) return text
+  const byNum = new Map<number, CiteDetail[]>()
+  for (const detail of citeDetails) {
+    const anchor = String(detail.anchor || '').trim()
+    if (!anchor) continue
+    const nums = new Set<number>()
+    const primary = Number(detail.num || 0)
+    if (Number.isFinite(primary) && primary > 0) nums.add(primary)
+    if (Array.isArray(detail.linkedNums)) {
+      for (const raw of detail.linkedNums) {
+        const num = Number(raw || 0)
+        if (Number.isFinite(num) && num > 0) nums.add(num)
+      }
+    }
+    for (const num of nums) {
+      const list = byNum.get(num) || []
+      list.push(detail)
+      byNum.set(num, list)
+    }
+  }
+  if (byNum.size <= 0) return text
+
+  const protectedRe = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g
+  let out = ''
+  let last = 0
+  for (const match of text.matchAll(protectedRe)) {
+    const index = match.index ?? 0
+    out += linkifyPlainCitationSegment(text.slice(last, index), byNum)
+    out += match[0]
+    last = index + match[0].length
+  }
+  out += linkifyPlainCitationSegment(text.slice(last), byNum)
+  return out
+}
+
 function dedupeRepeatedReaderImageMarkdown(text: string): string {
   const srcRe = /^\s*!\[[^\]]*\]\((.+?)\)\s*$/
   const seen = new Set<string>()
@@ -1168,11 +1245,12 @@ function buildMarkdownComponents(
             } as CSSProperties)
           : undefined
         return (
-          <button
-            type="button"
+          <a
+            href={`#${detail.anchor}`}
             className={detail.isInpaper ? 'kb-cite-chip-sysb' : 'kb-cite-chip'}
             style={toneStyle}
             title={detail.sourceName || detail.sourcePath || undefined}
+            aria-label={detail.sourceName || detail.sourcePath || citationInlineLabel(detail, { includeSource: false })}
             onClick={(event) => {
               event.preventDefault()
               onCitationClick?.(detail, event)
@@ -1185,7 +1263,7 @@ function buildMarkdownComponents(
             }}
           >
             {citationInlineLabel(detail, { includeSource: false })}
-          </button>
+          </a>
         )
       }
       return (
@@ -1357,9 +1435,10 @@ export function MarkdownRenderer({
   readerBlocks,
 }: Props) {
   const S = useT()
+  const rawContent = String(content || '')
   const renderContent = variant === 'reader'
-    ? dedupeRepeatedReaderImageMarkdown(String(content || ''))
-    : normalize(content)
+    ? dedupeRepeatedReaderImageMarkdown(rawContent)
+    : normalize(linkifyPlainCitationMarkers(rawContent, citeDetails))
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
   const toneBySource = buildToneMap(citeDetails)
   const readerBlockResolver = useMemo(

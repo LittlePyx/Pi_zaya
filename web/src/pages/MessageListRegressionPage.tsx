@@ -299,10 +299,10 @@ const renderPacketContractMessages: Message[] = [
         render_packet: {
           answer_markdown: 'Equation (1) gives the volume rendering integral. [[CITE:s1234abcd:1]]',
           notice: 'RenderPacket notice: this message should show notice without top-level fields.',
-          rendered_body: 'Equation (1) gives the volume rendering integral. [1](#kb-cite-demo-1)',
-          rendered_content: 'Equation (1) gives the volume rendering integral. [1](#kb-cite-demo-1)',
+          rendered_body: 'Equation (1) gives the volume rendering integral. [1]',
+          rendered_content: 'Equation (1) gives the volume rendering integral. [1]',
           copy_text: 'Equation (1) gives the volume rendering integral. [1]',
-          copy_markdown: 'Equation (1) gives the volume rendering integral. [1](#kb-cite-demo-1)',
+          copy_markdown: 'Equation (1) gives the volume rendering integral. [1]',
           cite_details: [
             {
               num: 1,
@@ -485,18 +485,18 @@ const systemACitationPopoverMessages: Message[] = [
   {
     id: 1,
     role: 'assistant',
-    content: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+    content: 'The method details are grounded in [1].',
     created_at: Date.now(),
     meta: {
       paper_guide_contracts: {
         version: 1,
         intent: { family: 'method' },
         render_packet: {
-          answer_markdown: 'The method details are grounded in [1](#kb-cite-system-a-1).',
-          rendered_body: 'The method details are grounded in [1](#kb-cite-system-a-1).',
-          rendered_content: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          answer_markdown: 'The method details are grounded in [1].',
+          rendered_body: 'The method details are grounded in [1].',
+          rendered_content: 'The method details are grounded in [1].',
           copy_text: 'The method details are grounded in [1].',
-          copy_markdown: 'The method details are grounded in [1](#kb-cite-system-a-1).',
+          copy_markdown: 'The method details are grounded in [1].',
           cite_details: [
             {
               num: 1,
@@ -515,6 +515,10 @@ const systemACitationPopoverMessages: Message[] = [
               summary_source: 'retrieval_hit',
               support_relation: 'The Method section states the exact mechanism used by the answer.',
               why_line: 'The Method section states the exact mechanism used by the answer.',
+              binding_status: 'grounded',
+              binding_confidence: 0.84,
+              binding_reason: 'The answer sentence and retrieved passage both mention NeRF and rays.',
+              binding_overlap_terms: ['NeRF', 'rays'],
               block_id: 'p-method-1',
               anchor_id: 'a-p-method-1',
               anchor_kind: 'sentence',
@@ -528,6 +532,61 @@ const systemACitationPopoverMessages: Message[] = [
     },
   },
 ]
+
+const plainCitationRefsFallbackMessages: Message[] = [
+  {
+    id: 1,
+    role: 'user',
+    content: 'Explain two papers with citations.',
+    created_at: Date.now(),
+  },
+  {
+    id: 2,
+    role: 'assistant',
+    content: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    rendered_body: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    copy_text: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    copy_markdown: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    created_at: Date.now(),
+  },
+]
+
+const plainCitationRefsFallbackRefs: Record<string, unknown> = {
+  '1': {
+    hits: [
+      {
+        score: 9.4,
+        text: 'Single-pixel imaging based on deep learning improves reconstruction quality and computational speed.',
+        ui_meta: {
+          display_name: 'Deep Learning SPI Review.pdf',
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Deep Learning SPI Review / 5. Realizations',
+          summary_line: 'Single-pixel imaging based on deep learning improves reconstruction quality and computational speed.',
+          why_line: 'This hit explains the broad deep-learning SPI advantage used by the answer.',
+        },
+        meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Deep Learning SPI Review / 5. Realizations',
+        },
+      },
+      {
+        score: 8.7,
+        text: 'PILN introduces a part-based image-loop network that uses the reconstructed image as the input of the next iteration.',
+        ui_meta: {
+          display_name: 'PILN Paper.pdf',
+          source_path: '__fixtures__/piln-paper.en.md',
+          heading_path: 'PILN Paper / Method',
+          summary_line: 'PILN introduces a part-based image-loop network that uses the reconstructed image as the input of the next iteration.',
+          why_line: 'This hit grounds the answer sentence about PILN method design.',
+        },
+        meta: {
+          source_path: '__fixtures__/piln-paper.en.md',
+          heading_path: 'PILN Paper / Method',
+        },
+      },
+    ],
+  },
+}
 
 const guideFilterOnlyMessages: Message[] = [
   {
@@ -710,6 +769,7 @@ type RegressionScenario =
   | 'render-packet-hidden-locate'
   | 'citation-hover-race'
   | 'system-a-citation-popover'
+  | 'plain-citation-refs-fallback'
   | 'guide-filter-empty-external'
   | 'negative-evidence-locate'
   | 'normal-multi-doc-ambiguous-inline-locate'
@@ -728,6 +788,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'render-packet-hidden-locate') return 'render-packet-hidden-locate'
     if (scenarioParam === 'citation-hover-race') return 'citation-hover-race'
     if (scenarioParam === 'system-a-citation-popover') return 'system-a-citation-popover'
+    if (scenarioParam === 'plain-citation-refs-fallback') return 'plain-citation-refs-fallback'
     if (scenarioParam === 'guide-filter-empty-external') return 'guide-filter-empty-external'
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
     if (scenarioParam === 'normal-multi-doc-ambiguous-inline-locate') return 'normal-multi-doc-ambiguous-inline-locate'
@@ -742,6 +803,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'render-packet-hidden-locate') return renderPacketHiddenLocateMessages
     if (scenario === 'citation-hover-race') return citationHoverRaceMessages
     if (scenario === 'system-a-citation-popover') return systemACitationPopoverMessages
+    if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackMessages
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyMessages
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateMessages
@@ -750,6 +812,7 @@ export default function MessageListRegressionPage() {
   })()
   const regressionRefs: Record<string, unknown> = (() => {
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyRefs
+    if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackRefs
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateRefs
     if (scenario === 'live-user-pending-refs') return liveUserPendingRefs
     return {}

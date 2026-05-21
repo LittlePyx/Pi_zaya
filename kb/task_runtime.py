@@ -1786,6 +1786,7 @@ def _build_generation_prompt_bundle(
     paper_guide_evidence_cards_block: str,
     paper_guide_citation_grounding_block: str,
     paper_guide_reference_opportunities_block: str = "",
+    citation_plan_block: str = "",
     image_attachment_count: int = 0,
 ) -> dict:
     return _message_builder_build_generation_prompt_bundle(
@@ -1807,6 +1808,7 @@ def _build_generation_prompt_bundle(
         paper_guide_evidence_cards_block=paper_guide_evidence_cards_block,
         paper_guide_citation_grounding_block=paper_guide_citation_grounding_block,
         paper_guide_reference_opportunities_block=paper_guide_reference_opportunities_block,
+        citation_plan_block=citation_plan_block,
         image_attachment_count=image_attachment_count,
     )
 
@@ -3731,6 +3733,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_citation_grounding_block = str(paper_guide_prompt_context.get("paper_guide_citation_grounding_block") or "")
         paper_guide_reference_opportunities_block = str(paper_guide_prompt_context.get("paper_guide_reference_opportunities_block") or "")
         paper_guide_reference_opportunities = list(paper_guide_prompt_context.get("paper_guide_reference_opportunities") or [])
+        citation_plan = dict(paper_guide_prompt_context.get("citation_plan") or {})
+        citation_plan_block = str(paper_guide_prompt_context.get("citation_plan_block") or "")
         paper_guide_candidate_refs_by_source = dict(paper_guide_prompt_context.get("paper_guide_candidate_refs_by_source") or {})
         paper_guide_support_slots = list(paper_guide_prompt_context.get("paper_guide_support_slots") or [])
         paper_guide_contracts_seed = dict(paper_guide_prompt_context.get("paper_guide_contracts_seed") or {})
@@ -3741,6 +3745,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "system_a_support_slot_count": int(len(paper_guide_support_slots or [])),
                 "evidence_card_count": int(len(paper_guide_evidence_cards or [])),
                 "candidate_ref_source_count": int(len(paper_guide_candidate_refs_by_source or {})),
+                "citation_plan_intent": str(citation_plan.get("intent") or ""),
+                "citation_plan_budget": dict(citation_plan.get("budget") or {}) if isinstance(citation_plan.get("budget"), dict) else {},
             },
         )
         if prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or "") and refs_seed_docs_for_display:
@@ -3783,6 +3789,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             paper_guide_evidence_cards_block=paper_guide_evidence_cards_block,
             paper_guide_citation_grounding_block=paper_guide_citation_grounding_block,
             paper_guide_reference_opportunities_block=paper_guide_reference_opportunities_block,
+            citation_plan_block=citation_plan_block,
             image_attachment_count=len(image_attachments or []),
         )
         system = str(prompt_bundle.get("system") or "")

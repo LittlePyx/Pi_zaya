@@ -8,6 +8,7 @@ from kb.inpaper_citation_grounding import (
     extract_candidate_ref_cue_texts,
     extract_candidate_ref_nums_from_hits,
 )
+from kb.citation_plan import build_citation_plan, build_citation_plan_prompt_block
 from kb.paper_guide_citation_surfacing import (
     _collect_paper_guide_candidate_refs_by_source,
 )
@@ -338,6 +339,8 @@ def _prepare_paper_guide_prompt_context(
     paper_guide_reference_opportunities: list[dict[str, object]] = []
     paper_guide_candidate_refs_by_source: dict[str, list[int]] = {}
     paper_guide_support_slots: list[dict] = []
+    citation_plan: dict[str, object] = {}
+    citation_plan_block = ""
     paper_guide_target_scope = _build_paper_guide_target_scope(
         prompt or retrieval_prompt or used_query,
         prompt_family=prompt_family,
@@ -448,6 +451,14 @@ def _prepare_paper_guide_prompt_context(
         paper_guide_citation_grounding_block = _build_paper_guide_citation_grounding_block(answer_hits)
 
     prompt_text = prompt or retrieval_prompt or used_query
+    citation_plan = build_citation_plan(
+        prompt=prompt_text,
+        prompt_family=prompt_family,
+        answer_hits=answer_hits,
+        support_slots=paper_guide_support_slots,
+        reference_opportunities=paper_guide_reference_opportunities,
+    )
+    citation_plan_block = build_citation_plan_prompt_block(citation_plan)
     paper_guide_contracts_seed = {}
     if paper_guide_mode:
         resolved_intent = _resolve_paper_guide_intent(
@@ -492,16 +503,21 @@ def _prepare_paper_guide_prompt_context(
             paper_guide_contracts_seed["reference_opportunities"] = [
                 dict(item) for item in paper_guide_reference_opportunities if isinstance(item, dict)
             ]
+        if citation_plan:
+            paper_guide_contracts_seed["citation_plan"] = dict(citation_plan)
         seed_primary_evidence = _select_seed_primary_evidence(paper_guide_evidence_cards)
         if seed_primary_evidence:
             paper_guide_contracts_seed["primary_evidence"] = dict(seed_primary_evidence)
-    elif paper_guide_reference_opportunities:
+    elif paper_guide_reference_opportunities or citation_plan:
         paper_guide_contracts_seed = {
             "version": 1,
-            "reference_opportunities": [
-                dict(item) for item in paper_guide_reference_opportunities if isinstance(item, dict)
-            ],
         }
+        if paper_guide_reference_opportunities:
+            paper_guide_contracts_seed["reference_opportunities"] = [
+                dict(item) for item in paper_guide_reference_opportunities if isinstance(item, dict)
+            ]
+        if citation_plan:
+            paper_guide_contracts_seed["citation_plan"] = dict(citation_plan)
 
     return {
         "paper_guide_evidence_cards_block": paper_guide_evidence_cards_block,
@@ -510,6 +526,8 @@ def _prepare_paper_guide_prompt_context(
         "paper_guide_citation_grounding_block": paper_guide_citation_grounding_block,
         "paper_guide_reference_opportunities_block": paper_guide_reference_opportunities_block,
         "paper_guide_reference_opportunities": paper_guide_reference_opportunities,
+        "citation_plan": citation_plan,
+        "citation_plan_block": citation_plan_block,
         "paper_guide_candidate_refs_by_source": paper_guide_candidate_refs_by_source,
         "paper_guide_support_slots": paper_guide_support_slots,
         "paper_guide_target_scope": paper_guide_target_scope,

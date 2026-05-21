@@ -31,12 +31,39 @@ function sameCompact(left: string, right: string) {
   return Boolean(a && b && a === b)
 }
 
+function substantiallySame(left: string, right: string) {
+  const a = compact(left).replace(/\s+/g, ' ').toLowerCase()
+  const b = compact(right).replace(/\s+/g, ' ').toLowerCase()
+  if (!a || !b) return false
+  if (a === b) return true
+  if (a.length >= 36 && b.includes(a)) return true
+  if (b.length >= 36 && a.includes(b)) return true
+  const aTokens = new Set(a.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
+  const bTokens = new Set(b.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
+  if (aTokens.size < 6 || bTokens.size < 6) return false
+  let overlap = 0
+  for (const token of aTokens) {
+    if (bTokens.has(token)) overlap += 1
+  }
+  return overlap / Math.min(aTokens.size, bTokens.size) >= 0.82
+}
+
 function pageRangeLabel(start: number, end: number): string {
   const p0 = Number(start || 0)
   const p1 = Number(end || 0)
   if (!Number.isFinite(p0) || p0 <= 0) return ''
   if (!Number.isFinite(p1) || p1 <= 0 || p1 === p0) return `p. ${Math.floor(p0)}`
   return `pp. ${Math.floor(Math.min(p0, p1))}-${Math.floor(Math.max(p0, p1))}`
+}
+
+function anchorKindLabel(value: string): string {
+  const key = compact(value).toLowerCase()
+  if (key === 'sentence') return '句子'
+  if (key === 'paragraph') return '段落'
+  if (key === 'equation') return '公式'
+  if (key === 'figure') return '图'
+  if (key === 'table') return '表'
+  return compact(value)
 }
 
 export function CitationPopover({
@@ -99,10 +126,16 @@ export function CitationPopover({
   const inlineLabel = citationInlineLabel(detail)
   const canOpenReader = Boolean(compact(detail.sourcePath))
   const isSystemB = Boolean(detail.isInpaper)
-  const kindLabel = isSystemB ? '文内参考' : '原文证据'
-  const badgeLabel = detail.num > 0 ? (isSystemB ? `[R${detail.num}]` : `#${detail.num}`) : inlineLabel
+  const kindLabel = isSystemB ? '原文引用' : '答案依据'
+  const displayNums = Array.from(new Set([
+    ...(Array.isArray(detail.linkedNums) ? detail.linkedNums : []),
+    detail.num,
+  ].map((num) => Number(num || 0)).filter((num) => Number.isFinite(num) && num > 0))).sort((a, b) => a - b)
+  const badgeNumText = displayNums.length > 1 ? displayNums.join('/') : String(displayNums[0] || '')
+  const badgeLabel = badgeNumText ? (isSystemB ? `[R${badgeNumText}]` : `#${badgeNumText}`) : inlineLabel
   const headingPath = compact(detail.headingPath) || (!isSystemB ? compact(detail.title) : '')
   const pageLabel = pageRangeLabel(detail.pageStart, detail.pageEnd)
+  const sourcePaperText = compact(detail.sourceName) || compact(display.source)
   const systemAClaimText = compact(detail.answerClaim)
   const systemAEvidenceText = compact(detail.evidenceQuote) || compact(detail.summaryLine) || compact(detail.raw) || compact(detail.citeFmt)
   const systemBReferenceText = compact(detail.raw) || compact(detail.citeFmt)
@@ -111,16 +144,59 @@ export function CitationPopover({
   const systemBRoleText = compact(detail.upstreamWorkRole) || compact(detail.whyLine)
   const systemBRelationText = compact(detail.userQuestionRelation) || compact(detail.supportRelation)
   const whyText = compact(detail.whyLine)
-  const supportText = compact(detail.supportRelation) || whyText || '这条编号对应回答中使用的检索命中；打开后可以核对原文语境、章节位置和具体句子。'
+  const bindingStatus = compact(detail.bindingStatus).toLowerCase()
+  const bindingReason = compact(detail.bindingReason)
+  const bindingOverlapText = Array.isArray(detail.bindingOverlapTerms)
+    ? detail.bindingOverlapTerms.map((item) => compact(item)).filter(Boolean).join(' / ')
+    : ''
+  const bindingState = !isSystemB && bindingStatus
+    ? (
+        bindingStatus === 'grounded'
+          ? { label: '已校验证据', tone: 'grounded' }
+          : bindingStatus === 'mismatch'
+            ? { label: '疑似错配', tone: 'mismatch' }
+            : { label: '候选依据', tone: 'candidate' }
+      )
+    : null
+  const supportBaseText = compact(detail.supportRelation)
+    || whyText
+    || bindingReason
+    || (bindingStatus === 'candidate'
+      ? '这条引用只能作为候选依据；请打开原文核对答案句和命中片段是否真正对应。'
+      : '打开原文核对答案句和命中片段的对应关系。')
+  const supportText = supportBaseText
+  const showBindingReason = Boolean(bindingReason && !substantiallySame(bindingReason, supportText))
   const displayMain = compact(display.main)
   const systemATitle = (displayMain && displayMain !== headingPath)
     ? displayMain
     : (compact(detail.sourceName) || compact(display.source) || displayMain)
   const systemASub = [headingPath, pageLabel].filter(Boolean).join(' · ')
   const systemALocationText = compact(detail.locationLabel) || systemASub || systemATitle
-  const systemAAnchorText = [compact(detail.anchorKind), compact(detail.blockId)].filter(Boolean).join(' · ')
-  const showSystemAClaim = Boolean(systemAClaimText && !sameCompact(systemAClaimText, systemAEvidenceText))
-  const primaryActionLabel = isSystemB ? '打开参考所在位置' : '打开原文证据'
+  const systemAAnchorText = [anchorKindLabel(detail.anchorKind), compact(detail.blockId)].filter(Boolean).join(' · ')
+  const showSystemAClaim = Boolean(systemAClaimText && !substantiallySame(systemAClaimText, systemAEvidenceText))
+  const showSystemASupport = Boolean(
+    supportText
+    && !substantiallySame(supportText, systemAEvidenceText)
+    && !substantiallySame(supportText, systemAClaimText),
+  )
+  const primaryActionLabel = isSystemB ? '打开引用语境' : '打开答案依据'
+  const explainText = isSystemB ? '这张卡说明当前论文在这里引用了哪篇上游工作，以及它和回答中的判断有什么关系。' : ''
+  const flowSteps = isSystemB
+    ? ['答案里的话', '当前论文引用处', '上游文献']
+    : []
+  const systemBLocationText = compact(detail.locationLabel) || [sourcePaperText, headingPath, pageLabel].filter(Boolean).join(' / ')
+  const showSystemBLocation = Boolean(systemBLocationText && !sameCompact(systemBLocationText, sourcePaperText))
+  const anchorKindText = anchorKindLabel(detail.anchorKind)
+  const contextRows = isSystemB
+    ? [
+        sourcePaperText ? { label: '当前论文', value: sourcePaperText, testId: 'citation-popover-system-b-citing-source' } : null,
+        showSystemBLocation ? { label: '引用位置', value: systemBLocationText, testId: 'citation-popover-system-b-citing-location' } : null,
+        display.main ? { label: '上游文献', value: display.main, testId: 'citation-popover-system-b-cited-source' } : null,
+      ]
+    : [
+        sourcePaperText ? { label: '来源论文', value: sourcePaperText, testId: 'citation-popover-system-a-source' } : null,
+        anchorKindText ? { label: '定位粒度', value: anchorKindText, testId: 'citation-popover-system-a-anchor-kind' } : null,
+      ]
   const metaRows = [
     display.source ? { label: '来源', value: display.source } : null,
     display.venueYear ? { label: '发表', value: display.venueYear } : null,
@@ -129,7 +205,7 @@ export function CitationPopover({
   return (
     <div
       ref={ref}
-      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b' : 'kb-cite-pop-system-a'} fixed z-50 w-[460px] max-w-[calc(100vw-20px)]`}
+      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b' : 'kb-cite-pop-system-a'} fixed z-50 w-[520px] max-w-[calc(100vw-20px)]`}
       data-testid="citation-popover"
       style={style ?? { left: position.x + 10, top: position.y + 10, visibility: 'hidden' }}
       onMouseEnter={onMouseEnter}
@@ -148,60 +224,94 @@ export function CitationPopover({
         </button>
       </div>
 
+      {explainText ? <div className="kb-cite-pop-explain" data-testid="citation-popover-explain">{explainText}</div> : null}
+      {flowSteps.length > 0 ? (
+        <div className="kb-cite-pop-flow" data-testid="citation-popover-flow" aria-label="引用定位路径">
+          {flowSteps.map((step, index) => (
+            <div className="kb-cite-pop-flow-piece" key={step}>
+              <span className="kb-cite-pop-flow-step">{step}</span>
+              {index < flowSteps.length - 1 ? <span className="kb-cite-pop-flow-arrow">→</span> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {bindingState ? (
+        <div
+          className={`kb-cite-pop-binding kb-cite-pop-binding-${bindingState.tone}`}
+          data-testid="citation-popover-binding-status"
+        >
+          <span className="kb-cite-pop-binding-label">{bindingState.label}</span>
+          {bindingOverlapText ? <span className="kb-cite-pop-binding-terms">{bindingOverlapText}</span> : null}
+          {showBindingReason ? <span className="kb-cite-pop-binding-reason">{bindingReason}</span> : null}
+        </div>
+      ) : null}
+      {contextRows.some(Boolean) ? (
+        <div className="kb-cite-pop-context-grid">
+          {contextRows.filter(Boolean).map((item) => (
+            <div key={item!.label} className="kb-cite-pop-context-item" data-testid={item!.testId}>
+              <span className="kb-cite-pop-context-label">{item!.label}</span>
+              <span className="kb-cite-pop-context-value">{item!.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {isSystemB && display.authors ? <div className="kb-cite-pop-sub">{display.authors}</div> : null}
       {!isSystemB ? (
         <div className="kb-cite-pop-evidence-map">
           {showSystemAClaim ? (
             <div className="kb-cite-pop-claim" data-testid="citation-popover-system-a-claim">
-              <span className="kb-cite-pop-section-title">回答中的判断</span>
+              <span className="kb-cite-pop-section-title">答案里的这句话</span>
               <div className="kb-cite-pop-main">{systemAClaimText}</div>
             </div>
           ) : null}
           <div className="kb-cite-pop-locator" data-testid="citation-popover-system-a-location">
-            <span className="kb-cite-pop-section-title">原文位置</span>
+            <span className="kb-cite-pop-section-title">定位到原文位置</span>
             <span className="kb-cite-pop-locator-text">{systemALocationText}</span>
             {systemAAnchorText ? <span className="kb-cite-pop-anchor-meta">{systemAAnchorText}</span> : null}
           </div>
           {systemAEvidenceText ? (
             <div className="kb-cite-pop-quote" data-testid="citation-popover-system-a-evidence">
-              <span className="kb-cite-pop-section-title">命中原文证据</span>
+              <span className="kb-cite-pop-section-title">原文怎么说</span>
               <blockquote>{systemAEvidenceText}</blockquote>
             </div>
           ) : null}
-          <div className="kb-cite-pop-why" data-testid="citation-popover-system-a-support">
-            <span className="kb-cite-pop-section-title">为什么链接到这里 / 为什么能支撑</span>
-            <div className="kb-cite-pop-main">{supportText}</div>
-          </div>
+          {showSystemASupport ? (
+            <div className="kb-cite-pop-why" data-testid="citation-popover-system-a-support">
+              <span className="kb-cite-pop-section-title">为什么能支撑这句话</span>
+              <div className="kb-cite-pop-main">{supportText}</div>
+            </div>
+          ) : null}
         </div>
       ) : (
         <div className="kb-cite-pop-evidence-map">
           {systemBClaimText ? (
             <div className="kb-cite-pop-claim" data-testid="citation-popover-system-b-claim">
-              <span className="kb-cite-pop-section-title">回答中的判断</span>
+              <span className="kb-cite-pop-section-title">答案里的这句话</span>
               <div className="kb-cite-pop-main">{systemBClaimText}</div>
             </div>
           ) : null}
           {systemBCitationContextText ? (
             <div className="kb-cite-pop-quote" data-testid="citation-popover-system-b-context">
-              <span className="kb-cite-pop-section-title">当前论文引用语境</span>
+              <span className="kb-cite-pop-section-title">当前论文在哪里提到它</span>
               <blockquote>{systemBCitationContextText}</blockquote>
             </div>
           ) : null}
           {systemBRoleText ? (
             <div className="kb-cite-pop-why" data-testid="citation-popover-system-b-role">
-              <span className="kb-cite-pop-section-title">上游文献角色</span>
+              <span className="kb-cite-pop-section-title">这篇上游文献提供了什么</span>
               <div className="kb-cite-pop-main">{systemBRoleText}</div>
             </div>
           ) : null}
           {systemBRelationText && !sameCompact(systemBRelationText, systemBRoleText) ? (
             <div className="kb-cite-pop-why" data-testid="citation-popover-system-b-relation">
-              <span className="kb-cite-pop-section-title">为什么与这个问题有关</span>
+              <span className="kb-cite-pop-section-title">它和你的问题有什么关系</span>
               <div className="kb-cite-pop-main">{systemBRelationText}</div>
             </div>
           ) : null}
           {systemBReferenceText ? (
             <div className="kb-cite-pop-evidence" data-testid="citation-popover-system-b-reference">
-              <div className="kb-cite-pop-section-title">这篇参考文献是什么</div>
+              <div className="kb-cite-pop-section-title">上游文献条目</div>
               <div className="kb-cite-pop-main">{systemBReferenceText}</div>
             </div>
           ) : null}

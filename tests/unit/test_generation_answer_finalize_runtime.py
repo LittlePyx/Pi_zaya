@@ -62,6 +62,12 @@ def test_maybe_append_requested_refs_uses_admm_net_label_after_wrong_inline_ref(
 def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkeypatch):
     calls = []
     figure_kwargs = {}
+    citation_plan = {
+        "version": 1,
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [{"preferred_system": "system_b", "candidate_refs": [35]}],
+    }
 
     monkeypatch.setattr(finalize_runtime, "_reconcile_kb_notice", lambda answer, **kwargs: calls.append("reconcile") or (answer + " [reconcile]"))
     monkeypatch.setattr(finalize_runtime, "_apply_answer_contract_v1", lambda answer, **kwargs: calls.append("contract") or (answer + " [contract]"))
@@ -93,6 +99,7 @@ def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkey
         paper_guide_candidate_refs_by_source={"demo.md": [35]},
         paper_guide_support_slots=[{"support_example": "[[SUPPORT:DOC-1]]"}],
         paper_guide_evidence_cards=[{"doc_idx": 1}],
+        paper_guide_contracts_seed={"citation_plan": citation_plan},
         apply_paper_guide_answer_postprocess=lambda answer, **kwargs: (calls.append("postprocess") or (answer + " [post]", [{"line_index": 0}])),
         maybe_append_library_figure_markdown=_figure,
         validate_structured_citations=lambda answer, **kwargs: (calls.append("validate") or (answer + " [validated]", {"kept": 1})),
@@ -104,6 +111,8 @@ def test_finalize_generation_answer_runs_postprocess_validate_and_quality(monkey
     assert out["paper_guide_support_resolution"] == [{"line_index": 0}]
     assert out["citation_validation"] == {"kept": 1}
     assert out["answer_quality"]["minimum_ok"] is True
+    assert out["answer_quality"]["citation_plan"] == citation_plan
+    assert out["paper_guide_contracts"]["citation_plan"] == citation_plan
 
 
 def test_finalize_generation_answer_passes_shared_primary_evidence_into_answer_contract(monkeypatch):

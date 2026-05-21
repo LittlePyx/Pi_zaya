@@ -619,6 +619,120 @@ def test_normal_answer_preserves_validated_system_b_marker(monkeypatch):
     assert (msg.get("cite_details") or [])[0]["is_inpaper"] is True
 
 
+def test_normal_upstream_question_can_route_structured_marker_to_system_b_without_validation(monkeypatch):
+    from api import chat_render
+
+    calls = []
+
+    def fake_primary(md, hits, *, anchor_ns="", canonical_paths=None):
+        del hits, anchor_ns, canonical_paths
+        calls.append(md)
+        return (
+            "ADMM comes from prior optimization work [4](#kb-cite-demo-4).",
+            [
+                {
+                    "num": 4,
+                    "anchor": "kb-cite-demo-4",
+                    "source_name": "SCINeRF.pdf",
+                    "source_path": r"db\demo\scinerf.en.md",
+                    "title": "Distributed optimization and statistical learning via ADMM",
+                    "is_inpaper": True,
+                    "citation_route": "system_b",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+    messages = [
+        {"id": 1, "role": "user", "content": "ADMM 是怎么来的？作者是不是借鉴了前人的方法？"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "ADMM comes from prior optimization work [[CITE:s1234abcd:4]].",
+            "meta": {"answer_quality": {"prompt_family": "overview", "output_mode": "reading_guide"}},
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "Most existing methods employ ADMM [4].",
+                    "meta": {"source_path": r"db\demo\scinerf.en.md"},
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-normal-sysb-unvalidated")
+    msg = rendered[-1]
+
+    assert calls
+    assert "[[CITE:" not in str(msg.get("rendered_body") or "")
+    assert "#kb-cite-demo-4" in str(msg.get("rendered_body") or "")
+    assert (msg.get("cite_details") or [])[0]["is_inpaper"] is True
+
+
+def test_citation_plan_allows_normal_question_to_render_system_b_without_validation(monkeypatch):
+    from api import chat_render
+
+    calls = []
+
+    def fake_primary(md, hits, *, anchor_ns="", canonical_paths=None, citation_plan=None):
+        del hits, anchor_ns, canonical_paths
+        calls.append({"md": md, "citation_plan": citation_plan})
+        return (
+            "ADMM is the optimization background [4](#kb-cite-demo-4).",
+            [
+                {
+                    "num": 4,
+                    "anchor": "kb-cite-demo-4",
+                    "source_name": "SCINeRF.pdf",
+                    "source_path": r"db\demo\scinerf.en.md",
+                    "title": "Distributed optimization and statistical learning via ADMM",
+                    "is_inpaper": True,
+                    "citation_route": "system_b",
+                    "routing_reason": "citation_plan",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(chat_render, "_annotate_inpaper_citations_with_hover_meta", fake_primary)
+    plan = {
+        "intent": "beginner_overview",
+        "budget": {"system_a": 2, "system_b": 1},
+        "system_b_enabled": True,
+        "slots": [{"preferred_system": "system_b", "candidate_refs": [4]}],
+    }
+    messages = [
+        {"id": 1, "role": "user", "content": "ADMM 这个东西我不太懂，简单说一下。"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "ADMM is the optimization background [[CITE:s1234abcd:4]].",
+            "meta": {"answer_quality": {"prompt_family": "overview", "citation_plan": plan}},
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "Most existing methods employ ADMM [4].",
+                    "meta": {"source_path": r"db\demo\scinerf.en.md"},
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-citation-plan-sysb")
+    msg = rendered[-1]
+
+    assert calls
+    assert calls[0]["citation_plan"]["intent"] == "beginner_overview"
+    assert "[[CITE:" not in str(msg.get("rendered_body") or "")
+    assert "#kb-cite-demo-4" in str(msg.get("rendered_body") or "")
+    assert (msg.get("cite_details") or [])[0]["routing_reason"] == "citation_plan"
+
+
 @pytest.mark.parametrize(
     "case",
     [
@@ -659,18 +773,29 @@ def test_normal_question_variants_do_not_trigger_inpaper_reference_links(case):
             "meta": case["meta"],
         },
     ]
+    name = str(case.get("name") or "")
+    hit_text = "retrieved evidence"
+    hit_meta = {"source_path": r"db\doc\doc.en.md"}
+    if name == "zh_overview_freeform_numeric":
+        hit_text = (
+            "Snapshot Compressive Imaging (SCI) is combined with NeRF training "
+            "to recover a 3D scene representation from a compressed observation."
+        )
+        hit_meta = {
+            "source_path": r"db\doc\scinerf.en.md",
+            "heading_path": "Abstract",
+            "evidence_quote": hit_text,
+        }
     refs_by_user = {
         1: {
             "hits": [
                 {
-                    "text": "retrieved evidence",
-                    "meta": {"source_path": r"db\doc\doc.en.md"},
+                    "text": hit_text,
+                    "meta": hit_meta,
                 }
             ]
         }
     }
-
-    name = str(case.get("name") or "")
 
     rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id=f"conv-{name}")
     msg = rendered[-1]
@@ -1567,6 +1692,104 @@ def test_enrich_messages_rebuilds_degraded_numeric_citation_cache(tmp_path: Path
     assert len(msg.get("cite_details") or []) == 2
     assert all(item.get("is_inpaper") is False for item in (msg.get("cite_details") or []))
     assert len(persisted_cache.get("cite_details") or []) == 2
+
+
+def test_render_packet_only_rebuilds_legacy_answer_markdown_citations_when_content_empty(tmp_path: Path):
+    from api import chat_render
+
+    answer = "Learning-based SPI improves reconstruction quality [1] and reduces sampling demand [2]."
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("legacy packet repair")
+    user_id = store.append_message(conv_id, "user", "what are the benefits of deep learning for SPI?")
+    assistant_id = store.append_message(
+        conv_id,
+        "assistant",
+        "",
+        meta={
+            "paper_guide_contracts": {
+                "version": 1,
+                "intent": {"family": "overview"},
+                "render_packet": {
+                    "answer_markdown": answer,
+                    "rendered_body": "",
+                    "rendered_content": "",
+                    "copy_markdown": "",
+                    "copy_text": "",
+                    "cite_details": [],
+                },
+            }
+        },
+    )
+    refs_by_user = {
+        user_id: {
+            "prompt_sig": "sig-legacy",
+            "updated_at": 1.0,
+            "used_query": "single pixel imaging deep learning benefits",
+            "used_translation": False,
+            "hits": [
+                {
+                    "text": "Deep learning improves reconstruction quality in single-pixel imaging.",
+                    "meta": {
+                        "source_path": r"db\paper-a.en.md",
+                        "heading_path": "Benefits / Reconstruction quality",
+                    },
+                },
+                {
+                    "text": "Learning based reconstruction can reduce sampling demand.",
+                    "meta": {
+                        "source_path": r"db\paper-b.en.md",
+                        "heading_path": "Benefits / Sampling demand",
+                    },
+                },
+            ],
+        }
+    }
+    stale_packet = (((store.get_messages(conv_id)[-1].get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    cache_key = chat_render._build_message_render_cache_key(
+        conv_id=conv_id,
+        msg_id=assistant_id,
+        role="assistant",
+        content=answer,
+        refs_user_msg_id=user_id,
+        ref_pack=refs_by_user[user_id],
+        provenance=None,
+    )
+    store.merge_message_meta(
+        assistant_id,
+        {
+            "render_cache": chat_render._build_render_cache_payload(
+                cache_key=cache_key,
+                notice="",
+                rendered_body="",
+                rendered_content="",
+                copy_markdown="",
+                copy_text="",
+                cite_details=[],
+                refs_user_msg_id=user_id,
+                render_packet=stale_packet,
+            )
+        },
+    )
+
+    rendered = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+        render_packet_only=True,
+    )
+    msg = rendered[-1]
+    packet = (((msg.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    persisted = store.get_messages(conv_id)[-1]
+    persisted_packet = ((((persisted.get("meta") or {}).get("render_cache") or {}).get("render_packet") or {}))
+
+    assert "rendered_body" not in msg
+    assert "cite_details" not in msg
+    assert "](#kb-cite-" in str(packet.get("rendered_body") or "")
+    assert "](#kb-cite-" in str(packet.get("rendered_content") or "")
+    assert len(packet.get("cite_details") or []) == 2
+    assert str(packet.get("answer_markdown") or "") == answer
+    assert len(persisted_packet.get("cite_details") or []) == 2
 
 
 def test_enrich_provenance_surfaces_hidden_derived_formula_source_anchor():

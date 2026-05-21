@@ -30,6 +30,7 @@ def _build_generation_prompt_bundle(
     paper_guide_evidence_cards_block: str,
     paper_guide_citation_grounding_block: str,
     paper_guide_reference_opportunities_block: str = "",
+    citation_plan_block: str = "",
     image_attachment_count: int = 0,
 ) -> dict:
     prompt_for_user = str(prompt or "").strip() or "[Image attachment only request]"
@@ -161,6 +162,14 @@ def _build_generation_prompt_bundle(
             "- Do not add a separate bibliography trail unless the user explicitly asks for a reading list or reference list.\n"
             "- Only use an upstream cite_example when the answer actually discusses the matching concept or prior work.\n"
         )
+    if citation_plan_block:
+        system += (
+            "\nCitation-plan protocol:\n"
+            "- Follow the Citation plan block before choosing citation markers.\n"
+            "- Treat SystemA citations as evidence links to retrieved paper text, and SystemB citations as links to a paper's bibliography entries.\n"
+            "- Respect the per-paragraph citation budget unless the user explicitly asks for a dense reference list.\n"
+            "- If the plan provides a cite_example or support_example, copy that marker exactly instead of inventing a new number.\n"
+        )
 
     cite_reminder = ""
     if (not paper_guide_mode) and has_answer_hits:
@@ -179,6 +188,8 @@ def _build_generation_prompt_bundle(
     )
     if paper_guide_special_focus_block:
         user += f"\n{paper_guide_special_focus_block}\n"
+    if citation_plan_block:
+        user += f"\n{citation_plan_block}\n"
     if paper_guide_support_slots_block:
         user += f"\n{paper_guide_support_slots_block}\n"
     if paper_guide_reference_opportunities_block:

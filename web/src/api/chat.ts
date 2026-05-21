@@ -86,6 +86,11 @@ export interface MessageCitationDetail {
   doi?: string
   doi_url?: string
   cite_fmt?: string
+  linked_nums?: number[]
+  evidence_fingerprint?: string
+  citation_route?: string
+  routing_reason?: string
+  routing_confidence?: number
   heading_path?: string
   evidence_quote?: string
   why_line?: string
@@ -105,6 +110,10 @@ export interface MessageCitationDetail {
   page_start?: number
   page_end?: number
   score?: number
+  binding_status?: string
+  binding_confidence?: number
+  binding_reason?: string
+  binding_overlap_terms?: string[]
   [key: string]: unknown
 }
 

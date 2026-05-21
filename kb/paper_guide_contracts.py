@@ -428,6 +428,11 @@ class PaperGuideCitationDetailModel(_PaperGuideBaseModel):
     doi_url: str = ""
     cite_fmt: str = ""
     is_inpaper: bool = False
+    linked_nums: list[int] = Field(default_factory=list)
+    evidence_fingerprint: str = ""
+    citation_route: str = ""
+    routing_reason: str = ""
+    routing_confidence: float = 0.0
     summary_line: str = ""
     summary_source: str = ""
     answer_claim: str = ""
@@ -443,6 +448,10 @@ class PaperGuideCitationDetailModel(_PaperGuideBaseModel):
     page_start: int = 0
     page_end: int = 0
     score: float = 0.0
+    binding_status: str = ""
+    binding_confidence: float = 0.0
+    binding_reason: str = ""
+    binding_overlap_terms: list[str] = Field(default_factory=list)
 
 
 class PaperGuideRenderPacketModel(_PaperGuideBaseModel):

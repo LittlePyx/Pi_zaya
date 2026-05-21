@@ -141,6 +141,8 @@ interface RefMetaLite {
 }
 
 interface RefHitLite {
+  score?: number
+  text?: string
   ui_meta?: RefUiMetaLite
   meta?: RefMetaLite
 }
@@ -1846,6 +1848,116 @@ function buildRefsLocateCandidatesAll(refHits: RefHitLite[]): LocateCandidate[] 
         anchorNumber: Number.isFinite(anchorNum) && anchorNum > 0 ? Math.floor(anchorNum) : undefined,
       })
     }
+  }
+  return out
+}
+
+function citationNumbersInMarkdown(content: string): number[] {
+  const out: number[] = []
+  const seen = new Set<number>()
+  const text = String(content || '')
+  if (!text || !/\[[Rr]?\d/.test(text)) return out
+  const re = /\[([Rr]?\d{1,4}(?:\s*[,，、]\s*[Rr]?\d{1,4})*)\](?!\()/g
+  for (const match of text.matchAll(re)) {
+    const prev = (match.index || 0) > 0 ? text[(match.index || 0) - 1] : ''
+    if (prev === '!' || prev === '[' || prev === '\\') continue
+    const body = String(match[1] || '')
+    for (const token of body.matchAll(/[Rr]?(\d{1,4})/g)) {
+      const num = Number(token[1] || 0)
+      if (!Number.isFinite(num) || num <= 0 || seen.has(num)) continue
+      seen.add(num)
+      out.push(num)
+    }
+  }
+  return out
+}
+
+function answerClaimAroundCitation(content: string, num: number): string {
+  const text = stripMarkdownInline(String(content || '')).replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  const marker = new RegExp(`\\[(?:R)?${num}\\]`, 'i')
+  const idx = text.search(marker)
+  if (idx < 0) return text.slice(0, 240)
+  const before = text.slice(0, idx)
+  const after = text.slice(idx)
+  const start = Math.max(
+    before.lastIndexOf('。'),
+    before.lastIndexOf('！'),
+    before.lastIndexOf('？'),
+    before.lastIndexOf('. '),
+    before.lastIndexOf('; '),
+  )
+  const tail = after.search(/[。！？]|\. |; /)
+  const end = tail >= 0 ? idx + tail + 1 : Math.min(text.length, idx + 220)
+  return text.slice(start >= 0 ? start + 1 : Math.max(0, idx - 140), end).trim()
+}
+
+function buildFallbackCiteDetailsFromRefHits(opts: {
+  bodyContent: string
+  refHits: RefHitLite[]
+  messageId: number
+  traceConvId: string
+  traceAssistantOrder: number
+  traceUserMsgId: number
+}): CiteDetail[] {
+  const nums = citationNumbersInMarkdown(opts.bodyContent)
+  if (nums.length <= 0 || opts.refHits.length <= 0) return []
+  const out: CiteDetail[] = []
+  for (const num of nums) {
+    const hit = opts.refHits[num - 1]
+    if (!hit) continue
+    const ui = hit.ui_meta || {}
+    const meta = hit.meta || {}
+    const sourcePath = String(ui.source_path || meta.source_path || '').trim()
+    if (!sourcePath) continue
+    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
+    const headingPath = String(
+      ui.heading_path
+      || ui.section_label
+      || ui.subsection_label
+      || meta.ref_best_heading_path
+      || meta.heading_path
+      || '',
+    ).trim()
+    const evidenceQuote = String(
+      ui.summary_line
+      || coerceStringArray(meta.ref_show_snippets, 1, 900)[0]
+      || coerceStringArray(meta.ref_snippets, 1, 900)[0]
+      || hit.text
+      || '',
+    ).trim()
+    const whyLine = String(ui.why_line || '').trim()
+    const detail = normalizeCiteDetail({
+      num,
+      anchor: `kb-cite-refhit-${opts.messageId}-${num}`,
+      linked_nums: [num],
+      evidence_fingerprint: `frontend-refhit-${opts.messageId}-${num}`,
+      source_name: sourceName,
+      source_path: sourcePath,
+      raw: evidenceQuote || sourceName,
+      title: headingPath || sourceName,
+      heading_path: headingPath,
+      answer_claim: answerClaimAroundCitation(opts.bodyContent, num),
+      evidence_quote: evidenceQuote,
+      evidence_source: 'references_panel_hit',
+      summary_line: String(ui.summary_line || evidenceQuote || '').trim(),
+      summary_source: 'references_panel_hit',
+      location_label: headingPath,
+      support_relation: whyLine || '这条链接由前端根据本轮 References 临时补齐，只能作为候选依据；请打开原文核对答案句和命中片段是否真正对应。',
+      why_line: whyLine,
+      binding_status: 'candidate',
+      binding_confidence: 0.35,
+      binding_reason: '前端缺少后端 cite_details，只能按 References 顺序补齐候选链接。',
+      score: Number(hit.score || 0),
+    })
+    if (!detail) continue
+    out.push({
+      ...detail,
+      traceConvId: opts.traceConvId,
+      traceAssistantMsgId: opts.messageId,
+      traceAssistantOrder: opts.traceAssistantOrder,
+      traceUserMsgId: opts.traceUserMsgId,
+    })
   }
   return out
 }
@@ -5291,6 +5403,21 @@ export function MessageList({
             const bodyContent = lowConfidenceMeta
               ? stripLeadingLowConfidenceNotice(rawBodyContent)
               : rawBodyContent
+            const refsUserMsgIdForCitations = Number(prep?.refsUserMsgId || message.refs_user_msg_id || trace?.userMsgId || 0)
+            const refEntryForCitations = refsUserMsgIdForCitations > 0
+              ? refs[String(refsUserMsgIdForCitations)] as RefEntryLite | undefined
+              : undefined
+            const fallbackCiteDetails = (!isUser && citeDetails.length <= 0 && Array.isArray(refEntryForCitations?.hits))
+              ? buildFallbackCiteDetailsFromRefHits({
+                bodyContent: String(bodyContent || ''),
+                refHits: refEntryForCitations?.hits || [],
+                messageId: message.id,
+                traceConvId: String(activeConvId || ''),
+                traceAssistantOrder: Number(trace?.answerOrder || 0),
+                traceUserMsgId: Number(trace?.userMsgId || refsUserMsgIdForCitations || 0),
+              })
+              : []
+            const effectiveCiteDetails = citeDetails.length > 0 ? citeDetails : fallbackCiteDetails
             const guideSourcePath = String(paperGuideSourcePath || '').trim()
             const locateSourceName = prep?.locateSourceName || String(paperGuideSourceName || '').trim()
             const messageProvenance = prep?.messageProvenance || (
@@ -5315,7 +5442,7 @@ export function MessageList({
             const suppressLooseInlineLocate = shouldSuppressLooseInlineLocate({
               guideSourcePath,
               bodyContent: String(bodyContent || ''),
-              hasRawCiteDetails: citeDetails.length > 0,
+              hasRawCiteDetails: effectiveCiteDetails.length > 0,
               hasStructuredProvenance,
               hasDirectProvenance,
             })
@@ -6076,7 +6203,7 @@ export function MessageList({
                       ) : null}
                       <MarkdownRenderer
                         content={bodyContent}
-                        citeDetails={citeDetails}
+                        citeDetails={effectiveCiteDetails}
                         onCitationClick={openCitation}
                         onCitationHover={previewCitation}
                         onCitationLeave={scheduleCitationPreviewClose}

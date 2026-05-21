@@ -55,6 +55,7 @@ export function getMessageRenderedBodyContent(message: Message): string {
   return String(
     packet?.renderedBody
     || packet?.renderedContent
+    || packet?.answerMarkdown
     || message.rendered_body
     || message.rendered_content
     || message.content
