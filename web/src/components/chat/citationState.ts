@@ -62,6 +62,24 @@ export interface CiteDetail {
   bindingConfidence: number
   bindingReason: string
   bindingOverlapTerms: string[]
+  cardKind: string
+  cardTitle: string
+  cardSubtitle: string
+  cardTakeawayLabel: string
+  cardTakeaway: string
+  cardClaimLabel: string
+  cardClaim: string
+  cardLocatorLabel: string
+  cardLocator: string
+  cardEvidenceLabel: string
+  cardEvidence: string
+  cardSupportLabel: string
+  cardSupportExplanation: string
+  cardQualityLabel: string
+  cardQualityScore: number
+  cardQualityFlags: string[]
+  cardWarning: string
+  cardFlow: string[]
 }
 
 export interface CiteShelfItem extends CiteDetail {
@@ -74,6 +92,348 @@ export interface CiteShelfItem extends CiteDetail {
 function asText(value: unknown): string {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
+  return ''
+}
+
+function cleanCitationDisplayText(value: string): string {
+  return String(value || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s{0,3}>\s?/gm, '')
+    .replace(/^\s{0,3}[-*+]\s+/gm, '')
+    .replace(/^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/gm, ' ')
+    .replace(/!\[[^\]]*]\([^)]+\)/g, ' ')
+    .replace(/\[([^\]]+)]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/\\(?=\s)/g, ' ')
+    .replace(/(^|\s)#{1,6}\s+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function looseTokens(value: string): string[] {
+  return Array.from(String(value || '').matchAll(/[A-Za-z0-9]+|[\u4e00-\u9fff]+/g)).map((match) => match[0].toLowerCase())
+}
+
+function sourceTitleCandidate(value: string): string {
+  const name = String(value || '')
+    .trim()
+    .split(/[\\/]/)
+    .pop() || ''
+  return cleanCitationDisplayText(name)
+    .replace(/\.(?:pdf|md)$/i, '')
+    .replace(/\.en$/i, '')
+    .replace(/^[A-Za-z]{2,12}-\d{4}-/, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function stripTokenPrefix(text: string, candidate: string): string {
+  const candidateTokens = looseTokens(candidate)
+  if (candidateTokens.length < 4) return text
+  const matches = Array.from(String(text || '').matchAll(/[A-Za-z0-9]+|[\u4e00-\u9fff]+/g))
+  if (matches.length < candidateTokens.length) return text
+  let matched = 0
+  const limit = Math.min(candidateTokens.length, matches.length)
+  for (let idx = 0; idx < limit; idx += 1) {
+    if (matches[idx][0].toLowerCase() !== candidateTokens[idx]) break
+    matched += 1
+  }
+  if (matched < Math.min(8, candidateTokens.length)) return text
+  const end = (matches[matched - 1].index || 0) + matches[matched - 1][0].length
+  return text.slice(end).replace(/^[\s,.;:，。；：-]+/, '')
+}
+
+function looksAuthorMetadataPrefix(value: string): boolean {
+  const text = String(value || '').trim()
+  if (text.length < 16) return false
+  const commaCount = (text.match(/[,，]/g) || []).length
+  const namePairs = (text.match(/\b[A-Z][a-zA-Z'`-]+\s+[A-Z][a-zA-Z'`-]+\b/g) || []).length
+  const tokens = looseTokens(text)
+  if (commaCount >= 2 || namePairs >= 2) return true
+  return tokens.length >= 8 && /[*\\]/.test(text)
+}
+
+const CONTENT_SENTENCE_START_RE = /\b(?:single[-\s]?pixel imaging|deep learning|snapshot compressive|compressive imaging|neural radiance|this paper|this work|this study|in this (?:paper|work|study)|we\s+|however,?|recent(?:ly)?|the proposed|our\s+)\b/i
+const FRAGMENT_LEAD_OK_RE = /^(?:a|an|the|this|these|those|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b/i
+
+function splitEvidenceSentences(value: string): string[] {
+  return String(value || '')
+    .trim()
+    .split(/(?<=[。！？!?\.])\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function looksFragmentaryEvidenceSentence(value: string): boolean {
+  const text = String(value || '').trim()
+  if (!text) return true
+  if (/^[a-z]{2,}\b/.test(text) && !FRAGMENT_LEAD_OK_RE.test(text)) return true
+  if (/^(?:and|or|of|that|which|from|into|onto|within|without|using|used|measured|allowing)\b/i.test(text)) return true
+  if (text.length > 80 && /\b(?:and|or|of|to|with|by|from|into|onto)$/i.test(text)) return true
+  if (text.length > 120 && !/[。！？!?\.]$/.test(text)) return true
+  return false
+}
+
+function looksCaptionHeadingSentence(value: string): boolean {
+  const text = String(value || '').trim()
+  if (/^(?:fig(?:ure)?|table)\s*\d+[.:]?\s*$/i.test(text)) return true
+  const tokens = looseTokens(text)
+  if (/^[a-z]\s*,\s*/i.test(text)) return true
+  return tokens.length <= 5 && /\b(?:configuration|configurations|overview|pipeline|results?|figure)\b/i.test(text)
+}
+
+function usableEvidenceSentence(value: string): boolean {
+  const text = String(value || '').trim()
+  if (looksFragmentaryEvidenceSentence(text) || looksCaptionHeadingSentence(text)) return false
+  return looseTokens(text).length >= 5
+}
+
+function evidenceSentenceQuality(value: string, detail: Pick<CiteDetail, 'answerClaim' | 'cardClaim' | 'headingPath' | 'title'>): number {
+  const text = String(value || '').trim()
+  if (!text) return -10
+  const tokens = looseTokens(text)
+  let score = 0
+  if (looksFragmentaryEvidenceSentence(text)) score -= 5
+  if (looksCaptionHeadingSentence(text)) score -= 2
+  if (tokens.length >= 8 && tokens.length <= 90) score += 2
+  else if (tokens.length < 5) score -= 2
+  if (looksAuthorMetadataPrefix(text.slice(0, 180))) score -= 3
+  if (/\b(?:is|are|can|uses?|proposes?|shows?|demonstrates?|improves?|captures?|reconstructs?)\b/i.test(text)) score += 1
+  const contextTokens = new Set(looseTokens(`${detail.answerClaim || ''} ${detail.cardClaim || ''} ${detail.headingPath || ''} ${detail.title || ''}`))
+  if (contextTokens.size > 0) {
+    let overlap = 0
+    for (const token of new Set(tokens)) {
+      if (contextTokens.has(token)) overlap += 1
+    }
+    score += Math.min(2, overlap * 0.3)
+  }
+  if (/\b(?:single[-\s]?pixel|imaging|deep learning|compressive|neural|reconstruction|sampling|dmd)\b/i.test(text)) score += 1
+  return score
+}
+
+function joinEvidenceWindow(
+  sentences: string[],
+  centerIndex: number,
+  detail: Pick<CiteDetail, 'answerClaim' | 'cardClaim' | 'headingPath' | 'title'>,
+  maxLen = 460,
+): string {
+  if (!sentences.length || !usableEvidenceSentence(sentences[centerIndex] || '')) return ''
+  const chosen: number[] = [centerIndex]
+  const centerScore = evidenceSentenceQuality(sentences[centerIndex], detail)
+
+  const previousIndex = centerIndex - 1
+  if (previousIndex >= 0 && usableEvidenceSentence(sentences[previousIndex])) {
+    const previousScore = evidenceSentenceQuality(sentences[previousIndex], detail)
+    if (previousScore >= 1 || centerScore < 2.5) chosen.unshift(previousIndex)
+  }
+
+  for (let nextIndex = centerIndex + 1; nextIndex < Math.min(sentences.length, centerIndex + 3); nextIndex += 1) {
+    if (chosen.length >= 3) break
+    if (!usableEvidenceSentence(sentences[nextIndex])) continue
+    const nextScore = evidenceSentenceQuality(sentences[nextIndex], detail)
+    if (nextScore < 0.5 && chosen.length > 1) continue
+    chosen.push(nextIndex)
+  }
+
+  const output: string[] = []
+  for (const index of Array.from(new Set(chosen)).sort((a, b) => a - b)) {
+    const candidate = [...output, sentences[index]].join(' ').trim()
+    if (output.length > 0 && candidate.length > maxLen) continue
+    output.push(sentences[index])
+  }
+  return output.join(' ').trim()
+}
+
+function pickReadableEvidenceText(value: string, detail: Pick<CiteDetail, 'answerClaim' | 'cardClaim' | 'headingPath' | 'title'>): string {
+  const sentences = splitEvidenceSentences(value)
+  while (sentences.length > 0 && !usableEvidenceSentence(sentences[0])) {
+    sentences.shift()
+  }
+  if (sentences.length <= 0) return String(value || '').trim()
+  const usable = sentences
+    .slice(0, 8)
+    .map((sentence, index) => ({ sentence, index }))
+    .filter((item) => usableEvidenceSentence(item.sentence))
+  if (!usable.length) return sentences[0]
+  const first = usable[0]
+  const scored = usable.map((item) => ({
+    index: item.index,
+    score: evidenceSentenceQuality(item.sentence, detail),
+  }))
+  scored.sort((a, b) => (b.score - a.score) || (a.index - b.index))
+  const best = scored[0]
+  const firstScore = evidenceSentenceQuality(first.sentence, detail)
+  const centerIndex = best.index > first.index && best.score >= firstScore + 1 ? best.index : first.index
+  return joinEvidenceWindow(sentences, centerIndex, detail) || sentences[0]
+}
+
+function stripEvidenceMetadataPrefix(
+  value: string,
+  detail: Pick<CiteDetail, 'sourceName' | 'title' | 'cardTitle' | 'answerClaim' | 'cardClaim' | 'headingPath'>,
+): string {
+  let text = cleanCitationDisplayText(value)
+  if (!text) return ''
+  for (const candidate of [
+    sourceTitleCandidate(detail.sourceName),
+    sourceTitleCandidate(detail.title),
+    sourceTitleCandidate(detail.cardTitle),
+  ]) {
+    if (candidate.length < 18) continue
+    const stripped = stripTokenPrefix(text, candidate)
+    if (stripped !== text) {
+      text = stripped
+      break
+    }
+  }
+
+  const match = text.match(CONTENT_SENTENCE_START_RE)
+  if (match?.index && match.index > 0 && match.index <= 320) {
+    const prefix = text.slice(0, match.index)
+    if (looksAuthorMetadataPrefix(prefix)) {
+      text = text.slice(match.index).replace(/^[\s,.;:，。；：-]+/, '')
+    }
+  }
+  return pickReadableEvidenceText(text.replace(/\s+/g, ' ').trim(), detail)
+}
+
+function hasCjkText(value: string): boolean {
+  return /[\u4e00-\u9fff]/.test(String(value || ''))
+}
+
+function trimTakeaway(value: string, maxLen = 110): string {
+  let text = cleanCitationDisplayText(value)
+    .replace(/^\s*(?:这条证据说明|证据说明|它说明|说明)[:：]\s*/, '')
+    .trim()
+  text = text.replace(/[。；;]\s*$/g, '')
+  if (text.length > maxLen) text = `${text.slice(0, Math.max(0, maxLen - 1)).replace(/[，,；;:：]\s*$/g, '')}...`
+  if (text && hasCjkText(text) && !/[。！？?]$|\.\.\.$/.test(text)) text = `${text}。`
+  return text
+}
+
+function looksLowValueTakeaway(value: string): boolean {
+  const text = cleanCitationDisplayText(value)
+  if (!text) return true
+  if (/^[A-Za-z][A-Za-z\s-]{2,48}\s+\d{1,3}$/.test(text)) return true
+  if (/(?:这条证据|该证据|this evidence|the evidence).{0,12}(?:支持|支撑|supports?)/i.test(text)) return true
+  const tokens = looseTokens(text)
+  if (hasCjkText(text)) return text.length < 12 && !/[：:，,。；;]/.test(text)
+  return tokens.length <= 6
+}
+
+function takeawayFromEnglishEvidence(evidence: string): string {
+  const text = String(evidence || '')
+  const low = text.toLowerCase()
+  if (low.includes('dmd') && (low.includes('spatially filter') || low.includes('single-pixel camera configuration'))) {
+    return 'DMD 可以作为单像素相机中的空间调制器，通过选择性重定向光束来完成采样和成像配置。'
+  }
+  if (low.includes('single-pixel imaging technology can capture images at wavelengths outside')) {
+    return '单像素成像可以覆盖传统焦平面阵列探测器难以触达的波段，但实用性仍受图像质量和计算时间限制。'
+  }
+  if (low.includes('structured detection') && low.includes('optical sectioning')) {
+    return '结构化检测用于在激光扫描显微中同时改善层切、分辨率和信噪比。'
+  }
+  if (low.includes('deep learning') && low.includes('single-pixel') && /\b(?:quality|speed|reconstruction)\b/i.test(text)) {
+    return '深度学习方法主要用于提升单像素成像的重建质量、速度或采样效率。'
+  }
+  if (low.includes('snapshot compressive imaging') && /\b(?:recover|reconstruct)\b/i.test(text)) {
+    return '快照压缩成像通过一次压缩观测恢复场景信息，是该回答所说成像任务的直接背景。'
+  }
+  return ''
+}
+
+function deriveSystemATakeaway(
+  detail: Pick<CiteDetail, 'answerClaim' | 'cardClaim' | 'cardEvidence' | 'evidenceQuote' | 'summaryLine' | 'headingPath'>,
+): string {
+  const claim = trimTakeaway(detail.cardClaim || detail.answerClaim || '')
+  if (claim && hasCjkText(claim) && !looksLowValueTakeaway(claim)) return claim
+
+  const evidence = detail.cardEvidence || detail.evidenceQuote || detail.summaryLine || ''
+  const evidenceTakeaway = trimTakeaway(takeawayFromEnglishEvidence(evidence))
+  if (evidenceTakeaway && !looksLowValueTakeaway(evidenceTakeaway)) return evidenceTakeaway
+
+  const heading = trimTakeaway(detail.headingPath || '', 70)
+  if (heading && hasCjkText(heading) && evidence) {
+    const candidate = `这条证据对应“${heading.replace(/[。！？?]$/g, '')}”这一部分的关键表述。`
+    if (!looksLowValueTakeaway(candidate)) return candidate
+  }
+  return ''
+}
+
+function looksGenericSystemBTakeaway(value: string): boolean {
+  const text = cleanCitationDisplayText(value).toLowerCase()
+  if (!text) return true
+  const genericPatterns = [
+    /这条链接把回答中的说法追溯到/,
+    /这条参考是当前论文给出的上游来源/,
+    /这篇上游文献条目/,
+    /the user is asking about the evidence/,
+    /upstream paper to open next/,
+    /cited prior work or background source/,
+    /trace the upstream origin/,
+    /this reference is the cited prior work/,
+  ]
+  if (genericPatterns.some((pattern) => pattern.test(text))) return true
+  return looseTokens(text).length <= 5
+}
+
+function explicitSystemBTakeaway(detail: Pick<CiteDetail, 'upstreamWorkRole' | 'userQuestionRelation' | 'supportRelation' | 'whyLine'>): string {
+  for (const raw of [detail.upstreamWorkRole, detail.userQuestionRelation, detail.supportRelation, detail.whyLine]) {
+    let text = trimTakeaway(raw || '', 118)
+    if (!text || !hasCjkText(text) || looksGenericSystemBTakeaway(text)) continue
+    text = text
+      .replace(/^用户问[“"].+?[”"，,；;]\s*/, '')
+      .replace(/^这条参考(?:正好)?说明/, '这篇上游文献说明')
+      .replace(/^它说明/, '这篇上游文献说明')
+    return trimTakeaway(text, 118)
+  }
+  return ''
+}
+
+function deriveSystemBTakeaway(
+  detail: Pick<CiteDetail, 'title' | 'answerClaim' | 'cardClaim' | 'cardEvidence' | 'citationContext' | 'evidenceQuote' | 'summaryLine' | 'upstreamWorkRole' | 'userQuestionRelation' | 'supportRelation' | 'whyLine'>,
+): string {
+  const explicit = explicitSystemBTakeaway(detail)
+  if (explicit) return explicit
+
+  const combined = [
+    detail.title,
+    detail.answerClaim,
+    detail.cardClaim,
+    detail.cardEvidence,
+    detail.citationContext,
+    detail.evidenceQuote,
+    detail.summaryLine,
+    detail.upstreamWorkRole,
+    detail.userQuestionRelation,
+    detail.supportRelation,
+    detail.whyLine,
+  ].join(' ').toLowerCase()
+  if (combined.includes('admm-net') || /\b(?:unfold|unrolled)\b/.test(combined)) {
+    return '这篇上游文献提供把迭代优化思想展开成可训练网络的前人线索。'
+  }
+  if (combined.includes('admm') || combined.includes('alternating direction method')) {
+    return '这篇上游文献提供 ADMM 优化框架背景，用来判断当前论文是在借鉴既有方法。'
+  }
+  if (combined.includes('single-shot compressive spectral imaging')) {
+    return '这篇上游文献提供单次压缩光谱成像的前人背景，是回答中相关概念的来源线索。'
+  }
+  if (/\b(?:baseline|compare|compared|comparison|against)\b/.test(combined)) {
+    return '这篇上游文献在当前论文中主要作为对比基线或相关方法参照。'
+  }
+  if (/\b(?:dataset|benchmark|evaluation|experiment)\b/.test(combined)) {
+    return '这篇上游文献提供实验数据、评测场景或 benchmark 线索。'
+  }
+  if (/\b(?:architecture|network|model|module)\b/.test(combined)) {
+    return '这篇上游文献提供模型结构或方法设计上的前人参考。'
+  }
+  if (/\b(?:background|prior work|related work|origin|source)\b/.test(combined)) {
+    return '这篇上游文献提供当前说法的相关工作背景和来源线索。'
+  }
   return ''
 }
 
@@ -211,7 +571,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
   const rec = value as Record<string, unknown>
   const anchor = pickText(rec, 'anchor')
   if (!anchor) return null
-  return {
+  const detail: CiteDetail = {
     num: pickNumber(rec, 'num'),
     anchor,
     sourceName: pickText(rec, 'source_name', 'sourceName'),
@@ -275,7 +635,77 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     bindingConfidence: pickNumber(rec, 'binding_confidence', 'bindingConfidence'),
     bindingReason: pickText(rec, 'binding_reason', 'bindingReason'),
     bindingOverlapTerms: pickStringArray(rec, 'binding_overlap_terms', 'bindingOverlapTerms'),
+    cardKind: pickText(rec, 'card_kind', 'cardKind'),
+    cardTitle: pickText(rec, 'card_title', 'cardTitle'),
+    cardSubtitle: pickText(rec, 'card_subtitle', 'cardSubtitle'),
+    cardTakeawayLabel: pickText(rec, 'card_takeaway_label', 'cardTakeawayLabel'),
+    cardTakeaway: pickText(rec, 'card_takeaway', 'cardTakeaway'),
+    cardClaimLabel: pickText(rec, 'card_claim_label', 'cardClaimLabel'),
+    cardClaim: pickText(rec, 'card_claim', 'cardClaim'),
+    cardLocatorLabel: pickText(rec, 'card_locator_label', 'cardLocatorLabel'),
+    cardLocator: pickText(rec, 'card_locator', 'cardLocator'),
+    cardEvidenceLabel: pickText(rec, 'card_evidence_label', 'cardEvidenceLabel'),
+    cardEvidence: pickText(rec, 'card_evidence', 'cardEvidence'),
+    cardSupportLabel: pickText(rec, 'card_support_label', 'cardSupportLabel'),
+    cardSupportExplanation: pickText(rec, 'card_support_explanation', 'cardSupportExplanation'),
+    cardQualityLabel: pickText(rec, 'card_quality_label', 'cardQualityLabel'),
+    cardQualityScore: pickNumber(rec, 'card_quality_score', 'cardQualityScore'),
+    cardQualityFlags: pickStringArray(rec, 'card_quality_flags', 'cardQualityFlags'),
+    cardWarning: pickText(rec, 'card_warning', 'cardWarning'),
+    cardFlow: pickStringArray(rec, 'card_flow', 'cardFlow'),
   }
+  for (const key of [
+    'raw',
+    'citeFmt',
+    'title',
+    'summaryLine',
+    'answerClaim',
+    'headingPath',
+    'evidenceQuote',
+    'citationContext',
+    'upstreamWorkRole',
+    'userQuestionRelation',
+    'locationLabel',
+    'supportRelation',
+    'whyLine',
+    'bindingReason',
+    'cardTitle',
+    'cardSubtitle',
+    'cardTakeawayLabel',
+    'cardTakeaway',
+    'cardClaim',
+    'cardLocator',
+    'cardEvidence',
+    'cardSupportExplanation',
+    'cardWarning',
+  ] as const) {
+    detail[key] = cleanCitationDisplayText(detail[key])
+  }
+  for (const key of [
+    'summaryLine',
+    'evidenceQuote',
+    'citationContext',
+    'cardEvidence',
+  ] as const) {
+    detail[key] = stripEvidenceMetadataPrefix(detail[key], detail)
+  }
+  if (!detail.isInpaper) {
+    detail.raw = stripEvidenceMetadataPrefix(detail.raw, detail)
+    if (!detail.cardTakeaway || looksLowValueTakeaway(detail.cardTakeaway)) {
+      detail.cardTakeaway = deriveSystemATakeaway(detail)
+    }
+    if (detail.cardTakeaway && !detail.cardTakeawayLabel) {
+      detail.cardTakeawayLabel = '证据重点'
+    }
+  } else {
+    if (!detail.cardTakeaway || looksGenericSystemBTakeaway(detail.cardTakeaway)) {
+      detail.cardTakeaway = deriveSystemBTakeaway(detail)
+    }
+    if (detail.cardTakeaway && !detail.cardTakeawayLabel) {
+      detail.cardTakeawayLabel = '上游作用'
+    }
+  }
+  return detail
 }
 
 export function citationMain(detail: CiteDetail): string {

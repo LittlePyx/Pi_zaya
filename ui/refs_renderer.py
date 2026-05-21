@@ -16,6 +16,8 @@ import streamlit as st
 import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
+from kb.citation_card import compose_citation_card
+from kb.citation_context import extract_inpaper_reference_context
 from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.file_naming import citation_meta_display_pdf_name
@@ -3333,8 +3335,11 @@ def _anchor_token(text: str) -> str:
     return hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()[:10]
 
 
-def _build_inpaper_anchor(anchor_ns: str, ref_num: int, source_name: str = "") -> str:
-    base = f"{str(anchor_ns or '').strip()}|{int(ref_num)}|{str(source_name or '').strip().lower()}"
+def _build_inpaper_anchor(anchor_ns: str, ref_num: int, source_name: str = "", extra: str = "") -> str:
+    base = (
+        f"{str(anchor_ns or '').strip()}|{int(ref_num)}|"
+        f"{str(source_name or '').strip().lower()}|{str(extra or '').strip().lower()}"
+    )
     sig = _anchor_token(base)
     return f"kb-cite-{sig}-{int(ref_num)}"
 
@@ -3556,6 +3561,48 @@ def _system_a_add_linked_num(rec: dict, n: int) -> None:
     deduped = sorted(dict.fromkeys(vals))
     if deduped:
         rec["linked_nums"] = deduped
+
+
+def _system_a_claim_substantially_same(left: str, right: str) -> bool:
+    a = _system_a_fp_text(left, max_len=420)
+    b = _system_a_fp_text(right, max_len=420)
+    if not a or not b:
+        return True
+    if a == b:
+        return True
+    if len(a) >= 36 and a in b:
+        return True
+    if len(b) >= 36 and b in a:
+        return True
+    at = set(re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", a))
+    bt = set(re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", b))
+    if len(at) < 4 or len(bt) < 4:
+        return False
+    return len(at & bt) / max(1, min(len(at), len(bt))) >= 0.78
+
+
+def _system_a_should_split_occurrence(existing: dict, n: int, answer_claim: str) -> bool:
+    claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
+    if len(claim) < 18:
+        return False
+    nums: set[int] = set()
+    for raw in list(existing.get("linked_nums") or []) + [existing.get("num")]:
+        try:
+            k = int(raw)
+        except Exception:
+            continue
+        if k > 0:
+            nums.add(k)
+    try:
+        current_n = int(n)
+    except Exception:
+        current_n = 0
+    if current_n not in nums:
+        return False
+    old_claim = str(existing.get("answer_claim") or "").strip()
+    if not old_claim:
+        return False
+    return not _system_a_claim_substantially_same(old_claim, claim)
 
 
 def _assess_system_a_hit_binding(
@@ -3884,7 +3931,7 @@ def _annotate_inpaper_citations_with_hover_meta(
         def _citation_budget_key(detail: dict) -> str:
             if bool(detail.get("is_inpaper")):
                 return str(detail.get("anchor") or "").strip()
-            return str(detail.get("evidence_fingerprint") or detail.get("anchor") or "").strip()
+            return str(detail.get("citation_budget_key") or detail.get("evidence_fingerprint") or detail.get("anchor") or "").strip()
 
         def _claim_citation_budget(detail: dict) -> bool:
             nonlocal used_system_a_count, used_system_b_count
@@ -3955,6 +4002,42 @@ def _annotate_inpaper_citations_with_hover_meta(
                 detail["support_relation"] = relation_line
             if not str(detail.get("why_line") or "").strip():
                 detail["why_line"] = role_line or relation_line
+
+            source_context: dict = {}
+            try:
+                source_context = extract_inpaper_reference_context(
+                    str(detail.get("source_path") or ""),
+                    int(detail.get("num") or 0),
+                    answer_context=context_line,
+                )
+            except Exception:
+                source_context = {}
+            if not isinstance(source_context, dict):
+                source_context = {}
+            source_citation_context = str(source_context.get("citation_context") or "").strip()
+            if source_citation_context:
+                detail["citation_context"] = source_citation_context[:520]
+                detail["citation_context_source"] = "source_markdown"
+                detail["evidence_quote"] = source_citation_context[:520]
+                detail["evidence_source"] = "source_markdown"
+                detail["summary_line"] = source_citation_context[:360]
+                detail["summary_source"] = "source_markdown"
+                for key in ("heading_path", "location_label", "anchor_kind"):
+                    value = str(source_context.get(key) or "").strip()
+                    if value:
+                        detail[key] = value
+                for key in ("page_start", "page_end", "line_start", "line_end"):
+                    try:
+                        value_i = int(source_context.get(key) or 0)
+                    except Exception:
+                        value_i = 0
+                    if value_i > 0:
+                        detail[key] = value_i
+                detail["citation_context_quality"] = str(source_context.get("citation_context_quality") or "").strip()
+                try:
+                    detail["citation_context_score"] = float(source_context.get("citation_context_score") or 0.0)
+                except Exception:
+                    detail["citation_context_score"] = 0.0
 
         def _pick_grounded_numeric_candidate(
             n: int,
@@ -4109,9 +4192,17 @@ def _annotate_inpaper_citations_with_hover_meta(
                 sp = str(meta_h.get("source_path") or "").strip()
             if not sp or _is_temp_source_path(sp):
                 return None
-            skey = f"{int(n)}|{sp.lower()}"
+            answer_claim = ""
+            if int(token_start) >= 0:
+                answer_claim = _citation_context_line(token_start=int(token_start), token_end=int(token_end))
+            claim_sig = _anchor_token(_system_a_fp_text(answer_claim, max_len=220)) if answer_claim else ""
+            base_skey = f"{int(n)}|{sp.lower()}"
+            skey = f"{base_skey}|claim:{claim_sig}" if claim_sig else base_skey
             cached = detail_by_key.get(skey)
             if isinstance(cached, dict):
+                return cached
+            cached = detail_by_key.get(base_skey)
+            if isinstance(cached, dict) and not _system_a_should_split_occurrence(cached, int(n), answer_claim):
                 return cached
             meta_h = (hit or {}).get("meta", {}) or {}
             src_name = _display_source_name(sp)
@@ -4139,9 +4230,6 @@ def _annotate_inpaper_citations_with_hover_meta(
                 )
             except Exception:
                 score_value = 0.0
-            answer_claim = ""
-            if int(token_start) >= 0:
-                answer_claim = _citation_context_line(token_start=int(token_start), token_end=int(token_end))
             binding = _assess_system_a_hit_binding(
                 answer_claim=answer_claim,
                 hit=hit or {},
@@ -4187,18 +4275,27 @@ def _annotate_inpaper_citations_with_hover_meta(
                 page_end=int(p1 or 0),
             )
             existing = system_a_detail_by_fingerprint.get(evidence_fp)
-            if isinstance(existing, dict):
+            split_occurrence = bool(
+                isinstance(existing, dict)
+                and _system_a_should_split_occurrence(existing, int(n), answer_claim)
+            )
+            if isinstance(existing, dict) and not split_occurrence:
                 _system_a_add_linked_num(existing, int(n))
                 if answer_claim and not str(existing.get("answer_claim") or "").strip():
                     existing["answer_claim"] = answer_claim[:420]
                 detail_by_key[skey] = existing
                 return existing
-            anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=src_name)
+            if isinstance(existing, dict) and split_occurrence:
+                existing["occurrence_specific"] = True
+            occurrence_extra = claim_sig if split_occurrence else ""
+            anchor = _build_inpaper_anchor(anchor_ns, int(n), source_name=src_name, extra=occurrence_extra)
             rec = {
                 "num": int(n),
                 "linked_nums": [int(n)],
                 "anchor": anchor,
                 "evidence_fingerprint": evidence_fp,
+                "citation_budget_key": f"{evidence_fp}|claim:{claim_sig}" if split_occurrence and claim_sig else evidence_fp,
+                "occurrence_specific": bool(split_occurrence),
                 "source_name": src_name,
                 "source_path": sp,
                 "raw": snippet[:520],
@@ -4228,7 +4325,8 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "binding_overlap_terms": list(binding.get("overlap_terms") or []),
             }
             detail_by_key[skey] = rec
-            system_a_detail_by_fingerprint[evidence_fp] = rec
+            if not isinstance(existing, dict):
+                system_a_detail_by_fingerprint[evidence_fp] = rec
             return rec
 
         def _repl_any(m: re.Match) -> str:
@@ -4421,7 +4519,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             nums.append(primary)
         return (min(nums) if nums else 0, str(rec.get("source_name") or ""))
 
-    details = sorted(unique_details.values(), key=_detail_sort_key)
+    details = [compose_citation_card(rec) for rec in sorted(unique_details.values(), key=_detail_sort_key)]
     return "\n".join(out_lines), details
 
 
@@ -4466,6 +4564,24 @@ def _render_inpaper_citation_details(
             "pages": str(rec.get("pages") or "").strip(),
             "doi": str(rec.get("doi") or "").strip(),
             "doi_url": str(rec.get("doi_url") or "").strip(),
+            "card_kind": str(rec.get("card_kind") or "").strip(),
+            "card_title": str(rec.get("card_title") or "").strip(),
+            "card_subtitle": str(rec.get("card_subtitle") or "").strip(),
+            "card_takeaway_label": str(rec.get("card_takeaway_label") or "").strip(),
+            "card_takeaway": str(rec.get("card_takeaway") or "").strip(),
+            "card_claim_label": str(rec.get("card_claim_label") or "").strip(),
+            "card_claim": str(rec.get("card_claim") or "").strip(),
+            "card_locator_label": str(rec.get("card_locator_label") or "").strip(),
+            "card_locator": str(rec.get("card_locator") or "").strip(),
+            "card_evidence_label": str(rec.get("card_evidence_label") or "").strip(),
+            "card_evidence": str(rec.get("card_evidence") or "").strip(),
+            "card_support_label": str(rec.get("card_support_label") or "").strip(),
+            "card_support_explanation": str(rec.get("card_support_explanation") or "").strip(),
+            "card_quality_label": str(rec.get("card_quality_label") or "").strip(),
+            "card_quality_score": float(rec.get("card_quality_score") or 0.0),
+            "card_quality_flags": list(rec.get("card_quality_flags") or []),
+            "card_warning": str(rec.get("card_warning") or "").strip(),
+            "card_flow": list(rec.get("card_flow") or []),
         }
         payload_s = html.escape(json.dumps(payload, ensure_ascii=False), quote=True)
         html_parts.append(

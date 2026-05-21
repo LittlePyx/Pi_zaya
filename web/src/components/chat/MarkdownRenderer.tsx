@@ -147,6 +147,89 @@ function resolvePlainCitationDetail(
   return null
 }
 
+function cleanCitationOccurrenceText(value: string): string {
+  return String(value || '')
+    .replace(/\[[Rr]?\d{1,4}]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isLowValueCitationOccurrenceContext(value: string): boolean {
+  const text = cleanCitationOccurrenceText(value)
+  if (!text || text.length < 18) return true
+  const tokens = text.match(/[A-Za-z0-9\u4e00-\u9fff]+/g) || []
+  const hasCjk = /[\u4e00-\u9fff]/.test(text)
+  if (!hasCjk && tokens.length <= 4) return true
+  if (/^[A-Za-z][A-Za-z\s-]{2,48}\s+\d{1,3}$/.test(text)) return true
+  const hasSentenceCue = /[：:，,。.!?；;]/.test(text)
+  if (hasCjk && text.length < 24 && !hasSentenceCue) return true
+  if (!hasCjk && tokens.length <= 6 && !hasSentenceCue) return true
+  return false
+}
+
+function nearestBoundaryIndex(value: string, direction: 'left' | 'right'): number {
+  const text = String(value || '')
+  const boundaries = ['\n', '。', '！', '？', '；', '.', '!', '?', ';']
+  if (direction === 'left') {
+    let best = -1
+    for (const token of boundaries) best = Math.max(best, text.lastIndexOf(token))
+    return best
+  }
+  let best = -1
+  for (const token of boundaries) {
+    const idx = text.indexOf(token)
+    if (idx >= 0 && (best < 0 || idx < best)) best = idx
+  }
+  return best
+}
+
+function citationOccurrenceContextFromLink(link: HTMLElement): string {
+  const parent = link.closest('p, li, td, th, blockquote, h1, h2, h3, h4, h5, h6, div') as HTMLElement | null
+  if (!parent || typeof document === 'undefined') return ''
+  try {
+    const beforeRange = document.createRange()
+    beforeRange.selectNodeContents(parent)
+    beforeRange.setEndBefore(link)
+    const beforeText = beforeRange.toString()
+    beforeRange.detach()
+
+    const afterRange = document.createRange()
+    afterRange.selectNodeContents(parent)
+    afterRange.setStartAfter(link)
+    const afterText = afterRange.toString()
+    afterRange.detach()
+
+    const leftBoundary = nearestBoundaryIndex(beforeText, 'left')
+    const left = beforeText.slice(leftBoundary >= 0 ? leftBoundary + 1 : 0)
+    const rightBoundary = nearestBoundaryIndex(afterText, 'right')
+    const right = rightBoundary >= 0 ? afterText.slice(0, rightBoundary + 1) : afterText.slice(0, 160)
+    return cleanCitationOccurrenceText(`${left} ${link.textContent || ''} ${right}`).slice(0, 360)
+  } catch {
+    return cleanCitationOccurrenceText(parent.innerText || parent.textContent || '').slice(0, 360)
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function withCitationOccurrenceContext(detail: CiteDetail, link: HTMLElement, enabled: boolean): CiteDetail {
+  if (!enabled || detail.isInpaper) return detail
+  const context = citationOccurrenceContextFromLink(link)
+  if (!context || isLowValueCitationOccurrenceContext(context)) return detail
+  const existing = String(detail.cardClaim || detail.answerClaim || '').trim()
+  if (existing && cleanCitationOccurrenceText(existing).toLowerCase() === context.toLowerCase()) return detail
+  const flags = Array.isArray(detail.cardQualityFlags) ? detail.cardQualityFlags.slice() : []
+  if (!flags.includes('occurrence_specific_claim')) flags.push('occurrence_specific_claim')
+  return {
+    ...detail,
+    answerClaim: context,
+    cardClaim: context,
+    cardClaimLabel: detail.cardClaimLabel || '对应回答',
+    cardQualityFlags: flags,
+  }
+}
+
 function linkifyPlainCitationSegment(segment: string, byNum: Map<number, CiteDetail[]>): string {
   if (!segment || byNum.size <= 0 || !/\[[Rr]?\d/.test(segment)) return segment
   return segment.replace(
@@ -950,6 +1033,7 @@ function parseAnswerContract(text: string): { preamble: string; sections: Parsed
 
 function buildMarkdownComponents(
   byAnchor: Map<string, CiteDetail>,
+  duplicateCitationAnchors: Set<string>,
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   onCitationHover?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   onCitationLeave?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
@@ -1237,6 +1321,7 @@ function buildMarkdownComponents(
       const key = typeof href === 'string' && href.startsWith('#') ? href.slice(1) : ''
       const detail = key ? byAnchor.get(key) : undefined
       if (detail) {
+        const useOccurrenceContext = duplicateCitationAnchors.has(detail.anchor)
         const tone = toneBySource?.get(sourceKey(detail))
         const toneStyle: CSSProperties | undefined = tone
           ? ({
@@ -1253,10 +1338,10 @@ function buildMarkdownComponents(
             aria-label={detail.sourceName || detail.sourcePath || citationInlineLabel(detail, { includeSource: false })}
             onClick={(event) => {
               event.preventDefault()
-              onCitationClick?.(detail, event)
+              onCitationClick?.(withCitationOccurrenceContext(detail, event.currentTarget, useOccurrenceContext), event)
             }}
             onMouseEnter={(event) => {
-              onCitationHover?.(detail, event)
+              onCitationHover?.(withCitationOccurrenceContext(detail, event.currentTarget, useOccurrenceContext), event)
             }}
             onMouseLeave={(event) => {
               onCitationLeave?.(detail, event)
@@ -1440,6 +1525,14 @@ export function MarkdownRenderer({
     ? dedupeRepeatedReaderImageMarkdown(rawContent)
     : normalize(linkifyPlainCitationMarkers(rawContent, citeDetails))
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
+  const duplicateCitationAnchors = new Set<string>()
+  if (variant === 'chat' && byAnchor.size > 0) {
+    for (const anchor of byAnchor.keys()) {
+      const pattern = new RegExp(`#${escapeRegExp(anchor)}(?=[\\s)"']|$)`, 'g')
+      const count = renderContent.match(pattern)?.length || 0
+      if (count > 1) duplicateCitationAnchors.add(anchor)
+    }
+  }
   const toneBySource = buildToneMap(citeDetails)
   const readerBlockResolver = useMemo(
     () => (variant === 'reader' ? createReaderBlockResolver(readerBlocks) : null),
@@ -1451,6 +1544,7 @@ export function MarkdownRenderer({
   )
   const components = buildMarkdownComponents(
     byAnchor,
+    duplicateCitationAnchors,
     onCitationClick,
     onCitationHover,
     onCitationLeave,

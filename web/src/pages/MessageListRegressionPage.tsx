@@ -533,6 +533,148 @@ const systemACitationPopoverMessages: Message[] = [
   },
 ]
 
+const repeatedSystemAOldPacketMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: [
+      '自适应采样策略：在感兴趣区域用高分辨率采样、边缘用低分辨率采样 [3](#kb-cite-repeated-system-a-3)。',
+      '实际系统搭建：完整的单像素相机实验装置包含 DMD 投影和检测路径 [3](#kb-cite-repeated-system-a-3)。',
+      '数据效率思维：采集阶段就做智能压缩，而不是等采集完再压缩 [3](#kb-cite-repeated-system-a-3)。',
+    ].join('\n'),
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        intent: { family: 'overview' },
+        render_packet: {
+          answer_markdown: [
+            '自适应采样策略：在感兴趣区域用高分辨率采样、边缘用低分辨率采样 [3](#kb-cite-repeated-system-a-3)。',
+            '实际系统搭建：完整的单像素相机实验装置包含 DMD 投影和检测路径 [3](#kb-cite-repeated-system-a-3)。',
+            '数据效率思维：采集阶段就做智能压缩，而不是等采集完再压缩 [3](#kb-cite-repeated-system-a-3)。',
+          ].join('\n'),
+          rendered_body: [
+            '自适应采样策略：在感兴趣区域用高分辨率采样、边缘用低分辨率采样 [3](#kb-cite-repeated-system-a-3)。',
+            '实际系统搭建：完整的单像素相机实验装置包含 DMD 投影和检测路径 [3](#kb-cite-repeated-system-a-3)。',
+            '数据效率思维：采集阶段就做智能压缩，而不是等采集完再压缩 [3](#kb-cite-repeated-system-a-3)。',
+          ].join('\n'),
+          rendered_content: '',
+          copy_text: '',
+          copy_markdown: '',
+          cite_details: [
+            {
+              num: 3,
+              anchor: 'kb-cite-repeated-system-a-3',
+              source_name: 'SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.pdf',
+              source_path: READER_REGRESSION_SOURCE_PATH,
+              is_inpaper: false,
+              title: 'INTRODUCTION',
+              heading_path: 'INTRODUCTION',
+              evidence_quote: '## Foveated single-pixel imaging Single-pixel imaging is based on structured illumination and dynamic supersampling.',
+              evidence_source: 'retrieval_hit',
+              location_label: 'INTRODUCTION',
+              anchor_kind: 'paragraph',
+              page_start: 1,
+              page_end: 1,
+              score: 8.2,
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
+const lowQualitySystemAOldPacketMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: 'Deep learning review 1 [1](#kb-cite-low-quality-system-a-1)',
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        intent: { family: 'overview' },
+        render_packet: {
+          answer_markdown: 'Deep learning review 1 [1](#kb-cite-low-quality-system-a-1)',
+          rendered_body: 'Deep learning review 1 [1](#kb-cite-low-quality-system-a-1)',
+          rendered_content: '',
+          copy_text: '',
+          copy_markdown: '',
+          cite_details: [
+            {
+              num: 1,
+              anchor: 'kb-cite-low-quality-system-a-1',
+              source_name: 'LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf',
+              source_path: READER_REGRESSION_SOURCE_PATH,
+              is_inpaper: false,
+              title: '5. Single-Pixel Imaging Realizations with Deep Learning',
+              heading_path: '5. Single-Pixel Imaging Realizations with Deep Learning',
+              answer_claim: 'Deep learning review 1',
+              card_claim: 'Deep learning review 1',
+              card_claim_label: '对应回答',
+              evidence_quote: 'Advances and Challenges of Single-Pixel Imaging Based on Deep Learning Kai Song, Yaoxing Bian,\\ Dong Wang, Runrui Li, Ku Wu, Hongrui Liu, Chengbing Qin, Jianyong Hu,\\ and Liantuan Xiao* Single-pixel imaging technology can capture images at wavelengths outside the reach of conventional focal plane array detectors. However, limited image quality and long computation times still hinder practical application.',
+              card_evidence: 'Advances and Challenges of Single-Pixel Imaging Based on Deep Learning Kai Song, Yaoxing Bian,\\ Dong Wang, Runrui Li, Ku Wu, Hongrui Liu, Chengbing Qin, Jianyong Hu,\\ and Liantuan Xiao* Single-pixel imaging technology can capture images at wavelengths outside the reach of conventional focal plane array detectors. However, limited image quality and long computation times still hinder practical application.',
+              card_evidence_label: '原文证据',
+              evidence_source: 'retrieval_hit',
+              location_label: '5. Single-Pixel Imaging Realizations with Deep Learning',
+              card_locator: '5. Single-Pixel Imaging Realizations with Deep Learning',
+              anchor_kind: 'paragraph',
+              page_start: 8,
+              page_end: 8,
+              score: 7.8,
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
+const fragmentarySystemAOldPacketMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: '这篇综述用 DMD 解释了单像素相机的基本配置 [2](#kb-cite-fragmentary-system-a-2)。',
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        intent: { family: 'overview' },
+        render_packet: {
+          answer_markdown: '这篇综述用 DMD 解释了单像素相机的基本配置 [2](#kb-cite-fragmentary-system-a-2)。',
+          rendered_body: '这篇综述用 DMD 解释了单像素相机的基本配置 [2](#kb-cite-fragmentary-system-a-2)。',
+          rendered_content: '',
+          copy_text: '',
+          copy_markdown: '',
+          cite_details: [
+            {
+              num: 2,
+              anchor: 'kb-cite-fragmentary-system-a-2',
+              source_name: 'NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf',
+              source_path: READER_REGRESSION_SOURCE_PATH,
+              is_inpaper: false,
+              title: 'Abstract / Understanding compressed sensing',
+              heading_path: 'Abstract / Understanding compressed sensing',
+              answer_claim: '这篇综述用 DMD 解释了单像素相机的基本配置。',
+              evidence_quote: 'rson can be described uniquely with a few targeted questions—a property closely related to sparsity that is key to many measurement problems and gives rise to the fields of both data compression and Figure 1. Computational imaging configurations. A DMD can be used to spatially filter light by selectively redirecting parts of an incident light beam at ±24° to the normal. a, Single-pixel camera configuration.',
+              card_evidence: 'rson can be described uniquely with a few targeted questions—a property closely related to sparsity that is key to many measurement problems and gives rise to the fields of both data compression and Figure 1. Computational imaging configurations. A DMD can be used to spatially filter light by selectively redirecting parts of an incident light beam at ±24° to the normal. a, Single-pixel camera configuration.',
+              card_evidence_label: '原文证据',
+              evidence_source: 'retrieval_hit',
+              location_label: 'Abstract / Understanding compressed sensing',
+              card_locator: 'Abstract / Understanding compressed sensing',
+              anchor_kind: 'paragraph',
+              page_start: 2,
+              page_end: 2,
+              score: 8.0,
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
 const plainCitationRefsFallbackMessages: Message[] = [
   {
     id: 1,
@@ -769,6 +911,9 @@ type RegressionScenario =
   | 'render-packet-hidden-locate'
   | 'citation-hover-race'
   | 'system-a-citation-popover'
+  | 'repeated-system-a-old-packet'
+  | 'low-quality-system-a-old-packet'
+  | 'fragmentary-system-a-old-packet'
   | 'plain-citation-refs-fallback'
   | 'guide-filter-empty-external'
   | 'negative-evidence-locate'
@@ -788,6 +933,9 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'render-packet-hidden-locate') return 'render-packet-hidden-locate'
     if (scenarioParam === 'citation-hover-race') return 'citation-hover-race'
     if (scenarioParam === 'system-a-citation-popover') return 'system-a-citation-popover'
+    if (scenarioParam === 'repeated-system-a-old-packet') return 'repeated-system-a-old-packet'
+    if (scenarioParam === 'low-quality-system-a-old-packet') return 'low-quality-system-a-old-packet'
+    if (scenarioParam === 'fragmentary-system-a-old-packet') return 'fragmentary-system-a-old-packet'
     if (scenarioParam === 'plain-citation-refs-fallback') return 'plain-citation-refs-fallback'
     if (scenarioParam === 'guide-filter-empty-external') return 'guide-filter-empty-external'
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
@@ -803,6 +951,9 @@ export default function MessageListRegressionPage() {
     if (scenario === 'render-packet-hidden-locate') return renderPacketHiddenLocateMessages
     if (scenario === 'citation-hover-race') return citationHoverRaceMessages
     if (scenario === 'system-a-citation-popover') return systemACitationPopoverMessages
+    if (scenario === 'repeated-system-a-old-packet') return repeatedSystemAOldPacketMessages
+    if (scenario === 'low-quality-system-a-old-packet') return lowQualitySystemAOldPacketMessages
+    if (scenario === 'fragmentary-system-a-old-packet') return fragmentarySystemAOldPacketMessages
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackMessages
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyMessages
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages

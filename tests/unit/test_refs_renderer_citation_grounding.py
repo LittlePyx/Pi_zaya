@@ -416,3 +416,9 @@ def test_structured_system_b_detail_carries_answer_context_and_role(monkeypatch)
     assert "prior work" in detail["upstream_work_role"].lower()
     assert "origin" in detail["user_question_relation"].lower()
     assert detail["support_relation"] == detail["user_question_relation"]
+    assert detail["card_kind"] == "upstream_reference"
+    assert detail["card_title"] == "Distributed Optimization and Statistical Learning via ADMM"
+    assert detail["card_evidence_label"] == "回答里的线索"
+    assert "ADMM 优化框架背景" in detail["card_takeaway"]
+    assert "answer_context_only" in detail["card_quality_flags"]
+    assert "完整引用语境" in detail["card_warning"]

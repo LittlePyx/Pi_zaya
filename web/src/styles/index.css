@@ -693,6 +693,40 @@ body.kb-reader-resizing .kb-reader-content {
   border-left-color: color-mix(in srgb, var(--accent) 78%, #16a34a 22%);
 }
 
+.kb-cite-pop-system-a .kb-cite-pop-head {
+  margin-bottom: 8px;
+}
+
+.kb-cite-pop-system-a .kb-cite-pop-evidence-map {
+  gap: 7px;
+}
+
+.kb-cite-pop-system-a .kb-cite-pop-quote {
+  border-left-color: color-mix(in srgb, #16a34a 58%, var(--accent));
+  background: color-mix(in srgb, #16a34a 5%, var(--panel));
+  padding-block: 9px;
+}
+
+.kb-cite-pop-system-a .kb-cite-pop-locator {
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  background: transparent;
+  padding: 7px 0 0;
+}
+
+.kb-cite-pop-system-a .kb-cite-pop-locator-text {
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.kb-cite-pop-system-a .kb-cite-pop-anchor-meta {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  padding: 2px 7px;
+}
+
 .kb-cite-pop-system-b {
   border-left-color: color-mix(in srgb, var(--accent) 55%, #d97706 45%);
 }
@@ -740,6 +774,15 @@ body.kb-reader-resizing .kb-reader-content {
   color: var(--text-main);
   font-size: 13.5px;
   font-weight: 760;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.kb-cite-pop-title-sub {
+  margin-top: 3px;
+  color: color-mix(in srgb, var(--text-main) 58%, transparent);
+  font-size: 11px;
+  font-weight: 620;
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -846,6 +889,42 @@ body.kb-reader-resizing .kb-reader-content {
   overflow-wrap: anywhere;
 }
 
+.kb-cite-pop-quality {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 82%, var(--accent));
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.25;
+}
+
+.kb-cite-pop-quality-score {
+  color: color-mix(in srgb, var(--text-main) 56%, transparent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.kb-cite-pop-warning {
+  margin-top: 8px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, #f59e0b 34%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, #f59e0b 9%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 78%, #92400e);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .kb-cite-pop-context-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -894,12 +973,18 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-cite-pop-claim,
+.kb-cite-pop-takeaway,
 .kb-cite-pop-locator,
 .kb-cite-pop-why {
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 94%, var(--bg));
   padding: 8px 10px;
+}
+
+.kb-cite-pop-takeaway {
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
 }
 
 .kb-cite-pop-locator-text {

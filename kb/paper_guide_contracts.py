@@ -452,6 +452,24 @@ class PaperGuideCitationDetailModel(_PaperGuideBaseModel):
     binding_confidence: float = 0.0
     binding_reason: str = ""
     binding_overlap_terms: list[str] = Field(default_factory=list)
+    card_kind: str = ""
+    card_title: str = ""
+    card_subtitle: str = ""
+    card_takeaway_label: str = ""
+    card_takeaway: str = ""
+    card_claim_label: str = ""
+    card_claim: str = ""
+    card_locator_label: str = ""
+    card_locator: str = ""
+    card_evidence_label: str = ""
+    card_evidence: str = ""
+    card_support_label: str = ""
+    card_support_explanation: str = ""
+    card_quality_label: str = ""
+    card_quality_score: float = 0.0
+    card_quality_flags: list[str] = Field(default_factory=list)
+    card_warning: str = ""
+    card_flow: list[str] = Field(default_factory=list)
 
 
 class PaperGuideRenderPacketModel(_PaperGuideBaseModel):

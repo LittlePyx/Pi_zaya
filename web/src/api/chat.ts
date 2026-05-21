@@ -114,6 +114,24 @@ export interface MessageCitationDetail {
   binding_confidence?: number
   binding_reason?: string
   binding_overlap_terms?: string[]
+  card_kind?: string
+  card_title?: string
+  card_subtitle?: string
+  card_takeaway_label?: string
+  card_takeaway?: string
+  card_claim_label?: string
+  card_claim?: string
+  card_locator_label?: string
+  card_locator?: string
+  card_evidence_label?: string
+  card_evidence?: string
+  card_support_label?: string
+  card_support_explanation?: string
+  card_quality_label?: string
+  card_quality_score?: number
+  card_quality_flags?: string[]
+  card_warning?: string
+  card_flow?: string[]
   [key: string]: unknown
 }
 
