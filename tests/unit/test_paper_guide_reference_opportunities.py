@@ -184,6 +184,25 @@ def test_reference_opportunities_can_be_injected_inline_without_tail_note() -> N
     assert meta["injected_refs"] == [4]
 
 
+def test_reference_opportunities_convert_matching_bare_ref_to_structured_marker() -> None:
+    answer, meta = inject_reference_opportunity_citations_inline(
+        "ADMM is prior optimization machinery [4].",
+        prompt="Is ADMM original to this paper?",
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 4,
+                "label": "ADMM",
+                "evidence_quote": "Most existing methods employ ADMM [4].",
+            }
+        ],
+    )
+
+    assert answer == "ADMM is prior optimization machinery [[CITE:s1234abcd:4]]."
+    assert meta["mode"] == "inline"
+    assert meta["injected_refs"] == [4]
+
+
 def test_reference_opportunities_inject_on_pronoun_answer_when_prompt_names_label() -> None:
     opportunities = detect_paper_guide_reference_opportunities(
         prompt="ADMM 是作者自己发明的吗，还是借鉴了前人的方法？",

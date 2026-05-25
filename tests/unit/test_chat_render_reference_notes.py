@@ -6,6 +6,7 @@ import pytest
 from kb.chat_store import ChatStore
 from api.chat_render import (
     _enrich_provenance_segments_for_display,
+    _normalize_chat_markdown_for_display,
     _normalize_equation_source_notes,
     enrich_messages_with_reference_render,
 )
@@ -41,6 +42,20 @@ def test_equation_source_note_does_not_reference_removed_refs_ui():
     assert "鍙傝€冨畾浣" not in body
     assert "库内文献" in body
     assert "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf" in body
+
+
+def test_normalize_chat_markdown_cleans_empty_example_connectors_and_duplicate_terms():
+    raw = (
+        "This review (for example or this survey [2]) is a good entry point.\n\n"
+        "The topic includes single-pixel imaging, single-pixel imaging."
+    )
+
+    rendered = _normalize_chat_markdown_for_display(raw)
+
+    assert "for example or" not in rendered
+    assert "single-pixel imaging, single-pixel imaging" not in rendered
+    assert "This review (this survey [2]) is a good entry point." in rendered
+    assert "The topic includes single-pixel imaging." in rendered
 
 
 def test_equation_source_note_is_not_added_without_hits():

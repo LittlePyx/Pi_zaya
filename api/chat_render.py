@@ -46,7 +46,6 @@ from kb.inpaper_citation_enrichment import (
     enrich_inpaper_detail_context,
     extract_structured_cite_answer_context_line,
 )
-from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
 from ui.chat_widgets import _md_to_plain_text, _normalize_copy_citation_links, _normalize_math_markdown
@@ -55,7 +54,6 @@ from ui.refs_renderer import (
     _annotate_inpaper_citations_with_hover_meta,
     _normalize_reference_for_popup,
     _source_cite_id,
-    _system_b_has_upstream_intent,
 )
 
 _STRUCT_CITE_RE = re.compile(r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]", re.IGNORECASE)
@@ -73,7 +71,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
-_RENDER_CACHE_SCHEMA_VERSION = 10
+_RENDER_CACHE_SCHEMA_VERSION = 11
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -516,8 +514,41 @@ def _strip_structured_cite_tokens_for_display(md: str) -> str:
     return out
 
 
+_EMPTY_EXAMPLE_CONNECTOR_RE = re.compile(
+    r"(?P<open>[（(])\s*(?:如|for\s+example|e\.g\.)\s*(?:或|和|及|以及|or|and|、|,|，)\s*",
+    re.IGNORECASE,
+)
+_BARE_EMPTY_EXAMPLE_CONNECTOR_RE = re.compile(
+    r"(?<![\w\u4e00-\u9fff])(?:如|for\s+example|e\.g\.)\s*(?:或|和|及|以及|or|and|、|,|，)\s*",
+    re.IGNORECASE,
+)
+_DUPLICATE_NEIGHBOR_TERM_RE = re.compile(
+    r"(?P<term>[A-Za-z][A-Za-z0-9+.-]*(?:\s+[A-Za-z][A-Za-z0-9+.-]*){0,4}|[\u4e00-\u9fff]{2,12})"
+    r"\s*(?:、|，|,|/)\s*(?P=term)(?=\s*(?:[，。,.;；、)）]|$))"
+)
+
+
+def _cleanup_answer_surface_artifacts(md: str) -> str:
+    out = str(md or "")
+    if not out:
+        return out
+    out = _EMPTY_EXAMPLE_CONNECTOR_RE.sub(lambda m: str(m.group("open") or ""), out)
+    out = _BARE_EMPTY_EXAMPLE_CONNECTOR_RE.sub("", out)
+    for _ in range(3):
+        nxt = _DUPLICATE_NEIGHBOR_TERM_RE.sub(lambda m: str(m.group("term") or "").strip(), out)
+        if nxt == out:
+            break
+        out = nxt
+    out = re.sub(r"\s+([，。；：！？、])", r"\1", out)
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+    out = re.sub(r"([（(])\s+", r"\1", out)
+    out = re.sub(r"\s+([）)])", r"\1", out)
+    out = re.sub(r"[（(]\s*[）)]", "", out)
+    return out.strip()
+
+
 def _normalize_chat_markdown_for_display(md: str) -> str:
-    return _normalize_math_markdown(_strip_structured_cite_tokens_for_display(md))
+    return _normalize_math_markdown(_cleanup_answer_surface_artifacts(_strip_structured_cite_tokens_for_display(md)))
 
 
 _FREEFORM_NUMERIC_CITE_RE = re.compile(
@@ -717,26 +748,6 @@ def _reading_guide_repair_missing_system_a_citations(
     return "".join(parts)
 
 
-def _message_has_validated_structured_cites(rec: dict | None) -> bool:
-    if not isinstance(rec, dict):
-        return False
-    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
-    answer_quality = dict(meta.get("answer_quality") or {}) if isinstance(meta.get("answer_quality"), dict) else {}
-    citation_validation = (
-        answer_quality.get("citation_validation")
-        if isinstance(answer_quality.get("citation_validation"), dict)
-        else {}
-    )
-    kept = int((citation_validation or {}).get("kept") or 0)
-    rewritten = int((citation_validation or {}).get("rewritten") or 0)
-    if kept + rewritten > 0:
-        return True
-    ref_opps = answer_quality.get("reference_opportunities")
-    if isinstance(ref_opps, dict) and int(ref_opps.get("count") or 0) > 0:
-        return True
-    return False
-
-
 def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str, hits: list[dict] | None = None) -> bool:
     raw = str(content or "")
     if not raw:
@@ -745,16 +756,17 @@ def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str
         return True
     if _message_answer_prompt_family(rec) == "citation_lookup":
         return True
-    if hits and _STRUCT_CITE_RE.search(raw) and _message_has_validated_structured_cites(rec):
-        return True
     if hits and (
         _STRUCT_CITE_RE.search(raw)
         or _STRUCT_CITE_SINGLE_RE.search(raw)
         or _STRUCT_CITE_SID_ONLY_RE.search(raw)
     ):
-        citation_plan = _message_citation_plan(rec)
-        if _system_b_has_upstream_intent(raw) or citation_plan_prefers_system_b(citation_plan, context=raw):
-            return True
+        # System B is a typed citation protocol: only structured
+        # [[CITE:<sid>:<ref_num>]] tokens point at the current paper's
+        # bibliography.  The renderer validates the SID/ref against the
+        # reference index and drops unresolved tokens, so we should not decide
+        # System A vs System B from answer wording here.
+        return True
     # Classic RAG with [n] markers and available hits → link citations.
     if hits and re.search(r"\[\d{1,4}\]", raw):
         return True
@@ -1581,7 +1593,7 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
         context_line = _structured_cite_context_line(int(m.start()), int(m.end()))
         detail = _mk_detail(sid, n, answer_context=context_line)
         if not detail:
-            return f"[{n}]"
+            return ""
         return f"[{n}](#{detail['anchor']})"
 
     out = _STRUCT_CITE_RE.sub(_replace, str(md or ""))

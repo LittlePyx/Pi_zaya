@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta, _should_route_numeric_to_system_b
+from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta
 
 
 def test_system_a_citation_detail_carries_reader_card_fields() -> None:
@@ -306,13 +306,6 @@ def test_system_a_does_not_route_to_system_b_from_reference_title_words() -> Non
     assert len(details) == 1
     assert details[0]["citation_route"] == "system_a"
     assert details[0]["card_kind"] == "answer_evidence"
-    assert not _should_route_numeric_to_system_b(
-        "This paper is useful for learning deep-learning single-pixel imaging [1].",
-        {
-            "title": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
-            "raw": "A review with references and prior work.",
-        },
-    )
 
 
 def test_system_a_keeps_distinct_cards_for_distinct_evidence_locations() -> None:

@@ -769,6 +769,27 @@ def _insert_marker_before_terminal_punctuation(line: str, marker: str) -> str:
     return f"{body} {marker}{trailing}"
 
 
+def _replace_exact_bare_ref_marker(line: str, *, ref_num: int, marker: str) -> tuple[str, bool]:
+    text = str(line or "")
+    if not text or int(ref_num or 0) <= 0 or not str(marker or "").strip() or marker in text:
+        return text, False
+
+    changed = False
+
+    def _repl(m: re.Match[str]) -> str:
+        nonlocal changed
+        # Leave existing markdown links alone.
+        if str(text[m.end() : m.end() + 1] or "") == "(":
+            return str(m.group(0) or "")
+        nums = [int(raw) for raw in re.findall(r"\d{1,4}", str(m.group(1) or ""))]
+        if nums == [int(ref_num)]:
+            changed = True
+            return str(marker)
+        return str(m.group(0) or "")
+
+    return _INLINE_REF_RE.sub(_repl, text), changed
+
+
 def inject_reference_opportunity_citations_inline(
     answer: str,
     *,
@@ -795,13 +816,30 @@ def inject_reference_opportunity_citations_inline(
         if not sid or ref_num <= 0 or (sid.lower(), ref_num) in existing:
             continue
         marker = _cite_marker_for_opportunity(opp)
+        best_bare_idx = -1
+        best_bare_score = float("-inf")
         best_idx = -1
         best_score = float("-inf")
         for idx, line in enumerate(lines):
             score = _line_score_for_opportunity(line=line, prompt=prompt, opp=opp)
+            _, has_bare_marker = _replace_exact_bare_ref_marker(line, ref_num=ref_num, marker=marker)
+            if has_bare_marker and score > best_bare_score:
+                best_bare_idx = idx
+                best_bare_score = score
             if score > best_score:
                 best_idx = idx
                 best_score = score
+        if best_bare_idx >= 0 and best_bare_score >= min(4.0, float(min_score)):
+            replaced, changed = _replace_exact_bare_ref_marker(
+                lines[best_bare_idx],
+                ref_num=ref_num,
+                marker=marker,
+            )
+            if changed:
+                lines[best_bare_idx] = replaced
+                injected_refs.append(ref_num)
+                existing.add((sid.lower(), ref_num))
+                continue
         if best_idx < 0 or best_score < float(min_score):
             continue
         lines[best_idx] = _insert_marker_before_terminal_punctuation(lines[best_idx], marker)

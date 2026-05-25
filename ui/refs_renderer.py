@@ -17,7 +17,6 @@ import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.citation_card import compose_citation_card
-from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.inpaper_citation_enrichment import (
@@ -3375,15 +3374,6 @@ _SYSTEM_B_METHOD_CONTEXT_RE = re.compile(
     r"(?i)\b(?:method|model|framework|algorithm|optimization|implementation|reconstruction|machinery|tool)\b|"
     r"(?:方法|模型|框架|算法|优化|实现|重建|工具|机制)"
 )
-_SYSTEM_B_UPSTREAM_INTENT_RE = re.compile(
-    r"(?i)\b(?:where\s+(?:did|does).{0,40}(?:come\s+from|originate)|"
-    r"come\s+from|origin|source|upstream|prior|previous|earlier|existing|"
-    r"borrowed|inspired|based\s+on|extends?|cited|citing|citation|references?|"
-    r"not\s+(?:original|new)|who\s+(?:proposed|invented|introduced))\b|"
-    r"(?:怎么来|从哪(?:里)?来|源头|来源|出处|上游|前人|已有|先前|之前|早期|"
-    r"借鉴|引用|参考|基于|沿用|延续|谁(?:提出|发明|做的)|不是.{0,16}(?:原创|新提出|自己))"
-)
-
 _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("iscat", re.compile(r"(?i)\biscat\b|干涉散射")),
     ("interferometric", re.compile(r"(?i)\binterferometric\b|干涉检测|干涉散射")),
@@ -3450,27 +3440,6 @@ def _system_b_prefers_zh(*texts: str) -> bool:
 
 def _system_a_prefers_zh(*texts: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", " ".join(str(text or "") for text in texts)))
-
-
-def _system_b_has_upstream_intent(*texts: str) -> bool:
-    raw = " ".join(str(text or "") for text in texts).strip()
-    return bool(raw and _SYSTEM_B_UPSTREAM_INTENT_RE.search(raw))
-
-
-def _system_b_route_reason(context_line: str, ref_rec: dict | None = None) -> str:
-    prefer_zh = _system_b_prefers_zh(context_line)
-    if prefer_zh:
-        return "这句话在追问方法、概念或判断的上游来源，优先链接当前论文引用的参考文献。"
-    return "This sentence asks about upstream origin or prior work, so the citation is routed to the paper's bibliography reference."
-
-
-def _should_route_numeric_to_system_b(context_line: str, ref_rec: dict | None = None) -> bool:
-    # Route free-form numeric citations to System B only when the answer line
-    # itself asks for origin/prior-work provenance.  Reference titles and raw
-    # bibliography strings often contain words like "based on" or "references",
-    # which previously caused ordinary answer evidence links to be mislabeled
-    # as upstream citations.
-    return _system_b_has_upstream_intent(context_line)
 
 
 def _system_a_domain_terms(text: str) -> set[str]:
@@ -4414,37 +4383,14 @@ def _annotate_inpaper_citations_with_hover_meta(
                     token_start=int(m.start()),
                     token_end=int(m.end()),
                 )
-                plan_prefers_b = citation_plan_prefers_system_b(
-                    plan,
-                    context=context_line,
-                    ref_num=int(n),
-                )
                 picked: tuple[str, str, dict] | None = None
-                should_try_system_b = bool(
-                    plan_prefers_b
-                    or
-                    (not hit_detail)
-                    or _should_route_numeric_to_system_b(context_line)
-                )
-                if should_try_system_b:
+                if not hit_detail:
                     picked = _pick_grounded_numeric_candidate(
                         int(n),
                         pos=int(m.start()),
                         target_sp=target_sp,
                     )
-                if picked and (plan_prefers_b or _should_route_numeric_to_system_b(context_line, picked[2])):
-                    sp, src_name, ref = picked
-                    detail = _remember_detail(int(n), sp, src_name, ref)
-                    detail["is_inpaper"] = True
-                    detail["citation_route"] = "system_b"
-                    detail["routing_reason"] = "citation_plan" if plan_prefers_b else _system_b_route_reason(context_line, ref)
-                    detail["routing_confidence"] = 0.82 if plan_prefers_b else 0.75
-                    _enrich_system_b_detail_from_answer_context(
-                        detail,
-                        token_start=int(m.start()),
-                        token_end=int(m.end()),
-                    )
-                elif hit_detail:
+                if hit_detail:
                     if bool(hit_detail.get("_suppress_link")):
                         if not _STRICT_STRUCTURED_CITATION_LINKING:
                             items.append(f"[{int(n)}]")

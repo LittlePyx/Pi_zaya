@@ -110,7 +110,7 @@ def test_numeric_citation_without_identity_signal_stays_clickable(monkeypatch):
     assert len(details) == 1
 
 
-def test_numeric_router_prefers_system_b_for_upstream_origin_context(monkeypatch):
+def test_structured_cite_routes_to_system_b_for_upstream_origin_context(monkeypatch):
     source_path = "scinerf.en.md"
 
     def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
@@ -133,7 +133,8 @@ def test_numeric_router_prefers_system_b_for_upstream_origin_context(monkeypatch
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
     monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "SCINeRF.pdf")
 
-    md = "ADMM was not invented by this paper; it comes from prior optimization work [1]."
+    sid = refs_renderer._source_cite_id(source_path)
+    md = f"ADMM was not invented by this paper; it comes from prior optimization work [[CITE:{sid}:1]]."
     hits = [
         {
             "text": "SCINeRF uses ADMM for optimization in its reconstruction pipeline.",
@@ -148,10 +149,53 @@ def test_numeric_router_prefers_system_b_for_upstream_origin_context(monkeypatch
     assert detail["is_inpaper"] is True
     assert detail["citation_route"] == "system_b"
     assert "ADMM" in " ".join([str(detail.get("title") or ""), str(detail.get("raw") or "")])
-    assert "upstream" in detail["routing_reason"].lower() or "prior work" in detail["routing_reason"].lower()
+    assert detail["routing_reason"] == "structured_cite"
 
 
-def test_numeric_router_uses_citation_plan_for_system_b(monkeypatch):
+def test_numeric_router_keeps_good_system_a_for_generic_reference_word(monkeypatch):
+    source_path = "single_pixel_review.en.md"
+
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) != 1:
+            return None
+        return {
+            "source_path": source_path,
+            "source_name": "Review.pdf",
+            "ref_num": 1,
+            "ref": {
+                "authors": "Unrelated A",
+                "year": "2001",
+                "title": "An unrelated bibliography item",
+                "raw": "[1] Unrelated A. An unrelated bibliography item. 2001.",
+            },
+        }
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "Review.pdf")
+
+    md = "Use this single-pixel imaging review as a reference [1]; it explains reconstruction quality and sampling rate."
+    hits = [
+        {
+            "text": "This review explains single-pixel imaging reconstruction quality, sampling rate, and deep learning methods.",
+            "meta": {
+                "source_path": source_path,
+                "source_sha1": "abc",
+                "heading_path": "Abstract",
+                "evidence_quote": "This review explains single-pixel imaging reconstruction quality, sampling rate, and deep learning methods.",
+            },
+        }
+    ]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[1](#kb-cite-" in out
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+    assert details[0]["card_kind"] == "answer_evidence"
+
+
+def test_citation_plan_does_not_steal_bare_numeric_system_a_citation(monkeypatch):
     source_path = "scinerf.en.md"
 
     def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
@@ -196,8 +240,8 @@ def test_numeric_router_uses_citation_plan_for_system_b(monkeypatch):
 
     assert "[1](#kb-cite-" in out
     assert len(details) == 1
-    assert details[0]["citation_route"] == "system_b"
-    assert details[0]["routing_reason"] == "citation_plan"
+    assert details[0]["citation_route"] == "system_a"
+    assert details[0]["routing_reason"] == "retrieval_hit"
 
 
 def test_citation_router_applies_per_paragraph_budget_for_system_a(monkeypatch):
