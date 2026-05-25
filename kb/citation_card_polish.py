@@ -48,18 +48,43 @@ _ALIAS_TO_SNAKE = {
     "cardLocator": "card_locator",
     "cardEvidenceLabel": "card_evidence_label",
     "cardEvidence": "card_evidence",
+    "cardContextSummary": "card_context_summary",
     "cardReferenceLabel": "card_reference_label",
     "cardReferenceEntry": "card_reference_entry",
     "cardSupportLabel": "card_support_label",
     "cardSupportExplanation": "card_support_explanation",
+    "cardQualityScore": "card_quality_score",
     "cardQualityFlags": "card_quality_flags",
+    "cardWarning": "card_warning",
 }
-_TEXT_PATCH_KEYS = ("card_takeaway", "card_claim", "card_support_explanation")
+_TEXT_PATCH_KEYS = ("card_takeaway", "card_claim", "card_context_summary", "card_support_explanation")
 _BAD_MARKUP_RE = re.compile(r"\[\[?\s*CITE\s*:|```|<[^>]+>|!\[[^\]]*]\(|\|")
+_INLINE_REF_MARKER_RE = re.compile(r"\[(?:R)?\d{1,4}(?:\s*[-,;]\s*(?:R)?\d{1,4})*\]", re.IGNORECASE)
+_PROMPT_LABEL_RE = re.compile(
+    r"^(?:"
+    r"card[_\s-]*(?:takeaway|claim|context|summary|support)|"
+    r"证据重点|答案中的话|答案里的这句话|对应答案|原文证据|上游作用|引用语境|"
+    r"语境摘要|引用语境摘要|为什么引用它|为什么值得打开|"
+    r"引用出现位置|引用所在位置|当前位置|当前论文位置|当前论文引用处|上游文献条目|"
+    r"为什么能支撑这句话|这条依据的可靠度"
+    r")\s*[:：\-]\s*",
+    re.IGNORECASE,
+)
 _GENERIC_RE = re.compile(
     r"\b(?:this reference is relevant|this evidence supports|good entry point|"
     r"directly relevant|upstream paper to open next|"
-    r"这条(?:引用|证据|参考).{0,12}(?:相关|有用|值得打开|可以作为入口))\b",
+    r"no summary available|loading citation metrics|"
+    r"这条(?:引用|证据|参考).{0,12}(?:相关|有用|值得打开|可以作为入口)|"
+    r"该(?:文献|论文|证据).{0,12}(?:相关|有用|值得阅读|可以作为入口)|"
+    r"可(?:以)?(?:作为|用于).{0,10}(?:候选读物|入口|定位切口))\b",
+    re.IGNORECASE,
+)
+_LOW_INFORMATION_RE = re.compile(
+    r"^(?:"
+    r"abstract|introduction|methods?|related work|references?|"
+    r"当前论文位置|引用出现位置|上游文献条目|对应答案|原文证据|引用语境|"
+    r"打开(?:答案依据|引用语境)|start reading guide|open citation shelf|add to shelf"
+    r")$",
     re.IGNORECASE,
 )
 
@@ -102,6 +127,19 @@ def _text(value: Any, *, max_len: int = 900) -> str:
     return clean_display_text(value, max_len=max_len)
 
 
+def _semantic_tokens(value: str) -> set[str]:
+    text = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+    if not text:
+        return set()
+    tokens = set(re.findall(r"[a-z0-9]{2,}", text))
+    cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+    if len(cjk_chars) >= 2:
+        tokens.update("".join(cjk_chars[idx : idx + 2]) for idx in range(len(cjk_chars) - 1))
+    elif cjk_chars:
+        tokens.update(cjk_chars)
+    return {token for token in tokens if token}
+
+
 def _sameish(left: str, right: str) -> bool:
     a = re.sub(r"\s+", " ", str(left or "")).strip().lower()
     b = re.sub(r"\s+", " ", str(right or "")).strip().lower()
@@ -113,22 +151,38 @@ def _sameish(left: str, right: str) -> bool:
         return True
     if len(b) >= 32 and b in a:
         return True
-    at = set(re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", a))
-    bt = set(re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", b))
+    at = _semantic_tokens(a)
+    bt = _semantic_tokens(b)
     if len(at) < 5 or len(bt) < 5:
         return False
     return len(at & bt) / max(1, min(len(at), len(bt))) >= 0.82
 
 
+def _clean_polish_candidate(value: Any, *, max_len: int) -> str:
+    text = _text(value, max_len=max_len)
+    for _ in range(2):
+        cleaned = _PROMPT_LABEL_RE.sub("", text).strip()
+        if cleaned == text:
+            break
+        text = cleaned
+    return text
+
+
 def _looks_bad_polish_text(value: str) -> bool:
-    text = _text(value, max_len=260)
+    text = _clean_polish_candidate(value, max_len=260)
     if not text:
         return True
     if _BAD_MARKUP_RE.search(text):
         return True
+    if _INLINE_REF_MARKER_RE.search(text):
+        return True
     if _GENERIC_RE.search(text):
         return True
-    tokens = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", text)
+    if _LOW_INFORMATION_RE.match(text.strip()):
+        return True
+    if re.search(r"\.(?:pdf|md)\b", text, re.IGNORECASE):
+        return True
+    tokens = _semantic_tokens(text)
     if len(tokens) < 4 and len(text) < 16:
         return True
     return False
@@ -136,32 +190,52 @@ def _looks_bad_polish_text(value: str) -> bool:
 
 def _candidate_payload(base: Mapping[str, Any]) -> str:
     rows: list[str] = []
+    metadata = " · ".join(
+        part
+        for part in (
+            _text(base.get("authors"), max_len=180),
+            _text(base.get("venue"), max_len=80),
+            _text(base.get("year"), max_len=16),
+        )
+        if part
+    )
     for label, key in (
+        ("Reference title", "card_title"),
+        ("Reference metadata", "__metadata__"),
         ("Answer sentence", "card_claim"),
-        ("Evidence quote", "card_evidence"),
+        ("Evidence or citation context", "card_evidence"),
         ("Current takeaway", "card_takeaway"),
+        ("Upstream role", "upstream_work_role"),
+        ("Question relation", "user_question_relation"),
+        ("Support relation", "support_relation"),
         ("Citation context", "citation_context"),
+        ("Reference entry", "card_reference_entry"),
         ("Raw reference", "raw"),
         ("Location", "card_locator"),
+        ("Quality warning", "card_warning"),
     ):
-        value = _text(base.get(key), max_len=520)
+        value = metadata if key == "__metadata__" else _text(base.get(key), max_len=520)
         if value:
             rows.append(f"{label}: {value}")
-    return "\n".join(rows[:6])
+    return "\n".join(rows[:11])
 
 
 def citation_card_polish_cache_key(detail: Mapping[str, Any] | None) -> str:
     rec = normalize_citation_card_detail(detail)
     base = compose_citation_card(rec)
     selected = {
-        "version": 1,
+        "version": 3,
         "is_inpaper": bool(base.get("is_inpaper")),
         "num": str(base.get("num") or ""),
         "source_name": _text(base.get("source_name"), max_len=220),
         "title": _text(base.get("title") or base.get("card_title"), max_len=260),
+        "card_title": _text(base.get("card_title"), max_len=260),
         "card_claim": _text(base.get("card_claim") or base.get("answer_claim"), max_len=420),
         "card_evidence": _text(base.get("card_evidence") or base.get("evidence_quote"), max_len=620),
         "citation_context": _text(base.get("citation_context"), max_len=620),
+        "upstream_work_role": _text(base.get("upstream_work_role") or base.get("why_line"), max_len=420),
+        "user_question_relation": _text(base.get("user_question_relation") or base.get("support_relation"), max_len=420),
+        "card_reference_entry": _text(base.get("card_reference_entry") or base.get("raw"), max_len=620),
         "card_locator": _text(base.get("card_locator") or base.get("location_label"), max_len=260),
     }
     blob = json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -196,7 +270,17 @@ def _llm_polish_citation_card_json(
         )
     except Exception:
         fast_settings = settings
-    route_hint = "SystemB upstream bibliography reference" if is_inpaper else "SystemA answer evidence card"
+    if is_inpaper:
+        route_hint = (
+            "SystemB upstream bibliography reference: the current paper cites this upstream work near "
+            "the answer sentence. Explain why that cited work is worth opening, without pretending it is "
+            "direct evidence unless the provided citation context says so."
+        )
+    else:
+        route_hint = (
+            "SystemA answer evidence card: this source text is direct evidence for a sentence in the answer. "
+            "Explain the concrete point supported by the quote."
+        )
     try:
         out = DeepSeekChat(fast_settings).chat(
             messages=[
@@ -204,12 +288,15 @@ def _llm_polish_citation_card_json(
                     "role": "system",
                     "content": (
                         "You polish a small citation popover card for a research reading assistant. "
-                        "Return JSON only: {\"card_takeaway\":\"...\",\"card_claim\":\"...\",\"card_support_explanation\":\"...\"}. "
-                        "Write concise Chinese. card_takeaway is the primary polished line: explain what the evidence/reference contributes. "
+                        "Return JSON only: {\"card_takeaway\":\"...\",\"card_claim\":\"...\",\"card_context_summary\":\"...\",\"card_support_explanation\":\"...\"}. "
+                        "Write concise Chinese. card_takeaway is the primary polished line: name the specific mechanism, claim, limitation, or upstream role. "
+                        "It must not be a title, location, bibliography entry, copied evidence, or generic relevance sentence. "
                         "card_claim is optional and should only be filled if it is a short answer-side statement that is not duplicated by the evidence. "
-                        "card_support_explanation is optional and only for a non-obvious reliability or tracing note. "
+                        "card_context_summary is only for SystemB: summarize why the current paper cites this upstream work in the provided context. "
+                        "Leave card_context_summary empty for SystemA or when the context is too weak. "
+                        "card_support_explanation is optional and only for a non-obvious reliability or tracing note. Leave optional fields empty when they add no new information. "
                         "Use only the supplied fields. Do not invent facts. Do not rewrite the evidence quote itself. "
-                        "Do not output markdown, bullets, table bars, formulas, DOC/SID/CITE markers, or generic phrases."
+                        "Do not output markdown, bullets, table bars, formulas, DOC/SID/CITE/reference markers, UI labels, or generic phrases."
                     ),
                 },
                 {
@@ -227,7 +314,7 @@ def _llm_polish_citation_card_json(
                 },
             ],
             temperature=0.1,
-            max_tokens=220,
+            max_tokens=300,
         )
     except Exception:
         return ""
@@ -251,6 +338,82 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
         return dict(parsed) if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _baseline_texts(base: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "evidence": _text(base.get("card_evidence") or base.get("evidence_quote") or base.get("citation_context"), max_len=620),
+        "claim": _text(base.get("card_claim") or base.get("answer_claim"), max_len=420),
+        "takeaway": _text(base.get("card_takeaway"), max_len=180),
+        "title": _text(base.get("title") or base.get("card_title"), max_len=260),
+        "source": _text(base.get("source_name"), max_len=220),
+        "locator": _text(base.get("card_locator") or base.get("heading_path") or base.get("location_label"), max_len=260),
+        "reference": _text(base.get("card_reference_entry") or base.get("raw") or base.get("cite_fmt"), max_len=620),
+        "warning": _text(base.get("card_warning"), max_len=360),
+    }
+
+
+def _reject_polish_reason(
+    *,
+    key: str,
+    text: str,
+    route: str,
+    baseline: Mapping[str, str],
+    accepted: Mapping[str, Any],
+) -> str:
+    if _looks_bad_polish_text(text):
+        return "bad_or_generic"
+    comparable = {
+        label: value
+        for label, value in baseline.items()
+        if value and label not in {"warning"}
+    }
+    if key == "card_takeaway":
+        for label, value in comparable.items():
+            if label == "takeaway":
+                continue
+            if _sameish(text, value):
+                return f"duplicates_{label}"
+        if route == "system_b" and _sameish(text, baseline.get("reference", "")):
+            return "duplicates_reference"
+    elif key == "card_claim":
+        for label in ("evidence", "takeaway", "title", "locator", "reference"):
+            if _sameish(text, baseline.get(label, "")):
+                return f"duplicates_{label}"
+        if _sameish(text, str(accepted.get("card_takeaway") or "")):
+            return "duplicates_takeaway"
+    elif key == "card_context_summary":
+        if route != "system_b":
+            return "wrong_route"
+        for label in ("evidence", "claim", "takeaway", "title", "locator", "reference"):
+            if _sameish(text, baseline.get(label, "")):
+                return f"duplicates_{label}"
+        for accepted_key in ("card_takeaway", "card_claim"):
+            if _sameish(text, str(accepted.get(accepted_key) or "")):
+                return f"duplicates_{accepted_key}"
+    elif key == "card_support_explanation":
+        for label in ("evidence", "claim", "takeaway", "title", "locator", "reference"):
+            if _sameish(text, baseline.get(label, "")):
+                return f"duplicates_{label}"
+        for accepted_key in ("card_takeaway", "card_claim", "card_context_summary"):
+            if _sameish(text, str(accepted.get(accepted_key) or "")):
+                return f"duplicates_{accepted_key}"
+    return ""
+
+
+def _quality_score_for_patch(patch: Mapping[str, Any], *, rejected_count: int) -> float:
+    score = 0.35
+    if str(patch.get("card_takeaway") or "").strip():
+        score += 0.34
+    if str(patch.get("card_claim") or "").strip():
+        score += 0.14
+    if str(patch.get("card_context_summary") or "").strip():
+        score += 0.16
+    if str(patch.get("card_support_explanation") or "").strip():
+        score += 0.1
+    if rejected_count:
+        score -= min(0.18, 0.04 * rejected_count)
+    return round(max(0.0, min(1.0, score)), 3)
 
 
 def polish_citation_card_detail(
@@ -286,30 +449,35 @@ def polish_citation_card_detail(
         candidate_payload=payload,
     )
     parsed = _parse_json_object(raw)
+    route = "system_b" if bool(base.get("is_inpaper")) else "system_a"
     patch: dict[str, Any] = {
         "citation_card_polish_status": "full",
         "citation_card_polish_source": "llm",
         "citation_card_polish_checked": True,
+        "citation_card_polish_route": route,
     }
-    evidence = _text(base.get("card_evidence") or base.get("evidence_quote") or base.get("citation_context"), max_len=620)
-    claim_seed = _text(base.get("card_claim") or base.get("answer_claim"), max_len=420)
-    accepted_any = False
+    baseline = _baseline_texts(base)
+    accepted_keys: list[str] = []
+    rejected: list[str] = []
     for key in _TEXT_PATCH_KEYS:
-        text = _text(parsed.get(key), max_len=420 if key != "card_takeaway" else 160)
-        if _looks_bad_polish_text(text):
-            continue
-        if key == "card_claim" and (not text or _sameish(text, evidence)):
-            continue
-        if key == "card_support_explanation" and (
-            _sameish(text, evidence) or _sameish(text, claim_seed) or _sameish(text, str(patch.get("card_takeaway") or ""))
-        ):
+        text = _clean_polish_candidate(
+            parsed.get(key),
+            max_len=220 if key == "card_context_summary" else (420 if key != "card_takeaway" else 160),
+        )
+        reason = _reject_polish_reason(key=key, text=text, route=route, baseline=baseline, accepted=patch)
+        if reason:
+            rejected.append(f"{key}:{reason}")
             continue
         patch[key] = text
-        accepted_any = True
-    if not accepted_any:
+        accepted_keys.append(key)
+    if not accepted_keys:
         return {
             "citation_card_polish_status": "empty",
             "citation_card_polish_source": "llm_empty",
             "citation_card_polish_checked": True,
         }
+    patch["citation_card_polish_fields"] = accepted_keys
+    patch["citation_card_polish_quality_score"] = _quality_score_for_patch(patch, rejected_count=len(rejected))
+    if rejected:
+        patch["citation_card_polish_rejected"] = rejected[:6]
     return patch

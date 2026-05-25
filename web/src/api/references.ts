@@ -124,6 +124,7 @@ export const referencesApi = {
     ),
   citationCardPolishCached: (meta: Record<string, unknown>, waitSeconds = 4) => {
     const key = stableStringify({
+      polish_client_version: 3,
       anchor: meta.anchor,
       num: meta.num,
       is_inpaper: meta.is_inpaper ?? meta.isInpaper,
@@ -134,6 +135,8 @@ export const referencesApi = {
       evidence_quote: meta.evidence_quote ?? meta.evidenceQuote ?? meta.card_evidence ?? meta.cardEvidence,
       citation_context: meta.citation_context ?? meta.citationContext,
       card_takeaway: meta.card_takeaway ?? meta.cardTakeaway,
+      card_context_summary: meta.card_context_summary ?? meta.cardContextSummary,
+      card_reference_entry: meta.card_reference_entry ?? meta.cardReferenceEntry ?? meta.raw ?? meta.cite_fmt ?? meta.citeFmt,
       card_locator: meta.card_locator ?? meta.cardLocator ?? meta.location_label ?? meta.locationLabel,
     })
     const cached = citationCardPolishCache.get(key)

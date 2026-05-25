@@ -698,13 +698,12 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-cite-pop-system-a .kb-cite-pop-evidence-map {
-  gap: 7px;
+  gap: 6px;
 }
 
 .kb-cite-pop-system-a .kb-cite-pop-quote {
-  border-left-color: color-mix(in srgb, #16a34a 58%, var(--accent));
-  background: color-mix(in srgb, #16a34a 5%, var(--panel));
-  padding-block: 9px;
+  border-left-color: color-mix(in srgb, #16a34a 48%, var(--accent));
+  background: color-mix(in srgb, #16a34a 4%, var(--panel));
 }
 
 .kb-cite-pop-system-a .kb-cite-pop-locator {
@@ -968,11 +967,11 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-cite-pop-evidence {
-  margin-top: 10px;
+  margin-top: 8px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 91%, var(--bg));
-  padding: 9px 10px;
+  padding: 8px 9px;
 }
 
 .kb-cite-pop-evidence-map {
@@ -983,17 +982,33 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-cite-pop-claim,
 .kb-cite-pop-takeaway,
+.kb-cite-pop-context-summary,
 .kb-cite-pop-locator,
 .kb-cite-pop-why {
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 94%, var(--bg));
-  padding: 8px 10px;
+  padding: 7px 9px;
 }
 
-.kb-cite-pop-takeaway {
-  border-color: color-mix(in srgb, var(--accent) 20%, var(--border));
-  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+.kb-cite-pop-insight {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+
+.kb-cite-pop-insight .kb-cite-pop-main {
+  font-size: 13px;
+  font-weight: 670;
+  line-height: 1.48;
+}
+
+.kb-cite-pop-claim {
+  background: color-mix(in srgb, var(--panel) 97%, var(--bg));
+}
+
+.kb-cite-pop-context-summary {
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+  background: color-mix(in srgb, var(--panel) 97%, var(--bg));
 }
 
 .kb-cite-pop-locator-text {
@@ -1016,18 +1031,25 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-cite-pop-quote {
-  border-left: 3px solid color-mix(in srgb, var(--accent) 58%, var(--border));
+  border-left: 3px solid color-mix(in srgb, var(--accent) 46%, var(--border));
   border-radius: 6px;
-  background: color-mix(in srgb, var(--msg-user-bg) 42%, var(--panel));
-  padding: 8px 10px 8px 12px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg));
+  padding: 7px 9px 7px 11px;
 }
 
 .kb-cite-pop-quote blockquote {
   margin: 0;
-  color: color-mix(in srgb, var(--text-main) 88%, transparent);
-  font-size: 12.5px;
-  line-height: 1.58;
+  color: color-mix(in srgb, var(--text-main) 82%, transparent);
+  font-size: 12px;
+  line-height: 1.52;
   overflow-wrap: anywhere;
+}
+
+.kb-cite-pop-section-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .kb-cite-pop-section-title {
@@ -1037,6 +1059,14 @@ body.kb-reader-resizing .kb-reader-content {
   font-weight: 760;
   letter-spacing: 0;
   text-transform: uppercase;
+}
+
+.kb-cite-pop-section-hint {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-main) 46%, transparent);
+  font-size: 10px;
+  font-weight: 660;
+  line-height: 1.2;
 }
 
 .kb-cite-pop-meta-grid {

@@ -4178,6 +4178,19 @@ function snapshotDiffCounts(currentItems: CiteShelfItem[], baselineItems: CiteSh
   return { added, removed }
 }
 
+function shouldRequestCitationCardPolish(detail: CiteDetail): boolean {
+  const polishStatus = String(detail.citationCardPolishStatus || '').trim().toLowerCase()
+  if (['full', 'failed', 'disabled', 'empty'].includes(polishStatus)) return false
+  return Boolean(
+    detail.cardEvidence
+    || detail.evidenceQuote
+    || detail.citationContext
+    || detail.cardTakeaway
+    || detail.raw
+    || detail.citeFmt,
+  )
+}
+
 export function MessageList({
   activeConvId,
   messages,
@@ -4204,6 +4217,7 @@ export function MessageList({
   const citationHoverCloseTimerRef = useRef<number | null>(null)
   const citationPolishRetryTimerRef = useRef<number | null>(null)
   const activePopoverRequestKeyRef = useRef('')
+  const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
@@ -4692,6 +4706,22 @@ export function MessageList({
   }, [activeConvId, assistantTraceByMsgId, messages])
 
   useEffect(() => {
+    const candidates = Array.from(liveCiteMap.values())
+      .filter(shouldRequestCitationCardPolish)
+      .slice(0, 18)
+    for (const item of candidates) {
+      const itemKey = toShelfItem(item).key
+      const warmKey = `${itemKey}|${item.citationCardPolishKey || ''}|v3`
+      if (citationPolishPrewarmKeysRef.current.has(warmKey)) continue
+      citationPolishPrewarmKeysRef.current.add(warmKey)
+      referencesApi.citationCardPolishCached(item as unknown as Record<string, unknown>, 0.25)
+        .catch(() => {
+          citationPolishPrewarmKeysRef.current.delete(warmKey)
+        })
+    }
+  }, [liveCiteMap])
+
+  useEffect(() => {
     setShelfItems((current) => {
       let changed = false
       const next = current.map((item) => {
@@ -4859,19 +4889,9 @@ export function MessageList({
         ? hasDoi
         : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
     )
-    const polishStatus = String(detail.citationCardPolishStatus || '').trim().toLowerCase()
-    const shouldFetchCitationCardPolish = !['full', 'failed', 'disabled', 'empty'].includes(polishStatus)
-      && Boolean(
-        detail.cardEvidence
-        || detail.evidenceQuote
-        || detail.citationContext
-        || detail.cardTakeaway
-        || detail.raw
-        || detail.citeFmt,
-      )
     const itemKey = toShelfItem(detail).key
     activePopoverRequestKeyRef.current = itemKey
-    if (shouldFetchCitationCardPolish) {
+    if (shouldRequestCitationCardPolish(detail)) {
       requestCitationCardPolish(detail, itemKey)
     }
     if (!shouldFetchCitationMeta && !shouldFetchBibliometrics) {

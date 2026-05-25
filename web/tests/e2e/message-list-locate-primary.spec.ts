@@ -195,6 +195,32 @@ test('system B upstream reference citation is explicitly clickable and opens its
   await expect(popover).toContainText('JCR Q2')
 })
 
+test('system B popover can show LLM citation-context summary without hiding raw context', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        citation_card_polish_status: 'full',
+        citation_card_polish_source: 'llm',
+        citation_card_polish_checked: true,
+        citation_card_polish_route: 'system_b',
+        citation_card_polish_fields: ['card_context_summary'],
+        card_context_summary: '当前论文在介绍 SCI 背景时引用这项工作，用它补足单次压缩光谱成像的上游来源。',
+      }),
+    })
+  })
+  await page.goto('/__message_list_test__?scenario=render-packet-contract')
+
+  const systemBChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(systemBChip).toBeVisible()
+  await systemBChip.click()
+
+  await expect(page.getByTestId('citation-popover-system-b-context-summary')).toContainText('单次压缩光谱成像的上游来源')
+  await expect(page.getByTestId('citation-popover-system-b-context')).toContainText('single-shot compressive spectral imaging background')
+})
+
 test('system B popover suppresses weak raw context without dropping metrics', async ({ page }) => {
   await mockReaderDoc(page)
   await page.goto('/__message_list_test__?scenario=weak-system-b-popover')

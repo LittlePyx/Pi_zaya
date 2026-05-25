@@ -105,6 +105,13 @@ function anchorKindLabel(value: string): string {
   return compact(value)
 }
 
+function evidencePreview(value: string, maxLen = 260): string {
+  const text = compact(value).replace(/\s+/g, ' ')
+  if (!text || text.length <= maxLen) return text
+  const head = text.slice(0, maxLen).replace(/[，,；;:：]\s*$/g, '').trim()
+  return `${head}...`
+}
+
 export function CitationPopover({
   detail,
   position,
@@ -211,6 +218,7 @@ export function CitationPopover({
   const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
     ? cardTakeaway
     : ''
+  const systemAEvidencePreview = evidencePreview(systemAEvidenceText, systemATakeawayText ? 250 : 330)
   const systemBExplicitReferenceText = cleanCitationDisplayText(detail.cardReferenceEntry)
   const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
   const systemBCardEvidenceText = cleanCitationDisplayText(detail.cardEvidence)
@@ -231,6 +239,15 @@ export function CitationPopover({
   const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
     ? cardTakeaway
     : ''
+  const rawSystemBContextSummary = cleanCitationDisplayText(detail.cardContextSummary)
+  const systemBContextSummaryText = isSystemB
+    && rawSystemBContextSummary
+    && !substantiallySame(rawSystemBContextSummary, systemBCitationContextText)
+    && !substantiallySame(rawSystemBContextSummary, systemBReferenceText)
+    && !substantiallySame(rawSystemBContextSummary, systemBTakeawayText)
+    ? rawSystemBContextSummary
+    : ''
+  const systemBCitationContextPreview = evidencePreview(systemBCitationContextText, systemBTakeawayText ? 250 : 330)
   const whyText = compact(detail.whyLine)
   const bindingStatus = compact(detail.bindingStatus).toLowerCase()
   const bindingReason = compact(detail.bindingReason)
@@ -328,6 +345,7 @@ export function CitationPopover({
       || (cardQualityFlags.includes('reference_entry_only') && !hasSystemBHeaderIdentity)
     ),
   )
+  const systemBReferencePreview = evidencePreview(systemBReferenceText, 260)
   const metaRows = [
     display.source ? { label: '来源', value: display.source } : null,
     display.venueYear ? { label: '发表', value: display.venueYear } : null,
@@ -414,15 +432,9 @@ export function CitationPopover({
       {!isSystemB ? (
         <div className="kb-cite-pop-evidence-map">
           {showSystemATakeaway ? (
-            <div className="kb-cite-pop-takeaway" data-testid="citation-popover-system-a-takeaway">
+            <div className="kb-cite-pop-insight kb-cite-pop-takeaway" data-testid="citation-popover-system-a-takeaway">
               <span className="kb-cite-pop-section-title">{cardTakeawayLabel || '证据重点'}</span>
               <div className="kb-cite-pop-main">{systemATakeawayText}</div>
-            </div>
-          ) : null}
-          {systemAEvidenceText ? (
-            <div className="kb-cite-pop-quote" data-testid="citation-popover-system-a-evidence">
-              <span className="kb-cite-pop-section-title">{cardEvidenceLabel || '原文证据'}</span>
-              <blockquote>{systemAEvidenceText}</blockquote>
             </div>
           ) : null}
           {showSystemAClaim ? (
@@ -436,6 +448,15 @@ export function CitationPopover({
             <span className="kb-cite-pop-locator-text">{systemALocationText}</span>
             {systemAAnchorText ? <span className="kb-cite-pop-anchor-meta">{systemAAnchorText}</span> : null}
           </div>
+          {systemAEvidenceText ? (
+            <div className="kb-cite-pop-quote" data-testid="citation-popover-system-a-evidence">
+              <div className="kb-cite-pop-section-line">
+                <span className="kb-cite-pop-section-title">{cardEvidenceLabel || '原文证据'}</span>
+                {systemAEvidencePreview !== systemAEvidenceText ? <span className="kb-cite-pop-section-hint">节选</span> : null}
+              </div>
+              <blockquote>{systemAEvidencePreview}</blockquote>
+            </div>
+          ) : null}
           {showSystemASupport ? (
             <div className="kb-cite-pop-why" data-testid="citation-popover-system-a-support">
               <span className="kb-cite-pop-section-title">{cardSupportLabel || '可靠度'}</span>
@@ -446,15 +467,9 @@ export function CitationPopover({
       ) : (
         <div className="kb-cite-pop-evidence-map">
           {systemBTakeawayText ? (
-            <div className="kb-cite-pop-takeaway" data-testid="citation-popover-system-b-takeaway">
+            <div className="kb-cite-pop-insight kb-cite-pop-takeaway" data-testid="citation-popover-system-b-takeaway">
               <span className="kb-cite-pop-section-title">{cardTakeawayLabel || '上游作用'}</span>
               <div className="kb-cite-pop-main">{systemBTakeawayText}</div>
-            </div>
-          ) : null}
-          {systemBCitationContextText ? (
-            <div className="kb-cite-pop-quote" data-testid="citation-popover-system-b-context">
-              <span className="kb-cite-pop-section-title">{systemBCitationContextLabel}</span>
-              <blockquote>{systemBCitationContextText}</blockquote>
             </div>
           ) : null}
           {showSystemBLocation ? (
@@ -464,10 +479,25 @@ export function CitationPopover({
               {systemBLocationHint ? <span className="kb-cite-pop-anchor-meta">{systemBLocationHint}</span> : null}
             </div>
           ) : null}
+          {systemBContextSummaryText ? (
+            <div className="kb-cite-pop-context-summary" data-testid="citation-popover-system-b-context-summary">
+              <span className="kb-cite-pop-section-title">语境摘要</span>
+              <div className="kb-cite-pop-main">{systemBContextSummaryText}</div>
+            </div>
+          ) : null}
+          {systemBCitationContextText ? (
+            <div className="kb-cite-pop-quote" data-testid="citation-popover-system-b-context">
+              <div className="kb-cite-pop-section-line">
+                <span className="kb-cite-pop-section-title">{systemBCitationContextLabel}</span>
+                {systemBCitationContextPreview !== systemBCitationContextText ? <span className="kb-cite-pop-section-hint">节选</span> : null}
+              </div>
+              <blockquote>{systemBCitationContextPreview}</blockquote>
+            </div>
+          ) : null}
           {showSystemBReference ? (
             <div className="kb-cite-pop-evidence" data-testid="citation-popover-system-b-reference">
               <div className="kb-cite-pop-section-title">{cardReferenceLabel || '上游文献条目'}</div>
-              <div className="kb-cite-pop-main">{systemBReferenceText}</div>
+              <div className="kb-cite-pop-main">{systemBReferencePreview}</div>
             </div>
           ) : null}
           {showSystemBSupport ? (

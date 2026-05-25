@@ -85,6 +85,7 @@ export interface CiteDetail {
   cardLocator: string
   cardEvidenceLabel: string
   cardEvidence: string
+  cardContextSummary: string
   cardReferenceLabel: string
   cardReferenceEntry: string
   cardSupportLabel: string
@@ -98,6 +99,10 @@ export interface CiteDetail {
   citationCardPolishSource: string
   citationCardPolishChecked: boolean
   citationCardPolishKey: string
+  citationCardPolishRoute: string
+  citationCardPolishFields: string[]
+  citationCardPolishRejected: string[]
+  citationCardPolishQualityScore: number
 }
 
 export interface CiteShelfItem extends CiteDetail {
@@ -727,6 +732,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     cardLocator: pickText(rec, 'card_locator', 'cardLocator'),
     cardEvidenceLabel: pickText(rec, 'card_evidence_label', 'cardEvidenceLabel'),
     cardEvidence: pickText(rec, 'card_evidence', 'cardEvidence'),
+    cardContextSummary: pickText(rec, 'card_context_summary', 'cardContextSummary'),
     cardReferenceLabel: pickText(rec, 'card_reference_label', 'cardReferenceLabel'),
     cardReferenceEntry: pickText(rec, 'card_reference_entry', 'cardReferenceEntry'),
     cardSupportLabel: pickText(rec, 'card_support_label', 'cardSupportLabel'),
@@ -740,6 +746,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     citationCardPolishSource: pickText(rec, 'citation_card_polish_source', 'citationCardPolishSource'),
     citationCardPolishChecked: Boolean(rec.citation_card_polish_checked ?? rec.citationCardPolishChecked),
     citationCardPolishKey: pickText(rec, 'citation_card_polish_key', 'citationCardPolishKey'),
+    citationCardPolishRoute: pickText(rec, 'citation_card_polish_route', 'citationCardPolishRoute'),
+    citationCardPolishFields: pickStringArray(rec, 'citation_card_polish_fields', 'citationCardPolishFields'),
+    citationCardPolishRejected: pickStringArray(rec, 'citation_card_polish_rejected', 'citationCardPolishRejected'),
+    citationCardPolishQualityScore: pickNumber(rec, 'citation_card_polish_quality_score', 'citationCardPolishQualityScore'),
   }
   for (const key of [
     'raw',
@@ -767,6 +777,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'cardClaim',
     'cardLocator',
     'cardEvidence',
+    'cardContextSummary',
     'cardReferenceLabel',
     'cardReferenceEntry',
     'cardSupportExplanation',
@@ -774,6 +785,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'citationCardPolishStatus',
     'citationCardPolishSource',
     'citationCardPolishKey',
+    'citationCardPolishRoute',
   ] as const) {
     detail[key] = cleanCitationDisplayText(detail[key])
   }
@@ -941,6 +953,7 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'card_takeaway',
     'card_claim',
     'card_evidence',
+    'card_context_summary',
     'card_reference_label',
     'card_reference_entry',
     'card_support_explanation',
@@ -949,6 +962,10 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'citation_card_polish_source',
     'citation_card_polish_checked',
     'citation_card_polish_key',
+    'citation_card_polish_route',
+    'citation_card_polish_fields',
+    'citation_card_polish_rejected',
+    'citation_card_polish_quality_score',
   ])
   const conflictSensitiveKeys = new Set([
     'title',
