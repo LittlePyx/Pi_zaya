@@ -972,7 +972,7 @@ export function CiteShelf({
                                 <>
                                   <div className="kb-shelf-summary-meta">
                                     <span className="kb-shelf-summary-head">{S.shelf_summary_head}</span>
-                                    <span className="kb-shelf-summary-source">{summarySourceLabel(item.summarySource)}</span>
+                                    <span className="kb-shelf-summary-source">{summarySourceLabel(item.summarySource, item.summaryProvider)}</span>
                                   </div>
                                   {(() => {
                                     const lines = splitSummary(item.summaryLine)
@@ -1025,4 +1025,3 @@ export function CiteShelf({
     </>
   )
 }
-

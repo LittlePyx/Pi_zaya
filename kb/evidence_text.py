@@ -11,7 +11,7 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[\u3002\uff01\uff1f\uff1b;!?\.])\s+")
 _LEAD_STRIP_RE = re.compile(r"^[\s,.;:\u3002\uff0c\uff1b\uff1a]+")
 _TRAIL_STRIP_RE = re.compile(r"[\s,.;:\u3002\uff0c\uff1b\uff1a]+$")
 _FRAGMENT_LEAD_OK_RE = re.compile(
-    r"^(?:a|an|the|this|these|those|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b",
+    r"^(?:a|an|the|this|these|those|most|many|some|several|existing|previous|prior|traditional|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b",
     re.IGNORECASE,
 )
 _CONTENT_SENTENCE_START_RE = re.compile(
@@ -33,6 +33,21 @@ _LOW_VALUE_EVIDENCE_SENTENCE_RE = re.compile(
     r"more details can be found|this section describes|the rest of this paper|future work)\b",
     re.IGNORECASE,
 )
+_TEX_INLINE_CITATION_RE = re.compile(
+    r"(?:\$\s*)?\^\{\s*\[[\d,\-\s;]+\]\s*\}(?:\s*\$)?|"
+    r"\\textsuperscript\{\s*\[[^\]\n]{1,80}\]\s*\}|"
+    r"\\(?:cite|citep|citet|citealp|upcite)\s*\{[^}\n]{1,200}\}",
+    re.IGNORECASE,
+)
+_BRACKET_REFERENCE_MARKER_RE = re.compile(r"\[\s*\d{1,4}(?:\s*[-,;]\s*\d{1,4})*\s*\]")
+_CONTENT_VERB_RE = re.compile(
+    r"\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|"
+    r"shown|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|"
+    r"improves?|improved|captures?|captured|reconstructs?|reconstructed|enables?|enabled|"
+    r"adopts?|adopted|adopting|offers?|offering|collects?|collecting|employs?|employed|employing|"
+    r"解决|提出|说明|表明|用于|能够|可以|实现|采用|提升|降低)\b",
+    re.IGNORECASE,
+)
 
 
 def clean_display_text(value: Any, *, max_len: int = 520) -> str:
@@ -40,15 +55,18 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     if not raw:
         return ""
     raw = re.sub(r"<!--[\s\S]*?-->", " ", raw)
+    raw = _TEX_INLINE_CITATION_RE.sub(" ", raw)
     raw = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", raw)
     raw = re.sub(r"(?m)^\s{0,3}>\s?", "", raw)
     raw = re.sub(r"(?m)^\s{0,3}[-*+]\s+", "", raw)
     raw = re.sub(r"(?m)^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$", " ", raw)
     text = normalize_inline_markdown(raw)
+    text = _TEX_INLINE_CITATION_RE.sub(" ", text)
     text = re.sub(r"\[\[\s*CITE\s*:[^\]\n]+\]\]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\\(?=\s|[,;])", " ", text)
     text = re.sub(r"(^|\s)#{1,6}\s+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^(?:\.{2,}|…)+\s*", "", text)
     if len(text) <= max_len:
         return text
     return text[: max(0, max_len - 1)].rstrip() + "..."
@@ -97,6 +115,64 @@ def looks_author_metadata_prefix(value: str) -> bool:
     if comma_count >= 2 or name_pairs >= 2:
         return True
     return len(tokens) >= 8 and bool(re.search(r"[*\\]", text))
+
+
+def looks_author_list_context(value: str) -> bool:
+    text = clean_display_text(value, max_len=1400)
+    if len(text) < 24:
+        return False
+    marker_count = len(_BRACKET_REFERENCE_MARKER_RE.findall(text))
+    comma_count = text.count(",") + text.count("\uff0c")
+    name_pairs = len(re.findall(r"\b[A-Z][a-zA-Z'`-]+\s+[A-Z][a-zA-Z'`-]+\b", text))
+    if marker_count >= 3 and (name_pairs >= 3 or comma_count >= 4):
+        return True
+    if name_pairs >= 4 and comma_count >= 3 and not _CONTENT_VERB_RE.search(text):
+        return True
+    return False
+
+
+def looks_bibliography_entry_context(value: str) -> bool:
+    text = clean_display_text(value, max_len=1400)
+    if len(text) < 30:
+        return False
+    text = re.sub(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\s*[.)])\s*", "", text)
+    has_year = bool(re.search(r"\b(?:18|19|20)\d{2}\b", text))
+    if not has_year:
+        return False
+    starts_like_authors = bool(
+        re.match(
+            r"^(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.?\s*){1,4}|[A-Z][a-zA-Z'`-]+\s+[A-Z](?:\.|\b))",
+            text,
+        )
+    )
+    venue_like = bool(
+        re.search(
+            r"\b(?:IEEE|ACM|Springer|Elsevier|Nature|Science|Nat\.?|Opt\.?|Phys\.?|"
+            r"Journal|Proceedings|Trans\.?|Conf\.?|CVPR|ICCV|ICML|NeurIPS|arXiv)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+    volume_pages = bool(re.search(r"\b\d{1,4}\s*,\s*\d{1,6}(?:[-–]\d{1,6})?\.?$", text))
+    return starts_like_authors and venue_like and (volume_pages or text.count(",") >= 3)
+
+
+def looks_low_value_citation_context(value: str) -> bool:
+    text = clean_display_text(value, max_len=1400)
+    if not text:
+        return True
+    if looks_author_list_context(text) or looks_bibliography_entry_context(text):
+        return True
+    tokens = loose_tokens(text)
+    if len(tokens) < 5:
+        return True
+    first_chunk = text[:320]
+    if looks_author_metadata_prefix(first_chunk) and not _CONTENT_VERB_RE.search(first_chunk):
+        return True
+    marker_count = len(_BRACKET_REFERENCE_MARKER_RE.findall(text))
+    if marker_count >= 4 and marker_count >= max(2, len(tokens) // 8) and not _CONTENT_VERB_RE.search(text):
+        return True
+    return False
 
 
 def _looks_heading_like_prefix(value: str) -> bool:
@@ -182,6 +258,8 @@ def looks_caption_heading_sentence(value: str) -> bool:
 
 def usable_evidence_sentence(value: str) -> bool:
     text = str(value or "").strip()
+    if looks_low_value_citation_context(text):
+        return False
     if _LOW_VALUE_EVIDENCE_SENTENCE_RE.search(text):
         return False
     if looks_fragmentary_sentence(text) or looks_caption_heading_sentence(text):
@@ -201,6 +279,8 @@ def evidence_sentence_quality(value: str, *, claim: str = "", heading: str = "",
         score -= 2.0
     if _LOW_VALUE_EVIDENCE_SENTENCE_RE.search(text):
         score -= 4.0
+    if looks_low_value_citation_context(text):
+        score -= 6.0
     if 8 <= len(tokens) <= 90:
         score += 2.0
     elif len(tokens) < 5:
@@ -271,11 +351,13 @@ def pick_readable_evidence_text(
     text = strip_evidence_metadata_prefix(str(value or ""), source=source, title=title)
     if not text:
         return ""
+    if looks_low_value_citation_context(text):
+        return ""
     sentences = split_evidence_sentences(text)
     while sentences and not usable_evidence_sentence(sentences[0]):
         sentences.pop(0)
     if not sentences:
-        return clean_display_text(text, max_len=max_len)
+        return ""
     usable = [idx for idx, sentence in enumerate(sentences[:10]) if usable_evidence_sentence(sentence)]
     if usable:
         first_idx = usable[0]

@@ -42,6 +42,32 @@ function substantiallySame(left: string, right: string) {
   return overlap / Math.min(aTokens.size, bTokens.size) >= 0.82
 }
 
+function comparablePaperLabel(value: string): string {
+  const raw = compact(value)
+  if (!raw) return ''
+  const leaf = raw.replace(/\\/g, '/').split('/').pop() || raw
+  return leaf
+    .replace(/\.pdf$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function isOnlyPaperLabel(value: string, candidates: string[]): boolean {
+  const text = compact(value)
+  const normalized = comparablePaperLabel(text)
+  if (!text || !normalized) return false
+  for (const candidate of candidates) {
+    const candidateText = compact(candidate)
+    const candidateNormalized = comparablePaperLabel(candidateText)
+    if (!candidateText || !candidateNormalized) continue
+    if (normalized === candidateNormalized) return true
+    if (substantiallySame(text, candidateText)) return true
+  }
+  return false
+}
+
 function isLowValueSystemAClaim(value: string): boolean {
   const text = compact(value).replace(/\[[Rr]?\d{1,4}]/g, '').replace(/\s+/g, ' ')
   if (!text || text.length < 18) return true
@@ -168,6 +194,7 @@ export function CitationPopover({
     : ''
   const systemBReferenceText = compact(detail.raw) || compact(detail.citeFmt)
   const systemBCitationContextText = compact(detail.cardEvidence) || compact(detail.citationContext) || compact(detail.evidenceQuote) || compact(detail.summaryLine)
+  const systemBCitationContextLabel = /回答/.test(cardEvidenceLabel) ? cardEvidenceLabel : '引用语境'
   const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
     ? cardTakeaway
     : ''
@@ -225,12 +252,27 @@ export function CitationPopover({
   const primaryActionLabel = isSystemB ? '打开引用语境' : '打开答案依据'
   const explainText = ''
   const flowSteps = isSystemB ? [] : cardFlow
-  const systemBLocationText = compact(detail.cardLocator) || compact(detail.locationLabel) || [sourcePaperText, headingPath, pageLabel].filter(Boolean).join(' / ')
+  const rawSystemBLocationText = compact(detail.cardLocator) || compact(detail.locationLabel) || [sourcePaperText, headingPath, pageLabel].filter(Boolean).join(' / ')
+  const systemBLocationIsPaperOnly = isOnlyPaperLabel(rawSystemBLocationText, [
+    sourcePaperText,
+    detail.sourceName,
+    display.source,
+  ])
+  const systemBLocationLabel = systemBLocationIsPaperOnly ? '当前论文' : '当前论文引用处'
+  const systemBLocationText = systemBLocationIsPaperOnly
+    ? (sourcePaperText || rawSystemBLocationText)
+    : rawSystemBLocationText
+  const systemBLocationHint = systemBLocationIsPaperOnly
+    ? '只定位到引用发生的论文，尚未定位到具体章节或页码；可打开引用语境核对。'
+    : ''
   const showSystemBLocation = Boolean(systemBLocationText)
+  const showSystemBReference = Boolean(!systemBTitle && systemBReferenceText)
   const metaRows = [
     display.source ? { label: '来源', value: display.source } : null,
     display.venueYear ? { label: '发表', value: display.venueYear } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>
+  const showMetaGrid = Boolean(!isSystemB && (metaRows.length > 0 || doiLabel))
+  const showMetrics = Boolean(metrics.length > 0 || (isSystemB && doiLabel))
   const showCardQuality = Boolean(
     cardQualityLabel
     && (cardWarning || systemAHasReviewRisk || cardQualityScore < 0.62),
@@ -337,17 +379,18 @@ export function CitationPopover({
           ) : null}
           {systemBCitationContextText ? (
             <div className="kb-cite-pop-quote" data-testid="citation-popover-system-b-context">
-              <span className="kb-cite-pop-section-title">{cardEvidenceLabel || '当前论文在哪里提到它'}</span>
+              <span className="kb-cite-pop-section-title">{systemBCitationContextLabel}</span>
               <blockquote>{systemBCitationContextText}</blockquote>
             </div>
           ) : null}
           {showSystemBLocation ? (
             <div className="kb-cite-pop-locator" data-testid="citation-popover-system-b-location">
-              <span className="kb-cite-pop-section-title">{cardLocatorLabel || '引用位置'}</span>
+              <span className="kb-cite-pop-section-title">{systemBLocationLabel}</span>
               <span className="kb-cite-pop-locator-text">{systemBLocationText}</span>
+              {systemBLocationHint ? <span className="kb-cite-pop-anchor-meta">{systemBLocationHint}</span> : null}
             </div>
           ) : null}
-          {systemBReferenceText ? (
+          {showSystemBReference ? (
             <div className="kb-cite-pop-evidence" data-testid="citation-popover-system-b-reference">
               <div className="kb-cite-pop-section-title">上游文献条目</div>
               <div className="kb-cite-pop-main">{systemBReferenceText}</div>
@@ -355,7 +398,7 @@ export function CitationPopover({
           ) : null}
         </div>
       )}
-      {isSystemB && (metaRows.length > 0 || doiLabel) ? (
+      {showMetaGrid ? (
         <div className="kb-cite-pop-meta-grid">
           {metaRows.map((item) => (
             <div key={item.label} className="kb-cite-pop-meta-item">
@@ -377,9 +420,18 @@ export function CitationPopover({
           ) : null}
         </div>
       ) : null}
-      {loading ? <div className="kb-cite-pop-sub">{S.cite_loading}</div> : null}
-      {!loading && metrics.length > 0 ? (
+      {loading && !isSystemB ? <div className="kb-cite-pop-sub">{S.cite_loading}</div> : null}
+      {!loading && showMetrics ? (
         <div className="kb-cite-pop-metrics">
+          {isSystemB && doiLabel ? (
+            doiHref ? (
+              <a className="kb-cite-pop-metric kb-cite-pop-link" href={doiHref} rel="noreferrer" target="_blank">
+                DOI {doiLabel}
+              </a>
+            ) : (
+              <span className="kb-cite-pop-metric">DOI {doiLabel}</span>
+            )
+          ) : null}
           {metrics.map((item) => (
             <span key={item} className="kb-cite-pop-metric">{item}</span>
           ))}

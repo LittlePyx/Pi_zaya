@@ -56,3 +56,63 @@ def test_extract_inpaper_reference_context_expands_ranges(tmp_path) -> None:
     assert "earlier compressive sensing systems [11-13]" in out["citation_context"]
     assert "Example reference entry" not in out["citation_context"]
     assert out["heading_path"].endswith("Method")
+
+
+def test_extract_inpaper_reference_context_skips_author_affiliation_list(tmp_path) -> None:
+    md = tmp_path / "paper.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy",
+                "",
+                "Alessandro Zunino [1,4], Giacomo Garre [1,2,4], Eleonora Perego [1,3], Sabrina Zappone [1,2], Mattia Donato [1], Nadine Vastenhouw [3] & Giuseppe Vicidomini [1]",
+                "",
+                "## Abstract",
+                "",
+                "Imaging a three-dimensional sample requires optical sectioning, namely, the capability to reject out-of-focus light and image a single plane [1,2]. Conventional wide-field microscopes cannot separate in-focus light from out-of-focus light, due to the well-known phenomenon of the missing cone [3,4].",
+                "",
+                "## References",
+                "[3] Macias-Garza, F. The missing cone problem and low-pass distortion in optical serial sectioning microscopy. 1988.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out = extract_inpaper_reference_context(
+        str(md),
+        3,
+        answer_context="missing cone and optical sectioning",
+    )
+
+    assert out["citation_context_source"] == "source_markdown"
+    assert "missing cone [3,4]" in out["citation_context"]
+    assert "Alessandro Zunino" not in out["citation_context"]
+    assert out["heading_path"].endswith("Abstract")
+    assert "Abstract" in out["location_label"]
+
+
+def test_extract_inpaper_reference_context_skips_inline_notation_fragment(tmp_path) -> None:
+    md = tmp_path / "paper.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Example Paper",
+                "## Results",
+                "The result of s [2]ISM is an image with enhanced resolution and optical sectioning.",
+                "",
+                "## Methods",
+                "The implementation follows the detector-array method [2] when configuring the reconstruction.",
+                "",
+                "## References",
+                "[2] Detector-array reference entry that must not be selected.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out = extract_inpaper_reference_context(str(md), 2)
+
+    assert out["citation_context_source"] == "source_markdown"
+    assert "detector-array method [2]" in out["citation_context"]
+    assert "s [2]ISM" not in out["citation_context"]
+    assert out["heading_path"].endswith("Methods")

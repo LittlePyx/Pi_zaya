@@ -294,6 +294,75 @@ def test_enrich_citation_detail_meta_uses_openalex_abstract_when_crossref_has_no
     assert "methane leak imaging" in str(out.get("summary_line") or "").lower()
 
 
+def test_enrich_citation_detail_meta_uses_semantic_scholar_abstract_when_primary_sources_have_none(monkeypatch):
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "_enrich_bibliometrics", lambda meta: dict(meta or {}))
+    monkeypatch.setattr(reference_ui, "_llm_summarize_abstract_zh", lambda title, abstract_text: "")
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+    monkeypatch.setattr(reference_ui, "fetch_crossref_work_by_doi", lambda doi: {"abstract": ""})
+    monkeypatch.setattr(reference_ui, "_openalex_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(
+        reference_ui,
+        "_semantic_scholar_paper_by_doi",
+        lambda doi: {
+            "title": "Adaptive sampling for single-pixel imaging",
+            "externalIds": {"DOI": "10.1000/semantic-demo"},
+            "abstract": (
+                "We develop an adaptive sampling method for single-pixel imaging that selects "
+                "informative illumination patterns during acquisition. Experiments show that "
+                "the strategy improves reconstruction quality under limited measurements."
+            ),
+        },
+    )
+
+    out = enrich_citation_detail_meta(
+        {
+            "doi": "10.1000/semantic-demo",
+            "title": "Adaptive sampling for single-pixel imaging",
+            "venue": "Optics Express",
+            "year": "2024",
+        }
+    )
+
+    assert str(out.get("summary_source") or "") == "abstract"
+    assert str(out.get("summary_provider") or "") == "semantic_scholar"
+    assert "adaptive sampling method" in str(out.get("summary_line") or "").lower()
+
+
+def test_enrich_citation_detail_meta_uses_doi_landing_page_abstract_as_last_external_fallback(monkeypatch):
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "_enrich_bibliometrics", lambda meta: dict(meta or {}))
+    monkeypatch.setattr(reference_ui, "_llm_summarize_abstract_zh", lambda title, abstract_text: "")
+    monkeypatch.setattr(reference_ui, "_translate_summary_to_zh", lambda text: text)
+    monkeypatch.setattr(reference_ui, "fetch_crossref_work_by_doi", lambda doi: {"abstract": ""})
+    monkeypatch.setattr(reference_ui, "_openalex_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_semantic_scholar_paper_by_doi", lambda doi: {})
+    monkeypatch.setattr(
+        reference_ui,
+        "_doi_landing_page_abstract",
+        lambda doi: (
+            "We analyze low-pass distortion in three-dimensional microscopic imaging and compare "
+            "how missing spatial frequencies affect reconstructed structures. The results show "
+            "that the missing-cone geometry imposes characteristic resolution limits."
+        ),
+    )
+
+    out = enrich_citation_detail_meta(
+        {
+            "doi": "10.1117/12.7976703",
+            "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+            "venue": "Optical Engineering",
+            "year": "1988",
+        }
+    )
+
+    assert str(out.get("summary_source") or "") == "abstract"
+    assert str(out.get("summary_provider") or "") == "doi_landing_page"
+    assert "low-pass distortion" in str(out.get("summary_line") or "").lower()
+
+
 def test_enrich_citation_detail_meta_translates_abstract_summary_to_chinese(monkeypatch):
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)

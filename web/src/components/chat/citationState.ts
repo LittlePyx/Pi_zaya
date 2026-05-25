@@ -41,6 +41,7 @@ export interface CiteDetail {
   bibliometricsChecked: boolean
   summaryLine: string
   summarySource: string
+  summaryProvider: string
   answerClaim: string
   headingPath: string
   evidenceQuote: string
@@ -98,6 +99,9 @@ function asText(value: unknown): string {
 function cleanCitationDisplayText(value: string): string {
   return String(value || '')
     .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/(?:\$\s*)?\^\{\s*\[[\d,\-\s;]+\]\s*\}(?:\s*\$)?/g, ' ')
+    .replace(/\\textsuperscript\{\s*\[[^\]\n]{1,80}\]\s*\}/gi, ' ')
+    .replace(/\\(?:cite|citep|citet|citealp|upcite)\s*\{[^}\n]{1,200}\}/gi, ' ')
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .replace(/^\s{0,3}[-*+]\s+/gm, '')
@@ -112,6 +116,7 @@ function cleanCitationDisplayText(value: string): string {
     .replace(/(^|\s)#{1,6}\s+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+    .replace(/^(?:\.{2,}|…)+\s*/, '')
 }
 
 function looseTokens(value: string): string[] {
@@ -158,8 +163,46 @@ function looksAuthorMetadataPrefix(value: string): boolean {
   return tokens.length >= 8 && /[*\\]/.test(text)
 }
 
+const BRACKET_REFERENCE_MARKER_RE = /\[\s*\d{1,4}(?:\s*[-,;]\s*\d{1,4})*\s*\]/g
+const CONTENT_VERB_RE = /\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|shown|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|improves?|improved|captures?|captured|reconstructs?|reconstructed|enables?|enabled|adopts?|adopted|adopting|offers?|offering|collects?|collecting|employs?|employed|employing|解决|提出|说明|表明|用于|能够|可以|实现|采用|提升|降低)\b/i
+
+function looksAuthorListContext(value: string): boolean {
+  const text = cleanCitationDisplayText(value)
+  if (text.length < 24) return false
+  const markerCount = (text.match(BRACKET_REFERENCE_MARKER_RE) || []).length
+  const commaCount = (text.match(/[,，]/g) || []).length
+  const namePairs = (text.match(/\b[A-Z][a-zA-Z'`-]+\s+[A-Z][a-zA-Z'`-]+\b/g) || []).length
+  if (markerCount >= 3 && (namePairs >= 3 || commaCount >= 4)) return true
+  if (namePairs >= 4 && commaCount >= 3 && !CONTENT_VERB_RE.test(text)) return true
+  return false
+}
+
+function looksBibliographyEntryContext(value: string): boolean {
+  const text = cleanCitationDisplayText(value)
+    .replace(/^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\s*[.)])\s*/, '')
+  if (text.length < 30) return false
+  if (!/\b(?:18|19|20)\d{2}\b/.test(text)) return false
+  const startsLikeAuthors = /^(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.?\s*){1,4}|[A-Z][a-zA-Z'`-]+\s+[A-Z](?:\.|\b))/.test(text)
+  const venueLike = /\b(?:IEEE|ACM|Springer|Elsevier|Nature|Science|Nat\.?|Opt\.?|Phys\.?|Journal|Proceedings|Trans\.?|Conf\.?|CVPR|ICCV|ICML|NeurIPS|arXiv)\b/i.test(text)
+  const volumePages = /\b\d{1,4}\s*,\s*\d{1,6}(?:[-–]\d{1,6})?\.?$/.test(text)
+  return startsLikeAuthors && venueLike && (volumePages || (text.match(/,/g) || []).length >= 3)
+}
+
+function looksLowValueCitationContext(value: string): boolean {
+  const text = cleanCitationDisplayText(value)
+  if (!text) return true
+  if (looksAuthorListContext(text) || looksBibliographyEntryContext(text)) return true
+  const tokens = looseTokens(text)
+  if (tokens.length < 5) return true
+  const firstChunk = text.slice(0, 320)
+  if (looksAuthorMetadataPrefix(firstChunk) && !CONTENT_VERB_RE.test(firstChunk)) return true
+  const markerCount = (text.match(BRACKET_REFERENCE_MARKER_RE) || []).length
+  if (markerCount >= 4 && markerCount >= Math.max(2, Math.floor(tokens.length / 8)) && !CONTENT_VERB_RE.test(text)) return true
+  return false
+}
+
 const CONTENT_SENTENCE_START_RE = /\b(?:single[-\s]?pixel imaging|deep learning|snapshot compressive|compressive imaging|neural radiance|this paper|this work|this study|in this (?:paper|work|study)|we\s+|however,?|recent(?:ly)?|the proposed|our\s+)\b/i
-const FRAGMENT_LEAD_OK_RE = /^(?:a|an|the|this|these|those|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b/i
+const FRAGMENT_LEAD_OK_RE = /^(?:a|an|the|this|these|those|most|many|some|several|existing|previous|prior|traditional|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b/i
 
 function splitEvidenceSentences(value: string): string[] {
   return String(value || '')
@@ -189,6 +232,7 @@ function looksCaptionHeadingSentence(value: string): boolean {
 
 function usableEvidenceSentence(value: string): boolean {
   const text = String(value || '').trim()
+  if (looksLowValueCitationContext(text)) return false
   if (looksFragmentaryEvidenceSentence(text) || looksCaptionHeadingSentence(text)) return false
   return looseTokens(text).length >= 5
 }
@@ -200,6 +244,7 @@ function evidenceSentenceQuality(value: string, detail: Pick<CiteDetail, 'answer
   let score = 0
   if (looksFragmentaryEvidenceSentence(text)) score -= 5
   if (looksCaptionHeadingSentence(text)) score -= 2
+  if (looksLowValueCitationContext(text)) score -= 6
   if (tokens.length >= 8 && tokens.length <= 90) score += 2
   else if (tokens.length < 5) score -= 2
   if (looksAuthorMetadataPrefix(text.slice(0, 180))) score -= 3
@@ -250,11 +295,12 @@ function joinEvidenceWindow(
 }
 
 function pickReadableEvidenceText(value: string, detail: Pick<CiteDetail, 'answerClaim' | 'cardClaim' | 'headingPath' | 'title'>): string {
+  if (looksLowValueCitationContext(value)) return ''
   const sentences = splitEvidenceSentences(value)
   while (sentences.length > 0 && !usableEvidenceSentence(sentences[0])) {
     sentences.shift()
   }
-  if (sentences.length <= 0) return String(value || '').trim()
+  if (sentences.length <= 0) return ''
   const usable = sentences
     .slice(0, 8)
     .map((sentence, index) => ({ sentence, index }))
@@ -614,6 +660,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     bibliometricsChecked: Boolean(rec.bibliometrics_checked ?? rec.bibliometricsChecked),
     summaryLine: pickText(rec, 'summary_line', 'summaryLine'),
     summarySource: pickText(rec, 'summary_source', 'summarySource'),
+    summaryProvider: pickText(rec, 'summary_provider', 'summaryProvider'),
     answerClaim: pickText(rec, 'answer_claim', 'answerClaim'),
     headingPath: pickText(rec, 'heading_path', 'headingPath'),
     evidenceQuote: pickText(rec, 'evidence_quote', 'evidenceQuote'),
@@ -715,11 +762,79 @@ export function citationMain(detail: CiteDetail): string {
   return stripLeadCitationLabel(detail.raw) || `[${detail.num || '?'}]`
 }
 
+function trimShelfSummary(value: string, maxLen = 220): string {
+  let text = cleanCitationDisplayText(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (text.length > maxLen) {
+    text = `${text.slice(0, Math.max(0, maxLen - 1)).replace(/[，,；;:：]\s*$/g, '')}...`
+  }
+  return text
+}
+
+function appendUniqueSummaryLine(lines: string[], value: string): void {
+  const text = trimShelfSummary(value)
+  if (!text) return
+  const key = looseTokens(text).join(' ')
+  if (!key) return
+  for (const line of lines) {
+    const existingKey = looseTokens(line).join(' ')
+    if (existingKey === key || existingKey.includes(key) || key.includes(existingKey)) return
+  }
+  lines.push(text)
+}
+
+function titleBasedShelfSummary(detail: CiteDetail): string {
+  const title = trimShelfSummary(detail.title || '', 180)
+  if (!title) return ''
+  const lower = title.toLowerCase()
+  if (lower.includes('missing cone') || lower.includes('low-pass distortion')) {
+    return '题名显示这篇文献讨论三维显微图像中的缺失锥频率与低通失真问题，可作为理解成像失真或分辨率限制的上游参考。'
+  }
+  if (lower.includes('interferometric') || lower.includes('iscat')) {
+    return '题名显示这篇文献关注干涉或散射显微成像，可作为理解无标记检测与显微分辨率提升的上游参考。'
+  }
+  if (lower.includes('single-pixel') || lower.includes('compressive')) {
+    return '题名显示这篇文献关注单像素或压缩成像，可作为理解相关成像机制、采样策略或重建方法的上游参考。'
+  }
+  return `题名显示这篇文献关注“${title}”，可先作为当前回答追溯引用来源的候选读物；摘要缺失时建议打开引用语境核对。`
+}
+
+function deriveShelfSummary(detail: CiteDetail): { line: string; source: string } {
+  const existing = trimShelfSummary(detail.summaryLine, 420)
+  if (existing) return { line: existing, source: detail.summarySource || 'metadata' }
+
+  const lines: string[] = []
+  if (detail.isInpaper) {
+    const takeaway = trimShelfSummary(detail.cardTakeaway || deriveSystemBTakeaway(detail), 220)
+    if (takeaway && !looksGenericSystemBTakeaway(takeaway)) appendUniqueSummaryLine(lines, `上游作用：${takeaway}`)
+
+    const context = trimShelfSummary(detail.cardEvidence || detail.citationContext || detail.evidenceQuote, 240)
+    if (context && !looksLowValueCitationContext(context)) appendUniqueSummaryLine(lines, `引用语境：${context}`)
+
+    const relation = trimShelfSummary(detail.userQuestionRelation || detail.upstreamWorkRole || detail.supportRelation || detail.whyLine, 220)
+    if (relation && !looksGenericSystemBTakeaway(relation)) appendUniqueSummaryLine(lines, relation)
+
+    if (lines.length <= 0) appendUniqueSummaryLine(lines, titleBasedShelfSummary(detail))
+    return { line: lines.slice(0, 3).join(' '), source: 'citation_context' }
+  }
+
+  appendUniqueSummaryLine(lines, detail.cardTakeaway)
+  appendUniqueSummaryLine(lines, detail.answerClaim || detail.cardClaim)
+  appendUniqueSummaryLine(lines, detail.evidenceQuote || detail.cardEvidence)
+  if (lines.length <= 0) appendUniqueSummaryLine(lines, titleBasedShelfSummary(detail))
+  return { line: lines.slice(0, 3).join(' '), source: 'citation_card' }
+}
+
 export function toShelfItem(detail: CiteDetail): CiteShelfItem {
   const main = citationMain(detail)
   const baseKey = `${detail.anchor}|${detail.sourceName || detail.sourcePath}|${detail.num}`
+  const summary = deriveShelfSummary(detail)
   return {
     ...detail,
+    summaryLine: summary.line,
+    summarySource: summary.line ? summary.source : detail.summarySource,
+    summaryProvider: detail.summaryProvider,
     key: baseKey,
     main,
     tags: [],
@@ -754,6 +869,7 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'conference_acronym',
     'summary_line',
     'summary_source',
+    'summary_provider',
   ])
   const conflictSensitiveKeys = new Set([
     'title',
@@ -1054,10 +1170,19 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   return { gbt, bibtex, ris }
 }
 
-export function summarySourceLabel(source: string): string {
+export function summarySourceLabel(source: string, provider = ''): string {
   const s = String(source || '').trim().toLowerCase()
+  const p = String(provider || '').trim().toLowerCase()
   if (s === 'fulltext') return 'fulltext'
-  if (s === 'abstract') return 'abstract'
+  if (s === 'abstract') {
+    if (p === 'crossref') return 'Crossref abstract'
+    if (p === 'openalex') return 'OpenAlex abstract'
+    if (p === 'semantic_scholar') return 'Semantic Scholar abstract'
+    if (p === 'doi_landing_page') return 'publisher page'
+    return 'abstract'
+  }
+  if (s === 'citation_context') return 'citation context'
+  if (s === 'citation_card') return 'citation card'
   if (s === 'metadata') return 'metadata'
   return 'metadata'
 }

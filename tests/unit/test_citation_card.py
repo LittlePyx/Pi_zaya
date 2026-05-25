@@ -186,3 +186,56 @@ def test_system_b_card_composer_distills_generic_english_role() -> None:
     assert "单次压缩光谱成像" in detail["card_takeaway"]
     assert "The user is asking" not in detail["card_takeaway"]
     assert detail["card_flow"] == []
+
+
+def test_system_b_card_composer_strips_tex_citation_markup() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+            "title": "Optical imaging by means of two-photon quantum entanglement",
+            "authors": "Pittman T, Shih Y, Strekalov D",
+            "venue": "Physical Review A",
+            "year": "1995",
+            "answer_claim": "SPI has advantages in sensitivity and spectral response.",
+            "citation_context": (
+                "...$^{[4-6]}$ Unlike traditional focal plane array detectors, SPI only adopts "
+                "a single-pixel detector to collect echo signals, offering significant advantages "
+                "in detection sensitivity, spectral response range, and imaging cost."
+            ),
+            "citation_context_source": "source_markdown",
+            "location_label": "Advances and Challenges / 1. Introduction",
+        }
+    )
+
+    assert detail["card_evidence"].startswith("Unlike traditional focal plane array detectors")
+    assert "$" not in detail["card_evidence"]
+    assert "^{" not in detail["card_evidence"]
+    assert "[4-6]" not in detail["card_evidence"]
+    assert "weak_citation_context" not in detail["card_quality_flags"]
+
+
+def test_system_b_card_composer_suppresses_author_list_context() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf",
+            "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+            "authors": "Macias-Garza",
+            "venue": "IEEE Trans. Acoust., Speech, Signal Process.",
+            "year": "1988",
+            "answer_claim": "This citation should support the discussion of three-dimensional microscopic imaging limits.",
+            "citation_context": (
+                "Alessandro Zunino [1,4], Giacomo Garre [1,2,4], Eleonora Perego [1,3], "
+                "Sabrina Zappone [1,2], Mattia Donato [1], Nadine Vastenhouw [3] "
+                "& Giuseppe Vicidomini [1]"
+            ),
+            "citation_context_source": "source_markdown",
+            "location_label": "Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy",
+        }
+    )
+
+    assert detail["card_evidence"] == ""
+    assert detail["card_locator_label"] == "当前论文引用处"
+    assert "weak_citation_context" in detail["card_quality_flags"]
+    assert "missing_citation_context" in detail["card_quality_flags"]

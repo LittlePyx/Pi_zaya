@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from kb.evidence_text import looks_author_list_context, looks_bibliography_entry_context
 from kb.inpaper_citation_grounding import parse_ref_num_set
 from kb.source_blocks import normalize_inline_markdown, tokenize_match_text
 
@@ -86,6 +87,33 @@ def _contains_ref_num(marker_spec: str, ref_num: int) -> bool:
     if target <= 0:
         return False
     return target in parse_ref_num_set(_normalize_ref_spec(marker_spec), max_items=64)
+
+
+def _looks_like_inline_reference_marker(text: str, match: re.Match[str]) -> bool:
+    """Reject bracketed numbers that are probably notation, not bibliography refs."""
+
+    s = str(text or "")
+    try:
+        start = int(match.start())
+        end = int(match.end())
+    except Exception:
+        return True
+
+    before = s[start - 1] if start > 0 else ""
+    after = s[end] if end < len(s) else ""
+
+    # Examples from converted PDFs: ``s [2]ISM`` / ``s[2]ISM`` are notation
+    # fragments for s2ISM, not citations to bibliography reference 2.
+    if after and re.match(r"[A-Za-z0-9_]", after):
+        return False
+    if before and re.match(r"[A-Za-z0-9_]", before):
+        if not before.isspace():
+            return False
+    return True
+
+
+def _looks_invalid_source_context(context: str) -> bool:
+    return looks_author_list_context(context) or looks_bibliography_entry_context(context)
 
 
 def _trim_window(text: str, start: int, end: int, *, max_chars: int) -> str:
@@ -249,10 +277,14 @@ def extract_inpaper_reference_context(
     best_score = float("-inf")
     for block in _body_blocks_cached(path_str, mtime_ns, size):
         for match in _INLINE_REF_RE.finditer(block.text):
+            if not _looks_like_inline_reference_marker(block.text, match):
+                continue
             if not _contains_ref_num(match.group(1), target):
                 continue
             context = _trim_window(block.text, int(match.start()), int(match.end()), max_chars=max_chars)
             if not context:
+                continue
+            if _looks_invalid_source_context(context):
                 continue
             score = _score_context(
                 context,

@@ -4,25 +4,10 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from kb.evidence_text import pick_readable_evidence_text
-from kb.source_blocks import normalize_inline_markdown
-
+from kb.evidence_text import clean_display_text, looks_low_value_citation_context, pick_readable_evidence_text
 
 def _clean_text(value: Any, *, max_len: int = 520) -> str:
-    raw = str(value or "")
-    raw = re.sub(r"<!--[\s\S]*?-->", " ", raw)
-    raw = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", raw)
-    raw = re.sub(r"(?m)^\s{0,3}>\s?", "", raw)
-    raw = re.sub(r"(?m)^\s{0,3}[-*+]\s+", "", raw)
-    raw = re.sub(r"(?m)^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$", " ", raw)
-    text = normalize_inline_markdown(raw)
-    text = re.sub(r"\[\[\s*CITE\s*:[^\]\n]+\]\]", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\\(?=\s)", " ", text)
-    text = re.sub(r"(^|\s)#{1,6}\s+", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) <= max_len:
-        return text
-    return text[: max(0, max_len - 1)].rstrip() + "..."
+    return clean_display_text(value, max_len=max_len)
 
 
 def _loose_tokens(value: str) -> list[str]:
@@ -564,7 +549,11 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         claim=claim,
         heading=_first_text(rec, "heading_path", "location_label", max_len=180),
         max_len=520,
-    ) or context_raw
+    )
+    weak_context = bool(context_raw and not context)
+    if context and looks_low_value_citation_context(context):
+        context = ""
+        weak_context = True
     context_source = str(rec.get("citation_context_source") or rec.get("evidence_source") or "").strip().lower()
     answer_context_only = bool(context and context_source == "answer_context")
     locator = _locator(rec) or source
@@ -587,15 +576,23 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
     if answer_context_only:
         flags.append("answer_context_only")
         score -= 0.08
+    if weak_context:
+        flags.append("weak_citation_context")
+        score -= 0.08
+    if not context:
+        flags.append("missing_citation_context")
+        score -= 0.06
     if not takeaway:
         flags.append("missing_takeaway")
         score -= 0.08
     score = max(0.0, min(1.0, score))
 
-    evidence_label = "回答里的线索" if answer_context_only else "当前论文引用处"
+    evidence_label = "回答里的线索" if answer_context_only else "引用语境"
     warning = ""
     if answer_context_only:
         warning = "目前只有回答线索或参考条目，完整引用语境仍建议打开原文核对。"
+    elif weak_context and score < 0.62:
+        warning = "当前自动抽取的引用语境质量较弱，已隐藏低价值片段；建议打开原文核对。"
     elif score < 0.58:
         warning = "这条上游参考信息不完整，建议打开引用语境确认。"
 
@@ -607,7 +604,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         "card_takeaway": takeaway,
         "card_claim_label": "答案里的这句话",
         "card_claim": claim,
-        "card_locator_label": "引用位置",
+        "card_locator_label": "当前论文引用处",
         "card_locator": locator,
         "card_evidence_label": evidence_label,
         "card_evidence": context,

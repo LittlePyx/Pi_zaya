@@ -41,6 +41,8 @@ from kb.paper_guide_structured_index_runtime import (
     load_paper_guide_figure_index,
 )
 from kb.citation_meta import extract_first_doi
+from kb.citation_card import compose_citation_card
+from kb.citation_context import extract_inpaper_reference_context
 from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
@@ -68,7 +70,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
-_RENDER_CACHE_SCHEMA_VERSION = 8
+_RENDER_CACHE_SCHEMA_VERSION = 9
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -1274,6 +1276,35 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             "doi_url": doi_url,
             "cite_fmt": str(ref2.get("cite_fmt") or raw).strip(),
         }
+        try:
+            source_context = extract_inpaper_reference_context(source_path, int(ref_num))
+        except Exception:
+            source_context = {}
+        if isinstance(source_context, dict):
+            source_citation_context = str(source_context.get("citation_context") or "").strip()
+            if source_citation_context:
+                rec["citation_context"] = source_citation_context[:520]
+                rec["citation_context_source"] = "source_markdown"
+                rec["evidence_quote"] = source_citation_context[:520]
+                rec["evidence_source"] = "source_markdown"
+                rec["summary_line"] = source_citation_context[:360]
+                rec["summary_source"] = "source_markdown"
+                for key in ("heading_path", "location_label", "anchor_kind"):
+                    value = str(source_context.get(key) or "").strip()
+                    if value:
+                        rec[key] = value
+                for key in ("page_start", "page_end", "line_start", "line_end"):
+                    try:
+                        value_i = int(source_context.get(key) or 0)
+                    except Exception:
+                        value_i = 0
+                    if value_i > 0:
+                        rec[key] = value_i
+                rec["citation_context_quality"] = str(source_context.get("citation_context_quality") or "").strip()
+                try:
+                    rec["citation_context_score"] = float(source_context.get("citation_context_score") or 0.0)
+                except Exception:
+                    rec["citation_context_score"] = 0.0
         details_by_key[key] = rec
         return rec
 
@@ -1295,7 +1326,10 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
     out = _STRUCT_CITE_SINGLE_RE.sub(_replace, out)
     out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
     out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
-    details = sorted(details_by_key.values(), key=lambda item: (int(item.get("num") or 0), str(item.get("source_name") or "")))
+    details = [
+        compose_citation_card(item)
+        for item in sorted(details_by_key.values(), key=lambda item: (int(item.get("num") or 0), str(item.get("source_name") or "")))
+    ]
     return out, details
 
 

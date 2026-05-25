@@ -3955,6 +3955,7 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.bibliometricsChecked === b.bibliometricsChecked
     && a.summaryLine === b.summaryLine
     && a.summarySource === b.summarySource
+    && a.summaryProvider === b.summaryProvider
     && a.answerClaim === b.answerClaim
     && a.headingPath === b.headingPath
     && a.evidenceQuote === b.evidenceQuote
@@ -4058,6 +4059,7 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     conferenceAcronym: preferExistingText(item.conferenceAcronym, live.conferenceAcronym),
     summaryLine: preferRicherField('title', item.summaryLine, live.summaryLine),
     summarySource: preferExistingText(item.summarySource, live.summarySource),
+    summaryProvider: preferExistingText(item.summaryProvider, live.summaryProvider),
     answerClaim: preferRicherField('title', item.answerClaim, live.answerClaim),
     headingPath: preferExistingText(item.headingPath, live.headingPath),
     evidenceQuote: preferRicherField('title', item.evidenceQuote, live.evidenceQuote),

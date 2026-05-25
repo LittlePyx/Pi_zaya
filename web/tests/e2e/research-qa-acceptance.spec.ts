@@ -137,6 +137,10 @@ const messages = [
         doi_url: 'https://doi.org/10.1561/2200000016',
         raw: '[4] Boyd S., Parikh N., Chu E., Peleato B., Eckstein J. Distributed Optimization and Statistical Learning via the Alternating Direction Method of Multipliers. Foundations and Trends in Machine Learning, 2011.',
         answer_claim: 'ADMM 不是 SCINeRF 作者新发明的，而是相关工作里借用的成熟优化框架。',
+        heading_path: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
+        location_label: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
+        card_locator_label: '当前论文引用处',
+        card_locator: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
         citation_context: 'Most existing methods employ ADMM-based optimization for snapshot compressive imaging reconstruction.',
         upstream_work_role: 'ADMM 提供的是通用优化框架，帮助理解早期 SCI 重建方法的来源。',
         user_question_relation: '用户问“是不是借鉴了别人以前的想法”，这条参考正好说明它是上游方法背景，而不是原创贡献。',
@@ -153,6 +157,10 @@ const messages = [
         year: '2016',
         raw: '[21] Yang Y., Sun J., Li H., Xu Z. ADMM-Net: A Deep Learning Approach for Compressive Sensing MRI. NeurIPS, 2016.',
         answer_claim: 'ADMM-Net 是把迭代优化思想展开成网络结构的代表性前作。',
+        heading_path: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
+        location_label: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
+        card_locator_label: '当前论文引用处',
+        card_locator: 'SCINeRF / 2. Related Work / Snapshot Compressive Imaging',
         citation_context: 'ADMM-Net unfolds ADMM iterations into a trainable deep network.',
         upstream_work_role: '它说明“优化算法展开成网络”的思想在 SCINeRF 之前已经存在。',
         user_question_relation: '这能帮助用户沿着 Related Work 追溯方法线索。',
@@ -389,6 +397,8 @@ test('research QA acceptance: polished refs and both citation systems stay click
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('ADMM')
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('上游')
   await expect(page.getByTestId('citation-popover-system-b-context')).toContainText('ADMM-based optimization')
+  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('当前论文引用处')
   await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('SCINeRF')
-  await expect(page.getByTestId('citation-popover-system-b-reference')).toContainText('Distributed Optimization')
+  await expect(page.getByTestId('citation-popover-system-b-location')).not.toContainText('尚未定位到具体章节或页码')
+  await expect(page.getByTestId('citation-popover-system-b-reference')).toHaveCount(0)
 })
