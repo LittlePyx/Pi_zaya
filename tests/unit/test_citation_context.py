@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from kb.citation_context import extract_inpaper_reference_context
 
 
@@ -116,3 +118,93 @@ def test_extract_inpaper_reference_context_skips_inline_notation_fragment(tmp_pa
     assert "detector-array method [2]" in out["citation_context"]
     assert "s [2]ISM" not in out["citation_context"]
     assert out["heading_path"].endswith("Methods")
+
+
+def test_extract_inpaper_reference_context_does_not_treat_reference_named_section_as_bibliography(tmp_path) -> None:
+    md = tmp_path / "paper.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "# Example Paper",
+                "## Reference representation",
+                "The model builds a reference representation from calibrated measurements [5].",
+                "",
+                "## References",
+                "[5] Calibration reference entry.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    out = extract_inpaper_reference_context(str(md), 5)
+
+    assert out["citation_context_source"] == "source_markdown"
+    assert "reference representation" in out["citation_context"].lower()
+    assert out["heading_path"].endswith("Reference representation")
+
+
+def test_extract_inpaper_reference_context_prefers_structured_reference_index(tmp_path) -> None:
+    md = tmp_path / "paper.en.md"
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    md.write_text(
+        "\n".join(
+            [
+                "# Example Paper",
+                "This body intentionally has no usable inline marker.",
+                "",
+                "## References",
+                "[7] Example upstream work.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "reference_index.json").write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "ref_num": 7,
+                        "citation_mentions": [
+                            {
+                                "citation_context": "The introduction briefly lists prior work [7].",
+                                "heading_path": "Example Paper / Introduction",
+                                "location_label": "Example Paper / Introduction / p. 1",
+                                "page_start": 1,
+                                "page_end": 1,
+                                "line_start": 10,
+                                "line_end": 10,
+                                "anchor_kind": "paragraph",
+                            },
+                            {
+                                "citation_context": "The method follows a calibrated detector-array design [7].",
+                                "heading_path": "Example Paper / Methods",
+                                "location_label": "Example Paper / Methods / p. 3",
+                                "page_start": 3,
+                                "page_end": 3,
+                                "line_start": 42,
+                                "line_end": 42,
+                                "anchor_kind": "paragraph",
+                                "block_id": "blk_demo_00042",
+                                "anchor_id": "p_00042",
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    out = extract_inpaper_reference_context(
+        str(md),
+        7,
+        answer_context="detector-array design",
+    )
+
+    assert out["citation_context_source"] == "structured_reference_index"
+    assert "detector-array design [7]" in out["citation_context"]
+    assert out["heading_path"].endswith("Methods")
+    assert out["page_start"] == 3
+    assert out["block_id"] == "blk_demo_00042"

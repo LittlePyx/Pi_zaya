@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from kb.citation_meta import extract_first_author_family_hint, extract_first_doi, extract_year_hint
+from kb.evidence_text import looks_author_list_context, looks_bibliography_entry_context
+from kb.inpaper_citation_grounding import parse_ref_num_set
 from kb.reference_index import (
     _fallback_title_from_raw_reference,
     build_reference_catalog_from_md,
@@ -16,6 +18,17 @@ from kb.source_blocks import build_source_blocks, doc_id_for_path, normalize_inl
 
 _INDEX_VERSION = 1
 _EQUATION_CONTEXT_KINDS = {"paragraph", "list_item", "blockquote", "table"}
+_INLINE_REF_RE = re.compile(
+    r"(?<!\[)\[(\d{1,4}(?:\s*(?:[-\u2013\u2014\u2212,;\uff0c\u3001\uff1b])\s*\d{1,4})*)\](?!\])"
+)
+_REFERENCE_HEADING_RE = re.compile(
+    r"(?:^|/)\s*(?:\d{1,3}\s*[.)]?\s*)?(?:references?|bibliography|literature\s+cited|"
+    r"works\s+cited|cited\s+references|reference\s+list|references\s+and\s+notes|"
+    r"\u53c2\u8003\u6587\u732e|\u5f15\u7528\u6587\u732e)\s*[:\uff1a]?\s*$",
+    re.IGNORECASE,
+)
+_REFERENCE_ENTRY_RE = re.compile(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\s*[\.)])\s+\S+")
+_MENTION_BOUNDARY_CHARS = ".!?;\n\u3002\uff01\uff1f\uff1b"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -62,6 +75,19 @@ def _extract_page_from_asset_name(*names: Any) -> int:
             page = 0
         if page > 0:
             return page
+    return 0
+
+
+def _block_page(block: dict[str, Any] | None) -> int:
+    if not isinstance(block, dict):
+        return 0
+    for key in ("page_start", "page", "page_end"):
+        try:
+            value = int(block.get(key) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            return value
     return 0
 
 
@@ -164,6 +190,132 @@ def _fallback_reference_authors(raw: str) -> str:
     return _clean_meta_text(family, limit=120)
 
 
+def _heading_is_references(value: Any) -> bool:
+    text = str(value or "").strip()
+    return bool(text and _REFERENCE_HEADING_RE.search(text))
+
+
+def _is_reference_entry_text(value: Any) -> bool:
+    text = _clean_text(value, limit=1200).strip()
+    return bool(text and _REFERENCE_ENTRY_RE.match(text))
+
+
+def _normalize_ref_marker_spec(value: Any) -> str:
+    return re.sub(r"[\uff0c\u3001;\uff1b]", ",", str(value or "").strip())
+
+
+def _looks_like_inline_reference_marker(text: str, match: re.Match[str]) -> bool:
+    source = str(text or "")
+    try:
+        start = int(match.start())
+        end = int(match.end())
+    except Exception:
+        return True
+    before = source[start - 1] if start > 0 else ""
+    after = source[end] if end < len(source) else ""
+    # Converted OCR/Markdown can split notation like s2ISM into "s [2]ISM".
+    # That is not a bibliography citation and should not seed SystemB cards.
+    if after and re.match(r"[A-Za-z0-9_]", after):
+        return False
+    if before and re.match(r"[A-Za-z0-9_]", before) and not before.isspace():
+        return False
+    return True
+
+
+def _mention_context(text: Any, start: int, end: int, *, max_chars: int = 520) -> str:
+    source = str(text or "")
+    if not source:
+        return ""
+    limit = max(180, int(max_chars or 520))
+    start = max(0, min(len(source), int(start)))
+    end = max(start, min(len(source), int(end)))
+
+    left = -1
+    for ch in _MENTION_BOUNDARY_CHARS:
+        left = max(left, source.rfind(ch, 0, start))
+    left = 0 if left < 0 else left + 1
+
+    right_candidates = [source.find(ch, end) for ch in _MENTION_BOUNDARY_CHARS]
+    right_candidates = [idx for idx in right_candidates if idx >= 0]
+    right = min(right_candidates) + 1 if right_candidates else len(source)
+
+    if right - left > limit:
+        center = (start + end) // 2
+        half = limit // 2
+        left = max(0, center - half)
+        right = min(len(source), left + limit)
+        left = max(0, min(left, max(0, right - limit)))
+
+    context = re.sub(r"\s+", " ", source[left:right]).strip()
+    if not context:
+        return ""
+    if left > 0:
+        context = "..." + context.lstrip()
+    if right < len(source):
+        context = context.rstrip() + "..."
+    return context[:limit].strip()
+
+
+def _collect_reference_mentions(blocks: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
+    out: dict[int, list[dict[str, Any]]] = {}
+    seen: set[tuple[int, str, int, str]] = set()
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        kind = str(block.get("kind") or "").strip().lower()
+        if kind not in {"paragraph", "list_item", "blockquote", "table"}:
+            continue
+        heading_path = str(block.get("heading_path") or "").strip()
+        if _heading_is_references(heading_path):
+            continue
+        text = _clean_text(block.get("raw_text") or block.get("text") or "", limit=5000)
+        if len(text) < 12:
+            continue
+        if _is_reference_entry_text(text):
+            continue
+        if looks_author_list_context(text) or looks_bibliography_entry_context(text):
+            continue
+        for match in _INLINE_REF_RE.finditer(text):
+            if not _looks_like_inline_reference_marker(text, match):
+                continue
+            nums = parse_ref_num_set(_normalize_ref_marker_spec(match.group(1)), max_items=64)
+            if not nums:
+                continue
+            context = _mention_context(text, int(match.start()), int(match.end()), max_chars=520)
+            if not context:
+                continue
+            if looks_author_list_context(context) or looks_bibliography_entry_context(context):
+                continue
+            line_start = int(block.get("line_start") or 0)
+            line_end = int(block.get("line_end") or 0)
+            page = _block_page(block)
+            location_parts = [part for part in (heading_path, f"p. {page}" if page > 0 else "") if part]
+            for num in nums:
+                key = (int(num), context.lower(), line_start, heading_path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rec: dict[str, Any] = {
+                    "ref_num": int(num),
+                    "citation_context": context,
+                    "heading_path": heading_path,
+                    "location_label": " / ".join(location_parts),
+                    "block_id": str(block.get("block_id") or "").strip(),
+                    "anchor_id": str(block.get("anchor_id") or "").strip(),
+                    "anchor_kind": kind,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                }
+                if page > 0:
+                    rec["page_start"] = int(page)
+                    rec["page_end"] = int(page)
+                out.setdefault(int(num), []).append(rec)
+    for num, rows in list(out.items()):
+        rows.sort(key=lambda item: (int(item.get("line_start") or 0), int(item.get("line_end") or 0)))
+        out[num] = rows[:8]
+    return out
+
+
 def _reference_meta_text(meta: dict[str, Any], *keys: str, limit: int = 0) -> str:
     for key in keys:
         value = _clean_meta_text(meta.get(key), limit=limit)
@@ -208,6 +360,10 @@ def _build_anchor_index_payload(md_path: Path, blocks: list[dict[str, Any]]) -> 
             "line_end": int(block.get("line_end") or 0),
             "text": _clean_text(block.get("raw_text") or block.get("text") or "", limit=1200),
         }
+        page = _block_page(block)
+        if page > 0:
+            rec["page_start"] = page
+            rec["page_end"] = page
         for key in ("number", "figure_id", "figure_ident", "figure_role", "asset_name", "asset_name_alias"):
             value = block.get(key)
             if isinstance(value, str) and value.strip():
@@ -253,6 +409,7 @@ def _build_equation_index_payload(md_path: Path, blocks: list[dict[str, Any]]) -
         raw_equation = str(block.get("raw_text") or block.get("text") or "").strip()
         if not raw_equation:
             continue
+        page = _block_page(block)
         equations.append(
             {
                 "equation_number": int(block.get("number") or 0),
@@ -265,6 +422,7 @@ def _build_equation_index_payload(md_path: Path, blocks: list[dict[str, Any]]) -
                 "heading_path": str(block.get("heading_path") or "").strip(),
                 "line_start": int(block.get("line_start") or 0),
                 "line_end": int(block.get("line_end") or 0),
+                **({"page_start": page, "page_end": page} if page > 0 else {}),
             }
         )
     return {
@@ -423,7 +581,11 @@ def _build_figure_index_payload(
                 "caption": caption_text,
                 "locate_anchor": locate_anchor,
             }
-            page = _extract_page_from_asset_name(fig.get("asset_name"), fig.get("asset_name_alias"))
+            page = (
+                _extract_page_from_asset_name(fig.get("asset_name"), fig.get("asset_name_alias"))
+                or _block_page(caption_block)
+                or _block_page(fig)
+            )
             if page > 0:
                 rec["page"] = page
             if caption_continuation:
@@ -484,6 +646,8 @@ def _build_figure_index_payload(
                 (figure_block or {}).get("asset_name"),
                 (figure_block or {}).get("asset_name_alias"),
             )
+        if page <= 0:
+            page = _block_page(caption_block) or _block_page(figure_block)
         if page > 0:
             rec["page"] = page
         caption_continuation = _clean_text(rec.get("caption_continuation") or "", limit=1200) or _collect_caption_continuation(
@@ -521,7 +685,12 @@ def _build_figure_index_payload(
     }
 
 
-def _build_reference_index_payload(md_path: Path, md_text: str) -> dict[str, Any]:
+def _build_reference_index_payload(
+    md_path: Path,
+    md_text: str,
+    *,
+    blocks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     catalog = load_reference_catalog_for_md(md_path)
     ref_map = reference_catalog_to_map(catalog)
     if not ref_map:
@@ -542,6 +711,8 @@ def _build_reference_index_payload(md_path: Path, md_text: str) -> dict[str, Any
         if ref_num > 0:
             refs_by_num[ref_num] = dict(item)
 
+    mention_map = _collect_reference_mentions(list(blocks or []))
+    mention_total = sum(len(rows) for rows in mention_map.values())
     references: list[dict[str, Any]] = []
     for ref_num in sorted(ref_map.keys()):
         raw = str(ref_map.get(ref_num) or "").strip()
@@ -573,12 +744,24 @@ def _build_reference_index_payload(md_path: Path, md_text: str) -> dict[str, Any
                 rec[field] = value
         if "crossref_ok" in meta:
             rec["crossref_ok"] = bool(meta.get("crossref_ok"))
+        mentions = [dict(item) for item in mention_map.get(int(ref_num), []) if isinstance(item, dict)]
+        if mentions:
+            rec["mention_count"] = int(len(mentions))
+            rec["citation_mentions"] = mentions
+            first = mentions[0]
+            first_context = _clean_text(first.get("citation_context"), limit=520)
+            first_location = _clean_meta_text(first.get("location_label"), limit=240)
+            if first_context:
+                rec["first_citation_context"] = first_context
+            if first_location:
+                rec["first_citation_location"] = first_location
         references.append(rec)
     return {
         "version": _INDEX_VERSION,
         "doc_id": doc_id_for_path(md_path),
         "doc_path": str(md_path.resolve(strict=False)),
         "ref_count": int(len(references)),
+        "citation_mention_count": int(mention_total),
         "tail_continuity_status": str(catalog.get("tail_continuity_status") or "").strip(),
         "missing_numbers": list(catalog.get("missing_numbers") or []),
         "references": references,
@@ -611,7 +794,7 @@ def rebuild_structured_indices_for_markdown(
 
     anchor_payload = _build_anchor_index_payload(path, blocks)
     equation_payload = _build_equation_index_payload(path, blocks)
-    reference_payload = _build_reference_index_payload(path, md_text)
+    reference_payload = _build_reference_index_payload(path, md_text, blocks=blocks)
     figure_payload = _build_figure_index_payload(path, blocks=blocks, rows=figure_rows)
 
     _write_json(resolved_assets_dir / "anchor_index.json", anchor_payload)

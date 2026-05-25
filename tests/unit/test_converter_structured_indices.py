@@ -156,3 +156,44 @@ a Input acquisition stage with the coded mask. b Reconstruction stage with the d
         {"panel_letter": "a", "clause": "a Input acquisition stage with the coded mask"},
         {"panel_letter": "b", "clause": "b Reconstruction stage with the decoder"},
     ]
+
+
+def test_rebuild_structured_indices_records_reference_mentions_with_pages(tmp_path: Path):
+    md = """# Demo Paper
+
+<!-- kb_page: 1 -->
+## 1. Introduction
+
+Earlier systems use adaptive sampling to reduce measurements [2].
+
+<!-- kb_page: 2 -->
+## 2. Method
+
+We compare the reconstruction baseline against compressed sensing systems [1,2].
+
+## References
+
+[1] A. Author. Compressed sensing baseline. 2019.
+[2] B. Example. Adaptive sampling for single-pixel imaging. 2020.
+"""
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+
+    ref_payload = out.get("reference_index") or {}
+    refs = ref_payload.get("references") or []
+    ref2 = next(item for item in refs if int(item.get("ref_num") or 0) == 2)
+    mentions = ref2.get("citation_mentions") or []
+
+    assert ref_payload["citation_mention_count"] == 3
+    assert ref2["mention_count"] == 2
+    assert "adaptive sampling" in mentions[0]["citation_context"]
+    assert mentions[0]["page_start"] == 1
+    assert "1. Introduction" in mentions[0]["location_label"]
+    assert mentions[1]["page_start"] == 2
+
+    anchor_payload = out.get("anchor_index") or {}
+    anchors = anchor_payload.get("anchors") or []
+    intro_anchor = next(item for item in anchors if "Earlier systems" in str(item.get("text") or ""))
+    assert intro_anchor["page_start"] == 1

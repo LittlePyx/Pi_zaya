@@ -1277,18 +1277,19 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             "cite_fmt": str(ref2.get("cite_fmt") or raw).strip(),
         }
         try:
-            source_context = extract_inpaper_reference_context(source_path, int(ref_num))
+            source_context = extract_inpaper_reference_context(source_path, int(ref_num), answer_context=md[:4000])
         except Exception:
             source_context = {}
         if isinstance(source_context, dict):
             source_citation_context = str(source_context.get("citation_context") or "").strip()
             if source_citation_context:
+                source_kind = str(source_context.get("citation_context_source") or "source_markdown").strip() or "source_markdown"
                 rec["citation_context"] = source_citation_context[:520]
-                rec["citation_context_source"] = "source_markdown"
+                rec["citation_context_source"] = source_kind
                 rec["evidence_quote"] = source_citation_context[:520]
-                rec["evidence_source"] = "source_markdown"
+                rec["evidence_source"] = source_kind
                 rec["summary_line"] = source_citation_context[:360]
-                rec["summary_source"] = "source_markdown"
+                rec["summary_source"] = source_kind
                 for key in ("heading_path", "location_label", "anchor_kind"):
                     value = str(source_context.get(key) or "").strip()
                     if value:

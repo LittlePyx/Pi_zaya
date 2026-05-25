@@ -18,6 +18,8 @@ class SourceBlock(TypedDict, total=False):
     kind: str
     heading_path: str
     order_index: int
+    page_start: int
+    page_end: int
     line_start: int
     line_end: int
     text: str
@@ -39,6 +41,7 @@ _MD_BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
 _MD_TABLE_RE = re.compile(r"^\s*\|.*\|\s*$")
 _MD_FENCE_RE = re.compile(r"^\s*(```+|~~~+)\s*")
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_PAGE_MARKER_RE = re.compile(r"^\s*<!--\s*kb_page\s*:\s*(\d{1,5})\s*-->\s*$", re.IGNORECASE)
 _BOX_START_RE = re.compile(r"^\s*<!--\s*box:start\s+id=(\d+)\s*-->\s*$", re.IGNORECASE)
 _BOX_END_RE = re.compile(r"^\s*<!--\s*box:end(?:\s+id=(\d+))?\s*-->\s*$", re.IGNORECASE)
 _BOX_TITLE_RE = re.compile(r"^\s*\*\*\[\s*Box\s+(\d+)\b[^\]]*\]\*\*\s*$", re.IGNORECASE)
@@ -391,6 +394,7 @@ def build_source_blocks(
     in_fence = False
     fence_mark = ""
     order_index = 0
+    current_page = 0
     box_stack: list[dict[str, object]] = []
     pending_figure_context: dict[str, object] | None = None
     caption_follow_context: dict[str, object] | None = None
@@ -427,6 +431,9 @@ def build_source_blocks(
             "text": clean[:4000],
             "raw_text": str(raw_text or "")[:12000],
         }
+        if current_page > 0:
+            block["page_start"] = int(current_page)
+            block["page_end"] = int(current_page)
         if int(number or 0) > 0:
             block["number"] = int(number)
             if kind == "figure":
@@ -585,6 +592,18 @@ def build_source_blocks(
             fence_mark = str(fence.group(1) or "")[:3]
             code_buf = []
             code_start = line_no + 1
+            continue
+
+        page_marker = _PAGE_MARKER_RE.match(line)
+        if page_marker:
+            flush_paragraph(max(1, line_no - 1))
+            flush_table(max(1, line_no - 1))
+            pending_figure_context = None
+            caption_follow_context = None
+            try:
+                current_page = int(str(page_marker.group(1) or "0"))
+            except Exception:
+                current_page = 0
             continue
 
         heading = _MD_HEADING_RE.match(line)

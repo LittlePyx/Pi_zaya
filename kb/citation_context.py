@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -15,8 +16,9 @@ _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$")
 _FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
 _REFERENCE_HEADING_RE = re.compile(
     r"^\s{0,3}#{1,6}\s*"
-    r"(?:references?|bibliography|literature\s+cited|works\s+cited|cited\s+references|"
-    r"reference\s+list|\u53c2\u8003\u6587\u732e|\u5f15\u7528\u6587\u732e)\b",
+    r"(?:\d{1,3}\s*[.)]?\s*)?(?:references?|bibliography|literature\s+cited|works\s+cited|"
+    r"cited\s+references|reference\s+list|references\s+and\s+notes|"
+    r"\u53c2\u8003\u6587\u732e|\u5f15\u7528\u6587\u732e)\s*[:\uff1a]?\s*$",
     re.IGNORECASE,
 )
 _REFERENCE_ENTRY_RE = re.compile(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\s*[\.)])\s+\S+")
@@ -56,6 +58,62 @@ def _read_text_cached(path_str: str, mtime_ns: int, size: int) -> str:
         return Path(path_str).read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _reference_index_cache_key(source_path: str) -> tuple[str, int, int] | None:
+    raw = str(source_path or "").strip()
+    if not raw:
+        return None
+    index_path = Path(raw).parent / "assets" / "reference_index.json"
+    try:
+        if not index_path.exists():
+            return None
+        stat = index_path.stat()
+        return (str(index_path.resolve()), int(stat.st_mtime_ns), int(stat.st_size))
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=96)
+def _read_reference_index_cached(path_str: str, mtime_ns: int, size: int) -> dict[str, Any]:
+    del mtime_ns, size
+    try:
+        data = json.loads(Path(path_str).read_text(encoding="utf-8", errors="ignore"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _to_int(value: Any) -> int:
+    try:
+        out = int(value or 0)
+    except Exception:
+        return 0
+    return out if out > 0 else 0
+
+
+def _precomputed_reference_mentions(source_path: str, ref_num: int) -> list[dict[str, Any]]:
+    key = _reference_index_cache_key(source_path)
+    if not key:
+        return []
+    path_str, mtime_ns, size = key
+    payload = _read_reference_index_cached(path_str, mtime_ns, size)
+    references = payload.get("references")
+    if not isinstance(references, list):
+        return []
+    target = _to_int(ref_num)
+    if target <= 0:
+        return []
+    for item in references:
+        if not isinstance(item, dict):
+            continue
+        if _to_int(item.get("ref_num")) != target:
+            continue
+        rows = item.get("citation_mentions")
+        if isinstance(rows, list):
+            return [dict(row) for row in rows if isinstance(row, dict)]
+        return []
+    return []
 
 
 def _clean_heading(raw: str) -> str:
@@ -273,6 +331,55 @@ def extract_inpaper_reference_context(
     if target <= 0:
         return {}
 
+    structured_best: dict[str, Any] = {}
+    structured_best_score = float("-inf")
+    for row in _precomputed_reference_mentions(source_path, target):
+        context = re.sub(r"\s+", " ", str(row.get("citation_context") or "")).strip()
+        if not context:
+            continue
+        limit = max(180, int(max_chars or 520))
+        if len(context) > limit:
+            context = context[: max(0, limit - 3)].rstrip() + "..."
+        if _looks_invalid_source_context(context):
+            continue
+        heading_path = str(row.get("heading_path") or "").strip()
+        page = _to_int(row.get("page_start") or row.get("page"))
+        line_start = _to_int(row.get("line_start"))
+        line_end = _to_int(row.get("line_end"))
+        score = _score_context(
+            context,
+            answer_context=str(answer_context or ""),
+            heading_path=heading_path,
+            page=page,
+            line_start=line_start,
+        )
+        location_label = str(row.get("location_label") or "").strip()
+        if not location_label:
+            location_parts = [part for part in (heading_path, f"p. {page}" if page > 0 else "") if part]
+            location_label = " / ".join(location_parts)
+        candidate = {
+            "citation_context": context,
+            "citation_context_source": "structured_reference_index",
+            "heading_path": heading_path,
+            "location_label": location_label,
+            "page_start": int(page or 0),
+            "page_end": _to_int(row.get("page_end")) or int(page or 0),
+            "line_start": int(line_start or 0),
+            "line_end": int(line_end or 0),
+            "anchor_kind": str(row.get("anchor_kind") or "paragraph").strip() or "paragraph",
+            "citation_context_quality": "precomputed_ref_marker",
+            "citation_context_score": round(float(score), 3),
+        }
+        for key_name in ("block_id", "anchor_id"):
+            value = str(row.get(key_name) or "").strip()
+            if value:
+                candidate[key_name] = value
+        if score > structured_best_score:
+            structured_best_score = score
+            structured_best = candidate
+    if structured_best:
+        return structured_best
+
     best: dict[str, Any] = {}
     best_score = float("-inf")
     for block in _body_blocks_cached(path_str, mtime_ns, size):
@@ -298,7 +405,7 @@ def extract_inpaper_reference_context(
                 "citation_context": context,
                 "citation_context_source": "source_markdown",
                 "heading_path": block.heading_path,
-                "location_label": " · ".join(location_parts),
+                "location_label": " / ".join(location_parts),
                 "page_start": int(block.page or 0),
                 "page_end": int(block.page or 0),
                 "line_start": int(block.line_start),
