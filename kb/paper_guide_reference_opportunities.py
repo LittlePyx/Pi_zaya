@@ -69,6 +69,16 @@ _RESEARCH_READING_TRACE_RE = re.compile(
     r"\u642d\u914d\u8bfb|\u5efa\u7acb\u4e3b\u7ebf|\u4e3b\u7ebf|\u8109\u7edc|\u8fd9\u6761\u7ebf|"
     r"\u4ece.{0,40}\u5230|\u5173\u7cfb|\u5206\u522b|\u9002\u5408\u89e3\u51b3)"
 )
+_REFERENCE_TAIL_INTENT_RE = re.compile(
+    r"(?i)\b(?:origin|source|upstream|citation\s+trail|reference\s+trail|reading\s+route|"
+    r"reading\s+order|lineage|where\s+did|come\s+from|came\s+from|prior\s+work|"
+    r"previous\s+work|who\s+proposed|who\s+introduced|invented|borrowed|inspired\s+by)\b|"
+    r"(?:\u6765\u6e90|\u51fa\u5904|\u6e90\u5934|\u4e0a\u6e38|\u5f15\u7528\u94fe|"
+    r"\u53c2\u8003\u6587\u732e|\u4ece\u54ea|\u600e\u4e48\u6765|\u8c01\u63d0\u51fa|"
+    r"\u8c01\u53d1\u660e|\u539f\u521b|\u501f\u9274|\u8bfb\u4e66\u8def\u7ebf|"
+    r"\u9605\u8bfb\u8def\u7ebf|\u5148\u8bfb|\u600e\u4e48\u8bfb|\u642d\u914d\u8bfb|"
+    r"\u4e3b\u7ebf|\u8109\u7edc|\u524d\u4eba|\u5df2\u6709|\u5148\u524d|\u4e4b\u524d)"
+)
 _PRIOR_WORK_CUE_RE = re.compile(
     r"(?i)("
     r"\b(?:prior|previous|existing|earlier|classic|baseline|original|source|origin|"
@@ -91,6 +101,12 @@ _OPPORTUNITY_NOTE_RE = re.compile(
 
 def _contains_cjk(text: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fff]", str(text or "")))
+
+
+def _prompt_allows_reference_tail_note(prompt: str) -> bool:
+    """Tail notes are only for explicit upstream/reading-route questions."""
+
+    return bool(_REFERENCE_TAIL_INTENT_RE.search(str(prompt or "")))
 
 
 def _compact_text(text: str, *, max_len: int = 360) -> str:
@@ -875,6 +891,14 @@ def apply_reference_opportunities_to_answer(
         meta["tail_used"] = False
         return inline_text, meta
 
+    if not _prompt_allows_reference_tail_note(prompt):
+        return text, {
+            "mode": str(inline_meta.get("mode") or "none"),
+            "injected_refs": [],
+            "tail_used": False,
+            "tail_suppressed": True,
+        }
+
     appended = append_reference_opportunity_note(text, prompt=prompt, opportunities=rows)
     if appended != text:
         return appended, {
@@ -919,6 +943,8 @@ def append_reference_opportunity_note(
 ) -> str:
     text = str(answer or "").strip()
     if not text:
+        return text
+    if not _prompt_allows_reference_tail_note(prompt):
         return text
     opps = [dict(item) for item in list(opportunities or []) if isinstance(item, Mapping)]
     if not opps:

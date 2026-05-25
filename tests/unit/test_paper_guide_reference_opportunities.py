@@ -271,6 +271,22 @@ def test_apply_reference_opportunities_uses_tail_only_when_no_sentence_matches()
     assert "[[CITE:s1234abcd:4]]" in answer
 
 
+def test_apply_reference_opportunities_suppresses_tail_for_broad_synthesis_question() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        "Deep learning improves image quality, but it can require paired data and heavy compute.",
+        prompt=(
+            "\u6df1\u5ea6\u5b66\u4e60\u7ed9\u5355\u50cf\u7d20\u6210\u50cf"
+            "\u5e26\u6765\u7684\u597d\u5904\u548c\u5751\u5206\u522b\u662f\u4ec0\u4e48\uff1f"
+        ),
+        opportunities=[{"sid": "s1234abcd", "ref_num": 1, "label": "single-pixel imaging"}],
+    )
+
+    assert answer == "Deep learning improves image quality, but it can require paired data and heavy compute."
+    assert meta["tail_used"] is False
+    assert meta["tail_suppressed"] is True
+    assert "[[CITE:" not in answer
+
+
 def test_reference_opportunities_merge_candidate_refs_without_duplicates() -> None:
     merged = merge_reference_opportunity_candidate_refs(
         {"db/demo/scinerf.en.md": [4]},

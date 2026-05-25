@@ -48,11 +48,14 @@ _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN = re.compile(
 )
 _PAPER_GUIDE_STRENGTH_PROMPT_RE = re.compile(
     r"(\bstrongest evidence\b|\blimitation\b|\bweakness\b|\bindirect(?:ly)? supported\b|\bwhat is missing\b|"
+    r"\bbenefits?\b|\bpitfalls?\b|\bpros\s+and\s+cons\b|\brisks?\b|\bchallenges?\b|"
     r"证据|局限|不足|缺点|薄弱|支撑)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_STRENGTH_PROMPT_RE_CLEAN = re.compile(
-    r"(\u8bc1\u636e|\u5c40\u9650|\u4e0d\u8db3|\u7f3a\u70b9|\u8584\u5f31|\u652f\u6491)",
+    r"(\u8bc1\u636e|\u5c40\u9650|\u4e0d\u8db3|\u7f3a\u70b9|\u8584\u5f31|\u652f\u6491|"
+    r"\u597d\u5904|\u574f\u5904|\u5751|\u98ce\u9669|\u6311\u6218|\u6536\u76ca|"
+    r"\u5229\u5f0a|\u4f18\u7f3a\u70b9)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_METHOD_PROMPT_RE = re.compile(

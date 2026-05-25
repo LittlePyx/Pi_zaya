@@ -317,8 +317,7 @@ export function CitationPopover({
   const showSystemBReference = Boolean(
     systemBReferenceText
     && (
-      systemBExplicitReferenceText
-      || systemBTitleMissing
+      systemBTitleMissing
       || cardQualityFlags.includes('missing_reference_title')
       || cardQualityFlags.includes('reference_entry_only')
     ),

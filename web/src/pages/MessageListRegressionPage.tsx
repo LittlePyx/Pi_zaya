@@ -311,6 +311,7 @@ const renderPacketContractMessages: Message[] = [
               source_name: READER_REGRESSION_SOURCE_NAME,
               source_path: READER_REGRESSION_SOURCE_PATH,
               raw: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013',
+              card_reference_entry: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013',
               title: 'Single-shot compressive spectral imaging with a dual-disperser architecture',
               authors: 'Gehm M, Brady D',
               venue: 'Optics Express',

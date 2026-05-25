@@ -6,8 +6,13 @@ from kb.citation_meta import extract_first_doi, extract_year_hint
 
 _RANGE_DASH_CLASS = r"\-\u2013\u2014\u2212"
 _INPAPER_NUMERIC_RE = re.compile(rf"\[(\d{{1,4}}(?:\s*(?:[{_RANGE_DASH_CLASS},])\s*\d{{1,4}})*)\]")
+_LATIN_SURNAME_RE = r"[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'`-]{1,40}"
 _AUTHOR_ETAL_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s+et\s+al\.?\b", flags=re.I)
 _AUTHOR_YEAR_PAREN_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s*\(\s*((?:19|20)\d{2})\s*\)")
+_AUTHOR_YEAR_CONNECTOR_RE = re.compile(
+    rf"\b(?:{_LATIN_SURNAME_RE}\s*(?:(?i:and)|&|和|与|、)\s*)?"
+    rf"({_LATIN_SURNAME_RE})\s*(?:,?\s*(?:(?i:in)|于|在)\s*)?((?:19|20)\d{{2}})\b"
+)
 _AUTHOR_YEAR_INLINE_RE = re.compile(r"\b([A-Z][A-Za-z'`-]{1,40})\s*,?\s+((?:19|20)\d{2})\b")
 
 
@@ -174,7 +179,7 @@ def extract_citation_context_hints(answer_text: str, *, token_start: int, token_
 
     author_hint = ""
     author_confident = False
-    for pattern in (_AUTHOR_ETAL_RE, _AUTHOR_YEAR_PAREN_RE, _AUTHOR_YEAR_INLINE_RE):
+    for pattern in (_AUTHOR_ETAL_RE, _AUTHOR_YEAR_PAREN_RE, _AUTHOR_YEAR_CONNECTOR_RE, _AUTHOR_YEAR_INLINE_RE):
         matches = list(pattern.finditer(window))
         if not matches:
             continue

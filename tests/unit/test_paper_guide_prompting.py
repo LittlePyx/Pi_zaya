@@ -95,6 +95,15 @@ def test_paper_guide_prompt_family_prefers_strength_limits_for_discussion_limita
     )
 
 
+def test_paper_guide_prompt_family_prefers_strength_limits_for_benefits_and_pitfalls_prompt():
+    prompt = (
+        "\u6df1\u5ea6\u5b66\u4e60\u7ed9\u5355\u50cf\u7d20\u6210\u50cf"
+        "\u5e26\u6765\u7684\u597d\u5904\u548c\u5751\u5206\u522b\u662f\u4ec0\u4e48\uff1f"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "strength_limits"
+
+
 def test_paper_guide_prompt_family_keeps_explicit_comparison_tradeoff_as_compare():
     assert (
         _paper_guide_prompt_family(

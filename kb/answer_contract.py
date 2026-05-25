@@ -823,6 +823,7 @@ def _build_paper_guide_grounding_rules(
                 "- Prompt family=strength_limits: when comparing method strengths, do not turn algorithm examples into peer method categories unless the retrieved text explicitly presents them as separate top-level classes.",
                 "- For reconstruction-method questions, treat basis pursuit, l1 minimization, total variation, curvature, or other optimization variants as submethods of compressed-sensing/optimization reconstruction when the evidence frames them that way.",
                 "- Do not claim an exact taxonomy count such as 'three classes' unless the retrieved evidence explicitly enumerates that count; otherwise phrase it as main approaches or evidence-backed families.",
+                "- For broad benefits/pitfalls questions, cover the evidence-backed upside and the main caveats separately; when deep learning is involved, explicitly check data dependence, generalization/robustness, and speed-quality trade-offs if the retrieved text supports them.",
             ]
         )
     if output_mode_norm == "fact_answer":
