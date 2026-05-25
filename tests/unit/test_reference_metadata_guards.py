@@ -1,5 +1,5 @@
 import api.reference_ui as reference_ui
-from api.reference_ui import _merge_meta_prefer_richer, enrich_citation_detail_meta
+from api.reference_ui import _ensure_summary_line, _merge_meta_prefer_richer, enrich_citation_detail_meta
 from ui.chat_widgets import _normalize_math_markdown
 from ui import refs_renderer
 
@@ -41,6 +41,66 @@ def test_merge_meta_prefer_richer_keeps_existing_data_on_doi_conflict():
     assert str(out.get("venue") or "") == "Journal A"
     assert str(out.get("journal_if") or "") == "8.1"
     assert int(out.get("citation_count") or 0) == 0
+
+
+def test_merge_meta_prefer_richer_keeps_raw_identity_for_low_similarity_external_hit():
+    base = {
+        "title": "The missing cone problem and low-pass distortion in optical serial sectioning microscopy",
+        "authors": "Macias-Garza F, Bovik A",
+        "venue": "IEEE Trans. Acoust., Speech, Signal Process.",
+        "year": "1988",
+    }
+    incoming = {
+        "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+        "authors": "F Macias-Garza",
+        "venue": "Proceedings of SPIE",
+        "year": "2008",
+        "doi": "10.1117/12.7976703",
+        "doi_url": "https://doi.org/10.1117/12.7976703",
+        "citation_count": 22,
+        "citation_source": "OpenAlex",
+        "journal_if": "1.2",
+        "journal_quartile": "Q4",
+        "match_method": "bibliographic",
+        "title_similarity": 0.4629,
+        "match_score": 0.8129,
+    }
+
+    out = _merge_meta_prefer_richer(base, incoming)
+
+    assert str(out.get("title") or "") == base["title"]
+    assert str(out.get("authors") or "") == base["authors"]
+    assert str(out.get("venue") or "") == base["venue"]
+    assert str(out.get("year") or "") == base["year"]
+    assert str(out.get("doi") or "") == "10.1117/12.7976703"
+    assert int(out.get("citation_count") or 0) == 22
+    assert str(out.get("journal_if") or "") == "1.2"
+    assert str(out.get("external_metadata_status") or "") == "candidate"
+    assert str(out.get("external_title") or "") == incoming["title"]
+    assert float(out.get("external_title_similarity") or 0) == 0.4629
+
+
+def test_ensure_summary_line_uses_citation_context_before_metadata_fallback(monkeypatch):
+    monkeypatch.setattr(reference_ui, "fetch_crossref_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_openalex_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_semantic_scholar_paper_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_doi_landing_page_abstract", lambda doi: "")
+
+    out = _ensure_summary_line(
+        {
+            "title": "Upstream work without abstract",
+            "venue": "Example Journal",
+            "year": "2024",
+            "citation_context": "The current paper cites this method when explaining how adaptive sampling reduces measurements in single-pixel imaging.",
+            "answer_claim": "Adaptive sampling can reduce the measurement budget.",
+            "location_label": "Introduction / prior work",
+        },
+        allow_crossref_abstract=True,
+    )
+
+    assert str(out.get("summary_source") or "") == "citation_context"
+    assert str(out.get("summary_generation") or "") == "citation_context_fallback"
+    assert "adaptive sampling reduces measurements" in str(out.get("summary_line") or "")
 
 
 def test_reference_index_loader_falls_back_to_default_db_outside_streamlit(monkeypatch, tmp_path):

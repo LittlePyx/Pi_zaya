@@ -37,7 +37,12 @@ from api.reference_intent import (
 )
 from kb.answer_contract import _prefer_zh_locale
 from kb.config import load_settings
-from kb.citation_meta import fetch_best_crossref_for_reference, fetch_best_crossref_meta, fetch_crossref_work_by_doi
+from kb.citation_meta import (
+    fetch_best_crossref_for_reference,
+    fetch_best_crossref_meta,
+    fetch_crossref_work_by_doi,
+    title_similarity,
+)
 from kb.evidence_text import clean_display_text as _clean_evidence_display_text
 from kb.evidence_text import pick_readable_evidence_text as _pick_readable_evidence_text
 from kb.file_naming import citation_meta_display_pdf_name
@@ -10952,6 +10957,13 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
             out["summary_provider"] = "doi_landing_page"
             return out
 
+    context_fallback = _contextual_summary_line(out)
+    if context_fallback:
+        out["summary_line"] = context_fallback
+        out["summary_source"] = "citation_context"
+        out["summary_generation"] = "citation_context_fallback"
+        return out
+
     fallback = _metadata_summary_line(out)
     if fallback:
         out["summary_line"] = fallback
@@ -10960,11 +10972,163 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
     return out
 
 
+_EXTERNAL_IDENTITY_KEYS = {
+    "title",
+    "authors",
+    "venue",
+    "year",
+    "volume",
+    "issue",
+    "pages",
+}
+
+_EXTERNAL_DOI_AND_METRIC_KEYS = {
+    "doi",
+    "doi_url",
+    "citation_count",
+    "citation_source",
+    "journal_if",
+    "journal_quartile",
+    "journal_if_source",
+    "conference_tier",
+    "conference_rank_source",
+    "conference_ccf",
+    "conference_ccf_source",
+    "venue_kind",
+    "openalex_venue",
+    "conference_name",
+    "conference_acronym",
+    "bibliometrics_checked",
+}
+
+
+def _safe_float_meta(value: object, default: float = 0.0) -> float:
+    try:
+        out = float(value)  # type: ignore[arg-type]
+    except Exception:
+        return default
+    if not math.isfinite(out):
+        return default
+    return out
+
+
+def _external_meta_seed_title(meta: dict) -> str:
+    title = str((meta or {}).get("title") or "").strip()
+    if title and not _is_weak_meta_value("title", title):
+        return title
+    for key in ("cite_fmt", "raw"):
+        text = _clean_summary_line(str((meta or {}).get(key) or ""))
+        if text and not _is_weak_meta_value("title", text):
+            return text[:240]
+    return ""
+
+
+def _external_meta_similarity(base: dict, incoming: dict) -> float:
+    explicit = _safe_float_meta((incoming or {}).get("title_similarity"), -1.0)
+    if explicit >= 0.0:
+        return max(0.0, min(1.0, explicit))
+    seed = _external_meta_seed_title(base)
+    candidate = str((incoming or {}).get("title") or "").strip()
+    if seed and candidate:
+        try:
+            return max(0.0, min(1.0, float(title_similarity(seed, candidate))))
+        except Exception:
+            return 0.0
+    return 1.0 if (not seed or not candidate) else 0.0
+
+
+def _store_candidate_external_metadata(out: dict, incoming: dict, *, status: str, reason: str, similarity: float) -> None:
+    out["external_metadata_status"] = status
+    out["external_metadata_reason"] = reason
+    match_method = str((incoming or {}).get("match_method") or "").strip()
+    if match_method:
+        out["external_match_method"] = match_method
+    match_score = (incoming or {}).get("match_score")
+    if match_score not in (None, ""):
+        out["external_match_score"] = match_score
+    if similarity >= 0.0:
+        out["external_title_similarity"] = round(max(0.0, min(1.0, similarity)), 4)
+    for key in _EXTERNAL_IDENTITY_KEYS | {"doi", "doi_url"}:
+        value = (incoming or {}).get(key)
+        if value in (None, "", [], {}):
+            continue
+        out[f"external_{key}"] = value
+
+
+def _external_meta_merge_mode(base: dict, incoming: dict) -> tuple[str, str, float]:
+    base_doi = _normalize_doi_like(str((base or {}).get("doi") or (base or {}).get("doi_url") or ""))
+    incoming_doi = _normalize_doi_like(str((incoming or {}).get("doi") or (incoming or {}).get("doi_url") or ""))
+    if base_doi and incoming_doi and (base_doi != incoming_doi):
+        return "conflict", "外部元数据 DOI 与当前引用已有 DOI 不一致，已保留当前引用信息。", 0.0
+
+    method = str((incoming or {}).get("match_method") or "").strip().lower()
+    similarity = _external_meta_similarity(base, incoming)
+    seed_title = _external_meta_seed_title(base)
+    incoming_title = str((incoming or {}).get("title") or "").strip()
+    if seed_title and incoming_title:
+        if method in {"bibliographic", "doi", "title", "openalex_title_arxiv"} and similarity < 0.72:
+            return (
+                "candidate",
+                "外部元数据标题与原参考条目相似度较低，已优先保留原参考条目；DOI、被引和期刊指标仅作核对线索。",
+                similarity,
+            )
+        if method == "bibliographic" and similarity < 0.80:
+            return (
+                "candidate",
+                "外部元数据由参考条目模糊匹配得到，标题相似度不够高，已作为候选线索处理。",
+                similarity,
+            )
+    return "trusted", "", similarity
+
+
+def _contextual_summary_line(meta: dict) -> str:
+    context = _summary_excerpt(
+        str(
+            (meta or {}).get("citation_context")
+            or (meta or {}).get("card_evidence")
+            or (meta or {}).get("evidence_quote")
+            or ""
+        ),
+        max_sentences=2,
+        max_len=280,
+    )
+    if not context:
+        return ""
+    claim = _summary_excerpt(
+        str((meta or {}).get("answer_claim") or (meta or {}).get("card_claim") or ""),
+        max_sentences=1,
+        max_len=160,
+    )
+    location = _clean_summary_line(
+        str((meta or {}).get("location_label") or (meta or {}).get("card_locator") or (meta or {}).get("heading_path") or "")
+    )
+    parts: list[str] = []
+    if claim:
+        parts.append(f"暂无可用摘要；当前回答主要借它支撑：{claim}")
+    else:
+        parts.append("暂无可用摘要；可先根据当前论文里的引用语境判断它在回答中的作用。")
+    if location:
+        parts.append(f"引用位置：{location}。")
+    parts.append(f"引用语境：{context}")
+    return _summary_excerpt(" ".join(parts), max_sentences=3, max_len=420)
+
+
 def _merge_meta_prefer_richer(base: dict, incoming: dict) -> dict:
     out = dict(base or {})
     base_doi = _normalize_doi_like(str(out.get("doi") or out.get("doi_url") or ""))
     incoming_doi = _normalize_doi_like(str((incoming or {}).get("doi") or (incoming or {}).get("doi_url") or ""))
     doi_conflict = bool(base_doi and incoming_doi and (base_doi != incoming_doi))
+    merge_mode, merge_reason, merge_similarity = _external_meta_merge_mode(out, incoming or {})
+    if merge_mode in {"candidate", "conflict"}:
+        _store_candidate_external_metadata(
+            out,
+            incoming or {},
+            status=merge_mode,
+            reason=merge_reason,
+            similarity=merge_similarity,
+        )
+    elif incoming:
+        out.setdefault("external_metadata_status", "trusted")
     conflict_sensitive_keys = {
         "title",
         "authors",
@@ -10996,6 +11160,12 @@ def _merge_meta_prefer_richer(base: dict, incoming: dict) -> dict:
         if doi_conflict and key in conflict_sensitive_keys:
             # Identity mismatch: keep current citation-level metadata.
             continue
+        if merge_mode in {"candidate", "conflict"} and key in _EXTERNAL_IDENTITY_KEYS:
+            # A fuzzy external hit may still provide DOI/metrics as a clue, but
+            # it must not rewrite the actual cited work identity.
+            continue
+        if merge_mode == "conflict" and key in _EXTERNAL_DOI_AND_METRIC_KEYS:
+            continue
         value = raw_value
         if not isinstance(value, str):
             out[key] = value
@@ -11025,6 +11195,14 @@ def _merge_meta_prefer_richer(base: dict, incoming: dict) -> dict:
         }:
             out[key] = value
             continue
+        if merge_mode == "trusted" and key in _EXTERNAL_IDENTITY_KEYS:
+            same_or_new_doi = bool(incoming_doi and ((not base_doi) or incoming_doi == base_doi))
+            if same_or_new_doi:
+                out[key] = new
+                continue
+            if key == "title" and _external_meta_similarity(out, incoming or {}) >= 0.94:
+                out[key] = new
+                continue
         cur_weak = _is_weak_meta_value(key, cur)
         new_weak = _is_weak_meta_value(key, new)
         if cur_weak and (not new_weak):
@@ -11216,10 +11394,7 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
             meta_doi = _normalize_doi_like(str(meta.get("doi") or meta.get("doi_url") or doi))
             canonical_doi = _normalize_doi_like(str(canonical.get("doi") or canonical.get("doi_url") or ""))
             if meta_doi and canonical_doi and (meta_doi == canonical_doi):
-                for key in ("title", "authors", "venue", "year", "volume", "issue", "pages", "doi", "doi_url"):
-                    value = canonical.get(key)
-                    if value not in (None, "", [], {}):
-                        meta[key] = value
+                meta = _merge_meta_prefer_richer(meta, canonical)
             else:
                 meta = _merge_meta_prefer_richer(meta, canonical)
             if str(meta.get("doi") or "").strip() and not str(meta.get("doi_url") or "").strip():

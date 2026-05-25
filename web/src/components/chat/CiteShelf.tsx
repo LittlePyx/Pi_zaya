@@ -211,9 +211,12 @@ export function CiteShelf({
     const hasAuthors = Boolean(String(item.authors || '').trim())
     const hasVenue = Boolean(String(item.venue || '').trim())
     const hasMetaConflict = hasConflictingVenueSignals(item)
+    const externalStatus = String(item.externalMetadataStatus || '').trim().toLowerCase()
+    const externalNeedsReview = externalStatus === 'candidate' || externalStatus === 'conflict'
     const unresolved = !item.bibliometricsChecked
     const needsRepair = shouldAutoRepairItem(item, display)
 
+    if (externalNeedsReview) chips.push('元数据待核对')
     if (!hasDoi) chips.push(S.shelf_missing_doi)
     if (!hasAuthors) chips.push(S.shelf_missing_author)
     if (!hasVenue) chips.push(S.shelf_missing_venue)
@@ -224,7 +227,8 @@ export function CiteShelf({
     if (!chips.length) return { chips: [], tip: '', needsRepair }
 
     let tip = S.shelf_auto_fix_tip
-    if (!hasDoi) tip = S.shelf_no_doi_tip
+    if (externalNeedsReview) tip = item.externalMetadataReason || '外部元数据与原参考条目需要核对，标题/作者以原条目为准，DOI 和指标先作为线索。'
+    else if (!hasDoi) tip = S.shelf_no_doi_tip
     else if (hasMetaConflict) tip = S.shelf_conflict_tip
     else if (hasWeakStoredTitle && !hasWeakTitle) tip = S.shelf_weak_stored_tip
     else if (hasWeakTitle) tip = S.shelf_weak_title_tip

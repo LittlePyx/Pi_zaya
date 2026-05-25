@@ -925,6 +925,15 @@ body.kb-reader-resizing .kb-reader-content {
   overflow-wrap: anywhere;
 }
 
+.kb-cite-pop-warning-sub {
+  display: block;
+  margin-top: 4px;
+  color: color-mix(in srgb, var(--text-main) 62%, transparent);
+  font-size: 10.5px;
+  font-weight: 560;
+  line-height: 1.4;
+}
+
 .kb-cite-pop-context-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));

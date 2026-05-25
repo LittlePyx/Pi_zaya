@@ -39,6 +39,17 @@ export interface CiteDetail {
   conferenceName: string
   conferenceAcronym: string
   bibliometricsChecked: boolean
+  externalMetadataStatus: string
+  externalMetadataReason: string
+  externalMatchMethod: string
+  externalMatchScore: number
+  externalTitleSimilarity: number
+  externalTitle: string
+  externalAuthors: string
+  externalVenue: string
+  externalYear: string
+  externalDoi: string
+  externalDoiUrl: string
   summaryLine: string
   summarySource: string
   summaryProvider: string
@@ -658,6 +669,17 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     conferenceName: pickText(rec, 'conference_name', 'conferenceName'),
     conferenceAcronym: pickText(rec, 'conference_acronym', 'conferenceAcronym'),
     bibliometricsChecked: Boolean(rec.bibliometrics_checked ?? rec.bibliometricsChecked),
+    externalMetadataStatus: pickText(rec, 'external_metadata_status', 'externalMetadataStatus'),
+    externalMetadataReason: pickText(rec, 'external_metadata_reason', 'externalMetadataReason'),
+    externalMatchMethod: pickText(rec, 'external_match_method', 'externalMatchMethod'),
+    externalMatchScore: pickNumber(rec, 'external_match_score', 'externalMatchScore'),
+    externalTitleSimilarity: pickNumber(rec, 'external_title_similarity', 'externalTitleSimilarity'),
+    externalTitle: pickText(rec, 'external_title', 'externalTitle'),
+    externalAuthors: pickText(rec, 'external_authors', 'externalAuthors'),
+    externalVenue: pickText(rec, 'external_venue', 'externalVenue'),
+    externalYear: pickText(rec, 'external_year', 'externalYear'),
+    externalDoi: pickText(rec, 'external_doi', 'externalDoi'),
+    externalDoiUrl: pickText(rec, 'external_doi_url', 'externalDoiUrl'),
     summaryLine: pickText(rec, 'summary_line', 'summaryLine'),
     summarySource: pickText(rec, 'summary_source', 'summarySource'),
     summaryProvider: pickText(rec, 'summary_provider', 'summaryProvider'),
@@ -716,6 +738,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'supportRelation',
     'whyLine',
     'bindingReason',
+    'externalMetadataReason',
+    'externalTitle',
+    'externalAuthors',
+    'externalVenue',
     'cardTitle',
     'cardSubtitle',
     'cardTakeawayLabel',
@@ -870,6 +896,17 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'summary_line',
     'summary_source',
     'summary_provider',
+    'external_metadata_status',
+    'external_metadata_reason',
+    'external_match_method',
+    'external_match_score',
+    'external_title_similarity',
+    'external_title',
+    'external_authors',
+    'external_venue',
+    'external_year',
+    'external_doi',
+    'external_doi_url',
   ])
   const conflictSensitiveKeys = new Set([
     'title',

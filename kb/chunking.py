@@ -71,6 +71,36 @@ def _parse_blocks(md: str) -> list[Block]:
     return blocks
 
 
+def _semantic_overlap_tail(text: str, overlap: int) -> str:
+    src = str(text or "")
+    max_len = int(overlap or 0)
+    if max_len <= 0 or len(src) <= max_len:
+        return src
+
+    start = max(0, len(src) - max_len)
+    window = src[start:]
+    min_tail = min(80, max(24, max_len // 3))
+
+    boundary_re = re.compile(r"(?:\n\s*\n+|(?<=[。！？.!?])\s+)")
+    best = ""
+    for match in boundary_re.finditer(window):
+        candidate = window[match.end() :].strip()
+        if len(candidate) >= min_tail:
+            best = candidate
+            break
+    if best:
+        return best
+
+    # If the raw character window starts inside a token, drop the partial token.
+    prev = src[start - 1] if start > 0 else ""
+    if prev and window and re.match(r"[A-Za-z0-9]", prev) and re.match(r"[A-Za-z0-9]", window[0]):
+        trimmed = re.sub(r"^\S+\s*", "", window, count=1).strip()
+        if len(trimmed) >= min_tail:
+            return trimmed
+
+    return window.strip()
+
+
 def _merge_blocks_into_chunks(
     blocks: list[Block],
     source_path: str,
@@ -120,8 +150,10 @@ def _merge_blocks_into_chunks(
             cur_page_end = None
             return
 
-        # Keep tail as overlap
-        tail = text[-overlap:]
+        # Keep tail as overlap, but avoid starting the next chunk in the
+        # middle of a word/sentence. Mid-token overlaps make evidence cards look
+        # fragmentary even when the original markdown is fine.
+        tail = _semantic_overlap_tail(text, overlap)
         cur = [tail]
         cur_len = len(tail)
         # Overlap keeps the same approximate page range.

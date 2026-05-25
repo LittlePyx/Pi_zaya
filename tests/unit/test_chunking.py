@@ -1,4 +1,4 @@
-from kb.chunking import chunk_markdown
+from kb.chunking import _semantic_overlap_tail, chunk_markdown
 
 
 def test_chunking_short_text():
@@ -34,4 +34,32 @@ Page 2 content.
     chunks = chunk_markdown(md, source_path="test.md")
     assert chunks[0]["meta"]["page_start"] == 1
     assert chunks[0]["meta"]["page_end"] == 2
+
+
+def test_overlap_tail_does_not_start_mid_word():
+    text = (
+        "Compressed sensing can recover signals from limited measurements. "
+        "A person can be described uniquely with a few targeted questions, "
+        "which is closely related to sparsity in imaging systems."
+    )
+
+    tail = _semantic_overlap_tail(text, overlap=75)
+
+    assert not tail.startswith("rson")
+    assert tail.startswith("questions") or tail.startswith("which") or tail.startswith("A person")
+
+
+def test_chunk_overlap_prefers_sentence_boundary():
+    first = (
+        "Single-pixel imaging uses structured illumination to acquire measurements. "
+        "The overlap region should start from a complete sentence for evidence cards. "
+        "This sentence carries the retrieval context without a broken leading word."
+    )
+    second = "The next paragraph should be appended after the semantic overlap."
+    md = f"# Intro\n\n{first}\n\n{second}"
+
+    chunks = chunk_markdown(md, source_path="test.md", chunk_size=260, overlap=115)
+
+    assert len(chunks) >= 2
+    assert chunks[1]["text"].startswith("This sentence carries")
 

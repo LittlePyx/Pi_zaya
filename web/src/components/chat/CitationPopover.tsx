@@ -179,6 +179,9 @@ export function CitationPopover({
   const cardLocatorLabel = compact(detail.cardLocatorLabel)
   const cardSupportLabel = compact(detail.cardSupportLabel)
   const cardWarning = compact(detail.cardWarning)
+  const externalMetadataStatus = compact(detail.externalMetadataStatus).toLowerCase()
+  const externalMetadataReason = compact(detail.externalMetadataReason)
+  const externalTitle = compact(detail.externalTitle)
   const cardQualityLabel = compact(detail.cardQualityLabel)
   const cardQualityScore = Number(detail.cardQualityScore || 0)
   const cardQualityFlags = Array.isArray(detail.cardQualityFlags)
@@ -277,6 +280,13 @@ export function CitationPopover({
     cardQualityLabel
     && (cardWarning || systemAHasReviewRisk || cardQualityScore < 0.62),
   )
+  const showExternalMetadataWarning = externalMetadataStatus === 'candidate' || externalMetadataStatus === 'conflict'
+  const externalMetadataWarningText = showExternalMetadataWarning
+    ? (externalMetadataReason || '外部元数据与原参考条目仍需核对，已优先保留原参考条目；DOI、被引和期刊指标仅作线索。')
+    : ''
+  const externalMetadataTitleHint = externalTitle && !substantiallySame(externalTitle, displayMain)
+    ? `候选外部标题：${externalTitle}`
+    : ''
 
   return (
     <div
@@ -335,6 +345,12 @@ export function CitationPopover({
       {cardWarning ? (
         <div className="kb-cite-pop-warning" data-testid="citation-popover-card-warning">
           {cardWarning}
+        </div>
+      ) : null}
+      {showExternalMetadataWarning ? (
+        <div className="kb-cite-pop-warning" data-testid="citation-popover-external-metadata-warning">
+          {externalMetadataWarningText}
+          {externalMetadataTitleHint ? <span className="kb-cite-pop-warning-sub">{externalMetadataTitleHint}</span> : null}
         </div>
       ) : null}
       {!isSystemB ? (
