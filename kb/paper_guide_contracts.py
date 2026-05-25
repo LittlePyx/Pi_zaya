@@ -463,6 +463,8 @@ class PaperGuideCitationDetailModel(_PaperGuideBaseModel):
     card_locator: str = ""
     card_evidence_label: str = ""
     card_evidence: str = ""
+    card_reference_label: str = ""
+    card_reference_entry: str = ""
     card_support_label: str = ""
     card_support_explanation: str = ""
     card_quality_label: str = ""

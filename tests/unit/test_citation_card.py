@@ -170,6 +170,27 @@ def test_system_a_card_composer_avoids_duplicate_takeaway() -> None:
     assert detail["card_takeaway"] != detail["card_evidence"]
 
 
+def test_system_a_card_composer_suppresses_low_value_answer_label() -> None:
+    detail = compose_citation_card(
+        {
+            "source_name": "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+            "heading_path": "5. Single-Pixel Imaging Realizations with Deep Learning",
+            "answer_claim": "Deep learning review 1",
+            "evidence_quote": (
+                "Deep learning models map low-dimensional measurements to target images. "
+                "This reduces the required sampling ratio while preserving reconstruction quality."
+            ),
+            "location_label": "5. Single-Pixel Imaging Realizations with Deep Learning",
+        }
+    )
+
+    assert detail["card_claim"] == ""
+    assert detail["card_claim_label"] == "答案中的话"
+    assert detail["card_locator_label"] == "原文位置"
+    assert "low_value_answer_claim" in detail["card_quality_flags"]
+    assert detail["card_evidence"].startswith("Deep learning models")
+
+
 def test_system_b_card_composer_marks_answer_context_only() -> None:
     detail = compose_citation_card(
         {
@@ -328,3 +349,34 @@ def test_system_b_card_composer_keeps_raw_reference_out_of_missing_title_header(
     assert detail["card_evidence"] == ""
     assert "missing_reference_title" in detail["card_quality_flags"]
     assert "weak_citation_context" in detail["card_quality_flags"]
+
+
+def test_system_b_card_composer_keeps_upstream_reference_entry_separate() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf",
+            "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+            "raw": (
+                "[3] Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. "
+                "& Aggarwal, J. K. The missing cone problem and low-pass distortion in "
+                "optical serial sectioning microscopy. IEEE Trans. Acoust., Speech, "
+                "Signal Process. 2, 890-893 (1988)."
+            ),
+            "answer_claim": "This citation should support the discussion of three-dimensional microscopic imaging limits.",
+            "citation_context": (
+                "Alessandro Zunino [1,4], Giacomo Garre [1,2,4], Eleonora Perego [1,3], "
+                "Sabrina Zappone [1,2], Mattia Donato [1], Nadine Vastenhouw [3] "
+                "& Giuseppe Vicidomini [1]"
+            ),
+            "citation_context_source": "source_markdown",
+            "location_label": "Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy",
+        }
+    )
+
+    assert detail["card_evidence"] == ""
+    assert detail["card_evidence_label"] == "当前论文引用语境"
+    assert detail["card_reference_label"] == "上游文献条目"
+    assert "The missing cone problem" in detail["card_reference_entry"]
+    assert "reference_entry_only" in detail["card_quality_flags"]
+    assert "上游论文正文证据" in detail["card_warning"]

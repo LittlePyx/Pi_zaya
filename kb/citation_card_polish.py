@@ -48,6 +48,8 @@ _ALIAS_TO_SNAKE = {
     "cardLocator": "card_locator",
     "cardEvidenceLabel": "card_evidence_label",
     "cardEvidence": "card_evidence",
+    "cardReferenceLabel": "card_reference_label",
+    "cardReferenceEntry": "card_reference_entry",
     "cardSupportLabel": "card_support_label",
     "cardSupportExplanation": "card_support_explanation",
     "cardQualityFlags": "card_quality_flags",

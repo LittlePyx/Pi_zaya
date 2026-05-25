@@ -4,7 +4,8 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from kb.evidence_text import clean_display_text, looks_low_value_citation_context, pick_readable_evidence_text
+from kb.citation_evidence_pack import build_system_a_evidence_pack, build_system_b_evidence_pack
+from kb.evidence_text import clean_display_text
 
 def _clean_text(value: Any, *, max_len: int = 520) -> str:
     return clean_display_text(value, max_len=max_len)
@@ -210,25 +211,6 @@ def _join_evidence_window(sentences: list[str], *, center_idx: int, claim: str, 
     return " ".join(out).strip()
 
 
-def _pick_system_a_evidence(
-    value: str,
-    *,
-    source: str = "",
-    title: str = "",
-    claim: str = "",
-    heading: str = "",
-    max_len: int = 460,
-) -> str:
-    return pick_readable_evidence_text(
-        value,
-        source=source,
-        title=title,
-        claim=claim,
-        heading=heading,
-        max_len=max_len,
-    )
-
-
 def _first_text(rec: Mapping[str, Any], *keys: str, max_len: int = 520) -> str:
     for key in keys:
         value = _clean_text(rec.get(key), max_len=max_len)
@@ -248,6 +230,8 @@ _CARD_TEXT_LIMITS = {
     "card_locator": 260,
     "card_evidence_label": 80,
     "card_evidence": 520,
+    "card_reference_label": 80,
+    "card_reference_entry": 900,
     "card_support_label": 80,
     "card_support_explanation": 420,
     "card_quality_label": 80,
@@ -629,28 +613,35 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
     source = _first_text(rec, "source_name", max_len=180) or _source_name(str(rec.get("source_path") or ""))
     heading = _first_text(rec, "heading_path", "title", max_len=180)
     title = source or heading or "答案依据"
-    claim = _first_text(rec, "answer_claim", max_len=320)
+    claim_raw = _first_text(rec, "answer_claim", max_len=420)
     evidence_raw = _first_text(rec, "evidence_quote", "summary_line", "raw", "cite_fmt", max_len=1400)
-    evidence = _pick_system_a_evidence(
-        evidence_raw,
+    locator = _locator(rec)
+    support_hint = _first_text(rec, "support_relation", "binding_reason", "why_line", max_len=420)
+    pack = build_system_a_evidence_pack(
+        answer_claim=claim_raw,
+        evidence_raw=evidence_raw,
         source=source,
         title=_first_text(rec, "title", max_len=240),
-        claim=claim,
         heading=heading,
-        max_len=460,
+        location_label=locator,
+        support_hint=support_hint,
     )
+    claim = pack.answer_claim
+    evidence = pack.evidence_quote
     takeaway = _system_a_takeaway(claim=claim, evidence=evidence, heading=heading)
+    if not takeaway:
+        takeaway = pack.evidence_focus
     if takeaway and (_sameish(takeaway, evidence) or _sameish(takeaway, claim)):
         takeaway = ""
-    locator = _locator(rec)
     subtitle = locator or (heading if heading and heading != title else "")
     binding_status = str(rec.get("binding_status") or "").strip().lower()
     binding_confidence = _safe_float(rec.get("binding_confidence"), 0.0)
-    support = _first_text(rec, "support_relation", "binding_reason", "why_line", max_len=420)
+    support = pack.support_explanation or support_hint
 
     ranked_score = min(0.76, max(0.42, _safe_float(rec.get("score"), 0.0) / 10.0))
     score = max(binding_confidence, ranked_score) if binding_confidence else ranked_score
-    flags: list[str] = []
+    score += pack.score_delta
+    flags: list[str] = list(pack.flags)
     if not claim:
         flags.append("missing_answer_claim")
         score -= 0.08
@@ -690,11 +681,11 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
         "card_subtitle": subtitle,
         "card_takeaway_label": "证据重点",
         "card_takeaway": takeaway,
-        "card_claim_label": "对应回答",
+        "card_claim_label": "答案中的话",
         "card_claim": claim,
-        "card_locator_label": "位置",
-        "card_locator": locator,
-        "card_evidence_label": "原文证据",
+        "card_locator_label": pack.location_label_name or "原文位置",
+        "card_locator": pack.location_label or locator,
+        "card_evidence_label": pack.evidence_label or "原文证据",
         "card_evidence": evidence,
         "card_support_label": support_label,
         "card_support_explanation": support_text,
@@ -721,30 +712,30 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         )
         if part
     )
-    claim = _first_text(rec, "answer_claim", max_len=420)
+    claim_raw = _first_text(rec, "answer_claim", max_len=420)
     context_raw = _first_text(rec, "citation_context", "evidence_quote", "summary_line", max_len=1400)
-    context = pick_readable_evidence_text(
-        context_raw,
-        source=source,
-        title=title,
-        claim=claim,
-        heading=_first_text(rec, "heading_path", "location_label", max_len=180),
-        max_len=520,
-    )
-    weak_context = bool(context_raw and not context)
-    if context and looks_low_value_citation_context(context):
-        context = ""
-        weak_context = True
-    context_source = str(rec.get("citation_context_source") or rec.get("evidence_source") or "").strip().lower()
-    answer_context_only = bool(context and context_source == "answer_context")
     locator = _locator(rec) or source
     role = _first_text(rec, "upstream_work_role", "why_line", max_len=420)
     relation = _first_text(rec, "user_question_relation", "support_relation", max_len=420)
+    pack = build_system_b_evidence_pack(
+        answer_claim=claim_raw,
+        citation_context_raw=context_raw,
+        citation_context_source=str(rec.get("citation_context_source") or rec.get("evidence_source") or ""),
+        source=source,
+        title=title,
+        heading=_first_text(rec, "heading_path", "location_label", max_len=180),
+        location_label=locator,
+        raw_reference=raw_reference,
+        role_hint=role,
+        relation_hint=relation,
+    )
+    claim = pack.answer_claim
+    context = pack.evidence_quote
     takeaway = _system_b_takeaway(title=title, claim=claim, context=context, role=role, relation=relation)
-    support = relation or role
+    support = pack.support_explanation
 
-    score = 0.72
-    flags: list[str] = []
+    score = 0.72 + pack.score_delta
+    flags: list[str] = list(pack.flags)
     if not explicit_title and not parsed_title:
         flags.append("missing_reference_title")
         score -= 0.16
@@ -754,27 +745,14 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
     if not locator:
         flags.append("missing_citing_location")
         score -= 0.1
-    if answer_context_only:
-        flags.append("answer_context_only")
-        score -= 0.08
-    if weak_context:
-        flags.append("weak_citation_context")
-        score -= 0.08
-    if not context:
-        flags.append("missing_citation_context")
-        score -= 0.06
     if not takeaway:
         flags.append("missing_takeaway")
         score -= 0.08
     score = max(0.0, min(1.0, score))
 
-    evidence_label = "回答里的线索" if answer_context_only else "引用语境"
-    warning = ""
-    if answer_context_only:
-        warning = "目前只有回答线索或参考条目，完整引用语境仍建议打开原文核对。"
-    elif weak_context and score < 0.62:
-        warning = "当前自动抽取的引用语境质量较弱，已隐藏低价值片段；建议打开原文核对。"
-    elif score < 0.58:
+    evidence_label = pack.evidence_label or "当前论文引用语境"
+    warning = pack.warning
+    if not warning and score < 0.58:
         warning = "这条上游参考信息不完整，建议打开引用语境确认。"
 
     return _finalize_card_output({
@@ -785,10 +763,12 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         "card_takeaway": takeaway,
         "card_claim_label": "答案里的这句话",
         "card_claim": claim,
-        "card_locator_label": "当前论文引用处",
-        "card_locator": locator,
+        "card_locator_label": pack.location_label_name or "当前论文引用处",
+        "card_locator": pack.location_label or locator,
         "card_evidence_label": evidence_label,
         "card_evidence": context,
+        "card_reference_label": pack.reference_label,
+        "card_reference_entry": pack.reference_entry,
         "card_support_label": "",
         "card_support_explanation": support,
         "card_quality_label": _quality_label(score, route="system_b"),

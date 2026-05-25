@@ -183,6 +183,7 @@ export function CitationPopover({
   const cardClaimLabel = compact(detail.cardClaimLabel)
   const cardEvidenceLabel = compact(detail.cardEvidenceLabel)
   const cardLocatorLabel = compact(detail.cardLocatorLabel)
+  const cardReferenceLabel = compact(detail.cardReferenceLabel)
   const cardSupportLabel = compact(detail.cardSupportLabel)
   const cardWarning = compact(detail.cardWarning)
   const externalMetadataStatus = compact(detail.externalMetadataStatus).toLowerCase()
@@ -205,7 +206,8 @@ export function CitationPopover({
   const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
     ? cardTakeaway
     : ''
-  const systemBReferenceText = cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
+  const systemBExplicitReferenceText = cleanCitationDisplayText(detail.cardReferenceEntry)
+  const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
   const systemBCardEvidenceText = cleanCitationDisplayText(detail.cardEvidence)
   const systemBRawContextCandidate = cleanCitationDisplayText(
     compact(detail.citationContext) || compact(detail.evidenceQuote) || compact(detail.summaryLine),
@@ -220,7 +222,7 @@ export function CitationPopover({
   )
   const systemBCitationContextText = systemBCardEvidenceText
     || ((!suppressRawSystemBContextFallback && !systemBRawContextIsLowValue) ? systemBRawContextCandidate : '')
-  const systemBCitationContextLabel = /回答/.test(cardEvidenceLabel) ? cardEvidenceLabel : '引用语境'
+  const systemBCitationContextLabel = cardEvidenceLabel || '当前论文引用语境'
   const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
     ? cardTakeaway
     : ''
@@ -293,7 +295,29 @@ export function CitationPopover({
     ? '只定位到引用发生的论文，尚未定位到具体章节或页码；可打开引用语境核对。'
     : ''
   const showSystemBLocation = Boolean(systemBLocationText)
-  const showSystemBReference = Boolean(systemBReferenceText && (systemBTitleMissing || cardQualityFlags.includes('missing_reference_title')))
+  const systemBSupportText = isSystemB
+    && explicitSupportText
+    && !substantiallySame(explicitSupportText, systemBCitationContextText)
+    && !substantiallySame(explicitSupportText, systemBReferenceText)
+    ? explicitSupportText
+    : ''
+  const showSystemBSupport = Boolean(
+    systemBSupportText
+    && (
+      cardQualityFlags.includes('reference_entry_only')
+      || !systemBCitationContextText
+      || cardWarning
+    ),
+  )
+  const showSystemBReference = Boolean(
+    systemBReferenceText
+    && (
+      systemBExplicitReferenceText
+      || systemBTitleMissing
+      || cardQualityFlags.includes('missing_reference_title')
+      || cardQualityFlags.includes('reference_entry_only')
+    ),
+  )
   const metaRows = [
     display.source ? { label: '来源', value: display.source } : null,
     display.venueYear ? { label: '发表', value: display.venueYear } : null,
@@ -432,8 +456,14 @@ export function CitationPopover({
           ) : null}
           {showSystemBReference ? (
             <div className="kb-cite-pop-evidence" data-testid="citation-popover-system-b-reference">
-              <div className="kb-cite-pop-section-title">上游文献条目</div>
+              <div className="kb-cite-pop-section-title">{cardReferenceLabel || '上游文献条目'}</div>
               <div className="kb-cite-pop-main">{systemBReferenceText}</div>
+            </div>
+          ) : null}
+          {showSystemBSupport ? (
+            <div className="kb-cite-pop-why" data-testid="citation-popover-system-b-support">
+              <span className="kb-cite-pop-section-title">{cardSupportLabel || '说明'}</span>
+              <div className="kb-cite-pop-main">{systemBSupportText}</div>
             </div>
           ) : null}
         </div>

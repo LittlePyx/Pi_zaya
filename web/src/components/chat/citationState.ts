@@ -85,6 +85,8 @@ export interface CiteDetail {
   cardLocator: string
   cardEvidenceLabel: string
   cardEvidence: string
+  cardReferenceLabel: string
+  cardReferenceEntry: string
   cardSupportLabel: string
   cardSupportExplanation: string
   cardQualityLabel: string
@@ -725,6 +727,8 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     cardLocator: pickText(rec, 'card_locator', 'cardLocator'),
     cardEvidenceLabel: pickText(rec, 'card_evidence_label', 'cardEvidenceLabel'),
     cardEvidence: pickText(rec, 'card_evidence', 'cardEvidence'),
+    cardReferenceLabel: pickText(rec, 'card_reference_label', 'cardReferenceLabel'),
+    cardReferenceEntry: pickText(rec, 'card_reference_entry', 'cardReferenceEntry'),
     cardSupportLabel: pickText(rec, 'card_support_label', 'cardSupportLabel'),
     cardSupportExplanation: pickText(rec, 'card_support_explanation', 'cardSupportExplanation'),
     cardQualityLabel: pickText(rec, 'card_quality_label', 'cardQualityLabel'),
@@ -763,6 +767,8 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'cardClaim',
     'cardLocator',
     'cardEvidence',
+    'cardReferenceLabel',
+    'cardReferenceEntry',
     'cardSupportExplanation',
     'cardWarning',
     'citationCardPolishStatus',
@@ -935,6 +941,8 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'card_takeaway',
     'card_claim',
     'card_evidence',
+    'card_reference_label',
+    'card_reference_entry',
     'card_support_explanation',
     'card_warning',
     'citation_card_polish_status',
