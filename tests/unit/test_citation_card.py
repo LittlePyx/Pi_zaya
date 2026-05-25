@@ -49,6 +49,32 @@ def test_system_a_card_composer_strips_markdown_source_markup() -> None:
     assert "##" not in detail["card_evidence"]
 
 
+def test_card_composer_scrubs_markdown_table_and_structured_tokens() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Fixture.pdf",
+            "heading_path": "Method",
+            "answer_claim": "Single-pixel imaging uses structured illumination.",
+            "evidence_quote": (
+                "## Evidence\n"
+                "| field | value |\n"
+                "| --- | --- |\n"
+                "| note | **Single-pixel imaging** uses `structured illumination` [[CITE:abc12345:3]] "
+                "and $DMD$ modulation to collect measurements. |\n"
+            ),
+            "location_label": "Method",
+            "binding_status": "grounded",
+            "binding_confidence": 0.86,
+        }
+    )
+
+    assert "Single-pixel imaging" in detail["card_evidence"]
+    assert "structured illumination" in detail["card_evidence"]
+    for bad in ("##", "|", "**", "`", "CITE", "$"):
+        assert bad not in detail["card_evidence"]
+
+
 def test_system_a_card_composer_strips_title_author_prefix_from_evidence() -> None:
     detail = compose_citation_card(
         {
@@ -186,6 +212,26 @@ def test_system_b_card_composer_distills_generic_english_role() -> None:
     assert "单次压缩光谱成像" in detail["card_takeaway"]
     assert "The user is asking" not in detail["card_takeaway"]
     assert detail["card_flow"] == []
+
+
+def test_system_b_card_composer_suppresses_duplicate_claim_and_support_copy() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "SCINeRF.pdf",
+            "title": "Distributed Optimization and Statistical Learning via ADMM",
+            "authors": "Boyd S",
+            "year": "2011",
+            "answer_claim": "ADMM is borrowed optimization background.",
+            "citation_context": "ADMM is borrowed optimization background.",
+            "citation_context_source": "answer_context",
+            "support_relation": "The user is asking about the evidence behind the answer; this reference is the upstream paper to open next.",
+        }
+    )
+
+    assert detail["card_claim"] == ""
+    assert detail["card_support_explanation"] == ""
+    assert "ADMM" in detail["card_takeaway"]
 
 
 def test_system_b_card_composer_strips_tex_citation_markup() -> None:

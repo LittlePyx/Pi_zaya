@@ -196,8 +196,12 @@ export function CitationPopover({
   const cardFlow = Array.isArray(detail.cardFlow)
     ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
-  const systemAClaimText = compact(detail.cardClaim) || compact(detail.answerClaim)
-  const systemAEvidenceText = compact(detail.cardEvidence) || compact(detail.evidenceQuote) || compact(detail.summaryLine) || compact(detail.raw) || compact(detail.citeFmt)
+  const systemAClaimText = cleanCitationDisplayText(compact(detail.cardClaim) || compact(detail.answerClaim))
+  const systemAEvidenceText = cleanCitationDisplayText(detail.cardEvidence)
+    || cleanCitationDisplayText(detail.evidenceQuote)
+    || cleanCitationDisplayText(detail.summaryLine)
+    || cleanCitationDisplayText(detail.raw)
+    || cleanCitationDisplayText(detail.citeFmt)
   const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
     ? cardTakeaway
     : ''

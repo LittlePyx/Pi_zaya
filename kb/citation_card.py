@@ -237,6 +237,65 @@ def _first_text(rec: Mapping[str, Any], *keys: str, max_len: int = 520) -> str:
     return ""
 
 
+_CARD_TEXT_LIMITS = {
+    "card_title": 220,
+    "card_subtitle": 220,
+    "card_takeaway_label": 80,
+    "card_takeaway": 140,
+    "card_claim_label": 80,
+    "card_claim": 420,
+    "card_locator_label": 80,
+    "card_locator": 260,
+    "card_evidence_label": 80,
+    "card_evidence": 520,
+    "card_support_label": 80,
+    "card_support_explanation": 420,
+    "card_quality_label": 80,
+    "card_warning": 360,
+}
+
+
+def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]:
+    out = dict(card)
+    for key, limit in _CARD_TEXT_LIMITS.items():
+        out[key] = _clean_text(out.get(key), max_len=limit)
+
+    evidence = str(out.get("card_evidence") or "").strip()
+    claim = str(out.get("card_claim") or "").strip()
+    takeaway = str(out.get("card_takeaway") or "").strip()
+    support = str(out.get("card_support_explanation") or "").strip()
+
+    if takeaway and (
+        _sameish(takeaway, evidence)
+        or _sameish(takeaway, claim)
+        or _looks_low_value_takeaway(takeaway)
+    ):
+        out["card_takeaway"] = ""
+        takeaway = ""
+
+    if route == "system_b":
+        if claim and evidence and _sameish(claim, evidence):
+            out["card_claim"] = ""
+            claim = ""
+        if support and (
+            _sameish(support, takeaway)
+            or _sameish(support, evidence)
+            or _sameish(support, claim)
+            or _looks_generic_system_b_text(support)
+        ):
+            out["card_support_explanation"] = ""
+    elif support and (
+        _sameish(support, evidence)
+        or _sameish(support, claim)
+        or _sameish(support, takeaway)
+    ):
+        out["card_support_explanation"] = ""
+
+    if not str(out.get("card_evidence") or "").strip():
+        out["card_evidence_label"] = _clean_text(out.get("card_evidence_label"), max_len=80)
+    return out
+
+
 def _clean_reference_entry(value: Any, *, max_len: int = 900) -> str:
     text = _clean_text(value, max_len=max_len)
     if not text:
@@ -625,7 +684,7 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
     elif "candidate_binding" in flags or score < 0.55:
         warning = "这条链接只是候选依据，建议打开原文确认语境。"
 
-    return {
+    return _finalize_card_output({
         "card_kind": "answer_evidence",
         "card_title": title,
         "card_subtitle": subtitle,
@@ -644,7 +703,7 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
-    }
+    }, route="system_a")
 
 
 def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
@@ -682,7 +741,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
     role = _first_text(rec, "upstream_work_role", "why_line", max_len=420)
     relation = _first_text(rec, "user_question_relation", "support_relation", max_len=420)
     takeaway = _system_b_takeaway(title=title, claim=claim, context=context, role=role, relation=relation)
-    support = takeaway or relation or role
+    support = relation or role
 
     score = 0.72
     flags: list[str] = []
@@ -718,7 +777,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
     elif score < 0.58:
         warning = "这条上游参考信息不完整，建议打开引用语境确认。"
 
-    return {
+    return _finalize_card_output({
         "card_kind": "upstream_reference",
         "card_title": title,
         "card_subtitle": subtitle,
@@ -737,7 +796,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
-    }
+    }, route="system_b")
 
 
 def compose_citation_card(detail: Mapping[str, Any] | None) -> dict[str, Any]:

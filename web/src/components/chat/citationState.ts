@@ -113,18 +113,24 @@ export function cleanCitationDisplayText(value: string): string {
     .replace(/(?:\$\s*)?\^\{\s*\[[\d,\-\s;]+\]\s*\}(?:\s*\$)?/g, ' ')
     .replace(/\\textsuperscript\{\s*\[[^\]\n]{1,80}\]\s*\}/gi, ' ')
     .replace(/\\(?:cite|citep|citet|citealp|upcite)\s*\{[^}\n]{1,200}\}/gi, ' ')
+    .replace(/\[\[?\s*CITE\s*:[^\]\n]{1,160}\]?\]?/gi, ' ')
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s{0,3}>\s?/gm, '')
     .replace(/^\s{0,3}[-*+]\s+/gm, '')
     .replace(/^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/gm, ' ')
+    .replace(/^\s*\|/gm, '')
+    .replace(/\|\s*$/gm, '')
+    .replace(/\s*\|\s*/g, ' ')
+    .replace(/\$([^$\n]{1,160})\$/g, '$1')
     .replace(/!\[[^\]]*]\([^)]+\)/g, ' ')
     .replace(/\[([^\]]+)]\([^)]+\)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/~~([^~]+)~~/g, '$1')
-    .replace(/\\(?=\s)/g, ' ')
+    .replace(/\\(?=\s|[,;])/g, ' ')
     .replace(/(^|\s)#{1,6}\s+/g, ' ')
+    .replace(/\s*\|\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^(?:\.{2,}|…)+\s*/, '')
@@ -212,7 +218,7 @@ export function looksLowValueCitationContext(value: string): boolean {
   return false
 }
 
-const CONTENT_SENTENCE_START_RE = /\b(?:single[-\s]?pixel imaging|deep learning|snapshot compressive|compressive imaging|neural radiance|this paper|this work|this study|in this (?:paper|work|study)|we\s+|however,?|recent(?:ly)?|the proposed|our\s+)\b/i
+const CONTENT_SENTENCE_START_RE = /\b(?:single[-\s]?pixel imaging\s+(?:is|can|uses?|technology|systems?)|deep learning\s+(?:models?|methods?|can|is|has|enables?)|snapshot compressive imaging\s+(?:is|can|uses?|recovers?)|compressive imaging\s+(?:is|can|uses?|recovers?)|neural radiance\s+(?:field|fields|representation)|a\s+DMD\s+can|this paper|this work|this study|in this (?:paper|work|study)|we\s+|however,?|recent(?:ly)?|the proposed|our\s+)\b/i
 const FRAGMENT_LEAD_OK_RE = /^(?:a|an|the|this|these|those|most|many|some|several|existing|previous|prior|traditional|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b/i
 
 function splitEvidenceSentences(value: string): string[] {

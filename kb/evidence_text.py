@@ -39,6 +39,11 @@ _TEX_INLINE_CITATION_RE = re.compile(
     r"\\(?:cite|citep|citet|citealp|upcite)\s*\{[^}\n]{1,200}\}",
     re.IGNORECASE,
 )
+_INLINE_MATH_WRAPPER_RE = re.compile(r"\$([^$\n]{1,160})\$")
+_STRUCTURED_CITE_TOKEN_RE = re.compile(
+    r"\[\[?\s*CITE\s*:[^\]\n]{1,160}\]?\]?",
+    re.IGNORECASE,
+)
 _BRACKET_REFERENCE_MARKER_RE = re.compile(r"\[\s*\d{1,4}(?:\s*[-,;]\s*\d{1,4})*\s*\]")
 _CONTENT_VERB_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|"
@@ -60,11 +65,16 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     raw = re.sub(r"(?m)^\s{0,3}>\s?", "", raw)
     raw = re.sub(r"(?m)^\s{0,3}[-*+]\s+", "", raw)
     raw = re.sub(r"(?m)^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$", " ", raw)
+    raw = re.sub(r"(?m)^\s*\|", "", raw)
+    raw = re.sub(r"(?m)\|\s*$", "", raw)
+    raw = re.sub(r"\s*\|\s*", " ", raw)
+    raw = _INLINE_MATH_WRAPPER_RE.sub(r"\1", raw)
     text = normalize_inline_markdown(raw)
     text = _TEX_INLINE_CITATION_RE.sub(" ", text)
-    text = re.sub(r"\[\[\s*CITE\s*:[^\]\n]+\]\]", "", text, flags=re.IGNORECASE)
+    text = _STRUCTURED_CITE_TOKEN_RE.sub(" ", text)
     text = re.sub(r"\\(?=\s|[,;])", " ", text)
     text = re.sub(r"(^|\s)#{1,6}\s+", " ", text)
+    text = re.sub(r"\s*\|\s*", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^(?:\.{2,}|…)+\s*", "", text)
     if len(text) <= max_len:
