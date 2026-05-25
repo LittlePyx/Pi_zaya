@@ -92,6 +92,10 @@ export interface CiteDetail {
   cardQualityFlags: string[]
   cardWarning: string
   cardFlow: string[]
+  citationCardPolishStatus: string
+  citationCardPolishSource: string
+  citationCardPolishChecked: boolean
+  citationCardPolishKey: string
 }
 
 export interface CiteShelfItem extends CiteDetail {
@@ -728,6 +732,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     cardQualityFlags: pickStringArray(rec, 'card_quality_flags', 'cardQualityFlags'),
     cardWarning: pickText(rec, 'card_warning', 'cardWarning'),
     cardFlow: pickStringArray(rec, 'card_flow', 'cardFlow'),
+    citationCardPolishStatus: pickText(rec, 'citation_card_polish_status', 'citationCardPolishStatus'),
+    citationCardPolishSource: pickText(rec, 'citation_card_polish_source', 'citationCardPolishSource'),
+    citationCardPolishChecked: Boolean(rec.citation_card_polish_checked ?? rec.citationCardPolishChecked),
+    citationCardPolishKey: pickText(rec, 'citation_card_polish_key', 'citationCardPolishKey'),
   }
   for (const key of [
     'raw',
@@ -757,6 +765,9 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'cardEvidence',
     'cardSupportExplanation',
     'cardWarning',
+    'citationCardPolishStatus',
+    'citationCardPolishSource',
+    'citationCardPolishKey',
   ] as const) {
     detail[key] = cleanCitationDisplayText(detail[key])
   }
@@ -921,6 +932,15 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'external_year',
     'external_doi',
     'external_doi_url',
+    'card_takeaway',
+    'card_claim',
+    'card_evidence',
+    'card_support_explanation',
+    'card_warning',
+    'citation_card_polish_status',
+    'citation_card_polish_source',
+    'citation_card_polish_checked',
+    'citation_card_polish_key',
   ])
   const conflictSensitiveKeys = new Set([
     'title',

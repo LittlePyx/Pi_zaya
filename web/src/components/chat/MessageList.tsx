@@ -4202,6 +4202,7 @@ export function MessageList({
   const [popoverPinned, setPopoverPinned] = useState(false)
   const citationHoverOpenTimerRef = useRef<number | null>(null)
   const citationHoverCloseTimerRef = useRef<number | null>(null)
+  const citationPolishRetryTimerRef = useRef<number | null>(null)
   const activePopoverRequestKeyRef = useRef('')
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
@@ -4232,6 +4233,9 @@ export function MessageList({
       }
       if (citationHoverCloseTimerRef.current !== null) {
         window.clearTimeout(citationHoverCloseTimerRef.current)
+      }
+      if (citationPolishRetryTimerRef.current !== null) {
+        window.clearTimeout(citationPolishRetryTimerRef.current)
       }
     }
   }, [])
@@ -4783,6 +4787,59 @@ export function MessageList({
       window.clearTimeout(citationHoverCloseTimerRef.current)
       citationHoverCloseTimerRef.current = null
     }
+    if (citationPolishRetryTimerRef.current !== null) {
+      window.clearTimeout(citationPolishRetryTimerRef.current)
+      citationPolishRetryTimerRef.current = null
+    }
+  }
+
+  const mergeCitationMetaForItemKey = (itemKey: string, metas: Array<Record<string, unknown>>) => {
+    const usable = metas.filter((meta) => meta && Object.keys(meta).length > 0)
+    if (!usable.length) return
+    setPopoverDetail((current) => {
+      if (!current) return current
+      if (toShelfItem(current).key !== itemKey) return current
+      let merged = current
+      for (const meta of usable) {
+        merged = mergeCiteMeta(merged, meta)
+      }
+      return merged
+    })
+    setShelfItems((current) => current.map((item) => {
+      if (item.key !== itemKey) return item
+      let merged: CiteDetail = item
+      for (const meta of usable) {
+        merged = mergeCiteMeta(merged, meta)
+      }
+      return {
+        ...toShelfItem(merged),
+        tags: normalizeShelfTags(item.tags),
+        note: normalizeShelfNote(item.note),
+      }
+    }))
+  }
+
+  const requestCitationCardPolish = (detail: CiteDetail, itemKey: string, attempt = 0) => {
+    referencesApi.citationCardPolishCached(detail as unknown as Record<string, unknown>)
+      .then((meta) => {
+        if (activePopoverRequestKeyRef.current !== itemKey) return
+        const status = String(meta?.citation_card_polish_status || meta?.citationCardPolishStatus || '').trim().toLowerCase()
+        if (status === 'pending') {
+          if (attempt >= 4) return
+          if (citationPolishRetryTimerRef.current !== null) {
+            window.clearTimeout(citationPolishRetryTimerRef.current)
+          }
+          citationPolishRetryTimerRef.current = window.setTimeout(() => {
+            citationPolishRetryTimerRef.current = null
+            requestCitationCardPolish(detail, itemKey, attempt + 1)
+          }, 900 + attempt * 700)
+          return
+        }
+        mergeCitationMetaForItemKey(itemKey, [meta])
+      })
+      .catch(() => {
+        // The card already has deterministic fallback text; LLM polish is a best-effort enhancement.
+      })
   }
 
   const showCitationAt = (detail: CiteDetail, position: { x: number; y: number }, pinned: boolean) => {
@@ -4801,8 +4858,22 @@ export function MessageList({
         ? hasDoi
         : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
     )
+    const polishStatus = String(detail.citationCardPolishStatus || '').trim().toLowerCase()
+    const shouldFetchCitationCardPolish = !['full', 'failed', 'disabled', 'empty'].includes(polishStatus)
+      && Boolean(
+        detail.cardEvidence
+        || detail.evidenceQuote
+        || detail.citationContext
+        || detail.cardTakeaway
+        || detail.raw
+        || detail.citeFmt,
+      )
+    const itemKey = toShelfItem(detail).key
+    activePopoverRequestKeyRef.current = itemKey
+    if (shouldFetchCitationCardPolish) {
+      requestCitationCardPolish(detail, itemKey)
+    }
     if (!shouldFetchCitationMeta && !shouldFetchBibliometrics) {
-      activePopoverRequestKeyRef.current = ''
       setPopoverLoading(false)
       return
     }
@@ -4815,36 +4886,10 @@ export function MessageList({
       reqs.push(referencesApi.bibliometricsCached(detail as unknown as Record<string, unknown>).catch(() => ({})))
     }
 
-    const itemKey = toShelfItem(detail).key
-    activePopoverRequestKeyRef.current = itemKey
     setPopoverLoading(true)
     Promise.all(reqs)
       .then((metas) => {
-        setPopoverDetail((current) => {
-          if (!current) return current
-          if (toShelfItem(current).key !== itemKey) return current
-          let merged = current
-          for (const meta of metas) {
-            if (meta && Object.keys(meta).length > 0) {
-              merged = mergeCiteMeta(merged, meta)
-            }
-          }
-          return merged
-        })
-        setShelfItems((current) => current.map((item) => {
-          if (item.key !== itemKey) return item
-          let merged: CiteDetail = item
-          for (const meta of metas) {
-            if (meta && Object.keys(meta).length > 0) {
-              merged = mergeCiteMeta(merged, meta)
-            }
-          }
-          return {
-            ...toShelfItem(merged),
-            tags: normalizeShelfTags(item.tags),
-            note: normalizeShelfNote(item.note),
-          }
-        }))
+        mergeCitationMetaForItemKey(itemKey, metas)
       })
       .finally(() => {
         if (activePopoverRequestKeyRef.current === itemKey) {
@@ -4884,6 +4929,10 @@ export function MessageList({
     }
     citationHoverCloseTimerRef.current = window.setTimeout(() => {
       citationHoverCloseTimerRef.current = null
+      if (citationPolishRetryTimerRef.current !== null) {
+        window.clearTimeout(citationPolishRetryTimerRef.current)
+        citationPolishRetryTimerRef.current = null
+      }
       setPopoverDetail(null)
       setPopoverPos(null)
       activePopoverRequestKeyRef.current = ''
@@ -4944,8 +4993,10 @@ export function MessageList({
       })
       message.success('Entered paper guide conversation')
       setPopoverPinned(false)
+      clearCitationHoverTimers()
       setPopoverDetail(null)
       setPopoverPos(null)
+      activePopoverRequestKeyRef.current = ''
     } catch (err) {
       message.error(err instanceof Error ? err.message : 'Failed to create paper guide conversation')
     } finally {

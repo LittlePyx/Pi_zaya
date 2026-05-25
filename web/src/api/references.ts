@@ -2,6 +2,7 @@ import { api } from './client'
 
 const citationMetaCache = new Map<string, Promise<Record<string, unknown>>>()
 const bibliometricsCache = new Map<string, Promise<Record<string, unknown>>>()
+const citationCardPolishCache = new Map<string, Promise<Record<string, unknown>>>()
 
 export interface ReaderDocAnchor {
   anchor_id: string
@@ -121,6 +122,36 @@ export const referencesApi = {
         meta,
       }),
     ),
+  citationCardPolishCached: (meta: Record<string, unknown>) => {
+    const key = stableStringify({
+      anchor: meta.anchor,
+      num: meta.num,
+      is_inpaper: meta.is_inpaper ?? meta.isInpaper,
+      source_path: meta.source_path ?? meta.sourcePath,
+      source_name: meta.source_name ?? meta.sourceName,
+      title: meta.title ?? meta.card_title ?? meta.cardTitle,
+      answer_claim: meta.answer_claim ?? meta.answerClaim ?? meta.card_claim ?? meta.cardClaim,
+      evidence_quote: meta.evidence_quote ?? meta.evidenceQuote ?? meta.card_evidence ?? meta.cardEvidence,
+      citation_context: meta.citation_context ?? meta.citationContext,
+      card_takeaway: meta.card_takeaway ?? meta.cardTakeaway,
+      card_locator: meta.card_locator ?? meta.cardLocator ?? meta.location_label ?? meta.locationLabel,
+    })
+    const cached = citationCardPolishCache.get(key)
+    if (cached) return cached
+    const pending = api.post<Record<string, unknown>>('/api/references/citation-card-polish', {
+      meta,
+    }).then((result) => {
+      const status = String(result?.citation_card_polish_status || result?.citationCardPolishStatus || '').trim().toLowerCase()
+      if (status === 'pending') citationCardPolishCache.delete(key)
+      else citationCardPolishCache.set(key, Promise.resolve(result))
+      return result
+    }).catch((err) => {
+      citationCardPolishCache.delete(key)
+      throw err
+    })
+    citationCardPolishCache.set(key, pending)
+    return pending
+  },
   readerDoc: (sourcePath: string) =>
     api.post<{
       ok: boolean

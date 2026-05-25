@@ -31,6 +31,11 @@ from api.reference_card_quality import refs_pack_has_full_llm_copy
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
+from kb.citation_card_polish import (
+    citation_card_polish_cache_key,
+    citation_card_polish_enabled,
+    polish_citation_card_detail,
+)
 from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
 from kb.reference_query_family import (
@@ -50,6 +55,9 @@ router = APIRouter(prefix="/api/references", tags=["references"])
 _REFS_CONVERSATION_CACHE: dict[str, dict] = {}
 _REFS_CONVERSATION_WARMING: set[str] = set()
 _REFS_CONVERSATION_WARMING_LOCK = threading.Lock()
+_CITATION_CARD_POLISH_CACHE: dict[str, dict] = {}
+_CITATION_CARD_POLISH_WARMING: set[str] = set()
+_CITATION_CARD_POLISH_LOCK = threading.Lock()
 _REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 9
 
 
@@ -1539,6 +1547,10 @@ class BibliometricsBody(BaseModel):
     meta: dict
 
 
+class CitationCardPolishBody(BaseModel):
+    meta: dict
+
+
 class ReaderDocBody(BaseModel):
     source_path: str
 
@@ -1580,6 +1592,94 @@ def get_reference_citation_meta(body: CitationMetaBody):
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     return enrich_citation_detail_meta(body.meta or {})
+
+
+def _run_citation_card_polish_job(key: str, detail: dict) -> None:
+    key_text = str(key or "").strip()
+    if not key_text:
+        return
+    try:
+        result = polish_citation_card_detail(detail or {})
+        if not isinstance(result, dict):
+            result = {}
+        status = str(result.get("citation_card_polish_status") or "").strip().lower()
+        if not status:
+            status = "empty"
+            result["citation_card_polish_status"] = status
+        result["citation_card_polish_cached_at"] = time.time()
+        with _CITATION_CARD_POLISH_LOCK:
+            _CITATION_CARD_POLISH_CACHE[key_text] = dict(result)
+    except Exception as exc:
+        with _CITATION_CARD_POLISH_LOCK:
+            _CITATION_CARD_POLISH_CACHE[key_text] = {
+                "citation_card_polish_status": "failed",
+                "citation_card_polish_source": "error",
+                "citation_card_polish_checked": True,
+                "citation_card_polish_error": f"{type(exc).__name__}: {str(exc or '').strip()}"[:300],
+                "citation_card_polish_cached_at": time.time(),
+            }
+    finally:
+        with _CITATION_CARD_POLISH_LOCK:
+            _CITATION_CARD_POLISH_WARMING.discard(key_text)
+
+
+def _schedule_citation_card_polish(key: str, detail: dict) -> bool:
+    key_text = str(key or "").strip()
+    if not key_text:
+        return False
+    with _CITATION_CARD_POLISH_LOCK:
+        if key_text in _CITATION_CARD_POLISH_CACHE:
+            return False
+        if key_text in _CITATION_CARD_POLISH_WARMING:
+            return False
+        _CITATION_CARD_POLISH_WARMING.add(key_text)
+    try:
+        threading.Thread(
+            target=_run_citation_card_polish_job,
+            args=(key_text, dict(detail or {})),
+            daemon=True,
+            name="kb_citation_card_polish",
+        ).start()
+        return True
+    except Exception:
+        with _CITATION_CARD_POLISH_LOCK:
+            _CITATION_CARD_POLISH_WARMING.discard(key_text)
+        return False
+
+
+@router.post("/citation-card-polish")
+def polish_citation_card(body: CitationCardPolishBody):
+    detail = dict(body.meta or {}) if isinstance(body.meta, dict) else {}
+    key = citation_card_polish_cache_key(detail)
+    if not key:
+        return {
+            "citation_card_polish_status": "empty",
+            "citation_card_polish_source": "no_key",
+            "citation_card_polish_checked": True,
+        }
+    with _CITATION_CARD_POLISH_LOCK:
+        cached = _CITATION_CARD_POLISH_CACHE.get(key)
+        warming = key in _CITATION_CARD_POLISH_WARMING
+    if isinstance(cached, dict):
+        out = dict(cached)
+        out["citation_card_polish_key"] = key
+        out["citation_card_polish_cached"] = True
+        return out
+    if not citation_card_polish_enabled():
+        return {
+            "citation_card_polish_status": "disabled",
+            "citation_card_polish_source": "disabled",
+            "citation_card_polish_checked": True,
+            "citation_card_polish_key": key,
+        }
+    started = False if warming else _schedule_citation_card_polish(key, detail)
+    return {
+        "citation_card_polish_status": "pending",
+        "citation_card_polish_source": "background_llm",
+        "citation_card_polish_checked": False,
+        "citation_card_polish_key": key,
+        "citation_card_polish_started": bool(started),
+    }
 
 
 def _resolve_reader_md_path(source_path: str) -> Path | None:
