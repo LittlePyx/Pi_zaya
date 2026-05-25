@@ -482,6 +482,11 @@ def _label_matches_surface(label: str, surface: str) -> bool:
     hay = str(surface or "")
     if not needle or len(needle) < 3 or needle.lower().startswith("ref "):
         return False
+    needle_loose = _loose_ascii_text(needle)
+    for canonical, pattern in _DOMAIN_LABEL_PATTERNS:
+        if needle_loose and needle_loose == _loose_ascii_text(canonical):
+            if re.search(pattern, hay):
+                return True
     if _contains_cjk(needle):
         return needle in hay
     if not re.search(r"[A-Za-z0-9]", needle):
@@ -707,7 +712,7 @@ def build_reference_opportunities_prompt_block(
     lines = [
         "Upstream reference opportunities:",
         "- These are bibliography references explicitly attached to current-paper evidence.",
-        "- For ordinary concept, origin, prior-work, or method-background questions, place the exact cite_example inline next to the sentence that explains that upstream work.",
+        "- For ordinary synthesis, concept, origin, prior-work, or method-background questions, place the exact cite_example inline next to the sentence that uses or explains that upstream work.",
         "- Do not dump these as a separate bibliography list unless the user asks for a reading list.",
         "- If the answer does not discuss the listed concept, do not force the citation.",
     ]
@@ -812,6 +817,7 @@ def inject_reference_opportunity_citations_inline(
     prompt: str,
     opportunities: Sequence[Mapping[str, object]] | None,
     min_score: float = 6.0,
+    max_injections: int = 3,
 ) -> tuple[str, dict[str, object]]:
     """Place validated upstream reference markers on the nearest answer sentence."""
 
@@ -826,7 +832,14 @@ def inject_reference_opportunity_citations_inline(
         for m in _CITE_CANON_RE.finditer(text)
     }
     injected_refs: list[int] = []
+    try:
+        injection_limit = max(1, min(3, int(max_injections)))
+    except Exception:
+        injection_limit = 3
+    used_line_indexes: set[int] = set()
     for opp in rows:
+        if len(injected_refs) >= injection_limit:
+            break
         sid = str(opp.get("sid") or "").strip()
         ref_num = int(opp.get("ref_num") or 0)
         if not sid or ref_num <= 0 or (sid.lower(), ref_num) in existing:
@@ -837,6 +850,8 @@ def inject_reference_opportunity_citations_inline(
         best_idx = -1
         best_score = float("-inf")
         for idx, line in enumerate(lines):
+            if idx in used_line_indexes:
+                continue
             score = _line_score_for_opportunity(line=line, prompt=prompt, opp=opp)
             _, has_bare_marker = _replace_exact_bare_ref_marker(line, ref_num=ref_num, marker=marker)
             if has_bare_marker and score > best_bare_score:
@@ -854,12 +869,14 @@ def inject_reference_opportunity_citations_inline(
             if changed:
                 lines[best_bare_idx] = replaced
                 injected_refs.append(ref_num)
+                used_line_indexes.add(best_bare_idx)
                 existing.add((sid.lower(), ref_num))
                 continue
         if best_idx < 0 or best_score < float(min_score):
             continue
         lines[best_idx] = _insert_marker_before_terminal_punctuation(lines[best_idx], marker)
         injected_refs.append(ref_num)
+        used_line_indexes.add(best_idx)
         existing.add((sid.lower(), ref_num))
 
     if not injected_refs:
@@ -885,6 +902,7 @@ def apply_reference_opportunities_to_answer(
         text,
         prompt=prompt,
         opportunities=rows,
+        max_injections=3,
     )
     if inline_text != text:
         meta = dict(inline_meta)

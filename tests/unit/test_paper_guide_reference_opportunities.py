@@ -240,6 +240,22 @@ def test_reference_opportunities_do_not_attach_admm_to_admm_net_line() -> None:
     assert meta["injected_refs"] == [21]
 
 
+def test_reference_opportunities_do_not_stack_multiple_auto_markers_on_one_line() -> None:
+    answer, meta = inject_reference_opportunity_citations_inline(
+        "ADMM is prior optimization machinery rather than a new contribution.",
+        prompt="Where did ADMM come from?",
+        opportunities=[
+            {"sid": "s1234abcd", "ref_num": 4, "label": "ADMM"},
+            {"sid": "s1234abcd", "ref_num": 7, "label": "ADMM"},
+        ],
+    )
+
+    assert answer.count("[[CITE:") == 1
+    assert "[[CITE:s1234abcd:4]]" in answer
+    assert "[[CITE:s1234abcd:7]]" not in answer
+    assert meta["injected_refs"] == [4]
+
+
 def test_reference_opportunities_build_prompt_block_for_generation() -> None:
     block = build_reference_opportunities_prompt_block(
         [
@@ -285,6 +301,38 @@ def test_apply_reference_opportunities_suppresses_tail_for_broad_synthesis_quest
     assert meta["tail_used"] is False
     assert meta["tail_suppressed"] is True
     assert "[[CITE:" not in answer
+
+
+def test_apply_reference_opportunities_uses_inline_system_b_for_ordinary_matching_sentence() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        "\u6df1\u5ea6\u5b66\u4e60\u4e3a\u5355\u50cf\u7d20\u6210\u50cf\u5e26\u6765\u4e86\u66f4\u5feb\u7684\u91cd\u5efa\u901f\u5ea6\u3002\n"
+        "SPAD \u5355\u5149\u5b50\u6210\u50cf\u5219\u66f4\u5173\u5fc3\u566a\u58f0\u5efa\u6a21\u548c\u8d85\u5206\u8fa8\u91cd\u5efa\u3002",
+        prompt=(
+            "\u6df1\u5ea6\u5b66\u4e60\u7ed9\u5355\u50cf\u7d20\u6210\u50cf"
+            "\u5e26\u6765\u7684\u597d\u5904\u548c\u5751\u5206\u522b\u662f\u4ec0\u4e48\uff1f"
+        ),
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 1,
+                "label": "single-pixel imaging",
+                "evidence_quote": "Single-pixel imaging via deep learning improves reconstruction speed.",
+            },
+            {
+                "sid": "s1234abcd",
+                "ref_num": 22,
+                "label": "SPAD",
+                "evidence_quote": "SPAD noise is important for single-photon imaging.",
+            },
+        ],
+    )
+
+    assert "[[CITE:s1234abcd:1]]" in answer
+    assert "[[CITE:s1234abcd:22]]" in answer
+    assert answer.count("[[CITE:") == 2
+    assert meta["mode"] == "inline"
+    assert meta["injected_refs"] == [1, 22]
+    assert meta["tail_used"] is False
 
 
 def test_reference_opportunities_merge_candidate_refs_without_duplicates() -> None:
