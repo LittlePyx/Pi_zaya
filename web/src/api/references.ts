@@ -122,7 +122,7 @@ export const referencesApi = {
         meta,
       }),
     ),
-  citationCardPolishCached: (meta: Record<string, unknown>) => {
+  citationCardPolishCached: (meta: Record<string, unknown>, waitSeconds = 4) => {
     const key = stableStringify({
       anchor: meta.anchor,
       num: meta.num,
@@ -140,6 +140,7 @@ export const referencesApi = {
     if (cached) return cached
     const pending = api.post<Record<string, unknown>>('/api/references/citation-card-polish', {
       meta,
+      wait_s: waitSeconds,
     }).then((result) => {
       const status = String(result?.citation_card_polish_status || result?.citationCardPolishStatus || '').trim().toLowerCase()
       if (status === 'pending') citationCardPolishCache.delete(key)

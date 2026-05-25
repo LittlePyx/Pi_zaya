@@ -1611,6 +1611,7 @@ class BibliometricsBody(BaseModel):
 
 class CitationCardPolishBody(BaseModel):
     meta: dict
+    wait_s: float | None = None
 
 
 class ReaderDocBody(BaseModel):
@@ -1709,6 +1710,25 @@ def _schedule_citation_card_polish(key: str, detail: dict) -> bool:
         return False
 
 
+def _wait_for_citation_card_polish_cache(key: str, *, wait_s: float | None) -> dict | None:
+    key_text = str(key or "").strip()
+    if not key_text:
+        return None
+    try:
+        deadline = time.time() + max(0.0, min(8.0, float(wait_s or 0.0)))
+    except Exception:
+        deadline = time.time()
+    if deadline <= time.time():
+        return None
+    while time.time() < deadline:
+        with _CITATION_CARD_POLISH_LOCK:
+            cached = _CITATION_CARD_POLISH_CACHE.get(key_text)
+        if isinstance(cached, dict):
+            return dict(cached)
+        time.sleep(0.12)
+    return None
+
+
 @router.post("/citation-card-polish")
 def polish_citation_card(body: CitationCardPolishBody):
     detail = dict(body.meta or {}) if isinstance(body.meta, dict) else {}
@@ -1735,6 +1755,12 @@ def polish_citation_card(body: CitationCardPolishBody):
             "citation_card_polish_key": key,
         }
     started = False if warming else _schedule_citation_card_polish(key, detail)
+    waited = _wait_for_citation_card_polish_cache(key, wait_s=body.wait_s)
+    if isinstance(waited, dict):
+        waited["citation_card_polish_key"] = key
+        waited["citation_card_polish_cached"] = True
+        waited["citation_card_polish_waited"] = True
+        return waited
     return {
         "citation_card_polish_status": "pending",
         "citation_card_polish_source": "background_llm",

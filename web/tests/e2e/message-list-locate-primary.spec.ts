@@ -4,6 +4,16 @@ import {
   readerRegressionDocResponse,
 } from '../../src/testing/readerRegressionFixtures'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+})
+
 async function mockReaderDoc(page: Page) {
   await page.route('**/api/references/citation-meta', async (route) => {
     await route.fulfill({
@@ -305,6 +315,34 @@ test('system A citation popover shows source location, evidence quote, and opens
   await expect(payload).toContainText('"anchorId": "a-p-method-1"')
   await expect(payload).toContainText('"anchorKind": "sentence"')
   await expect(payload).toContainText('"strictLocate": true')
+})
+
+test('citation popover upgrades to waited LLM polish when it is ready', async ({ page }) => {
+  await mockReaderDoc(page)
+  let observedWaitSeconds = 0
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    const payload = route.request().postDataJSON() as { wait_s?: number } | undefined
+    observedWaitSeconds = Number(payload?.wait_s || 0)
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        citation_card_polish_status: 'full',
+        citation_card_polish_source: 'llm',
+        citation_card_polish_checked: true,
+        card_takeaway: 'LLM 润色后：这条证据说明多视角图像如何被压缩成可核对的重建依据。',
+      }),
+    })
+  })
+  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+
+  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM 润色后')
+  await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Given a set of input multi-view images')
+  expect(observedWaitSeconds).toBeGreaterThan(0)
 })
 
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {

@@ -4820,12 +4820,13 @@ export function MessageList({
   }
 
   const requestCitationCardPolish = (detail: CiteDetail, itemKey: string, attempt = 0) => {
-    referencesApi.citationCardPolishCached(detail as unknown as Record<string, unknown>)
+    const waitSeconds = attempt <= 1 ? 4 : 2
+    referencesApi.citationCardPolishCached(detail as unknown as Record<string, unknown>, waitSeconds)
       .then((meta) => {
         if (activePopoverRequestKeyRef.current !== itemKey) return
         const status = String(meta?.citation_card_polish_status || meta?.citationCardPolishStatus || '').trim().toLowerCase()
         if (status === 'pending') {
-          if (attempt >= 4) return
+          if (attempt >= 8) return
           if (citationPolishRetryTimerRef.current !== null) {
             window.clearTimeout(citationPolishRetryTimerRef.current)
           }
