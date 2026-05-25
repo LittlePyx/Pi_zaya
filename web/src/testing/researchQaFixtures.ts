@@ -285,7 +285,7 @@ function systemB(opts: ResearchSystemBOptions): Record<string, unknown> {
     cite_fmt: opts.raw,
     heading_path: opts.headingPath,
     location_label: opts.headingPath,
-    card_locator_label: '当前论文引用处',
+    card_locator_label: '引用出现位置',
     card_locator: opts.headingPath,
     evidence_quote: opts.context,
     citation_context: opts.context,

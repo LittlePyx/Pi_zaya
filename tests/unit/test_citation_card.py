@@ -434,7 +434,7 @@ def test_system_b_card_composer_suppresses_author_list_context() -> None:
     )
 
     assert detail["card_evidence"] == ""
-    assert detail["card_locator_label"] == "当前论文引用处"
+    assert detail["card_locator_label"] == "引用出现位置"
     assert "weak_citation_context" in detail["card_quality_flags"]
     assert "missing_citation_context" in detail["card_quality_flags"]
 
@@ -506,7 +506,7 @@ def test_system_b_card_composer_keeps_upstream_reference_entry_separate() -> Non
     )
 
     assert detail["card_evidence"] == ""
-    assert detail["card_evidence_label"] == "当前论文引用语境"
+    assert detail["card_evidence_label"] == "引用语境"
     assert detail["card_reference_label"] == "上游文献条目"
     assert "The missing cone problem" in detail["card_reference_entry"]
     assert "reference_entry_only" in detail["card_quality_flags"]

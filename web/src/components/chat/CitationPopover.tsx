@@ -165,7 +165,7 @@ export function CitationPopover({
   const inlineLabel = citationInlineLabel(detail)
   const canOpenReader = Boolean(compact(detail.sourcePath))
   const isSystemB = Boolean(detail.isInpaper)
-  const kindLabel = isSystemB ? '原文引用' : '答案依据'
+  const kindLabel = isSystemB ? '上游引用' : '答案依据'
   const displayNums = Array.from(new Set([
     ...(Array.isArray(detail.linkedNums) ? detail.linkedNums : []),
     detail.num,
@@ -227,7 +227,7 @@ export function CitationPopover({
   )
   const systemBCitationContextText = systemBCardEvidenceText
     || ((!suppressRawSystemBContextFallback && !systemBRawContextIsLowValue) ? systemBRawContextCandidate : '')
-  const systemBCitationContextLabel = cardEvidenceLabel || '当前论文引用语境'
+  const systemBCitationContextLabel = cardEvidenceLabel || '引用语境'
   const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
     ? cardTakeaway
     : ''
@@ -292,12 +292,12 @@ export function CitationPopover({
     detail.sourceName,
     display.source,
   ])
-  const systemBLocationLabel = systemBLocationIsPaperOnly ? '当前论文' : '当前论文引用处'
+  const systemBLocationLabel = systemBLocationIsPaperOnly ? '引用所在论文' : '引用出现位置'
   const systemBLocationText = systemBLocationIsPaperOnly
     ? (sourcePaperText || rawSystemBLocationText)
     : rawSystemBLocationText
   const systemBLocationHint = systemBLocationIsPaperOnly
-    ? '只定位到引用发生的论文，尚未定位到具体章节或页码；可打开引用语境核对。'
+    ? '只定位到引用出现的论文，尚未定位到具体章节或页码；可打开引用语境核对。'
     : ''
   const showSystemBLocation = Boolean(systemBLocationText)
   const systemBSupportText = isSystemB
@@ -314,12 +314,18 @@ export function CitationPopover({
       || cardWarning
     ),
   )
+  const hasSystemBHeaderIdentity = Boolean(
+    (systemBTitle && systemBTitle !== '上游参考文献')
+    || headerSubtitle
+    || doiLabel
+    || metrics.length > 0
+  )
   const showSystemBReference = Boolean(
     systemBReferenceText
     && (
       systemBTitleMissing
       || cardQualityFlags.includes('missing_reference_title')
-      || cardQualityFlags.includes('reference_entry_only')
+      || (cardQualityFlags.includes('reference_entry_only') && !hasSystemBHeaderIdentity)
     ),
   )
   const metaRows = [

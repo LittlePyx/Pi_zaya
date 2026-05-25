@@ -332,6 +332,7 @@ const renderPacketContractMessages: Message[] = [
               summary_line: 'The answer points to this paper as the upstream source for single-shot compressive spectral imaging.',
               summary_source: 'answer_context',
               why_line: 'This reference is the cited prior work to open when tracing the concept behind the answer.',
+              card_quality_flags: ['reference_entry_only'],
             },
           ],
           locate_target: {

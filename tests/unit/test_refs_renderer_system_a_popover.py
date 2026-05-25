@@ -195,7 +195,7 @@ def test_system_a_reuses_repeated_same_number_for_same_evidence() -> None:
     )
 
     anchors = re.findall(r"\[1\]\(#([^) \"\n]+)", rendered)
-    assert len(anchors) == 2
+    assert len(anchors) == 1
     assert len(set(anchors)) == 1
     assert len(details) == 1
     assert "occurrence_specific_claim" not in details[0]["card_quality_flags"]

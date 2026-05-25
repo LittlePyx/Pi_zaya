@@ -264,14 +264,14 @@ def build_system_b_evidence_pack(
         score_delta -= 0.06
         if reference_entry:
             flags.append("reference_entry_only")
-            support = "暂未拿到上游论文正文；这张卡展示的是当前论文中的引用位置和参考文献条目。"
+            support = "暂未拿到上游论文正文；这张卡展示的是引用出现位置和参考文献条目。"
 
-    evidence_label = "回答里的线索" if answer_context_only else "当前论文引用语境"
+    evidence_label = "回答里的线索" if answer_context_only else "引用语境"
     warning = ""
     if answer_context_only:
         warning = "目前只有回答线索或参考条目，完整引用语境仍建议打开原文核对。"
     elif not context and reference_entry:
-        warning = "目前没有上游论文正文证据，只能先依据当前论文引用处和参考文献条目判断来源。"
+        warning = "目前没有上游论文正文证据，只能先依据引用出现位置和参考文献条目判断来源。"
     elif weak_context:
         warning = "当前自动抽取的引用语境质量较弱，已隐藏低价值片段；建议打开原文核对。"
 
@@ -282,7 +282,7 @@ def build_system_b_evidence_pack(
         evidence_label=evidence_label,
         support_explanation=support,
         location_label=clean_display_text(location_label, max_len=260),
-        location_label_name="当前论文引用处",
+        location_label_name="引用出现位置",
         reference_entry=reference_entry,
         reference_label="上游文献条目",
         warning=warning,

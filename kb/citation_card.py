@@ -766,7 +766,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         score -= 0.08
     score = max(0.0, min(1.0, score))
 
-    evidence_label = pack.evidence_label or "当前论文引用语境"
+    evidence_label = pack.evidence_label or "引用语境"
     warning = pack.warning
     if not warning and score < 0.58:
         warning = "这条上游参考信息不完整，建议打开引用语境确认。"
@@ -779,7 +779,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         "card_takeaway": takeaway,
         "card_claim_label": "答案里的这句话",
         "card_claim": claim,
-        "card_locator_label": pack.location_label_name or "当前论文引用处",
+        "card_locator_label": pack.location_label_name or "引用出现位置",
         "card_locator": pack.location_label or locator,
         "card_evidence_label": evidence_label,
         "card_evidence": context,

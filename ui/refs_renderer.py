@@ -3827,6 +3827,7 @@ def _annotate_inpaper_citations_with_hover_meta(
     detail_by_key: dict[str, dict] = {}
     system_a_detail_by_fingerprint: dict[str, dict] = {}
     visible_detail_anchors: set[str] = set()
+    visible_system_a_evidence_keys: set[str] = set()
     plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
 
     def _plan_budget(system_name: str, default: int) -> int:
@@ -3979,9 +3980,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                 return True
             if key in used_system_a_keys:
                 return False
+            if key in visible_system_a_evidence_keys:
+                return False
             if used_system_a_count >= system_a_budget:
                 return False
             used_system_a_keys.add(key)
+            visible_system_a_evidence_keys.add(key)
             used_system_a_count += 1
             if anchor:
                 visible_detail_anchors.add(anchor)
