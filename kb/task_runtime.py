@@ -4059,8 +4059,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         _trace_section(
             "citation_systems",
             {
-                "system_b_validated": bool((ref_opps_quality or {}).get("enabled") or (ref_opps_quality or {}).get("count")),
-                "system_b_validated_count": int((ref_opps_quality or {}).get("count") or len(paper_guide_reference_opportunities or [])),
+                "system_b_validated": bool((ref_opps_quality or {}).get("rendered_count")),
+                "system_b_validated_count": int((ref_opps_quality or {}).get("rendered_count") or 0),
+                "system_b_available_count": int((ref_opps_quality or {}).get("count") or len(paper_guide_reference_opportunities or [])),
                 "citation_validation_status": str((validation_quality or {}).get("status") or (citation_validation or {}).get("status") or ""),
                 "citation_validation_changed": bool((validation_quality or {}).get("changed") or (citation_validation or {}).get("changed")),
             },

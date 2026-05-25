@@ -101,6 +101,19 @@ def test_detect_text_reference_opportunities_for_normal_question(monkeypatch) ->
     from kb import paper_guide_reference_opportunities as mod
 
     monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+    monkeypatch.setattr(
+        mod,
+        "load_paper_guide_reference_index",
+        lambda _source_path: [
+            {
+                "ref_num": 4,
+                "title": "Distributed optimization and statistical learning via the alternating direction method of multipliers",
+                "text": "Distributed optimization and statistical learning via the alternating direction method of multipliers.",
+                "first_citation_context": "Most existing methods employ alternating direction method of multipliers (ADMM) [4].",
+                "first_citation_location": "SCINeRF / 2. Related Work",
+            }
+        ],
+    )
 
     def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
         del _index, source_path, source_sha1
@@ -140,6 +153,19 @@ def test_detect_text_reference_opportunities_for_ordinary_reading_route(monkeypa
     from kb import paper_guide_reference_opportunities as mod
 
     monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+    monkeypatch.setattr(
+        mod,
+        "load_paper_guide_reference_index",
+        lambda _source_path: [
+            {
+                "ref_num": 4,
+                "title": "Single-pixel imaging via compressive sampling",
+                "text": "Duarte et al. Single-pixel imaging via compressive sampling.",
+                "first_citation_context": "Single-pixel imaging via compressive sampling [4] is a foundational reading point.",
+                "first_citation_location": "Principles",
+            }
+        ],
+    )
 
     def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
         del _index, source_path, source_sha1
@@ -179,6 +205,19 @@ def test_detect_text_reference_opportunities_keeps_common_spad_label_for_reading
     from kb import paper_guide_reference_opportunities as mod
 
     monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+    monkeypatch.setattr(
+        mod,
+        "load_paper_guide_reference_index",
+        lambda _source_path: [
+            {
+                "ref_num": 6,
+                "title": "Confocal-based fluorescence fluctuation spectroscopy with a SPAD array detector",
+                "text": "Confocal-based fluorescence lifetime spectroscopy with a SPAD array detector.",
+                "first_citation_context": "The method models SPAD arrays and detector noise using prior SPAD work [6].",
+                "first_citation_location": "Figure 1",
+            }
+        ],
+    )
 
     def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
         del _index, source_path, source_sha1

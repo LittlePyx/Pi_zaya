@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from kb.inpaper_citation_grounding import parse_ref_num_set
+from kb.paper_guide_structured_index_runtime import load_paper_guide_reference_index
 from kb.paper_guide_shared import _cite_source_id
 from kb.reference_index import load_reference_index, resolve_reference_entry
 from kb.source_blocks import normalize_inline_markdown
@@ -244,6 +245,48 @@ def _explicit_ref_nums_from_record(record: Mapping[str, object], *, text: str) -
     return out[:6]
 
 
+def _explicit_ref_contexts_from_text(text: str, *, max_contexts: int = 12) -> list[tuple[int, str]]:
+    src = str(text or "")
+    if not src.strip():
+        return []
+    out: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+    for match in _INLINE_REF_RE.finditer(src):
+        start = max(0, int(match.start()) - 220)
+        end = min(len(src), int(match.end()) + 220)
+        context = _compact_text(src[start:end], max_len=360)
+        if not context:
+            continue
+        for ref_num in parse_ref_num_set(str(match.group(1) or ""), max_items=16):
+            try:
+                n = int(ref_num)
+            except Exception:
+                continue
+            if n <= 0:
+                continue
+            key = (n, context)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((n, context))
+            if len(out) >= max(1, int(max_contexts)):
+                return out
+    return out
+
+
+def _source_body_text(source_path: str, *, max_chars: int = 1_200_000) -> str:
+    path = Path(str(source_path or "")).expanduser()
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
+    if not text:
+        return ""
+    text = text[: max(1, int(max_chars))]
+    parts = re.split(r"(?im)^\s*#{1,6}\s+(?:references|bibliography)\b", text, maxsplit=1)
+    return str(parts[0] if parts else text)
+
+
 def _ref_nums_from_record(record: Mapping[str, object], *, text: str) -> list[int]:
     out: list[int] = []
     for key in ("resolved_ref_num", "ref_num", "reference_number"):
@@ -325,6 +368,22 @@ def _reference_surface_for_match(ref: Mapping[str, object]) -> tuple[str, str]:
     authors = str(ref.get("authors") or "")
     venue = str(ref.get("venue") or "")
     return title, " ".join([title, raw, authors, venue])
+
+
+def _structured_ref_to_ref(row: Mapping[str, object]) -> dict[str, object]:
+    ref: dict[str, object] = {}
+    for src_key, dst_key in (
+        ("title", "title"),
+        ("text", "raw"),
+        ("authors", "authors"),
+        ("venue", "venue"),
+        ("year", "year"),
+        ("doi", "doi"),
+    ):
+        value = str(row.get(src_key) or "").strip()
+        if value:
+            ref[dst_key] = value
+    return ref
 
 
 def _loose_ascii_words(text: str) -> list[str]:
@@ -459,30 +518,38 @@ def detect_text_reference_opportunities(
     db_dir: str | Path | None = None,
     max_items: int = 3,
 ) -> list[dict[str, object]]:
-    """Find upstream bibliography refs for ordinary library Q&A.
+    """Find grounded upstream refs for ordinary library Q&A.
 
-    This is the non-paper-guide counterpart to support-slot opportunities:
-    when the user's question names a method/concept and asks whether it is
-    new, borrowed, prior work, or background, scan the references of retrieved
-    source papers for that method/concept and expose a validated System B
-    candidate. The final answer still has to discuss the matching label before
-    a marker is injected.
+    Ordinary Q&A does not have paper-guide support slots, so use each source
+    paper's structured reference index instead.  A candidate is trusted only
+    when that index contains a citation context from the current paper body
+    and the context explicitly contains the same "[n]" marker.
     """
 
     prompt_text = str(prompt or "").strip()
     if not prompt_text:
         return []
-    if not (_UPSTREAM_INTENT_RE.search(prompt_text) or _RESEARCH_READING_TRACE_RE.search(prompt_text)):
+    answer_text = str(answer or "").strip()
+    focus_surface = f"{prompt_text}\n{answer_text}"
+    focus_tokens = _tokens(focus_surface)
+    if not focus_tokens:
         return []
-    labels = _candidate_labels_from_text(prompt=prompt_text, answer=answer, max_labels=5)
-    if not labels:
-        return []
+    prompt_labels = _candidate_labels_from_text(prompt=prompt_text, answer="", max_labels=6)
+    labels = _candidate_labels_from_text(prompt=prompt_text, answer=answer_text, max_labels=6)
+    explicit_upstream_intent = bool(_UPSTREAM_INTENT_RE.search(prompt_text))
+    strong_trace_intent = bool(
+        explicit_upstream_intent
+        or _RESEARCH_READING_TRACE_RE.search(prompt_text)
+        or re.search(
+            r"(?i)\b(?:lineage|roadmap|background|prior\s+work|from\s+.+\s+to)\b|"
+            r"(?:\u4e3b\u7ebf|\u8109\u7edc|\u8def\u7ebf|\u4e0a\u6e38|\u524d\u4eba|\u4ece.+\u5230)",
+            prompt_text,
+        )
+    )
     try:
         index_data = load_reference_index(Path(db_dir).expanduser()) if db_dir else {}
     except Exception:
         index_data = {}
-    if not isinstance(index_data, Mapping) or not index_data:
-        return []
 
     rows: list[tuple[float, dict[str, object]]] = []
     seen_source: set[str] = set()
@@ -498,39 +565,148 @@ def detect_text_reference_opportunities(
         if not sid:
             continue
         meta = hit.get("meta") if isinstance(hit.get("meta"), Mapping) else {}
-        heading = _compact_text(
-            str((meta or {}).get("ref_best_heading_path") or (meta or {}).get("heading_path") or ""),
-            max_len=120,
+        source_sha1 = _hit_source_sha1(hit)
+        hit_surface = " ".join(
+            [
+                str(hit.get("text") or ""),
+                " ".join(str(x or "") for x in list((meta or {}).get("ref_show_snippets") or [])[:2]),
+                " ".join(str(x or "") for x in list((meta or {}).get("ref_snippets") or [])[:2]),
+            ]
         )
-        evidence = _compact_text(
-            str((((meta or {}).get("ref_show_snippets") or [None])[0]) or hit.get("text") or ""),
-            max_len=240,
-        )
-        for label in labels:
-            ref_num, ref = _find_reference_num_for_label(
-                index_data=index_data,
-                source_path=source_path,
-                source_sha1=source_sha1,
-                label=label,
-            )
-            if ref_num <= 0:
-                continue
+
+        def _push_context_candidate(
+            *,
+            ref_num: int,
+            context: str,
+            heading: str = "",
+            seed_ref: Mapping[str, object] | None = None,
+            score_bonus: float = 0.0,
+        ) -> None:
+            try:
+                n = int(ref_num or 0)
+            except Exception:
+                n = 0
+            if n <= 0:
+                return
+            context_text = _compact_text(str(context or "").strip(), max_len=360)
+            if not context_text or n not in _inline_ref_nums_from_text(context_text):
+                return
+            ref = dict(seed_ref or {})
+            try:
+                resolved = resolve_reference_entry(
+                    dict(index_data or {}),
+                    source_path,
+                    n,
+                    source_sha1=source_sha1,
+                )
+            except Exception:
+                resolved = None
+            if isinstance(resolved, Mapping) and isinstance(resolved.get("ref"), Mapping):
+                ref.update({k: v for k, v in dict(resolved.get("ref") or {}).items() if v})
             title, surface = _reference_surface_for_match(ref)
-            score = 12.0 - (0.25 * float(hit_index)) + _score_reference_label_match(label, ref)
+            label = _label_for_opportunity(prompt=prompt_text, text=context_text, ref_num=n)
+            active_labels = list(prompt_labels if (explicit_upstream_intent and prompt_labels) else labels)
+            if explicit_upstream_intent and prompt_labels:
+                explicit_match = False
+                for candidate in prompt_labels:
+                    cand = str(candidate or "").strip()
+                    if not cand:
+                        continue
+                    try:
+                        cand_score = float(_score_reference_label_match(cand, ref))
+                    except Exception:
+                        cand_score = float("-inf")
+                    if cand_score >= 7.0 or _label_matches_surface(cand, label):
+                        explicit_match = True
+                        break
+                if not explicit_match:
+                    return
+            best_focus_label = ""
+            best_focus_score = float("-inf")
+            for candidate in active_labels:
+                cand = str(candidate or "").strip()
+                if not cand or not _label_matches_surface(cand, focus_surface):
+                    continue
+                try:
+                    cand_score = float(_score_reference_label_match(cand, ref))
+                except Exception:
+                    cand_score = float("-inf")
+                if cand_score > best_focus_score:
+                    best_focus_score = cand_score
+                    best_focus_label = cand
+            if best_focus_label and best_focus_score >= 7.0:
+                label = best_focus_label
+            combined = f"{context_text}\n{title}\n{surface}"
+            combined_tokens = _tokens(combined)
+            shared_focus = focus_tokens.intersection(combined_tokens)
+            label_matches_prompt = _label_matches_surface(label, prompt_text)
+            label_matches = bool(
+                label_matches_prompt
+                or _label_matches_surface(label, answer_text)
+                or any(_label_matches_surface(candidate, combined) for candidate in active_labels)
+            )
+            if len(shared_focus) < 2 and not label_matches:
+                return
+            if not strong_trace_intent and len(shared_focus) < 3 and not label_matches:
+                return
+            hit_overlap = len(_tokens(hit_surface).intersection(combined_tokens))
+            score = (
+                8.0
+                - (0.25 * float(hit_index))
+                + min(8.0, 1.1 * float(len(shared_focus)))
+                + min(3.0, 0.6 * float(hit_overlap))
+                + (4.0 if label_matches_prompt else 0.0)
+                + (2.0 if strong_trace_intent else 0.0)
+                + (2.0 if label_matches else 0.0)
+                + float(score_bonus)
+            )
             rows.append(
                 (
                     score,
                     {
                         "source_path": source_path,
                         "sid": sid,
-                        "ref_num": int(ref_num),
+                        "ref_num": int(n),
                         "label": label,
-                        "heading_path": heading,
-                        "evidence_quote": evidence or _compact_text(surface, max_len=240),
-                        "why_line": "The retrieved paper's bibliography contains the upstream work named in this question.",
+                        "heading_path": _compact_text(heading, max_len=160),
+                        "evidence_quote": context_text,
+                        "why_line": "The retrieved source paper explicitly cites this upstream work in the cited context.",
                         "ref_title": _compact_text(title, max_len=160),
                     },
                 )
+            )
+
+        heading_hint = str((meta or {}).get("ref_best_heading_path") or (meta or {}).get("heading_path") or "")
+        for n, context in _explicit_ref_contexts_from_text(hit_surface, max_contexts=14):
+            _push_context_candidate(ref_num=n, context=context, heading=heading_hint, score_bonus=1.0)
+
+        if explicit_upstream_intent and prompt_labels:
+            body_text = _source_body_text(source_path)
+            for n, context in _explicit_ref_contexts_from_text(body_text, max_contexts=32):
+                _push_context_candidate(ref_num=n, context=context, heading=heading_hint, score_bonus=2.5)
+
+        try:
+            reference_rows = load_paper_guide_reference_index(source_path)
+        except Exception:
+            reference_rows = []
+        for raw in list(reference_rows or []):
+            if not isinstance(raw, Mapping):
+                continue
+            try:
+                ref_num = int(raw.get("ref_num") or 0)
+            except Exception:
+                ref_num = 0
+            if ref_num <= 0:
+                continue
+            context = _compact_text(str(raw.get("first_citation_context") or "").strip(), max_len=300)
+            if not context or int(ref_num) not in _inline_ref_nums_from_text(context):
+                continue
+            heading = _compact_text(str(raw.get("first_citation_location") or ""), max_len=160)
+            _push_context_candidate(
+                ref_num=ref_num,
+                context=context,
+                heading=heading,
+                seed_ref=_structured_ref_to_ref(raw),
             )
 
     rows.sort(key=lambda item: item[0], reverse=True)
@@ -623,6 +799,9 @@ def _label_for_opportunity(*, prompt: str, text: str, ref_num: int) -> str:
     local_ref = re.search(rf"\[\s*{int(ref_num)}\s*\]", str(text or ""))
     if local_ref:
         before = str(text or "")[max(0, local_ref.start() - 100) : local_ref.start()]
+        for label, pattern in _DOMAIN_LABEL_PATTERNS:
+            if re.search(pattern, before):
+                return label
         local_entities = [
             item
             for item in _ENTITY_RE.findall(before)

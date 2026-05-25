@@ -28,6 +28,7 @@ from kb.paper_guide_answer_repair import repair_template_only_paper_guide_answer
 from kb.paper_guide_reference_opportunities import (
     apply_reference_opportunities_to_answer,
     detect_paper_guide_reference_opportunities,
+    detect_text_reference_opportunities,
     merge_reference_opportunity_candidate_refs,
     strip_reference_opportunity_note,
 )
@@ -2704,6 +2705,14 @@ def _finalize_generation_answer(
             cards=list(paper_guide_evidence_cards or []),
             max_items=3,
         )
+    else:
+        paper_guide_reference_opportunities = detect_text_reference_opportunities(
+            prompt=prompt_for_user or prompt,
+            answer=answer,
+            answer_hits=answer_hits,
+            db_dir=db_dir,
+            max_items=3,
+        )
     if paper_guide_reference_opportunities:
         answer, paper_guide_reference_apply_meta = apply_reference_opportunities_to_answer(
             answer,
@@ -2838,15 +2847,27 @@ def _finalize_generation_answer(
         if refs_for_notice:
             retrieval_confidence["candidate_refs_for_notice"] = list(refs_for_notice)
     if paper_guide_reference_opportunities:
+        opportunity_refs = [
+            int(item.get("ref_num") or 0)
+            for item in paper_guide_reference_opportunities
+            if isinstance(item, dict) and int(item.get("ref_num") or 0) > 0
+        ]
+        opportunity_ref_set = set(opportunity_refs)
+        rendered_refs: list[int] = []
+        for match in _CITE_CANON_RE.finditer(str(answer or "")):
+            try:
+                n = int(match.group(2) or 0)
+            except Exception:
+                n = 0
+            if n > 0 and n in opportunity_ref_set and n not in rendered_refs:
+                rendered_refs.append(n)
         answer_quality["reference_opportunities"] = {
             "count": int(len(paper_guide_reference_opportunities)),
+            "rendered_count": int(len(rendered_refs)),
             "mode": str(paper_guide_reference_apply_meta.get("mode") or "none"),
             "injected_refs": list(paper_guide_reference_apply_meta.get("injected_refs") or []),
-            "refs": [
-                int(item.get("ref_num") or 0)
-                for item in paper_guide_reference_opportunities
-                if isinstance(item, dict) and int(item.get("ref_num") or 0) > 0
-            ],
+            "rendered_refs": list(rendered_refs),
+            "refs": opportunity_refs,
         }
     if dict(citation_validation or {}).get("raw_count"):
         answer_quality["citation_validation"] = dict(citation_validation or {})
