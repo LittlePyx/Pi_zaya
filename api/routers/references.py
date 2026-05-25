@@ -80,6 +80,59 @@ def _project_root() -> Path:
     return Path(s.db_dir).expanduser().resolve().parent
 
 
+def _refs_payload_has_primary_evidence(payload: dict | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for pack in payload.values():
+        if not isinstance(pack, dict):
+            continue
+        for hit in list(pack.get("hits") or []):
+            if not isinstance(hit, dict):
+                continue
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            primary = ui_meta.get("primary_evidence")
+            if isinstance(primary, dict) and primary:
+                return True
+            reader_open = ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {}
+            for key in ("primaryEvidence", "primary_evidence", "locateTarget", "locate_target"):
+                if isinstance(reader_open.get(key), dict) and reader_open.get(key):
+                    return True
+    return False
+
+
+def _sync_message_render_packets_with_refs_payload(*, store, conv_id: str, payload: dict | None, mode: str) -> None:
+    mode_s = str(mode or "").strip().lower()
+    if mode_s in {"pending", "cache_pending"}:
+        return
+    if not _refs_payload_has_primary_evidence(payload):
+        return
+    refs_by_user: dict[int, dict] = {}
+    for key, pack in (payload or {}).items():
+        if not isinstance(pack, dict):
+            continue
+        try:
+            user_msg_id = int(key)
+        except Exception:
+            continue
+        if user_msg_id > 0:
+            refs_by_user[user_msg_id] = pack
+    if not refs_by_user:
+        return
+    try:
+        from api.chat_render import enrich_messages_with_reference_render
+
+        messages = store.get_messages(conv_id)
+        enrich_messages_with_reference_render(
+            messages,
+            refs_by_user,
+            conv_id=conv_id,
+            chat_store=store,
+            render_packet_only=True,
+        )
+    except Exception:
+        return
+
+
 def _reference_asset_roots() -> list[Path]:
     roots: list[Path] = []
     for raw in (_md_dir(), _project_root() / "tmp"):
@@ -1251,6 +1304,15 @@ def get_conversation_refs(conv_id: str, response: Response | None = None):
 
     def _finish(payload: dict | None, mode: str) -> dict:
         payload_out = payload if isinstance(payload, dict) else {}
+        try:
+            _sync_message_render_packets_with_refs_payload(
+                store=store,
+                conv_id=conv_id,
+                payload=payload_out,
+                mode=mode,
+            )
+        except Exception:
+            pass
         _set_refs_timing_headers(
             response,
             timings=timings,

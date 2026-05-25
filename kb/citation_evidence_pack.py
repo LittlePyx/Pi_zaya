@@ -18,6 +18,7 @@ _LOW_VALUE_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _REFERENCE_MARKER_RE = re.compile(r"\[\s*\d{1,4}(?:\s*[-,;]\s*\d{1,4})*\s*\]")
+_DOC_FRONT_RE = re.compile(r"^\s{0,3}#\s+.+?\n.{0,420}?\b(?:abstract|single[-\s]?pixel|deep learning|this paper|in this review)\b", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,53 @@ def _reference_entry(value: Any, *, max_len: int = 900) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _meaningful_token_set(value: str) -> set[str]:
+    stop = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+        "that",
+        "paper",
+        "study",
+        "work",
+        "section",
+        "introduction",
+        "abstract",
+        "method",
+        "methods",
+    }
+    return {token for token in _tokens(value) if len(token) >= 3 and token not in stop}
+
+
+def _sanitize_location_label_for_evidence(*, location_label: str, evidence_raw: Any, evidence: str, claim: str) -> str:
+    loc = clean_display_text(location_label, max_len=260)
+    if not loc:
+        return ""
+    raw = str(evidence_raw or "").strip()
+    if raw and _DOC_FRONT_RE.search(raw) and not re.search(r"\b(?:abstract|introduction)\b", loc, re.IGNORECASE):
+        return "Abstract"
+
+    parts = [part.strip() for part in re.split(r"\s*/\s*", loc) if part.strip()]
+    if len(parts) < 2:
+        return loc
+    leaf = parts[-1]
+    leaf_tokens = _meaningful_token_set(leaf)
+    if not leaf_tokens:
+        return loc
+    context_tokens = _meaningful_token_set(f"{evidence} {claim}")
+    if not context_tokens:
+        return loc
+    leaf_overlap = len(leaf_tokens & context_tokens)
+    parent_tokens = _meaningful_token_set(" / ".join(parts[:-1]))
+    parent_overlap = len(parent_tokens & context_tokens)
+    if leaf_overlap == 0 and parent_overlap >= 2:
+        return " / ".join(parts[:-1])
+    return loc
+
+
 def _claim_support_sentence(*, claim: str, evidence: str, route: str) -> str:
     if not claim or not evidence:
         return ""
@@ -146,6 +194,12 @@ def build_system_a_evidence_pack(
     support = clean_display_text(support_hint, max_len=420)
     if not support:
         support = _claim_support_sentence(claim=claim, evidence=evidence, route="system_a")
+    safe_location = _sanitize_location_label_for_evidence(
+        location_label=location_label,
+        evidence_raw=evidence_raw,
+        evidence=evidence,
+        claim=claim,
+    )
     return CitationEvidencePack(
         route="system_a",
         answer_claim=claim,
@@ -153,7 +207,7 @@ def build_system_a_evidence_pack(
         evidence_label="原文证据",
         evidence_focus=_evidence_focus(claim=claim, evidence=evidence, route="system_a"),
         support_explanation=support,
-        location_label=clean_display_text(location_label, max_len=260),
+        location_label=safe_location,
         location_label_name="原文位置",
         flags=tuple(flags),
         score_delta=score_delta,

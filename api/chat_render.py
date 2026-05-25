@@ -73,7 +73,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
-_RENDER_CACHE_SCHEMA_VERSION = 9
+_RENDER_CACHE_SCHEMA_VERSION = 10
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -263,6 +263,130 @@ def _merge_render_packet_primary_evidence(
     return base
 
 
+def _primary_evidence_text(raw: dict | None) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    return str(
+        raw.get("highlight_snippet")
+        or raw.get("highlightSnippet")
+        or raw.get("snippet")
+        or ""
+    ).strip()
+
+
+def _primary_evidence_from_ref_hit(hit: dict | None) -> dict:
+    if not isinstance(hit, dict):
+        return {}
+    ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+    direct = ui_meta.get("primary_evidence")
+    if isinstance(direct, dict) and _primary_evidence_text(direct):
+        return dict(direct)
+    reader_open = ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {}
+    for key in ("primaryEvidence", "primary_evidence", "locateTarget", "locate_target"):
+        nested = reader_open.get(key)
+        if isinstance(nested, dict) and _primary_evidence_text(nested):
+            return dict(nested)
+    if _primary_evidence_text(reader_open):
+        return dict(reader_open)
+    return {}
+
+
+def _ref_pack_primary_evidence_by_source(ref_pack: dict | None) -> dict[str, dict]:
+    if not isinstance(ref_pack, dict):
+        return {}
+    out: dict[str, dict] = {}
+    candidate_hits: list[dict] = []
+    candidate_hits.extend([item for item in list(ref_pack.get("hits") or []) if isinstance(item, dict)])
+    candidate_hits.extend([item for item in list(ref_pack.get("enriched_hits") or []) if isinstance(item, dict)])
+    for hit in candidate_hits:
+        if not isinstance(hit, dict):
+            continue
+        primary = _primary_evidence_from_ref_hit(hit)
+        if not primary:
+            continue
+        source_key = (
+            _render_primary_source_identity(hit.get("meta") if isinstance(hit.get("meta"), dict) else {})
+            or _render_primary_source_identity(hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {})
+            or _render_primary_source_identity(primary)
+        )
+        if not source_key:
+            continue
+        current = out.get(source_key)
+        if current and _primary_evidence_precision_score(current) >= _primary_evidence_precision_score(primary):
+            continue
+        out[source_key] = primary
+    return out
+
+
+def _system_a_detail_needs_ref_primary_backfill(detail: dict) -> bool:
+    if bool(detail.get("is_inpaper")):
+        return False
+    if str(detail.get("citation_route") or "").strip().lower() == "system_b":
+        return False
+    flags = {str(item or "").strip().lower() for item in list(detail.get("card_quality_flags") or [])}
+    if flags & {"evidence_quote_filtered", "missing_evidence_quote", "missing_precise_location"}:
+        return True
+    if not str(detail.get("block_id") or detail.get("anchor_id") or "").strip():
+        return True
+    evidence = str(
+        detail.get("card_evidence")
+        or detail.get("evidence_quote")
+        or detail.get("summary_line")
+        or detail.get("raw")
+        or ""
+    ).strip()
+    if not evidence:
+        return True
+    if re.match(r"^\s*#{1,6}\s+", evidence):
+        return True
+    if re.search(r"\$\^\{|\bdagger\b|\\dagger|\*[, ]", evidence[:360], re.IGNORECASE):
+        return True
+    return False
+
+
+def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_pack: dict | None) -> list[dict]:
+    if not cite_details or not isinstance(ref_pack, dict):
+        return cite_details
+    primary_by_source = _ref_pack_primary_evidence_by_source(ref_pack)
+    if not primary_by_source:
+        return cite_details
+    out: list[dict] = []
+    for raw in cite_details:
+        detail = dict(raw or {}) if isinstance(raw, dict) else {}
+        if not detail or not _system_a_detail_needs_ref_primary_backfill(detail):
+            out.append(detail)
+            continue
+        source_key = _render_primary_source_identity(detail)
+        primary = primary_by_source.get(source_key) if source_key else None
+        snippet = _primary_evidence_text(primary if isinstance(primary, dict) else {})
+        if not isinstance(primary, dict) or not snippet:
+            out.append(detail)
+            continue
+        heading = str(primary.get("heading_path") or primary.get("headingPath") or "").strip()
+        block_id = str(primary.get("block_id") or primary.get("blockId") or "").strip()
+        anchor_id = str(primary.get("anchor_id") or primary.get("anchorId") or "").strip()
+        anchor_kind = str(primary.get("anchor_kind") or primary.get("anchorKind") or detail.get("anchor_kind") or "").strip()
+        detail["heading_path"] = heading or str(detail.get("heading_path") or "").strip()
+        detail["title"] = detail["heading_path"] or str(detail.get("title") or "").strip()
+        detail["summary_line"] = snippet
+        detail["evidence_quote"] = snippet
+        detail["raw"] = snippet
+        detail["evidence_source"] = "reference_primary_evidence"
+        detail["summary_source"] = "reference_primary_evidence"
+        detail["block_id"] = block_id or str(detail.get("block_id") or "").strip()
+        detail["anchor_id"] = anchor_id or str(detail.get("anchor_id") or "").strip()
+        detail["anchor_kind"] = anchor_kind
+        location_bits: list[str] = []
+        if detail.get("heading_path"):
+            location_bits.append(str(detail.get("heading_path") or "").strip())
+        if detail.get("anchor_kind"):
+            location_bits.append(str(detail.get("anchor_kind") or "").strip())
+        if location_bits:
+            detail["location_label"] = " · ".join(part for part in location_bits if part)
+        out.append(compose_citation_card(detail))
+    return out
+
+
 def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
     if not isinstance(raw_pack, dict):
         return {}
@@ -277,6 +401,8 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
         merged["hits"] = pack["hits"]
     if pack.get("scores") not in (None, "", [], {}):
         merged["scores"] = pack["scores"]
+    if rendered_payload.get("hits") not in (None, "", [], {}):
+        merged["enriched_hits"] = rendered_payload["hits"]
     for key in (
         "user_msg_id",
         "conv_id",
@@ -447,6 +573,148 @@ def _citation_plan_system_b_budget(plan: dict | None) -> int:
         return int((budget or {}).get("system_b") if "system_b" in (budget or {}) else 1)
     except Exception:
         return 1
+
+
+_READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (
+        re.compile(r"\b(?:single[-\s]?photon|spad|photodetectors?|detectors?|detection)\b", re.IGNORECASE),
+        ("单光子", "探测器", "硬件", "spad", "暗计数", "死时间", "后脉冲", "串扰"),
+    ),
+    (
+        re.compile(r"\b(?:physics[-\s]?informed|deep learning|transformer|neural|noise model)\b", re.IGNORECASE),
+        ("physics-informed", "deep learning", "深度学习", "物理", "噪声", "噪声模型", "transformer"),
+    ),
+    (
+        re.compile(r"\b(?:single[-\s]?pixel|spi|compressive|sampling|reconstruction)\b", re.IGNORECASE),
+        ("单像素", "单像素成像", "压缩", "采样", "重建", "spi"),
+    ),
+)
+
+
+def _reading_source_surface(hit: dict | None, slot: dict | None = None) -> str:
+    parts: list[str] = []
+    if isinstance(slot, dict):
+        parts.extend(
+            str(slot.get(key) or "")
+            for key in ("topic", "source_name", "heading_path", "evidence_quote")
+        )
+    if isinstance(hit, dict):
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        parts.extend(
+            str(value or "")
+            for value in (
+                hit.get("text"),
+                meta.get("source_name"),
+                meta.get("source_path"),
+                meta.get("heading_path"),
+                ui_meta.get("display_name"),
+                ui_meta.get("summary_line"),
+                ui_meta.get("why_line"),
+            )
+        )
+    return " ".join(part for part in parts if part)
+
+
+def _reading_coverage_terms(surface: str) -> set[str]:
+    raw = str(surface or "")
+    terms = {token.lower() for token in re.findall(r"[A-Za-z][A-Za-z0-9+.-]{2,}", raw)}
+    terms.update(re.findall(r"[\u4e00-\u9fff]{2,8}", raw))
+    for pattern, bridged_terms in _READING_COVERAGE_BRIDGES:
+        if pattern.search(raw):
+            terms.update(term.lower() for term in bridged_terms)
+    return {term for term in terms if term and term not in {"the", "and", "for", "with", "this", "that", "from", "into"}}
+
+
+def _reading_paragraph_affinity(paragraph: str, terms: set[str], *, source_surface: str = "") -> float:
+    text = str(paragraph or "")
+    if not text or not terms:
+        return 0.0
+    low = text.lower()
+    source_low = str(source_surface or "").lower()
+    if (
+        ("physics-informed" in source_low or "deep learning" in source_low or "noise model" in source_low)
+        and not re.search(r"physics-informed|deep learning|深度学习|噪声|模型|算法|AI", text, re.IGNORECASE)
+    ):
+        return 0.0
+    score = 0.0
+    for term in terms:
+        if len(term) < 2:
+            continue
+        if term in low or term in text:
+            score += 1.0 if len(term) <= 4 else 1.4
+    if re.match(r"^\s*(?:\d+[.)、]|[-*+])\s*", text):
+        score += 0.4
+    if re.search(r"先读|再读|搭配|顺序|综述|review|paper|论文", text, re.IGNORECASE):
+        score += 0.4
+    return score
+
+
+def _append_numeric_citation_to_paragraph(paragraph: str, num: int) -> str:
+    marker = f"[{int(num)}]"
+    text = str(paragraph or "")
+    if marker in text:
+        return text
+    match = re.search(r"([。！？.!?])(\s*)$", text)
+    if match:
+        return f"{text[:match.start(1)].rstrip()} {marker}{match.group(1)}{match.group(2)}"
+    return f"{text.rstrip()} {marker}"
+
+
+def _reading_guide_repair_missing_system_a_citations(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict | None,
+    *,
+    output_mode: str,
+) -> str:
+    if "reading" not in str(output_mode or ""):
+        return str(md or "")
+    if not isinstance(citation_plan, dict) or not hits:
+        return str(md or "")
+    text = str(md or "")
+    if not text.strip():
+        return text
+    candidates: list[tuple[int, dict]] = []
+    for slot in list(citation_plan.get("slots") or []):
+        if not isinstance(slot, dict):
+            continue
+        if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            continue
+        nums = []
+        for raw in list(slot.get("candidate_hits") or []):
+            try:
+                num = int(raw)
+            except Exception:
+                continue
+            if 1 <= num <= len(hits):
+                nums.append(num)
+        for num in nums[:1]:
+            candidates.append((num, slot))
+    if not candidates:
+        return text
+
+    parts = re.split(r"(\n{2,})", text)
+    used_part_indices: set[int] = set()
+    for num, slot in candidates[:6]:
+        surface = _reading_source_surface(hits[num - 1], slot)
+        terms = _reading_coverage_terms(surface)
+        best_idx = -1
+        best_score = 0.0
+        for idx in range(0, len(parts), 2):
+            if idx in used_part_indices:
+                continue
+            paragraph = parts[idx]
+            if not paragraph.strip() or f"[{num}]" in paragraph:
+                continue
+            score = _reading_paragraph_affinity(paragraph, terms, source_surface=surface)
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+        if best_idx >= 0 and best_score >= 2.2:
+            parts[best_idx] = _append_numeric_citation_to_paragraph(parts[best_idx], num)
+            used_part_indices.add(best_idx)
+    return "".join(parts)
 
 
 def _message_has_validated_structured_cites(rec: dict | None) -> bool:
@@ -733,6 +1001,9 @@ def _merge_render_packet_contract_meta(
         for item in list(rec.get("cite_details") or [])
         if isinstance(item, dict)
     ]
+    if isinstance(ref_pack, dict):
+        existing_cite_details = _backfill_system_a_cite_details_from_ref_pack(existing_cite_details, ref_pack)
+        current_cite_details = _backfill_system_a_cite_details_from_ref_pack(current_cite_details, ref_pack)
     allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
         rec=rec,
         content=str(rec.get("content") or ""),
@@ -1406,6 +1677,12 @@ def enrich_messages_with_reference_render(
                     }
                     if citation_plan:
                         annotate_kwargs["citation_plan"] = citation_plan
+                    rendered_body = _reading_guide_repair_missing_system_a_citations(
+                        rendered_body,
+                        hits,
+                        citation_plan,
+                        output_mode=_message_answer_output_mode(rec),
+                    )
                     rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
                         rendered_body,
                         hits,

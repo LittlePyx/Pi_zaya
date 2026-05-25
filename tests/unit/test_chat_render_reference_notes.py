@@ -2633,6 +2633,181 @@ def test_merge_render_packet_contract_meta_refreshes_contract_primary_from_refs_
     assert (packet.get("primary_evidence") or {}).get("block_id") == "blk_30"
 
 
+def test_merge_render_packet_contract_meta_backfills_system_a_card_from_ref_primary_evidence():
+    from api import chat_render
+
+    rec = {
+        "content": "Light-field microscopy solves the depth-of-field trade-off [1].",
+        "rendered_body": "Light-field microscopy solves the depth-of-field trade-off [1](#kb-cite-demo-1).",
+        "rendered_content": "Light-field microscopy solves the depth-of-field trade-off [1](#kb-cite-demo-1).",
+        "copy_markdown": "Light-field microscopy solves the depth-of-field trade-off [1].",
+        "copy_text": "Light-field microscopy solves the depth-of-field trade-off [1].",
+        "notice": "",
+        "cite_details": [
+            {
+                "num": 1,
+                "anchor": "kb-cite-demo-1",
+                "source_path": "db/qclfm/qclfm.en.md",
+                "source_name": "QCLFM.pdf",
+                "citation_route": "system_a",
+                "is_inpaper": False,
+                "heading_path": "I. INTRODUCTION",
+                "answer_claim": "Light-field microscopy solves the depth-of-field trade-off.",
+                "evidence_quote": (
+                    "# Quantum correlation light-field microscope with extreme depth of field\n"
+                    "Yingwen Zhang,$^{1,2,*}$ Duncan England"
+                ),
+                "raw": (
+                    "# Quantum correlation light-field microscope with extreme depth of field\n"
+                    "Yingwen Zhang,$^{1,2,*}$ Duncan England"
+                ),
+                "card_quality_flags": ["evidence_quote_filtered", "missing_evidence_quote"],
+            }
+        ],
+        "meta": {"paper_guide_contracts": {"render_packet": {}}},
+    }
+
+    chat_render._merge_render_packet_contract_meta(
+        rec=rec,
+        msg_id=6,
+        enriched_provenance={"segments": []},
+        ref_pack={
+            "hits": [
+                {
+                    "text": "rough title text",
+                    "meta": {"source_path": "db/qclfm/qclfm.en.md"},
+                    "ui_meta": {
+                        "primary_evidence": {
+                            "source_path": "db/qclfm/qclfm.en.md",
+                            "source_name": "QCLFM.pdf",
+                            "block_id": "blk_light_field",
+                            "anchor_id": "p_light_field",
+                            "heading_path": "I. INTRODUCTION / Light-field microscopy",
+                            "snippet": (
+                                "Light-field microscopy is a 3D microscopy technique whereby volumetric "
+                                "information of a sample is gained in a single shot."
+                            ),
+                            "highlight_snippet": (
+                                "Light-field microscopy is a 3D microscopy technique whereby volumetric "
+                                "information of a sample is gained in a single shot."
+                            ),
+                            "anchor_kind": "paragraph",
+                            "selection_reason": "prompt_aligned",
+                        }
+                    },
+                }
+            ]
+        },
+        chat_store=None,
+    )
+
+    packet = (((rec.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    details = packet.get("cite_details") or []
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["block_id"] == "blk_light_field"
+    assert detail["anchor_id"] == "p_light_field"
+    assert detail["heading_path"] == "I. INTRODUCTION / Light-field microscopy"
+    assert "volumetric information" in detail["card_evidence"]
+    assert "Yingwen Zhang" not in detail["card_evidence"]
+    assert "##" not in detail["card_evidence"]
+
+
+def test_chat_messages_merge_cached_reference_payload_prefers_enriched_hits(monkeypatch):
+    from api.routers import chat, references
+
+    monkeypatch.setitem(
+        references._REFS_CONVERSATION_CACHE,
+        "conv-cached-refs",
+        {
+            "payload": {
+                101: {
+                    "prompt": "cached prompt",
+                    "hits": [
+                        {
+                            "text": "enriched",
+                            "ui_meta": {
+                                "primary_evidence": {
+                                    "snippet": "Precise cached evidence.",
+                                    "block_id": "blk_cached",
+                                }
+                            },
+                        }
+                    ],
+                }
+            }
+        },
+    )
+
+    merged = chat._merge_cached_reference_render_payload(
+        "conv-cached-refs",
+        {101: {"prompt": "raw prompt", "hits": [{"text": "raw only"}]}},
+    )
+
+    assert merged[101]["prompt"] == "raw prompt"
+    assert merged[101]["hits"][0]["text"] == "raw only"
+    assert merged[101]["rendered_payload"]["prompt"] == "cached prompt"
+    assert merged[101]["rendered_payload"]["hits"][0]["text"] == "enriched"
+    assert merged[101]["rendered_payload"]["hits"][0]["ui_meta"]["primary_evidence"]["block_id"] == "blk_cached"
+
+
+def test_effective_reference_pack_keeps_raw_hit_order_and_exposes_enriched_hits():
+    from api.chat_render import _effective_reference_render_pack
+
+    pack = {
+        "hits": [{"text": "raw generation hit", "meta": {"source_path": "raw.md"}}],
+        "rendered_payload": {
+            "hits": [
+                {
+                    "text": "enriched reference hit",
+                    "ui_meta": {"primary_evidence": {"snippet": "precise"}},
+                }
+            ]
+        },
+    }
+
+    effective = _effective_reference_render_pack(pack)
+
+    assert effective["hits"][0]["text"] == "raw generation hit"
+    assert effective["enriched_hits"][0]["text"] == "enriched reference hit"
+
+
+def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    answer = (
+        "建议按以下顺序阅读：\n\n"
+        "1. **先读探测器综述**：快速了解单光子探测器、SPAD、暗计数和死时间。\n\n"
+        "2. **再读 Physics-informed deep learning 论文**：看它如何建立 SPAD 噪声模型 [1]。"
+    )
+    hits = [
+        {
+            "text": "High-resolution single-photon imaging with physics-informed deep learning.",
+            "meta": {"source_path": "pidl.md"},
+        },
+        {
+            "text": "Emerging single-photon detection technique for high-performance photodetector.",
+            "meta": {"source_path": "spd-review.md"},
+        },
+    ]
+    plan = {
+        "slots": [
+            {"preferred_system": "system_a", "candidate_hits": [1], "source_name": "physics-informed deep learning"},
+            {"preferred_system": "system_a", "candidate_hits": [2], "source_name": "single-photon detection photodetector review"},
+        ]
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert "死时间 [2]。" in repaired
+    assert "噪声模型 [1]" in repaired
+
+
 def test_merge_render_packet_contract_meta_allows_refs_pack_to_replace_coarse_cross_paper_seed():
     from api import chat_render
 

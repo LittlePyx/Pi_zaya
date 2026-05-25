@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from tools.research_qa.run_research_qa_eval import (
+    _assistant_message_by_id,
     load_fixture,
     source_path_for_doc,
     validate_case,
@@ -12,6 +13,19 @@ def _case_by_id(fixture, case_id: str):
         if case.get("id") == case_id:
             return case
     raise AssertionError(f"missing case {case_id}")
+
+
+def test_assistant_message_by_id_prefers_refetched_converged_message():
+    messages = [
+        {"id": 10, "role": "assistant", "content": "old"},
+        {"id": 11, "role": "assistant", "content": "target", "meta": {"ready": True}},
+        {"id": 12, "role": "assistant", "content": "newer but unrelated"},
+    ]
+
+    msg = _assistant_message_by_id({"messages": messages}, 11)
+
+    assert msg["content"] == "target"
+    assert msg["meta"]["ready"] is True
 
 
 def test_research_qa_fixture_loads_shared_docs_and_cases():
@@ -47,11 +61,18 @@ def test_validate_case_accepts_grounded_system_b_answer():
             "content": answer,
             "cite_details": [
                 {
+                    "num": 4,
+                    "anchor": "admm-r4",
                     "source_path": scinerf_path,
                     "source_name": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
                     "is_inpaper": True,
                     "title": "Distributed optimization and statistical learning via the alternating direction method of multipliers",
                     "raw": "Distributed optimization and statistical learning via ADMM.",
+                    "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+                    "location_label": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+                    "citation_context": "Most existing snapshot compressive imaging methods employ ADMM-based optimization.",
+                    "upstream_work_role": "This upstream paper provides the ADMM optimization framework used as prior work.",
+                    "user_question_relation": "It shows ADMM is existing background rather than a new SCINeRF contribution.",
                 }
             ],
         },
@@ -87,7 +108,7 @@ def test_validate_case_accepts_multi_doc_ordinary_question_with_system_b_and_pol
     answer = (
         "A good single-pixel imaging route is: first read the SPI principles review, "
         "then read Hadamard/Fourier coding choices, and finally read the deep learning SPI review "
-        "for upstream single-pixel imaging background [[CITE:sinline:18]]."
+        "for upstream single-pixel imaging background [R18](#spi-r18)."
     )
     result = {
         "status": "done",
@@ -97,9 +118,50 @@ def test_validate_case_accepts_multi_doc_ordinary_question_with_system_b_and_pol
             "role": "assistant",
             "content": answer,
             "cite_details": [
-                {"source_path": spi_path, "source_name": "Principles and prospects for single-pixel imaging"},
-                {"source_path": dl_path, "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning"},
-                {"source_path": hsi_path, "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging"},
+                {
+                    "num": 1,
+                    "anchor": "spi-a1",
+                    "source_path": spi_path,
+                    "source_name": "Principles and prospects for single-pixel imaging",
+                    "heading_path": "Abstract / Principles",
+                    "evidence_quote": "Single-pixel imaging measures correlations between a scene and projected patterns.",
+                    "answer_claim": "Start from the principles review to build the measurement model.",
+                    "support_relation": "The evidence explains the core SPI measurement principle.",
+                },
+                {
+                    "num": 2,
+                    "anchor": "spi-a2",
+                    "source_path": dl_path,
+                    "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                    "heading_path": "Deep learning SPI / Overview",
+                    "evidence_quote": "Deep learning methods improve reconstruction quality but face data and generalization risks.",
+                    "answer_claim": "The deep learning review should be read after the foundations.",
+                    "support_relation": "The evidence gives both benefits and limitations for DL-SPI.",
+                },
+                {
+                    "num": 3,
+                    "anchor": "spi-a3",
+                    "source_path": hsi_path,
+                    "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                    "heading_path": "Experiment design / Coding choice",
+                    "evidence_quote": "Hadamard and Fourier single-pixel imaging differ in measurement efficiency and noise behavior.",
+                    "answer_claim": "Coding choice is the practical bridge from principles to experiments.",
+                    "support_relation": "The evidence explains why the roadmap should include coding strategies.",
+                },
+                {
+                    "num": 18,
+                    "anchor": "spi-r18",
+                    "is_inpaper": True,
+                    "source_path": dl_path,
+                    "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                    "title": "Principles and prospects for single-pixel imaging",
+                    "raw": "Principles and prospects for single-pixel imaging.",
+                    "heading_path": "Deep learning SPI review / References",
+                    "location_label": "Deep learning SPI review / References",
+                    "citation_context": "The review cites earlier single-pixel imaging foundations when introducing the field.",
+                    "upstream_work_role": "This upstream review is the foundation source for the SPI reading route.",
+                    "user_question_relation": "It gives the user a concrete upstream source to open after the roadmap answer.",
+                },
             ],
         },
         "refs_payload": {
@@ -238,6 +300,65 @@ def test_validate_case_rejects_template_answer_and_missing_system_b():
     assert "answer_no_template_phrase" in failed_names
     assert "system_b_present" in failed_names
     assert "refs_card_copy_quality" in failed_names
+
+
+def test_validate_case_prefers_render_packet_over_raw_content_for_citation_quality():
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "scinerf-admm-origin")
+    scinerf_path = source_path_for_doc(fixture, "scinerf")
+    result = {
+        "status": "done",
+        "done": True,
+        "user_msg_id": 106,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "ADMM 不是新东西 [[CITE:s12345678:4]]。",
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "rendered_body": "ADMM 不是新东西 [R4](#admm-r4)。",
+                        "cite_details": [
+                            {
+                                "num": 4,
+                                "anchor": "admm-r4",
+                                "source_path": scinerf_path,
+                                "source_name": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                                "is_inpaper": True,
+                                "title": "Distributed optimization and statistical learning via the alternating direction method of multipliers",
+                                "raw": "Distributed optimization and statistical learning via ADMM.",
+                                "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+                                "location_label": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+                                "citation_context": "Most existing snapshot compressive imaging methods employ ADMM-based optimization.",
+                                "upstream_work_role": "This upstream paper provides the ADMM optimization framework used as prior work.",
+                                "user_question_relation": "It shows ADMM is existing background rather than a new SCINeRF contribution.",
+                            }
+                        ],
+                    }
+                }
+            },
+        },
+        "refs_payload": {
+            "106": {
+                "hits": [
+                    {
+                        "text": "SCINeRF discusses ADMM in Related Work.",
+                        "ui_meta": {
+                            "source_path": scinerf_path,
+                            "display_name": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+                            "summary_line": "Related Work explains ADMM as an existing optimization method.",
+                            "why_line": "The user asks whether ADMM is new, and this card points to the prior-work context.",
+                        },
+                    }
+                ]
+            }
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert "citation_card_quality" not in failed_names
+    assert quality["citation_quality"]["count"] == 1
 
 
 def test_validate_case_accepts_common_zh_en_synonyms():

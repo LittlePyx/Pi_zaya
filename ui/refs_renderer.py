@@ -3465,13 +3465,12 @@ def _system_b_route_reason(context_line: str, ref_rec: dict | None = None) -> st
 
 
 def _should_route_numeric_to_system_b(context_line: str, ref_rec: dict | None = None) -> bool:
-    if not isinstance(ref_rec, dict):
-        ref_rec = {}
-    return _system_b_has_upstream_intent(
-        context_line,
-        str(ref_rec.get("title") or ""),
-        str(ref_rec.get("raw") or ""),
-    )
+    # Route free-form numeric citations to System B only when the answer line
+    # itself asks for origin/prior-work provenance.  Reference titles and raw
+    # bibliography strings often contain words like "based on" or "references",
+    # which previously caused ordinary answer evidence links to be mislabeled
+    # as upstream citations.
+    return _system_b_has_upstream_intent(context_line)
 
 
 def _system_a_domain_terms(text: str) -> set[str]:
@@ -3513,6 +3512,36 @@ def _system_a_fp_text(text: str, *, max_len: int = 360) -> str:
     raw = re.sub(r"\[[Rr]?\d{1,4}(?:\s*[,，、]\s*[Rr]?\d{1,4})*\]", "", raw)
     raw = re.sub(r"\s+", " ", raw).strip().lower()
     return raw[: max(32, int(max_len))]
+
+
+def _system_a_primary_evidence_from_ui_meta(ui_meta: dict) -> dict:
+    """Return the same primary evidence object used by the reader locate action."""
+    if not isinstance(ui_meta, dict):
+        return {}
+    direct = ui_meta.get("primary_evidence")
+    if isinstance(direct, dict) and direct:
+        return direct
+    reader_open = ui_meta.get("reader_open")
+    if not isinstance(reader_open, dict):
+        reader_open = {}
+    for key in ("primaryEvidence", "primary_evidence", "locateTarget", "locate_target"):
+        nested = reader_open.get(key)
+        if isinstance(nested, dict) and nested:
+            return nested
+    reader_signal_keys = (
+        "snippet",
+        "highlightSnippet",
+        "highlight_snippet",
+        "headingPath",
+        "heading_path",
+        "blockId",
+        "block_id",
+        "anchorId",
+        "anchor_id",
+    )
+    if any(str(reader_open.get(key) or "").strip() for key in reader_signal_keys):
+        return reader_open
+    return {}
 
 
 def _system_a_evidence_fingerprint(
@@ -3584,6 +3613,30 @@ def _system_a_claim_substantially_same(left: str, right: str) -> bool:
     return len(at & bt) / max(1, min(len(at), len(bt))) >= 0.78
 
 
+def _system_a_claim_quality(value: str) -> float:
+    text = re.sub(r"\s+", " ", normalize_inline_markdown(str(value or ""))).strip()
+    if not text:
+        return 0.0
+    low = text.lower()
+    score = min(4.0, len(text) / 80.0)
+    if re.match(r"^\s*(?:推荐文献|reference|source)\s*[:：]", text, re.IGNORECASE):
+        score -= 1.2
+    if re.search(r"\b(?:why|because|主要看什么|为什么|解决|提出|使用|uses?|used|construction|improve|explain|shows?)\b", low):
+        score += 1.0
+    if len(re.findall(r"[\u4e00-\u9fff]", text)) >= 8:
+        score += 0.4
+    return score
+
+
+def _system_a_maybe_replace_claim(existing: dict, answer_claim: str) -> None:
+    claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
+    if not claim:
+        return
+    current = str(existing.get("answer_claim") or "").strip()
+    if not current or _system_a_claim_quality(claim) > _system_a_claim_quality(current) + 0.45:
+        existing["answer_claim"] = claim[:420]
+
+
 def _system_a_should_split_occurrence(existing: dict, n: int, answer_claim: str) -> bool:
     claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
     if len(claim) < 18:
@@ -3605,7 +3658,10 @@ def _system_a_should_split_occurrence(existing: dict, n: int, answer_claim: str)
     old_claim = str(existing.get("answer_claim") or "").strip()
     if not old_claim:
         return False
-    return not _system_a_claim_substantially_same(old_claim, claim)
+    # Same evidence location should stay one card even if the answer mentions
+    # it twice with slightly different local wording.  Multiple near-identical
+    # System A cards made hover/click feel noisy instead of helpful.
+    return False
 
 
 def _assess_system_a_hit_binding(
@@ -4151,20 +4207,39 @@ def _annotate_inpaper_citations_with_hover_meta(
             skey = f"{base_skey}|claim:{claim_sig}" if claim_sig else base_skey
             cached = detail_by_key.get(skey)
             if isinstance(cached, dict):
+                _system_a_maybe_replace_claim(cached, answer_claim)
                 return cached
             cached = detail_by_key.get(base_skey)
             if isinstance(cached, dict) and not _system_a_should_split_occurrence(cached, int(n), answer_claim):
+                _system_a_maybe_replace_claim(cached, answer_claim)
                 return cached
             meta_h = (hit or {}).get("meta", {}) or {}
+            ui_meta_h = (hit or {}).get("ui_meta", {}) or {}
+            primary_evidence = _system_a_primary_evidence_from_ui_meta(ui_meta_h)
             src_name = _display_source_name(sp)
             heading = str(
-                meta_h.get("heading_path")
+                primary_evidence.get("heading_path")
+                or primary_evidence.get("headingPath")
+                or ui_meta_h.get("primary_evidence_heading_path")
+                or ui_meta_h.get("primaryEvidenceHeadingPath")
+                or ui_meta_h.get("heading_path")
+                or ui_meta_h.get("headingPath")
+                or meta_h.get("heading_path")
                 or meta_h.get("ref_best_heading_path")
                 or ""
             ).strip()
-            snippet = str(hit.get("text") or "").strip()
+            snippet = str(
+                primary_evidence.get("highlight_snippet")
+                or primary_evidence.get("highlightSnippet")
+                or primary_evidence.get("snippet")
+                or hit.get("text")
+                or ""
+            ).strip()
             evidence_quote = str(
-                meta_h.get("evidence_quote")
+                primary_evidence.get("highlight_snippet")
+                or primary_evidence.get("highlightSnippet")
+                or primary_evidence.get("snippet")
+                or meta_h.get("evidence_quote")
                 or meta_h.get("support_locate_anchor")
                 or meta_h.get("anchor_text")
                 or snippet
@@ -4206,9 +4281,26 @@ def _annotate_inpaper_citations_with_hover_meta(
                     location_bits.append(f"pp. {int(min(p0, p1))}-{int(max(p0, p1))}")
                 else:
                     location_bits.append(f"p. {int(p0)}")
-            block_id = str(meta_h.get("primary_block_id") or meta_h.get("block_id") or "").strip()
-            anchor_id = str(meta_h.get("primary_anchor_id") or meta_h.get("anchor_id") or "").strip()
-            anchor_kind = str(meta_h.get("anchor_kind") or "").strip()
+            block_id = str(
+                primary_evidence.get("block_id")
+                or primary_evidence.get("blockId")
+                or meta_h.get("primary_block_id")
+                or meta_h.get("block_id")
+                or ""
+            ).strip()
+            anchor_id = str(
+                primary_evidence.get("anchor_id")
+                or primary_evidence.get("anchorId")
+                or meta_h.get("primary_anchor_id")
+                or meta_h.get("anchor_id")
+                or ""
+            ).strip()
+            anchor_kind = str(
+                primary_evidence.get("anchor_kind")
+                or primary_evidence.get("anchorKind")
+                or meta_h.get("anchor_kind")
+                or ""
+            ).strip()
             if anchor_kind:
                 location_bits.append(anchor_kind)
             why_line = str(ref_rank.get("why") or meta_h.get("why_line") or "").strip()[:320]
@@ -4232,8 +4324,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             )
             if isinstance(existing, dict) and not split_occurrence:
                 _system_a_add_linked_num(existing, int(n))
-                if answer_claim and not str(existing.get("answer_claim") or "").strip():
-                    existing["answer_claim"] = answer_claim[:420]
+                _system_a_maybe_replace_claim(existing, answer_claim)
                 detail_by_key[skey] = existing
                 return existing
             if isinstance(existing, dict) and split_occurrence:

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from kb.citation_evidence_pack import build_system_a_evidence_pack, build_system_b_evidence_pack
-from kb.evidence_text import clean_display_text
+from kb.evidence_text import clean_display_text, finish_evidence_text
 
 def _clean_text(value: Any, *, max_len: int = 520) -> str:
     return clean_display_text(value, max_len=max_len)
@@ -219,6 +219,14 @@ def _first_text(rec: Mapping[str, Any], *keys: str, max_len: int = 520) -> str:
     return ""
 
 
+def _first_raw_value(rec: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = rec.get(key)
+        if str(value or "").strip():
+            return value
+    return ""
+
+
 _CARD_TEXT_LIMITS = {
     "card_title": 220,
     "card_subtitle": 220,
@@ -242,7 +250,10 @@ _CARD_TEXT_LIMITS = {
 def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]:
     out = dict(card)
     for key, limit in _CARD_TEXT_LIMITS.items():
-        out[key] = _clean_text(out.get(key), max_len=limit)
+        if key == "card_evidence":
+            out[key] = finish_evidence_text(out.get(key), max_len=limit)
+        else:
+            out[key] = _clean_text(out.get(key), max_len=limit)
 
     evidence = str(out.get("card_evidence") or "").strip()
     claim = str(out.get("card_claim") or "").strip()
@@ -574,6 +585,10 @@ def _system_b_takeaway(*, title: str, claim: str, context: str, role: str, relat
         return "这篇上游文献提供 ADMM 优化框架背景，用来判断当前论文是在借鉴既有方法。"
     if "single-shot compressive spectral imaging" in combined:
         return "这篇上游文献提供单次压缩光谱成像的前人背景，是回答中相关概念的来源线索。"
+    if "single-pixel imaging via compressive sampling" in combined or (
+        "single-pixel" in combined and "compressive sampling" in combined
+    ):
+        return "这篇上游文献是单像素压缩采样路线的经典来源，适合用来补上“单个探测器如何靠调制与重建成像”的基础背景。"
     if re.search(r"\b(?:baseline|compare|compared|comparison|against)\b", combined):
         return "这篇上游文献在当前论文中主要作为对比基线或相关方法参照。"
     if re.search(r"\b(?:dataset|benchmark|evaluation|experiment)\b", combined):
@@ -615,11 +630,12 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
     title = source or heading or "答案依据"
     claim_raw = _first_text(rec, "answer_claim", max_len=420)
     evidence_raw = _first_text(rec, "evidence_quote", "summary_line", "raw", "cite_fmt", max_len=1400)
+    evidence_raw_for_pack = _first_raw_value(rec, "evidence_quote", "summary_line", "raw", "cite_fmt") or evidence_raw
     locator = _locator(rec)
     support_hint = _first_text(rec, "support_relation", "binding_reason", "why_line", max_len=420)
     pack = build_system_a_evidence_pack(
         answer_claim=claim_raw,
-        evidence_raw=evidence_raw,
+        evidence_raw=evidence_raw_for_pack,
         source=source,
         title=_first_text(rec, "title", max_len=240),
         heading=heading,

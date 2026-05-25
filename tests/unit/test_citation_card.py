@@ -49,6 +49,22 @@ def test_system_a_card_composer_strips_markdown_source_markup() -> None:
     assert "##" not in detail["card_evidence"]
 
 
+def test_system_a_card_composer_trims_mid_word_ellipsis() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "PIDL.pdf",
+            "heading_path": "Abstract",
+            "answer_claim": "The paper introduces deep learning into SPAD.",
+            "evidence_quote": "we introduce deep learning into SPAD, enabling super-resolution single-photon ima...",
+            "location_label": "Abstract",
+        }
+    )
+
+    assert detail["card_evidence"].endswith("single-photon...")
+    assert "ima..." not in detail["card_evidence"]
+
+
 def test_card_composer_scrubs_markdown_table_and_structured_tokens() -> None:
     detail = compose_citation_card(
         {
@@ -152,6 +168,93 @@ def test_system_a_card_composer_keeps_readable_evidence_window() -> None:
     assert "Implementation details are discussed later" not in detail["card_evidence"]
 
 
+def test_system_a_card_composer_trims_incomplete_evidence_tail() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Deep-SPI.pdf",
+            "heading_path": "Abstract",
+            "answer_claim": "Deep learning improves single-pixel imaging quality and speed.",
+            "evidence_quote": (
+                "Single-pixel imaging technology can capture images at wavelengths outside "
+                "the reach of conventional focal plane array detectors. However, the limited "
+                "image quality and lengthy computational times for iterative reconstruction "
+                "still hinder its practical application. Recently, single-pixel imaging based "
+                "on deep learning has attrac"
+            ),
+            "location_label": "Abstract",
+        }
+    )
+
+    assert "attrac" not in detail["card_evidence"]
+    assert detail["card_evidence"].endswith("application.")
+    assert "Recently" not in detail["card_evidence"]
+
+
+def test_system_a_card_composer_removes_dangling_bracket_tail() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Foveated.pdf",
+            "heading_path": "INTRODUCTION",
+            "answer_claim": "Single-pixel imaging measures correlations with projected patterns.",
+            "evidence_quote": (
+                "Single-pixel imaging is based on the measurement of the level of correlation "
+                "between the scene and a series of patterns. The patterns can either be "
+                "projected onto the scene [known as structured illumination (1)"
+            ),
+            "location_label": "INTRODUCTION",
+        }
+    )
+
+    assert detail["card_evidence"] == (
+        "Single-pixel imaging is based on the measurement of the level of correlation "
+        "between the scene and a series of patterns."
+    )
+    assert "[" not in detail["card_evidence"]
+
+
+def test_system_a_card_composer_drops_mismatched_location_leaf() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Deep-SPI.pdf",
+            "heading_path": "5. Single-Pixel Imaging Realizations with Deep Learning / 5.4. Optical Encryption",
+            "answer_claim": "Deep learning improves single-pixel imaging quality and speed.",
+            "evidence_quote": (
+                "Deep learning models can improve single-pixel imaging reconstruction quality "
+                "and speed."
+            ),
+            "location_label": "5. Single-Pixel Imaging Realizations with Deep Learning / 5.4. Optical Encryption",
+        }
+    )
+
+    assert detail["card_locator"] == "5. Single-Pixel Imaging Realizations with Deep Learning"
+    assert "Optical Encryption" not in detail["card_locator"]
+
+
+def test_system_a_card_composer_labels_document_front_evidence_as_abstract() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Deep-SPI.pdf",
+            "heading_path": "5. Single-Pixel Imaging Realizations with Deep Learning / 5.4. Optical Encryption",
+            "answer_claim": "Deep learning improves single-pixel imaging quality and speed.",
+            "evidence_quote": (
+                "# Advances and Challenges of Single-Pixel Imaging Based on Deep Learning\n"
+                "Kai Song, Yaoxing Bian, Dong Wang\n"
+                "Single-pixel imaging technology can capture images at wavelengths outside "
+                "the reach of conventional focal plane array detectors. However, the limited "
+                "image quality and lengthy computational times still hinder practical application."
+            ),
+            "location_label": "5. Single-Pixel Imaging Realizations with Deep Learning / 5.4. Optical Encryption",
+        }
+    )
+
+    assert detail["card_locator"] == "Abstract"
+    assert detail["card_evidence"].startswith("Single-pixel imaging technology can capture")
+
+
 def test_system_a_card_composer_avoids_duplicate_takeaway() -> None:
     detail = compose_citation_card(
         {
@@ -233,6 +336,34 @@ def test_system_b_card_composer_distills_generic_english_role() -> None:
     assert "单次压缩光谱成像" in detail["card_takeaway"]
     assert "The user is asking" not in detail["card_takeaway"]
     assert detail["card_flow"] == []
+
+
+def test_system_b_card_composer_distills_classic_spi_compressive_sampling_role() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "3D single-pixel video.pdf",
+            "title": "Single-pixel imaging via compressive sampling",
+            "authors": "Duarte M, Davenport M, Takhar D, et al",
+            "venue": "IEEE Signal Processing Magazine",
+            "year": "2008",
+            "raw": (
+                "Duarte M F, Davenport M A, Takhar D, Laska J N, Kelly K E and "
+                "Baraniuk R G 2008 Single-pixel imaging via compressive sampling "
+                "IEEE Signal Process. Mag."
+            ),
+            "answer_claim": "This upstream paper is useful for following the citation chain behind SPI.",
+            "citation_context": (
+                "Single-pixel imaging is a computational imaging technique that allows "
+                "a single-pixel detector to be used as an imaging device."
+            ),
+            "location_label": "3D single-pixel video / Introduction",
+        }
+    )
+
+    assert detail["card_kind"] == "upstream_reference"
+    assert "单像素压缩采样路线" in detail["card_takeaway"]
+    assert "missing_takeaway" not in detail["card_quality_flags"]
 
 
 def test_system_b_card_composer_suppresses_duplicate_claim_and_support_copy() -> None:

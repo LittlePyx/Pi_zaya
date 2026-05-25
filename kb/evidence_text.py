@@ -10,6 +10,9 @@ from kb.source_blocks import normalize_inline_markdown
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[\u3002\uff01\uff1f\uff1b;!?\.])\s+")
 _LEAD_STRIP_RE = re.compile(r"^[\s,.;:\u3002\uff0c\uff1b\uff1a]+")
 _TRAIL_STRIP_RE = re.compile(r"[\s,.;:\u3002\uff0c\uff1b\uff1a]+$")
+_EVIDENCE_TRAIL_STRIP_RE = re.compile(r"[\s,;:\uff0c\uff1b\uff1a]+$")
+_TERMINAL_PUNCT_RE = re.compile(r"[\u3002\uff01\uff1f.!?]$")
+_LAST_TERMINAL_PUNCT_RE = re.compile(r"[\u3002\uff01\uff1f.!?]")
 _FRAGMENT_LEAD_OK_RE = re.compile(
     r"^(?:a|an|the|this|these|those|most|many|some|several|existing|previous|prior|traditional|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b",
     re.IGNORECASE,
@@ -22,7 +25,7 @@ _CONTENT_SENTENCE_START_RE = re.compile(
     r"compressive imaging\s+(?:is|can|uses?|recovers?)|"
     r"neural radiance\s+(?:field|fields|representation)|"
     r"a\s+DMD\s+can|"
-    r"this paper|this work|this study|"
+    r"this (?:paper|work|study|method|system|microscope|approach)|"
     r"in this (?:paper|work|study)|"
     r"we\s+|however,?|recent(?:ly)?|the proposed|our\s+"
     r")\b",
@@ -47,12 +50,30 @@ _STRUCTURED_CITE_TOKEN_RE = re.compile(
 _BRACKET_REFERENCE_MARKER_RE = re.compile(r"\[\s*\d{1,4}(?:\s*[-,;]\s*\d{1,4})*\s*\]")
 _CONTENT_VERB_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|"
-    r"shown|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|"
+    r"shown|presents?|presented|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|"
     r"improves?|improved|captures?|captured|reconstructs?|reconstructed|enables?|enabled|"
     r"adopts?|adopted|adopting|offers?|offering|collects?|collecting|employs?|employed|employing|"
     r"解决|提出|说明|表明|用于|能够|可以|实现|采用|提升|降低)\b",
     re.IGNORECASE,
 )
+
+
+def _strip_leading_markdown_heading_lines(value: str) -> str:
+    text = str(value or "").lstrip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    idx = 0
+    while idx < len(lines):
+        line = str(lines[idx] or "").strip()
+        if not line:
+            idx += 1
+            continue
+        if re.match(r"^#{1,6}\s+\S", line):
+            idx += 1
+            continue
+        break
+    return "\n".join(lines[idx:]).lstrip() if idx else text
 
 
 def clean_display_text(value: Any, *, max_len: int = 520) -> str:
@@ -80,6 +101,70 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     if len(text) <= max_len:
         return text
     return text[: max(0, max_len - 1)].rstrip() + "..."
+
+
+def finish_evidence_text(value: Any, *, max_len: int = 520) -> str:
+    text = clean_display_text(value, max_len=max_len)
+    if not text:
+        return ""
+    text = _trim_dangling_bracket_tail(text)
+    text = _trim_incomplete_sentence_tail(text)
+    return clean_display_text(text, max_len=max_len)
+
+
+def _trim_dangling_bracket_tail(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    last_open = text.rfind("[")
+    last_close = text.rfind("]")
+    if last_open > last_close and last_open >= 0:
+        tail = text[last_open:]
+        # OCR/Markdown chunks often end in explanatory bracket clauses such as
+        # "[known as structured illumination (1)" after a semicolon split.
+        if len(tail) <= 180 and len(loose_tokens(tail)) >= 3:
+            text = text[:last_open].rstrip(" ,;:")
+    return text.strip()
+
+
+def _trim_incomplete_sentence_tail(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return text
+    if text.endswith(("...", "\u2026")):
+        ellipsis = "\u2026" if text.endswith("\u2026") else "..."
+        stem = text[: -len(ellipsis)].rstrip()
+        words = list(re.finditer(r"[A-Za-z]{2,}$", stem))
+        if words:
+            last_word = words[-1].group(0)
+            if 2 <= len(last_word) <= 5 and last_word.lower() not in {"image", "model"}:
+                stem = stem[: words[-1].start()].rstrip(" ,;:")
+                return stem + ellipsis if stem else text
+        return text
+    if _TERMINAL_PUNCT_RE.search(text):
+        return text
+
+    terminals = list(_LAST_TERMINAL_PUNCT_RE.finditer(text))
+    if terminals:
+        last = terminals[-1]
+        head = text[: last.end()].strip()
+        tail = text[last.end() :].strip()
+        tail_tokens = loose_tokens(tail)
+        if head and tail and len(tail_tokens) <= 18:
+            return head
+
+    tokens = loose_tokens(text)
+    if len(tokens) < 8:
+        return text
+
+    # If the source chunk itself ended mid-sentence, make that visible with an
+    # ellipsis and avoid exposing a half word as if it were valid evidence.
+    words = list(re.finditer(r"[A-Za-z]{2,}$", text))
+    if words:
+        last_word = words[-1].group(0)
+        if 2 <= len(last_word) <= 8 and last_word.lower() not in {"method", "system", "image", "learning"}:
+            text = text[: words[-1].start()].rstrip(" ,;:")
+    return text.rstrip(" ,;:") + "..."
 
 
 def loose_tokens(value: str) -> list[str]:
@@ -207,7 +292,7 @@ def strip_evidence_metadata_prefix(
     source: str = "",
     title: str = "",
 ) -> str:
-    text = clean_display_text(value, max_len=1600)
+    text = clean_display_text(_strip_leading_markdown_heading_lines(value), max_len=1600)
     if not text:
         return ""
 
@@ -392,4 +477,4 @@ def pick_readable_evidence_text(
         )
         if window:
             text = window
-    return clean_display_text(_TRAIL_STRIP_RE.sub("", text), max_len=max_len)
+    return finish_evidence_text(_EVIDENCE_TRAIL_STRIP_RE.sub("", text), max_len=max_len)

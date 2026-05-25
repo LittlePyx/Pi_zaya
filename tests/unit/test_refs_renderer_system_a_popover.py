@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta
+from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta, _should_route_numeric_to_system_b
 
 
 def test_system_a_citation_detail_carries_reader_card_fields() -> None:
@@ -166,7 +166,7 @@ def test_system_a_reuses_one_card_for_duplicate_evidence_hits() -> None:
     assert details[0]["evidence_fingerprint"]
 
 
-def test_system_a_splits_repeated_same_number_for_different_answer_claims() -> None:
+def test_system_a_reuses_repeated_same_number_for_same_evidence() -> None:
     rendered, details = _annotate_inpaper_citations_with_hover_meta(
         (
             "Adaptive sampling puts high resolution near the fovea [1].\n"
@@ -196,11 +196,123 @@ def test_system_a_splits_repeated_same_number_for_different_answer_claims() -> N
 
     anchors = re.findall(r"\[1\]\(#([^) \"\n]+)", rendered)
     assert len(anchors) == 2
-    assert len(set(anchors)) == 2
-    assert len(details) == 2
-    assert all("occurrence_specific_claim" in d["card_quality_flags"] for d in details)
-    assert details[0]["answer_claim"] != details[1]["answer_claim"]
-    assert all("##" not in d["card_evidence"] for d in details)
+    assert len(set(anchors)) == 1
+    assert len(details) == 1
+    assert "occurrence_specific_claim" not in details[0]["card_quality_flags"]
+    assert "Hardware construction uses a DMD" in details[0]["answer_claim"]
+    assert "##" not in details[0]["card_evidence"]
+
+
+def test_system_a_prefers_primary_evidence_location_from_hit_ui_meta() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Deep learning helps with difficult scattering cases [1].",
+        [
+            {
+                "text": "# Paper title\nAuthor A\nSingle-pixel imaging based on deep learning has attrac",
+                "meta": {
+                    "source_path": "db/demo/lpr.en.md",
+                    "ref_best_heading_path": "5. Single-Pixel Imaging Realizations with Deep Learning / 5.4. Optical Encryption",
+                },
+                "ui_meta": {
+                    "heading_path": "5.2. Imaging Through Scattering Media",
+                    "primary_evidence": {
+                        "heading_path": "5.2. Imaging Through Scattering Media",
+                        "snippet": (
+                            "Turbulence-immune imaging is a classical challenge in the field of imaging "
+                            "through scattering weak media. DL has exhibited remarkable efficacy in addressing this problem"
+                        ),
+                        "block_id": "blk_scattering",
+                        "anchor_id": "p_42",
+                        "anchor_kind": "paragraph",
+                    },
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["heading_path"] == "5.2. Imaging Through Scattering Media"
+    assert detail["card_locator"].startswith("5.2. Imaging Through Scattering Media")
+    assert detail["block_id"] == "blk_scattering"
+    assert detail["anchor_id"] == "p_42"
+    assert "Optical Encryption" not in detail["card_locator"]
+    assert "attrac" not in detail["card_evidence"]
+
+
+def test_system_a_prefers_reader_open_primary_evidence_when_direct_primary_missing() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Light-field microscopy reconstructs three-dimensional information [1].",
+        [
+            {
+                "text": (
+                    "# Quantum correlation light-field microscope with extreme depth of field\n"
+                    "Yingwen Zhang, Yuhang Qin, Wenhao Li"
+                ),
+                "meta": {
+                    "source_path": "db/demo/qclfm.en.md",
+                    "heading_path": "I. INTRODUCTION",
+                },
+                "ui_meta": {
+                    "reader_open": {
+                        "primaryEvidence": {
+                            "headingPath": "I. INTRODUCTION / Light-field microscope",
+                            "highlightSnippet": (
+                                "Conventional light-field microscope designs typically make use "
+                                "of a microlens array to record spatial and angular information."
+                            ),
+                            "blockId": "intro-light-field",
+                            "anchorId": "sent-light-field",
+                            "anchorKind": "sentence",
+                        }
+                    }
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["heading_path"] == "I. INTRODUCTION / Light-field microscope"
+    assert detail["card_locator"].startswith("I. INTRODUCTION / Light-field microscope")
+    assert detail["block_id"] == "intro-light-field"
+    assert detail["anchor_id"] == "sent-light-field"
+    assert "microlens array" in detail["card_evidence"]
+    assert "Yingwen Zhang" not in detail["card_evidence"]
+    assert "##" not in detail["card_evidence"]
+
+
+def test_system_a_does_not_route_to_system_b_from_reference_title_words() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "This paper is useful for learning deep-learning single-pixel imaging [1].",
+        [
+            {
+                "text": "Deep learning improves single-pixel imaging reconstruction quality.",
+                "meta": {
+                    "source_path": "db/demo/deep-spi.en.md",
+                    "heading_path": "Abstract",
+                    "evidence_quote": "Deep learning improves single-pixel imaging reconstruction quality.",
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+    assert details[0]["card_kind"] == "answer_evidence"
+    assert not _should_route_numeric_to_system_b(
+        "This paper is useful for learning deep-learning single-pixel imaging [1].",
+        {
+            "title": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+            "raw": "A review with references and prior work.",
+        },
+    )
 
 
 def test_system_a_keeps_distinct_cards_for_distinct_evidence_locations() -> None:

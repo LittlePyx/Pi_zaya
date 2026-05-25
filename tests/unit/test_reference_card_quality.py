@@ -3,7 +3,9 @@ from __future__ import annotations
 from api.reference_card_quality import (
     attach_ref_card_polish_contract,
     attach_refs_pack_polish_contract,
+    citation_detail_quality,
     refs_pack_has_full_llm_copy,
+    summarize_citation_detail_quality,
 )
 from api.reference_card_payload import build_ref_card_ui_payload
 
@@ -119,3 +121,104 @@ def test_ref_card_payload_builder_attaches_polish_contract():
 
     assert payload["polish_status"] == "full"
     assert payload["polish_contract_version"] == 1
+
+
+def test_citation_detail_quality_accepts_grounded_system_a_card():
+    quality = citation_detail_quality(
+        {
+            "num": 1,
+            "anchor": "a1",
+            "source_name": "Demo.pdf",
+            "source_path": "demo.en.md",
+            "heading_path": "2. Method / Reconstruction",
+            "evidence_quote": "The method maps low-dimensional measurements back to target images with a learned decoder.",
+            "answer_claim": "The method improves reconstruction from fewer measurements.",
+            "support_relation": "The quoted sentence explains the encoder-decoder measurement mapping.",
+        }
+    )
+
+    assert quality["ok"] is True
+    assert quality["route"] == "system_a"
+
+
+def test_citation_detail_quality_rejects_raw_markdown_and_fragmented_evidence():
+    quality = citation_detail_quality(
+        {
+            "num": 2,
+            "anchor": "a2",
+            "source_name": "Foveated SPI.pdf",
+            "heading_path": "INTRODUCTION",
+            "evidence_quote": "## Foveated single-pixel imaging has attrac...",
+            "answer_claim": "This is a method card.",
+            "support_relation": "This quote supports the answer.",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "raw_markdown_visible" in names
+    assert "system_a_broken_evidence" in names
+
+
+def test_citation_detail_quality_accepts_grounded_system_b_card():
+    quality = citation_detail_quality(
+        {
+            "num": 4,
+            "anchor": "r4",
+            "is_inpaper": True,
+            "source_name": "SCINeRF.pdf",
+            "title": "Distributed Optimization and Statistical Learning via ADMM",
+            "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+            "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+            "citation_context": "Most existing methods employ ADMM-based optimization for snapshot compressive imaging.",
+            "upstream_work_role": "This upstream work provides the optimization framework behind the cited ADMM method.",
+            "user_question_relation": "The citation shows ADMM is prior work rather than a new SCINeRF contribution.",
+        }
+    )
+
+    assert quality["ok"] is True
+    assert quality["route"] == "system_b"
+
+
+def test_citation_detail_quality_rejects_weak_system_b_card():
+    quality = citation_detail_quality(
+        {
+            "ref_num": 3,
+            "is_inpaper": True,
+            "source_name": "Paper.pdf",
+            "raw": "Missing cone problem and low-pass distortion.",
+            "heading_path": "Unknown location",
+            "citation_context": "Missing cone problem and low-pass distortion.",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "missing_click_anchor" in names
+    assert "system_b_missing_takeaway" in names
+    assert "system_b_missing_locator" in names
+
+
+def test_summarize_citation_detail_quality_counts_routes_and_failures():
+    summary = summarize_citation_detail_quality(
+        [
+            {
+                "num": 1,
+                "anchor": "a1",
+                "source_name": "Demo.pdf",
+                "heading_path": "Abstract",
+                "evidence_quote": "A complete evidence sentence explains the answer in enough detail.",
+            },
+            {
+                "is_inpaper": True,
+                "source": "inline_marker",
+                "ref_num": "4",
+                "raw": "inline marker only",
+            },
+        ]
+    )
+
+    assert summary["ok"] is False
+    assert summary["route_counts"] == {"system_a": 1, "system_b": 1}
+    assert summary["ok_route_counts"]["system_a"] == 1
+    assert any(item["name"] == "inline_marker_not_rendered" for item in summary["failures"])

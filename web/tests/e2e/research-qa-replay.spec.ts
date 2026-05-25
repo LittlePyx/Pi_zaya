@@ -8,6 +8,13 @@ test.beforeEach(async ({ page }) => {
       body: JSON.stringify({}),
     })
   })
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
   await page.route('**/api/references/bibliometrics', async (route) => {
     await route.fulfill({
       status: 200,
@@ -48,6 +55,9 @@ test('research QA replay covers multiple real library documents and citation car
 
   await expect(page.locator('body')).not.toContainText('The paper cites')
   await expect(page.locator('body')).not.toContainText('This hit is directly relevant')
+  await expect(page.locator('body')).not.toContainText('[[CITE:')
+  await expect(page.locator('body')).not.toContainText('No summary available')
+  await expect(page.locator('body')).not.toContainText('## Foveated')
   await expect(page.locator('body')).not.toContainText('适合作为定位入口')
 
   const firstRefsHeader = page.locator('.kb-refs-panel .ant-collapse-header').first()
@@ -58,8 +68,13 @@ test('research QA replay covers multiple real library documents and citation car
 
   const systemAChip = page.locator('.kb-cite-chip:not(.kb-cite-chip-sysb)').first()
   await expect(systemAChip).toBeVisible()
+  await expect(systemAChip).toHaveAttribute('href', /^#.+/)
   await systemAChip.click()
   await expect(page.locator('.kb-cite-pop')).toHaveClass(/kb-cite-pop-system-a/)
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('[[CITE:')
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('## ')
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('has attrac')
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('No summary available')
   await expect(page.locator('.kb-cite-pop')).toContainText('SCIGS')
   await expect(page.getByTestId('citation-popover-system-a-location')).toContainText('SCIGS / Abstract')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('variant of 3DGS')
@@ -71,9 +86,14 @@ test('research QA replay covers multiple real library documents and citation car
 
   const systemBChip = page.locator('.kb-cite-chip-sysb').first()
   await expect(systemBChip).toBeVisible()
+  await expect(systemBChip).toHaveAttribute('href', /^#.+/)
   await systemBChip.scrollIntoViewIfNeeded()
   await systemBChip.click()
   await expect(page.locator('.kb-cite-pop')).toHaveClass(/kb-cite-pop-system-b/)
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('[[CITE:')
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('```')
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('No summary available')
+  await expect(page.locator('.kb-cite-pop')).not.toContainText('The paper cites')
   await expect(page.getByTestId('citation-popover-explain')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-flow')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-claim')).toHaveCount(0)

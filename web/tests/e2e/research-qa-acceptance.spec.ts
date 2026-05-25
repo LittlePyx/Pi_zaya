@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from '@playwright/test'
+import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
 
 const CONV_ID = 'conv-research-qa-acceptance'
 const BASE_TIME = 1_780_000_000
@@ -326,6 +326,9 @@ async function installResearchQaBackend(page: Page) {
   await page.route('**/api/references/citation-meta', async (route) => {
     await fulfillJson(route, {})
   })
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await fulfillJson(route, {})
+  })
   await page.route('**/api/references/bibliometrics', async (route) => {
     await fulfillJson(route, {})
   })
@@ -337,6 +340,37 @@ async function installResearchQaBackend(page: Page) {
       anchors: [],
     })
   })
+}
+
+async function expectCitationChipsAreClickableLinks(scope: Locator, selector: string) {
+  const chips = scope.locator(selector)
+  const count = await chips.count()
+  expect(count).toBeGreaterThan(0)
+  const hrefs = await chips.evaluateAll((items) =>
+    items.map((item) => ({
+      tag: item.tagName.toLowerCase(),
+      href: item.getAttribute('href') || '',
+      text: item.textContent || '',
+    })),
+  )
+  for (const item of hrefs) {
+    expect(item.tag, `${item.text} should render as an anchor`).toBe('a')
+    expect(item.href, `${item.text} should point at a citation anchor`).toMatch(/^#.+/)
+  }
+  expect(new Set(hrefs.map((item) => item.href)).size).toBe(hrefs.length)
+}
+
+async function expectCitationPopoverClean(page: Page) {
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await expect(popover).not.toContainText('[[CITE:')
+  await expect(popover).not.toContainText('```')
+  await expect(popover).not.toContainText('## ')
+  await expect(popover).not.toContainText('No summary available')
+  await expect(popover).not.toContainText('The paper cites')
+  await expect(popover).not.toContainText('This is stated in')
+  await expect(popover).not.toContainText('This hit is directly relevant')
+  await expect(popover).not.toContainText('has attrac')
 }
 
 test('research QA acceptance: polished refs and both citation systems stay clickable', async ({ page }) => {
@@ -367,11 +401,13 @@ test('research QA acceptance: polished refs and both citation systems stay click
 
   const firstAssistant = page.locator('div[data-msg-id="202"]')
   await expect(firstAssistant.locator('.kb-cite-chip')).toHaveCount(3)
+  await expectCitationChipsAreClickableLinks(firstAssistant, '.kb-cite-chip')
   await expect(firstAssistant).not.toContainText('[1]')
   await expect(firstAssistant).not.toContainText('[2]')
   await firstAssistant.locator('.kb-cite-chip').first().hover()
   await firstAssistant.locator('.kb-cite-chip').first().click()
   await expect(page.locator('.kb-cite-pop')).toHaveClass(/kb-cite-pop-system-a/)
+  await expectCitationPopoverClean(page)
   await expect(page.getByTestId('citation-popover-system-a-location')).toContainText('Data-driven strategy')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('low-dimensional measurements')
   await expect(page.getByTestId('citation-popover-system-a-claim')).toHaveCount(0)
@@ -387,10 +423,12 @@ test('research QA acceptance: polished refs and both citation systems stay click
   const secondAssistant = page.locator('div[data-msg-id="204"]')
   const systemBChips = secondAssistant.locator('.kb-cite-chip-sysb')
   await expect(systemBChips).toHaveCount(2)
+  await expectCitationChipsAreClickableLinks(secondAssistant, '.kb-cite-chip-sysb')
   await expect(systemBChips.first()).toHaveText('[R4]')
   await systemBChips.first().hover()
   await systemBChips.first().click()
   await expect(page.locator('.kb-cite-pop')).toHaveClass(/kb-cite-pop-system-b/)
+  await expectCitationPopoverClean(page)
   await expect(page.getByTestId('citation-popover-system-b-claim')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-role')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-relation')).toHaveCount(0)
@@ -401,4 +439,5 @@ test('research QA acceptance: polished refs and both citation systems stay click
   await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('SCINeRF')
   await expect(page.getByTestId('citation-popover-system-b-location')).not.toContainText('尚未定位到具体章节或页码')
   await expect(page.getByTestId('citation-popover-system-b-reference')).toHaveCount(0)
+  await expect(page.locator('.kb-cite-pop')).toContainText('10.1561/2200000016')
 })

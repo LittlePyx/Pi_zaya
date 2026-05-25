@@ -198,11 +198,16 @@ export function CitationPopover({
     ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
   const systemAClaimText = cleanCitationDisplayText(compact(detail.cardClaim) || compact(detail.answerClaim))
+  const suppressRawSystemAEvidenceFallback = !isSystemB
+    && (
+      cardQualityFlags.includes('evidence_quote_filtered')
+      || cardQualityFlags.includes('missing_evidence_quote')
+    )
   const systemAEvidenceText = cleanCitationDisplayText(detail.cardEvidence)
-    || cleanCitationDisplayText(detail.evidenceQuote)
-    || cleanCitationDisplayText(detail.summaryLine)
-    || cleanCitationDisplayText(detail.raw)
-    || cleanCitationDisplayText(detail.citeFmt)
+    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.evidenceQuote) : '')
+    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.summaryLine) : '')
+    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.raw) : '')
+    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.citeFmt) : '')
   const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
     ? cardTakeaway
     : ''

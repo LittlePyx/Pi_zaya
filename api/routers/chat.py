@@ -865,6 +865,35 @@ def get_conversation(conv_id: str):
     return conv
 
 
+def _merge_cached_reference_render_payload(conv_id: str, refs_by_user: dict) -> dict:
+    merged: dict = dict(refs_by_user or {}) if isinstance(refs_by_user, dict) else {}
+    try:
+        from api.routers.references import _get_any_cached_conversation_refs_payload
+
+        cached = _get_any_cached_conversation_refs_payload(conv_id=conv_id)
+    except Exception:
+        cached = None
+    if not isinstance(cached, dict):
+        return merged
+    for raw_key, pack in cached.items():
+        if not isinstance(pack, dict):
+            continue
+        try:
+            key = int(raw_key)
+        except Exception:
+            continue
+        if key <= 0:
+            continue
+        current = merged.get(key) or merged.get(str(key))
+        if isinstance(current, dict):
+            next_pack = dict(current)
+            next_pack["rendered_payload"] = pack
+            merged[key] = next_pack
+        else:
+            merged[key] = pack
+    return merged
+
+
 @router.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: str):
     get_chat_store().delete_conversation(conv_id)
@@ -875,7 +904,7 @@ def delete_conversation(conv_id: str):
 def get_messages(conv_id: str, limit: int | None = None, render_packet_only: int | None = None):
     store = get_chat_store()
     messages = [_normalize_message_attachments(msg) for msg in store.get_messages(conv_id, limit=limit)]
-    refs_by_user = store.list_message_refs(conv_id) or {}
+    refs_by_user = _merge_cached_reference_render_payload(conv_id, store.list_message_refs(conv_id) or {})
     conv = store.get_conversation(conv_id) or {}
     mode = str(conv.get("mode") or "").strip().lower()
     # Default: enable in paper-guide conversations so frontend can exercise contract-first mode.
@@ -902,7 +931,7 @@ def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = Non
         limit=limit,
         before_id=before_id,
     )
-    refs_by_user = store.list_message_refs(conv_id) or {}
+    refs_by_user = _merge_cached_reference_render_payload(conv_id, store.list_message_refs(conv_id) or {})
     conv = store.get_conversation(conv_id) or {}
     mode = str(conv.get("mode") or "").strip().lower()
     render_packet_flag = (

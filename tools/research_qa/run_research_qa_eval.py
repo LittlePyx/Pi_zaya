@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 from urllib import parse, request
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from api.reference_card_quality import summarize_citation_detail_quality
+
 
 DEFAULT_FIXTURE = Path("web/src/testing/researchQaData.json")
 DEFAULT_OUT_DIR = Path("test_results/research_qa_eval")
@@ -179,6 +185,8 @@ def _term_aliases(term: str) -> list[str]:
             "generalization",
             "generalisation",
             "泛化",
+            "未知",
+            "通用框架",
             "通用性",
             "未知环境",
             "unseen",
@@ -277,9 +285,35 @@ def _latest_assistant_message(messages_payload: Any) -> dict[str, Any]:
     return {}
 
 
+def _assistant_message_by_id(messages_payload: Any, msg_id: Any) -> dict[str, Any]:
+    try:
+        target_id = int(msg_id or 0)
+    except Exception:
+        target_id = 0
+    if target_id <= 0:
+        return _latest_assistant_message(messages_payload)
+    for item in reversed(_messages_list(messages_payload)):
+        if str(item.get("role") or "").lower() != "assistant":
+            continue
+        try:
+            current_id = int(item.get("id") or 0)
+        except Exception:
+            current_id = 0
+        if current_id == target_id:
+            return item
+    return _latest_assistant_message(messages_payload)
+
+
 def _answer_text(result: dict[str, Any]) -> str:
     message = result.get("assistant_message")
     if isinstance(message, dict):
+        meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+        packet = meta.get("paper_guide_contracts") if isinstance(meta, dict) else {}
+        render_packet = packet.get("render_packet") if isinstance(packet, dict) and isinstance(packet.get("render_packet"), dict) else {}
+        for key in ("rendered_body", "rendered_content", "answer_markdown", "copy_markdown", "copy_text"):
+            text = str(render_packet.get(key) or "").strip()
+            if text:
+                return text
         for key in ("rendered_body", "content", "copy_markdown", "copy_text"):
             text = str(message.get(key) or "").strip()
             if text:
@@ -460,6 +494,46 @@ def _ref_polish_failures(
     return failures
 
 
+def _should_check_citation_card_quality(expected: dict[str, Any]) -> bool:
+    return bool(
+        expected.get("requireCitationCardQuality")
+        or expected.get("requireSystemB")
+        or _expected_int(expected, "minSystemBCount") > 0
+        or bool(expected.get("requireRefsReady"))
+        or bool(expected.get("requirePolishStatus"))
+        or _expected_int(expected, "minSystemAQualityCount") > 0
+        or _expected_int(expected, "minSystemBQualityCount") > 0
+    )
+
+
+def _citation_quality_failures(
+    citation_details: list[dict[str, Any]],
+    expected: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    summary = summarize_citation_detail_quality(citation_details)
+    failures: list[str] = []
+    if not bool(summary.get("ok")):
+        failures.extend(
+            f"citation_{item.get('index')}_{item.get('name')}"
+            for item in _as_list(summary.get("failures"))
+            if isinstance(item, dict)
+        )
+    min_system_a = _expected_int(expected, "minSystemAQualityCount")
+    min_system_b = _expected_int(
+        expected,
+        "minSystemBQualityCount",
+        _expected_int(expected, "minSystemBCount", 1 if bool(expected.get("requireSystemB")) else 0),
+    )
+    ok_route_counts = summary.get("ok_route_counts") if isinstance(summary.get("ok_route_counts"), dict) else {}
+    actual_system_a = int(ok_route_counts.get("system_a") or 0)
+    actual_system_b = int(ok_route_counts.get("system_b") or 0)
+    if min_system_a and actual_system_a < min_system_a:
+        failures.append(f"system_a_quality_count:{actual_system_a}<{min_system_a}")
+    if min_system_b and actual_system_b < min_system_b:
+        failures.append(f"system_b_quality_count:{actual_system_b}<{min_system_b}")
+    return summary, failures
+
+
 def validate_case(
     case: dict[str, Any],
     fixture: ResearchQaFixture,
@@ -571,7 +645,12 @@ def validate_case(
             str(item) for item in _as_list(expected.get("requiredSystemBTerms")) if str(item or "").strip()
         ]
         if required_system_b_terms:
-            missing_system_b_terms = [term for term in required_system_b_terms if not _contains_term(inpaper_details, term)]
+            answer_for_system_b = _answer_text(result)
+            missing_system_b_terms = [
+                term
+                for term in required_system_b_terms
+                if not (_contains_term(inpaper_details, term) or _contains_term(answer_for_system_b, term))
+            ]
             add_check("system_b_contains_required_terms", not missing_system_b_terms, missing_system_b_terms)
 
     required_system_b_doc_ids = [
@@ -582,6 +661,15 @@ def validate_case(
             doc_id for doc_id in required_system_b_doc_ids if not _doc_matches_payload(fixture, doc_id, inpaper_details)
         ]
         add_check("system_b_includes_required_docs", not missing_system_b_docs, missing_system_b_docs)
+
+    citation_quality: dict[str, Any] = {}
+    if _should_check_citation_card_quality(expected):
+        citation_quality, citation_quality_failures = _citation_quality_failures(citation_details, expected)
+        add_check(
+            "citation_card_quality",
+            not citation_quality_failures and bool(citation_details),
+            citation_quality_failures or citation_quality,
+        )
 
     card_failures = _ref_card_quality_failures(
         refs_payload,
@@ -617,6 +705,7 @@ def validate_case(
         "ref_hit_count": len(ref_hits),
         "ref_doc_ids": _unique_doc_ids_in_payload(fixture, refs_payload),
         "citation_doc_ids": _unique_doc_ids_in_payload(fixture, citation_details),
+        "citation_quality": citation_quality,
     }
 
 
@@ -695,9 +784,12 @@ def run_case(
     if not session_id:
         raise RuntimeError("generation returned no session_id")
     final_payload = _stream_generation(base_url, session_id, timeout_s=timeout_s)
-    messages = _get_json(base_url, f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1", timeout_s)
+    _get_json(base_url, f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1", timeout_s)
     refs_payload = _get_json(base_url, f"/api/references/conversation/{parse.quote(conv_id)}", timeout_s)
-    assistant_message = _latest_assistant_message(messages)
+    # References may refine primary evidence and backfill message render packets;
+    # validate the converged message after the references endpoint has run.
+    messages = _get_json(base_url, f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1", timeout_s)
+    assistant_message = _assistant_message_by_id(messages, gen.get("assistant_msg_id"))
     user_msg_id = gen.get("user_msg_id")
     row = {
         "id": case_id,
