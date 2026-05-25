@@ -1213,7 +1213,28 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
     details_by_key: dict[str, dict] = {}
     index_data = _load_reference_index_cached()
 
-    def _mk_detail(sid: str, ref_num: int) -> dict | None:
+    def _structured_cite_context_line(token_start: int, token_end: int) -> str:
+        try:
+            start = max(0, int(token_start))
+            end = max(start, int(token_end))
+        except Exception:
+            return ""
+        source = str(md or "")
+        left = source.rfind("\n", 0, start)
+        left = 0 if left < 0 else left + 1
+        right = source.find("\n", end)
+        if right < 0:
+            right = len(source)
+        raw = str(source[left:right] or "").strip()
+        raw = _STRUCT_CITE_RE.sub("", raw)
+        raw = _STRUCT_CITE_SINGLE_RE.sub("", raw)
+        raw = _STRUCT_CITE_SID_ONLY_RE.sub("", raw)
+        raw = _STRUCT_CITE_GARBAGE_RE.sub("", raw)
+        raw = re.sub(r"\s+", " ", _md_to_plain_text(raw)).strip()
+        raw = re.sub(r"\s+([,.;:!?，。；：！？])", r"\1", raw)
+        return raw[:420]
+
+    def _mk_detail(sid: str, ref_num: int, *, answer_context: str = "") -> dict | None:
         source_path = src_by_sid.get(str(sid or "").strip().lower())
         if not source_path:
             return None
@@ -1276,8 +1297,15 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             "doi_url": doi_url,
             "cite_fmt": str(ref2.get("cite_fmt") or raw).strip(),
         }
+        local_answer_context = str(answer_context or "").strip()
+        if local_answer_context:
+            rec["answer_claim"] = local_answer_context[:420]
         try:
-            source_context = extract_inpaper_reference_context(source_path, int(ref_num), answer_context=md[:4000])
+            source_context = extract_inpaper_reference_context(
+                source_path,
+                int(ref_num),
+                answer_context=local_answer_context or str(md or "")[:4000],
+            )
         except Exception:
             source_context = {}
         if isinstance(source_context, dict):
@@ -1306,6 +1334,13 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
                     rec["citation_context_score"] = float(source_context.get("citation_context_score") or 0.0)
                 except Exception:
                     rec["citation_context_score"] = 0.0
+        if local_answer_context and not str(rec.get("citation_context") or "").strip():
+            rec["citation_context"] = local_answer_context[:420]
+            rec["citation_context_source"] = "answer_context"
+            rec["evidence_quote"] = local_answer_context[:420]
+            rec["evidence_source"] = "answer_context"
+            rec["summary_line"] = local_answer_context[:360]
+            rec["summary_source"] = "answer_context"
         details_by_key[key] = rec
         return rec
 
@@ -1318,7 +1353,8 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             n = int(n_txt)
         except Exception:
             return ""
-        detail = _mk_detail(sid, n)
+        context_line = _structured_cite_context_line(int(m.start()), int(m.end()))
+        detail = _mk_detail(sid, n, answer_context=context_line)
         if not detail:
             return f"[{n}]"
         return f"[{n}](#{detail['anchor']})"

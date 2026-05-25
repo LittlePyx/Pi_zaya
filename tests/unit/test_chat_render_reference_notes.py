@@ -969,6 +969,116 @@ def test_citation_lookup_rendered_link_points_to_validated_target_reference(monk
     assert packet["cite_details"][0]["doi"] == "10.1364/OE.15.014013"
 
 
+def test_structured_cite_fallback_uses_local_answer_line_for_system_b_context(monkeypatch, tmp_path: Path):
+    from api import chat_render
+
+    source_file = tmp_path / "paper.en.md"
+    source_file.write_text(
+        "\n".join(
+            [
+                "# Paper",
+                "This body intentionally leaves mention choice to the structured asset.",
+                "",
+                "## References",
+                "[3] Example A. Detector-array reconstruction benchmark. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "reference_index.json").write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "ref_num": 3,
+                        "citation_mentions": [
+                            {
+                                "citation_context": "The introduction briefly names earlier optical sectioning work [3].",
+                                "heading_path": "Paper / Introduction",
+                                "location_label": "Paper / Introduction / p. 1",
+                                "page_start": 1,
+                                "page_end": 1,
+                                "line_start": 8,
+                                "line_end": 8,
+                            },
+                            {
+                                "citation_context": "The benchmark compares detector-array reconstruction accuracy against prior work [3].",
+                                "heading_path": "Paper / Benchmark",
+                                "location_label": "Paper / Benchmark / p. 5",
+                                "page_start": 5,
+                                "page_end": 5,
+                                "line_start": 88,
+                                "line_end": 88,
+                            },
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    source_path = str(source_file)
+    sid = chat_render._source_cite_id(source_path)
+    monkeypatch.setattr(chat_render, "_load_reference_index_cached", lambda: {})
+
+    md = f"Intro sentence without a citation.\nFor the benchmark, open prior work [[CITE:{sid}:3]]."
+    rendered, details = chat_render._fallback_render_structured_citations(
+        md,
+        [{"text": "hit", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        anchor_ns="local-line-test",
+    )
+
+    assert "[3](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["is_inpaper"] is True
+    assert detail["answer_claim"] == "For the benchmark, open prior work."
+    assert detail["citation_context_source"] == "structured_reference_index"
+    assert "detector-array reconstruction accuracy" in detail["citation_context"]
+    assert "briefly names earlier" not in detail["citation_context"]
+    assert detail["heading_path"].endswith("Benchmark")
+    assert detail["page_start"] == 5
+
+
+def test_structured_cite_fallback_marks_answer_context_only_when_source_context_missing(monkeypatch, tmp_path: Path):
+    from api import chat_render
+
+    source_file = tmp_path / "paper.en.md"
+    source_file.write_text(
+        "\n".join(
+            [
+                "# Paper",
+                "No body mention is available for this reference.",
+                "",
+                "## References",
+                "[6] Example B. Unlocated upstream method. 2023.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    source_path = str(source_file)
+    sid = chat_render._source_cite_id(source_path)
+    monkeypatch.setattr(chat_render, "_load_reference_index_cached", lambda: {})
+
+    md = f"This answer mentions an upstream method [[CITE:{sid}:6]]."
+    rendered, details = chat_render._fallback_render_structured_citations(
+        md,
+        [{"text": "hit", "meta": {"source_path": source_path, "source_sha1": "abc"}}],
+        anchor_ns="answer-only-test",
+    )
+
+    assert "[6](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["citation_context_source"] == "answer_context"
+    assert detail["card_evidence_label"] == "回答里的线索"
+    assert "answer_context_only" in detail["card_quality_flags"]
+
+
 def test_non_citation_message_does_not_preserve_stale_existing_render_packet_links():
     messages = [
         {"id": 1, "role": "user", "content": "test"},
