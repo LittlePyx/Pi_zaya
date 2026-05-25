@@ -185,6 +185,30 @@ test('system B upstream reference citation is explicitly clickable and opens its
   await expect(popover).toContainText('JCR Q2')
 })
 
+test('system B popover suppresses weak raw context without dropping metrics', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
+  const systemBChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(systemBChip).toBeVisible()
+  await systemBChip.click()
+
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await expect(popover).toHaveClass(/kb-cite-pop-system-b/)
+  await expect(popover).toContainText('上游参考文献')
+  await expect(page.getByTestId('citation-popover-system-b-context')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-b-reference')).toContainText('The missing cone problem')
+  await expect(popover).not.toContainText('##')
+  await expect(popover).not.toContainText('Alessandro Zunino')
+  await expect(popover).not.toContainText('No useful citation context')
+  await expect(popover).toContainText('DOI 10.1117/12.7976703')
+  await expect(popover).toContainText('22')
+  await expect(popover).toContainText('IF 1.2')
+  await expect(popover).toContainText('JCR Q4')
+})
+
 test('render packet hidden locate does not leak a visible locate chip', async ({ page }) => {
   await mockReaderDoc(page)
   await page.goto('/__message_list_test__?scenario=render-packet-hidden-locate')

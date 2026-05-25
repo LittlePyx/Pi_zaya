@@ -485,6 +485,60 @@ const citationHoverRaceMessages: Message[] = [
   },
 ]
 
+const weakSystemBPopoverMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: 'This discussion traces a cited upstream imaging paper [R3](#kb-cite-weak-system-b-r3).',
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        intent: { family: 'citation_lookup' },
+        render_packet: {
+          answer_markdown: 'This discussion traces a cited upstream imaging paper [R3](#kb-cite-weak-system-b-r3).',
+          rendered_body: 'This discussion traces a cited upstream imaging paper [R3](#kb-cite-weak-system-b-r3).',
+          rendered_content: 'This discussion traces a cited upstream imaging paper [R3](#kb-cite-weak-system-b-r3).',
+          copy_text: 'This discussion traces a cited upstream imaging paper [R3].',
+          copy_markdown: 'This discussion traces a cited upstream imaging paper [R3](#kb-cite-weak-system-b-r3).',
+          cite_details: [
+            {
+              num: 3,
+              anchor: 'kb-cite-weak-system-b-r3',
+              source_name: 'NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf',
+              source_path: READER_REGRESSION_SOURCE_PATH,
+              is_inpaper: true,
+              raw: 'Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K. The missing cone problem and low-pass distortion in optical serial sectioning microscopy. IEEE Trans. Acoust., Speech, Signal Process. 2, 890-893 (1988).',
+              card_title: '上游参考文献',
+              authors: 'Macias-Garza F',
+              venue: 'IEEE Trans. Acoust., Speech, Signal Process.',
+              year: '1988',
+              doi: '10.1117/12.7976703',
+              doi_url: 'https://doi.org/10.1117/12.7976703',
+              citation_count: 22,
+              citation_source: 'OpenAlex',
+              journal_if: '1.2',
+              journal_quartile: 'Q4',
+              answer_claim: 'This citation should support the discussion of three-dimensional microscopic imaging limits.',
+              citation_context: '## Authors\nAlessandro Zunino [1,4], Giacomo Garre [1,2,4], Eleonora Perego [1,3], Sabrina Zappone [1,2], Mattia Donato [1], Nadine Vastenhouw [3] & Giuseppe Vicidomini [1]',
+              citation_context_source: 'source_markdown',
+              evidence_quote: '**No useful citation context**',
+              summary_line: '**No useful citation context**',
+              location_label: 'Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy',
+              card_locator: 'Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy',
+              card_evidence: '',
+              card_evidence_label: '引用语境',
+              card_takeaway: '',
+              card_quality_flags: ['weak_citation_context', 'missing_citation_context', 'missing_reference_title'],
+              card_warning: '当前自动抽取的引用语境质量较弱，已隐藏低价值片段；建议打开原文核对。',
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
 const systemACitationPopoverMessages: Message[] = [
   {
     id: 1,
@@ -914,6 +968,7 @@ type RegressionScenario =
   | 'render-packet-contract'
   | 'render-packet-hidden-locate'
   | 'citation-hover-race'
+  | 'weak-system-b-popover'
   | 'system-a-citation-popover'
   | 'repeated-system-a-old-packet'
   | 'low-quality-system-a-old-packet'
@@ -936,6 +991,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'render-packet-contract') return 'render-packet-contract'
     if (scenarioParam === 'render-packet-hidden-locate') return 'render-packet-hidden-locate'
     if (scenarioParam === 'citation-hover-race') return 'citation-hover-race'
+    if (scenarioParam === 'weak-system-b-popover') return 'weak-system-b-popover'
     if (scenarioParam === 'system-a-citation-popover') return 'system-a-citation-popover'
     if (scenarioParam === 'repeated-system-a-old-packet') return 'repeated-system-a-old-packet'
     if (scenarioParam === 'low-quality-system-a-old-packet') return 'low-quality-system-a-old-packet'
@@ -954,6 +1010,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'render-packet-contract') return renderPacketContractMessages
     if (scenario === 'render-packet-hidden-locate') return renderPacketHiddenLocateMessages
     if (scenario === 'citation-hover-race') return citationHoverRaceMessages
+    if (scenario === 'weak-system-b-popover') return weakSystemBPopoverMessages
     if (scenario === 'system-a-citation-popover') return systemACitationPopoverMessages
     if (scenario === 'repeated-system-a-old-packet') return repeatedSystemAOldPacketMessages
     if (scenario === 'low-quality-system-a-old-packet') return lowQualitySystemAOldPacketMessages

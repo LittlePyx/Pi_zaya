@@ -239,3 +239,46 @@ def test_system_b_card_composer_suppresses_author_list_context() -> None:
     assert detail["card_locator_label"] == "当前论文引用处"
     assert "weak_citation_context" in detail["card_quality_flags"]
     assert "missing_citation_context" in detail["card_quality_flags"]
+
+
+def test_system_b_card_composer_parses_title_from_raw_reference_without_promoting_raw_entry() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "Fixture Paper.pdf",
+            "raw": (
+                "[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a "
+                "dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013"
+            ),
+            "answer_claim": "The answer traces single-shot compressive spectral imaging.",
+            "citation_context": (
+                "The current paper cites this work when tracing the single-shot "
+                "compressive spectral imaging background."
+            ),
+        }
+    )
+
+    assert detail["card_title"] == "Single-shot compressive spectral imaging with a dual-disperser architecture"
+    assert not detail["card_title"].startswith("[1] Gehm")
+    assert "missing_reference_title" not in detail["card_quality_flags"]
+
+
+def test_system_b_card_composer_keeps_raw_reference_out_of_missing_title_header() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "Fixture Paper.pdf",
+            "raw": "Unparseable upstream item. No stable title.",
+            "citation_context": (
+                "Alessandro Zunino [1,4], Giacomo Garre [1,2,4], Eleonora Perego [1,3], "
+                "Sabrina Zappone [1,2], Mattia Donato [1], Nadine Vastenhouw [3] "
+                "& Giuseppe Vicidomini [1]"
+            ),
+            "citation_context_source": "source_markdown",
+        }
+    )
+
+    assert detail["card_title"] == "上游参考文献"
+    assert detail["card_evidence"] == ""
+    assert "missing_reference_title" in detail["card_quality_flags"]
+    assert "weak_citation_context" in detail["card_quality_flags"]

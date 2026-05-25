@@ -107,7 +107,7 @@ function asText(value: unknown): string {
   return ''
 }
 
-function cleanCitationDisplayText(value: string): string {
+export function cleanCitationDisplayText(value: string): string {
   return String(value || '')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/(?:\$\s*)?\^\{\s*\[[\d,\-\s;]+\]\s*\}(?:\s*\$)?/g, ' ')
@@ -199,7 +199,7 @@ function looksBibliographyEntryContext(value: string): boolean {
   return startsLikeAuthors && venueLike && (volumePages || (text.match(/,/g) || []).length >= 3)
 }
 
-function looksLowValueCitationContext(value: string): boolean {
+export function looksLowValueCitationContext(value: string): boolean {
   const text = cleanCitationDisplayText(value)
   if (!text) return true
   if (looksAuthorListContext(text) || looksBibliographyEntryContext(text)) return true
@@ -828,14 +828,22 @@ function titleBasedShelfSummary(detail: CiteDetail): string {
 
 function deriveShelfSummary(detail: CiteDetail): { line: string; source: string } {
   const existing = trimShelfSummary(detail.summaryLine, 420)
-  if (existing) return { line: existing, source: detail.summarySource || 'metadata' }
+  const suppressRawSystemBContext = detail.isInpaper
+    && (
+      detail.cardQualityFlags.includes('weak_citation_context')
+      || detail.cardQualityFlags.includes('missing_citation_context')
+    )
+  if (existing && !(detail.isInpaper && looksLowValueCitationContext(existing))) {
+    return { line: existing, source: detail.summarySource || 'metadata' }
+  }
 
   const lines: string[] = []
   if (detail.isInpaper) {
     const takeaway = trimShelfSummary(detail.cardTakeaway || deriveSystemBTakeaway(detail), 220)
     if (takeaway && !looksGenericSystemBTakeaway(takeaway)) appendUniqueSummaryLine(lines, `上游作用：${takeaway}`)
 
-    const context = trimShelfSummary(detail.cardEvidence || detail.citationContext || detail.evidenceQuote, 240)
+    const rawContext = suppressRawSystemBContext ? '' : (detail.citationContext || detail.evidenceQuote)
+    const context = trimShelfSummary(detail.cardEvidence || rawContext, 240)
     if (context && !looksLowValueCitationContext(context)) appendUniqueSummaryLine(lines, `引用语境：${context}`)
 
     const relation = trimShelfSummary(detail.userQuestionRelation || detail.upstreamWorkRole || detail.supportRelation || detail.whyLine, 220)

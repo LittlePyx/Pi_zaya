@@ -2,7 +2,13 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import type { CiteDetail } from './citationState'
-import { citationDisplay, citationInlineLabel, citeMetricSummary } from './citationState'
+import {
+  citationDisplay,
+  citationInlineLabel,
+  citeMetricSummary,
+  cleanCitationDisplayText,
+  looksLowValueCitationContext,
+} from './citationState'
 
 import { useT } from '../../i18n'
 
@@ -195,8 +201,21 @@ export function CitationPopover({
   const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
     ? cardTakeaway
     : ''
-  const systemBReferenceText = compact(detail.raw) || compact(detail.citeFmt)
-  const systemBCitationContextText = compact(detail.cardEvidence) || compact(detail.citationContext) || compact(detail.evidenceQuote) || compact(detail.summaryLine)
+  const systemBReferenceText = cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
+  const systemBCardEvidenceText = cleanCitationDisplayText(detail.cardEvidence)
+  const systemBRawContextCandidate = cleanCitationDisplayText(
+    compact(detail.citationContext) || compact(detail.evidenceQuote) || compact(detail.summaryLine),
+  )
+  const suppressRawSystemBContextFallback = isSystemB
+    && (
+      cardQualityFlags.includes('weak_citation_context')
+      || cardQualityFlags.includes('missing_citation_context')
+    )
+  const systemBRawContextIsLowValue = Boolean(
+    systemBRawContextCandidate && looksLowValueCitationContext(systemBRawContextCandidate),
+  )
+  const systemBCitationContextText = systemBCardEvidenceText
+    || ((!suppressRawSystemBContextFallback && !systemBRawContextIsLowValue) ? systemBRawContextCandidate : '')
   const systemBCitationContextLabel = /回答/.test(cardEvidenceLabel) ? cardEvidenceLabel : '引用语境'
   const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
     ? cardTakeaway
@@ -229,7 +248,8 @@ export function CitationPopover({
   const systemATitle = cardTitle || ((displayMain && displayMain !== headingPath)
     ? displayMain
     : (compact(detail.sourceName) || compact(display.source) || displayMain))
-  const systemBTitle = cardTitle || display.main
+  const systemBTitleMissing = !cardTitle && !compact(detail.title)
+  const systemBTitle = cardTitle || compact(detail.title) || '上游参考文献'
   const systemASub = [headingPath, pageLabel].filter(Boolean).join(' · ')
   const systemALocationText = compact(detail.cardLocator) || compact(detail.locationLabel) || systemASub || systemATitle
   const systemAAnchorText = anchorKindLabel(detail.anchorKind)
@@ -269,7 +289,7 @@ export function CitationPopover({
     ? '只定位到引用发生的论文，尚未定位到具体章节或页码；可打开引用语境核对。'
     : ''
   const showSystemBLocation = Boolean(systemBLocationText)
-  const showSystemBReference = Boolean(!systemBTitle && systemBReferenceText)
+  const showSystemBReference = Boolean(systemBReferenceText && (systemBTitleMissing || cardQualityFlags.includes('missing_reference_title')))
   const metaRows = [
     display.source ? { label: '来源', value: display.source } : null,
     display.venueYear ? { label: '发表', value: display.venueYear } : null,

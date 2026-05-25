@@ -106,7 +106,14 @@ def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
             self.messages: list[tuple[str, str, str, list[dict] | None]] = []
             self.titles: list[tuple[str, str]] = []
 
-        def append_message(self, conv_id: str, role: str, content: str, attachments: list[dict] | None = None) -> int:
+        def append_message(
+            self,
+            conv_id: str,
+            role: str,
+            content: str,
+            attachments: list[dict] | None = None,
+            meta: dict | None = None,
+        ) -> int:
             self.messages.append((conv_id, role, content, attachments))
             return len(self.messages)
 

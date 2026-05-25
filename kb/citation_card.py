@@ -237,6 +237,125 @@ def _first_text(rec: Mapping[str, Any], *keys: str, max_len: int = 520) -> str:
     return ""
 
 
+def _clean_reference_entry(value: Any, *, max_len: int = 900) -> str:
+    text = _clean_text(value, max_len=max_len)
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _looks_reference_author_segment(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    comma_count = text.count(",")
+    amp_or_and = bool(re.search(r"\b(?:and|et al)\b|&", text, re.IGNORECASE))
+    initials = len(re.findall(r"\b[A-Z]\.?\b", text))
+    surnames = len(re.findall(r"\b[A-Z][A-Za-z'`-]{2,}\b", text))
+    if comma_count >= 1 and initials >= 2 and surnames >= 2:
+        return True
+    if comma_count >= 2 and (initials >= 2 or amp_or_and):
+        return True
+    return comma_count >= 3 and surnames >= 3
+
+
+def _looks_reference_venue_segment(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lower = text.lower()
+    if re.search(r"\b(?:18|19|20)\d{2}\b", lower):
+        return True
+    if re.search(r"\b\d{1,4}\s*,\s*\d{1,6}(?:[-–]\d{1,6})?\b", lower):
+        return True
+    venue_tokens = (
+        "journal",
+        "transactions",
+        "proceedings",
+        "conference",
+        "letters",
+        "express",
+        "optics",
+        "photonics",
+        "physical review",
+        "phys. rev",
+        "ieee",
+        "acm",
+        "springer",
+        "elsevier",
+        "nature",
+        "science",
+        "arxiv",
+    )
+    return len(lower.split()) <= 12 and any(token in lower for token in venue_tokens)
+
+
+def _looks_reference_title_segment(value: str) -> bool:
+    text = str(value or "").strip(" .;:,")
+    if not text:
+        return False
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'`-]*|[\u4e00-\u9fff]+", text)
+    if len(text) < 8 or len(text) > 260:
+        return False
+    if len(words) < 3 or len(words) > 32:
+        return False
+    if re.search(r"\b(?:doi|arxiv)\b", text, re.IGNORECASE):
+        return False
+    if _looks_reference_author_segment(text) or _looks_reference_venue_segment(text):
+        return False
+    if len(re.findall(r"[A-Za-z\u4e00-\u9fff]{2,}", text)) < 2:
+        return False
+    return True
+
+
+def _fallback_system_b_title_from_raw_reference(raw: str) -> str:
+    text = _clean_reference_entry(raw, max_len=900)
+    if not text:
+        return ""
+    has_reference_shape = bool(
+        re.search(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\s*[.)])\s+", text)
+        or re.search(r"\b(?:18|19|20)\d{2}\b", text)
+        or re.search(r"\bdoi\s*:?\s*10\.", text, re.IGNORECASE)
+        or text.count(",") >= 2
+    )
+    if not has_reference_shape:
+        return ""
+    text = re.sub(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\s*[.)])\s*", "", text)
+    text = re.sub(r"https?://\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bdoi\s*:?\s*10\.\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\barxiv\s*:?\s*\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" .;:,")
+    if not text:
+        return ""
+
+    quoted = re.search(r"[\"“”]([^\"“”]{8,260})[\"“”]", text)
+    if quoted:
+        title = str(quoted.group(1) or "").strip(" .;:,")
+        if _looks_reference_title_segment(title):
+            return _clean_text(title, max_len=220)
+
+    year_match = re.search(r"\((?:18|19|20)\d{2}\)\s*([^.]{8,260})\.", text)
+    if year_match:
+        title = str(year_match.group(1) or "").strip(" .;:,")
+        if _looks_reference_title_segment(title):
+            return _clean_text(title, max_len=220)
+
+    segments = [
+        part.strip(" .;:,")
+        for part in re.split(r"\.\s+(?=[A-Z][A-Za-z0-9])", text)
+        if part.strip(" .;:,")
+    ]
+    if not segments:
+        return ""
+
+    for idx, segment in enumerate(segments):
+        if idx == 0 and _looks_reference_author_segment(segment):
+            continue
+        if _looks_reference_title_segment(segment):
+            return _clean_text(segment, max_len=220)
+    return ""
+
+
 def _source_name(source_path: str) -> str:
     text = str(source_path or "").strip()
     if not text:
@@ -530,7 +649,10 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
 
 def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
     source = _first_text(rec, "source_name", max_len=180) or _source_name(str(rec.get("source_path") or ""))
-    title = _first_text(rec, "title", "cite_fmt", "raw", max_len=220) or "上游参考文献"
+    raw_reference = _clean_reference_entry(rec.get("raw") or rec.get("cite_fmt"), max_len=900)
+    explicit_title = _first_text(rec, "title", max_len=220)
+    parsed_title = _fallback_system_b_title_from_raw_reference(raw_reference)
+    title = explicit_title or parsed_title or "上游参考文献"
     subtitle = " · ".join(
         part
         for part in (
@@ -564,7 +686,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
 
     score = 0.72
     flags: list[str] = []
-    if not title or title == "上游参考文献":
+    if not explicit_title and not parsed_title:
         flags.append("missing_reference_title")
         score -= 0.16
     if not source:
