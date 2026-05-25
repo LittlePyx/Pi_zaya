@@ -16,7 +16,8 @@ from kb.reference_index import (
 )
 from kb.source_blocks import build_source_blocks, doc_id_for_path, normalize_inline_markdown
 
-_INDEX_VERSION = 1
+STRUCTURED_INDEX_VERSION = 2
+_INDEX_VERSION = STRUCTURED_INDEX_VERSION
 _EQUATION_CONTEXT_KINDS = {"paragraph", "list_item", "blockquote", "table"}
 _INLINE_REF_RE = re.compile(
     r"(?<!\[)\[(\d{1,4}(?:\s*(?:[-\u2013\u2014\u2212,;\uff0c\u3001\uff1b])\s*\d{1,4})*)\](?!\])"

@@ -43,6 +43,7 @@ from kb.file_ops import (
     _path_is_file,
     _to_os_path,
 )
+from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.library_store import LibraryStore
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
 from kb.reference_sync import start_reference_sync
@@ -1754,7 +1755,20 @@ def reindex():
     pdf_d = _pdf_dir()
     ingest_py = _ingest_py_path()
     if not ingest_py.exists():
-        return {"ok": False, "error": "ingest.py not found", "refsync": None, "refsync_error": ""}
+        return {
+            "ok": False,
+            "error": "ingest.py not found",
+            "structured_indices": None,
+            "structured_indices_error": "",
+            "refsync": None,
+            "refsync_error": "",
+        }
+    structured_indices: dict | None = None
+    structured_indices_error = ""
+    try:
+        structured_indices = rebuild_structured_indices_for_root(md_d, force=False)
+    except Exception as exc:
+        structured_indices_error = str(exc)
     result = subprocess.run(
         [os.sys.executable, str(ingest_py), "--src", str(md_d), "--db", str(s.db_dir), "--incremental", "--prune"],
         capture_output=True, text=True, timeout=300,
@@ -1788,6 +1802,8 @@ def reindex():
         "ok": bool(ok),
         "stdout": result.stdout[-500:],
         "stderr": result.stderr[-500:],
+        "structured_indices": structured_indices,
+        "structured_indices_error": structured_indices_error,
         "refsync": refsync,
         "refsync_error": refsync_error,
     }

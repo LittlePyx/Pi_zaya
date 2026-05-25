@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from kb.chunking import chunk_markdown
+from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.store import (
     compute_doc_id,
     compute_file_sha1,
@@ -48,6 +49,16 @@ def main() -> None:
     ap.add_argument("--prune", action="store_true", help="Remove docs from DB if source file is missing.")
     ap.add_argument("--chunk-size", type=int, default=1400, help="Chunk size in characters. Default: 1400")
     ap.add_argument("--chunk-overlap", type=int, default=200, help="Chunk overlap in characters. Default: 200")
+    ap.add_argument(
+        "--rebuild-structured-indices",
+        action="store_true",
+        help="Rebuild per-document structured indices under each markdown assets/ directory.",
+    )
+    ap.add_argument(
+        "--force-structured-indices",
+        action="store_true",
+        help="Rebuild structured indices even when the current index version is already present.",
+    )
     args = ap.parse_args()
 
     src = Path(args.src).expanduser().resolve()
@@ -58,6 +69,16 @@ def main() -> None:
     md_files = _iter_md_files(src, args.glob, set(args.exclude_dir), set(args.exclude_name))
     if not md_files:
         raise SystemExit(f"No markdown files found under: {src}")
+
+    structured_stats: dict | None = None
+    if bool(args.rebuild_structured_indices):
+        structured_stats = rebuild_structured_indices_for_root(
+            src,
+            glob=str(args.glob or "*.md"),
+            exclude_dirs=set(args.exclude_dir),
+            exclude_names=set(args.exclude_name),
+            force=bool(args.force_structured_indices),
+        )
 
     changed = 0
     skipped = 0
@@ -101,6 +122,15 @@ def main() -> None:
     save_docs_index(db_dir, docs_index)
 
     print(f"Docs: {len(md_files)} | updated: {changed} | skipped: {skipped} | removed: {removed}")
+    if structured_stats is not None:
+        print(
+            "Structured indices: "
+            f"scanned={int(structured_stats.get('scanned') or 0)} "
+            f"rebuilt={int(structured_stats.get('rebuilt') or 0)} "
+            f"skipped={int(structured_stats.get('skipped') or 0)} "
+            f"failed={int(structured_stats.get('failed') or 0)} "
+            f"citation_mentions={int(structured_stats.get('citation_mention_count') or 0)}"
+        )
     if changed:
         print(f"New/updated chunks written: {total_chunks}")
     print(f"DB: {db_dir}")

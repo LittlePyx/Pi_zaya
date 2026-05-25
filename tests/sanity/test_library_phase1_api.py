@@ -365,10 +365,24 @@ def test_reindex_route_starts_reference_sync_on_success(monkeypatch, tmp_path: P
         stderr = ""
 
     captured: dict = {}
+    structured_captured: dict = {}
 
     def fake_start_reference_sync(**kwargs):
         captured.update(kwargs)
         return {"started": True, "run_id": 7}
+
+    def fake_rebuild_structured_indices_for_root(src_root, **kwargs):
+        structured_captured["src_root"] = src_root
+        structured_captured.update(kwargs)
+        return {
+            "version": 2,
+            "scanned": 3,
+            "rebuilt": 2,
+            "skipped": 1,
+            "failed": 0,
+            "citation_mention_count": 5,
+            "errors": [],
+        }
 
     monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
     monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
@@ -376,6 +390,7 @@ def test_reindex_route_starts_reference_sync_on_success(monkeypatch, tmp_path: P
     monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")))
     monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeProc())
     monkeypatch.setattr(library_router, "start_reference_sync", fake_start_reference_sync)
+    monkeypatch.setattr(library_router, "rebuild_structured_indices_for_root", fake_rebuild_structured_indices_for_root)
     monkeypatch.setenv("KB_CROSSREF_BUDGET_S", "55")
     monkeypatch.setenv("KB_REFSYNC_WORKERS", "8")
 
@@ -384,6 +399,10 @@ def test_reindex_route_starts_reference_sync_on_success(monkeypatch, tmp_path: P
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
+    assert (payload.get("structured_indices") or {}).get("rebuilt") == 2
+    assert (payload.get("structured_indices") or {}).get("citation_mention_count") == 5
+    assert structured_captured.get("src_root") == md_dir
+    assert structured_captured.get("force") is False
     assert (payload.get("refsync") or {}).get("started") is True
     assert captured.get("src_root") == md_dir
     assert captured.get("pdf_root") == pdf_dir

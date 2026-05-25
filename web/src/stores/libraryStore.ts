@@ -64,7 +64,23 @@ interface LibraryState {
   regenerateSuggestions: (body?: LibrarySuggestionRegenerateBody) => Promise<number>
   applySuggestionAction: (body: LibrarySuggestionActionBody) => Promise<LibraryFileItem | null>
   cancelConvert: () => Promise<void>
-  reindex: () => Promise<{ ok: boolean; stdout: string; stderr: string; refsync: { started?: boolean; reason?: string; run_id?: number } | null; refsync_error: string }>
+  reindex: () => Promise<{
+    ok: boolean
+    stdout: string
+    stderr: string
+    structured_indices: {
+      version: number
+      scanned: number
+      rebuilt: number
+      skipped: number
+      failed: number
+      citation_mention_count: number
+      errors: Array<{ path: string; error: string }>
+    } | null
+    structured_indices_error: string
+    refsync: { started?: boolean; reason?: string; run_id?: number } | null
+    refsync_error: string
+  }>
   startReferenceSync: () => Promise<{ started: boolean; reason?: string; run_id?: number }>
   startProgressStream: () => void
   stopProgressStream: () => void

@@ -253,6 +253,16 @@ export interface LibraryReindexResponse {
   ok: boolean
   stdout: string
   stderr: string
+  structured_indices: {
+    version: number
+    scanned: number
+    rebuilt: number
+    skipped: number
+    failed: number
+    citation_mention_count: number
+    errors: Array<{ path: string; error: string }>
+  } | null
+  structured_indices_error: string
   refsync: {
     started?: boolean
     reason?: string
