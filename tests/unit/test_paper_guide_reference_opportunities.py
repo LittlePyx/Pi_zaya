@@ -44,6 +44,59 @@ def test_detects_upstream_refs_for_ordinary_beginner_question_before_generation(
     assert "Related Work" in opportunities[0]["heading_path"]
 
 
+def test_detect_paper_guide_reference_opportunities_requires_explicit_evidence_ref() -> None:
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt="Deep learning gives SPI what benefits and pitfalls?",
+        answer="Deep learning can improve reconstruction, but needs training data.",
+        prompt_family="overview",
+        source_path="db/demo/spi.en.md",
+        support_slots=[
+            {
+                "source_path": "db/demo/spi.en.md",
+                "sid": "s1234abcd",
+                "heading_path": "Deep learning",
+                "snippet": "Deep learning improves single-pixel reconstruction speed and image quality.",
+                "candidate_refs": [22],
+                "claim_type": "method_detail",
+                "cite_policy": "prefer_ref",
+            }
+        ],
+        max_items=3,
+    )
+
+    assert opportunities == []
+
+
+def test_detect_paper_guide_reference_opportunities_accepts_ref_span_from_same_sentence() -> None:
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt="Did ADMM come from earlier work?",
+        answer="ADMM is earlier optimization machinery.",
+        prompt_family="overview",
+        source_path="db/demo/scinerf.en.md",
+        support_slots=[
+            {
+                "source_path": "db/demo/scinerf.en.md",
+                "sid": "s1234abcd",
+                "heading_path": "SCINeRF / 2. Related Work",
+                "snippet": "Most existing methods employ alternating direction method of multipliers.",
+                "candidate_refs": [4],
+                "ref_spans": [
+                    {
+                        "text": "Most existing methods employ alternating direction method of multipliers (ADMM) [4].",
+                        "nums": [4],
+                        "scope": "same_sentence",
+                    }
+                ],
+                "claim_type": "prior_work",
+                "cite_policy": "prefer_ref",
+            }
+        ],
+        max_items=3,
+    )
+
+    assert [item["ref_num"] for item in opportunities] == [4]
+
+
 def test_detect_text_reference_opportunities_for_normal_question(monkeypatch) -> None:
     from kb import paper_guide_reference_opportunities as mod
 
@@ -301,6 +354,25 @@ def test_apply_reference_opportunities_suppresses_tail_for_broad_synthesis_quest
     assert meta["tail_used"] is False
     assert meta["tail_suppressed"] is True
     assert "[[CITE:" not in answer
+
+
+def test_apply_reference_opportunities_does_not_inject_on_generic_benefits_sentence() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        "Deep learning brings significant benefits to single-pixel imaging, but it also introduces challenges.",
+        prompt="What benefits and pitfalls does deep learning bring to single-pixel imaging?",
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 22,
+                "label": "single-pixel imaging",
+                "evidence_quote": "Keywords: Single-pixel imaging Information extraction network Deep learning",
+            }
+        ],
+    )
+
+    assert "[[CITE:" not in answer
+    assert meta["tail_used"] is False
+    assert meta["tail_suppressed"] is True
 
 
 def test_apply_reference_opportunities_uses_inline_system_b_for_ordinary_matching_sentence() -> None:

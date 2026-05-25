@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from kb.inpaper_citation_grounding import parse_ref_num_set
 from kb.paper_guide_shared import _cite_source_id
 from kb.reference_index import load_reference_index, resolve_reference_entry
 from kb.source_blocks import normalize_inline_markdown
@@ -13,7 +14,7 @@ _CITE_CANON_RE = re.compile(
     re.IGNORECASE,
 )
 _INLINE_REF_RE = re.compile(
-    r"(?<!\[)\[(\d{1,4}(?:\s*(?:-|–|—|,)\s*\d{1,4})*)\](?!\])"
+    r"(?<!\[)\[(\d{1,4}(?:\s*(?:[-\u2013\u2014\u2212,])\s*\d{1,4})*)\](?!\])"
 )
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]{2,}|\d{3,}|\w+")
 _ENTITY_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)*\b")
@@ -45,6 +46,32 @@ _DOMAIN_LABEL_PATTERNS = (
     ("NeRF", r"(?i)\bNeRF\b|neural radiance fields?"),
     ("3D Gaussian", r"(?i)\b3DGS\b|3D Gaussian|Gaussian splatting"),
     ("PILN", r"(?i)\bPILN\b|part-based image-loop network|image-loop network"),
+)
+_BROAD_REFERENCE_LABELS = {
+    "single pixel imaging",
+    "snapshot compressive imaging",
+    "deep learning",
+    "neural network",
+}
+_GENERIC_SYNTHESIS_LINE_RE = re.compile(
+    r"(?i)\b(?:brings?|offers?|has|provides?)\s+(?:significant\s+)?(?:benefits?|advantages?)\b.{0,80}\b(?:challenges?|risks?|limitations?)\b|"
+    r"(?:\u5e26\u6765.{0,16}(?:\u597d\u5904|\u4f18\u52bf|\u63d0\u5347).{0,40}(?:\u6311\u6218|\u98ce\u9669|\u5c40\u9650|\u5751)|"
+    r"\u603b\u7684\u6765\u8bf4|\u5177\u4f53\u6765\u8bf4)"
+)
+_SEMANTIC_SUPPORT_PATTERNS = (
+    ("single_pixel_imaging", r"(?i)\bsingle[-\s]?pixel imaging\b|\bSPI\b|\u5355\u50cf\u7d20\u6210\u50cf"),
+    ("snapshot_compressive_imaging", r"(?i)\bsnapshot compressive imaging\b|\bSCI\b|\u538b\u7f29\u5feb\u7167|\u5feb\u7167\u538b\u7f29"),
+    ("deep_learning", r"(?i)\bdeep learning\b|\bDNNs?\b|\bneural networks?\b|\u6df1\u5ea6\u5b66\u4e60|\u795e\u7ecf\u7f51\u7edc"),
+    ("reconstruction", r"(?i)\breconstruction\b|\breconstruct\b|\u91cd\u5efa"),
+    ("speed", r"(?i)\bspeed\b|\breal[-\s]?time\b|\bfast\b|\u901f\u5ea6|\u5feb\u901f|\u5b9e\u65f6"),
+    ("quality", r"(?i)\bquality\b|\bhigh[-\s]?quality\b|\u8d28\u91cf|\u9ad8\u8d28\u91cf"),
+    ("sampling", r"(?i)\bsampling\b|\bsampling rate\b|\u91c7\u6837|\u91c7\u6837\u7387"),
+    ("noise", r"(?i)\bnoise\b|\bdenois(?:e|ing)\b|\u566a\u58f0|\u53bb\u566a"),
+    ("spad", r"(?i)\bSPADs?\b|single[-\s]?photon avalanche diode|\u5355\u5149\u5b50"),
+    ("super_resolution", r"(?i)\bsuper[-\s]?resolution\b|\u8d85\u5206\u8fa8"),
+    ("generalization", r"(?i)\bgenerali[sz]ation\b|\brobustness\b|\bunseen\b|\u6cdb\u5316|\u9c81\u68d2"),
+    ("data", r"(?i)\bdatasets?\b|\btraining data\b|\u6570\u636e\u96c6|\u8bad\u7ec3\u6570\u636e"),
+    ("physical_model", r"(?i)\bphysical model\b|\bphysics[-\s]?informed\b|\u7269\u7406\u6a21\u578b|\u7269\u7406\u4fe1\u606f"),
 )
 _LABEL_EXPANSIONS = {
     "admm": ("alternating direction method of multipliers",),
@@ -172,6 +199,51 @@ def _append_ref_num(bucket: list[int], value: object) -> None:
         bucket.append(n)
 
 
+def _inline_ref_nums_from_text(text: str, *, limit: int = 12) -> list[int]:
+    out: list[int] = []
+    for match in _INLINE_REF_RE.finditer(str(text or "")):
+        for item in parse_ref_num_set(str(match.group(1) or ""), max_items=limit):
+            _append_ref_num(out, item)
+            if len(out) >= max(1, int(limit)):
+                return out
+    return out
+
+
+def _explicit_ref_nums_from_record(record: Mapping[str, object], *, text: str) -> list[int]:
+    """Refs that are explicitly present in the evidence sentence itself.
+
+    Candidate refs can be useful for validation, but they are too broad for
+    System B surfacing: a System B card should mean that the current paper
+    evidence actually contains "[n]" (or an equivalent ref_span parsed from
+    that same sentence/clause), not merely that a bibliography entry matched a
+    label.
+    """
+
+    out: list[int] = []
+    for item in _inline_ref_nums_from_text(text):
+        _append_ref_num(out, item)
+    for span in list(record.get("ref_spans") or []):
+        if not isinstance(span, Mapping):
+            continue
+        scope = str(span.get("scope") or "").strip().lower()
+        if scope in {"reference_entry", "bibliography", "references"}:
+            continue
+        span_text = str(span.get("text") or span.get("surface") or span.get("snippet") or "").strip()
+        span_nums = [int(n) for n in list(span.get("nums") or []) if str(n).strip().isdigit() and int(n) > 0]
+        if not span_nums:
+            continue
+        inline_nums = _inline_ref_nums_from_text(span_text) if span_text else []
+        if inline_nums:
+            for item in inline_nums:
+                if item in span_nums:
+                    _append_ref_num(out, item)
+            continue
+        if scope in {"same_sentence", "same_clause", "context_explicit_ref"}:
+            for item in span_nums:
+                _append_ref_num(out, item)
+    return out[:6]
+
+
 def _ref_nums_from_record(record: Mapping[str, object], *, text: str) -> list[int]:
     out: list[int] = []
     for key in ("resolved_ref_num", "ref_num", "reference_number"):
@@ -193,21 +265,7 @@ def _ref_nums_from_record(record: Mapping[str, object], *, text: str) -> list[in
 
 
 def _record_has_upstream_ref_signal(record: Mapping[str, object], *, text: str) -> bool:
-    if _INLINE_REF_RE.search(str(text or "")):
-        return True
-    cite_policy = str(record.get("cite_policy") or "").strip().lower()
-    if cite_policy == "prefer_ref":
-        return True
-    claim_type = str(record.get("claim_type") or "").strip().lower()
-    has_candidate_refs = False
-    for key in ("candidate_refs", "support_ref_candidates", "ref_nums", "inline_refs"):
-        values = record.get(key)
-        if isinstance(values, Sequence) and not isinstance(values, (str, bytes)) and list(values):
-            has_candidate_refs = True
-            break
-    if has_candidate_refs and claim_type in {"prior_work", "method_detail", "component_role"}:
-        return True
-    return False
+    return bool(_explicit_ref_nums_from_record(record, text=text))
 
 
 def _tokens(text: str) -> set[str]:
@@ -275,6 +333,22 @@ def _loose_ascii_words(text: str) -> list[str]:
 
 def _loose_ascii_text(text: str) -> str:
     return " ".join(_loose_ascii_words(text))
+
+
+def _semantic_support_tags(text: str) -> set[str]:
+    src = str(text or "")
+    if not src:
+        return set()
+    return {tag for tag, pattern in _SEMANTIC_SUPPORT_PATTERNS if re.search(pattern, src)}
+
+
+def _is_broad_reference_label(label: str) -> bool:
+    key = _loose_ascii_text(label)
+    if key in _BROAD_REFERENCE_LABELS:
+        return True
+    if str(label or "").strip().upper() in {"SCI", "SPI"}:
+        return True
+    return False
 
 
 def _expansions_for_label(label: str) -> tuple[str, ...]:
@@ -515,6 +589,36 @@ def _line_can_take_prompt_bound_opportunity(*, line: str, prompt: str, label: st
     )
 
 
+def _line_has_grounded_opportunity_context(*, line: str, prompt: str, opp: Mapping[str, object]) -> bool:
+    plain = _compact_text(line, max_len=520)
+    if not plain or _GENERIC_SYNTHESIS_LINE_RE.search(plain):
+        return False
+    label = str(opp.get("label") or "").strip()
+    if not label or label.lower().startswith("ref "):
+        return False
+    label_matches_line = _label_matches_surface(label, plain)
+    if not _is_broad_reference_label(label):
+        return bool(
+            label_matches_line
+            or _line_can_take_prompt_bound_opportunity(line=plain, prompt=prompt, label=label)
+        )
+    if not label_matches_line:
+        return False
+    evidence_surface = " ".join(
+        [
+            str(opp.get("evidence_quote") or "").strip(),
+            str(opp.get("ref_title") or "").strip(),
+            str(opp.get("why_line") or "").strip(),
+        ]
+    )
+    line_tags = _semantic_support_tags(plain)
+    evidence_tags = _semantic_support_tags(evidence_surface)
+    shared_tags = line_tags.intersection(evidence_tags)
+    broad_only_tags = {"single_pixel_imaging", "snapshot_compressive_imaging", "deep_learning"}
+    concrete_shared = shared_tags.difference(broad_only_tags)
+    return bool(concrete_shared or len(shared_tags) >= 3)
+
+
 def _label_for_opportunity(*, prompt: str, text: str, ref_num: int) -> str:
     local_ref = re.search(rf"\[\s*{int(ref_num)}\s*\]", str(text or ""))
     if local_ref:
@@ -591,9 +695,9 @@ def detect_paper_guide_reference_opportunities(
 ) -> list[dict[str, object]]:
     """Find upstream bibliography refs that should surface in ordinary answers.
 
-    The detector only trusts refs that are already attached to the current
-    paper evidence, either as explicit inline markers in a paragraph or as
-    candidate refs on a support slot/card.
+    The detector only trusts refs that are explicitly attached to the current
+    paper evidence sentence or clause, either as inline markers such as "[4]"
+    or as ref_spans parsed from that same sentence/clause.
     """
 
     family = str(prompt_family or "").strip().lower()
@@ -614,10 +718,8 @@ def detect_paper_guide_reference_opportunities(
         if not record_source:
             continue
         text = _text_from_record(record)
-        refs = _ref_nums_from_record(record, text=text)
+        refs = _explicit_ref_nums_from_record(record, text=text)
         if not refs:
-            continue
-        if not _record_has_upstream_ref_signal(record, text=text):
             continue
         heading = _heading_from_record(record)
         score = _score_record(
@@ -749,6 +851,8 @@ def _line_score_for_opportunity(*, line: str, prompt: str, opp: Mapping[str, obj
         return float("-inf")
     label = str(opp.get("label") or "").strip()
     evidence = str(opp.get("evidence_quote") or "").strip()
+    if not _line_has_grounded_opportunity_context(line=plain, prompt=prompt, opp=opp):
+        return float("-inf")
     score = 0.0
     label_matches = _label_matches_surface(label, plain)
     if label_matches:

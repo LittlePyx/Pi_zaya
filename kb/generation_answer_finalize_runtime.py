@@ -28,7 +28,6 @@ from kb.paper_guide_answer_repair import repair_template_only_paper_guide_answer
 from kb.paper_guide_reference_opportunities import (
     apply_reference_opportunities_to_answer,
     detect_paper_guide_reference_opportunities,
-    detect_text_reference_opportunities,
     merge_reference_opportunity_candidate_refs,
     strip_reference_opportunity_note,
 )
@@ -2705,32 +2704,6 @@ def _finalize_generation_answer(
             cards=list(paper_guide_evidence_cards or []),
             max_items=3,
         )
-    else:
-        text_reference_opportunities = detect_text_reference_opportunities(
-            prompt=prompt_for_user or prompt,
-            answer=answer,
-            answer_hits=answer_hits,
-            db_dir=db_dir,
-            max_items=3,
-        )
-        if text_reference_opportunities:
-            seen_opp = {
-                (
-                    str(item.get("sid") or "").strip().lower(),
-                    int(item.get("ref_num") or 0),
-                )
-                for item in paper_guide_reference_opportunities
-                if isinstance(item, dict)
-            }
-            for item in text_reference_opportunities:
-                key = (
-                    str(item.get("sid") or "").strip().lower(),
-                    int(item.get("ref_num") or 0),
-                )
-                if key in seen_opp:
-                    continue
-                seen_opp.add(key)
-                paper_guide_reference_opportunities.append(dict(item))
     if paper_guide_reference_opportunities:
         answer, paper_guide_reference_apply_meta = apply_reference_opportunities_to_answer(
             answer,
