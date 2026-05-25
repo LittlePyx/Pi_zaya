@@ -1,6 +1,87 @@
 from __future__ import annotations
 
+import json
+
 from ui import refs_renderer
+
+
+def test_structured_system_b_detail_preserves_precomputed_reference_index_source(monkeypatch, tmp_path):
+    source_file = tmp_path / "paper.en.md"
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    source_file.write_text(
+        "\n".join(
+            [
+                "# Paper",
+                "This body intentionally has no inline citation marker.",
+                "",
+                "## References",
+                "[7] Example upstream work. 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "reference_index.json").write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "ref_num": 7,
+                        "citation_mentions": [
+                            {
+                                "citation_context": "The method follows a calibrated detector-array design [7].",
+                                "heading_path": "Paper / Methods",
+                                "location_label": "Paper / Methods / p. 3",
+                                "page_start": 3,
+                                "page_end": 3,
+                                "line_start": 42,
+                                "line_end": 42,
+                                "anchor_kind": "paragraph",
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    source_path = str(source_file)
+    sid = refs_renderer._source_cite_id(source_path)
+
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) != 7:
+            return None
+        return {
+            "source_path": source_path,
+            "source_name": "paper.pdf",
+            "ref_num": 7,
+            "ref": {
+                "authors": "Example A",
+                "year": "2024",
+                "title": "Example upstream work",
+                "raw": "[7] Example A. Example upstream work. 2024.",
+            },
+        }
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "paper.pdf")
+    monkeypatch.setattr(refs_renderer, "_is_temp_source_path", lambda _sp: False)
+
+    md = f"The answer uses detector-array design [[CITE:{sid}:7]] to explain the method lineage."
+    hits = [{"meta": {"source_path": source_path, "source_sha1": "abc"}}]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[7](#kb-cite-" in out
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["citation_context_source"] == "structured_reference_index"
+    assert detail["evidence_source"] == "structured_reference_index"
+    assert "detector-array design [7]" in detail["citation_context"]
+    assert detail["page_start"] == 3
+    assert "answer_context_only" not in detail["card_quality_flags"]
 
 
 def test_structured_system_b_detail_prefers_source_markdown_context(monkeypatch, tmp_path):

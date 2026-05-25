@@ -17,10 +17,13 @@ import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.citation_card import compose_citation_card
-from kb.citation_context import extract_inpaper_reference_context
 from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.file_naming import citation_meta_display_pdf_name
+from kb.inpaper_citation_enrichment import (
+    enrich_inpaper_detail_context,
+    extract_structured_cite_answer_context_line,
+)
 from kb.inpaper_citation_grounding import (
     extract_citation_context_hints,
     has_explicit_reference_conflict,
@@ -3960,38 +3963,15 @@ def _annotate_inpaper_citations_with_hover_meta(
             return True
 
         def _citation_context_line(*, token_start: int, token_end: int) -> str:
-            try:
-                start = max(0, int(token_start))
-                end = max(start, int(token_end))
-            except Exception:
-                return ""
-            left = seg.rfind("\n", 0, start)
-            left = 0 if left < 0 else left + 1
-            right = seg.find("\n", end)
-            if right < 0:
-                right = len(seg)
-            raw = str(seg[left:right] or "").strip()
-            raw = _STRUCT_CITE_RE.sub("", raw)
-            raw = _STRUCT_CITE_SINGLE_RE.sub("", raw)
-            raw = _STRUCT_CITE_SID_ONLY_RE.sub("", raw)
-            raw = _STRUCT_CITE_GARBAGE_RE.sub("", raw)
-            raw = re.sub(r"\s+", " ", normalize_inline_markdown(raw)).strip()
-            return raw[:420]
+            return extract_structured_cite_answer_context_line(
+                seg,
+                int(token_start),
+                int(token_end),
+                normalizer=normalize_inline_markdown,
+            )
 
         def _enrich_system_b_detail_from_answer_context(detail: dict, *, token_start: int, token_end: int) -> None:
             context_line = _citation_context_line(token_start=token_start, token_end=token_end)
-            if context_line:
-                if not str(detail.get("answer_claim") or "").strip():
-                    detail["answer_claim"] = context_line
-                if not str(detail.get("citation_context") or "").strip():
-                    detail["citation_context"] = context_line
-                    detail["citation_context_source"] = "answer_context"
-                if not str(detail.get("evidence_quote") or "").strip():
-                    detail["evidence_quote"] = context_line
-                    detail["evidence_source"] = "answer_context"
-                if not str(detail.get("summary_line") or "").strip():
-                    detail["summary_line"] = context_line
-                    detail["summary_source"] = "answer_context"
             role_line = _system_b_upstream_role(context_line, detail)
             relation_line = _system_b_user_relation(context_line, detail)
             if role_line and not str(detail.get("upstream_work_role") or "").strip():
@@ -4003,41 +3983,12 @@ def _annotate_inpaper_citations_with_hover_meta(
             if not str(detail.get("why_line") or "").strip():
                 detail["why_line"] = role_line or relation_line
 
-            source_context: dict = {}
-            try:
-                source_context = extract_inpaper_reference_context(
-                    str(detail.get("source_path") or ""),
-                    int(detail.get("num") or 0),
-                    answer_context=context_line,
-                )
-            except Exception:
-                source_context = {}
-            if not isinstance(source_context, dict):
-                source_context = {}
-            source_citation_context = str(source_context.get("citation_context") or "").strip()
-            if source_citation_context:
-                detail["citation_context"] = source_citation_context[:520]
-                detail["citation_context_source"] = "source_markdown"
-                detail["evidence_quote"] = source_citation_context[:520]
-                detail["evidence_source"] = "source_markdown"
-                detail["summary_line"] = source_citation_context[:360]
-                detail["summary_source"] = "source_markdown"
-                for key in ("heading_path", "location_label", "anchor_kind"):
-                    value = str(source_context.get(key) or "").strip()
-                    if value:
-                        detail[key] = value
-                for key in ("page_start", "page_end", "line_start", "line_end"):
-                    try:
-                        value_i = int(source_context.get(key) or 0)
-                    except Exception:
-                        value_i = 0
-                    if value_i > 0:
-                        detail[key] = value_i
-                detail["citation_context_quality"] = str(source_context.get("citation_context_quality") or "").strip()
-                try:
-                    detail["citation_context_score"] = float(source_context.get("citation_context_score") or 0.0)
-                except Exception:
-                    detail["citation_context_score"] = 0.0
+            enrich_inpaper_detail_context(
+                detail,
+                source_path=str(detail.get("source_path") or ""),
+                ref_num=int(detail.get("num") or 0),
+                answer_context=context_line,
+            )
 
         def _pick_grounded_numeric_candidate(
             n: int,

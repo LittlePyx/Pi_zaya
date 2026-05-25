@@ -42,7 +42,10 @@ from kb.paper_guide_structured_index_runtime import (
 )
 from kb.citation_meta import extract_first_doi
 from kb.citation_card import compose_citation_card
-from kb.citation_context import extract_inpaper_reference_context
+from kb.inpaper_citation_enrichment import (
+    enrich_inpaper_detail_context,
+    extract_structured_cite_answer_context_line,
+)
 from kb.citation_plan import citation_plan_prefers_system_b
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
@@ -1214,25 +1217,12 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
     index_data = _load_reference_index_cached()
 
     def _structured_cite_context_line(token_start: int, token_end: int) -> str:
-        try:
-            start = max(0, int(token_start))
-            end = max(start, int(token_end))
-        except Exception:
-            return ""
-        source = str(md or "")
-        left = source.rfind("\n", 0, start)
-        left = 0 if left < 0 else left + 1
-        right = source.find("\n", end)
-        if right < 0:
-            right = len(source)
-        raw = str(source[left:right] or "").strip()
-        raw = _STRUCT_CITE_RE.sub("", raw)
-        raw = _STRUCT_CITE_SINGLE_RE.sub("", raw)
-        raw = _STRUCT_CITE_SID_ONLY_RE.sub("", raw)
-        raw = _STRUCT_CITE_GARBAGE_RE.sub("", raw)
-        raw = re.sub(r"\s+", " ", _md_to_plain_text(raw)).strip()
-        raw = re.sub(r"\s+([,.;:!?，。；：！？])", r"\1", raw)
-        return raw[:420]
+        return extract_structured_cite_answer_context_line(
+            str(md or ""),
+            int(token_start),
+            int(token_end),
+            normalizer=_md_to_plain_text,
+        )
 
     def _mk_detail(sid: str, ref_num: int, *, answer_context: str = "") -> dict | None:
         source_path = src_by_sid.get(str(sid or "").strip().lower())
@@ -1298,49 +1288,13 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             "cite_fmt": str(ref2.get("cite_fmt") or raw).strip(),
         }
         local_answer_context = str(answer_context or "").strip()
-        if local_answer_context:
-            rec["answer_claim"] = local_answer_context[:420]
-        try:
-            source_context = extract_inpaper_reference_context(
-                source_path,
-                int(ref_num),
-                answer_context=local_answer_context or str(md or "")[:4000],
-            )
-        except Exception:
-            source_context = {}
-        if isinstance(source_context, dict):
-            source_citation_context = str(source_context.get("citation_context") or "").strip()
-            if source_citation_context:
-                source_kind = str(source_context.get("citation_context_source") or "source_markdown").strip() or "source_markdown"
-                rec["citation_context"] = source_citation_context[:520]
-                rec["citation_context_source"] = source_kind
-                rec["evidence_quote"] = source_citation_context[:520]
-                rec["evidence_source"] = source_kind
-                rec["summary_line"] = source_citation_context[:360]
-                rec["summary_source"] = source_kind
-                for key in ("heading_path", "location_label", "anchor_kind"):
-                    value = str(source_context.get(key) or "").strip()
-                    if value:
-                        rec[key] = value
-                for key in ("page_start", "page_end", "line_start", "line_end"):
-                    try:
-                        value_i = int(source_context.get(key) or 0)
-                    except Exception:
-                        value_i = 0
-                    if value_i > 0:
-                        rec[key] = value_i
-                rec["citation_context_quality"] = str(source_context.get("citation_context_quality") or "").strip()
-                try:
-                    rec["citation_context_score"] = float(source_context.get("citation_context_score") or 0.0)
-                except Exception:
-                    rec["citation_context_score"] = 0.0
-        if local_answer_context and not str(rec.get("citation_context") or "").strip():
-            rec["citation_context"] = local_answer_context[:420]
-            rec["citation_context_source"] = "answer_context"
-            rec["evidence_quote"] = local_answer_context[:420]
-            rec["evidence_source"] = "answer_context"
-            rec["summary_line"] = local_answer_context[:360]
-            rec["summary_source"] = "answer_context"
+        enrich_inpaper_detail_context(
+            rec,
+            source_path=source_path,
+            ref_num=int(ref_num),
+            answer_context=local_answer_context,
+            source_answer_context=local_answer_context or str(md or "")[:4000],
+        )
         details_by_key[key] = rec
         return rec
 
