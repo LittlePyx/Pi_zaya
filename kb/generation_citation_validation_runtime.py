@@ -250,6 +250,24 @@ def _validate_structured_citations(
                 merged.append(n)
             if merged:
                 candidate_ref_nums_by_source[src_norm] = merged
+    else:
+        for src, nums in (paper_guide_candidate_refs_by_source or {}).items():
+            src_norm = str(src or "").strip()
+            if not src_norm:
+                continue
+            focused_bucket: list[int] = []
+            focused_seen: set[int] = set()
+            for item in list(nums or []):
+                try:
+                    n = int(item)
+                except Exception:
+                    continue
+                if n <= 0 or n in focused_seen:
+                    continue
+                focused_seen.add(n)
+                focused_bucket.append(n)
+            if focused_bucket:
+                focused_candidate_ref_nums_by_source[src_norm] = focused_bucket
 
     support_slots_by_sid: dict[str, list[dict]] = {}
     if paper_guide_mode:
@@ -441,6 +459,9 @@ def _validate_structured_citations(
         if (not src) or int(current_ref_num) <= 0:
             return None
         if not paper_guide_mode:
+            focused_candidate_nums = list(focused_candidate_ref_nums_by_source.get(src) or [])
+            if focused_candidate_ref_nums_by_source and int(current_ref_num) not in focused_candidate_nums:
+                return None
             return int(current_ref_num) if isinstance(_resolve_ref(src, int(current_ref_num)), dict) else None
 
         current_ref = _resolve_ref(src, int(current_ref_num))
@@ -646,6 +667,17 @@ def _validate_structured_citations(
             return ""
 
         if locked_sid:
+            if sid and sid != locked_sid:
+                sid_source_path = sid_to_source.get(sid, "")
+                sid_grounded_n = _pick_grounded_ref_num(
+                    source_path=sid_source_path,
+                    current_ref_num=n,
+                    token_start=int(m.start()),
+                    token_end=int(m.end()),
+                )
+                if sid_grounded_n is not None and _resolves(sid, sid_grounded_n):
+                    stats["kept"] = int(stats["kept"]) + 1
+                    return f"[[CITE:{sid}:{sid_grounded_n}]]"
             grounded_n = _pick_grounded_ref_num(
                 source_path=locked_source_path,
                 current_ref_num=n,

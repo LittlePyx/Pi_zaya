@@ -170,9 +170,16 @@ def test_citation_detail_quality_accepts_grounded_system_b_card():
             "title": "Distributed Optimization and Statistical Learning via ADMM",
             "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
             "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+            "answer_claim": "ADMM is prior optimization background, not a new SCINeRF invention.",
             "citation_context": "Most existing methods employ ADMM-based optimization for snapshot compressive imaging.",
             "upstream_work_role": "This upstream work provides the optimization framework behind the cited ADMM method.",
             "user_question_relation": "The citation shows ADMM is prior work rather than a new SCINeRF contribution.",
+            "system_b_trace_complete": True,
+            "system_b_trace_score": 0.82,
+            "system_b_trace_steps": ["答案句", "当前论文引用处", "上游文献"],
+            "system_b_trace_answer": "ADMM is prior optimization background, not a new SCINeRF invention.",
+            "system_b_trace_context": "Most existing methods employ ADMM-based optimization for snapshot compressive imaging.",
+            "system_b_trace_reference": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
         }
     )
 
@@ -197,6 +204,7 @@ def test_citation_detail_quality_rejects_weak_system_b_card():
     assert "missing_click_anchor" in names
     assert "system_b_missing_takeaway" in names
     assert "system_b_missing_locator" in names
+    assert "system_b_missing_answer_claim" in names
 
 
 def test_summarize_citation_detail_quality_counts_routes_and_failures():
@@ -222,3 +230,60 @@ def test_summarize_citation_detail_quality_counts_routes_and_failures():
     assert summary["route_counts"] == {"system_a": 1, "system_b": 1}
     assert summary["ok_route_counts"]["system_a"] == 1
     assert any(item["name"] == "inline_marker_not_rendered" for item in summary["failures"])
+    assert summary["system_b_audit"]["system_b_total"] == 1
+    assert summary["system_b_audit"]["needs_review_count"] == 1
+    assert summary["system_b_audit"]["review_examples"]
+
+
+def test_summarize_citation_detail_quality_audits_system_b_sources():
+    summary = summarize_citation_detail_quality(
+        [
+            {
+                "num": 4,
+                "anchor": "r4",
+                "is_inpaper": True,
+                "citation_route": "system_b",
+                "routing_reason": "structured_cite",
+                "source_name": "SCINeRF.pdf",
+                "title": "Distributed Optimization and Statistical Learning via ADMM",
+                "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+                "answer_claim": "ADMM is prior optimization background.",
+                "citation_context": "The current paper cites ADMM while discussing optimization background.",
+                "citation_context_source": "source_markdown",
+                "location_label": "Related Work",
+                "card_takeaway": "这篇上游文献提供 ADMM 优化背景。",
+                "system_b_trace_complete": True,
+                "system_b_trace_score": 0.82,
+                "system_b_trace_source": "source_markdown",
+                "system_b_trace_flags": [],
+            },
+            {
+                "num": 24,
+                "anchor": "r24",
+                "is_inpaper": True,
+                "citation_route": "system_b",
+                "routing_reason": "reference_index_fallback",
+                "source_name": "SCI.pdf",
+                "title": "Single-shot compressive spectral imaging",
+                "raw": "Gehm et al. Single-shot compressive spectral imaging.",
+                "answer_claim": "This is an upstream source.",
+                "citation_context": "This is an upstream source.",
+                "citation_context_source": "answer_context",
+                "location_label": "SCI.pdf",
+                "card_takeaway": "这篇文献提供单次压缩光谱成像背景。",
+                "system_b_trace_complete": False,
+                "system_b_trace_score": 0.32,
+                "system_b_trace_source": "answer_context",
+                "system_b_trace_flags": ["answer_context_only"],
+            },
+        ]
+    )
+
+    audit = summary["system_b_audit"]
+    assert audit["system_b_total"] == 2
+    assert audit["structured_cite_count"] == 1
+    assert audit["reference_index_fallback_count"] == 1
+    assert audit["source_markdown_count"] == 1
+    assert audit["answer_context_only_count"] == 1
+    assert audit["trace_complete_count"] == 1
+    assert audit["needs_review_count"] == 1

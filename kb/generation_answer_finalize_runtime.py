@@ -2687,7 +2687,9 @@ def _finalize_generation_answer(
         if isinstance(item, dict)
     ]
     paper_guide_reference_apply_meta: dict[str, object] = {"mode": "none", "tail_used": False}
-    paper_guide_candidate_refs_effective = dict(paper_guide_candidate_refs_by_source or {})
+    paper_guide_candidate_refs_effective = (
+        dict(paper_guide_candidate_refs_by_source or {}) if bool(paper_guide_mode) else {}
+    )
     if bool(paper_guide_mode):
         reference_source_path = str(
             paper_guide_bound_source_path
@@ -2719,9 +2721,29 @@ def _finalize_generation_answer(
             prompt=prompt_for_user or prompt,
             opportunities=paper_guide_reference_opportunities,
         )
+        reference_opportunities_for_validation = paper_guide_reference_opportunities
+        if not bool(paper_guide_mode):
+            applied_refs: set[int] = set()
+            for key in ("injected_refs", "tail_refs"):
+                for raw_ref in list(paper_guide_reference_apply_meta.get(key) or []):
+                    try:
+                        ref_num = int(raw_ref)
+                    except Exception:
+                        continue
+                    if ref_num > 0:
+                        applied_refs.add(ref_num)
+            filtered_reference_opportunities: list[dict[str, object]] = []
+            for item in paper_guide_reference_opportunities:
+                try:
+                    item_ref_num = int(item.get("ref_num") or 0)
+                except Exception:
+                    item_ref_num = 0
+                if item_ref_num in applied_refs:
+                    filtered_reference_opportunities.append(item)
+            reference_opportunities_for_validation = filtered_reference_opportunities
         paper_guide_candidate_refs_effective = merge_reference_opportunity_candidate_refs(
             paper_guide_candidate_refs_effective,
-            paper_guide_reference_opportunities,
+            reference_opportunities_for_validation,
         )
     answer, citation_validation = validate_structured_citations(
         answer,

@@ -31,7 +31,6 @@ from kb.paper_guide_prompting import (
 from kb.paper_guide_reference_opportunities import (
     build_reference_opportunities_prompt_block,
     detect_paper_guide_reference_opportunities,
-    detect_text_reference_opportunities,
     merge_reference_opportunity_candidate_refs,
 )
 from kb.paper_guide.router import _resolve_paper_guide_intent
@@ -425,23 +424,11 @@ def _prepare_paper_guide_prompt_context(
                 paper_guide_reference_opportunities,
             )
     elif answer_hits:
-        prompt_text = prompt or retrieval_prompt or used_query
-        paper_guide_reference_opportunities = detect_text_reference_opportunities(
-            prompt=prompt_text,
-            answer="",
-            answer_hits=answer_hits,
-            db_dir=db_dir,
-            max_items=3,
-        )
-        if paper_guide_reference_opportunities:
-            paper_guide_reference_opportunities_block = build_reference_opportunities_prompt_block(
-                paper_guide_reference_opportunities,
-                max_items=3,
-            )
-            paper_guide_candidate_refs_by_source = merge_reference_opportunity_candidate_refs(
-                paper_guide_candidate_refs_by_source,
-                paper_guide_reference_opportunities,
-            )
+        # Ordinary multi-paper Q&A should surface System B after the answer is
+        # grounded in concrete System A citations.  Pre-generation hints do not
+        # yet know which retrieved papers the answer will actually use, and can
+        # tempt the model to emit unrelated upstream references.
+        paper_guide_reference_opportunities = []
 
     if (
         paper_guide_mode

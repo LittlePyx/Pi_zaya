@@ -141,6 +141,8 @@ test('render packet contract can drive body render and strict locate without top
   await expect(page.getByTestId('citation-popover-system-b-citing-source')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-cited-source')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('单次压缩光谱成像')
+  await expect(page.getByTestId('citation-popover-system-b-trace')).toContainText('答案句')
+  await expect(page.getByTestId('citation-popover-system-b-trace')).toContainText('上游文献')
   await expect(page.getByTestId('citation-popover-system-b-context')).toContainText('single-shot compressive spectral imaging background')
   await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('引用所在论文')
   await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('Fixture Paper')

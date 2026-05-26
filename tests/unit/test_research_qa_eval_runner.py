@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from tools.research_qa.run_research_qa_eval import (
     _assistant_message_by_id,
+    _build_report,
     load_fixture,
     source_path_for_doc,
     validate_case,
@@ -47,6 +48,28 @@ def test_research_qa_fixture_loads_shared_docs_and_cases():
     )
 
 
+def test_research_qa_fixture_enforces_system_b_trace_policy():
+    fixture = load_fixture()
+    policy_case_ids = {
+        "scinerf-admm-origin",
+        "spi-roadmap-beginner",
+        "cassi-to-3d-sci-lineage",
+        "microscopy-methods-map",
+        "single-photon-reading-pair",
+        "piln-dl-spi-position",
+    }
+
+    for case_id in policy_case_ids:
+        expected = _case_by_id(fixture, case_id).get("expected") or {}
+        assert expected.get("requireSystemB") or int(expected.get("minSystemBCount") or 0) >= 1
+        assert expected.get("requireSystemBTraceComplete") is True
+        assert expected.get("forbidSystemBAnswerContextOnly") is True
+        assert expected.get("maxSystemBNeedsReviewCount") == 0
+        assert expected.get("maxSystemBAnswerContextOnlyCount") == 0
+        assert expected.get("maxSystemBReferenceIndexFallbackCount") == 0
+        assert expected.get("minSystemBCompleteRate") == 1.0
+
+
 def test_validate_case_accepts_grounded_system_b_answer():
     fixture = load_fixture()
     case = _case_by_id(fixture, "scinerf-admm-origin")
@@ -70,9 +93,14 @@ def test_validate_case_accepts_grounded_system_b_answer():
                     "raw": "Distributed optimization and statistical learning via ADMM.",
                     "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
                     "location_label": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+                    "answer_claim": "ADMM is existing optimization background rather than a new SCINeRF contribution.",
                     "citation_context": "Most existing snapshot compressive imaging methods employ ADMM-based optimization.",
+                    "citation_context_source": "source_markdown",
                     "upstream_work_role": "This upstream paper provides the ADMM optimization framework used as prior work.",
                     "user_question_relation": "It shows ADMM is existing background rather than a new SCINeRF contribution.",
+                    "system_b_trace_complete": True,
+                    "system_b_trace_score": 0.86,
+                    "system_b_trace_source": "source_markdown",
                 }
             ],
         },
@@ -158,9 +186,14 @@ def test_validate_case_accepts_multi_doc_ordinary_question_with_system_b_and_pol
                     "raw": "Principles and prospects for single-pixel imaging.",
                     "heading_path": "Deep learning SPI review / References",
                     "location_label": "Deep learning SPI review / References",
+                    "answer_claim": "The reading route should include upstream single-pixel imaging foundations.",
                     "citation_context": "The review cites earlier single-pixel imaging foundations when introducing the field.",
+                    "citation_context_source": "source_markdown",
                     "upstream_work_role": "This upstream review is the foundation source for the SPI reading route.",
                     "user_question_relation": "It gives the user a concrete upstream source to open after the roadmap answer.",
+                    "system_b_trace_complete": True,
+                    "system_b_trace_score": 0.82,
+                    "system_b_trace_source": "source_markdown",
                 },
             ],
         },
@@ -312,11 +345,11 @@ def test_validate_case_prefers_render_packet_over_raw_content_for_citation_quali
         "user_msg_id": 106,
         "assistant_message": {
             "role": "assistant",
-            "content": "ADMM 不是新东西 [[CITE:s12345678:4]]。",
+            "content": "ADMM 不是新东西，而是已有优化框架 [[CITE:s12345678:4]]。",
             "meta": {
                 "paper_guide_contracts": {
                     "render_packet": {
-                        "rendered_body": "ADMM 不是新东西 [R4](#admm-r4)。",
+                        "rendered_body": "ADMM 不是新东西，而是已有优化框架 [R4](#admm-r4)。",
                         "cite_details": [
                             {
                                 "num": 4,
@@ -328,9 +361,14 @@ def test_validate_case_prefers_render_packet_over_raw_content_for_citation_quali
                                 "raw": "Distributed optimization and statistical learning via ADMM.",
                                 "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
                                 "location_label": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
+                                "answer_claim": "ADMM is existing optimization background rather than a new SCINeRF contribution.",
                                 "citation_context": "Most existing snapshot compressive imaging methods employ ADMM-based optimization.",
+                                "citation_context_source": "source_markdown",
                                 "upstream_work_role": "This upstream paper provides the ADMM optimization framework used as prior work.",
                                 "user_question_relation": "It shows ADMM is existing background rather than a new SCINeRF contribution.",
+                                "system_b_trace_complete": True,
+                                "system_b_trace_score": 0.86,
+                                "system_b_trace_source": "source_markdown",
                             }
                         ],
                     }
@@ -359,6 +397,84 @@ def test_validate_case_prefers_render_packet_over_raw_content_for_citation_quali
 
     assert "citation_card_quality" not in failed_names
     assert quality["citation_quality"]["count"] == 1
+    assert quality["system_b_audit"]["trace_complete_count"] == 1
+
+
+def test_validate_case_flags_system_b_audit_policy_failures():
+    fixture = load_fixture()
+    dl_path = source_path_for_doc(fixture, "dl-spi-review")
+    case = {
+        "id": "audit-policy",
+        "expected": {
+            "minSystemBCount": 1,
+            "requireSystemBTraceComplete": True,
+            "forbidSystemBAnswerContextOnly": True,
+            "forbidSystemBReferenceIndexFallback": True,
+        },
+    }
+    result = {
+        "status": "done",
+        "done": True,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "This answer points to an upstream SPI reference [R18](#spi-r18).",
+            "cite_details": [
+                {
+                    "num": 18,
+                    "anchor": "spi-r18",
+                    "is_inpaper": True,
+                    "source_path": dl_path,
+                    "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+                    "title": "Principles and prospects for single-pixel imaging",
+                    "raw": "Principles and prospects for single-pixel imaging.",
+                    "answer_claim": "This answer points to an upstream SPI reference.",
+                    "citation_context": "This answer points to an upstream SPI reference.",
+                    "citation_context_source": "answer_context",
+                    "location_label": "Deep learning SPI review / References",
+                    "upstream_work_role": "This upstream paper is a bibliography source.",
+                    "system_b_trace_complete": False,
+                    "system_b_trace_score": 0.31,
+                    "system_b_trace_source": "answer_context",
+                    "system_b_trace_flags": ["answer_context_only"],
+                    "routing_reason": "reference_index_fallback",
+                }
+            ],
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert quality["ok"] is False
+    assert "system_b_audit" in failed_names
+    assert quality["system_b_audit"]["answer_context_only_count"] == 1
+    assert quality["system_b_audit"]["reference_index_fallback_count"] == 1
+
+
+def test_research_qa_report_surfaces_system_b_audit(tmp_path):
+    report = _build_report(
+        [
+            {
+                "id": "case-a",
+                "quality": {
+                    "ok": True,
+                    "system_b_audit": {
+                        "system_b_total": 2,
+                        "trace_complete_count": 1,
+                        "needs_review_count": 1,
+                        "answer_context_only_count": 1,
+                        "reference_index_fallback_count": 1,
+                    },
+                },
+            }
+        ],
+        fixture_path=tmp_path / "fixture.json",
+        base_url="http://127.0.0.1:8000",
+        output_dir=tmp_path,
+    )
+
+    assert "## System B Audit" in report
+    assert "`case-a`: total=2, complete=1, review=1, answer_context_only=1, fallback=1" in report
 
 
 def test_validate_case_accepts_common_zh_en_synonyms():

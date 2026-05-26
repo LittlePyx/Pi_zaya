@@ -41,18 +41,41 @@ _DOMAIN_LABEL_PATTERNS = (
     ),
     ("physics-informed deep learning", r"(?i)\bphysics[-\s]?informed deep learning\b"),
     ("SPAD", r"(?i)\bSPADs?\b|single[-\s]?photon avalanche diode"),
+    ("Structured detection", r"(?i)\bstructured detection\b|\bs2ISM\b|结构检测"),
+    ("Interferometric", r"(?i)\binterferometric\b|\biSCAT\b|干涉(?:散射|检测)?"),
+    ("Light-field", r"(?i)\blight[-\s]?field\b|\bplenoptic\b|光场"),
+    ("ISM", r"(?i)\bimage scanning microscopy\b|\bISM\b"),
+    ("dark count", r"(?i)\bdark count(?: rate)?\b|暗计数"),
+    ("afterpulsing", r"(?i)\bafterpuls(?:e|ing)\b|后脉冲"),
+    ("crosstalk", r"(?i)\bcrosstalk\b|串扰"),
+    ("dead time", r"(?i)\bdead time\b|死时间"),
     ("Hadamard", r"(?i)\bHadamard\b"),
     ("Fourier", r"(?i)\bFourier\b"),
+    ("Cosine transform", r"(?i)\bCosine transform\b|\bDCT\b"),
+    ("Orbital Angular Momentum", r"(?i)\bOrbital Angular Momentum\b|\bOAM\b"),
     ("CASSI", r"(?i)\bCASSI\b|coded aperture snapshot spectral imaging"),
     ("NeRF", r"(?i)\bNeRF\b|neural radiance fields?"),
     ("3D Gaussian", r"(?i)\b3DGS\b|3D Gaussian|Gaussian splatting"),
     ("PILN", r"(?i)\bPILN\b|part-based image-loop network|image-loop network"),
 )
+_CONCRETE_DOMAIN_LABELS = {
+    label
+    for label, _pattern in _DOMAIN_LABEL_PATTERNS
+    if label not in {"single-pixel imaging", "snapshot compressive imaging"}
+}
 _BROAD_REFERENCE_LABELS = {
     "single pixel imaging",
     "snapshot compressive imaging",
     "deep learning",
     "neural network",
+}
+_LOW_VALUE_REFERENCE_LABELS = {
+    "fig",
+    "figure",
+    "table",
+    "results",
+    "methods",
+    "method",
 }
 _GENERIC_SYNTHESIS_LINE_RE = re.compile(
     r"(?i)\b(?:brings?|offers?|has|provides?)\s+(?:significant\s+)?(?:benefits?|advantages?)\b.{0,80}\b(?:challenges?|risks?|limitations?)\b|"
@@ -67,6 +90,19 @@ _SEMANTIC_SUPPORT_PATTERNS = (
     ("speed", r"(?i)\bspeed\b|\breal[-\s]?time\b|\bfast\b|\u901f\u5ea6|\u5feb\u901f|\u5b9e\u65f6"),
     ("quality", r"(?i)\bquality\b|\bhigh[-\s]?quality\b|\u8d28\u91cf|\u9ad8\u8d28\u91cf"),
     ("sampling", r"(?i)\bsampling\b|\bsampling rate\b|\u91c7\u6837|\u91c7\u6837\u7387"),
+    ("basis_patterns", r"(?i)\bbasis patterns?\b|\bHadamard\b|\bFourier\b|\bCosine transform\b|\bOAM\b|\bOrbital Angular Momentum\b"),
+    ("hadamard", r"(?i)\bHadamard\b"),
+    ("fourier", r"(?i)\bFourier\b"),
+    ("oam", r"(?i)\bOAM\b|\bOrbital Angular Momentum\b"),
+    ("structured_detection", r"(?i)\bstructured detection\b|\bs2ISM\b|结构检测"),
+    ("image_scanning_microscopy", r"(?i)\bimage scanning microscopy\b|\bISM\b|\bAiryscan\b"),
+    ("interferometric", r"(?i)\binterferometric\b|\biSCAT\b|干涉(?:散射|检测)?"),
+    ("light_field", r"(?i)\blight[-\s]?field\b|\bplenoptic\b|光场"),
+    ("depth_of_field", r"(?i)\bdepth of field\b|\bDOF\b|景深"),
+    ("dark_count", r"(?i)\bdark count(?: rate)?\b|暗计数"),
+    ("afterpulsing", r"(?i)\bafterpuls(?:e|ing)\b|后脉冲"),
+    ("crosstalk", r"(?i)\bcrosstalk\b|串扰"),
+    ("dead_time", r"(?i)\bdead time\b|死时间"),
     ("noise", r"(?i)\bnoise\b|\bdenois(?:e|ing)\b|\u566a\u58f0|\u53bb\u566a"),
     ("spad", r"(?i)\bSPADs?\b|single[-\s]?photon avalanche diode|\u5355\u5149\u5b50"),
     ("super_resolution", r"(?i)\bsuper[-\s]?resolution\b|\u8d85\u5206\u8fa8"),
@@ -410,6 +446,11 @@ def _is_broad_reference_label(label: str) -> bool:
     return False
 
 
+def _is_low_value_reference_label(label: str) -> bool:
+    key = _loose_ascii_text(label)
+    return (not key) or key in _LOW_VALUE_REFERENCE_LABELS
+
+
 def _expansions_for_label(label: str) -> tuple[str, ...]:
     key = _loose_ascii_text(label).replace(" ", "-")
     plain_key = key.replace("-", "")
@@ -482,6 +523,52 @@ def _score_reference_label_match(label: str, ref: Mapping[str, object]) -> float
     return score
 
 
+def _reference_label_is_relevant(
+    *,
+    label: str,
+    ref: Mapping[str, object],
+    context: str,
+) -> bool:
+    """Reject broad labels that only match the answer topic, not the cited work."""
+
+    label_text = str(label or "").strip()
+    if (not label_text) or _is_low_value_reference_label(label_text):
+        return False
+    try:
+        label_score = float(_score_reference_label_match(label_text, ref))
+    except Exception:
+        label_score = float("-inf")
+    if label_score >= 7.0:
+        return True
+    if not _is_broad_reference_label(label_text):
+        return label_score >= 3.0 or _label_matches_surface(label_text, context)
+
+    title, surface = _reference_surface_for_match(ref)
+    ref_tags = _semantic_support_tags(f"{title}\n{surface}")
+    label_tags = _semantic_support_tags(label_text)
+    if label_tags and ref_tags.intersection(label_tags):
+        return True
+    return False
+
+
+def _specific_label_from_reference_surface(
+    *,
+    ref: Mapping[str, object],
+    context: str,
+    focus_surface: str,
+) -> str:
+    title, surface = _reference_surface_for_match(ref)
+    ref_surface = f"{title}\n{surface}"
+    for label, pattern in _DOMAIN_LABEL_PATTERNS:
+        if label not in _CONCRETE_DOMAIN_LABELS:
+            continue
+        if not re.search(pattern, ref_surface):
+            continue
+        if _label_matches_surface(label, focus_surface) or _label_matches_surface(label, context):
+            return label
+    return ""
+
+
 def _find_reference_num_for_label(
     *,
     index_data: Mapping[str, object],
@@ -508,6 +595,33 @@ def _find_reference_num_for_label(
     if best_score < 7.0:
         return 0, {}
     return best_num, best_ref
+
+
+def _source_key(path: object) -> str:
+    return str(path or "").strip().replace("\\", "/").lower()
+
+
+def _cited_source_keys_from_answer(
+    answer: str,
+    answer_hits: Sequence[Mapping[str, object]] | None,
+) -> set[str]:
+    hits = [hit for hit in list(answer_hits or []) if isinstance(hit, Mapping)]
+    if not hits:
+        return set()
+    text = _CITE_CANON_RE.sub("", str(answer or ""))
+    out: set[str] = set()
+    for match in _INLINE_REF_RE.finditer(text):
+        for item in parse_ref_num_set(str(match.group(1) or ""), max_items=24):
+            try:
+                idx = int(item)
+            except Exception:
+                continue
+            if idx <= 0 or idx > len(hits):
+                continue
+            key = _source_key(_hit_source_path(hits[idx - 1]))
+            if key:
+                out.add(key)
+    return out
 
 
 def detect_text_reference_opportunities(
@@ -551,15 +665,19 @@ def detect_text_reference_opportunities(
     except Exception:
         index_data = {}
 
+    cited_source_keys = _cited_source_keys_from_answer(answer_text, answer_hits)
     rows: list[tuple[float, dict[str, object]]] = []
     seen_source: set[str] = set()
     for hit_index, hit in enumerate(list(answer_hits or [])[:6], start=1):
         if not isinstance(hit, Mapping):
             continue
         source_path = _hit_source_path(hit)
-        if not source_path or source_path in seen_source:
+        source_key = _source_key(source_path)
+        if not source_path or not source_key or source_key in seen_source:
             continue
-        seen_source.add(source_path)
+        if cited_source_keys and source_key not in cited_source_keys:
+            continue
+        seen_source.add(source_key)
         source_sha1 = _hit_source_sha1(hit)
         sid = _cite_source_id(source_path)
         if not sid:
@@ -634,8 +752,29 @@ def detect_text_reference_opportunities(
                 if cand_score > best_focus_score:
                     best_focus_score = cand_score
                     best_focus_label = cand
-            if best_focus_label and best_focus_score >= 7.0:
+            try:
+                current_label_score = float(_score_reference_label_match(label, ref))
+            except Exception:
+                current_label_score = float("-inf")
+            if (
+                best_focus_label
+                and best_focus_score >= 7.0
+                and (
+                    _is_broad_reference_label(label)
+                    or (current_label_score < 7.0 and label not in _CONCRETE_DOMAIN_LABELS)
+                )
+            ):
                 label = best_focus_label
+            if _is_broad_reference_label(label):
+                specific_label = _specific_label_from_reference_surface(
+                    ref=ref,
+                    context=context_text,
+                    focus_surface=focus_surface,
+                )
+                if specific_label:
+                    label = specific_label
+            if not _reference_label_is_relevant(label=label, ref=ref, context=context_text):
+                return
             combined = f"{context_text}\n{title}\n{surface}"
             combined_tokens = _tokens(combined)
             shared_focus = focus_tokens.intersection(combined_tokens)
@@ -712,17 +851,34 @@ def detect_text_reference_opportunities(
     rows.sort(key=lambda item: item[0], reverse=True)
     out: list[dict[str, object]] = []
     seen: set[tuple[str, int, str]] = set()
-    for _score, row in rows:
+    seen_sources_out: set[str] = set()
+
+    def _try_add(row: Mapping[str, object]) -> bool:
         key = (
             str(row.get("sid") or "").lower(),
             int(row.get("ref_num") or 0),
             str(row.get("label") or "").lower(),
         )
         if key in seen:
-            continue
+            return False
         seen.add(key)
-        out.append(row)
-        if len(out) >= max(1, int(max_items or 3)):
+        out.append(dict(row))
+        source_key = _source_key(row.get("source_path"))
+        if source_key:
+            seen_sources_out.add(source_key)
+        return True
+
+    limit = max(1, int(max_items or 3))
+    for _score, row in rows:
+        source_key = _source_key(row.get("source_path"))
+        if source_key and source_key in seen_sources_out:
+            continue
+        _try_add(row)
+        if len(out) >= limit:
+            return out
+    for _score, row in rows:
+        _try_add(row)
+        if len(out) >= limit:
             break
     return out
 
@@ -773,13 +929,6 @@ def _line_has_grounded_opportunity_context(*, line: str, prompt: str, opp: Mappi
     if not label or label.lower().startswith("ref "):
         return False
     label_matches_line = _label_matches_surface(label, plain)
-    if not _is_broad_reference_label(label):
-        return bool(
-            label_matches_line
-            or _line_can_take_prompt_bound_opportunity(line=plain, prompt=prompt, label=label)
-        )
-    if not label_matches_line:
-        return False
     evidence_surface = " ".join(
         [
             str(opp.get("evidence_quote") or "").strip(),
@@ -789,6 +938,21 @@ def _line_has_grounded_opportunity_context(*, line: str, prompt: str, opp: Mappi
     )
     line_tags = _semantic_support_tags(plain)
     evidence_tags = _semantic_support_tags(evidence_surface)
+    noise_tags = {"noise", "dark_count", "afterpulsing", "crosstalk", "dead_time"}
+    if line_tags.intersection(noise_tags) and not evidence_tags.intersection(noise_tags):
+        return False
+    if not _is_broad_reference_label(label):
+        if label_matches_line and line_tags and evidence_tags:
+            broad_only_tags = {"single_pixel_imaging", "snapshot_compressive_imaging", "deep_learning"}
+            concrete_line_tags = line_tags.difference(broad_only_tags)
+            if concrete_line_tags and not concrete_line_tags.intersection(evidence_tags):
+                return False
+        return bool(
+            label_matches_line
+            or _line_can_take_prompt_bound_opportunity(line=plain, prompt=prompt, label=label)
+        )
+    if not label_matches_line:
+        return False
     shared_tags = line_tags.intersection(evidence_tags)
     broad_only_tags = {"single_pixel_imaging", "snapshot_compressive_imaging", "deep_learning"}
     concrete_shared = shared_tags.difference(broad_only_tags)
@@ -796,16 +960,28 @@ def _line_has_grounded_opportunity_context(*, line: str, prompt: str, opp: Mappi
 
 
 def _label_for_opportunity(*, prompt: str, text: str, ref_num: int) -> str:
-    local_ref = re.search(rf"\[\s*{int(ref_num)}\s*\]", str(text or ""))
+    local_ref: re.Match[str] | None = None
+    for match in _INLINE_REF_RE.finditer(str(text or "")):
+        nums = parse_ref_num_set(str(match.group(1) or ""))
+        if int(ref_num) in nums:
+            local_ref = match
+            break
     if local_ref:
         before = str(text or "")[max(0, local_ref.start() - 100) : local_ref.start()]
+        nearest_label = ""
+        nearest_start = -1
         for label, pattern in _DOMAIN_LABEL_PATTERNS:
-            if re.search(pattern, before):
-                return label
+            for match in re.finditer(pattern, before):
+                if match.start() >= nearest_start:
+                    nearest_start = match.start()
+                    nearest_label = label
+        if nearest_label:
+            return nearest_label
         local_entities = [
             item
             for item in _ENTITY_RE.findall(before)
-            if len(item) >= 3 and item.lower() not in {"the", "this", "that", "most"}
+            if len(item) >= 3
+            and item.lower() not in {"the", "this", "that", "most", "for", "example", "fig", "figure", "table"}
         ]
         if local_entities:
             return local_entities[-1]
@@ -816,7 +992,7 @@ def _label_for_opportunity(*, prompt: str, text: str, ref_num: int) -> str:
         if len(value) >= 3 and value.lower() not in {"the", "this", "that"} and value.lower() in text_low:
             return entity
     for entity in _ENTITY_RE.findall(str(text or "")):
-        if len(entity) >= 3 and entity.lower() not in {"the", "this"}:
+        if len(entity) >= 3 and entity.lower() not in {"the", "this", "fig", "figure", "table"}:
             return entity
     return f"ref {int(ref_num)}"
 
@@ -1022,9 +1198,22 @@ def _cite_marker_for_opportunity(opp: Mapping[str, object]) -> str:
     return f"[[CITE:{str(opp.get('sid') or '').strip()}:{int(opp.get('ref_num') or 0)}]]"
 
 
+def _looks_like_reading_list_title_line(line: str) -> bool:
+    text = _compact_text(line, max_len=260)
+    if not text:
+        return False
+    if re.match(r"^\s*\*{0,2}(?:文献|论文|paper|reference)\*{0,2}\s*[:：]", text, flags=re.I):
+        return True
+    if not re.match(r"^\s*\d{1,2}\.\s+\*{0,2}[《\"“]", text):
+        return False
+    return not bool(re.search(r"(?:看什么|重点|理解|because|why|focus|read for)", text, flags=re.I))
+
+
 def _line_score_for_opportunity(*, line: str, prompt: str, opp: Mapping[str, object]) -> float:
     plain = _compact_text(line, max_len=520)
     if len(plain) < 8 or _ANSWER_LINE_SKIP_RE.search(plain):
+        return float("-inf")
+    if _looks_like_reading_list_title_line(plain):
         return float("-inf")
     if _OPPORTUNITY_NOTE_RE.search(plain):
         return float("-inf")
@@ -1202,10 +1391,12 @@ def apply_reference_opportunities_to_answer(
 
     appended = append_reference_opportunity_note(text, prompt=prompt, opportunities=rows)
     if appended != text:
+        tail_segment = appended[len(text) :] if appended.startswith(text) else appended
+        tail_refs = [int(m.group(2) or 0) for m in _CITE_CANON_RE.finditer(tail_segment)]
         return appended, {
             "mode": "tail",
             "injected_refs": [],
-            "tail_refs": [int(row.get("ref_num") or 0) for row in rows],
+            "tail_refs": [n for n in tail_refs if n > 0],
             "tail_used": True,
         }
     return text, {"mode": str(inline_meta.get("mode") or "none"), "injected_refs": [], "tail_used": False}
@@ -1255,6 +1446,7 @@ def append_reference_opportunity_note(
         for m in _CITE_CANON_RE.finditer(text)
     }
     parts: list[str] = []
+    seen_broad_tail_labels: set[str] = set()
     for opp in opps:
         sid = str(opp.get("sid") or "").strip()
         try:
@@ -1263,7 +1455,16 @@ def append_reference_opportunity_note(
             ref_num = 0
         if not sid or ref_num <= 0 or (sid.lower(), ref_num) in existing:
             continue
-        label = str(opp.get("label") or "").strip() or f"ref {ref_num}"
+        raw_label = str(opp.get("label") or "").strip() or f"ref {ref_num}"
+        if _is_broad_reference_label(raw_label):
+            broad_key = _loose_ascii_text(raw_label) or raw_label.lower()
+            if broad_key in seen_broad_tail_labels:
+                continue
+            seen_broad_tail_labels.add(broad_key)
+        label = raw_label
+        ref_title = str(opp.get("ref_title") or "").strip()
+        if ref_title and (_is_broad_reference_label(label) or label.lower().startswith("ref ")):
+            label = _compact_text(ref_title, max_len=90)
         parts.append(f"{label} [[CITE:{sid}:{ref_num}]]")
         existing.add((sid.lower(), ref_num))
         if len(parts) >= 3:

@@ -1096,6 +1096,46 @@ def test_validate_structured_citations_rewrites_to_locked_source(monkeypatch, tm
     assert stats["rewritten"] == 1
 
 
+def test_validate_structured_citations_keeps_grounded_explicit_sid_when_locked_source_differs(monkeypatch, tmp_path):
+    from kb import task_runtime
+
+    locked_source_path = r"db\doc\hadamard.en.md"
+    explicit_source_path = r"db\doc\dl-spi.en.md"
+    locked_sid = task_runtime._cite_source_id(locked_source_path)
+    explicit_sid = task_runtime._cite_source_id(explicit_source_path)
+
+    monkeypatch.setattr(task_runtime, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_resolve(_index, src, ref_num, *, source_sha1=""):
+        del _index, source_sha1
+        if str(src) == locked_source_path and int(ref_num) == 2:
+            return {"ref": {"raw": "[2] Optical coherence tomography"}}
+        if str(src) == explicit_source_path and int(ref_num) == 2:
+            return {"ref": {"raw": "[2] Principles and prospects for single-pixel imaging"}}
+        return None
+
+    monkeypatch.setattr(task_runtime, "resolve_reference_entry", fake_resolve)
+
+    answer, stats = task_runtime._validate_structured_citations(
+        f"Follow the upstream review [[CITE:{explicit_sid}:2]].",
+        answer_hits=[
+            {"meta": {"source_path": locked_source_path, "source_sha1": "aaa"}},
+            {"meta": {"source_path": explicit_source_path, "source_sha1": "bbb"}},
+        ],
+        db_dir=tmp_path,
+        locked_source={
+            "sid": locked_sid,
+            "source_path": locked_source_path,
+            "source_sha1": "aaa",
+        },
+    )
+
+    assert f"[[CITE:{explicit_sid}:2]]" in answer
+    assert f"[[CITE:{locked_sid}:2]]" not in answer
+    assert stats["kept"] == 1
+    assert stats["rewritten"] == 0
+
+
 def test_validate_structured_citations_in_paper_guide_rewrites_to_evidence_candidate(monkeypatch, tmp_path):
     from kb import task_runtime
 

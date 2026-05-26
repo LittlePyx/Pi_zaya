@@ -305,6 +305,41 @@ def test_build_paper_guide_render_packet_model_derives_primary_render_state():
     assert out.visible_segment_count == 1
 
 
+def test_build_paper_guide_render_packet_model_adds_system_b_audit():
+    out = _build_paper_guide_render_packet_model(
+        rendered_body="ADMM comes from prior work [4](#kb-cite-r4).",
+        cite_details=[
+            {
+                "num": 4,
+                "anchor": "kb-cite-r4",
+                "is_inpaper": True,
+                "citation_route": "system_b",
+                "routing_reason": "structured_cite",
+                "source_name": "SCINeRF.pdf",
+                "source_path": "scinerf.en.md",
+                "title": "Distributed Optimization and Statistical Learning via ADMM",
+                "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+                "answer_claim": "ADMM comes from prior work.",
+                "citation_context": "The current paper cites ADMM while discussing optimization methods.",
+                "citation_context_source": "source_markdown",
+                "location_label": "2. Related Work",
+                "system_b_trace_complete": True,
+                "system_b_trace_score": 0.86,
+                "system_b_trace_source": "source_markdown",
+                "system_b_trace_flags": [],
+            }
+        ],
+        citation_validation={"kept": 1},
+    )
+
+    audit = out.citation_validation["system_b_audit"]
+    assert out.citation_validation["kept"] == 1
+    assert audit["system_b_total"] == 1
+    assert audit["structured_cite_count"] == 1
+    assert audit["trace_complete_count"] == 1
+    assert audit["needs_review_count"] == 0
+
+
 def test_build_paper_guide_render_packet_model_prefers_grounded_support_segment_over_shell_sentence():
     out = _build_paper_guide_render_packet_model(
         answer_markdown="The paper cites [4] for this point.\n> most of the existing methods employ ADMM [4],",

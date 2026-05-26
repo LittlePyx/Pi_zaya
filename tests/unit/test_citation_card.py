@@ -316,6 +316,9 @@ def test_system_b_card_composer_marks_answer_context_only() -> None:
     assert detail["card_support_label"] == ""
     assert "answer_context_only" in detail["card_quality_flags"]
     assert "完整引用语境" in detail["card_warning"]
+    assert detail["system_b_trace_complete"] is False
+    assert "answer_context_only" in detail["system_b_trace_flags"]
+    assert detail["system_b_trace_steps"] == ["答案句", "引用语境待核对", "上游文献"]
 
 
 def test_system_b_card_composer_distills_generic_english_role() -> None:
@@ -364,6 +367,9 @@ def test_system_b_card_composer_distills_classic_spi_compressive_sampling_role()
     assert detail["card_kind"] == "upstream_reference"
     assert "单像素压缩采样路线" in detail["card_takeaway"]
     assert "missing_takeaway" not in detail["card_quality_flags"]
+    assert detail["system_b_trace_complete"] is True
+    assert detail["system_b_trace_steps"] == ["答案句", "当前论文引用处", "上游文献"]
+    assert "answer_context_only" not in detail["system_b_trace_flags"]
 
 
 def test_system_b_card_composer_suppresses_duplicate_claim_and_support_copy() -> None:

@@ -1305,6 +1305,21 @@ def _pick_specific_terms_ui(cands: list[str], *, max_n: int = 3) -> list[str]:
     return out
 
 
+def _looks_front_matter_evidence_ui(text: str) -> bool:
+    src = str(text or "").strip()
+    if not src:
+        return False
+    head = src[:700]
+    low = head.lower()
+    if re.search(r"\b(?:supplement|published with|institute of|university|academy of sciences|corresponding author)\b", low):
+        return True
+    if "@" in head and len(re.findall(r"\b[A-Z][A-Z-]{2,}\b", head)) >= 4:
+        return True
+    comma_count = head.count(",")
+    name_like = len(re.findall(r"\b[A-Z][A-Za-z-]+(?:\s+[A-Z]\.){0,3}\s+[A-Z][A-Za-z-]+\b", head))
+    return comma_count >= 8 and name_like >= 4 and not re.search(r"\b(?:we|this paper|this work|propose|show|demonstrate)\b", low)
+
+
 def _build_ref_navigation(meta: dict, *, prompt: str, heading_fallback: str = "") -> dict:
     pack = meta.get("ref_pack") if isinstance(meta.get("ref_pack"), dict) else {}
     pack = pack if isinstance(pack, dict) else {}
@@ -2892,7 +2907,7 @@ def _citation_hover_title(source_name: str, ref_num: int, ref_rec: dict) -> str:
             title = str((_fallback_fill_reference_meta_from_raw(ref_rec) or {}).get("title") or "").strip()
         except Exception:
             title = ""
-    parts = [f"source: {src}", f"ref [{int(ref_num)}]"]
+    parts = [f"source: {src}", f"ref {int(ref_num)}"]
     if title:
         parts.append(title)
     if doi:
@@ -3761,6 +3776,29 @@ def _system_b_user_relation(context_line: str, ref_rec: dict) -> str:
     return "It is tied to the cited sentence in the answer and lets you follow the current paper back to the referenced work."
 
 
+def _system_b_reference_index_fallback_is_grounded(detail: dict) -> bool:
+    """Allow numeric [n] -> bibliography fallback only when the citation chain is grounded."""
+
+    if not isinstance(detail, dict):
+        return False
+    if str(detail.get("routing_reason") or "").strip().lower() != "reference_index_fallback":
+        return True
+    card = compose_citation_card(detail)
+    for key, value in card.items():
+        if str(key).startswith("system_b_trace_") or str(key).startswith("card_"):
+            detail[key] = value
+    flags = {str(item or "").strip() for item in card.get("system_b_trace_flags") or [] if str(item or "").strip()}
+    if bool(card.get("system_b_trace_complete")) and float(card.get("system_b_trace_score") or 0.0) >= 0.5:
+        return True
+    if bool(detail.get("reference_index_fallback_grounded")) and str(detail.get("citation_context") or "").strip():
+        return True
+    if bool(detail.get("reference_index_fallback_legacy_identity_signal")):
+        return True
+    detail["system_b_suppressed_reason"] = str(card.get("system_b_trace_reason") or "").strip()
+    detail["system_b_suppressed_flags"] = sorted(flags)
+    return False
+
+
 def _annotate_inpaper_citations_with_hover_meta(
     md: str,
     hits: list[dict],
@@ -4057,6 +4095,68 @@ def _annotate_inpaper_citations_with_hover_meta(
             # DOI is treated as a hard identity signal.
             return best if best_score >= 6.0 else None
 
+        def _source_path_key(value: object) -> str:
+            return str(value or "").strip().replace("\\", "/").lower()
+
+        def _hit_context_for_numeric_ref(n: int, source_path: str) -> dict:
+            wanted = _source_path_key(source_path)
+            if not wanted:
+                return {}
+            for raw_hit in hits or []:
+                if not isinstance(raw_hit, dict):
+                    continue
+                meta_hit = raw_hit.get("meta") if isinstance(raw_hit.get("meta"), dict) else {}
+                if _source_path_key((meta_hit or {}).get("source_path")) != wanted:
+                    continue
+                pieces = [str(raw_hit.get("text") or "")]
+                for key in ("ref_show_snippets", "ref_snippets"):
+                    values = (meta_hit or {}).get(key)
+                    if isinstance(values, list):
+                        pieces.extend(str(item or "") for item in values[:3])
+                for piece in pieces:
+                    text = str(piece or "")
+                    if not text:
+                        continue
+                    for marker in _INPAPER_CITE_ANY_RE.finditer(text):
+                        if int(n) not in _parse_int_set(str(marker.group(1) or "")):
+                            continue
+                        start = max(0, int(marker.start()) - 220)
+                        end = min(len(text), int(marker.end()) + 220)
+                        context = re.sub(r"\s+", " ", text[start:end]).strip()
+                        if not context:
+                            continue
+                        return {
+                            "citation_context": context[:520],
+                            "citation_context_source": "retrieval_hit_ref_marker",
+                            "heading_path": str(
+                                (meta_hit or {}).get("heading_path")
+                                or (meta_hit or {}).get("ref_best_heading_path")
+                                or ""
+                            ).strip(),
+                        }
+            return {}
+
+        def _hits_have_text() -> bool:
+            for raw_hit in hits or []:
+                if isinstance(raw_hit, dict) and str(raw_hit.get("text") or "").strip():
+                    return True
+            return False
+
+        def _legacy_no_hit_text_identity_signal(*, ref: dict, token_start: int, token_end: int) -> bool:
+            """Permit old persisted numeric refs only when the answer line identifies the bibliography entry."""
+
+            if _hits_have_text():
+                return False
+            hints = extract_citation_context_hints(seg, token_start=int(token_start), token_end=int(token_end))
+            doi_hint = str(hints.get("doi") or "").strip()
+            author_confident = bool(hints.get("author_confident"))
+            year_hint = str(hints.get("year") or "").strip()
+            if not doi_hint and not (author_confident and year_hint):
+                return False
+            if has_explicit_reference_conflict(ref, hints):
+                return False
+            return float(reference_alignment_score(ref, hints)) >= 4.0
+
         def _resolve_struct_token(sid_raw: str, n_raw: str, *, pos: int = -1) -> str:
             nonlocal structured_seen
             sid = str(sid_raw or "").strip().lower()
@@ -4237,6 +4337,15 @@ def _annotate_inpaper_citations_with_hover_meta(
                 evidence_quote=evidence_quote,
                 source_name=src_name,
             )
+            if (not heading) and _looks_front_matter_evidence_ui(evidence_quote):
+                return {
+                    "_suppress_link": True,
+                    "num": int(n),
+                    "binding_status": "mismatch",
+                    "binding_confidence": 0.0,
+                    "binding_reason": "The matched hit is document front matter rather than a locatable evidence passage.",
+                    "binding_overlap_terms": list(binding.get("overlap_terms") or []),
+                }
             if bool(binding.get("suppress_link")):
                 return {
                     "_suppress_link": True,
@@ -4357,6 +4466,8 @@ def _annotate_inpaper_citations_with_hover_meta(
                     target_sp = pref_sp
             items: list[str] = []
             changed = False
+            linked_count = 0
+            plain_fallback_count = 0
             for n in nums:
                 if int(n) in unresolved_struct_refs:
                     # A failed System B token must not be silently reinterpreted
@@ -4398,6 +4509,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                     if bool(hit_detail.get("_suppress_link")):
                         if not _STRICT_STRUCTURED_CITATION_LINKING:
                             items.append(f"[{int(n)}]")
+                            plain_fallback_count += 1
                         changed = True
                         continue
                     detail = hit_detail
@@ -4413,6 +4525,39 @@ def _annotate_inpaper_citations_with_hover_meta(
                         token_start=int(m.start()),
                         token_end=int(m.end()),
                     )
+                    hit_grounding = _hit_context_for_numeric_ref(int(n), sp)
+                    if hit_grounding:
+                        context_from_hit = str(hit_grounding.get("citation_context") or "").strip()
+                        if context_from_hit:
+                            detail["citation_context"] = context_from_hit[:520]
+                            detail["citation_context_source"] = str(
+                                hit_grounding.get("citation_context_source") or "retrieval_hit_ref_marker"
+                            )
+                            detail["evidence_quote"] = context_from_hit[:520]
+                            detail["evidence_source"] = str(
+                                hit_grounding.get("citation_context_source") or "retrieval_hit_ref_marker"
+                            )
+                            detail["summary_line"] = context_from_hit[:360]
+                            detail["summary_source"] = str(
+                                hit_grounding.get("citation_context_source") or "retrieval_hit_ref_marker"
+                            )
+                            detail["reference_index_fallback_grounded"] = True
+                        heading_from_hit = str(hit_grounding.get("heading_path") or "").strip()
+                        if heading_from_hit:
+                            detail["heading_path"] = heading_from_hit
+                            detail["location_label"] = heading_from_hit
+                        detail["routing_confidence"] = max(float(detail.get("routing_confidence") or 0.0), 0.62)
+                    elif _legacy_no_hit_text_identity_signal(
+                        ref=ref,
+                        token_start=int(m.start()),
+                        token_end=int(m.end()),
+                    ):
+                        detail["reference_index_fallback_legacy_identity_signal"] = True
+                    if not _system_b_reference_index_fallback_is_grounded(detail):
+                        items.append(f"[{int(n)}]")
+                        plain_fallback_count += 1
+                        changed = True
+                        continue
                 else:
                     if not _STRICT_STRUCTURED_CITATION_LINKING:
                         items.append(f"[{int(n)}]")
@@ -4426,9 +4571,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                     detail,
                 )
                 items.append(_mk_cite_link_md(int(n), detail, title_attr))
+                linked_count += 1
                 changed = True
             if not changed:
                 return "" if _STRICT_STRUCTURED_CITATION_LINKING else raw
+            if linked_count == 0 and plain_fallback_count > 0 and plain_fallback_count == len(items):
+                return raw
             return "".join(items)
 
         seg2 = _STRUCT_CITE_RE.sub(_repl_struct, seg)
@@ -4567,6 +4715,7 @@ def _render_inpaper_citation_details(
             "card_locator": str(rec.get("card_locator") or "").strip(),
             "card_evidence_label": str(rec.get("card_evidence_label") or "").strip(),
             "card_evidence": str(rec.get("card_evidence") or "").strip(),
+            "card_context_summary": str(rec.get("card_context_summary") or "").strip(),
             "card_support_label": str(rec.get("card_support_label") or "").strip(),
             "card_support_explanation": str(rec.get("card_support_explanation") or "").strip(),
             "card_quality_label": str(rec.get("card_quality_label") or "").strip(),
@@ -4574,6 +4723,16 @@ def _render_inpaper_citation_details(
             "card_quality_flags": list(rec.get("card_quality_flags") or []),
             "card_warning": str(rec.get("card_warning") or "").strip(),
             "card_flow": list(rec.get("card_flow") or []),
+            "system_b_trace_complete": bool(rec.get("system_b_trace_complete") or False),
+            "system_b_trace_score": float(rec.get("system_b_trace_score") or 0.0),
+            "system_b_trace_reason": str(rec.get("system_b_trace_reason") or "").strip(),
+            "system_b_trace_flags": list(rec.get("system_b_trace_flags") or []),
+            "system_b_trace_steps": list(rec.get("system_b_trace_steps") or []),
+            "system_b_trace_answer": str(rec.get("system_b_trace_answer") or "").strip(),
+            "system_b_trace_context": str(rec.get("system_b_trace_context") or "").strip(),
+            "system_b_trace_reference": str(rec.get("system_b_trace_reference") or "").strip(),
+            "system_b_trace_locator": str(rec.get("system_b_trace_locator") or "").strip(),
+            "system_b_trace_source": str(rec.get("system_b_trace_source") or "").strip(),
         }
         payload_s = html.escape(json.dumps(payload, ensure_ascii=False), quote=True)
         html_parts.append(

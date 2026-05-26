@@ -95,6 +95,16 @@ export interface CiteDetail {
   cardQualityFlags: string[]
   cardWarning: string
   cardFlow: string[]
+  systemBTraceComplete: boolean
+  systemBTraceScore: number
+  systemBTraceReason: string
+  systemBTraceFlags: string[]
+  systemBTraceSteps: string[]
+  systemBTraceAnswer: string
+  systemBTraceContext: string
+  systemBTraceReference: string
+  systemBTraceLocator: string
+  systemBTraceSource: string
   citationCardPolishStatus: string
   citationCardPolishSource: string
   citationCardPolishChecked: boolean
@@ -742,6 +752,16 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     cardQualityFlags: pickStringArray(rec, 'card_quality_flags', 'cardQualityFlags'),
     cardWarning: pickText(rec, 'card_warning', 'cardWarning'),
     cardFlow: pickStringArray(rec, 'card_flow', 'cardFlow'),
+    systemBTraceComplete: Boolean(rec.system_b_trace_complete ?? rec.systemBTraceComplete),
+    systemBTraceScore: pickNumber(rec, 'system_b_trace_score', 'systemBTraceScore'),
+    systemBTraceReason: pickText(rec, 'system_b_trace_reason', 'systemBTraceReason'),
+    systemBTraceFlags: pickStringArray(rec, 'system_b_trace_flags', 'systemBTraceFlags'),
+    systemBTraceSteps: pickStringArray(rec, 'system_b_trace_steps', 'systemBTraceSteps'),
+    systemBTraceAnswer: pickText(rec, 'system_b_trace_answer', 'systemBTraceAnswer'),
+    systemBTraceContext: pickText(rec, 'system_b_trace_context', 'systemBTraceContext'),
+    systemBTraceReference: pickText(rec, 'system_b_trace_reference', 'systemBTraceReference'),
+    systemBTraceLocator: pickText(rec, 'system_b_trace_locator', 'systemBTraceLocator'),
+    systemBTraceSource: pickText(rec, 'system_b_trace_source', 'systemBTraceSource'),
     citationCardPolishStatus: pickText(rec, 'citation_card_polish_status', 'citationCardPolishStatus'),
     citationCardPolishSource: pickText(rec, 'citation_card_polish_source', 'citationCardPolishSource'),
     citationCardPolishChecked: Boolean(rec.citation_card_polish_checked ?? rec.citationCardPolishChecked),
@@ -782,6 +802,12 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'cardReferenceEntry',
     'cardSupportExplanation',
     'cardWarning',
+    'systemBTraceReason',
+    'systemBTraceAnswer',
+    'systemBTraceContext',
+    'systemBTraceReference',
+    'systemBTraceLocator',
+    'systemBTraceSource',
     'citationCardPolishStatus',
     'citationCardPolishSource',
     'citationCardPolishKey',
@@ -794,6 +820,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'evidenceQuote',
     'citationContext',
     'cardEvidence',
+    'systemBTraceContext',
   ] as const) {
     detail[key] = stripEvidenceMetadataPrefix(detail[key], detail)
   }
@@ -958,6 +985,16 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'card_reference_entry',
     'card_support_explanation',
     'card_warning',
+    'system_b_trace_complete',
+    'system_b_trace_score',
+    'system_b_trace_reason',
+    'system_b_trace_flags',
+    'system_b_trace_steps',
+    'system_b_trace_answer',
+    'system_b_trace_context',
+    'system_b_trace_reference',
+    'system_b_trace_locator',
+    'system_b_trace_source',
     'citation_card_polish_status',
     'citation_card_polish_source',
     'citation_card_polish_checked',

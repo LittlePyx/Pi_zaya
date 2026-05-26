@@ -478,7 +478,7 @@ def test_enrich_citation_detail_meta_prefers_llm_academic_summary(monkeypatch):
     assert "这条不应被采用" not in str(out.get("summary_line") or "")
 
 
-def test_inpaper_numeric_citation_links_using_dominant_source(monkeypatch):
+def test_inpaper_numeric_citation_stays_plain_when_identity_conflicts(monkeypatch):
     def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
         del _index_data, _source_path, source_sha1
         if int(ref_num) != 50:
@@ -503,11 +503,12 @@ def test_inpaper_numeric_citation_links_using_dominant_source(monkeypatch):
     hits = [{"meta": {"source_path": "doc.en.md", "source_sha1": "abc"}}]
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
 
-    assert "[50](#" in out
-    assert len(details) == 1
+    assert "[50](#" not in out
+    assert "[50]" in out
+    assert details == []
 
 
-def test_inpaper_numeric_citation_links_without_identity_signal(monkeypatch):
+def test_inpaper_numeric_citation_stays_plain_without_identity_signal(monkeypatch):
     def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
         del _index_data, _source_path, source_sha1
         if int(ref_num) != 116:
@@ -532,8 +533,9 @@ def test_inpaper_numeric_citation_links_without_identity_signal(monkeypatch):
     hits = [{"meta": {"source_path": "doc.en.md", "source_sha1": "abc"}}]
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
 
-    assert "[116](#" in out
-    assert len(details) == 1
+    assert "[116](#" not in out
+    assert "[116]" in out
+    assert details == []
 
 
 def test_inpaper_citation_link_kept_when_year_signal_matches(monkeypatch):
@@ -693,7 +695,7 @@ def test_numeric_citation_is_hidden_when_source_is_ambiguous(monkeypatch):
     assert details == []
 
 
-def test_numeric_citation_is_clickable_when_unique_across_multiple_sources(monkeypatch):
+def test_numeric_citation_stays_plain_when_unique_but_ungrounded(monkeypatch):
     def fake_resolve(_index_data, source_path, ref_num, *, source_sha1=""):
         del _index_data, source_sha1
         if int(ref_num) != 19:
@@ -720,11 +722,12 @@ def test_numeric_citation_is_clickable_when_unique_across_multiple_sources(monke
     ]
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
 
-    assert "[19](#" in out
-    assert len(details) == 1
+    assert "[19](#" not in out
+    assert "[19]" in out
+    assert details == []
 
 
-def test_numeric_citation_range_expands_middle_member(monkeypatch):
+def test_numeric_citation_range_stays_compact_when_ungrounded(monkeypatch):
     def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
         del _index_data, _source_path, source_sha1
         if int(ref_num) not in {11, 12, 13}:
@@ -749,10 +752,11 @@ def test_numeric_citation_range_expands_middle_member(monkeypatch):
     hits = [{"meta": {"source_path": "doc.en.md", "source_sha1": "abc"}}]
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
 
-    assert "[11](#" in out
-    assert "[12](#" in out
-    assert "[13](#" in out
-    assert sorted(int(item.get("num") or 0) for item in details) == [11, 12, 13]
+    assert "[11](#" not in out
+    assert "[12](#" not in out
+    assert "[13](#" not in out
+    assert "[11-13]" in out
+    assert details == []
 
 
 def test_structured_citation_is_hidden_when_sid_cannot_map(monkeypatch):

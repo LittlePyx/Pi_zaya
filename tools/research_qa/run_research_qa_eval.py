@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from api.reference_card_quality import summarize_citation_detail_quality
+from kb.citation_audit import summarize_system_b_citation_audit
 
 
 DEFAULT_FIXTURE = Path("web/src/testing/researchQaData.json")
@@ -156,6 +157,26 @@ def _term_aliases(term: str) -> list[str]:
         "optical sectioning": ["optical sectioning", "sectioning", "光学层切", "光学切片"],
         "perovskite": ["perovskite", "钙钛矿"],
     }
+    aliases.update(
+        {
+            "已有": [
+                "已有",
+                "现有",
+                "既有",
+                "前人",
+                "前人的",
+                "成熟",
+                "经典",
+                "已被",
+                "existing",
+                "prior",
+                "previous",
+                "not new",
+                "background",
+            ],
+            "不是": ["不是", "并非", "不属于", "不应该", "not", "not a", "not the", "different"],
+        }
+    )
     extra_aliases = {
         "single-pixel imaging": [
             "single-pixel imaging",
@@ -534,6 +555,74 @@ def _citation_quality_failures(
     return summary, failures
 
 
+def _system_b_audit_expected(expected: dict[str, Any]) -> bool:
+    return bool(
+        expected.get("requireSystemBTraceComplete")
+        or expected.get("forbidSystemBAnswerContextOnly")
+        or expected.get("forbidSystemBReferenceIndexFallback")
+        or "maxSystemBNeedsReviewCount" in expected
+        or "maxSystemBAnswerContextOnlyCount" in expected
+        or "maxSystemBReferenceIndexFallbackCount" in expected
+        or "minSystemBCompleteRate" in expected
+    )
+
+
+def _expected_float(expected: dict[str, Any], key: str, default: float = 0.0) -> float:
+    try:
+        value = float(expected.get(key) if key in expected else default)
+    except Exception:
+        value = float(default)
+    if value != value:
+        return float(default)
+    return value
+
+
+def _expected_optional_int(expected: dict[str, Any], key: str) -> int | None:
+    if key not in expected:
+        return None
+    try:
+        return max(0, int(expected.get(key) or 0))
+    except Exception:
+        return None
+
+
+def _system_b_audit_failures(audit: dict[str, Any], expected: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    if not isinstance(audit, dict):
+        return ["system_b_audit_missing"]
+
+    total = int(audit.get("system_b_total") or 0)
+    needs_review = int(audit.get("needs_review_count") or 0)
+    answer_context_only = int(audit.get("answer_context_only_count") or 0)
+    reference_index_fallback = int(audit.get("reference_index_fallback_count") or 0)
+    complete_rate = float(audit.get("complete_rate") or 0.0)
+
+    if bool(expected.get("requireSystemBTraceComplete")):
+        if total <= 0:
+            failures.append("system_b_audit_no_system_b")
+        if needs_review > 0:
+            failures.append(f"system_b_trace_needs_review:{needs_review}")
+    if bool(expected.get("forbidSystemBAnswerContextOnly")) and answer_context_only > 0:
+        failures.append(f"system_b_answer_context_only:{answer_context_only}")
+    if bool(expected.get("forbidSystemBReferenceIndexFallback")) and reference_index_fallback > 0:
+        failures.append(f"system_b_reference_index_fallback:{reference_index_fallback}")
+
+    max_needs_review = _expected_optional_int(expected, "maxSystemBNeedsReviewCount")
+    if max_needs_review is not None and needs_review > max_needs_review:
+        failures.append(f"system_b_needs_review:{needs_review}>{max_needs_review}")
+    max_answer_context_only = _expected_optional_int(expected, "maxSystemBAnswerContextOnlyCount")
+    if max_answer_context_only is not None and answer_context_only > max_answer_context_only:
+        failures.append(f"system_b_answer_context_only:{answer_context_only}>{max_answer_context_only}")
+    max_reference_index_fallback = _expected_optional_int(expected, "maxSystemBReferenceIndexFallbackCount")
+    if max_reference_index_fallback is not None and reference_index_fallback > max_reference_index_fallback:
+        failures.append(f"system_b_reference_index_fallback:{reference_index_fallback}>{max_reference_index_fallback}")
+
+    min_complete_rate = _expected_float(expected, "minSystemBCompleteRate", 0.0)
+    if min_complete_rate > 0 and complete_rate < min_complete_rate:
+        failures.append(f"system_b_complete_rate:{complete_rate}<{min_complete_rate}")
+    return failures
+
+
 def validate_case(
     case: dict[str, Any],
     fixture: ResearchQaFixture,
@@ -663,12 +752,22 @@ def validate_case(
         add_check("system_b_includes_required_docs", not missing_system_b_docs, missing_system_b_docs)
 
     citation_quality: dict[str, Any] = {}
+    system_b_audit = summarize_system_b_citation_audit(citation_details)
     if _should_check_citation_card_quality(expected):
         citation_quality, citation_quality_failures = _citation_quality_failures(citation_details, expected)
+        if isinstance(citation_quality.get("system_b_audit"), dict):
+            system_b_audit = dict(citation_quality.get("system_b_audit") or {})
         add_check(
             "citation_card_quality",
             not citation_quality_failures and bool(citation_details),
             citation_quality_failures or citation_quality,
+        )
+    if _system_b_audit_expected(expected):
+        system_b_audit_failures = _system_b_audit_failures(system_b_audit, expected)
+        add_check(
+            "system_b_audit",
+            not system_b_audit_failures,
+            system_b_audit_failures or system_b_audit,
         )
 
     card_failures = _ref_card_quality_failures(
@@ -706,6 +805,7 @@ def validate_case(
         "ref_doc_ids": _unique_doc_ids_in_payload(fixture, refs_payload),
         "citation_doc_ids": _unique_doc_ids_in_payload(fixture, citation_details),
         "citation_quality": citation_quality,
+        "system_b_audit": system_b_audit,
     }
 
 
@@ -741,6 +841,24 @@ def _build_report(rows: list[dict[str, Any]], *, fixture_path: Path, base_url: s
         quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
         failure_names = [str(item.get("name") or "") for item in _as_list(quality.get("failures")) if isinstance(item, dict)]
         lines.append(f"- `{row.get('id')}`: {', '.join(failure_names) or 'unknown'}")
+    audit_rows: list[tuple[str, dict[str, Any]]] = []
+    for row in rows:
+        quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+        audit = quality.get("system_b_audit") if isinstance(quality.get("system_b_audit"), dict) else {}
+        if int(audit.get("system_b_total") or 0) > 0:
+            audit_rows.append((str(row.get("id") or ""), audit))
+    lines.extend(["", "## System B Audit", ""])
+    if not audit_rows:
+        lines.append("- None")
+    for case_id, audit in audit_rows:
+        lines.append(
+            "- "
+            f"`{case_id}`: total={int(audit.get('system_b_total') or 0)}, "
+            f"complete={int(audit.get('trace_complete_count') or 0)}, "
+            f"review={int(audit.get('needs_review_count') or 0)}, "
+            f"answer_context_only={int(audit.get('answer_context_only_count') or 0)}, "
+            f"fallback={int(audit.get('reference_index_fallback_count') or 0)}"
+        )
     return "\n".join(lines) + "\n"
 
 

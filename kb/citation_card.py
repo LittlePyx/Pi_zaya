@@ -244,6 +244,11 @@ _CARD_TEXT_LIMITS = {
     "card_support_explanation": 420,
     "card_quality_label": 80,
     "card_warning": 360,
+    "system_b_trace_reason": 360,
+    "system_b_trace_answer": 420,
+    "system_b_trace_context": 520,
+    "system_b_trace_reference": 520,
+    "system_b_trace_locator": 260,
 }
 
 
@@ -614,6 +619,121 @@ def _quality_label(score: float, *, route: str) -> str:
     return "需要核对"
 
 
+def _dedup_strings(values: list[str] | tuple[str, ...]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _clean_text(value, max_len=120)
+        if not text:
+            continue
+        key = re.sub(r"\s+", " ", text).strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _is_paper_only_locator(locator: str, source: str) -> bool:
+    loc = _clean_text(locator, max_len=260).lower()
+    src = _clean_text(source, max_len=260).lower()
+    if not loc:
+        return True
+    if src and loc == src:
+        return True
+    return loc in {"unknown location", "not located", "source paper", "current paper"}
+
+
+def _compose_system_b_trace(
+    *,
+    rec: Mapping[str, Any],
+    pack_flags: list[str],
+    claim: str,
+    context: str,
+    source: str,
+    locator: str,
+    title: str,
+    raw_reference: str,
+    reference_entry: str,
+    score: float,
+) -> dict[str, Any]:
+    reference = reference_entry or raw_reference or title
+    context_source = str(rec.get("citation_context_source") or rec.get("evidence_source") or "").strip().lower()
+    routing_reason = _first_text(rec, "routing_reason", max_len=160) or "structured_cite"
+    routing_confidence = _safe_float(rec.get("routing_confidence"), 0.0)
+
+    flags: list[str] = []
+    if not claim:
+        flags.append("missing_answer_claim")
+    if not context:
+        flags.append("missing_citation_context")
+    if context_source == "answer_context":
+        flags.append("answer_context_only")
+    if not reference:
+        flags.append("missing_reference_entry")
+    if not locator:
+        flags.append("missing_citing_location")
+    elif _is_paper_only_locator(locator, source):
+        flags.append("paper_only_citing_location")
+    if context and reference and _sameish(context, reference):
+        flags.append("context_is_reference_entry")
+    if routing_confidence and routing_confidence < 0.5:
+        flags.append("low_routing_confidence")
+    flags.extend(str(item or "").strip() for item in pack_flags if str(item or "").strip())
+    flags = _dedup_strings(flags)
+
+    hard_flags = {
+        "missing_answer_claim",
+        "missing_citation_context",
+        "answer_context_only",
+        "missing_reference_entry",
+        "missing_citing_location",
+        "context_is_reference_entry",
+        "low_routing_confidence",
+        "weak_citation_context",
+        "reference_entry_only",
+    }
+    trace_complete = not any(flag in hard_flags for flag in flags)
+    trace_score = max(0.0, min(1.0, score))
+    for flag in flags:
+        if flag in {"missing_citation_context", "missing_reference_entry"}:
+            trace_score -= 0.22
+        elif flag in {"answer_context_only", "context_is_reference_entry"}:
+            trace_score -= 0.18
+        elif flag in {"missing_answer_claim", "missing_citing_location", "low_routing_confidence"}:
+            trace_score -= 0.14
+        elif flag == "paper_only_citing_location":
+            trace_score -= 0.06
+        elif flag in {"weak_citation_context", "reference_entry_only"}:
+            trace_score -= 0.1
+    trace_score = max(0.0, min(1.0, trace_score))
+
+    if trace_complete:
+        reason = "答案句命中了当前论文的引用语境，该语境再指向这篇上游文献。"
+    elif "answer_context_only" in flags:
+        reason = "目前只拿到了答案句里的引用线索，还没有定位到当前论文正文中的引用语境。"
+    elif "missing_citation_context" in flags:
+        reason = "缺少当前论文里围绕该引用的正文语境，需要打开引用语境核对。"
+    elif "context_is_reference_entry" in flags:
+        reason = "当前语境看起来像参考文献条目本身，不足以说明答案句如何使用了它。"
+    else:
+        reason = "这条上游引用链还需要结合当前论文位置和参考条目核对。"
+
+    steps = ["答案句", "当前论文引用处", "上游文献"] if trace_complete else ["答案句", "引用语境待核对", "上游文献"]
+    return {
+        "system_b_trace_complete": trace_complete,
+        "system_b_trace_score": round(trace_score, 3),
+        "system_b_trace_reason": reason,
+        "system_b_trace_flags": flags,
+        "system_b_trace_steps": steps,
+        "system_b_trace_answer": claim,
+        "system_b_trace_context": context,
+        "system_b_trace_reference": reference,
+        "system_b_trace_locator": locator,
+        "system_b_trace_source": context_source or routing_reason,
+    }
+
+
 def _locator(rec: Mapping[str, Any]) -> str:
     loc = _first_text(rec, "location_label", max_len=260)
     if loc:
@@ -765,6 +885,18 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         flags.append("missing_takeaway")
         score -= 0.08
     score = max(0.0, min(1.0, score))
+    trace = _compose_system_b_trace(
+        rec=rec,
+        pack_flags=flags,
+        claim=claim,
+        context=context,
+        source=source,
+        locator=pack.location_label or locator,
+        title=title,
+        raw_reference=raw_reference,
+        reference_entry=pack.reference_entry,
+        score=score,
+    )
 
     evidence_label = pack.evidence_label or "引用语境"
     warning = pack.warning
@@ -792,6 +924,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
+        **trace,
     }, route="system_b")
 
 

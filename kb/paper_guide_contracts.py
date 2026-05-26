@@ -7,6 +7,8 @@ from typing_extensions import TypedDict
 
 from pydantic import BaseModel, Field
 
+from kb.citation_audit import summarize_system_b_citation_audit
+
 try:
     from pydantic import ConfigDict
 except Exception:  # pragma: no cover - compatibility shim
@@ -463,6 +465,7 @@ class PaperGuideCitationDetailModel(_PaperGuideBaseModel):
     card_locator: str = ""
     card_evidence_label: str = ""
     card_evidence: str = ""
+    card_context_summary: str = ""
     card_reference_label: str = ""
     card_reference_entry: str = ""
     card_support_label: str = ""
@@ -472,6 +475,16 @@ class PaperGuideCitationDetailModel(_PaperGuideBaseModel):
     card_quality_flags: list[str] = Field(default_factory=list)
     card_warning: str = ""
     card_flow: list[str] = Field(default_factory=list)
+    system_b_trace_complete: bool = False
+    system_b_trace_score: float = 0.0
+    system_b_trace_reason: str = ""
+    system_b_trace_flags: list[str] = Field(default_factory=list)
+    system_b_trace_steps: list[str] = Field(default_factory=list)
+    system_b_trace_answer: str = ""
+    system_b_trace_context: str = ""
+    system_b_trace_reference: str = ""
+    system_b_trace_locator: str = ""
+    system_b_trace_source: str = ""
 
 
 class PaperGuideRenderPacketModel(_PaperGuideBaseModel):
@@ -1201,6 +1214,12 @@ def _build_paper_guide_render_packet_model(
         if not isinstance(raw, dict):
             continue
         normalized_cites.append(_paper_guide_citation_detail_model_from_raw(raw))
+    citation_validation_out = _normalize_paper_guide_shallow_dict(citation_validation)
+    cite_audit = summarize_system_b_citation_audit(
+        [_paper_guide_model_dump(item) for item in normalized_cites],
+    )
+    if int(cite_audit.get("system_b_total") or 0) > 0:
+        citation_validation_out["system_b_audit"] = cite_audit
 
     segments = [dict(item) for item in list(provenance_segments or []) if isinstance(item, dict)]
     segment_ids = _normalize_paper_guide_id_list(
@@ -1271,7 +1290,7 @@ def _build_paper_guide_render_packet_model(
         copy_markdown=str(copy_markdown or "").strip(),
         copy_text=str(copy_text or "").strip(),
         cite_details=normalized_cites,
-        citation_validation=_normalize_paper_guide_shallow_dict(citation_validation),
+        citation_validation=citation_validation_out,
         locate_target=_normalize_paper_guide_shallow_dict(primary_locate_target),
         reader_open=_normalize_paper_guide_shallow_dict(primary_reader_open),
         segment_ids=segment_ids,

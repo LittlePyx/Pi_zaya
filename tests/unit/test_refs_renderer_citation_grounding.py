@@ -68,6 +68,16 @@ def test_numeric_citation_uses_doi_to_resolve_multi_source_ambiguity(monkeypatch
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
     monkeypatch.setattr(refs_renderer, "_display_source_name", lambda sp: "a.pdf" if sp.endswith("a.en.md") else "b.pdf")
+    def fake_enrich(detail, *, source_path, ref_num, answer_context="", **_kwargs):
+        del source_path, ref_num
+        detail["answer_claim"] = answer_context
+        detail["citation_context"] = "The current paper cites Gehm and Brady when tracing single-shot compressive spectral imaging."
+        detail["citation_context_source"] = "source_markdown"
+        detail["evidence_quote"] = detail["citation_context"]
+        detail["location_label"] = "Related Work / Snapshot compressive imaging"
+        return detail
+
+    monkeypatch.setattr(refs_renderer, "enrich_inpaper_detail_context", fake_enrich)
 
     md = "This follows DOI 10.1364/OE.15.014013 [24]."
     hits = [
@@ -101,6 +111,16 @@ def test_numeric_citation_without_identity_signal_stays_clickable(monkeypatch):
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
     monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "doc.pdf")
+    def fake_enrich(detail, *, source_path, ref_num, answer_context="", **_kwargs):
+        del source_path, ref_num
+        detail["answer_claim"] = answer_context
+        detail["citation_context"] = "The current paper cites Wang and Li when discussing DenseNet reconstruction."
+        detail["citation_context_source"] = "source_markdown"
+        detail["evidence_quote"] = detail["citation_context"]
+        detail["location_label"] = "Related Work / Reconstruction"
+        return detail
+
+    monkeypatch.setattr(refs_renderer, "enrich_inpaper_detail_context", fake_enrich)
 
     md = "Wang uses DenseNet for reconstruction [116]."
     hits = [{"meta": {"source_path": "doc.en.md", "source_sha1": "abc"}}]
@@ -108,6 +128,37 @@ def test_numeric_citation_without_identity_signal_stays_clickable(monkeypatch):
 
     assert "[116](#" in out
     assert len(details) == 1
+    assert details[0]["system_b_trace_complete"] is True
+
+
+def test_numeric_reference_index_fallback_stays_plain_when_citation_context_is_missing(monkeypatch):
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) != 116:
+            return None
+        return {
+            "source_path": "doc.en.md",
+            "source_name": "doc.pdf",
+            "ref_num": 116,
+            "ref": {
+                "authors": "Wang X, Li Y",
+                "year": "2020",
+                "title": "A paper",
+                "raw": "[116] Wang X, Li Y. A paper. IEEE TCI, 2020.",
+            },
+        }
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "doc.pdf")
+
+    md = "Wang uses DenseNet for reconstruction [116]."
+    hits = [{"meta": {"source_path": "doc.en.md", "source_sha1": "abc"}}]
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[116](#" not in out
+    assert "[116]" in out
+    assert details == []
 
 
 def test_structured_cite_routes_to_system_b_for_upstream_origin_context(monkeypatch):
@@ -466,3 +517,6 @@ def test_structured_system_b_detail_carries_answer_context_and_role(monkeypatch)
     assert "ADMM 优化框架背景" in detail["card_takeaway"]
     assert "answer_context_only" in detail["card_quality_flags"]
     assert "完整引用语境" in detail["card_warning"]
+    assert detail["system_b_trace_complete"] is False
+    assert "answer_context_only" in detail["system_b_trace_flags"]
+    assert detail["system_b_trace_steps"] == ["答案句", "引用语境待核对", "上游文献"]

@@ -201,6 +201,217 @@ def test_detect_text_reference_opportunities_for_ordinary_reading_route(monkeypa
     assert opportunities[0]["ref_num"] == 4
 
 
+def test_detect_text_reference_opportunities_uses_nearest_label_before_ref(monkeypatch) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+    monkeypatch.setattr(
+        mod,
+        "load_paper_guide_reference_index",
+        lambda _source_path: [
+            {
+                "ref_num": 46,
+                "title": "Single-pixel imaging by means of Fourier spectrum acquisition",
+                "text": "Single-pixel imaging by means of Fourier spectrum acquisition.",
+                "first_citation_context": (
+                    "Universal patterns include Hadamard basis [45], Fourier basis [46], "
+                    "and Cosine transform basis [47]."
+                ),
+                "first_citation_location": "Introduction",
+            }
+        ],
+    )
+
+    def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
+        del _index, source_path, source_sha1
+        if int(ref_num) == 46:
+            return {
+                "ref": {
+                    "title": "Single-pixel imaging by means of Fourier spectrum acquisition",
+                    "raw": "Single-pixel imaging by means of Fourier spectrum acquisition.",
+                }
+            }
+        return None
+
+    monkeypatch.setattr(mod, "resolve_reference_entry", fake_resolve)
+
+    opportunities = detect_text_reference_opportunities(
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？",
+        answer="Hadamard 和 Fourier 编码选择是理解 SPI 实验设计的关键。",
+        answer_hits=[
+            {
+                "text": "Hadamard and Fourier basis patterns differ in SPI.",
+                "meta": {
+                    "source_path": "db/demo/dl-spi.en.md",
+                    "source_sha1": "abc",
+                    "heading_path": "Introduction",
+                },
+            }
+        ],
+        db_dir="db",
+    )
+
+    assert opportunities
+    assert opportunities[0]["label"] == "Fourier"
+    assert opportunities[0]["ref_num"] == 46
+
+
+def test_detect_text_reference_opportunities_rejects_broad_label_for_unrelated_ref(monkeypatch) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+    monkeypatch.setattr(
+        mod,
+        "load_paper_guide_reference_index",
+        lambda _source_path: [
+            {
+                "ref_num": 2,
+                "title": "Optical Coherence Tomography",
+                "text": "Huang et al. Optical Coherence Tomography.",
+                "first_citation_context": "Single-pixel imaging is discussed alongside other optical imaging work [2].",
+                "first_citation_location": "Introduction",
+            }
+        ],
+    )
+
+    def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
+        del _index, source_path, source_sha1
+        if int(ref_num) == 2:
+            return {
+                "ref": {
+                    "title": "Optical Coherence Tomography",
+                    "raw": "Huang et al. Optical Coherence Tomography.",
+                }
+            }
+        return None
+
+    monkeypatch.setattr(mod, "resolve_reference_entry", fake_resolve)
+
+    opportunities = detect_text_reference_opportunities(
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？",
+        answer="先读 single-pixel imaging 的基础综述，再读编码方案。",
+        answer_hits=[
+            {
+                "text": "Single-pixel imaging overview.",
+                "meta": {
+                    "source_path": "db/demo/hadamard-fourier.en.md",
+                    "source_sha1": "abc",
+                    "heading_path": "Introduction",
+                },
+            }
+        ],
+        db_dir="db",
+    )
+
+    assert opportunities == []
+
+
+def test_detect_text_reference_opportunities_ignores_uncited_answer_hits(monkeypatch) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_reference_rows(source_path):
+        if "uncited" not in str(source_path):
+            return []
+        return [
+            {
+                "ref_num": 4,
+                "title": "Distributed optimization and statistical learning via ADMM",
+                "text": "Distributed optimization and statistical learning via ADMM.",
+                "first_citation_context": "Most existing methods employ alternating direction method of multipliers (ADMM) [4].",
+                "first_citation_location": "Related Work",
+            }
+        ]
+
+    monkeypatch.setattr(mod, "load_paper_guide_reference_index", fake_reference_rows)
+
+    def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
+        del _index, source_path, source_sha1
+        if int(ref_num) == 4:
+            return {
+                "ref": {
+                    "title": "Distributed optimization and statistical learning via ADMM",
+                    "raw": "Distributed optimization and statistical learning via ADMM.",
+                }
+            }
+        return None
+
+    monkeypatch.setattr(mod, "resolve_reference_entry", fake_resolve)
+
+    opportunities = detect_text_reference_opportunities(
+        prompt="Where did ADMM come from?",
+        answer="The answer is grounded in the first retrieved paper [1].",
+        answer_hits=[
+            {
+                "text": "The cited paper discusses reconstruction background.",
+                "meta": {"source_path": "db/demo/cited.en.md", "source_sha1": "abc"},
+            },
+            {
+                "text": "Most existing methods employ ADMM.",
+                "meta": {"source_path": "db/demo/uncited.en.md", "source_sha1": "def"},
+            },
+        ],
+        db_dir="db",
+    )
+
+    assert opportunities == []
+
+
+def test_detect_text_reference_opportunities_keeps_cited_answer_hits(monkeypatch) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    monkeypatch.setattr(mod, "load_reference_index", lambda _db_dir: {"docs": {"demo": {}}})
+
+    def fake_reference_rows(source_path):
+        if "uncited" not in str(source_path):
+            return []
+        return [
+            {
+                "ref_num": 4,
+                "title": "Distributed optimization and statistical learning via ADMM",
+                "text": "Distributed optimization and statistical learning via ADMM.",
+                "first_citation_context": "Most existing methods employ alternating direction method of multipliers (ADMM) [4].",
+                "first_citation_location": "Related Work",
+            }
+        ]
+
+    monkeypatch.setattr(mod, "load_paper_guide_reference_index", fake_reference_rows)
+
+    def fake_resolve(_index, source_path, ref_num, *, source_sha1=""):
+        del _index, source_path, source_sha1
+        if int(ref_num) == 4:
+            return {
+                "ref": {
+                    "title": "Distributed optimization and statistical learning via ADMM",
+                    "raw": "Distributed optimization and statistical learning via ADMM.",
+                }
+            }
+        return None
+
+    monkeypatch.setattr(mod, "resolve_reference_entry", fake_resolve)
+
+    opportunities = detect_text_reference_opportunities(
+        prompt="Where did ADMM come from?",
+        answer="The answer is grounded in the second retrieved paper [2].",
+        answer_hits=[
+            {
+                "text": "The first paper discusses reconstruction background.",
+                "meta": {"source_path": "db/demo/cited.en.md", "source_sha1": "abc"},
+            },
+            {
+                "text": "Most existing methods employ ADMM.",
+                "meta": {"source_path": "db/demo/uncited.en.md", "source_sha1": "def"},
+            },
+        ],
+        db_dir="db",
+    )
+
+    assert opportunities
+    assert opportunities[0]["ref_num"] == 4
+    assert opportunities[0]["source_path"] == "db/demo/uncited.en.md"
+
+
 def test_detect_text_reference_opportunities_keeps_common_spad_label_for_reading_pair(monkeypatch) -> None:
     from kb import paper_guide_reference_opportunities as mod
 
@@ -446,6 +657,54 @@ def test_apply_reference_opportunities_uses_inline_system_b_for_ordinary_matchin
     assert meta["tail_used"] is False
 
 
+def test_reference_opportunities_do_not_inject_on_reading_list_title_line() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        (
+            "2. **《Hadamard single-pixel imaging versus Fourier single-pixel imaging》**（2017）[1]\n"
+            "- **看什么**：重点理解 Hadamard 与 Fourier 基扫描如何影响采样效率。"
+        ),
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？",
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 46,
+                "label": "Fourier",
+                "evidence_quote": "Universal patterns include Hadamard basis [45] and Fourier basis [46].",
+                "ref_title": "Single-pixel imaging by means of Fourier spectrum acquisition",
+            }
+        ],
+    )
+
+    lines = answer.splitlines()
+    assert "[[CITE:s1234abcd:46]]" not in lines[0]
+    assert "[[CITE:s1234abcd:46]]" in lines[1]
+    assert meta["mode"] == "inline"
+
+
+def test_reference_opportunities_do_not_inject_on_labeled_bibliography_line() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        (
+            "**文献**：*Hadamard single-pixel imaging versus Fourier single-pixel imaging* [1]\n"
+            "- **看什么**：重点理解 Hadamard 与 Fourier 基扫描如何影响采样效率。"
+        ),
+        prompt="我刚开始看单像素成像，想先建立主线，应该先读哪几篇？",
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 46,
+                "label": "Fourier",
+                "evidence_quote": "Universal patterns include Hadamard basis [45] and Fourier basis [46].",
+                "ref_title": "Single-pixel imaging by means of Fourier spectrum acquisition",
+            }
+        ],
+    )
+
+    lines = answer.splitlines()
+    assert "[[CITE:s1234abcd:46]]" not in lines[0]
+    assert "[[CITE:s1234abcd:46]]" in lines[1]
+    assert meta["mode"] == "inline"
+
+
 def test_reference_opportunities_merge_candidate_refs_without_duplicates() -> None:
     merged = merge_reference_opportunity_candidate_refs(
         {"db/demo/scinerf.en.md": [4]},
@@ -470,6 +729,31 @@ def test_reference_opportunity_note_does_not_duplicate_existing_marker() -> None
 
     assert answer.count("[[CITE:s1234abcd:4]]") == 1
     assert "[[CITE:s1234abcd:21]]" in answer
+
+
+def test_reference_opportunity_tail_dedupes_broad_labels() -> None:
+    answer = append_reference_opportunity_note(
+        "Read the SPI foundations first.",
+        prompt="I need a reading route for single-pixel imaging.",
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 2,
+                "label": "single-pixel imaging",
+                "ref_title": "Principles and prospects for single-pixel imaging",
+            },
+            {
+                "sid": "s1234abcd",
+                "ref_num": 135,
+                "label": "single-pixel imaging",
+                "ref_title": "Super-coding resolution single-pixel imaging",
+            },
+        ],
+    )
+
+    assert "[[CITE:s1234abcd:2]]" in answer
+    assert "[[CITE:s1234abcd:135]]" not in answer
+    assert "Principles and prospects" in answer
 
 
 def test_strip_reference_opportunity_note_removes_unvalidated_tail() -> None:

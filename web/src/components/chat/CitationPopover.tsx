@@ -247,6 +247,22 @@ export function CitationPopover({
     && !substantiallySame(rawSystemBContextSummary, systemBTakeawayText)
     ? rawSystemBContextSummary
     : ''
+  const systemBTraceSteps = isSystemB && Array.isArray(detail.systemBTraceSteps)
+    ? detail.systemBTraceSteps.map((item) => compact(item)).filter(Boolean)
+    : []
+  const systemBTraceReason = isSystemB ? cleanCitationDisplayText(detail.systemBTraceReason) : ''
+  const systemBTraceScore = Number(detail.systemBTraceScore || 0)
+  const showSystemBTrace = Boolean(
+    isSystemB
+    && (
+      systemBTraceSteps.length > 0
+      || systemBTraceReason
+      || systemBTraceScore > 0
+    ),
+  )
+  const systemBTraceStatus = detail.systemBTraceComplete
+    ? { label: '链路已闭合', tone: 'complete' }
+    : { label: '链路需核对', tone: 'review' }
   const systemBCitationContextPreview = evidencePreview(systemBCitationContextText, systemBTakeawayText ? 250 : 330)
   const whyText = compact(detail.whyLine)
   const bindingStatus = compact(detail.bindingStatus).toLowerCase()
@@ -466,6 +482,31 @@ export function CitationPopover({
         </div>
       ) : (
         <div className="kb-cite-pop-evidence-map">
+          {showSystemBTrace ? (
+            <div
+              className={`kb-cite-pop-trace kb-cite-pop-trace-${systemBTraceStatus.tone}`}
+              data-testid="citation-popover-system-b-trace"
+            >
+              <div className="kb-cite-pop-trace-head">
+                <span className="kb-cite-pop-section-title">证据链</span>
+                <span className="kb-cite-pop-trace-status">{systemBTraceStatus.label}</span>
+                {systemBTraceScore > 0 ? (
+                  <span className="kb-cite-pop-trace-score">{Math.round(systemBTraceScore * 100)}%</span>
+                ) : null}
+              </div>
+              {systemBTraceSteps.length > 0 ? (
+                <div className="kb-cite-pop-trace-steps" aria-label="System B evidence chain">
+                  {systemBTraceSteps.map((step, index) => (
+                    <span className="kb-cite-pop-trace-step-wrap" key={`${step}-${index}`}>
+                      <span className="kb-cite-pop-trace-step">{step}</span>
+                      {index < systemBTraceSteps.length - 1 ? <span className="kb-cite-pop-trace-arrow">→</span> : null}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              {systemBTraceReason ? <div className="kb-cite-pop-trace-reason">{systemBTraceReason}</div> : null}
+            </div>
+          ) : null}
           {systemBTakeawayText ? (
             <div className="kb-cite-pop-insight kb-cite-pop-takeaway" data-testid="citation-popover-system-b-takeaway">
               <span className="kb-cite-pop-section-title">{cardTakeawayLabel || '上游作用'}</span>

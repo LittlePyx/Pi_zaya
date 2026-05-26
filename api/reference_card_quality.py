@@ -4,6 +4,8 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from kb.citation_audit import summarize_system_b_citation_audit
+
 REF_CARD_POLISH_CONTRACT_VERSION = 1
 CITATION_CARD_QUALITY_CONTRACT_VERSION = 1
 
@@ -64,6 +66,34 @@ def _intish(value: Any) -> int:
         return 0
 
 
+def _floatish(value: Any) -> float:
+    try:
+        out = float(value)
+    except Exception:
+        return 0.0
+    if out != out:
+        return 0.0
+    return out
+
+
+def _boolish(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    text = _norm(value)
+    if text in {"true", "1", "yes", "y"}:
+        return True
+    if text in {"false", "0", "no", "n"}:
+        return False
+    return None
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [_text(item) for item in value if _text(item)]
+    text = _text(value)
+    return [text] if text else []
+
+
 def _citation_route(detail: Mapping[str, Any]) -> str:
     explicit = _norm(detail.get("citation_route") or detail.get("route"))
     if explicit in {"system_a", "system-b", "system_b", "a", "b"}:
@@ -118,10 +148,13 @@ def _visible_citation_texts(data: Mapping[str, Any], *, route: str) -> dict[str,
     if route == "system_b":
         return {
             "card_takeaway": _first_text(data, ("card_takeaway", "upstream_work_role", "user_question_relation", "support_relation")),
-            "card_evidence": _first_text(data, ("card_evidence", "citation_context", "evidence_quote", "context", "answer_claim")),
+            "card_evidence": _first_text(data, ("card_evidence", "system_b_trace_context", "citation_context", "evidence_quote", "context")),
             "card_locator": _first_text(data, ("card_locator", "location_label", "heading_path")),
             "card_reference_entry": _first_text(data, ("card_reference_entry", "raw", "cite_fmt")),
             "card_support_explanation": _first_text(data, ("card_support_explanation", "why_line")),
+            "system_b_trace_reason": _first_text(data, ("system_b_trace_reason",)),
+            "system_b_trace_answer": _first_text(data, ("system_b_trace_answer", "card_claim", "answer_claim")),
+            "system_b_trace_reference": _first_text(data, ("system_b_trace_reference", "card_reference_entry", "raw", "cite_fmt")),
         }
     return {
         "card_takeaway": _first_text(data, ("card_takeaway",)),
@@ -181,8 +214,15 @@ def citation_detail_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
         reference_identity = _first_text(data, ("title", "raw", "cite_fmt", "card_reference_entry"))
         takeaway = visible_texts.get("card_takeaway", "")
         context = visible_texts.get("card_evidence", "")
+        answer_claim = visible_texts.get("system_b_trace_answer", "") or _first_text(data, ("card_claim", "answer_claim"))
+        reference_entry = visible_texts.get("system_b_trace_reference", "") or visible_texts.get("card_reference_entry", "")
+        trace_complete = _boolish(data.get("system_b_trace_complete"))
+        trace_score = _floatish(data.get("system_b_trace_score"))
+        trace_flags = set(_string_list(data.get("system_b_trace_flags")) + _string_list(data.get("card_quality_flags")))
         if not reference_identity:
             fail("system_b_missing_reference_identity")
+        if len(answer_claim) < 12:
+            fail("system_b_missing_answer_claim", field="answer_claim")
         if len(takeaway) < 24:
             fail("system_b_missing_takeaway", field="card_takeaway")
         if len(context) < 24:
@@ -191,6 +231,23 @@ def citation_detail_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
             fail("system_b_missing_locator", field="location_label")
         if _norm(context) == _norm(reference_identity):
             fail("system_b_context_is_reference_entry", field="citation_context")
+        if not reference_entry:
+            fail("system_b_missing_reference_entry", field="card_reference_entry")
+        if trace_complete is False:
+            fail("system_b_trace_incomplete", field="system_b_trace_complete", detail=", ".join(sorted(trace_flags))[:160])
+        elif trace_complete is None:
+            hard_trace_flags = {
+                "answer_context_only",
+                "missing_citation_context",
+                "missing_answer_claim",
+                "missing_reference_entry",
+                "context_is_reference_entry",
+                "reference_entry_only",
+            }
+            if trace_flags & hard_trace_flags:
+                fail("system_b_trace_incomplete", field="system_b_trace_flags", detail=", ".join(sorted(trace_flags & hard_trace_flags)))
+        if trace_score and trace_score < 0.45:
+            warn("system_b_low_trace_score", field="system_b_trace_score", detail=trace_score)
         if _norm(data.get("card_locator_label")) in {"current paper citation", "current paper location"}:
             warn("system_b_locator_label_should_be_user_facing", field="card_locator_label")
 
@@ -234,6 +291,7 @@ def summarize_citation_detail_quality(details: list[Mapping[str, Any]] | tuple[M
         "failures": failures,
         "warnings": warnings,
         "min_score": min((float(item.get("score") or 0.0) for item in items), default=1.0),
+        "system_b_audit": summarize_system_b_citation_audit(details),
     }
 
 
