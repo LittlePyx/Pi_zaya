@@ -35,6 +35,12 @@ def test_polish_citation_card_accepts_grounded_short_fields() -> None:
     assert out["citation_card_polish_quality_score"] > 0.7
     assert out["card_takeaway"].startswith("DMD is the hardware")
     assert "card_evidence" not in out
+    assert out["citation_card_view_patch_version"] == 1
+    assert out["card_view"]["route"] == "system_a"
+    sections = {section["id"]: section for section in out["card_view"]["sections"]}
+    assert sections["takeaway"]["text"].startswith("DMD is the hardware")
+    assert "locator" in sections
+    assert "evidence" in sections
 
 
 def test_polish_citation_card_rejects_markdown_and_generic_output() -> None:
@@ -123,6 +129,13 @@ def test_polish_citation_card_system_b_payload_and_quality_metadata() -> None:
     ]
     assert out["citation_card_polish_quality_score"] > 0.7
     assert "早期量子成像工作" in out["card_context_summary"]
+    assert out["citation_card_view_patch_version"] == 1
+    assert out["card_view"]["route"] == "system_b"
+    sections = {section["id"]: section for section in out["card_view"]["sections"]}
+    assert "takeaway" in sections
+    assert "context_summary" in sections
+    assert sections["context_summary"]["text"] == out["card_context_summary"]
+    assert "Physical Review A" not in "\n".join(section["text"] for section in sections.values())
     payload = str(captured["candidate_payload"])
     assert "Reference entry:" in payload
     assert "Citation context:" in payload
@@ -154,6 +167,39 @@ def test_polish_citation_card_system_b_rejects_context_summary_copies() -> None:
     assert "card_context_summary" not in out
     assert "card_support_explanation" not in out
     assert any("card_context_summary:duplicates_" in item for item in out["citation_card_polish_rejected"])
+
+
+def test_polish_citation_card_rejects_metadata_repetition_in_narrative_fields() -> None:
+    detail = {
+        "is_inpaper": True,
+        "source_name": "Current paper.pdf",
+        "title": "Optical imaging by means of two-photon quantum entanglement",
+        "authors": "Pittman T, Shih Y",
+        "venue": "Physical Review A",
+        "year": "1995",
+        "doi": "10.1103/physreva.52.r3429",
+        "raw": "Pittman T, Shih Y. Optical imaging by means of two-photon quantum entanglement. Physical Review A, 1995.",
+        "answer_claim": "单像素成像可以降低成像成本。",
+        "citation_context": "Unlike traditional focal plane array detectors, SPI only adopts a SPD to collect echo signals.",
+        "heading_path": "1. Introduction",
+    }
+
+    def fake_llm(**_kwargs: object) -> str:
+        return (
+            '{"card_takeaway":"这篇发表于 Physical Review A 1995 的论文 Optical imaging by means of two-photon quantum entanglement 值得打开。",'
+            '"card_context_summary":"当前论文引用它时强调 SPI 用单点探测器替代传统焦平面阵列，线索落在探测结构和成本优势。",'
+            '"card_support_explanation":"DOI 是 10.1103/physreva.52.r3429。"}'
+        )
+
+    out = polish_citation_card_detail(detail, llm_fn=fake_llm)
+
+    assert out["citation_card_polish_status"] == "full"
+    assert out["citation_card_polish_fields"] == ["card_context_summary"]
+    assert "card_takeaway" not in out
+    assert "card_support_explanation" not in out
+    assert out["card_context_summary"].startswith("当前论文引用它时强调 SPI")
+    assert any("card_takeaway:metadata_repeated" in item for item in out["citation_card_polish_rejected"])
+    assert any("card_support_explanation:metadata_repeated" in item for item in out["citation_card_polish_rejected"])
 
 
 def test_citation_card_polish_cache_key_normalizes_frontend_aliases() -> None:

@@ -1,3 +1,31 @@
+export interface CitationCardViewSection {
+  id: string
+  label: string
+  text: string
+  kind: string
+  hint: string
+  tone: string
+}
+
+export interface CitationCardView {
+  version: number
+  route: string
+  kind: string
+  header: {
+    kicker: string
+    title: string
+    subtitle: string
+  }
+  sections: CitationCardViewSection[]
+  summary: string
+  quality: {
+    label: string
+    score: number
+    flags: string[]
+    warning: string
+  }
+}
+
 export interface CiteDetail {
   num: number
   anchor: string
@@ -95,6 +123,9 @@ export interface CiteDetail {
   cardQualityFlags: string[]
   cardWarning: string
   cardFlow: string[]
+  cardDisplayContractVersion: number
+  cardVisibleSections: string[]
+  cardView: CitationCardView | null
   systemBTraceComplete: boolean
   systemBTraceScore: number
   systemBTraceReason: string
@@ -604,6 +635,55 @@ function pickNumberArray(rec: Record<string, unknown>, ...keys: string[]): numbe
   return []
 }
 
+function normalizeCitationCardView(value: unknown): CitationCardView | null {
+  if (!value || typeof value !== 'object') return null
+  const rec = value as Record<string, unknown>
+  const headerRec = rec.header && typeof rec.header === 'object'
+    ? rec.header as Record<string, unknown>
+    : {}
+  const qualityRec = rec.quality && typeof rec.quality === 'object'
+    ? rec.quality as Record<string, unknown>
+    : {}
+  const sectionsRaw = Array.isArray(rec.sections) ? rec.sections : []
+  const sections: CitationCardViewSection[] = []
+  const seen = new Set<string>()
+  for (const item of sectionsRaw) {
+    if (!item || typeof item !== 'object') continue
+    const section = item as Record<string, unknown>
+    const id = asText(section.id)
+    const text = cleanCitationDisplayText(asText(section.text))
+    if (!id || !text || seen.has(id)) continue
+    seen.add(id)
+    sections.push({
+      id,
+      label: cleanCitationDisplayText(asText(section.label)),
+      text,
+      kind: asText(section.kind),
+      hint: cleanCitationDisplayText(asText(section.hint)),
+      tone: asText(section.tone),
+    })
+  }
+  if (sections.length <= 0 && !asText(headerRec.title)) return null
+  return {
+    version: pickNumber(rec, 'version'),
+    route: asText(rec.route),
+    kind: asText(rec.kind),
+    header: {
+      kicker: cleanCitationDisplayText(asText(headerRec.kicker)),
+      title: cleanCitationDisplayText(asText(headerRec.title)),
+      subtitle: cleanCitationDisplayText(asText(headerRec.subtitle)),
+    },
+    sections,
+    summary: cleanCitationDisplayText(asText(rec.summary)),
+    quality: {
+      label: cleanCitationDisplayText(asText(qualityRec.label)),
+      score: pickNumber(qualityRec, 'score'),
+      flags: pickStringArray(qualityRec, 'flags'),
+      warning: cleanCitationDisplayText(asText(qualityRec.warning)),
+    },
+  }
+}
+
 function stripLeadCitationLabel(value: string): string {
   return String(value || '')
     .replace(/^\s*(?:\[\s*\d{1,4}\s*\]\s*){1,3}/, '')
@@ -752,6 +832,9 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     cardQualityFlags: pickStringArray(rec, 'card_quality_flags', 'cardQualityFlags'),
     cardWarning: pickText(rec, 'card_warning', 'cardWarning'),
     cardFlow: pickStringArray(rec, 'card_flow', 'cardFlow'),
+    cardDisplayContractVersion: pickNumber(rec, 'card_display_contract_version', 'cardDisplayContractVersion'),
+    cardVisibleSections: pickStringArray(rec, 'card_visible_sections', 'cardVisibleSections'),
+    cardView: normalizeCitationCardView(rec.card_view ?? rec.cardView),
     systemBTraceComplete: Boolean(rec.system_b_trace_complete ?? rec.systemBTraceComplete),
     systemBTraceScore: pickNumber(rec, 'system_b_trace_score', 'systemBTraceScore'),
     systemBTraceReason: pickText(rec, 'system_b_trace_reason', 'systemBTraceReason'),
@@ -850,10 +933,165 @@ export function citationMain(detail: CiteDetail): string {
   return stripLeadCitationLabel(detail.raw) || `[${detail.num || '?'}]`
 }
 
+function makeCardViewSection(
+  id: string,
+  label: string,
+  text: string,
+  kind: string,
+  opts?: { hint?: string; tone?: string },
+): CitationCardViewSection | null {
+  const cleanText = cleanCitationDisplayText(text)
+  if (!id || !cleanText) return null
+  return {
+    id,
+    label: cleanCitationDisplayText(label),
+    text: cleanText,
+    kind,
+    hint: cleanCitationDisplayText(opts?.hint || ''),
+    tone: String(opts?.tone || '').trim(),
+  }
+}
+
+function appendCardViewSection(sections: CitationCardViewSection[], section: CitationCardViewSection | null): void {
+  if (!section) return
+  if (sections.some((item) => item.id === section.id)) return
+  const key = looseTokens(section.text).join(' ')
+  if (key && sections.some((item) => {
+    const existing = looseTokens(item.text).join(' ')
+    return existing === key || (key.length > 24 && existing.includes(key)) || (existing.length > 24 && key.includes(existing))
+  })) return
+  sections.push(section)
+}
+
+export function citationCardView(detail: CiteDetail): CitationCardView {
+  const stored = detail.cardView
+  const isSystemB = Boolean(detail.isInpaper)
+  const route = isSystemB ? 'system_b' : 'system_a'
+  const storedMatchesRoute = Boolean(stored && (!stored.route || stored.route === route))
+  const storedSection = (id: string): CitationCardViewSection | null => {
+    if (!storedMatchesRoute) return null
+    return stored?.sections?.find((item) => item.id === id) || null
+  }
+  const sectionLabel = (id: string, fieldValue: string, fallback: string): string => {
+    return cleanCitationDisplayText(storedSection(id)?.label || fieldValue || fallback)
+  }
+  const sectionText = (id: string, fieldValue: string): string => {
+    return cleanCitationDisplayText(storedSection(id)?.text || fieldValue || '')
+  }
+  const title = cleanCitationDisplayText(
+    (storedMatchesRoute ? stored?.header?.title : '')
+    || detail.cardTitle
+    || (isSystemB ? detail.title : detail.sourceName)
+    || detail.title
+    || detail.sourcePath,
+  )
+  const subtitle = cleanCitationDisplayText((storedMatchesRoute ? stored?.header?.subtitle : '') || detail.cardSubtitle || '')
+  const qualityFlags = detail.cardQualityFlags.length ? detail.cardQualityFlags : (storedMatchesRoute ? (stored?.quality?.flags || []) : [])
+  const sections: CitationCardViewSection[] = []
+
+  appendCardViewSection(sections, makeCardViewSection('warning', sectionLabel('warning', '', '提醒'), sectionText('warning', detail.cardWarning), 'warning', { tone: 'warning' }))
+  appendCardViewSection(
+    sections,
+    makeCardViewSection(
+      'takeaway',
+      sectionLabel('takeaway', detail.cardTakeawayLabel, isSystemB ? '上游作用' : '证据重点'),
+      sectionText('takeaway', detail.cardTakeaway),
+      'insight',
+      { tone: 'primary' },
+    ),
+  )
+  if (!isSystemB) {
+    appendCardViewSection(
+      sections,
+      makeCardViewSection('claim', sectionLabel('claim', detail.cardClaimLabel, '答案要点'), sectionText('claim', detail.cardClaim), 'claim'),
+    )
+  }
+  appendCardViewSection(
+    sections,
+    makeCardViewSection(
+      'locator',
+      sectionLabel('locator', detail.cardLocatorLabel, isSystemB ? '当前论文引用处' : '原文位置'),
+      sectionText('locator', detail.cardLocator || detail.locationLabel),
+      'locator',
+    ),
+  )
+  if (isSystemB) {
+    appendCardViewSection(sections, makeCardViewSection('context_summary', sectionLabel('context_summary', '', '语境摘要'), sectionText('context_summary', detail.cardContextSummary), 'summary'))
+  }
+  appendCardViewSection(
+    sections,
+    makeCardViewSection(
+      'evidence',
+      sectionLabel('evidence', detail.cardEvidenceLabel, isSystemB ? '引用语境' : '原文证据'),
+      sectionText('evidence', detail.cardEvidence),
+      'quote',
+    ),
+  )
+  if (
+    isSystemB
+    && (
+      qualityFlags.includes('missing_reference_title')
+      || qualityFlags.includes('reference_entry_only')
+      || !title
+      || Boolean(storedSection('reference'))
+    )
+  ) {
+    appendCardViewSection(
+      sections,
+      makeCardViewSection('reference', sectionLabel('reference', detail.cardReferenceLabel, '上游文献条目'), sectionText('reference', detail.cardReferenceEntry), 'reference'),
+    )
+  }
+  appendCardViewSection(
+    sections,
+    makeCardViewSection('support', sectionLabel('support', detail.cardSupportLabel, isSystemB ? '说明' : '可靠度'), sectionText('support', detail.cardSupportExplanation), 'support'),
+  )
+
+  const summary = trimShelfSummary(
+    sections.find((item) => item.id === 'takeaway')?.text
+    || sections.find((item) => item.id === 'context_summary')?.text
+    || sections.find((item) => item.id === 'claim')?.text
+    || sections.find((item) => item.id === 'evidence')?.text
+    || (storedMatchesRoute ? stored?.summary : '')
+    || '',
+    260,
+  )
+  return {
+    version: (storedMatchesRoute ? stored?.version : 0) || 1,
+    route,
+    kind: (storedMatchesRoute ? stored?.kind : '') || detail.cardKind || (isSystemB ? 'upstream_reference' : 'answer_evidence'),
+    header: {
+      kicker: stored?.header?.kicker || (isSystemB ? '上游引用' : '答案依据'),
+      title,
+      subtitle,
+    },
+    sections,
+    summary,
+    quality: {
+      label: detail.cardQualityLabel || (storedMatchesRoute ? stored?.quality?.label : '') || '',
+      score: Number(detail.cardQualityScore || (storedMatchesRoute ? stored?.quality?.score : 0) || 0),
+      flags: qualityFlags,
+      warning: detail.cardWarning || (storedMatchesRoute ? stored?.quality?.warning : '') || '',
+    },
+  }
+}
+
 function trimShelfSummary(value: string, maxLen = 220): string {
   let text = cleanCitationDisplayText(value)
     .replace(/\s+/g, ' ')
     .trim()
+  const low = text.toLowerCase()
+  if (
+    low === 'no summary available'
+    || low === 'no summary'
+    || low === 'summary pending'
+    || low === 'no notes'
+    || low === 'none'
+    || low === 'n/a'
+    || low === 'na'
+    || low === 'unknown'
+  ) {
+    return ''
+  }
   if (text.length > maxLen) {
     text = `${text.slice(0, Math.max(0, maxLen - 1)).replace(/[，,；;:：]\s*$/g, '')}...`
   }
@@ -889,6 +1127,10 @@ function titleBasedShelfSummary(detail: CiteDetail): string {
 }
 
 function deriveShelfSummary(detail: CiteDetail): { line: string; source: string } {
+  const viewSummary = trimShelfSummary(citationCardView(detail).summary, 420)
+  if (viewSummary) {
+    return { line: viewSummary, source: 'citation_card_view' }
+  }
   const existing = trimShelfSummary(detail.summaryLine, 420)
   const suppressRawSystemBContext = detail.isInpaper
     && (
@@ -986,6 +1228,9 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'card_support_explanation',
     'card_warning',
     'system_b_trace_complete',
+    'card_display_contract_version',
+    'card_visible_sections',
+    'card_view',
     'system_b_trace_score',
     'system_b_trace_reason',
     'system_b_trace_flags',
@@ -1055,18 +1300,12 @@ export function citeMetricSummary(detail: CiteDetail): string[] {
     items.push(`被引 ${detail.citationCount}${detail.citationSource ? ` (${detail.citationSource})` : ''}`)
   }
   if (detail.venueKind === 'conference') {
-    const confLabel = detail.conferenceAcronym || detail.conferenceName || detail.venue
-    if (confLabel) items.push(`会议 ${confLabel}`)
-    if (detail.year) items.push(`年份 ${detail.year}`)
     if (detail.conferenceTier) {
       items.push(`CORE ${detail.conferenceTier}${detail.conferenceRankSource ? ` (${detail.conferenceRankSource})` : ''}`)
     }
     if (detail.conferenceCcf) {
       items.push(`CCF ${detail.conferenceCcf}${detail.conferenceCcfSource ? ` (${detail.conferenceCcfSource})` : ''}`)
     }
-  } else {
-    if (detail.venue) items.push(`期刊 ${detail.venue}`)
-    if (detail.year) items.push(`年份 ${detail.year}`)
   }
   if (detail.journalIf) items.push(`IF ${detail.journalIf}`)
   if (detail.journalQuartile) items.push(`JCR ${detail.journalQuartile}`)
@@ -1315,7 +1554,7 @@ export function summarySourceLabel(source: string, provider = ''): string {
     return 'abstract'
   }
   if (s === 'citation_context') return 'citation context'
-  if (s === 'citation_card') return 'citation card'
+  if (s === 'citation_card' || s === 'citation_card_view' || s === 'card_view') return 'citation card'
   if (s === 'metadata') return 'metadata'
   return 'metadata'
 }

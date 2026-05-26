@@ -8,9 +8,10 @@ from dataclasses import replace
 from functools import lru_cache
 from typing import Any, Callable, Mapping
 
-from kb.citation_card import compose_citation_card
+from kb.citation_card import compose_citation_card, refresh_citation_card_contract
+from kb.citation_context_summary import reject_system_b_context_summary
 from kb.config import load_settings
-from kb.evidence_text import clean_display_text
+from kb.evidence_text import clean_display_text, source_title_candidate
 from kb.llm import DeepSeekChat
 
 
@@ -58,6 +59,7 @@ _ALIAS_TO_SNAKE = {
     "cardWarning": "card_warning",
 }
 _TEXT_PATCH_KEYS = ("card_takeaway", "card_claim", "card_context_summary", "card_support_explanation")
+_VIEW_PATCH_VERSION = 1
 _BAD_MARKUP_RE = re.compile(r"\[\[?\s*CITE\s*:|```|<[^>]+>|!\[[^\]]*]\(|\|")
 _INLINE_REF_MARKER_RE = re.compile(r"\[(?:R)?\d{1,4}(?:\s*[-,;]\s*(?:R)?\d{1,4})*\]", re.IGNORECASE)
 _PROMPT_LABEL_RE = re.compile(
@@ -86,6 +88,17 @@ _LOW_INFORMATION_RE = re.compile(
     r"打开(?:答案依据|引用语境)|start reading guide|open citation shelf|add to shelf"
     r")$",
     re.IGNORECASE,
+)
+_NARRATIVE_METADATA_RE = re.compile(
+    r"\b(?:doi|jcr|impact\s*factor|if\s*[:：]?\s*\d|published\s+(?:in|by)|"
+    r"journal|conference|venue|citation\s+count|cited\s+by)\b|"
+    r"(?:发表于|发表在|期刊|会议|年份|被引|影响因子|分区|出处|来源论文|论文标题|标题是|作者是)",
+    re.IGNORECASE,
+)
+_DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s，。；;,)）]+", re.IGNORECASE)
+_AUTHOR_LIST_RE = re.compile(
+    r"(?:[A-Z][a-zA-Z'`-]+,\s*(?:[A-Z]\.?\s*){1,4}|[A-Z][a-zA-Z'`-]+\s+[A-Z]\.?)"
+    r"(?:\s*(?:,|;|and|&)\s*(?:[A-Z][a-zA-Z'`-]+,\s*(?:[A-Z]\.?\s*){1,4}|[A-Z][a-zA-Z'`-]+\s+[A-Z]\.?)){2,}",
 )
 
 
@@ -158,6 +171,41 @@ def _sameish(left: str, right: str) -> bool:
     return len(at & bt) / max(1, min(len(at), len(bt))) >= 0.82
 
 
+def _compact_identity(value: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", str(value or "").lower()).strip()
+
+
+def _contains_identity_text(text: str, candidate: str, *, min_len: int = 22) -> bool:
+    body = _compact_identity(text)
+    ident = _compact_identity(candidate)
+    if not body or len(ident) < min_len:
+        return False
+    return ident in body
+
+
+def _looks_redundant_metadata_text(text: str, baseline: Mapping[str, str]) -> bool:
+    value = _clean_polish_candidate(text, max_len=320)
+    if not value:
+        return False
+    if _DOI_RE.search(value) or _NARRATIVE_METADATA_RE.search(value):
+        return True
+    if _AUTHOR_LIST_RE.search(value):
+        return True
+
+    title = source_title_candidate(baseline.get("title", ""))
+    source = source_title_candidate(baseline.get("source", ""))
+    if _contains_identity_text(value, title) or _contains_identity_text(value, source):
+        return True
+
+    venue = str(baseline.get("venue") or "").strip()
+    year = str(baseline.get("year") or "").strip()
+    if venue and _contains_identity_text(value, venue, min_len=7):
+        return True
+    if year and re.search(r"\b(?:18|19|20)\d{2}\b", value) and _NARRATIVE_METADATA_RE.search(value):
+        return True
+    return False
+
+
 def _clean_polish_candidate(value: Any, *, max_len: int) -> str:
     text = _text(value, max_len=max_len)
     for _ in range(2):
@@ -224,7 +272,7 @@ def citation_card_polish_cache_key(detail: Mapping[str, Any] | None) -> str:
     rec = normalize_citation_card_detail(detail)
     base = compose_citation_card(rec)
     selected = {
-        "version": 3,
+        "version": 4,
         "is_inpaper": bool(base.get("is_inpaper")),
         "num": str(base.get("num") or ""),
         "source_name": _text(base.get("source_name"), max_len=220),
@@ -237,6 +285,9 @@ def citation_card_polish_cache_key(detail: Mapping[str, Any] | None) -> str:
         "user_question_relation": _text(base.get("user_question_relation") or base.get("support_relation"), max_len=420),
         "card_reference_entry": _text(base.get("card_reference_entry") or base.get("raw"), max_len=620),
         "card_locator": _text(base.get("card_locator") or base.get("location_label"), max_len=260),
+        "venue": _text(base.get("venue"), max_len=120),
+        "year": _text(base.get("year"), max_len=16),
+        "doi": _text(base.get("doi") or base.get("doi_url"), max_len=140),
     }
     blob = json.dumps(selected, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(blob.encode("utf-8", "ignore")).hexdigest()
@@ -295,6 +346,7 @@ def _llm_polish_citation_card_json(
                         "card_context_summary is only for SystemB: summarize why the current paper cites this upstream work in the provided context. "
                         "Leave card_context_summary empty for SystemA or when the context is too weak. "
                         "card_support_explanation is optional and only for a non-obvious reliability or tracing note. Leave optional fields empty when they add no new information. "
+                        "Do not mention authors, venue, year, DOI, citation count, IF/JCR, or repeat the paper/source title; those are shown elsewhere in the UI. "
                         "Use only the supplied fields. Do not invent facts. Do not rewrite the evidence quote itself. "
                         "Do not output markdown, bullets, table bars, formulas, DOC/SID/CITE/reference markers, UI labels, or generic phrases."
                     ),
@@ -343,6 +395,7 @@ def _parse_json_object(raw: str) -> dict[str, Any]:
 def _baseline_texts(base: Mapping[str, Any]) -> dict[str, str]:
     return {
         "evidence": _text(base.get("card_evidence") or base.get("evidence_quote") or base.get("citation_context"), max_len=620),
+        "context": _text(base.get("citation_context") or base.get("card_evidence") or base.get("evidence_quote"), max_len=620),
         "claim": _text(base.get("card_claim") or base.get("answer_claim"), max_len=420),
         "takeaway": _text(base.get("card_takeaway"), max_len=180),
         "title": _text(base.get("title") or base.get("card_title"), max_len=260),
@@ -350,6 +403,10 @@ def _baseline_texts(base: Mapping[str, Any]) -> dict[str, str]:
         "locator": _text(base.get("card_locator") or base.get("heading_path") or base.get("location_label"), max_len=260),
         "reference": _text(base.get("card_reference_entry") or base.get("raw") or base.get("cite_fmt"), max_len=620),
         "warning": _text(base.get("card_warning"), max_len=360),
+        "venue": _text(base.get("venue"), max_len=120),
+        "year": _text(base.get("year"), max_len=16),
+        "authors": _text(base.get("authors"), max_len=220),
+        "doi": _text(base.get("doi") or base.get("doi_url"), max_len=140),
     }
 
 
@@ -363,6 +420,8 @@ def _reject_polish_reason(
 ) -> str:
     if _looks_bad_polish_text(text):
         return "bad_or_generic"
+    if key in _TEXT_PATCH_KEYS and _looks_redundant_metadata_text(text, baseline):
+        return "metadata_repeated"
     comparable = {
         label: value
         for label, value in baseline.items()
@@ -385,6 +444,18 @@ def _reject_polish_reason(
     elif key == "card_context_summary":
         if route != "system_b":
             return "wrong_route"
+        summary_reason = reject_system_b_context_summary(
+            text,
+            context=baseline.get("context") or baseline.get("evidence", ""),
+            claim=baseline.get("claim", ""),
+            title=baseline.get("title", ""),
+            source=baseline.get("source", ""),
+            reference_entry=baseline.get("reference", ""),
+            locator=baseline.get("locator", ""),
+            takeaway=str(accepted.get("card_takeaway") or baseline.get("takeaway", "")),
+        )
+        if summary_reason:
+            return summary_reason
         for label in ("evidence", "claim", "takeaway", "title", "locator", "reference"):
             if _sameish(text, baseline.get(label, "")):
                 return f"duplicates_{label}"
@@ -414,6 +485,34 @@ def _quality_score_for_patch(patch: Mapping[str, Any], *, rejected_count: int) -
     if rejected_count:
         score -= min(0.18, 0.04 * rejected_count)
     return round(max(0.0, min(1.0, score)), 3)
+
+
+def _attach_card_view_patch(
+    *,
+    base: Mapping[str, Any],
+    patch: dict[str, Any],
+    accepted_keys: list[str],
+    rejected: list[str],
+) -> list[str]:
+    refreshed = refresh_citation_card_contract({**dict(base), **patch})
+    final_keys: list[str] = []
+    for key in accepted_keys:
+        text = _text(
+            refreshed.get(key),
+            max_len=220 if key == "card_context_summary" else (420 if key != "card_takeaway" else 160),
+        )
+        if not text:
+            patch.pop(key, None)
+            rejected.append(f"{key}:finalized_empty")
+            continue
+        patch[key] = text
+        final_keys.append(key)
+    if final_keys:
+        patch["card_display_contract_version"] = refreshed.get("card_display_contract_version")
+        patch["card_visible_sections"] = refreshed.get("card_visible_sections") or []
+        patch["card_view"] = refreshed.get("card_view") or {}
+        patch["citation_card_view_patch_version"] = _VIEW_PATCH_VERSION
+    return final_keys
 
 
 def polish_citation_card_detail(
@@ -470,6 +569,13 @@ def polish_citation_card_detail(
             continue
         patch[key] = text
         accepted_keys.append(key)
+    if not accepted_keys:
+        return {
+            "citation_card_polish_status": "empty",
+            "citation_card_polish_source": "llm_empty",
+            "citation_card_polish_checked": True,
+        }
+    accepted_keys = _attach_card_view_patch(base=base, patch=patch, accepted_keys=accepted_keys, rejected=rejected)
     if not accepted_keys:
         return {
             "citation_card_polish_status": "empty",

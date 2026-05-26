@@ -71,7 +71,9 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     re.IGNORECASE,
 )
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
-_RENDER_CACHE_SCHEMA_VERSION = 11
+# Bump whenever citation rendering/card contracts change in a way that should
+# repair historical conversations on the next page load.
+_RENDER_CACHE_SCHEMA_VERSION = 12
 
 
 def _env_flag(name: str, default: str = "0") -> bool:

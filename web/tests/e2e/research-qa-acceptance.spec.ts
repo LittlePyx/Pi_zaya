@@ -435,7 +435,7 @@ test('research QA acceptance: polished refs and both citation systems stay click
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('ADMM')
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('上游')
   await expect(page.getByTestId('citation-popover-system-b-context')).toContainText('ADMM-based optimization')
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('引用出现位置')
+  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('当前论文引用处')
   await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('SCINeRF')
   await expect(page.getByTestId('citation-popover-system-b-location')).not.toContainText('尚未定位到具体章节或页码')
   await expect(page.getByTestId('citation-popover-system-b-reference')).toHaveCount(0)

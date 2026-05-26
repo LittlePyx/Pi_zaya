@@ -56,6 +56,16 @@ _CONTENT_VERB_RE = re.compile(
     r"解决|提出|说明|表明|用于|能够|可以|实现|采用|提升|降低)\b",
     re.IGNORECASE,
 )
+_CONNECTOR_CONTINUATION_RE = re.compile(
+    r"^(?:to|of|and|or|from|into|onto|within|without|using|allowing|which|that|where|while|for|by|with|at)\b",
+    re.IGNORECASE,
+)
+_INCOMPLETE_RIGHT_EDGE_RE = re.compile(
+    r"(?:\b(?:and|or|of|to|with|by|from|into|onto|at|for|using|allowing)|"
+    r"\bat\s+[±+\-]?\??\d+(?:\.\d+)?\??|"
+    r"[,;:，；：])$",
+    re.IGNORECASE,
+)
 
 
 def _strip_leading_markdown_heading_lines(value: str) -> str:
@@ -212,6 +222,20 @@ def looks_author_metadata_prefix(value: str) -> bool:
     return len(tokens) >= 8 and bool(re.search(r"[*\\]", text))
 
 
+def looks_broken_leading_prefix(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text or len(text) > 360:
+        return False
+    if looks_author_metadata_prefix(text):
+        return True
+    first_token = re.match(r"^[A-Za-z]{2,}\b", text)
+    if first_token and not _FRAGMENT_LEAD_OK_RE.match(text):
+        return True
+    if re.match(r"^(?:and|or|of|that|which|from|into|onto|within|without|using|used|measured|allowing)\b", text, re.IGNORECASE):
+        return True
+    return False
+
+
 def looks_author_list_context(value: str) -> bool:
     text = clean_display_text(value, max_len=1400)
     if len(text) < 24:
@@ -312,7 +336,7 @@ def strip_evidence_metadata_prefix(
         if idx > 360:
             break
         prefix = text[:idx]
-        if looks_author_metadata_prefix(prefix) or _looks_heading_like_prefix(prefix):
+        if looks_author_metadata_prefix(prefix) or _looks_heading_like_prefix(prefix) or looks_broken_leading_prefix(prefix):
             text = _LEAD_STRIP_RE.sub("", text[idx:])
         break
 
@@ -360,6 +384,27 @@ def usable_evidence_sentence(value: str) -> bool:
     if looks_fragmentary_sentence(text) or looks_caption_heading_sentence(text):
         return False
     return len(loose_tokens(text)) >= 5
+
+
+def needs_right_continuation(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if _INCOMPLETE_RIGHT_EDGE_RE.search(text.rstrip(" .!?。！？")):
+        return True
+    if len(text) > 90 and not _TERMINAL_PUNCT_RE.search(text):
+        return True
+    return False
+
+
+def usable_evidence_continuation(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    tokens = loose_tokens(text)
+    if len(tokens) > 16:
+        return False
+    return bool(_CONNECTOR_CONTINUATION_RE.match(text))
 
 
 def evidence_sentence_quality(value: str, *, claim: str = "", heading: str = "", title: str = "") -> float:
@@ -418,10 +463,12 @@ def join_evidence_window(
     for next_idx in range(center_idx + 1, min(len(sentences), center_idx + 3)):
         if len(chosen) >= 3:
             break
-        if not usable_evidence_sentence(sentences[next_idx]):
+        previous_text = sentences[chosen[-1]]
+        is_continuation = needs_right_continuation(previous_text) and usable_evidence_continuation(sentences[next_idx])
+        if not usable_evidence_sentence(sentences[next_idx]) and not is_continuation:
             continue
         next_score = evidence_sentence_quality(sentences[next_idx], claim=claim, heading=heading, title=title)
-        if next_score < 0.5 and len(chosen) > 1:
+        if next_score < 0.5 and len(chosen) > 1 and not is_continuation:
             continue
         chosen.append(next_idx)
 

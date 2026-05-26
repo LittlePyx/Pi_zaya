@@ -141,12 +141,11 @@ test('render packet contract can drive body render and strict locate without top
   await expect(page.getByTestId('citation-popover-system-b-citing-source')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-cited-source')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('单次压缩光谱成像')
-  await expect(page.getByTestId('citation-popover-system-b-trace')).toContainText('答案句')
-  await expect(page.getByTestId('citation-popover-system-b-trace')).toContainText('上游文献')
-  await expect(page.getByTestId('citation-popover-system-b-context')).toContainText('single-shot compressive spectral imaging background')
+  await expect(page.getByTestId('citation-popover-system-b-trace')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-b-context')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('引用所在论文')
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('Fixture Paper')
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('尚未定位到具体章节或页码')
+  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('仅定位到当前论文')
+  await expect(page.getByTestId('citation-popover-system-b-support')).toContainText('cited prior work')
   await expect(page.locator('.kb-cite-pop')).toContainText('Single-shot compressive spectral imaging')
   await expect(page.locator('.kb-cite-pop')).toContainText('DOI 10.1364/OE.15.014013')
   await expect(page.locator('.kb-cite-pop')).toContainText('被引 123')
@@ -186,10 +185,9 @@ test('system B upstream reference citation is explicitly clickable and opens its
   await expect(popover).toBeVisible()
   await expect(popover).toHaveClass(/kb-cite-pop-system-b/)
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('单次压缩光谱成像')
-  await expect(page.getByTestId('citation-popover-system-b-context')).toContainText('single-shot compressive spectral imaging background')
+  await expect(page.getByTestId('citation-popover-system-b-context')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('引用所在论文')
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('Fixture Paper')
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('尚未定位到具体章节或页码')
+  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('仅定位到当前论文')
   await expect(page.getByTestId('citation-popover-system-b-reference')).toHaveCount(0)
   await expect(popover).toContainText('DOI 10.1364/OE.15.014013')
   await expect(popover).toContainText('被引 123')
@@ -197,7 +195,7 @@ test('system B upstream reference citation is explicitly clickable and opens its
   await expect(popover).toContainText('JCR Q2')
 })
 
-test('system B popover can show LLM citation-context summary without hiding raw context', async ({ page }) => {
+test('system B popover can show LLM citation-context summary while hiding answer-context raw text', async ({ page }) => {
   await mockReaderDoc(page)
   await page.route('**/api/references/citation-card-polish', async (route) => {
     await route.fulfill({
@@ -220,7 +218,7 @@ test('system B popover can show LLM citation-context summary without hiding raw 
   await systemBChip.click()
 
   await expect(page.getByTestId('citation-popover-system-b-context-summary')).toContainText('单次压缩光谱成像的上游来源')
-  await expect(page.getByTestId('citation-popover-system-b-context')).toContainText('single-shot compressive spectral imaging background')
+  await expect(page.getByTestId('citation-popover-system-b-context')).toHaveCount(0)
 })
 
 test('system B popover suppresses weak raw context without dropping metrics', async ({ page }) => {
@@ -322,7 +320,8 @@ test('system A citation popover shows source location, evidence quote, and opens
   const popover = page.locator('.kb-cite-pop')
   await expect(popover).toBeVisible()
   await expect(popover).toHaveClass(/kb-cite-pop-system-a/)
-  await expect(page.getByTestId('citation-popover-system-a-location')).toContainText('Fixture Paper / 2. Method')
+  await expect(page.getByTestId('citation-popover-system-a-location')).toContainText('2. Method')
+  await expect(page.getByTestId('citation-popover-system-a-location')).not.toContainText('Fixture Paper / 2. Method')
   await expect(page.getByTestId('citation-popover-system-a-location')).toContainText('sentence')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Given a set of input multi-view images')
   await expect(page.getByTestId('citation-popover-system-a-claim')).toHaveCount(0)
@@ -332,7 +331,8 @@ test('system A citation popover shows source location, evidence quote, and opens
   await expect(page.getByTestId('citation-popover-system-a-anchor-kind')).toHaveCount(0)
   await expect(popover).toContainText('Fixture Paper')
   await expect(popover).toContainText('位置')
-  await expect(popover).toContainText('Fixture Paper / 2. Method')
+  await expect(popover).toContainText('2. Method')
+  await expect(popover).not.toContainText('Fixture Paper / 2. Method')
   await expect(popover).toContainText('原文证据')
   await expect(popover).toContainText('Given a set of input multi-view images')
   await expect(popover).not.toContainText('Method section states the exact mechanism')
@@ -358,7 +358,34 @@ test('citation popover upgrades to waited LLM polish when it is ready', async ({
         citation_card_polish_status: 'full',
         citation_card_polish_source: 'llm',
         citation_card_polish_checked: true,
-        card_takeaway: 'LLM 润色后：这条证据说明多视角图像如何被压缩成可核对的重建依据。',
+        card_takeaway: 'LLM polished: this evidence explains how multi-view images become a checkable reconstruction basis.',
+        card_view: {
+          version: 1,
+          route: 'system_a',
+          kind: 'answer_evidence',
+          header: { kicker: '答案依据', title: 'Fixture Paper', subtitle: '2. Method' },
+          sections: [
+            {
+              id: 'takeaway',
+              label: 'LLM section',
+              text: 'LLM polished: this evidence explains how multi-view images become a checkable reconstruction basis.',
+              kind: 'insight',
+              hint: '',
+              tone: 'primary',
+            },
+            { id: 'locator', label: '原文位置', text: '2. Method', kind: 'locator', hint: '', tone: '' },
+            {
+              id: 'evidence',
+              label: '原文证据',
+              text: 'Given a set of input multi-view images, the method builds a reconstruction basis.',
+              kind: 'quote',
+              hint: '',
+              tone: '',
+            },
+          ],
+          summary: 'LLM polished: this evidence explains how multi-view images become a checkable reconstruction basis.',
+          quality: { label: 'polished', score: 0.9, flags: [], warning: '' },
+        },
       }),
     })
   })
@@ -368,9 +395,39 @@ test('citation popover upgrades to waited LLM polish when it is ready', async ({
   await expect(citeChip).toBeVisible()
   await citeChip.click()
 
-  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM 润色后')
+  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM section')
+  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM polished')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Given a set of input multi-view images')
   expect(observedWaitSeconds).toBeGreaterThan(0)
+})
+
+test('citation popover and shelf prefer card_view over legacy fallback fields', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.goto('/__message_list_test__?scenario=card-view-priority-popover')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('card-view-priority-popover')
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await expect(popover).toContainText('Clean Card Title')
+  await expect(popover).toContainText('Clean Method Section')
+  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('Key point')
+  await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('Polished card-view takeaway')
+  await expect(page.getByTestId('citation-popover-system-a-location')).toContainText('Clean Method Section')
+  await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Source evidence')
+  await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('calibrated measurements')
+  await expect(popover).not.toContainText('Legacy fallback takeaway')
+  await expect(popover).not.toContainText('Legacy markdown evidence')
+
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  await expect(page.locator('.kb-shelf-item')).toContainText('Clean Card Title')
+  await page.locator('.kb-shelf-item').first().click()
+  await expect(page.locator('.kb-shelf-summary')).toContainText('citation card')
+  await expect(page.locator('.kb-shelf-summary')).toContainText('Polished card-view takeaway')
 })
 
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {
@@ -452,6 +509,11 @@ test('plain numeric citations become clickable from refs hits when cite details 
   await citeChips.nth(0).click()
   await expect(page.locator('.kb-cite-pop')).toHaveClass(/kb-cite-pop-system-a/)
   await expect(page.locator('.kb-cite-pop')).toContainText('Deep Learning SPI Review')
+  const firstClaim = page.getByTestId('citation-popover-system-a-claim')
+  await expect(firstClaim).toContainText('deep learning SPI improves reconstruction quality')
+  await expect(firstClaim).not.toContainText('[1]')
+  await expect(firstClaim).not.toContainText('PILN uses')
+  expect((await firstClaim.innerText()).length).toBeLessThan(220)
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('improves reconstruction quality')
 
   await page.keyboard.press('Escape')

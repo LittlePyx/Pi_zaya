@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from kb.citation_context_summary import build_system_b_context_summary
 from kb.evidence_text import (
     clean_display_text,
     looks_low_value_citation_context,
@@ -17,7 +18,7 @@ _LOW_VALUE_LABEL_RE = re.compile(
     r"(?:deep learning|review|method|baseline|principles?|introduction)\s*\d{0,3})$",
     re.IGNORECASE,
 )
-_REFERENCE_MARKER_RE = re.compile(r"\[\s*\d{1,4}(?:\s*[-,;]\s*\d{1,4})*\s*\]")
+_REFERENCE_MARKER_RE = re.compile(r"\[\s*[Rr]?\d{1,4}(?:\s*[-,;]\s*[Rr]?\d{1,4})*\s*\]")
 _DOC_FRONT_RE = re.compile(r"^\s{0,3}#\s+.+?\n.{0,420}?\b(?:abstract|single[-\s]?pixel|deep learning|this paper|in this review)\b", re.IGNORECASE | re.DOTALL)
 
 
@@ -57,6 +58,32 @@ def _first_sentence(value: str, *, max_len: int = 120) -> str:
     return out
 
 
+def _finish_answer_claim(value: Any, *, max_len: int = 220) -> str:
+    text = clean_display_text(value, max_len=max_len * 2)
+    if not text:
+        return ""
+    text = _REFERENCE_MARKER_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip(" \t\r\n,，;；:：")
+    text = re.sub(r"^\s*(?:\d{1,3}[.)、．]|[-*•])\s*", "", text).strip()
+    if len(text) <= max_len:
+        return text
+    head = text[:max_len].rstrip()
+    cut = max(
+        head.rfind("。"),
+        head.rfind("！"),
+        head.rfind("？"),
+        head.rfind("；"),
+        head.rfind(";"),
+        head.rfind(". "),
+    )
+    if cut >= 40:
+        return head[: cut + 1].strip()
+    soft_cut = max(head.rfind("，"), head.rfind(","), head.rfind("："), head.rfind(":"))
+    if soft_cut >= 60:
+        return f"{head[:soft_cut].strip()}..."
+    return f"{head[: max(0, max_len - 1)].strip()}..."
+
+
 def _is_low_value_answer_claim(value: str) -> bool:
     text = clean_display_text(value, max_len=420)
     if not text:
@@ -73,7 +100,7 @@ def _is_low_value_answer_claim(value: str) -> bool:
 
 
 def meaningful_answer_claim(value: Any, *, max_len: int = 420) -> tuple[str, bool]:
-    claim = clean_display_text(value, max_len=max_len)
+    claim = _finish_answer_claim(value, max_len=max_len)
     if not claim:
         return "", False
     if _is_low_value_answer_claim(claim):
@@ -174,7 +201,7 @@ def build_system_a_evidence_pack(
     location_label: str = "",
     support_hint: Any = "",
 ) -> CitationEvidencePack:
-    claim, low_claim = meaningful_answer_claim(answer_claim, max_len=420)
+    claim, low_claim = meaningful_answer_claim(answer_claim, max_len=220)
     evidence = pick_readable_evidence_text(
         evidence_raw,
         source=source,
@@ -227,7 +254,7 @@ def build_system_b_evidence_pack(
     role_hint: Any = "",
     relation_hint: Any = "",
 ) -> CitationEvidencePack:
-    claim, low_claim = meaningful_answer_claim(answer_claim, max_len=420)
+    claim, low_claim = meaningful_answer_claim(answer_claim, max_len=220)
     context = pick_readable_evidence_text(
         citation_context_raw,
         source=source,
@@ -247,6 +274,7 @@ def build_system_b_evidence_pack(
     support = clean_display_text(relation_hint, max_len=420) or clean_display_text(role_hint, max_len=420)
     if not support and context and claim:
         support = _claim_support_sentence(claim=claim, evidence=context, route="system_b")
+    context_summary = ""
 
     flags: list[str] = []
     score_delta = 0.0
@@ -256,6 +284,17 @@ def build_system_b_evidence_pack(
     if answer_context_only:
         flags.append("answer_context_only")
         score_delta -= 0.08
+    else:
+        context_summary = build_system_b_context_summary(
+            context=context,
+            claim=claim,
+            title=title,
+            source=source,
+            reference_entry=reference_entry,
+            locator=location_label,
+            role=clean_display_text(role_hint, max_len=260),
+            relation=clean_display_text(relation_hint, max_len=260),
+        )
     if weak_context:
         flags.append("weak_citation_context")
         score_delta -= 0.08
@@ -280,9 +319,10 @@ def build_system_b_evidence_pack(
         answer_claim=claim,
         evidence_quote=context,
         evidence_label=evidence_label,
+        evidence_focus=context_summary,
         support_explanation=support,
         location_label=clean_display_text(location_label, max_len=260),
-        location_label_name="引用出现位置",
+        location_label_name="当前论文引用处",
         reference_entry=reference_entry,
         reference_label="上游文献条目",
         warning=warning,

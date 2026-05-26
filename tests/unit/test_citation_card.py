@@ -20,8 +20,8 @@ def test_system_a_card_composer_builds_quality_fields() -> None:
 
     assert detail["card_kind"] == "answer_evidence"
     assert detail["card_title"] == "SCIGS.pdf"
-    assert detail["card_subtitle"] == "SCIGS / Abstract · p. 1"
-    assert detail["card_locator"] == "SCIGS / Abstract · p. 1"
+    assert detail["card_subtitle"] == "Abstract · p. 1"
+    assert detail["card_locator"] == "Abstract · p. 1"
     assert detail["card_evidence"].startswith("SCIGS is a variant")
     assert detail["card_takeaway"] == ""
     assert detail["card_support_explanation"] == ""
@@ -288,7 +288,7 @@ def test_system_a_card_composer_suppresses_low_value_answer_label() -> None:
     )
 
     assert detail["card_claim"] == ""
-    assert detail["card_claim_label"] == "答案中的话"
+    assert detail["card_claim_label"] == "答案要点"
     assert detail["card_locator_label"] == "原文位置"
     assert "low_value_answer_claim" in detail["card_quality_flags"]
     assert detail["card_evidence"].startswith("Deep learning models")
@@ -311,10 +311,12 @@ def test_system_b_card_composer_marks_answer_context_only() -> None:
 
     assert detail["card_kind"] == "upstream_reference"
     assert detail["card_evidence_label"] == "回答里的线索"
+    assert detail["card_evidence"] == ""
     assert detail["card_takeaway_label"] == "上游作用"
     assert "ADMM 优化框架背景" in detail["card_takeaway"]
     assert detail["card_support_label"] == ""
     assert "answer_context_only" in detail["card_quality_flags"]
+    assert "answer_context_hidden_from_card" in detail["card_quality_flags"]
     assert "完整引用语境" in detail["card_warning"]
     assert detail["system_b_trace_complete"] is False
     assert "answer_context_only" in detail["system_b_trace_flags"]
@@ -417,6 +419,8 @@ def test_system_b_card_composer_strips_tex_citation_markup() -> None:
     assert "^{" not in detail["card_evidence"]
     assert "[4-6]" not in detail["card_evidence"]
     assert "weak_citation_context" not in detail["card_quality_flags"]
+    assert "单像素探测" in detail["card_context_summary"]
+    assert "context_summary" in detail["card_visible_sections"]
 
 
 def test_system_b_card_composer_suppresses_author_list_context() -> None:
@@ -440,9 +444,31 @@ def test_system_b_card_composer_suppresses_author_list_context() -> None:
     )
 
     assert detail["card_evidence"] == ""
-    assert detail["card_locator_label"] == "引用出现位置"
+    assert detail["card_locator_label"] == "当前论文引用处"
     assert "weak_citation_context" in detail["card_quality_flags"]
     assert "missing_citation_context" in detail["card_quality_flags"]
+
+
+def test_system_b_card_composer_summarizes_missing_cone_context() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf",
+            "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+            "raw": "Macias-Garza F. The missing cone problem and low-pass distortion in optical serial sectioning microscopy.",
+            "answer_claim": "结构检测可以缓解三维显微成像中的频率缺失问题。",
+            "citation_context": (
+                "The current paper cites missing cone and low-pass distortion work when "
+                "discussing limitations in three-dimensional microscopic images."
+            ),
+            "citation_context_source": "source_markdown",
+            "location_label": "Introduction",
+        }
+    )
+
+    assert "频率缺失" in detail["card_context_summary"]
+    assert "低通失真" in detail["card_context_summary"]
+    assert "The current paper cites" not in detail["card_context_summary"]
 
 
 def test_system_b_card_composer_parses_title_from_raw_reference_without_promoting_raw_entry() -> None:
@@ -517,3 +543,165 @@ def test_system_b_card_composer_keeps_upstream_reference_entry_separate() -> Non
     assert "The missing cone problem" in detail["card_reference_entry"]
     assert "reference_entry_only" in detail["card_quality_flags"]
     assert "上游论文正文证据" in detail["card_warning"]
+
+
+def test_card_composer_exposes_compact_display_contract() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Fixture.pdf",
+            "heading_path": "Method",
+            "answer_claim": "深度学习用于提高单像素重建质量。",
+            "evidence_quote": "## Method\nDeep learning models improve single-pixel reconstruction quality.",
+            "location_label": "Method",
+            "summary_line": "No summary available",
+            "binding_status": "grounded",
+            "binding_confidence": 0.86,
+        }
+    )
+
+    assert detail["card_display_contract_version"] == 2
+    assert "locator" in detail["card_visible_sections"]
+    assert "evidence" in detail["card_visible_sections"]
+    assert "card_evidence_markup_cleaned" in detail["card_quality_flags"]
+    assert detail["card_evidence"]
+    assert "##" not in detail["card_evidence"]
+
+
+def test_system_b_card_contract_keeps_reference_entry_out_of_main_evidence() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "Paper.pdf",
+            "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+            "raw": (
+                "[3] Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. "
+                "& Aggarwal, J. K. The missing cone problem and low-pass distortion in "
+                "optical serial sectioning microscopy. IEEE Trans. Acoust., Speech, "
+                "Signal Process. 2, 890-893 (1988)."
+            ),
+            "answer_claim": "This citation is relevant to missing-cone limits in 3D microscopy.",
+            "citation_context": (
+                "Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. "
+                "& Aggarwal, J. K. The missing cone problem and low-pass distortion in "
+                "optical serial sectioning microscopy. IEEE Trans. Acoust., Speech, "
+                "Signal Process. 2, 890-893 (1988)."
+            ),
+            "citation_context_source": "source_markdown",
+            "location_label": "Related Work",
+        }
+    )
+
+    assert detail["card_evidence"] == ""
+    assert detail["card_reference_entry"]
+    assert "reference" not in detail["card_visible_sections"]
+    assert "reference_entry_only" in detail["card_quality_flags"]
+
+
+def test_card_composer_strips_repeated_source_title_from_locator() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "LPR-2025-Advances and Challenges of Single-Pixel Imaging Based on Deep Learning.pdf",
+            "heading_path": "5. Single-Pixel Imaging Realizations with Deep Learning",
+            "answer_claim": "深度学习综述适合先读方法收益和限制。",
+            "evidence_quote": "Deep learning methods improve single-pixel imaging quality and speed.",
+            "location_label": (
+                "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning / "
+                "5. Single-Pixel Imaging Realizations with Deep Learning"
+            ),
+            "binding_status": "grounded",
+            "binding_confidence": 0.86,
+        }
+    )
+
+    assert detail["card_locator"] == "5. Single-Pixel Imaging Realizations with Deep Learning"
+    assert "Advances and Challenges" not in detail["card_locator"]
+
+
+def test_system_b_card_composer_strips_current_paper_title_from_locator() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf",
+            "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+            "raw": "[3] Macias-Garza F. The missing cone problem. IEEE Trans., 1988.",
+            "answer_claim": "This upstream paper explains missing-cone limits.",
+            "citation_context": "The current paper cites this missing-cone work when discussing three-dimensional microscopy limits.",
+            "citation_context_source": "source_markdown",
+            "location_label": (
+                "Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy / "
+                "Introduction"
+            ),
+        }
+    )
+
+    assert detail["card_locator"] == "Introduction"
+    assert "Structured detection for simultaneous" not in detail["card_locator"]
+
+
+def test_system_a_card_view_contract_exposes_renderable_sections() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Deep-SPI.pdf",
+            "heading_path": "Abstract",
+            "answer_claim": "深度学习可以降低单像素成像的采样压力。",
+            "evidence_quote": (
+                "Deep learning models map low-dimensional measurements to target images. "
+                "This reduces the required sampling ratio while preserving reconstruction quality."
+            ),
+            "location_label": "Abstract",
+            "binding_status": "grounded",
+            "binding_confidence": 0.9,
+        }
+    )
+
+    view = detail["card_view"]
+    section_ids = {section["id"] for section in view["sections"]}
+
+    assert view["version"] == 1
+    assert view["route"] == "system_a"
+    assert view["header"]["kicker"] == "答案依据"
+    assert view["header"]["title"] == "Deep-SPI.pdf"
+    assert "locator" in section_ids
+    assert "evidence" in section_ids
+    assert view["summary"]
+    assert all("##" not in section["text"] for section in view["sections"])
+
+
+def test_system_b_card_view_contract_separates_context_from_reference_entry() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "Current.pdf",
+            "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+            "raw": (
+                "[3] Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. "
+                "& Aggarwal, J. K. The missing cone problem and low-pass distortion in "
+                "optical serial sectioning microscopy. IEEE Trans. Acoust., Speech, "
+                "Signal Process. 2, 890-893 (1988)."
+            ),
+            "answer_claim": "这篇上游论文解释三维显微成像里的 missing-cone 限制。",
+            "citation_context": (
+                "The current paper cites the missing-cone problem when explaining why "
+                "three-dimensional microscopy can suffer low-pass distortion."
+            ),
+            "citation_context_source": "source_markdown",
+            "location_label": "Introduction",
+        }
+    )
+
+    view = detail["card_view"]
+    section_ids = {section["id"] for section in view["sections"]}
+    section_text = "\n".join(section["text"] for section in view["sections"])
+
+    assert view["version"] == 1
+    assert view["route"] == "system_b"
+    assert view["header"]["kicker"] == "上游引用"
+    assert view["header"]["title"].startswith("Missing Cone")
+    assert "locator" in section_ids
+    assert "evidence" in section_ids
+    assert "reference" not in section_ids
+    assert "The current paper cites" in section_text
+    assert "Macias-Garza, F." not in view["summary"]

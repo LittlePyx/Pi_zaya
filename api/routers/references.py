@@ -28,6 +28,10 @@ from api.reference_ui import (
     open_reference_source,
 )
 from api.reference_card_quality import refs_pack_has_full_llm_copy
+from api.reference_card_copy import (
+    looks_generic_ref_why_line,
+    looks_templated_ref_why_line,
+)
 from kb.generation_answer_finalize_runtime import (
     _build_multi_paper_doc_list_contract as _references_build_multi_paper_doc_list_contract,
 )
@@ -58,7 +62,9 @@ _REFS_CONVERSATION_WARMING_LOCK = threading.Lock()
 _CITATION_CARD_POLISH_CACHE: dict[str, dict] = {}
 _CITATION_CARD_POLISH_WARMING: set[str] = set()
 _CITATION_CARD_POLISH_LOCK = threading.Lock()
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 9
+# Bump whenever persisted References-panel payloads should be rebuilt instead
+# of reused. This protects older conversations after card-copy contract changes.
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 10
 
 
 def _md_dir() -> Path:
@@ -491,6 +497,40 @@ def _stored_rendered_pack_payload_lost_current_hits(*, payload: dict, pack: dict
     return bool(display_state == "empty" and suppression_reason == "no_candidate_hits" and debug_raw_hit_count <= 0)
 
 
+_REF_CARD_RAW_MARKDOWN_RE = re.compile(
+    r"\[\[\s*CITE:|```|^\s{0,3}#{1,6}\s+\S|"
+    r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$",
+    re.MULTILINE,
+)
+
+
+def _ref_card_copy_text_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", str(value or "").lower()).strip()
+
+
+def _stored_rendered_pack_payload_has_dirty_card_copy(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for hit in list(payload.get("hits") or []):
+        if not isinstance(hit, dict):
+            continue
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        summary = str((ui_meta or {}).get("summary_line") or "").strip()
+        why = str((ui_meta or {}).get("why_line") or "").strip()
+        for text in (summary, why):
+            if not text:
+                continue
+            if _REF_CARD_RAW_MARKDOWN_RE.search(text):
+                return True
+        if why and (looks_generic_ref_why_line(why) or looks_templated_ref_why_line(why)):
+            return True
+        summary_key = _ref_card_copy_text_key(summary)
+        why_key = _ref_card_copy_text_key(why)
+        if summary_key and why_key and len(summary_key) >= 24 and summary_key == why_key:
+            return True
+    return False
+
+
 def _get_stored_rendered_pack_payload(
     *,
     user_msg_id: int | str,
@@ -515,6 +555,8 @@ def _get_stored_rendered_pack_payload(
     if (not stored_sig) or (stored_sig != expected_sig):
         return None
     if _stored_rendered_pack_payload_lost_current_hits(payload=payload, pack=pack):
+        return None
+    if _stored_rendered_pack_payload_has_dirty_card_copy(payload):
         return None
     if (
         _refs_background_llm_polish_enabled()

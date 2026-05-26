@@ -121,6 +121,11 @@ def test_ref_card_payload_builder_attaches_polish_contract():
 
     assert payload["polish_status"] == "full"
     assert payload["polish_contract_version"] == 1
+    assert payload["card_view"]["quality"]["label"] == "full"
+    assert payload["card_view"]["quality"]["source"] == "llm"
+    sections = {section["id"]: section for section in payload["card_view"]["sections"]}
+    assert sections["summary"]["text"] == "A concise LLM-grounded summary."
+    assert sections["why"]["text"] == "A concise LLM-grounded relevance note."
 
 
 def test_citation_detail_quality_accepts_grounded_system_a_card():
@@ -158,6 +163,49 @@ def test_citation_detail_quality_rejects_raw_markdown_and_fragmented_evidence():
     assert quality["ok"] is False
     assert "raw_markdown_visible" in names
     assert "system_a_broken_evidence" in names
+
+
+def test_citation_detail_quality_rejects_duplicate_visible_card_text():
+    quality = citation_detail_quality(
+        {
+            "num": 1,
+            "anchor": "a1",
+            "source_name": "Demo.pdf",
+            "heading_path": "2. Method",
+            "card_takeaway": "深度学习模型把低维测量映射回目标图像，从而提升重建质量。",
+            "card_evidence": "深度学习模型把低维测量映射回目标图像，从而提升重建质量。",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "duplicate_visible_card_text" in names
+
+
+def test_citation_detail_quality_rejects_metadata_repeated_in_card_copy():
+    quality = citation_detail_quality(
+        {
+            "num": 2,
+            "anchor": "r2",
+            "is_inpaper": True,
+            "source_name": "Current paper.pdf",
+            "title": "Optical imaging by means of two-photon quantum entanglement",
+            "venue": "Physical Review A",
+            "year": "1995",
+            "raw": "Pittman T, Shih Y. Optical imaging by means of two-photon quantum entanglement. Physical Review A, 1995.",
+            "heading_path": "1. Introduction",
+            "answer_claim": "单像素成像可以降低成像成本。",
+            "citation_context": "Unlike traditional focal plane array detectors, SPI only adopts a SPD to collect echo signals.",
+            "card_takeaway": "这篇发表于 Physical Review A 1995 的论文值得打开。",
+            "system_b_trace_complete": True,
+            "system_b_trace_score": 0.8,
+            "system_b_trace_reference": "Pittman T, Shih Y. Optical imaging by means of two-photon quantum entanglement.",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "narrative_metadata_repeated" in names
 
 
 def test_citation_detail_quality_accepts_grounded_system_b_card():

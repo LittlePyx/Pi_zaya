@@ -612,6 +612,84 @@ const systemACitationPopoverMessages: Message[] = [
   },
 ]
 
+const cardViewPriorityPopoverMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: 'This answer should render the polished card contract [1](#kb-cite-card-view-priority-1).',
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        intent: { family: 'method' },
+        render_packet: {
+          answer_markdown: 'This answer should render the polished card contract [1](#kb-cite-card-view-priority-1).',
+          rendered_body: 'This answer should render the polished card contract [1](#kb-cite-card-view-priority-1).',
+          rendered_content: 'This answer should render the polished card contract [1](#kb-cite-card-view-priority-1).',
+          copy_text: 'This answer should render the polished card contract [1].',
+          copy_markdown: 'This answer should render the polished card contract [1](#kb-cite-card-view-priority-1).',
+          cite_details: [
+            {
+              num: 1,
+              anchor: 'kb-cite-card-view-priority-1',
+              source_name: 'Legacy Repeated Source.pdf',
+              source_path: READER_REGRESSION_SOURCE_PATH,
+              is_inpaper: false,
+              card_title: 'Legacy title should not win',
+              card_subtitle: 'Legacy subtitle should not win',
+              card_takeaway_label: 'Legacy label',
+              card_takeaway: 'Legacy fallback takeaway should not render.',
+              card_claim: 'Legacy claim should not render.',
+              card_locator: 'Legacy Paper / Legacy Location',
+              card_evidence_label: 'Legacy evidence',
+              card_evidence: '## Legacy markdown evidence **should not render**',
+              summary_line: '',
+              card_view: {
+                version: 1,
+                route: 'system_a',
+                kind: 'answer_evidence',
+                header: {
+                  kicker: 'Answer evidence',
+                  title: 'Clean Card Title',
+                  subtitle: 'Clean Method Section',
+                },
+                sections: [
+                  {
+                    id: 'takeaway',
+                    label: 'Key point',
+                    text: 'Polished card-view takeaway used by the popover and shelf.',
+                    kind: 'insight',
+                    hint: '',
+                    tone: 'primary',
+                  },
+                  {
+                    id: 'locator',
+                    label: 'Location',
+                    text: 'Clean Method Section · p. 4',
+                    kind: 'locator',
+                    hint: '',
+                    tone: '',
+                  },
+                  {
+                    id: 'evidence',
+                    label: 'Source evidence',
+                    text: 'The method uses calibrated measurements to reconstruct the scene in a verifiable way.',
+                    kind: 'quote',
+                    hint: '',
+                    tone: '',
+                  },
+                ],
+                summary: 'Polished card-view takeaway used by the popover and shelf.',
+                quality: { label: 'polished', score: 0.92, flags: [], warning: '' },
+              },
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
 const repeatedSystemAOldPacketMessages: Message[] = [
   {
     id: 1,
@@ -764,10 +842,10 @@ const plainCitationRefsFallbackMessages: Message[] = [
   {
     id: 2,
     role: 'assistant',
-    content: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
-    rendered_body: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
-    copy_text: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
-    copy_markdown: 'Deep learning SPI improves reconstruction quality [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    content: 'For a beginner, the broad point is that deep learning SPI improves reconstruction quality while also reducing iterative reconstruction cost and making low-sampling settings easier to use [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    rendered_body: 'For a beginner, the broad point is that deep learning SPI improves reconstruction quality while also reducing iterative reconstruction cost and making low-sampling settings easier to use [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    copy_text: 'For a beginner, the broad point is that deep learning SPI improves reconstruction quality while also reducing iterative reconstruction cost and making low-sampling settings easier to use [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
+    copy_markdown: 'For a beginner, the broad point is that deep learning SPI improves reconstruction quality while also reducing iterative reconstruction cost and making low-sampling settings easier to use [1]. PILN uses a part-based image loop for self-supervised reconstruction [2].',
     created_at: Date.now(),
   },
 ]
@@ -991,6 +1069,7 @@ type RegressionScenario =
   | 'citation-hover-race'
   | 'weak-system-b-popover'
   | 'system-a-citation-popover'
+  | 'card-view-priority-popover'
   | 'repeated-system-a-old-packet'
   | 'low-quality-system-a-old-packet'
   | 'fragmentary-system-a-old-packet'
@@ -1014,6 +1093,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'citation-hover-race') return 'citation-hover-race'
     if (scenarioParam === 'weak-system-b-popover') return 'weak-system-b-popover'
     if (scenarioParam === 'system-a-citation-popover') return 'system-a-citation-popover'
+    if (scenarioParam === 'card-view-priority-popover') return 'card-view-priority-popover'
     if (scenarioParam === 'repeated-system-a-old-packet') return 'repeated-system-a-old-packet'
     if (scenarioParam === 'low-quality-system-a-old-packet') return 'low-quality-system-a-old-packet'
     if (scenarioParam === 'fragmentary-system-a-old-packet') return 'fragmentary-system-a-old-packet'
@@ -1033,6 +1113,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'citation-hover-race') return citationHoverRaceMessages
     if (scenario === 'weak-system-b-popover') return weakSystemBPopoverMessages
     if (scenario === 'system-a-citation-popover') return systemACitationPopoverMessages
+    if (scenario === 'card-view-priority-popover') return cardViewPriorityPopoverMessages
     if (scenario === 'repeated-system-a-old-packet') return repeatedSystemAOldPacketMessages
     if (scenario === 'low-quality-system-a-old-packet') return lowQualitySystemAOldPacketMessages
     if (scenario === 'fragmentary-system-a-old-packet') return fragmentarySystemAOldPacketMessages

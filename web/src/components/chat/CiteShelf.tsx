@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
 import type { CiteShelfItem } from './citationState'
 import {
+  citationCardView,
   citationDisplay,
   citationFormats,
   citeMetricSummary,
@@ -458,7 +459,7 @@ export function CiteShelf({
         'summary',
       ]
       const rows = selectedItems.map((item) => ([
-        item.title || item.main,
+        citationCardView(item).header.title || item.title || item.main,
         item.authors,
         item.year,
         item.venue,
@@ -470,7 +471,7 @@ export function CiteShelf({
         item.journalQuartile,
         item.conferenceTier,
         item.conferenceCcf,
-        item.summaryLine,
+        item.summaryLine || citationCardView(item).summary,
       ].map((field) => csvEscape(field)).join(',')))
       const csv = `${headers.join(',')}\n${rows.join('\n')}`
       downloadTextFile(`${base}.csv`, csv, 'text/csv;charset=utf-8')
@@ -794,6 +795,8 @@ export function CiteShelf({
                     ) : null}
                     {group.items.map((item) => {
                       const display = citationDisplay(item)
+                      const cardView = citationCardView(item)
+                      const shelfTitle = String(cardView.header.title || display.main || item.main || '').trim()
                       const subtitle = display.source
                       const duplicateCount = duplicateCountByIdentity[paperIdentity(item)] || 0
                       const trace = sourceTraceLabel(item)
@@ -802,6 +805,10 @@ export function CiteShelf({
                       const noteText = String(item.note || '').trim()
                       const isFocused = item.key === focusedKey
                       const metrics = citeMetricSummary(item)
+                      const shelfSummaryLine = String(item.summaryLine || cardView.summary || '').trim()
+                      const shelfSummarySource = item.summaryLine
+                        ? summarySourceLabel(item.summarySource, item.summaryProvider)
+                        : summarySourceLabel('citation_card')
                       const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
                       const tagOptions = [...TAG_PRESETS, ...allTags]
                         .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
@@ -838,7 +845,7 @@ export function CiteShelf({
                               onClick={(event) => event.stopPropagation()}
                             />
                             <div className="kb-shelf-item-main">
-                              <div className="kb-shelf-item-title">{display.main}</div>
+                              <div className="kb-shelf-item-title">{shelfTitle}</div>
                               {display.authors ? (
                                 <div className="kb-shelf-item-authors">{display.authors}</div>
                               ) : null}
@@ -934,9 +941,11 @@ export function CiteShelf({
                                 </>
                               ) : (
                                 <div className="kb-shelf-note-inline">
-                                  <div className="kb-shelf-note-preview">
-                                    {noteText || S.shelf_no_note}
-                                  </div>
+                                  {noteText ? (
+                                    <div className="kb-shelf-note-preview">
+                                      {noteText}
+                                    </div>
+                                  ) : null}
                                   {isFocused ? (
                                     <button
                                       type="button"
@@ -972,14 +981,14 @@ export function CiteShelf({
                             <div className="kb-shelf-summary">
                               {summaryLoadingKey === item.key ? (
                                 <div className="kb-shelf-summary-text">{S.shelf_summary_loading}</div>
-                              ) : item.summaryLine ? (
+                              ) : shelfSummaryLine ? (
                                 <>
                                   <div className="kb-shelf-summary-meta">
                                     <span className="kb-shelf-summary-head">{S.shelf_summary_head}</span>
-                                    <span className="kb-shelf-summary-source">{summarySourceLabel(item.summarySource, item.summaryProvider)}</span>
+                                    <span className="kb-shelf-summary-source">{shelfSummarySource}</span>
                                   </div>
                                   {(() => {
-                                    const lines = splitSummary(item.summaryLine)
+                                    const lines = splitSummary(shelfSummaryLine)
                                     const expanded = Boolean(expandedSummaryKeys[item.key])
                                     const visibleLines = expanded ? lines : lines.slice(0, 2)
                                     const canExpand = lines.length > 2
@@ -1006,9 +1015,7 @@ export function CiteShelf({
                                     )
                                   })()}
                                 </>
-                              ) : (
-                                <div className="kb-shelf-summary-empty">{S.shelf_summary_empty}</div>
-                              )}
+                              ) : null}
                             </div>
                           ) : null}
                         </div>

@@ -3,6 +3,7 @@
 
 import type { CiteDetail } from './citationState'
 import {
+  citationCardView,
   citationDisplay,
   citationInlineLabel,
   citeMetricSummary,
@@ -53,7 +54,10 @@ function comparablePaperLabel(value: string): string {
   if (!raw) return ''
   const leaf = raw.replace(/\\/g, '/').split('/').pop() || raw
   return leaf
+    .replace(/\.en\.md$/i, '')
+    .replace(/\.md$/i, '')
     .replace(/\.pdf$/i, '')
+    .replace(/^[A-Za-z]{2,12}-\d{4}-/, '')
     .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -71,6 +75,65 @@ function isOnlyPaperLabel(value: string, candidates: string[]): boolean {
     if (normalized === candidateNormalized) return true
     if (substantiallySame(text, candidateText)) return true
   }
+  return false
+}
+
+function stripLocationIdentityPrefix(value: string, candidates: string[]): string {
+  let text = compact(value)
+  if (!text) return ''
+  const identities = candidates.map(comparablePaperLabel).filter(Boolean)
+  if (!identities.length) return text
+  const sameIdentity = (left: string, right: string) => {
+    const a = comparablePaperLabel(left)
+    const b = comparablePaperLabel(right)
+    if (!a || !b) return false
+    if (a === b) return true
+    if (a.length >= 16 && b.includes(a)) return true
+    if (b.length >= 16 && a.includes(b)) return true
+    const at = new Set(a.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
+    const bt = new Set(b.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
+    if (at.size < 3 || bt.size < 3) return false
+    let overlap = 0
+    for (const token of at) {
+      if (bt.has(token)) overlap += 1
+    }
+    return overlap / Math.min(at.size, bt.size) >= 0.82
+  }
+  const parts = text.split(/\s*\/\s*/).map((part) => compact(part)).filter(Boolean)
+  while (parts.length > 1 && identities.some((candidate) => sameIdentity(parts[0], candidate))) {
+    parts.shift()
+  }
+  if (parts.length > 0 && parts.join(' / ') !== text) return parts.join(' / ')
+  if (identities.some((candidate) => sameIdentity(text, candidate))) return ''
+  for (const raw of candidates) {
+    const candidate = compact(raw)
+    if (candidate.length < 10) continue
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const next = text.replace(new RegExp(`^\\s*${escaped}\\s*(?:/|·|-|—|:|：)\\s*`, 'i'), '').trim()
+    if (next !== text) return next
+  }
+  return text
+}
+
+function compactIdentity(value: string): string {
+  return comparablePaperLabel(value).replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ').trim()
+}
+
+function containsIdentityText(value: string, candidate: string, minLen = 22): boolean {
+  const body = compactIdentity(value)
+  const ident = compactIdentity(candidate)
+  return Boolean(body && ident.length >= minLen && body.includes(ident))
+}
+
+function looksNarrativeMetadataText(value: string, detail: CiteDetail): boolean {
+  const text = compact(value)
+  if (!text) return false
+  if (/\b10\.\d{4,9}\/[^\s，。；;,)）]+/i.test(text)) return true
+  if (/\b(?:doi|jcr|impact\s*factor|if\s*[:：]?\s*\d|published\s+(?:in|by)|journal|conference|venue|citation\s+count|cited\s+by)\b/i.test(text)) return true
+  if (/(?:发表于|发表在|期刊|会议|年份|被引|影响因子|分区|出处|来源论文|论文标题|标题是|作者是)/.test(text)) return true
+  if (containsIdentityText(text, detail.title) || containsIdentityText(text, detail.cardTitle) || containsIdentityText(text, detail.sourceName) || containsIdentityText(text, detail.sourcePath)) return true
+  const venue = compact(detail.venue)
+  if (venue && containsIdentityText(text, venue, 7)) return true
   return false
 }
 
@@ -110,6 +173,27 @@ function evidencePreview(value: string, maxLen = 260): string {
   if (!text || text.length <= maxLen) return text
   const head = text.slice(0, maxLen).replace(/[，,；;:：]\s*$/g, '').trim()
   return `${head}...`
+}
+
+function answerPointPreview(value: string, maxLen = 140): string {
+  const text = compact(value)
+    .replace(/\s*\[[Rr]?\d{1,4}]\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^\s*(?:\d{1,3}[.)、．]|[-*•])\s*/, '')
+    .trim()
+  if (!text || text.length <= maxLen) return text
+  const head = text.slice(0, maxLen)
+  const cut = Math.max(
+    head.lastIndexOf('。'),
+    head.lastIndexOf('！'),
+    head.lastIndexOf('？'),
+    head.lastIndexOf('；'),
+    head.lastIndexOf(';'),
+    head.lastIndexOf('，'),
+    head.lastIndexOf(','),
+  )
+  if (cut >= 40) return `${head.slice(0, cut).trim()}...`
+  return `${head.slice(0, maxLen - 1).trim()}...`
 }
 
 export function CitationPopover({
@@ -172,7 +256,17 @@ export function CitationPopover({
   const inlineLabel = citationInlineLabel(detail)
   const canOpenReader = Boolean(compact(detail.sourcePath))
   const isSystemB = Boolean(detail.isInpaper)
-  const kindLabel = isSystemB ? '上游引用' : '答案依据'
+  const view = citationCardView(detail)
+  const viewSection = (id: string) => view.sections.find((item) => item.id === id)
+  const takeawaySection = viewSection('takeaway')
+  const claimSection = viewSection('claim')
+  const locatorSection = viewSection('locator')
+  const contextSummarySection = viewSection('context_summary')
+  const evidenceSection = viewSection('evidence')
+  const referenceSection = viewSection('reference')
+  const supportSection = viewSection('support')
+  const warningSection = viewSection('warning')
+  const kindLabel = compact(view.header.kicker) || (isSystemB ? '上游引用' : '答案依据')
   const displayNums = Array.from(new Set([
     ...(Array.isArray(detail.linkedNums) ? detail.linkedNums : []),
     detail.num,
@@ -182,17 +276,18 @@ export function CitationPopover({
   const headingPath = compact(detail.headingPath) || (!isSystemB ? compact(detail.title) : '')
   const pageLabel = pageRangeLabel(detail.pageStart, detail.pageEnd)
   const sourcePaperText = compact(detail.sourceName) || compact(display.source)
-  const cardTitle = compact(detail.cardTitle)
-  const cardSubtitle = compact(detail.cardSubtitle)
-  const headerSubtitle = isSystemB ? cardSubtitle : ''
-  const cardTakeawayLabel = compact(detail.cardTakeawayLabel)
-  const cardTakeaway = compact(detail.cardTakeaway)
-  const cardClaimLabel = compact(detail.cardClaimLabel)
-  const cardEvidenceLabel = compact(detail.cardEvidenceLabel)
-  const cardLocatorLabel = compact(detail.cardLocatorLabel)
-  const cardReferenceLabel = compact(detail.cardReferenceLabel)
-  const cardSupportLabel = compact(detail.cardSupportLabel)
-  const cardWarning = compact(detail.cardWarning)
+  const cardTitle = compact(view.header.title) || compact(detail.cardTitle)
+  const cardSubtitle = compact(view.header.subtitle) || compact(detail.cardSubtitle)
+  const rawHeaderSubtitle = isSystemB ? cardSubtitle : ''
+  const cardTakeawayLabel = compact(takeawaySection?.label || detail.cardTakeawayLabel)
+  const rawCardTakeaway = compact(takeawaySection?.text || detail.cardTakeaway)
+  const cardTakeaway = looksNarrativeMetadataText(rawCardTakeaway, detail) ? '' : rawCardTakeaway
+  const cardClaimLabel = compact(claimSection?.label || detail.cardClaimLabel)
+  const cardEvidenceLabel = compact(evidenceSection?.label || detail.cardEvidenceLabel)
+  const cardLocatorLabel = compact(locatorSection?.label || detail.cardLocatorLabel)
+  const cardReferenceLabel = compact(referenceSection?.label || detail.cardReferenceLabel)
+  const cardSupportLabel = compact(supportSection?.label || detail.cardSupportLabel)
+  const cardWarning = compact(warningSection?.text || detail.cardWarning)
   const externalMetadataStatus = compact(detail.externalMetadataStatus).toLowerCase()
   const externalMetadataReason = compact(detail.externalMetadataReason)
   const externalTitle = compact(detail.externalTitle)
@@ -201,27 +296,37 @@ export function CitationPopover({
   const cardQualityFlags = Array.isArray(detail.cardQualityFlags)
     ? detail.cardQualityFlags.map((item) => compact(item)).filter(Boolean)
     : []
+  const answerContextOnly = isSystemB && (
+    cardQualityFlags.includes('answer_context_only')
+    || compact(detail.citationContextSource).toLowerCase() === 'answer_context'
+    || compact(detail.systemBTraceSource).toLowerCase() === 'answer_context'
+  )
   const cardFlow = Array.isArray(detail.cardFlow)
     ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
-  const systemAClaimText = cleanCitationDisplayText(compact(detail.cardClaim) || compact(detail.answerClaim))
+  const rawSystemAClaimText = cleanCitationDisplayText(
+    compact(claimSection?.text || '') || compact(detail.cardClaim) || compact(detail.answerClaim),
+  )
+  const systemAClaimText = looksNarrativeMetadataText(rawSystemAClaimText, detail) ? '' : rawSystemAClaimText
+  const systemAClaimPreview = answerPointPreview(systemAClaimText)
+  const systemAClaimLabel = cardClaimLabel && !/^(?:答案中的话|对应回答)$/.test(cardClaimLabel)
+    ? cardClaimLabel
+    : '答案要点'
   const suppressRawSystemAEvidenceFallback = !isSystemB
     && (
       cardQualityFlags.includes('evidence_quote_filtered')
       || cardQualityFlags.includes('missing_evidence_quote')
     )
-  const systemAEvidenceText = cleanCitationDisplayText(detail.cardEvidence)
+  const systemAEvidenceText = cleanCitationDisplayText(evidenceSection?.text || detail.cardEvidence)
     || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.evidenceQuote) : '')
     || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.summaryLine) : '')
-    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.raw) : '')
-    || (!suppressRawSystemAEvidenceFallback ? cleanCitationDisplayText(detail.citeFmt) : '')
   const systemATakeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemAEvidenceText)
     ? cardTakeaway
     : ''
   const systemAEvidencePreview = evidencePreview(systemAEvidenceText, systemATakeawayText ? 250 : 330)
-  const systemBExplicitReferenceText = cleanCitationDisplayText(detail.cardReferenceEntry)
+  const systemBExplicitReferenceText = cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry)
   const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
-  const systemBCardEvidenceText = cleanCitationDisplayText(detail.cardEvidence)
+  const systemBCardEvidenceText = answerContextOnly ? '' : cleanCitationDisplayText(evidenceSection?.text || detail.cardEvidence)
   const systemBRawContextCandidate = cleanCitationDisplayText(
     compact(detail.citationContext) || compact(detail.evidenceQuote) || compact(detail.summaryLine),
   )
@@ -229,6 +334,7 @@ export function CitationPopover({
     && (
       cardQualityFlags.includes('weak_citation_context')
       || cardQualityFlags.includes('missing_citation_context')
+      || answerContextOnly
     )
   const systemBRawContextIsLowValue = Boolean(
     systemBRawContextCandidate && looksLowValueCitationContext(systemBRawContextCandidate),
@@ -239,26 +345,25 @@ export function CitationPopover({
   const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
     ? cardTakeaway
     : ''
-  const rawSystemBContextSummary = cleanCitationDisplayText(detail.cardContextSummary)
+  const rawSystemBContextSummary = cleanCitationDisplayText(contextSummarySection?.text || detail.cardContextSummary)
   const systemBContextSummaryText = isSystemB
     && rawSystemBContextSummary
+    && !looksNarrativeMetadataText(rawSystemBContextSummary, detail)
     && !substantiallySame(rawSystemBContextSummary, systemBCitationContextText)
     && !substantiallySame(rawSystemBContextSummary, systemBReferenceText)
     && !substantiallySame(rawSystemBContextSummary, systemBTakeawayText)
     ? rawSystemBContextSummary
     : ''
+  const systemBContextSummaryLabel = compact(contextSummarySection?.label || '') || '语境摘要'
   const systemBTraceSteps = isSystemB && Array.isArray(detail.systemBTraceSteps)
     ? detail.systemBTraceSteps.map((item) => compact(item)).filter(Boolean)
     : []
   const systemBTraceReason = isSystemB ? cleanCitationDisplayText(detail.systemBTraceReason) : ''
   const systemBTraceScore = Number(detail.systemBTraceScore || 0)
   const showSystemBTrace = Boolean(
-    isSystemB
-    && (
-      systemBTraceSteps.length > 0
-      || systemBTraceReason
-      || systemBTraceScore > 0
-    ),
+    false
+    && isSystemB
+    && (systemBTraceSteps.length > 0 || systemBTraceReason || systemBTraceScore > 0),
   )
   const systemBTraceStatus = detail.systemBTraceComplete
     ? { label: '链路已闭合', tone: 'complete' }
@@ -277,10 +382,12 @@ export function CitationPopover({
             : { label: '候选依据', tone: 'candidate' }
       )
     : null
-  const explicitSupportText = compact(detail.cardSupportExplanation)
+  const rawExplicitSupportText = compact(supportSection?.text || '')
+    || compact(detail.cardSupportExplanation)
     || compact(detail.supportRelation)
     || whyText
     || bindingReason
+  const explicitSupportText = looksNarrativeMetadataText(rawExplicitSupportText, detail) ? '' : rawExplicitSupportText
   const supportBaseText = isSystemB
     ? (explicitSupportText || '这条链接把回答中的说法追溯到当前论文引用的上游文献。')
     : (explicitSupportText || (bindingStatus === 'candidate'
@@ -294,14 +401,23 @@ export function CitationPopover({
     : (compact(detail.sourceName) || compact(display.source) || displayMain))
   const systemBTitleMissing = !cardTitle && !compact(detail.title)
   const systemBTitle = cardTitle || compact(detail.title) || '上游参考文献'
+  const headerSubtitle = rawHeaderSubtitle && !substantiallySame(rawHeaderSubtitle, systemBTitle)
+    ? rawHeaderSubtitle
+    : ''
   const systemASub = [headingPath, pageLabel].filter(Boolean).join(' · ')
-  const systemALocationText = compact(detail.cardLocator) || compact(detail.locationLabel) || systemASub || systemATitle
+  const rawSystemALocationText = compact(locatorSection?.text || '') || compact(detail.cardLocator) || compact(detail.locationLabel) || systemASub || systemATitle
+  const systemALocationText = stripLocationIdentityPrefix(rawSystemALocationText, [
+    systemATitle,
+    sourcePaperText,
+    detail.sourceName,
+    display.source,
+  ]) || rawSystemALocationText
   const systemAAnchorText = anchorKindLabel(detail.anchorKind)
   const systemAHasReviewRisk = Boolean(bindingState || cardWarning || cardQualityFlags.includes('candidate_binding') || cardQualityFlags.includes('binding_mismatch'))
   const systemAHasOccurrenceClaim = cardQualityFlags.includes('occurrence_specific_claim')
   const systemAClaimLooksUseful = !isLowValueSystemAClaim(systemAClaimText)
   const showSystemAClaim = Boolean(
-    systemAClaimText
+    systemAClaimPreview
     && systemAClaimLooksUseful
     && (!systemAEvidenceText || ((systemAHasReviewRisk || systemAHasOccurrenceClaim) && !substantiallySame(systemAClaimText, systemAEvidenceText))),
   )
@@ -319,18 +435,23 @@ export function CitationPopover({
   const primaryActionLabel = isSystemB ? '打开引用语境' : '打开答案依据'
   const explainText = ''
   const flowSteps = isSystemB ? [] : cardFlow
-  const rawSystemBLocationText = compact(detail.cardLocator) || compact(detail.locationLabel) || [sourcePaperText, headingPath, pageLabel].filter(Boolean).join(' / ')
+  const rawSystemBLocationText = compact(locatorSection?.text || '') || compact(detail.cardLocator) || compact(detail.locationLabel) || [sourcePaperText, headingPath, pageLabel].filter(Boolean).join(' / ')
+  const cleanedSystemBLocationText = stripLocationIdentityPrefix(rawSystemBLocationText, [
+    sourcePaperText,
+    detail.sourceName,
+    display.source,
+  ])
   const systemBLocationIsPaperOnly = isOnlyPaperLabel(rawSystemBLocationText, [
     sourcePaperText,
     detail.sourceName,
     display.source,
   ])
-  const systemBLocationLabel = systemBLocationIsPaperOnly ? '引用所在论文' : '引用出现位置'
+  const systemBLocationLabel = systemBLocationIsPaperOnly ? '引用所在论文' : '当前论文引用处'
   const systemBLocationText = systemBLocationIsPaperOnly
-    ? (sourcePaperText || rawSystemBLocationText)
-    : rawSystemBLocationText
+    ? '仅定位到当前论文'
+    : (cleanedSystemBLocationText || rawSystemBLocationText)
   const systemBLocationHint = systemBLocationIsPaperOnly
-    ? '只定位到引用出现的论文，尚未定位到具体章节或页码；可打开引用语境核对。'
+    ? '只定位到哪篇论文引用了它，尚未定位到具体章节或页码。'
     : ''
   const showSystemBLocation = Boolean(systemBLocationText)
   const systemBSupportText = isSystemB
@@ -341,10 +462,10 @@ export function CitationPopover({
     : ''
   const showSystemBSupport = Boolean(
     systemBSupportText
+    && !cardWarning
     && (
       cardQualityFlags.includes('reference_entry_only')
       || !systemBCitationContextText
-      || cardWarning
     ),
   )
   const hasSystemBHeaderIdentity = Boolean(
@@ -362,8 +483,11 @@ export function CitationPopover({
     ),
   )
   const systemBReferencePreview = evidencePreview(systemBReferenceText, 260)
+  const systemAMetaSource = display.source && !isOnlyPaperLabel(display.source, [systemATitle, sourcePaperText])
+    ? display.source
+    : ''
   const metaRows = [
-    display.source ? { label: '来源', value: display.source } : null,
+    systemAMetaSource ? { label: '来源', value: systemAMetaSource } : null,
     display.venueYear ? { label: '发表', value: display.venueYear } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>
   const showMetaGrid = Boolean(!isSystemB && (metaRows.length > 0 || doiLabel))
@@ -455,8 +579,8 @@ export function CitationPopover({
           ) : null}
           {showSystemAClaim ? (
             <div className="kb-cite-pop-claim" data-testid="citation-popover-system-a-claim">
-              <span className="kb-cite-pop-section-title">{cardClaimLabel || '对应回答'}</span>
-              <div className="kb-cite-pop-main">{systemAClaimText}</div>
+              <span className="kb-cite-pop-section-title">{systemAClaimLabel}</span>
+              <div className="kb-cite-pop-main">{systemAClaimPreview}</div>
             </div>
           ) : null}
           <div className="kb-cite-pop-locator" data-testid="citation-popover-system-a-location">
@@ -522,7 +646,7 @@ export function CitationPopover({
           ) : null}
           {systemBContextSummaryText ? (
             <div className="kb-cite-pop-context-summary" data-testid="citation-popover-system-b-context-summary">
-              <span className="kb-cite-pop-section-title">语境摘要</span>
+              <span className="kb-cite-pop-section-title">{systemBContextSummaryLabel}</span>
               <div className="kb-cite-pop-main">{systemBContextSummaryText}</div>
             </div>
           ) : null}

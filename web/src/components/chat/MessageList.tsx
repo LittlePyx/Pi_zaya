@@ -1889,7 +1889,44 @@ function answerClaimAroundCitation(content: string, num: number): string {
   )
   const tail = after.search(/[。！？]|\. |; /)
   const end = tail >= 0 ? idx + tail + 1 : Math.min(text.length, idx + 220)
-  return text.slice(start >= 0 ? start + 1 : Math.max(0, idx - 140), end).trim()
+  const sentenceStart = start >= 0 ? start + 1 : (idx > 260 ? Math.max(0, idx - 180) : 0)
+  const sentence = text.slice(sentenceStart, end).trim()
+  const markerInSentence = Math.max(0, idx - sentenceStart)
+  let snippet = sentence.replace(/\s*\[(?:R)?\d{1,4}]\s*/gi, ' ').replace(/\s+/g, ' ').trim()
+  snippet = snippet.replace(/^\s*(?:\d{1,3}[.)、．]|[-*•])\s*/, '').trim()
+  const maxLen = 180
+  if (snippet.length <= maxLen) return snippet
+  const focus = Math.min(Math.max(0, markerInSentence), snippet.length)
+  const snippetBefore = snippet.slice(0, focus)
+  const clauseStart = Math.max(
+    snippetBefore.lastIndexOf('。'),
+    snippetBefore.lastIndexOf('！'),
+    snippetBefore.lastIndexOf('？'),
+    snippetBefore.lastIndexOf('；'),
+    snippetBefore.lastIndexOf(';'),
+    snippetBefore.lastIndexOf('，'),
+    snippetBefore.lastIndexOf(','),
+    snippetBefore.lastIndexOf('：'),
+    snippetBefore.lastIndexOf(':'),
+  )
+  const startAt = clauseStart >= 0 && focus - clauseStart >= 18 && focus - clauseStart <= maxLen
+    ? clauseStart + 1
+    : (snippet.length > maxLen * 1.35 ? Math.max(0, focus - 130) : 0)
+  snippet = snippet.slice(startAt, Math.min(snippet.length, Math.max(startAt + maxLen, focus + 36))).trim()
+  if (snippet.length > maxLen) {
+    const soft = Math.max(
+      snippet.slice(0, maxLen).lastIndexOf('。'),
+      snippet.slice(0, maxLen).lastIndexOf('！'),
+      snippet.slice(0, maxLen).lastIndexOf('？'),
+      snippet.slice(0, maxLen).lastIndexOf('；'),
+      snippet.slice(0, maxLen).lastIndexOf(';'),
+      snippet.slice(0, maxLen).lastIndexOf('，'),
+      snippet.slice(0, maxLen).lastIndexOf(','),
+    )
+    snippet = soft >= 40 ? snippet.slice(0, soft) : snippet.slice(0, maxLen - 1)
+    snippet = `${snippet.trim()}...`
+  }
+  return snippet.replace(/^[，,；;:：]\s*/, '').trim()
 }
 
 function buildFallbackCiteDetailsFromRefHits(opts: {

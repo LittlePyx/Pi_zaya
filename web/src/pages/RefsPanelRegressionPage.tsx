@@ -341,6 +341,66 @@ const REFS_PANEL_POLISH_STATUS_PAYLOAD: Record<string, unknown> = {
   },
 }
 
+const REFS_PANEL_CARD_VIEW_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: 'I am new to single-pixel imaging. Which source should I read first and why?',
+    display_state: 'ready',
+    hits: [
+      {
+        text: 'Fallback evidence text that should not define the visible card.',
+        meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Fixture Paper / 2. Method',
+          summary_label: 'Old label',
+          summary_title: 'Old summary title',
+          summary_line: 'Old fallback summary should not be rendered when card_view is present.',
+          why_line: 'Old fallback reason should not be rendered when card_view is present.',
+          card_view: {
+            version: 1,
+            route: 'references',
+            kind: 'reference_locator',
+            header: {
+              kicker: 'References',
+              title: READER_REGRESSION_SOURCE_NAME,
+              subtitle: 'Fixture Paper / 2. Method',
+            },
+            sections: [
+              {
+                id: 'summary',
+                label: 'Guide',
+                title: 'What this section gives you',
+                text: 'This section explains the method at the level a first reading needs.',
+              },
+              {
+                id: 'why',
+                label: 'Relevance',
+                title: 'Why it matches your question',
+                text: 'It is a good first stop because it connects the paper title to the concrete method steps.',
+              },
+              {
+                id: 'location',
+                label: 'Location',
+                title: 'Original location',
+                text: 'Fixture Paper / 2. Method',
+              },
+            ],
+            summary: 'This section explains the method at the level a first reading needs.',
+            quality: {
+              label: 'full',
+              source: 'llm',
+            },
+          },
+        },
+      },
+    ],
+  },
+}
+
 export default function RefsPanelRegressionPage() {
   const scenarioParam = (() => {
     if (typeof window === 'undefined') return ''
@@ -356,8 +416,10 @@ export default function RefsPanelRegressionPage() {
           ? 'auto-citation-meta'
           : scenarioParam === 'polish-status'
             ? 'polish-status'
-          : scenarioParam === 'pending-with-hits'
-            ? 'pending-with-hits'
+            : scenarioParam === 'card-view-contract'
+              ? 'card-view-contract'
+              : scenarioParam === 'pending-with-hits'
+                ? 'pending-with-hits'
         : 'rich-reader-open'
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
 
@@ -371,8 +433,10 @@ export default function RefsPanelRegressionPage() {
           ? REFS_PANEL_AUTO_CITATION_META_PAYLOAD
           : scenario === 'polish-status'
             ? REFS_PANEL_POLISH_STATUS_PAYLOAD
-          : scenario === 'pending-with-hits'
-            ? REFS_PANEL_PENDING_WITH_HITS_PAYLOAD
+            : scenario === 'card-view-contract'
+              ? REFS_PANEL_CARD_VIEW_PAYLOAD
+              : scenario === 'pending-with-hits'
+                ? REFS_PANEL_PENDING_WITH_HITS_PAYLOAD
       : REFS_PANEL_PAYLOAD
 
   return (

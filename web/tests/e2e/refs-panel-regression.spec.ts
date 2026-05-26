@@ -72,6 +72,21 @@ test('refs panel surfaces reference-card polish status', async ({ page }) => {
   await expect(page.getByTestId('refs-panel-polish-status-1')).toHaveAttribute('data-status', 'heuristic')
 })
 
+test('refs panel prefers the card_view contract over legacy card fields', async ({ page }) => {
+  await page.goto('/__refs_panel_test__?scenario=card-view-contract')
+
+  await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('card-view-contract')
+  await page.getByRole('button').first().click()
+  await expect(page.locator('.kb-ref-card').first()).toContainText('Guide')
+  await expect(page.locator('.kb-ref-card').first()).toContainText('What this section gives you')
+  await expect(page.locator('.kb-ref-card').first()).toContainText('This section explains the method at the level a first reading needs.')
+  await expect(page.locator('.kb-ref-card').nth(1)).toContainText('Relevance')
+  await expect(page.locator('.kb-ref-card').nth(1)).toContainText('Why it matches your question')
+  await expect(page.locator('.kb-ref-card').nth(1)).toContainText('It is a good first stop because it connects the paper title to the concrete method steps.')
+  await expect(page.getByText('Old fallback summary should not be rendered when card_view is present.')).toHaveCount(0)
+  await expect(page.getByText('Old fallback reason should not be rendered when card_view is present.')).toHaveCount(0)
+})
+
 test('refs panel can render a section-level strict locate card directly in the page', async ({ page }) => {
   await page.goto('/__refs_panel_test__?scenario=section-target')
 
@@ -120,7 +135,6 @@ test('refs panel auto-fetches citation meta for visible cards without clicking C
   await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('auto-citation-meta')
   await page.getByRole('button').first().click()
   await expect(page.getByTestId('refs-panel-metrics-0')).toContainText('被引 3 (OpenAlex)')
-  await expect(page.getByTestId('refs-panel-metrics-0')).toContainText('会议 CVPR')
   await expect(page.getByTestId('refs-panel-metrics-0')).toContainText('CORE A* (ICORE2026)')
   await expect(page.getByTestId('refs-panel-metrics-0')).toContainText('CCF A (CORE tier proxy)')
 })

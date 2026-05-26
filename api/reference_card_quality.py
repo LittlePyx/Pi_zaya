@@ -5,9 +5,11 @@ from collections.abc import Mapping
 from typing import Any
 
 from kb.citation_audit import summarize_system_b_citation_audit
+from kb.evidence_text import source_title_candidate
 
 REF_CARD_POLISH_CONTRACT_VERSION = 1
-CITATION_CARD_QUALITY_CONTRACT_VERSION = 1
+REF_CARD_VIEW_CONTRACT_VERSION = 1
+CITATION_CARD_QUALITY_CONTRACT_VERSION = 2
 
 POLISH_STATUSES = {"full", "heuristic", "pending", "failed"}
 LLM_SUMMARY_GENERATIONS = {"llm_grounded", "llm_pack", "llm_abstract"}
@@ -37,6 +39,13 @@ _BROKEN_EVIDENCE_PHRASES = (
 )
 _MARKDOWN_HEADING_RE = re.compile(r"(^|\n)\s{0,3}#{1,6}\s+\S")
 _MARKDOWN_TABLE_RULE_RE = re.compile(r"(^|\n)\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*(\n|$)")
+_NARRATIVE_METADATA_RE = re.compile(
+    r"\b(?:doi|jcr|impact\s*factor|if\s*[:：]?\s*\d|published\s+(?:in|by)|"
+    r"journal|conference|venue|citation\s+count|cited\s+by)\b|"
+    r"(?:发表于|发表在|期刊|会议|年份|被引|影响因子|分区|出处|来源论文|论文标题|标题是|作者是)",
+    re.IGNORECASE,
+)
+_DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s，。；;,)）]+", re.IGNORECASE)
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -94,6 +103,155 @@ def _string_list(value: Any) -> list[str]:
     return [text] if text else []
 
 
+def _clean_ref_card_text(value: Any, *, max_len: int = 520) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    text = re.sub(r"\[\[CITE:[^\]]+]]", "", text)
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"`{1,3}", "", text)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip(" \t\r\n-—:：")
+    if len(text) > max_len:
+        text = text[: max(0, max_len - 1)].rstrip(" ,，;；:：") + "..."
+    return text
+
+
+def _ref_card_page_label(ui: Mapping[str, Any]) -> str:
+    start = _intish(ui.get("page_start"))
+    end = _intish(ui.get("page_end"))
+    if start <= 0:
+        return ""
+    if end <= 0 or end == start:
+        return f"p. {start}"
+    return f"pp. {min(start, end)}-{max(start, end)}"
+
+
+def _ref_card_location_text(ui: Mapping[str, Any]) -> str:
+    heading = _clean_ref_card_text(
+        ui.get("heading_path") or ui.get("section_label") or ui.get("subsection_label"),
+        max_len=220,
+    )
+    page = _ref_card_page_label(ui)
+    return " · ".join(part for part in (heading, page) if part)
+
+
+def _ref_card_section(
+    section_id: str,
+    *,
+    label: str,
+    text: str,
+    kind: str,
+    title: str = "",
+    tone: str = "",
+    source: str = "",
+) -> dict[str, Any] | None:
+    clean_text = _clean_ref_card_text(text, max_len=620)
+    if not section_id or not clean_text:
+        return None
+    return {
+        "id": section_id,
+        "label": _clean_ref_card_text(label, max_len=80),
+        "title": _clean_ref_card_text(title, max_len=120),
+        "text": clean_text,
+        "kind": kind,
+        "tone": _clean_ref_card_text(tone, max_len=40),
+        "source": _clean_ref_card_text(source, max_len=80),
+    }
+
+
+def _append_ref_card_section(sections: list[dict[str, Any]], section: dict[str, Any] | None) -> None:
+    if not section:
+        return
+    section_id = str(section.get("id") or "").strip()
+    text = str(section.get("text") or "").strip()
+    if not section_id or not text:
+        return
+    if any(str(item.get("id") or "") == section_id for item in sections):
+        return
+    for item in sections:
+        existing = str(item.get("text") or "").strip()
+        if existing and _substantially_same_visible_text(existing, text):
+            return
+    sections.append(section)
+
+
+def build_ref_card_view(ui_meta: Mapping[str, Any] | None) -> dict[str, Any]:
+    ui = _as_dict(ui_meta)
+    if not ui:
+        return {}
+    citation_meta = _as_dict(ui.get("citation_meta"))
+    title = _clean_ref_card_text(
+        citation_meta.get("title") or ui.get("display_name") or ui.get("source_path"),
+        max_len=240,
+    )
+    subtitle = _ref_card_location_text(ui)
+    summary_label = _clean_ref_card_text(ui.get("summary_label"), max_len=80) or "导读"
+    summary_title = _clean_ref_card_text(ui.get("summary_title"), max_len=120) or "命中章节讲什么"
+    sections: list[dict[str, Any]] = []
+    _append_ref_card_section(
+        sections,
+        _ref_card_section(
+            "summary",
+            label=summary_label,
+            title=summary_title,
+            text=str(ui.get("summary_line") or ""),
+            kind="summary",
+            tone="primary",
+            source=str(ui.get("summary_generation") or ui.get("summary_source") or ""),
+        ),
+    )
+    _append_ref_card_section(
+        sections,
+        _ref_card_section(
+            "why",
+            label="Relevance",
+            title="Why this is relevant",
+            text=str(ui.get("why_line") or ""),
+            kind="reason",
+            source=str(ui.get("why_generation") or ""),
+        ),
+    )
+    _append_ref_card_section(
+        sections,
+        _ref_card_section(
+            "location",
+            label="位置",
+            title="原文位置",
+            text=subtitle,
+            kind="locator",
+            source=str(ui.get("primary_evidence_source") or ""),
+        ),
+    )
+
+    summary = ""
+    for preferred in ("summary", "why"):
+        match = next((item for item in sections if item.get("id") == preferred), None)
+        if match and str(match.get("text") or "").strip():
+            summary = _clean_ref_card_text(match.get("text"), max_len=260)
+            break
+
+    return {
+        "version": REF_CARD_VIEW_CONTRACT_VERSION,
+        "route": "references",
+        "kind": "reference_locator",
+        "header": {
+            "kicker": "References",
+            "title": title,
+            "subtitle": subtitle,
+        },
+        "sections": sections,
+        "summary": summary,
+        "quality": {
+            "label": _clean_ref_card_text(ui.get("polish_status"), max_len=40),
+            "source": _clean_ref_card_text(ui.get("polish_source"), max_len=40),
+            "detail": _clean_ref_card_text(ui.get("polish_detail"), max_len=160),
+            "summary_status": _clean_ref_card_text(ui.get("summary_polish_status"), max_len=40),
+            "why_status": _clean_ref_card_text(ui.get("why_polish_status"), max_len=40),
+        },
+    }
+
+
 def _citation_route(detail: Mapping[str, Any]) -> str:
     explicit = _norm(detail.get("citation_route") or detail.get("route"))
     if explicit in {"system_a", "system-b", "system_b", "a", "b"}:
@@ -135,6 +293,52 @@ def _looks_broken_evidence(text: str) -> bool:
     return False
 
 
+def _substantially_same_visible_text(left: str, right: str) -> bool:
+    a = re.sub(r"\s+", " ", _text(left)).strip().lower()
+    b = re.sub(r"\s+", " ", _text(right)).strip().lower()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) >= 36 and a in b:
+        return True
+    if len(b) >= 36 and b in a:
+        return True
+    at = set(re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", a))
+    bt = set(re.findall(r"[a-z0-9\u4e00-\u9fff]{2,}", b))
+    if len(at) < 5 or len(bt) < 5:
+        return False
+    return len(at & bt) / max(1, min(len(at), len(bt))) >= 0.84
+
+
+def _compact_identity(value: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", str(value or "").lower()).strip()
+
+
+def _contains_identity_text(text: str, candidate: str, *, min_len: int = 22) -> bool:
+    body = _compact_identity(text)
+    ident = _compact_identity(candidate)
+    if not body or len(ident) < min_len:
+        return False
+    return ident in body
+
+
+def _looks_redundant_narrative_metadata(text: str, data: Mapping[str, Any]) -> bool:
+    value = _text(text)
+    if not value:
+        return False
+    if _DOI_RE.search(value) or _NARRATIVE_METADATA_RE.search(value):
+        return True
+    for key in ("title", "card_title", "source_name", "source_path"):
+        candidate = source_title_candidate(data.get(key))
+        if _contains_identity_text(value, candidate):
+            return True
+    venue = _text(data.get("venue"))
+    if venue and _contains_identity_text(value, venue, min_len=7):
+        return True
+    return False
+
+
 def _quality_issue(name: str, *, field: str = "", detail: Any = "", severity: str = "error") -> dict[str, Any]:
     out: dict[str, Any] = {"name": name, "severity": severity}
     if field:
@@ -148,6 +352,7 @@ def _visible_citation_texts(data: Mapping[str, Any], *, route: str) -> dict[str,
     if route == "system_b":
         return {
             "card_takeaway": _first_text(data, ("card_takeaway", "upstream_work_role", "user_question_relation", "support_relation")),
+            "card_context_summary": _first_text(data, ("card_context_summary",)),
             "card_evidence": _first_text(data, ("card_evidence", "system_b_trace_context", "citation_context", "evidence_quote", "context")),
             "card_locator": _first_text(data, ("card_locator", "location_label", "heading_path")),
             "card_reference_entry": _first_text(data, ("card_reference_entry", "raw", "cite_fmt")),
@@ -200,6 +405,22 @@ def citation_detail_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
             fail("raw_markdown_visible", field=field, detail=text[:120])
         if _has_template_phrase(text):
             fail("template_phrase_visible", field=field, detail=text[:120])
+        if field in {"card_takeaway", "card_claim", "card_context_summary", "card_support_explanation"} and _looks_redundant_narrative_metadata(text, data):
+            fail("narrative_metadata_repeated", field=field, detail=text[:120])
+    comparable_visible = [
+        (field, text)
+        for field, text in visible_texts.items()
+        if text and len(text) >= 24 and field not in {"system_b_trace_reference", "card_reference_entry"}
+    ]
+    for idx, (left_field, left_text) in enumerate(comparable_visible):
+        for right_field, right_text in comparable_visible[idx + 1 :]:
+            if _substantially_same_visible_text(left_text, right_text):
+                fail(
+                    "duplicate_visible_card_text",
+                    field=f"{left_field}/{right_field}",
+                    detail=left_text[:120],
+                )
+                break
 
     locator = visible_texts.get("card_locator", "")
     if route == "system_a":
@@ -395,6 +616,8 @@ def attach_ref_card_polish_contract(
             display_state=display_state,
         )
     )
+    ui["card_view"] = build_ref_card_view(ui)
+    ui["card_view_contract_version"] = REF_CARD_VIEW_CONTRACT_VERSION
     return ui
 
 

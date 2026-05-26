@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from kb.citation_evidence_pack import build_system_a_evidence_pack, build_system_b_evidence_pack
-from kb.evidence_text import clean_display_text, finish_evidence_text
+from kb.evidence_text import clean_display_text, finish_evidence_text, source_title_candidate
+
+CITATION_CARD_DISPLAY_CONTRACT_VERSION = 2
+CITATION_CARD_VIEW_CONTRACT_VERSION = 1
+
 
 def _clean_text(value: Any, *, max_len: int = 520) -> str:
     return clean_display_text(value, max_len=max_len)
@@ -13,202 +17,6 @@ def _clean_text(value: Any, *, max_len: int = 520) -> str:
 
 def _loose_tokens(value: str) -> list[str]:
     return [token.lower() for token in re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", str(value or ""))]
-
-
-def _source_title_candidate(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    name = Path(text).name or text
-    name = re.sub(r"\.(?:pdf|md)$", "", name, flags=re.IGNORECASE)
-    name = re.sub(r"\.en$", "", name, flags=re.IGNORECASE)
-    name = re.sub(r"^[A-Za-z]{2,12}-\d{4}-", "", name)
-    name = re.sub(r"[_-]+", " ", name)
-    name = re.sub(r"\s+", " ", name).strip()
-    return name
-
-
-def _strip_token_prefix(text: str, candidate: str) -> str:
-    tokens = _loose_tokens(candidate)
-    if len(tokens) < 4:
-        return text
-    matches = list(re.finditer(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", text))
-    if len(matches) < len(tokens):
-        return text
-    limit = min(len(tokens), len(matches))
-    matched = 0
-    for idx in range(limit):
-        if matches[idx].group(0).lower() != tokens[idx]:
-            break
-        matched += 1
-    required = min(8, len(tokens))
-    if matched < required:
-        return text
-    return text[matches[matched - 1].end() :].lstrip(" ,.;:，。；：-")
-
-
-def _looks_author_metadata_prefix(prefix: str) -> bool:
-    text = str(prefix or "").strip()
-    if len(text) < 16:
-        return False
-    comma_count = text.count(",") + text.count("，")
-    name_pairs = len(re.findall(r"\b[A-Z][a-zA-Z'`-]+\s+[A-Z][a-zA-Z'`-]+\b", text))
-    tokens = _loose_tokens(text)
-    if comma_count >= 2 or name_pairs >= 2:
-        return True
-    return len(tokens) >= 8 and bool(re.search(r"[*\\]", text))
-
-
-_CONTENT_SENTENCE_START_RE = re.compile(
-    r"\b(?:"
-    r"single[-\s]?pixel imaging|"
-    r"deep learning|"
-    r"snapshot compressive|"
-    r"compressive imaging|"
-    r"neural radiance|"
-    r"this paper|this work|this study|"
-    r"in this (?:paper|work|study)|"
-    r"we\s+|however,?|recent(?:ly)?|the proposed|our\s+"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
-def _strip_system_a_metadata_prefix(text: str, *, source: str = "", title: str = "") -> str:
-    out = str(text or "").strip()
-    if not out:
-        return ""
-
-    for raw_candidate in (source, title):
-        candidate = _source_title_candidate(raw_candidate)
-        if len(candidate) >= 18:
-            stripped = _strip_token_prefix(out, candidate)
-            if stripped != out:
-                out = stripped
-                break
-
-    for match in _CONTENT_SENTENCE_START_RE.finditer(out):
-        idx = match.start()
-        if idx <= 0:
-            break
-        if idx > 320:
-            break
-        prefix = out[:idx]
-        if _looks_author_metadata_prefix(prefix):
-            out = out[idx:].lstrip(" ,.;:，。；：-")
-        break
-
-    return re.sub(r"\s+", " ", out).strip()
-
-
-def _split_sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[。！？!?\.])\s+", str(text or "").strip())
-    return [part.strip() for part in parts if part.strip()]
-
-
-_FRAGMENT_LEAD_OK_RE = re.compile(
-    r"^(?:a|an|the|this|these|those|we|our|in|on|for|by|with|when|where|while|because|however|therefore|thus|as|if|to)\b",
-    re.IGNORECASE,
-)
-
-
-def _looks_fragmentary_sentence(sentence: str) -> bool:
-    text = str(sentence or "").strip()
-    if not text:
-        return True
-    if re.match(r"^[a-z]{2,}\b", text) and not _FRAGMENT_LEAD_OK_RE.match(text):
-        return True
-    if re.match(r"^(?:and|or|of|that|which|from|into|onto|within|without|using|used|measured|allowing)\b", text, re.IGNORECASE):
-        return True
-    if len(text) > 80 and re.search(r"\b(?:and|or|of|to|with|by|from|into|onto)$", text, re.IGNORECASE):
-        return True
-    if len(text) > 120 and not re.search(r"[。！？!?\.]$", text):
-        return True
-    return False
-
-
-def _looks_caption_heading(sentence: str) -> bool:
-    text = str(sentence or "").strip()
-    if re.match(r"^(?:fig(?:ure)?|table)\s*\d+[.:]?\s*$", text, re.IGNORECASE):
-        return True
-    tokens = _loose_tokens(text)
-    if re.match(r"^[a-z]\s*,\s*", text, re.IGNORECASE):
-        return True
-    return len(tokens) <= 5 and bool(re.search(r"\b(?:configuration|configurations|overview|pipeline|results?|figure)\b", text, re.IGNORECASE))
-
-
-def _usable_evidence_sentence(sentence: str) -> bool:
-    text = str(sentence or "").strip()
-    if _looks_fragmentary_sentence(text) or _looks_caption_heading(text):
-        return False
-    tokens = _loose_tokens(text)
-    return len(tokens) >= 5
-
-
-def _sentence_quality(sentence: str, *, claim: str = "", heading: str = "") -> float:
-    text = str(sentence or "").strip()
-    if not text:
-        return -10.0
-    tokens = _loose_tokens(text)
-    score = 0.0
-    if _looks_fragmentary_sentence(text):
-        score -= 5.0
-    if _looks_caption_heading(text):
-        score -= 2.0
-    if 8 <= len(tokens) <= 90:
-        score += 2.0
-    elif len(tokens) < 5:
-        score -= 2.0
-    if _looks_author_metadata_prefix(text[:180]):
-        score -= 3.0
-    if re.search(r"\b(?:is|are|can|uses?|proposes?|shows?|demonstrates?|improves?|captures?|reconstructs?|实现|提出|表明|说明|用于|能够)\b", text, re.IGNORECASE):
-        score += 1.0
-    context_tokens = set(_loose_tokens(f"{claim} {heading}"))
-    if context_tokens:
-        overlap = len(set(tokens) & context_tokens)
-        score += min(2.0, overlap * 0.3)
-    if re.search(r"\b(?:single[-\s]?pixel|imaging|deep learning|compressive|neural|reconstruction|sampling)\b", text, re.IGNORECASE):
-        score += 1.0
-    return score
-
-
-def _join_evidence_window(sentences: list[str], *, center_idx: int, claim: str, heading: str, max_len: int) -> str:
-    if not sentences:
-        return ""
-    usable = [
-        idx
-        for idx, sentence in enumerate(sentences)
-        if _usable_evidence_sentence(sentence)
-    ]
-    if center_idx not in usable:
-        return ""
-
-    chosen = [center_idx]
-    center_score = _sentence_quality(sentences[center_idx], claim=claim, heading=heading)
-
-    prev_idx = center_idx - 1
-    if prev_idx >= 0 and _usable_evidence_sentence(sentences[prev_idx]):
-        prev_score = _sentence_quality(sentences[prev_idx], claim=claim, heading=heading)
-        if prev_score >= 1.0 or center_score < 2.5:
-            chosen.insert(0, prev_idx)
-
-    for next_idx in range(center_idx + 1, min(len(sentences), center_idx + 3)):
-        if len(chosen) >= 3:
-            break
-        if not _usable_evidence_sentence(sentences[next_idx]):
-            continue
-        next_score = _sentence_quality(sentences[next_idx], claim=claim, heading=heading)
-        if next_score < 0.5 and len(chosen) > 1:
-            continue
-        chosen.append(next_idx)
-
-    out: list[str] = []
-    for idx in sorted(set(chosen)):
-        candidate = " ".join([*out, sentences[idx]]).strip()
-        if out and len(candidate) > max_len:
-            continue
-        out.append(sentences[idx])
-    return " ".join(out).strip()
 
 
 def _first_text(rec: Mapping[str, Any], *keys: str, max_len: int = 520) -> str:
@@ -233,37 +41,275 @@ _CARD_TEXT_LIMITS = {
     "card_takeaway_label": 80,
     "card_takeaway": 140,
     "card_claim_label": 80,
-    "card_claim": 420,
+    "card_claim": 220,
     "card_locator_label": 80,
     "card_locator": 260,
     "card_evidence_label": 80,
     "card_evidence": 520,
+    "card_context_summary": 220,
     "card_reference_label": 80,
-    "card_reference_entry": 900,
+    "card_reference_entry": 520,
     "card_support_label": 80,
     "card_support_explanation": 420,
     "card_quality_label": 80,
     "card_warning": 360,
     "system_b_trace_reason": 360,
-    "system_b_trace_answer": 420,
+    "system_b_trace_answer": 220,
     "system_b_trace_context": 520,
-    "system_b_trace_reference": 520,
+    "system_b_trace_reference": 360,
     "system_b_trace_locator": 260,
 }
 
 
+def _is_placeholder_card_text(value: str) -> bool:
+    text = _clean_text(value, max_len=160).strip().lower()
+    if not text:
+        return False
+    return text in {
+        "no summary available",
+        "no notes",
+        "none",
+        "n/a",
+        "na",
+        "unknown",
+        "unknown location",
+        "not located",
+        "source paper",
+        "current paper",
+    }
+
+
+def _text_has_visible_markup_artifact(value: str) -> bool:
+    text = str(value or "")
+    if not text:
+        return False
+    if "[[CITE:" in text or "```" in text:
+        return True
+    if re.search(r"(?m)^\s{0,3}#{1,6}\s+\S", text):
+        return True
+    if re.search(r"(?m)^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$", text):
+        return True
+    if re.search(r"\$\s*\^\{\s*\[[\d,\-\s;]+\]\s*\}\s*\$", text):
+        return True
+    return False
+
+
+def _clean_quality_flags(value: Any) -> list[str]:
+    raw_values = value if isinstance(value, (list, tuple)) else []
+    return _dedup_strings([str(item or "") for item in raw_values])
+
+
+def _add_flag(flags: list[str], name: str) -> None:
+    if name and name not in flags:
+        flags.append(name)
+
+
+def _card_visible_sections(out: Mapping[str, Any], *, route: str) -> list[str]:
+    sections: list[str] = []
+    flags = set(str(item or "") for item in (out.get("card_quality_flags") or []))
+    if str(out.get("card_warning") or "").strip():
+        sections.append("warning")
+    if str(out.get("card_takeaway") or "").strip():
+        sections.append("takeaway")
+    if route == "system_a" and str(out.get("card_claim") or "").strip():
+        sections.append("claim")
+    if str(out.get("card_locator") or "").strip():
+        sections.append("locator")
+    if str(out.get("card_evidence") or "").strip():
+        sections.append("evidence")
+    if route == "system_b" and str(out.get("card_context_summary") or "").strip():
+        sections.append("context_summary")
+    if (
+        route == "system_b"
+        and str(out.get("card_reference_entry") or "").strip()
+        and (
+            "missing_reference_title" in flags
+            or str(out.get("card_title") or "").strip() in {"", "上游参考文献"}
+        )
+    ):
+        sections.append("reference")
+    if str(out.get("card_support_explanation") or "").strip():
+        sections.append("support")
+    return sections
+
+
+def _card_view_section(
+    *,
+    section_id: str,
+    label: str,
+    text: str,
+    kind: str,
+    hint: str = "",
+    tone: str = "",
+) -> dict[str, Any]:
+    return {
+        "id": section_id,
+        "label": _clean_text(label, max_len=80),
+        "text": _clean_text(text, max_len=620),
+        "kind": kind,
+        "hint": _clean_text(hint, max_len=80),
+        "tone": _clean_text(tone, max_len=40),
+    }
+
+
+def _append_card_view_section(
+    sections: list[dict[str, Any]],
+    *,
+    section_id: str,
+    label: str,
+    text: str,
+    kind: str,
+    hint: str = "",
+    tone: str = "",
+) -> None:
+    clean_text = _clean_text(text, max_len=620)
+    if not clean_text:
+        return
+    for existing in sections:
+        if existing.get("id") == section_id:
+            return
+        if _sameish(str(existing.get("text") or ""), clean_text):
+            return
+    sections.append(
+        _card_view_section(
+            section_id=section_id,
+            label=label,
+            text=clean_text,
+            kind=kind,
+            hint=hint,
+            tone=tone,
+        )
+    )
+
+
+def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
+    is_system_b = route == "system_b"
+    title = _clean_text(out.get("card_title"), max_len=220)
+    subtitle = _clean_text(out.get("card_subtitle"), max_len=220)
+    sections: list[dict[str, Any]] = []
+    flags = _clean_quality_flags(out.get("card_quality_flags"))
+
+    if _clean_text(out.get("card_warning"), max_len=360):
+        _append_card_view_section(
+            sections,
+            section_id="warning",
+            label="提醒",
+            text=str(out.get("card_warning") or ""),
+            kind="warning",
+            tone="warning",
+        )
+    _append_card_view_section(
+        sections,
+        section_id="takeaway",
+        label=str(out.get("card_takeaway_label") or ("上游作用" if is_system_b else "证据重点")),
+        text=str(out.get("card_takeaway") or ""),
+        kind="insight",
+        tone="primary",
+    )
+    if not is_system_b:
+        _append_card_view_section(
+            sections,
+            section_id="claim",
+            label=str(out.get("card_claim_label") or "答案要点"),
+            text=str(out.get("card_claim") or ""),
+            kind="claim",
+        )
+    _append_card_view_section(
+        sections,
+        section_id="locator",
+        label=str(out.get("card_locator_label") or ("当前论文引用处" if is_system_b else "原文位置")),
+        text=str(out.get("card_locator") or ""),
+        kind="locator",
+    )
+    if is_system_b:
+        _append_card_view_section(
+            sections,
+            section_id="context_summary",
+            label="语境摘要",
+            text=str(out.get("card_context_summary") or ""),
+            kind="summary",
+        )
+    _append_card_view_section(
+        sections,
+        section_id="evidence",
+        label=str(out.get("card_evidence_label") or ("引用语境" if is_system_b else "原文证据")),
+        text=str(out.get("card_evidence") or ""),
+        kind="quote",
+    )
+    if is_system_b and (
+        "missing_reference_title" in flags
+        or "reference_entry_only" in flags
+        or not title
+    ):
+        _append_card_view_section(
+            sections,
+            section_id="reference",
+            label=str(out.get("card_reference_label") or "上游文献条目"),
+            text=str(out.get("card_reference_entry") or ""),
+            kind="reference",
+        )
+    _append_card_view_section(
+        sections,
+        section_id="support",
+        label=str(out.get("card_support_label") or ("说明" if is_system_b else "可靠度")),
+        text=str(out.get("card_support_explanation") or ""),
+        kind="support",
+    )
+
+    summary = ""
+    for preferred in ("takeaway", "context_summary", "claim", "evidence", "reference"):
+        match = next((item for item in sections if item.get("id") == preferred), None)
+        if match and str(match.get("text") or "").strip():
+            summary = _clean_text(match.get("text"), max_len=260)
+            break
+
+    return {
+        "version": CITATION_CARD_VIEW_CONTRACT_VERSION,
+        "route": route,
+        "kind": _clean_text(out.get("card_kind"), max_len=80),
+        "header": {
+            "kicker": "上游引用" if is_system_b else "答案依据",
+            "title": title,
+            "subtitle": subtitle,
+        },
+        "sections": sections,
+        "summary": summary,
+        "quality": {
+            "label": _clean_text(out.get("card_quality_label"), max_len=80),
+            "score": _safe_float(out.get("card_quality_score"), 0.0),
+            "flags": flags,
+            "warning": _clean_text(out.get("card_warning"), max_len=360),
+        },
+    }
+
+
 def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]:
     out = dict(card)
+    flags = _clean_quality_flags(out.get("card_quality_flags"))
     for key, limit in _CARD_TEXT_LIMITS.items():
+        before = str(out.get(key) or "")
         if key == "card_evidence":
             out[key] = finish_evidence_text(out.get(key), max_len=limit)
         else:
             out[key] = _clean_text(out.get(key), max_len=limit)
+        if _is_placeholder_card_text(str(out.get(key) or "")):
+            out[key] = ""
+            _add_flag(flags, f"{key}_placeholder_removed")
+        if before and _text_has_visible_markup_artifact(before) and not _text_has_visible_markup_artifact(str(out.get(key) or "")):
+            _add_flag(flags, f"{key}_markup_cleaned")
 
     evidence = str(out.get("card_evidence") or "").strip()
     claim = str(out.get("card_claim") or "").strip()
     takeaway = str(out.get("card_takeaway") or "").strip()
+    context_summary = str(out.get("card_context_summary") or "").strip()
     support = str(out.get("card_support_explanation") or "").strip()
+    answer_context_only = route == "system_b" and "answer_context_only" in set(flags)
+
+    if answer_context_only and evidence:
+        # The answer sentence is useful for tracing, but it is not original paper evidence.
+        out["card_evidence"] = ""
+        evidence = ""
+        _add_flag(flags, "answer_context_hidden_from_card")
 
     if takeaway and (
         _sameish(takeaway, evidence)
@@ -274,6 +320,14 @@ def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]
         takeaway = ""
 
     if route == "system_b":
+        if context_summary and (
+            _sameish(context_summary, evidence)
+            or _sameish(context_summary, takeaway)
+            or _sameish(context_summary, claim)
+            or _looks_generic_system_b_text(context_summary)
+        ):
+            out["card_context_summary"] = ""
+            context_summary = ""
         if claim and evidence and _sameish(claim, evidence):
             out["card_claim"] = ""
             claim = ""
@@ -284,6 +338,9 @@ def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]
             or _looks_generic_system_b_text(support)
         ):
             out["card_support_explanation"] = ""
+        if claim and answer_context_only:
+            out["card_claim"] = ""
+            claim = ""
     elif support and (
         _sameish(support, evidence)
         or _sameish(support, claim)
@@ -293,6 +350,10 @@ def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]
 
     if not str(out.get("card_evidence") or "").strip():
         out["card_evidence_label"] = _clean_text(out.get("card_evidence_label"), max_len=80)
+    out["card_quality_flags"] = _dedup_strings(flags)
+    out["card_display_contract_version"] = CITATION_CARD_DISPLAY_CONTRACT_VERSION
+    out["card_visible_sections"] = _card_visible_sections(out, route=route)
+    out["card_view"] = _build_card_view(out, route=route)
     return out
 
 
@@ -426,6 +487,69 @@ def _source_name(source_path: str) -> str:
     if low.endswith(".md"):
         return name[:-3] + ".pdf"
     return name
+
+
+def _identity_label_candidates(*values: str) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        raw = _clean_text(value, max_len=260)
+        if not raw:
+            continue
+        base = Path(raw.replace("\\", "/")).name or raw
+        for candidate in (raw, base, source_title_candidate(base), source_title_candidate(raw)):
+            text = _clean_text(candidate, max_len=260).strip(" /·")
+            if not text:
+                continue
+            key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text.lower()).strip()
+            if len(key) < 4:
+                continue
+            if key not in {re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", item.lower()).strip() for item in out}:
+                out.append(text)
+    return out
+
+
+def _same_location_identity(left: str, right: str) -> bool:
+    a = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", _clean_text(left, max_len=260).lower()).strip()
+    b = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", _clean_text(right, max_len=260).lower()).strip()
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) >= 16 and len(b) >= 16 and (a in b or b in a):
+        return True
+    at = set(a.split())
+    bt = set(b.split())
+    if len(at) < 3 or len(bt) < 3:
+        return False
+    return len(at & bt) / max(1, min(len(at), len(bt))) >= 0.82
+
+
+def _strip_redundant_locator_prefix(locator: str, *, source: str = "", title: str = "") -> str:
+    text = _clean_text(locator, max_len=260).strip(" /·")
+    if not text:
+        return ""
+    identities = _identity_label_candidates(source, title)
+    if not identities:
+        return text
+
+    parts = [part.strip() for part in re.split(r"\s*/\s*", text) if part.strip()]
+    changed = False
+    while len(parts) > 1 and any(_same_location_identity(parts[0], item) for item in identities):
+        parts = parts[1:]
+        changed = True
+    if changed:
+        return " / ".join(parts).strip()
+
+    if any(_same_location_identity(text, item) for item in identities):
+        return ""
+    for item in sorted(identities, key=len, reverse=True):
+        if len(item) < 10:
+            continue
+        pattern = re.compile(rf"^\s*{re.escape(item)}\s*(?:/|·|-|—|:|：)\s*", re.IGNORECASE)
+        stripped = pattern.sub("", text).strip(" /·")
+        if stripped != text:
+            return stripped
+    return text
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -563,6 +687,9 @@ def _looks_generic_system_b_text(value: str) -> bool:
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in generic_patterns):
         return True
     tokens = _loose_tokens(text)
+    if re.search(r"[\u4e00-\u9fff]", text):
+        cjk_chars = re.findall(r"[\u4e00-\u9fff]", text)
+        return len(cjk_chars) <= 10 and len(tokens) <= 3
     return len(tokens) <= 5
 
 
@@ -751,7 +878,7 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
     claim_raw = _first_text(rec, "answer_claim", max_len=420)
     evidence_raw = _first_text(rec, "evidence_quote", "summary_line", "raw", "cite_fmt", max_len=1400)
     evidence_raw_for_pack = _first_raw_value(rec, "evidence_quote", "summary_line", "raw", "cite_fmt") or evidence_raw
-    locator = _locator(rec)
+    locator = _strip_redundant_locator_prefix(_locator(rec), source=source, title=title)
     support_hint = _first_text(rec, "support_relation", "binding_reason", "why_line", max_len=420)
     pack = build_system_a_evidence_pack(
         answer_claim=claim_raw,
@@ -769,7 +896,7 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
         takeaway = pack.evidence_focus
     if takeaway and (_sameish(takeaway, evidence) or _sameish(takeaway, claim)):
         takeaway = ""
-    subtitle = locator or (heading if heading and heading != title else "")
+    subtitle = locator or _strip_redundant_locator_prefix(heading, source=source, title=title)
     binding_status = str(rec.get("binding_status") or "").strip().lower()
     binding_confidence = _safe_float(rec.get("binding_confidence"), 0.0)
     support = pack.support_explanation or support_hint
@@ -778,6 +905,8 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
     score = max(binding_confidence, ranked_score) if binding_confidence else ranked_score
     score += pack.score_delta
     flags: list[str] = list(pack.flags)
+    if _text_has_visible_markup_artifact(str(evidence_raw_for_pack or "")):
+        flags.append("card_evidence_markup_cleaned")
     if not claim:
         flags.append("missing_answer_claim")
         score -= 0.08
@@ -817,7 +946,7 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
         "card_subtitle": subtitle,
         "card_takeaway_label": "证据重点",
         "card_takeaway": takeaway,
-        "card_claim_label": "答案中的话",
+        "card_claim_label": "答案要点",
         "card_claim": claim,
         "card_locator_label": pack.location_label_name or "原文位置",
         "card_locator": pack.location_label or locator,
@@ -850,7 +979,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
     )
     claim_raw = _first_text(rec, "answer_claim", max_len=420)
     context_raw = _first_text(rec, "citation_context", "evidence_quote", "summary_line", max_len=1400)
-    locator = _locator(rec) or source
+    locator = _strip_redundant_locator_prefix(_locator(rec), source=source, title=source) or source
     role = _first_text(rec, "upstream_work_role", "why_line", max_len=420)
     relation = _first_text(rec, "user_question_relation", "support_relation", max_len=420)
     pack = build_system_b_evidence_pack(
@@ -872,6 +1001,8 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
 
     score = 0.72 + pack.score_delta
     flags: list[str] = list(pack.flags)
+    if _text_has_visible_markup_artifact(str(context_raw or "")):
+        flags.append("card_evidence_markup_cleaned")
     if not explicit_title and not parsed_title:
         flags.append("missing_reference_title")
         score -= 0.16
@@ -915,6 +1046,7 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         "card_locator": pack.location_label or locator,
         "card_evidence_label": evidence_label,
         "card_evidence": context,
+        "card_context_summary": pack.evidence_focus,
         "card_reference_label": pack.reference_label,
         "card_reference_entry": pack.reference_entry,
         "card_support_label": "",
@@ -935,3 +1067,12 @@ def compose_citation_card(detail: Mapping[str, Any] | None) -> dict[str, Any]:
     card = _compose_system_b(rec) if bool(rec.get("is_inpaper")) else _compose_system_a(rec)
     rec.update(card)
     return rec
+
+
+def refresh_citation_card_contract(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Rebuild display contract fields after trusted text fields are patched."""
+    rec = dict(detail or {}) if isinstance(detail, Mapping) else {}
+    if not rec:
+        return {}
+    route = "system_b" if bool(rec.get("is_inpaper")) or str(rec.get("card_kind") or "") == "upstream_reference" else "system_a"
+    return _finalize_card_output(rec, route=route)

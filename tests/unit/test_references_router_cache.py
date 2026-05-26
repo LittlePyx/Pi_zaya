@@ -1398,6 +1398,93 @@ def test_stored_full_payload_with_llm_copy_is_reused_when_polish_is_enabled(monk
     assert out == payload
 
 
+def test_stored_full_payload_from_previous_render_schema_is_ignored(monkeypatch):
+    monkeypatch.setattr(references_router, "_refs_card_polish_llm_enabled", lambda: False)
+    pack = {
+        "prompt": "what helps SPI reconstruction?",
+        "prompt_sig": "sig-prev-schema",
+        "used_query": "SPI reconstruction",
+        "used_translation": False,
+        "hits": [
+            {
+                "text": "Deep learning improves reconstruction quality.",
+                "meta": {"source_path": r"db\LPR-2025\LPR-2025.en.md"},
+            }
+        ],
+    }
+    current_schema = int(references_router._REFS_RENDER_PAYLOAD_SCHEMA_VERSION)
+    monkeypatch.setattr(references_router, "_REFS_RENDER_PAYLOAD_SCHEMA_VERSION", current_schema - 1)
+    old_sig = references_router._refs_pack_render_signature(
+        user_msg_id=23,
+        pack=pack,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+    monkeypatch.setattr(references_router, "_REFS_RENDER_PAYLOAD_SCHEMA_VERSION", current_schema)
+    pack["rendered_payload_sig"] = old_sig
+    pack["rendered_payload"] = {
+        "hits": [
+            {
+                "ui_meta": {
+                    "source_path": r"db\LPR-2025\LPR-2025.en.md",
+                    "summary_line": "old full payload",
+                    "summary_generation": "llm_grounded",
+                    "why_generation": "llm_grounded",
+                }
+            }
+        ]
+    }
+
+    out = references_router._get_stored_rendered_pack_payload(
+        user_msg_id=23,
+        pack=pack,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+
+    assert out is None
+
+
+def test_stored_full_payload_with_dirty_card_copy_is_ignored(monkeypatch):
+    monkeypatch.setattr(references_router, "_refs_card_polish_llm_enabled", lambda: False)
+    monkeypatch.setattr(references_router, "_refs_pack_render_signature", lambda **kwargs: "sig-current")
+    pack = {
+        "prompt": "what helps SPI reconstruction?",
+        "rendered_payload_sig": "sig-current",
+        "hits": [
+            {
+                "text": "Deep learning improves reconstruction quality.",
+                "meta": {"source_path": r"db\LPR-2025\LPR-2025.en.md"},
+            }
+        ],
+        "rendered_payload": {
+            "hits": [
+                {
+                    "ui_meta": {
+                        "source_path": r"db\LPR-2025\LPR-2025.en.md",
+                        "summary_line": "## Benefits\nDeep learning improves reconstruction quality.",
+                        "why_line": "This hit is directly relevant to the user's question.",
+                        "summary_generation": "llm_grounded",
+                        "why_generation": "llm_grounded",
+                    }
+                }
+            ]
+        },
+    }
+
+    out = references_router._get_stored_rendered_pack_payload(
+        user_msg_id=24,
+        pack=pack,
+        guide_mode=False,
+        guide_source_path="",
+        guide_source_name="",
+    )
+
+    assert out is None
+
+
 def test_get_conversation_refs_falls_back_to_cached_payload_when_conversation_read_is_busy(monkeypatch):
     references_router._REFS_CONVERSATION_CACHE.clear()
     references_router._REFS_CONVERSATION_WARMING.clear()

@@ -4723,6 +4723,8 @@ def _render_inpaper_citation_details(
             "card_quality_flags": list(rec.get("card_quality_flags") or []),
             "card_warning": str(rec.get("card_warning") or "").strip(),
             "card_flow": list(rec.get("card_flow") or []),
+            "card_display_contract_version": int(rec.get("card_display_contract_version") or 0),
+            "card_visible_sections": list(rec.get("card_visible_sections") or []),
             "system_b_trace_complete": bool(rec.get("system_b_trace_complete") or False),
             "system_b_trace_score": float(rec.get("system_b_trace_score") or 0.0),
             "system_b_trace_reason": str(rec.get("system_b_trace_reason") or "").strip(),

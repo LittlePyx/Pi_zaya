@@ -55,6 +55,14 @@ def test_build_ref_card_ui_payload_preserves_frontend_contract() -> None:
     assert payload["reader_open"] == {"snippet": "ADMM baseline", "page": 2}
     assert payload["semantic_badges"] == ["ADMM"]
     assert payload["can_open"] is True
+    assert payload["card_view"]["version"] == 1
+    assert payload["card_view"]["route"] == "references"
+    assert payload["card_view"]["header"]["title"] == "Paper A"
+    sections = {section["id"]: section for section in payload["card_view"]["sections"]}
+    assert sections["summary"]["label"] == "Abstract"
+    assert sections["summary"]["text"] == "This section discusses ADMM."
+    assert sections["why"]["text"] == "Related Work names ADMM."
+    assert sections["location"]["text"] == "Paper A / Related Work · pp. 2-3"
 
 
 def test_build_ref_card_ui_payload_normalizes_optional_mappings() -> None:
@@ -96,3 +104,4 @@ def test_build_ref_card_ui_payload_normalizes_optional_mappings() -> None:
     assert payload["citation_meta"] == {}
     assert payload["reader_open"] == {}
     assert payload["semantic_badges"] == []
+    assert payload["card_view"]["sections"] == []

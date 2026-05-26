@@ -1819,6 +1819,69 @@ def test_enrich_messages_rebuilds_degraded_numeric_citation_cache(tmp_path: Path
     assert len(persisted_cache.get("cite_details") or []) == 2
 
 
+def test_enrich_messages_ignores_previous_schema_render_cache(tmp_path: Path):
+    from api import chat_render
+
+    content = "Learning-based SPI improves reconstruction quality [1]."
+    store = ChatStore(tmp_path / "chat.db")
+    conv_id = store.create_conversation("previous schema cache")
+    user_id = store.append_message(conv_id, "user", "what helps SPI reconstruction?")
+    assistant_id = store.append_message(conv_id, "assistant", content)
+    refs_by_user = {
+        user_id: {
+            "prompt_sig": "sig-prev-cache",
+            "updated_at": 1.0,
+            "used_query": "SPI reconstruction",
+            "used_translation": False,
+            "hits": [
+                {
+                    "text": "Deep learning improves reconstruction quality in single-pixel imaging.",
+                    "meta": {
+                        "source_path": r"db\LPR-2025\LPR-2025.en.md",
+                        "heading_path": "Benefits / Reconstruction quality",
+                    },
+                }
+            ],
+        }
+    }
+    cache_key = chat_render._build_message_render_cache_key(
+        conv_id=conv_id,
+        msg_id=assistant_id,
+        role="assistant",
+        content=content,
+        refs_user_msg_id=user_id,
+        ref_pack=refs_by_user[user_id],
+        provenance=None,
+    )
+    old_cache = chat_render._build_render_cache_payload(
+        cache_key=cache_key,
+        notice="",
+        rendered_body="stale plain [1]",
+        rendered_content="stale plain [1]",
+        copy_markdown="stale plain [1]",
+        copy_text="stale plain [1]",
+        cite_details=[],
+        refs_user_msg_id=user_id,
+        render_packet={"rendered_content": "stale plain [1]", "cite_details": []},
+    )
+    old_cache["schema"] = int(chat_render._RENDER_CACHE_SCHEMA_VERSION) - 1
+    store.merge_message_meta(assistant_id, {"render_cache": old_cache})
+
+    rendered = enrich_messages_with_reference_render(
+        store.get_messages(conv_id),
+        refs_by_user,
+        conv_id=conv_id,
+        chat_store=store,
+    )
+    msg = rendered[-1]
+    persisted_cache = ((store.get_messages(conv_id)[-1].get("meta") or {}).get("render_cache") or {})
+
+    assert str(msg.get("rendered_content") or "") != "stale plain [1]"
+    assert "](#kb-cite-" in str(msg.get("rendered_content") or "")
+    assert int(persisted_cache.get("schema") or 0) == int(chat_render._RENDER_CACHE_SCHEMA_VERSION)
+    assert len(persisted_cache.get("cite_details") or []) == 1
+
+
 def test_render_packet_only_rebuilds_legacy_answer_markdown_citations_when_content_empty(tmp_path: Path):
     from api import chat_render
 

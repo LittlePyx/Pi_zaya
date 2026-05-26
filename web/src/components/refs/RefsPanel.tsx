@@ -53,6 +53,32 @@ interface RefUiMeta {
   citation_meta?: Record<string, unknown>
   source_path?: string
   reader_open?: Partial<ReaderOpenPayload>
+  card_view?: RefCardView
+  cardView?: RefCardView
+}
+
+interface RefCardViewSection {
+  id?: string
+  label?: string
+  title?: string
+  text?: string
+  kind?: string
+  tone?: string
+  source?: string
+}
+
+interface RefCardView {
+  version?: number
+  route?: string
+  kind?: string
+  header?: {
+    kicker?: string
+    title?: string
+    subtitle?: string
+  }
+  sections?: RefCardViewSection[]
+  summary?: string
+  quality?: Record<string, unknown>
 }
 
 interface RefHit {
@@ -255,6 +281,43 @@ function normalizePolishStatus(input: unknown) {
   const status = String(input || '').trim().toLowerCase()
   if (status === 'full' || status === 'heuristic' || status === 'pending' || status === 'failed') return status
   return ''
+}
+
+function cleanRefViewText(input: unknown) {
+  return String(input || '').replace(/\s+/g, ' ').trim()
+}
+
+function normalizeRefCardView(input: unknown): RefCardView | null {
+  if (!input || typeof input !== 'object') return null
+  const rec = input as RefCardView
+  const sections = Array.isArray(rec.sections)
+    ? rec.sections
+        .map((section) => ({
+          id: cleanRefViewText(section?.id),
+          label: cleanRefViewText(section?.label),
+          title: cleanRefViewText(section?.title),
+          text: cleanRefViewText(section?.text),
+          kind: cleanRefViewText(section?.kind),
+          tone: cleanRefViewText(section?.tone),
+          source: cleanRefViewText(section?.source),
+        }))
+        .filter((section) => section.id && section.text)
+    : []
+  if (!sections.length && !cleanRefViewText(rec.header?.title)) return null
+  return {
+    ...rec,
+    header: {
+      kicker: cleanRefViewText(rec.header?.kicker),
+      title: cleanRefViewText(rec.header?.title),
+      subtitle: cleanRefViewText(rec.header?.subtitle),
+    },
+    sections,
+    summary: cleanRefViewText(rec.summary),
+  }
+}
+
+function refCardSection(view: RefCardView | null, id: string): RefCardViewSection | null {
+  return view?.sections?.find((section) => section.id === id) || null
 }
 
 function polishStatusLabel(status: string, S: ReturnType<typeof useT>) {
@@ -523,10 +586,15 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                   const heading = ui.heading_path || ui.section_label || ''
                   const scorePending = Boolean(ui.score_pending)
                   const score = typeof ui.score === 'number' ? ui.score.toFixed(2) : ''
-                  const summary = String(ui.summary_line || '').trim()
-                  const summaryLabel = String(ui.summary_label || '').trim() || S.refs_summary_label
-                  const summaryTitle = String(ui.summary_title || '').trim() || S.refs_summary_title
-                  const why = String(ui.why_line || '').trim()
+                  const cardView = normalizeRefCardView(ui.card_view || ui.cardView)
+                  const summarySection = refCardSection(cardView, 'summary')
+                  const whySection = refCardSection(cardView, 'why')
+                  const summary = String(summarySection?.text || ui.summary_line || '').trim()
+                  const summaryLabel = String(summarySection?.label || ui.summary_label || '').trim() || S.refs_summary_label
+                  const summaryTitle = String(summarySection?.title || ui.summary_title || '').trim() || S.refs_summary_title
+                  const why = String(whySection?.text || ui.why_line || '').trim()
+                  const whyLabel = String(whySection?.label || '').trim() || S.refs_why_chip
+                  const whyTitle = String(whySection?.title || '').trim() || S.refs_why_title
                   const polishStatus = normalizePolishStatus(ui.polish_status)
                   const polishLabel = polishStatusLabel(polishStatus, S)
                   const semanticBadges = (Array.isArray(ui.semantic_badges) ? ui.semantic_badges : [])
@@ -646,8 +714,8 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
                         </div>
                         <div className="kb-ref-card">
                           <div className="kb-ref-card-head">
-                            <span className="kb-ref-chip">{S.refs_why_chip}</span>
-                            <span className="kb-ref-card-title">{S.refs_why_title}</span>
+                            <span className="kb-ref-chip">{whyLabel}</span>
+                            <span className="kb-ref-card-title">{whyTitle}</span>
                           </div>
                           <Text className="kb-ref-card-text !block !whitespace-pre-wrap">
                             {why || (isFailed ? S.refs_no_why_failed : S.refs_no_why)}
