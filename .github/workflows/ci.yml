@@ -10,8 +10,24 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout public repository without Actions token
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git remote add origin "https://github.com/${REPOSITORY}.git"
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "${PR_NUMBER}" ]; then
+            git fetch --depth=1 origin "pull/${PR_NUMBER}/merge"
+          else
+            git fetch --depth=1 origin "$SHA"
+          fi
+          git checkout --detach FETCH_HEAD
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
