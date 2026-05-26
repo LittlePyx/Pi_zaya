@@ -29,6 +29,12 @@ from kb.inpaper_citation_grounding import (
     reference_alignment_score,
 )
 from kb.source_filters import is_excluded_source_path
+from kb.evidence_text import (
+    clean_display_text as _clean_evidence_display_text,
+    evidence_sentence_quality as _evidence_sentence_quality,
+    looks_low_value_citation_context as _looks_low_value_citation_context,
+    pick_readable_evidence_text as _pick_readable_evidence_text,
+)
 from kb.reference_index import (
     extract_references_map_from_md as _extract_references_map_from_md_index,
     load_reference_index as _load_reference_index_file,
@@ -3392,12 +3398,19 @@ _SYSTEM_B_METHOD_CONTEXT_RE = re.compile(
 _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("iscat", re.compile(r"(?i)\biscat\b|干涉散射")),
     ("interferometric", re.compile(r"(?i)\binterferometric\b|干涉检测|干涉散射")),
-    ("structured detection", re.compile(r"(?i)\bstructured\s+detection\b|结构检测")),
+    ("structured detection", re.compile(r"(?i)\bstructured\s+detection\b|结构检测|结构探测")),
     ("image scanning microscopy", re.compile(r"(?i)\bimage\s+scanning\s+microscopy\b|\bISM\b|共聚焦|扫描显微")),
     ("light field", re.compile(r"(?i)\blight[-\s]?field\b|光场")),
-    ("single-pixel imaging", re.compile(r"(?i)\bsingle[-\s]?pixel\b|单像素")),
+    ("single-pixel imaging", re.compile(r"(?i)\bsingle[-\s]?pixel\b|\bspi\b|单像素")),
+    ("deep learning", re.compile(r"(?i)\bdeep\s+learning\b|\bneural\s+network\b|深度学习|神经网络")),
     ("foveated", re.compile(r"(?i)\bfoveated\b|中央凹|自适应采样")),
     ("dynamic supersampling", re.compile(r"(?i)\bdynamic\s+supersampling\b|\bsupersampling\b|超采样")),
+    ("sampling ratio", re.compile(r"(?i)\bsampling\s+ratio\b|\blow[-\s]?sampling\b|\bfewer\s+measurements?\b|采样率|低采样|更少测量")),
+    ("hadamard", re.compile(r"(?i)\bhadamard\b|哈达玛|哈达马")),
+    ("fourier", re.compile(r"(?i)\bfourier\b|傅里叶")),
+    ("compressed sensing", re.compile(r"(?i)\bcompressed\s+sensing\b|压缩感知")),
+    ("photometric stereo", re.compile(r"(?i)\bphotometric\s+stereo\b|光度立体")),
+    ("dmd", re.compile(r"(?i)\bdmd\b|digital\s+micromirror|数字微镜")),
     ("optical sectioning", re.compile(r"(?i)\boptical\s+sectioning\b|光学切片")),
     ("neural radiance fields", re.compile(r"(?i)\bnerf\b|neural\s+radiance\s+fields?|神经辐射场")),
     ("3d gaussian splatting", re.compile(r"(?i)\b3dgs\b|gaussian\s+splatting|高斯泼溅|高斯溅射")),
@@ -3413,6 +3426,13 @@ _SYSTEM_A_STRONG_BINDING_TERMS = {
     "light field",
     "foveated",
     "dynamic supersampling",
+    "deep learning",
+    "sampling ratio",
+    "hadamard",
+    "fourier",
+    "compressed sensing",
+    "photometric stereo",
+    "dmd",
     "neural radiance fields",
     "3d gaussian splatting",
     "cassi",
@@ -3447,6 +3467,20 @@ _SYSTEM_A_TOKEN_STOPWORDS = {
     "problem",
     "problems",
 }
+_SYSTEM_A_LOW_VALUE_EVIDENCE_RE = re.compile(
+    r"(?i)(?:"
+    r"no\s+summary\s+available|metadata\s+only|only\s+metadata|"
+    r"current(?:ly)?\s+only\s+retrieved\s+metadata|"
+    r"\u8fd9\u7bc7\u6587\u732e\u5f53\u524d\u7f3a\u5c11\u53ef\u7528\u6458\u8981|"
+    r"\u4ec5\u6839\u636e\u5143\u6570\u636e|"
+    r"\u5f53\u524d\u4ec5\u68c0\u7d22\u5230\u6587\u732e\u5143\u6570\u636e|"
+    r"\u6682\u65e0\u6cd5\u53ef\u9760\u63d0\u70bc"
+    r")"
+)
+_SYSTEM_A_WRAPPED_EXCERPT_RE = re.compile(
+    r"^\s*(?:\u539f\u6587\u7247\u6bb5\u5199\u5230|source\s+excerpt\s+says)\s*[:\uff1a]",
+    re.IGNORECASE,
+)
 
 
 def _system_b_prefers_zh(*texts: str) -> bool:
@@ -3526,6 +3560,272 @@ def _system_a_primary_evidence_from_ui_meta(ui_meta: dict) -> dict:
     if any(str(reader_open.get(key) or "").strip() for key in reader_signal_keys):
         return reader_open
     return {}
+
+
+def _system_a_candidate_value(raw: dict, *keys: str) -> str:
+    if not isinstance(raw, dict):
+        return ""
+    for key in keys:
+        value = str(raw.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _system_a_candidate_text(raw: dict) -> str:
+    return _system_a_candidate_value(
+        raw,
+        "highlight_snippet",
+        "highlightSnippet",
+        "snippet",
+        "anchor_text",
+        "anchorText",
+        "evidence_quote",
+        "evidenceQuote",
+        "text",
+        "raw_text",
+        "rawText",
+    )
+
+
+def _system_a_is_low_value_evidence_text(value: str) -> bool:
+    text = _clean_evidence_display_text(value, max_len=900)
+    if not text:
+        return True
+    if _SYSTEM_A_LOW_VALUE_EVIDENCE_RE.search(text):
+        return True
+    if _SYSTEM_A_WRAPPED_EXCERPT_RE.search(text) and ("..." in text or "\u2026" in text):
+        return True
+    try:
+        if _looks_low_value_citation_context(text):
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _system_a_add_evidence_candidate(
+    out: list[dict],
+    seen: set[str],
+    raw: object,
+    *,
+    source: str,
+    rank: int,
+    default_heading: str = "",
+) -> None:
+    if not isinstance(raw, dict):
+        return
+    text = _system_a_candidate_text(raw)
+    if not str(text or "").strip():
+        return
+    heading = _system_a_candidate_value(raw, "heading_path", "headingPath") or default_heading
+    block_id = _system_a_candidate_value(raw, "block_id", "blockId")
+    anchor_id = _system_a_candidate_value(raw, "anchor_id", "anchorId")
+    key = _system_a_fp_text(f"{heading}|{block_id}|{anchor_id}|{text}", max_len=520)
+    if not key or key in seen:
+        return
+    seen.add(key)
+    out.append(
+        {
+            "source": source,
+            "rank": int(rank),
+            "raw": raw,
+            "text": str(text or "").strip(),
+            "heading_path": heading,
+            "block_id": block_id,
+            "anchor_id": anchor_id,
+            "anchor_kind": _system_a_candidate_value(raw, "anchor_kind", "anchorKind"),
+        }
+    )
+
+
+def _system_a_evidence_candidates_from_hit(
+    *,
+    hit: dict,
+    meta: dict,
+    ui_meta: dict,
+    primary_evidence: dict,
+    default_heading: str,
+) -> list[dict]:
+    candidates: list[dict] = []
+    seen: set[str] = set()
+    _system_a_add_evidence_candidate(
+        candidates,
+        seen,
+        primary_evidence,
+        source="primary_evidence",
+        rank=0,
+        default_heading=default_heading,
+    )
+    reader_open = ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {}
+    if isinstance(reader_open, dict):
+        for key in ("primaryEvidence", "primary_evidence", "locateTarget", "locate_target"):
+            _system_a_add_evidence_candidate(
+                candidates,
+                seen,
+                reader_open.get(key),
+                source=f"reader_open.{key}",
+                rank=1,
+                default_heading=default_heading,
+            )
+        for list_key in (
+            "evidenceAlternatives",
+            "visibleAlternatives",
+            "alternatives",
+        ):
+            values = reader_open.get(list_key)
+            if isinstance(values, list):
+                for idx, item in enumerate(values[:8]):
+                    _system_a_add_evidence_candidate(
+                        candidates,
+                        seen,
+                        item,
+                        source=f"reader_open.{list_key}",
+                        rank=2 + idx,
+                        default_heading=default_heading,
+                    )
+    for list_key in ("evidenceAlternatives", "visibleAlternatives", "alternatives"):
+        values = ui_meta.get(list_key)
+        if isinstance(values, list):
+            for idx, item in enumerate(values[:8]):
+                _system_a_add_evidence_candidate(
+                    candidates,
+                    seen,
+                    item,
+                    source=f"ui_meta.{list_key}",
+                    rank=3 + idx,
+                    default_heading=default_heading,
+                )
+    meta_candidate = {
+        "heading_path": default_heading,
+        "snippet": (
+            str(meta.get("evidence_quote") or "").strip()
+            or str(meta.get("support_locate_anchor") or "").strip()
+            or str(meta.get("anchor_text") or "").strip()
+        ),
+        "block_id": str(meta.get("primary_block_id") or meta.get("block_id") or "").strip(),
+        "anchor_id": str(meta.get("primary_anchor_id") or meta.get("anchor_id") or "").strip(),
+        "anchor_kind": str(meta.get("anchor_kind") or "").strip(),
+    }
+    _system_a_add_evidence_candidate(
+        candidates,
+        seen,
+        meta_candidate,
+        source="hit_meta",
+        rank=12,
+        default_heading=default_heading,
+    )
+    hit_candidate = {
+        "heading_path": default_heading,
+        "snippet": str((hit or {}).get("text") or "").strip(),
+        "block_id": str(meta.get("primary_block_id") or meta.get("block_id") or "").strip(),
+        "anchor_id": str(meta.get("primary_anchor_id") or meta.get("anchor_id") or "").strip(),
+        "anchor_kind": str(meta.get("anchor_kind") or "").strip(),
+    }
+    _system_a_add_evidence_candidate(
+        candidates,
+        seen,
+        hit_candidate,
+        source="hit_text",
+        rank=14,
+        default_heading=default_heading,
+    )
+    return candidates
+
+
+def _system_a_score_evidence_candidate(
+    candidate: dict,
+    *,
+    answer_claim: str,
+    source_name: str,
+) -> dict:
+    raw_text = str(candidate.get("text") or "").strip()
+    heading = str(candidate.get("heading_path") or "").strip()
+    readable = _pick_readable_evidence_text(
+        raw_text,
+        source=source_name,
+        title=heading,
+        claim=answer_claim,
+        heading=heading,
+        max_len=520,
+    )
+    scoring_text = readable or _clean_evidence_display_text(raw_text, max_len=520)
+    score = _evidence_sentence_quality(
+        scoring_text,
+        claim=answer_claim,
+        heading=heading,
+        title=source_name,
+    )
+    if readable:
+        score += 2.0
+    else:
+        score -= 3.0
+    if _system_a_is_low_value_evidence_text(raw_text):
+        score -= 6.0
+    if _SYSTEM_A_WRAPPED_EXCERPT_RE.search(raw_text):
+        score -= 2.0
+    claim_domains = _system_a_domain_terms(answer_claim)
+    evidence_domains = _system_a_domain_terms(" ".join([raw_text, scoring_text, heading, source_name]))
+    overlap = claim_domains & evidence_domains
+    if overlap:
+        score += min(3.0, 0.9 * len(overlap))
+    strong_claim_terms = claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
+    matched_strong = strong_claim_terms & evidence_domains
+    if strong_claim_terms:
+        score += 1.6 if matched_strong else -3.0
+    if heading:
+        score += 0.25
+    source = str(candidate.get("source") or "")
+    if source == "primary_evidence":
+        score += 0.2
+    try:
+        score -= min(1.0, max(0, int(candidate.get("rank") or 0)) * 0.04)
+    except Exception:
+        pass
+    out = dict(candidate)
+    out["readable_text"] = readable
+    out["score"] = float(score)
+    return out
+
+
+def _system_a_pick_best_evidence_candidate(
+    *,
+    hit: dict,
+    meta: dict,
+    ui_meta: dict,
+    primary_evidence: dict,
+    answer_claim: str,
+    source_name: str,
+    default_heading: str,
+) -> dict:
+    candidates = _system_a_evidence_candidates_from_hit(
+        hit=hit,
+        meta=meta,
+        ui_meta=ui_meta,
+        primary_evidence=primary_evidence,
+        default_heading=default_heading,
+    )
+    if not candidates:
+        return {}
+    scored = [
+        _system_a_score_evidence_candidate(
+            candidate,
+            answer_claim=answer_claim,
+            source_name=source_name,
+        )
+        for candidate in candidates
+    ]
+    scored.sort(key=lambda item: (float(item.get("score") or -999.0), -int(item.get("rank") or 0)), reverse=True)
+    best = scored[0]
+    primary = next((item for item in scored if str(item.get("source") or "") == "primary_evidence"), None)
+    if (
+        isinstance(primary, dict)
+        and primary is not best
+        and str(primary.get("readable_text") or "").strip()
+        and float(best.get("score") or 0.0) < float(primary.get("score") or 0.0) + 0.75
+    ):
+        best = primary
+    return best
 
 
 def _system_a_evidence_fingerprint(
@@ -3676,8 +3976,10 @@ def _assess_system_a_hit_binding(
     prefer_zh = _system_a_prefers_zh(claim)
 
     strong_claim_terms = claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
-    if strong_claim_terms and not domain_overlap:
-        missing = _system_a_term_label(strong_claim_terms)
+    missing_strong_terms = strong_claim_terms - evidence_domains
+    matched_strong_terms = strong_claim_terms & evidence_domains
+    if strong_claim_terms and not matched_strong_terms:
+        missing = _system_a_term_label(missing_strong_terms)
         evidence_label = _system_a_term_label(evidence_domains) or "retrieved passage"
         reason = (
             f"答案句的关键术语“{missing}”没有出现在该命中证据中；该命中更像是在讨论“{evidence_label}”。"
@@ -3690,7 +3992,7 @@ def _assess_system_a_hit_binding(
             "suppress_link": True,
             "reason": reason,
             "overlap_terms": [],
-            "missing_terms": sorted(strong_claim_terms),
+            "missing_terms": sorted(missing_strong_terms),
         }
 
     if domain_overlap:
@@ -3735,7 +4037,7 @@ def _assess_system_a_hit_binding(
     return {
         "status": "candidate",
         "confidence": 0.35,
-        "suppress_link": False,
+        "suppress_link": True,
         "reason": reason,
         "overlap_terms": sorted(keyword_overlap),
         "missing_terms": sorted(strong_claim_terms - evidence_domains),
@@ -4290,7 +4592,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             ui_meta_h = (hit or {}).get("ui_meta", {}) or {}
             primary_evidence = _system_a_primary_evidence_from_ui_meta(ui_meta_h)
             src_name = _display_source_name(sp)
-            heading = str(
+            default_heading = str(
                 primary_evidence.get("heading_path")
                 or primary_evidence.get("headingPath")
                 or ui_meta_h.get("primary_evidence_heading_path")
@@ -4301,15 +4603,37 @@ def _annotate_inpaper_citations_with_hover_meta(
                 or meta_h.get("ref_best_heading_path")
                 or ""
             ).strip()
+            evidence_pick = _system_a_pick_best_evidence_candidate(
+                hit=hit or {},
+                meta=meta_h,
+                ui_meta=ui_meta_h,
+                primary_evidence=primary_evidence,
+                answer_claim=answer_claim,
+                source_name=src_name,
+                default_heading=default_heading,
+            )
+            picked_raw = evidence_pick.get("raw") if isinstance(evidence_pick.get("raw"), dict) else {}
+            if isinstance(picked_raw, dict) and picked_raw:
+                primary_evidence = picked_raw
+            heading = str(
+                evidence_pick.get("heading_path")
+                or primary_evidence.get("heading_path")
+                or primary_evidence.get("headingPath")
+                or default_heading
+                or ""
+            ).strip()
             snippet = str(
-                primary_evidence.get("highlight_snippet")
+                evidence_pick.get("text")
+                or primary_evidence.get("highlight_snippet")
                 or primary_evidence.get("highlightSnippet")
                 or primary_evidence.get("snippet")
                 or hit.get("text")
                 or ""
             ).strip()
             evidence_quote = str(
-                primary_evidence.get("highlight_snippet")
+                evidence_pick.get("readable_text")
+                or evidence_pick.get("text")
+                or primary_evidence.get("highlight_snippet")
                 or primary_evidence.get("highlightSnippet")
                 or primary_evidence.get("snippet")
                 or meta_h.get("evidence_quote")
@@ -4318,6 +4642,9 @@ def _annotate_inpaper_citations_with_hover_meta(
                 or snippet
                 or ""
             ).strip()
+            evidence_source = str(evidence_pick.get("source") or "retrieval_hit").strip() or "retrieval_hit"
+            if evidence_source in {"hit_meta", "hit_text"}:
+                evidence_source = "retrieval_hit"
             p0, p1 = _safe_page_range(meta_h)
             ref_rank = meta_h.get("ref_rank") if isinstance(meta_h.get("ref_rank"), dict) else {}
             try:
@@ -4430,10 +4757,10 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "routing_confidence": float(binding.get("confidence") or 0.0),
                 "heading_path": heading,
                 "summary_line": evidence_quote[:360] or snippet[:360],
-                "summary_source": "retrieval_hit",
+                "summary_source": evidence_source,
                 "answer_claim": answer_claim[:420],
                 "evidence_quote": evidence_quote[:520],
-                "evidence_source": "retrieval_hit",
+                "evidence_source": evidence_source,
                 "location_label": " · ".join([part for part in location_bits if str(part or "").strip()])[:260],
                 "support_relation": support_relation,
                 "why_line": why_line,
@@ -4447,6 +4774,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "binding_confidence": float(binding.get("confidence") or 0.0),
                 "binding_reason": str(binding.get("reason") or "").strip(),
                 "binding_overlap_terms": list(binding.get("overlap_terms") or []),
+                "evidence_pick_score": float(evidence_pick.get("score") or 0.0) if evidence_pick else 0.0,
             }
             detail_by_key[skey] = rec
             if not isinstance(existing, dict):

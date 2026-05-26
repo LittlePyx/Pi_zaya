@@ -1240,6 +1240,11 @@ body.kb-reader-resizing .kb-reader-content {
   letter-spacing: 0.01em;
 }
 
+.kb-shelf-summary-sep {
+  color: color-mix(in srgb, var(--text-main) 34%, transparent);
+  font-size: 11px;
+}
+
 .kb-shelf-summary-source {
   display: inline-flex;
   align-items: center;

@@ -426,7 +426,7 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
   await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
   await expect(page.locator('.kb-shelf-item')).toContainText('Clean Card Title')
   await page.locator('.kb-shelf-item').first().click()
-  await expect(page.locator('.kb-shelf-summary')).toContainText('citation card')
+  await expect(page.locator('.kb-shelf-summary')).toContainText('证据卡片')
   await expect(page.locator('.kb-shelf-summary')).toContainText('Polished card-view takeaway')
 })
 

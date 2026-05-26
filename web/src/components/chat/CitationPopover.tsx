@@ -583,11 +583,6 @@ export function CitationPopover({
               <div className="kb-cite-pop-main">{systemAClaimPreview}</div>
             </div>
           ) : null}
-          <div className="kb-cite-pop-locator" data-testid="citation-popover-system-a-location">
-            <span className="kb-cite-pop-section-title">{cardLocatorLabel || '位置'}</span>
-            <span className="kb-cite-pop-locator-text">{systemALocationText}</span>
-            {systemAAnchorText ? <span className="kb-cite-pop-anchor-meta">{systemAAnchorText}</span> : null}
-          </div>
           {systemAEvidenceText ? (
             <div className="kb-cite-pop-quote" data-testid="citation-popover-system-a-evidence">
               <div className="kb-cite-pop-section-line">
@@ -597,6 +592,11 @@ export function CitationPopover({
               <blockquote>{systemAEvidencePreview}</blockquote>
             </div>
           ) : null}
+          <div className="kb-cite-pop-locator" data-testid="citation-popover-system-a-location">
+            <span className="kb-cite-pop-section-title">{cardLocatorLabel || '位置'}</span>
+            <span className="kb-cite-pop-locator-text">{systemALocationText}</span>
+            {systemAAnchorText ? <span className="kb-cite-pop-anchor-meta">{systemAAnchorText}</span> : null}
+          </div>
           {showSystemASupport ? (
             <div className="kb-cite-pop-why" data-testid="citation-popover-system-a-support">
               <span className="kb-cite-pop-section-title">{cardSupportLabel || '可靠度'}</span>

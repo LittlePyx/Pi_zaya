@@ -424,6 +424,19 @@ def citation_detail_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
 
     locator = visible_texts.get("card_locator", "")
     if route == "system_a":
+        flags = {_norm(item) for item in _string_list(data.get("card_quality_flags"))}
+        binding_status = _norm(data.get("binding_status"))
+        binding_confidence = _floatish(data.get("binding_confidence"))
+        if (
+            flags & {"candidate_binding", "binding_mismatch"}
+            or binding_status in {"candidate", "mismatch"}
+            or (binding_confidence and binding_confidence < 0.55)
+        ):
+            fail(
+                "system_a_weak_binding_visible",
+                field="binding_status",
+                detail=", ".join(sorted(flags)) or binding_status or binding_confidence,
+            )
         evidence = visible_texts.get("card_evidence", "")
         if len(evidence) < 24:
             fail("system_a_missing_evidence", field="evidence_quote")

@@ -319,7 +319,7 @@ def test_hit_payload_has_source_path_from_canonical(monkeypatch):
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *a, **kw: None)
 
-    md = "Two sources were compared [1] and [2]."
+    md = "SPI uses second-order correlation [1], while compressive sensing enables sub-Nyquist sampling [2]."
     hits = _base_hits()
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
         md, hits, anchor_ns="t-check", canonical_paths=[PAPER1, PAPER2],
@@ -377,8 +377,9 @@ def test_hit_payload_has_no_ref_metadata_fields(monkeypatch):
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *a, **kw: None)
 
-    md = "Simple claim [1]."
-    hits = [{"meta": {"source_path": PAPER1, "source_sha1": "aaa"}, "text": "Some text."}]
+    snippet_text = "Single-pixel imaging uses a DMD to modulate single-pixel measurements."
+    md = "SPI uses a DMD to modulate single-pixel measurements [1]."
+    hits = [{"meta": {"source_path": PAPER1, "source_sha1": "aaa"}, "text": snippet_text}]
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
         md, hits, anchor_ns="t-no-ref", canonical_paths=[PAPER1],
     )
@@ -389,7 +390,7 @@ def test_hit_payload_has_no_ref_metadata_fields(monkeypatch):
     assert d.get("doi") == "" or d.get("doi") is None
     assert d.get("authors") == "" or d.get("authors") is None
     # It should have raw text (the snippet)
-    assert d.get("raw") == "Some text."
+    assert d.get("raw") == snippet_text
 
 
 # ══════════════════════════════════════════════════════════════════════

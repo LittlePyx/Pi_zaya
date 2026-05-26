@@ -146,6 +146,27 @@ def test_citation_detail_quality_accepts_grounded_system_a_card():
     assert quality["route"] == "system_a"
 
 
+def test_citation_detail_quality_rejects_visible_weak_system_a_binding():
+    quality = citation_detail_quality(
+        {
+            "num": 1,
+            "anchor": "a1",
+            "source_name": "3D single-pixel video.pdf",
+            "source_path": "demo.en.md",
+            "heading_path": "Methods / Photometric stereo",
+            "evidence_quote": "Photometric stereo estimates surface orientation from different illumination directions.",
+            "answer_claim": "Hadamard subsampling is useful for real-time low-sampling imaging.",
+            "binding_status": "candidate",
+            "binding_confidence": 0.35,
+            "card_quality_flags": ["candidate_binding"],
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "system_a_weak_binding_visible" in names
+
+
 def test_citation_detail_quality_rejects_raw_markdown_and_fragmented_evidence():
     quality = citation_detail_quality(
         {

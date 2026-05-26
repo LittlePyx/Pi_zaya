@@ -658,14 +658,17 @@ def test_system_a_card_view_contract_exposes_renderable_sections() -> None:
     )
 
     view = detail["card_view"]
-    section_ids = {section["id"] for section in view["sections"]}
+    section_ids = [section["id"] for section in view["sections"]]
 
-    assert view["version"] == 1
+    assert view["version"] == 2
     assert view["route"] == "system_a"
     assert view["header"]["kicker"] == "答案依据"
     assert view["header"]["title"] == "Deep-SPI.pdf"
     assert "locator" in section_ids
     assert "evidence" in section_ids
+    assert "claim" not in section_ids
+    assert "support" not in section_ids
+    assert section_ids.index("evidence") < section_ids.index("locator")
     assert view["summary"]
     assert all("##" not in section["text"] for section in view["sections"])
 
@@ -696,7 +699,7 @@ def test_system_b_card_view_contract_separates_context_from_reference_entry() ->
     section_ids = {section["id"] for section in view["sections"]}
     section_text = "\n".join(section["text"] for section in view["sections"])
 
-    assert view["version"] == 1
+    assert view["version"] == 2
     assert view["route"] == "system_b"
     assert view["header"]["kicker"] == "上游引用"
     assert view["header"]["title"].startswith("Missing Cone")

@@ -46,6 +46,12 @@ from kb.inpaper_citation_enrichment import (
     enrich_inpaper_detail_context,
     extract_structured_cite_answer_context_line,
 )
+from kb.evidence_text import (
+    clean_display_text as _clean_evidence_display_text,
+    evidence_sentence_quality as _evidence_sentence_quality,
+    looks_low_value_citation_context as _looks_low_value_citation_context,
+    pick_readable_evidence_text as _pick_readable_evidence_text,
+)
 from kb.config import load_settings
 from kb.reference_index import extract_references_map_from_md, load_reference_index, resolve_reference_entry
 from ui.chat_widgets import _md_to_plain_text, _normalize_copy_citation_links, _normalize_math_markdown
@@ -73,7 +79,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 12
+_RENDER_CACHE_SCHEMA_VERSION = 17
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -274,21 +280,119 @@ def _primary_evidence_text(raw: dict | None) -> str:
     ).strip()
 
 
-def _primary_evidence_from_ref_hit(hit: dict | None) -> dict:
+_REF_PRIMARY_LOW_VALUE_RE = re.compile(
+    r"(?i)(?:"
+    r"no\s+summary\s+available|metadata\s+only|only\s+metadata|"
+    r"source\s+excerpt\s+says\s*[:：].*(?:\.\.\.|\u2026)|"
+    r"\u539f\u6587\u7247\u6bb5\u5199\u5230\s*[:：].*(?:\.\.\.|\u2026)|"
+    r"\u8fd9\u7bc7\u6587\u732e\u5f53\u524d\u7f3a\u5c11\u53ef\u7528\u6458\u8981|"
+    r"\u4ec5\u6839\u636e\u5143\u6570\u636e|"
+    r"\u5f53\u524d\u4ec5\u68c0\u7d22\u5230\u6587\u732e\u5143\u6570\u636e"
+    r")"
+)
+
+
+def _primary_evidence_candidates_from_ref_hit(hit: dict | None) -> list[dict]:
     if not isinstance(hit, dict):
-        return {}
+        return []
     ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
-    direct = ui_meta.get("primary_evidence")
-    if isinstance(direct, dict) and _primary_evidence_text(direct):
-        return dict(direct)
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
     reader_open = ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else {}
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def push(raw: object, *, rank: int) -> None:
+        if not isinstance(raw, dict):
+            return
+        text = _primary_evidence_text(raw)
+        if not text:
+            return
+        key = re.sub(r"\s+", " ", f"{raw.get('heading_path') or raw.get('headingPath') or ''}|{text}").strip().lower()
+        if key in seen:
+            return
+        seen.add(key)
+        item = dict(raw)
+        item["_rank"] = int(rank)
+        out.append(item)
+
+    push(ui_meta.get("primary_evidence"), rank=0)
     for key in ("primaryEvidence", "primary_evidence", "locateTarget", "locate_target"):
-        nested = reader_open.get(key)
-        if isinstance(nested, dict) and _primary_evidence_text(nested):
-            return dict(nested)
+        push(reader_open.get(key), rank=1)
     if _primary_evidence_text(reader_open):
-        return dict(reader_open)
-    return {}
+        push(reader_open, rank=2)
+    for container, base_rank in ((reader_open, 3), (ui_meta, 10)):
+        if not isinstance(container, dict):
+            continue
+        for list_key in ("evidenceAlternatives", "visibleAlternatives", "alternatives"):
+            values = container.get(list_key)
+            if not isinstance(values, list):
+                continue
+            for idx, item in enumerate(values[:8]):
+                push(item, rank=base_rank + idx)
+    hit_text = str(hit.get("text") or "").strip()
+    if hit_text:
+        push(
+            {
+                "heading_path": (
+                    str(meta.get("heading_path") or "").strip()
+                    or str(meta.get("ref_best_heading_path") or "").strip()
+                    or str(ui_meta.get("heading_path") or "").strip()
+                    or str(ui_meta.get("primary_evidence_heading_path") or "").strip()
+                ),
+                "snippet": hit_text,
+                "block_id": str(meta.get("primary_block_id") or meta.get("block_id") or "").strip(),
+                "anchor_id": str(meta.get("primary_anchor_id") or meta.get("anchor_id") or "").strip(),
+                "anchor_kind": str(meta.get("anchor_kind") or "").strip(),
+            },
+            rank=30,
+        )
+    return out
+
+
+def _primary_evidence_quality_score(raw: dict, *, claim: str = "", source: str = "") -> float:
+    text = _primary_evidence_text(raw)
+    heading = str(raw.get("heading_path") or raw.get("headingPath") or "").strip()
+    clean = _clean_evidence_display_text(text, max_len=700)
+    readable = _pick_readable_evidence_text(
+        text,
+        source=source,
+        title=heading,
+        claim=claim,
+        heading=heading,
+        max_len=520,
+    )
+    scoring_text = readable or clean
+    score = _evidence_sentence_quality(scoring_text, claim=claim, heading=heading, title=source)
+    if readable:
+        score += 2.0
+    else:
+        score -= 2.0
+    if _REF_PRIMARY_LOW_VALUE_RE.search(clean):
+        score -= 6.0
+    try:
+        if _looks_low_value_citation_context(clean):
+            score -= 3.0
+    except Exception:
+        pass
+    if str(raw.get("block_id") or raw.get("blockId") or "").strip():
+        score += 0.2
+    if str(raw.get("anchor_id") or raw.get("anchorId") or "").strip():
+        score += 0.2
+    try:
+        score -= min(0.8, max(0, int(raw.get("_rank") or 0)) * 0.04)
+    except Exception:
+        pass
+    return float(score)
+
+
+def _primary_evidence_from_ref_hit(hit: dict | None) -> dict:
+    candidates = _primary_evidence_candidates_from_ref_hit(hit)
+    if not candidates:
+        return {}
+    candidates.sort(key=lambda item: (_primary_evidence_quality_score(item), -int(item.get("_rank") or 0)), reverse=True)
+    best = dict(candidates[0])
+    best.pop("_rank", None)
+    return best
 
 
 def _ref_pack_primary_evidence_by_source(ref_pack: dict | None) -> dict[str, dict]:

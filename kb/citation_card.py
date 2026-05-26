@@ -8,7 +8,7 @@ from kb.citation_evidence_pack import build_system_a_evidence_pack, build_system
 from kb.evidence_text import clean_display_text, finish_evidence_text, source_title_candidate
 
 CITATION_CARD_DISPLAY_CONTRACT_VERSION = 2
-CITATION_CARD_VIEW_CONTRACT_VERSION = 1
+CITATION_CARD_VIEW_CONTRACT_VERSION = 2
 
 
 def _clean_text(value: Any, *, max_len: int = 520) -> str:
@@ -107,15 +107,33 @@ def _add_flag(flags: list[str], name: str) -> None:
 def _card_visible_sections(out: Mapping[str, Any], *, route: str) -> list[str]:
     sections: list[str] = []
     flags = set(str(item or "") for item in (out.get("card_quality_flags") or []))
-    if str(out.get("card_warning") or "").strip():
+    warning = str(out.get("card_warning") or "").strip()
+    takeaway = str(out.get("card_takeaway") or "").strip()
+    locator = str(out.get("card_locator") or "").strip()
+    evidence = str(out.get("card_evidence") or "").strip()
+    support = str(out.get("card_support_explanation") or "").strip()
+    if warning:
         sections.append("warning")
-    if str(out.get("card_takeaway") or "").strip():
+    if takeaway:
         sections.append("takeaway")
-    if route == "system_a" and str(out.get("card_claim") or "").strip():
-        sections.append("claim")
-    if str(out.get("card_locator") or "").strip():
+
+    if route == "system_a":
+        if evidence:
+            sections.append("evidence")
+        if locator:
+            sections.append("locator")
+        if support and (
+            warning
+            or "candidate_binding" in flags
+            or "binding_mismatch" in flags
+            or "missing_evidence_quote" in flags
+        ):
+            sections.append("support")
+        return sections
+
+    if locator:
         sections.append("locator")
-    if str(out.get("card_evidence") or "").strip():
+    if evidence:
         sections.append("evidence")
     if route == "system_b" and str(out.get("card_context_summary") or "").strip():
         sections.append("context_summary")
@@ -128,7 +146,7 @@ def _card_visible_sections(out: Mapping[str, Any], *, route: str) -> list[str]:
         )
     ):
         sections.append("reference")
-    if str(out.get("card_support_explanation") or "").strip():
+    if support:
         sections.append("support")
     return sections
 
@@ -209,19 +227,26 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
     if not is_system_b:
         _append_card_view_section(
             sections,
-            section_id="claim",
-            label=str(out.get("card_claim_label") or "答案要点"),
-            text=str(out.get("card_claim") or ""),
-            kind="claim",
+            section_id="evidence",
+            label=str(out.get("card_evidence_label") or "原文证据"),
+            text=str(out.get("card_evidence") or ""),
+            kind="quote",
         )
-    _append_card_view_section(
-        sections,
-        section_id="locator",
-        label=str(out.get("card_locator_label") or ("当前论文引用处" if is_system_b else "原文位置")),
-        text=str(out.get("card_locator") or ""),
-        kind="locator",
-    )
-    if is_system_b:
+        _append_card_view_section(
+            sections,
+            section_id="locator",
+            label=str(out.get("card_locator_label") or "原文位置"),
+            text=str(out.get("card_locator") or ""),
+            kind="locator",
+        )
+    else:
+        _append_card_view_section(
+            sections,
+            section_id="locator",
+            label=str(out.get("card_locator_label") or "当前论文引用处"),
+            text=str(out.get("card_locator") or ""),
+            kind="locator",
+        )
         _append_card_view_section(
             sections,
             section_id="context_summary",
@@ -229,35 +254,38 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
             text=str(out.get("card_context_summary") or ""),
             kind="summary",
         )
-    _append_card_view_section(
-        sections,
-        section_id="evidence",
-        label=str(out.get("card_evidence_label") or ("引用语境" if is_system_b else "原文证据")),
-        text=str(out.get("card_evidence") or ""),
-        kind="quote",
-    )
-    if is_system_b and (
-        "missing_reference_title" in flags
-        or "reference_entry_only" in flags
-        or not title
-    ):
         _append_card_view_section(
             sections,
-            section_id="reference",
-            label=str(out.get("card_reference_label") or "上游文献条目"),
-            text=str(out.get("card_reference_entry") or ""),
-            kind="reference",
+            section_id="evidence",
+            label=str(out.get("card_evidence_label") or "引用语境"),
+            text=str(out.get("card_evidence") or ""),
+            kind="quote",
         )
-    _append_card_view_section(
-        sections,
-        section_id="support",
-        label=str(out.get("card_support_label") or ("说明" if is_system_b else "可靠度")),
-        text=str(out.get("card_support_explanation") or ""),
-        kind="support",
+        if "missing_reference_title" in flags or "reference_entry_only" in flags or not title:
+            _append_card_view_section(
+                sections,
+                section_id="reference",
+                label=str(out.get("card_reference_label") or "上游文献条目"),
+                text=str(out.get("card_reference_entry") or ""),
+                kind="reference",
+            )
+    show_support = is_system_b or bool(
+        _clean_text(out.get("card_warning"), max_len=360)
+        or "candidate_binding" in flags
+        or "binding_mismatch" in flags
+        or "missing_evidence_quote" in flags
     )
+    if show_support:
+        _append_card_view_section(
+            sections,
+            section_id="support",
+            label=str(out.get("card_support_label") or ("说明" if is_system_b else "可靠度")),
+            text=str(out.get("card_support_explanation") or ""),
+            kind="support",
+        )
 
     summary = ""
-    for preferred in ("takeaway", "context_summary", "claim", "evidence", "reference"):
+    for preferred in ("takeaway", "context_summary", "evidence", "reference"):
         match = next((item for item in sections if item.get("id") == preferred), None)
         if match and str(match.get("text") or "").strip():
             summary = _clean_text(match.get("text"), max_len=260)

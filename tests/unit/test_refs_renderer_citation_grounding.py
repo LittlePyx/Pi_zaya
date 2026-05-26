@@ -420,12 +420,21 @@ def test_unresolved_structured_citation_does_not_fall_back_to_hit_number(monkeyp
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
     monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "doc.pdf")
 
-    md = "Bad structured cite [[CITE:badbad:1]] and normal evidence [1]."
-    hits = [{"text": "supporting snippet", "meta": {"source_path": "doc.en.md"}}]
+    md = "Bad structured cite [[CITE:badbad:1]] and normal compressive imaging evidence [1]."
+    hits = [
+        {
+            "text": "Compressive imaging evidence supports the reconstruction claim.",
+            "meta": {
+                "source_path": "doc.en.md",
+                "heading_path": "Methods",
+                "evidence_quote": "Compressive imaging evidence supports the reconstruction claim.",
+            },
+        }
+    ]
     out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
 
     assert "[[CITE:" not in out
-    assert "Bad structured cite  and normal evidence [1](#" in out
+    assert "Bad structured cite  and normal compressive imaging evidence [1](#" in out
     assert len(details) == 1
     assert details[0]["is_inpaper"] is False
 

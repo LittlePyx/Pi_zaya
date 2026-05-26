@@ -987,6 +987,12 @@ export function citationCardView(detail: CiteDetail): CitationCardView {
   )
   const subtitle = cleanCitationDisplayText((storedMatchesRoute ? stored?.header?.subtitle : '') || detail.cardSubtitle || '')
   const qualityFlags = detail.cardQualityFlags.length ? detail.cardQualityFlags : (storedMatchesRoute ? (stored?.quality?.flags || []) : [])
+  const systemAHasReviewRisk = !isSystemB && Boolean(
+    detail.cardWarning
+    || qualityFlags.includes('candidate_binding')
+    || qualityFlags.includes('binding_mismatch')
+    || qualityFlags.includes('missing_evidence_quote')
+  )
   const sections: CitationCardViewSection[] = []
 
   appendCardViewSection(sections, makeCardViewSection('warning', sectionLabel('warning', '', '提醒'), sectionText('warning', detail.cardWarning), 'warning', { tone: 'warning' }))
@@ -1003,53 +1009,64 @@ export function citationCardView(detail: CiteDetail): CitationCardView {
   if (!isSystemB) {
     appendCardViewSection(
       sections,
-      makeCardViewSection('claim', sectionLabel('claim', detail.cardClaimLabel, '答案要点'), sectionText('claim', detail.cardClaim), 'claim'),
+      makeCardViewSection(
+        'evidence',
+        sectionLabel('evidence', detail.cardEvidenceLabel, '原文证据'),
+        sectionText('evidence', detail.cardEvidence),
+        'quote',
+      ),
     )
-  }
-  appendCardViewSection(
-    sections,
-    makeCardViewSection(
-      'locator',
-      sectionLabel('locator', detail.cardLocatorLabel, isSystemB ? '当前论文引用处' : '原文位置'),
-      sectionText('locator', detail.cardLocator || detail.locationLabel),
-      'locator',
-    ),
-  )
-  if (isSystemB) {
+    appendCardViewSection(
+      sections,
+      makeCardViewSection(
+        'locator',
+        sectionLabel('locator', detail.cardLocatorLabel, '原文位置'),
+        sectionText('locator', detail.cardLocator || detail.locationLabel),
+        'locator',
+      ),
+    )
+  } else {
+    appendCardViewSection(
+      sections,
+      makeCardViewSection(
+        'locator',
+        sectionLabel('locator', detail.cardLocatorLabel, '当前论文引用处'),
+        sectionText('locator', detail.cardLocator || detail.locationLabel),
+        'locator',
+      ),
+    )
     appendCardViewSection(sections, makeCardViewSection('context_summary', sectionLabel('context_summary', '', '语境摘要'), sectionText('context_summary', detail.cardContextSummary), 'summary'))
-  }
-  appendCardViewSection(
-    sections,
-    makeCardViewSection(
-      'evidence',
-      sectionLabel('evidence', detail.cardEvidenceLabel, isSystemB ? '引用语境' : '原文证据'),
-      sectionText('evidence', detail.cardEvidence),
-      'quote',
-    ),
-  )
-  if (
-    isSystemB
-    && (
+    appendCardViewSection(
+      sections,
+      makeCardViewSection(
+        'evidence',
+        sectionLabel('evidence', detail.cardEvidenceLabel, '引用语境'),
+        sectionText('evidence', detail.cardEvidence),
+        'quote',
+      ),
+    )
+    if (
       qualityFlags.includes('missing_reference_title')
       || qualityFlags.includes('reference_entry_only')
       || !title
       || Boolean(storedSection('reference'))
-    )
-  ) {
+    ) {
+      appendCardViewSection(
+        sections,
+        makeCardViewSection('reference', sectionLabel('reference', detail.cardReferenceLabel, '上游文献条目'), sectionText('reference', detail.cardReferenceEntry), 'reference'),
+      )
+    }
+  }
+  if (isSystemB || systemAHasReviewRisk) {
     appendCardViewSection(
       sections,
-      makeCardViewSection('reference', sectionLabel('reference', detail.cardReferenceLabel, '上游文献条目'), sectionText('reference', detail.cardReferenceEntry), 'reference'),
+      makeCardViewSection('support', sectionLabel('support', detail.cardSupportLabel, isSystemB ? '说明' : '可靠度'), sectionText('support', detail.cardSupportExplanation), 'support'),
     )
   }
-  appendCardViewSection(
-    sections,
-    makeCardViewSection('support', sectionLabel('support', detail.cardSupportLabel, isSystemB ? '说明' : '可靠度'), sectionText('support', detail.cardSupportExplanation), 'support'),
-  )
 
   const summary = trimShelfSummary(
     sections.find((item) => item.id === 'takeaway')?.text
     || sections.find((item) => item.id === 'context_summary')?.text
-    || sections.find((item) => item.id === 'claim')?.text
     || sections.find((item) => item.id === 'evidence')?.text
     || (storedMatchesRoute ? stored?.summary : '')
     || '',
@@ -1545,16 +1562,16 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
 export function summarySourceLabel(source: string, provider = ''): string {
   const s = String(source || '').trim().toLowerCase()
   const p = String(provider || '').trim().toLowerCase()
-  if (s === 'fulltext') return 'fulltext'
+  if (s === 'fulltext') return '全文'
   if (s === 'abstract') {
-    if (p === 'crossref') return 'Crossref abstract'
-    if (p === 'openalex') return 'OpenAlex abstract'
-    if (p === 'semantic_scholar') return 'Semantic Scholar abstract'
-    if (p === 'doi_landing_page') return 'publisher page'
-    return 'abstract'
+    if (p === 'crossref') return 'Crossref 摘要'
+    if (p === 'openalex') return 'OpenAlex 摘要'
+    if (p === 'semantic_scholar') return 'Semantic Scholar 摘要'
+    if (p === 'doi_landing_page') return '出版商页面'
+    return '摘要'
   }
-  if (s === 'citation_context') return 'citation context'
-  if (s === 'citation_card' || s === 'citation_card_view' || s === 'card_view') return 'citation card'
-  if (s === 'metadata') return 'metadata'
-  return 'metadata'
+  if (s === 'citation_context') return '引用语境'
+  if (s === 'citation_card' || s === 'citation_card_view' || s === 'card_view') return '证据卡片'
+  if (s === 'metadata') return '元数据'
+  return '元数据'
 }

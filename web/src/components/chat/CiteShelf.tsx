@@ -985,6 +985,7 @@ export function CiteShelf({
                                 <>
                                   <div className="kb-shelf-summary-meta">
                                     <span className="kb-shelf-summary-head">{S.shelf_summary_head}</span>
+                                    <span className="kb-shelf-summary-sep" aria-hidden="true">·</span>
                                     <span className="kb-shelf-summary-source">{shelfSummarySource}</span>
                                   </div>
                                   {(() => {

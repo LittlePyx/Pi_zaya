@@ -7,7 +7,7 @@ from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta
 
 def test_system_a_citation_detail_carries_reader_card_fields() -> None:
     rendered, details = _annotate_inpaper_citations_with_hover_meta(
-        "The method is explained in the retrieved paper [1].",
+        "ADMM prior optimization machinery is explained in the retrieved paper [1].",
         [
             {
                 "text": "Most existing methods employ alternating direction method of multipliers (ADMM) [4].",
@@ -32,7 +32,7 @@ def test_system_a_citation_detail_carries_reader_card_fields() -> None:
     detail = details[0]
     assert detail["is_inpaper"] is False
     assert detail["heading_path"] == "2. Related Work"
-    assert "method is explained" in detail["answer_claim"]
+    assert "ADMM prior optimization" in detail["answer_claim"]
     assert detail["evidence_quote"].startswith("Most existing methods employ")
     assert detail["evidence_source"] == "retrieval_hit"
     assert "2. Related Work" in detail["location_label"]
@@ -52,6 +52,61 @@ def test_system_a_citation_detail_carries_reader_card_fields() -> None:
     assert detail["card_locator"].startswith("2. Related Work")
     assert detail["card_evidence"].startswith("Most existing methods employ")
     assert detail["card_quality_label"] in {"候选依据", "证据匹配"}
+
+
+def test_system_a_suppresses_weak_candidate_binding_instead_of_linking() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "For real-time or low-sampling imaging, Hadamard subsampling is worth comparing [1].",
+        [
+            {
+                "text": (
+                    "With a static object, the corresponding surface orientation can be "
+                    "determined by analyzing the object images under different illumination directions."
+                ),
+                "meta": {
+                    "source_path": "db/demo/3d-single-pixel-video.en.md",
+                    "heading_path": "Methods / Photometric stereo",
+                    "evidence_quote": (
+                        "Photometric stereo allows the surface orientation of a static object "
+                        "to be estimated from images under different illumination directions."
+                    ),
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "#kb-cite-" not in rendered
+    assert "[1]" not in rendered
+    assert details == []
+
+
+def test_system_a_requires_specific_strong_term_not_only_broad_domain_overlap() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "High-speed DMD modulation is a hardware route for real-time single-pixel imaging [1].",
+        [
+            {
+                "text": (
+                    "With a static object, photometric stereo determines surface orientation "
+                    "from object images under different illumination directions."
+                ),
+                "meta": {
+                    "source_path": "db/demo/3d-single-pixel-video.en.md",
+                    "heading_path": "Methods / Photometric stereo",
+                    "evidence_quote": (
+                        "Photometric stereo estimates surface orientation from images under "
+                        "different illumination directions."
+                    ),
+                    "source_name": "Journal of Optics-2016-3D single-pixel video.pdf",
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "#kb-cite-" not in rendered
+    assert "[1]" not in rendered
+    assert details == []
 
 
 def test_system_a_suppresses_link_when_answer_claim_conflicts_with_hit_topic() -> None:
@@ -169,8 +224,8 @@ def test_system_a_reuses_one_card_for_duplicate_evidence_hits() -> None:
 def test_system_a_reuses_repeated_same_number_for_same_evidence() -> None:
     rendered, details = _annotate_inpaper_citations_with_hover_meta(
         (
-            "Adaptive sampling puts high resolution near the fovea [1].\n"
-            "Hardware construction uses a DMD with projection and detection paths [1]."
+            "Foveated single-pixel imaging uses dynamic supersampling with a DMD [1].\n"
+            "The same dynamic supersampling evidence is cited again here [1]."
         ),
         [
             {
@@ -199,7 +254,7 @@ def test_system_a_reuses_repeated_same_number_for_same_evidence() -> None:
     assert len(set(anchors)) == 1
     assert len(details) == 1
     assert "occurrence_specific_claim" not in details[0]["card_quality_flags"]
-    assert "Hardware construction uses a DMD" in details[0]["answer_claim"]
+    assert "Foveated single-pixel imaging uses dynamic supersampling" in details[0]["answer_claim"]
     assert "##" not in details[0]["card_evidence"]
 
 
@@ -284,6 +339,59 @@ def test_system_a_prefers_reader_open_primary_evidence_when_direct_primary_missi
     assert "microlens array" in detail["card_evidence"]
     assert "Yingwen Zhang" not in detail["card_evidence"]
     assert "##" not in detail["card_evidence"]
+
+
+def test_system_a_replaces_truncated_wrapped_primary_with_readable_alternative() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "Adaptive foveated single-pixel imaging uses dynamic supersampling to spend more samples near important regions [1].",
+        [
+            {
+                "text": "source excerpt says: \"For comparison, uniformly imaging the entire field of view at the higher resolu...\"",
+                "meta": {
+                    "source_path": "db/demo/foveated.en.md",
+                    "heading_path": "INTRODUCTION / Linear constraints",
+                },
+                "ui_meta": {
+                    "reader_open": {
+                        "primaryEvidence": {
+                            "headingPath": "INTRODUCTION / Linear constraints",
+                            "highlightSnippet": (
+                                "source excerpt says: \"For comparison, uniformly imaging the entire "
+                                "field of view at the higher resolu...\""
+                            ),
+                            "blockId": "bad-wrapper",
+                            "anchorId": "p_bad",
+                            "anchorKind": "paragraph",
+                        },
+                        "evidenceAlternatives": [
+                            {
+                                "headingPath": "INTRODUCTION",
+                                "highlightSnippet": (
+                                    "Dynamic supersampling adaptively allocates high-resolution "
+                                    "sampling to the fovea while using lower resolution elsewhere."
+                                ),
+                                "blockId": "good-fovea",
+                                "anchorId": "p_good",
+                                "anchorKind": "paragraph",
+                            }
+                        ],
+                    }
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["block_id"] == "good-fovea"
+    assert detail["anchor_id"] == "p_good"
+    assert detail["heading_path"] == "INTRODUCTION"
+    assert detail["evidence_source"] == "reader_open.evidenceAlternatives"
+    assert detail["card_evidence"].startswith("Dynamic supersampling")
+    assert "source excerpt says" not in detail["card_evidence"]
+    assert "higher resolu" not in detail["card_evidence"]
 
 
 def test_system_a_does_not_route_to_system_b_from_reference_title_words() -> None:
