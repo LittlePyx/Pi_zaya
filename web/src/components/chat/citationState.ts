@@ -67,6 +67,10 @@ export interface CiteDetail {
   conferenceName: string
   conferenceAcronym: string
   bibliometricsChecked: boolean
+  metadataQuality: Record<string, unknown> | null
+  metadataRepairStatus: string
+  metadataRepairSources: string[]
+  metadataChangedFields: string[]
   externalMetadataStatus: string
   externalMetadataReason: string
   externalMatchMethod: string
@@ -592,9 +596,34 @@ function normalizeDoiLike(value: unknown): string {
     .trim()
 }
 
+function extractDoiLike(value: unknown): string {
+  const text = String(value || '').trim()
+  const direct = normalizeDoiLike(text)
+  if (/^10\.\d{4,9}\//i.test(direct)) return direct
+  const match = text.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i)
+  return match ? normalizeDoiLike(match[0]) : ''
+}
+
 function doiUrlFrom(value: unknown): string {
   const doi = normalizeDoiLike(value)
   return doi ? `https://doi.org/${doi}` : ''
+}
+
+function metadataQualityOk(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const rec = value as Record<string, unknown>
+  const status = String(rec.status || '').trim().toLowerCase()
+  return rec.ok === true || status === 'ready'
+}
+
+function metadataRepairMetaTrusted(meta: Record<string, unknown>): boolean {
+  const qualityOk = metadataQualityOk(meta.metadata_quality || meta.metadataQuality)
+  const repairStatus = String(meta.metadata_repair_status || meta.metadataRepairStatus || '').trim().toLowerCase()
+  const changedFields = Array.isArray(meta.metadata_changed_fields)
+    ? meta.metadata_changed_fields
+    : meta.metadataChangedFields
+  const changedCount = Array.isArray(changedFields) ? changedFields.length : 0
+  return qualityOk && (changedCount > 0 || ['ready', 'repaired'].includes(repairStatus))
 }
 
 function pickText(rec: Record<string, unknown>, ...keys: string[]): string {
@@ -638,6 +667,16 @@ function pickNumberArray(rec: Record<string, unknown>, ...keys: string[]): numbe
     if (deduped.length > 0) return deduped
   }
   return []
+}
+
+function pickRecord(rec: Record<string, unknown>, ...keys: string[]): Record<string, unknown> | null {
+  for (const key of keys) {
+    const value = rec[key]
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { ...(value as Record<string, unknown>) }
+    }
+  }
+  return null
 }
 
 function normalizeCitationCardView(value: unknown): CitationCardView | null {
@@ -726,6 +765,17 @@ export function isLikelyWeakCitationTitle(value: string): boolean {
   return false
 }
 
+function isGenericSystemBCardTitle(value: string): boolean {
+  const s = cleanCitationDisplayText(value).replace(/\s+/g, ' ').trim().toLowerCase()
+  return (
+    !s
+    || s === '\u4e0a\u6e38\u53c2\u8003\u6587\u732e'
+    || s === '\u4e0a\u6e38\u5f15\u7528'
+    || s === 'upstream reference'
+    || s === 'upstream citation'
+  )
+}
+
 function isWeakField(key: string, value: string): boolean {
   const s = String(value || '').trim()
   if (!s) return true
@@ -781,6 +831,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     conferenceName: pickText(rec, 'conference_name', 'conferenceName'),
     conferenceAcronym: pickText(rec, 'conference_acronym', 'conferenceAcronym'),
     bibliometricsChecked: Boolean(rec.bibliometrics_checked ?? rec.bibliometricsChecked),
+    metadataQuality: pickRecord(rec, 'metadata_quality', 'metadataQuality'),
+    metadataRepairStatus: pickText(rec, 'metadata_repair_status', 'metadataRepairStatus'),
+    metadataRepairSources: pickStringArray(rec, 'metadata_repair_sources', 'metadataRepairSources'),
+    metadataChangedFields: pickStringArray(rec, 'metadata_changed_fields', 'metadataChangedFields'),
     externalMetadataStatus: pickText(rec, 'external_metadata_status', 'externalMetadataStatus'),
     externalMetadataReason: pickText(rec, 'external_metadata_reason', 'externalMetadataReason'),
     externalMatchMethod: pickText(rec, 'external_match_method', 'externalMatchMethod'),
@@ -989,8 +1043,17 @@ export function citationCardView(detail: CiteDetail): CitationCardView {
   const sectionText = (id: string, fieldValue: string): string => {
     return cleanCitationDisplayText(storedSection(id)?.text || fieldValue || '')
   }
+  const storedTitle = cleanCitationDisplayText((storedMatchesRoute ? stored?.header?.title : '') || '')
+  const detailTitle = cleanCitationDisplayText(detail.title || '')
+  const repairedSystemBTitle = (
+    isSystemB
+    && detailTitle
+    && !isLikelyWeakCitationTitle(detailTitle)
+    && (isGenericSystemBCardTitle(storedTitle) || isGenericSystemBCardTitle(detail.cardTitle))
+  ) ? detailTitle : ''
   const title = cleanCitationDisplayText(
-    (storedMatchesRoute ? stored?.header?.title : '')
+    repairedSystemBTitle
+    || storedTitle
     || detail.cardTitle
     || (isSystemB ? detail.title : detail.sourceName)
     || detail.title
@@ -1211,10 +1274,16 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
 export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>): CiteDetail {
   const merged: Record<string, unknown> = { ...detail }
   const currentDoi = normalizeDoiLike(detail.doi || detail.doiUrl)
+  const currentRawDoi = extractDoiLike(detail.raw || detail.citeFmt)
   const incomingDoi = normalizeDoiLike(
     asText(meta?.doi) || asText(meta?.doi_url) || asText(meta?.doiUrl),
   )
-  const hasDoiConflict = Boolean(currentDoi && incomingDoi && currentDoi !== incomingDoi)
+  const trustedSystemBRepair = Boolean(
+    detail.isInpaper
+    && !currentRawDoi
+    && metadataRepairMetaTrusted(meta),
+  )
+  const hasDoiConflict = Boolean(currentDoi && incomingDoi && currentDoi !== incomingDoi && !trustedSystemBRepair)
   const overwriteKeys = new Set([
     'doi',
     'doi_url',
@@ -1236,6 +1305,10 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'summary_line',
     'summary_source',
     'summary_provider',
+    'metadata_quality',
+    'metadata_repair_status',
+    'metadata_repair_sources',
+    'metadata_changed_fields',
     'external_metadata_status',
     'external_metadata_reason',
     'external_match_method',

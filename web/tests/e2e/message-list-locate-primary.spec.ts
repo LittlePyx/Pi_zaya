@@ -430,6 +430,121 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
   await expect(page.locator('.kb-shelf-summary')).toContainText('Polished card-view takeaway')
 })
 
+test('citation shelf consumes metadata repair quality and clears review chips', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.route('**/api/library/source-quality', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          conversion_quality: { status: 'good', has_review_issue: false, score: 96, issues: [] },
+        })),
+      }),
+    })
+  })
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const items = Array.isArray(payload.items) ? payload.items : []
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: items.length,
+        ready: items.length,
+        partial: 0,
+        retryable: 0,
+        failed: 0,
+        changed: items.length,
+        persisted: 1,
+        impact: {
+          requested: items.length,
+          ready_before: 0,
+          ready_after: items.length,
+          ready_delta: items.length,
+          changed: items.length,
+          persisted: 1,
+          before_avg_score: 44,
+          after_avg_score: 100,
+          score_delta: 56,
+          fixed_issue_codes: [
+            { name: 'weak_or_missing_title', count: 1 },
+            { name: 'missing_doi', count: 1 },
+          ],
+          remaining_issue_codes: [],
+          changed_fields: [
+            { name: 'title', count: 1 },
+            { name: 'doi', count: 1 },
+          ],
+          repair_sources: [{ name: 'reference_index', count: 1 }],
+        },
+        items: items.map((item, idx) => ({
+          key: String(item.key || item.anchor || `repair-${idx}`),
+          ok: true,
+          changed: true,
+          changed_fields: ['title', 'authors', 'venue', 'year', 'doi', 'doi_url'],
+          repair_status: 'repaired',
+          retryable: false,
+          fixed_issue_codes: ['weak_or_missing_title', 'missing_doi', 'missing_authors', 'missing_venue'],
+          remaining_issue_codes: [],
+          repair_sources: ['reference_index'],
+          before: { contract_version: 1, ok: false, status: 'error', score: 44, missing_fields: ['doi'], issues: [{ code: 'missing_doi', label: 'Missing DOI', field: 'doi', severity: 'warning' }], repairable: true, retryable: true },
+          after: { contract_version: 1, ok: true, status: 'ready', score: 100, missing_fields: [], issues: [], repairable: true, retryable: false, doi: '10.1109/TASSP.1988.1164940' },
+          meta: {
+            ...item,
+            title: 'The missing cone problem and low-pass distortion in optical serial sectioning microscopy',
+            authors: 'Macias-Garza F, Bovik A C, Diller K R',
+            venue: 'IEEE Transactions on Acoustics, Speech, and Signal Processing',
+            year: '1988',
+            doi: '10.1109/TASSP.1988.1164940',
+            doi_url: 'https://doi.org/10.1109/TASSP.1988.1164940',
+            bibliometrics_checked: true,
+            metadata_quality: { contract_version: 1, ok: true, status: 'ready', score: 100, missing_fields: [], issues: [], repairable: true, retryable: false, doi: '10.1109/TASSP.1988.1164940' },
+            metadata_repair_status: 'repaired',
+            metadata_changed_fields: ['title', 'authors', 'venue', 'year', 'doi', 'doi_url'],
+            metadata_repair_sources: ['reference_index'],
+          },
+          persisted: idx === 0,
+          persisted_targets: idx === 0 ? ['reference_index'] : [],
+        })),
+      }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
+
+  const citeChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+
+  const repairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  await expect.poll(async () => {
+    const payload = (await repairRequest).postDataJSON() as { items?: Array<Record<string, unknown>> }
+    return payload.items?.length || 0
+  }).toBeGreaterThan(0)
+
+  const shelf = page.getByTestId('citation-shelf')
+  await expect(shelf).toHaveClass(/translate-x-0/)
+  await expect(page.getByTestId('citation-shelf-item-title')).toContainText('The missing cone problem')
+  await expect(page.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
+  await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
+  await expect(page.getByTestId('citation-shelf-repair-impact')).toContainText('doi')
+  await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
+  await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
+})
+
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {
   await mockReaderDoc(page)
   await page.goto('/__message_list_test__?scenario=repeated-system-a-old-packet')

@@ -367,6 +367,27 @@ def _metadata_payload(meta: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _reference_entry_payload(ref: Mapping[str, Any], meta: Mapping[str, Any]) -> dict[str, Any]:
+    merged = _canonicalize_detail({**dict(meta or {}), **dict(ref or {})})
+    raw = _text(ref.get("raw") or ref.get("cite_fmt") or ref.get("citeFmt") or meta.get("raw") or meta.get("cite_fmt"))
+    if raw:
+        merged.setdefault("raw", raw)
+        merged.setdefault("cite_fmt", raw)
+    doi = _norm_doi(merged.get("doi") or merged.get("doi_url") or raw)
+    if doi:
+        merged["doi"] = doi
+        merged["doi_url"] = _doi_url(doi)
+    payload = _metadata_payload(merged)
+    for key in ("raw", "cite_fmt", "source_path", "source_name", "ref_num", "num"):
+        value = merged.get(key)
+        if _text(value) and not _text(payload.get(key)):
+            payload[key] = _text(value)
+    if doi:
+        payload.setdefault("doi", doi)
+        payload.setdefault("doi_url", _doi_url(doi))
+    return payload
+
+
 def _merge_metadata(existing: Mapping[str, Any] | None, incoming: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     out = dict(existing or {})
     changed = False
@@ -582,6 +603,33 @@ def _persist_reference_index(meta: Mapping[str, Any], db_dir: Path) -> bool:
     return True
 
 
+def _metadata_from_reference_index(meta: Mapping[str, Any], db_dir: str | Path | None) -> dict[str, Any]:
+    if not db_dir:
+        return {}
+    path = Path(db_dir) / INDEX_FILE_NAME
+    if not path.exists():
+        return {}
+    data = _json_load_dict(path)
+    found_doc = _find_reference_doc(data, meta)
+    if not found_doc:
+        return {}
+    _doc_key, doc = found_doc
+    found_ref = _find_reference_entry(doc, meta)
+    if not found_ref:
+        return {}
+    ref_key, ref = found_ref
+    payload = _reference_entry_payload(ref, meta)
+    if ref_key and not _text(payload.get("ref_num")):
+        payload["ref_num"] = ref_key
+    if _text(doc.get("path")) and not _text(payload.get("source_path")):
+        payload["source_path"] = _text(doc.get("path"))
+    if _text(doc.get("name")) and not _text(payload.get("source_name")):
+        payload["source_name"] = _text(doc.get("name"))
+    if payload:
+        payload["metadata_repair_source"] = "reference_index"
+    return payload
+
+
 def persist_repaired_citation_metadata(meta: Mapping[str, Any], db_dir: str | Path | None = None) -> list[str]:
     if not db_dir:
         return []
@@ -616,11 +664,14 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
     key = _text(original.get("key") or original.get("anchor") or original.get("doi") or original.get("title"))
     before = citation_metadata_quality(original)
     try:
-        repaired = enrich_citation_detail_meta(original)
+        local_meta = _metadata_from_reference_index(original, db_dir)
+        repair_sources: list[str] = ["reference_index"] if local_meta else []
+        seed = _canonicalize_detail({**original, **local_meta}) if local_meta else original
+        repaired = enrich_citation_detail_meta(seed)
         if not isinstance(repaired, dict):
             repaired = {}
-        merged = _canonicalize_detail({**original, **repaired})
-        raw_doi = _norm_doi(original.get("raw") or original.get("cite_fmt") or original.get("citeFmt"))
+        merged = _canonicalize_detail({**seed, **repaired})
+        raw_doi = _norm_doi(seed.get("raw") or seed.get("cite_fmt") or seed.get("citeFmt"))
         if raw_doi and not _norm_doi(merged.get("doi") or merged.get("doi_url")):
             merged["doi"] = raw_doi
             merged["doi_url"] = _doi_url(raw_doi)
@@ -639,6 +690,11 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
         else:
             repair_status = "unchanged"
         merged["metadata_quality"] = after
+        merged["metadata_repair_status"] = repair_status
+        if repair_sources:
+            merged["metadata_repair_sources"] = repair_sources
+        if changed:
+            merged["metadata_changed_fields"] = changed
         return {
             "key": key,
             "ok": bool(after.get("ok")),
@@ -646,6 +702,23 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
             "changed_fields": changed,
             "repair_status": repair_status,
             "retryable": bool(after.get("retryable")),
+            "fixed_issue_codes": [
+                str(issue.get("code") or "")
+                for issue in list(before.get("issues") or [])
+                if isinstance(issue, Mapping)
+                and str(issue.get("code") or "")
+                and str(issue.get("code") or "") not in {
+                    str(after_issue.get("code") or "")
+                    for after_issue in list(after.get("issues") or [])
+                    if isinstance(after_issue, Mapping)
+                }
+            ],
+            "remaining_issue_codes": [
+                str(issue.get("code") or "")
+                for issue in list(after.get("issues") or [])
+                if isinstance(issue, Mapping) and str(issue.get("code") or "")
+            ],
+            "repair_sources": repair_sources,
             "before": before,
             "after": after,
             "meta": merged,
@@ -680,11 +753,46 @@ def repair_citation_metadata_batch(
     limited = [item for item in list(items or []) if isinstance(item, Mapping)][: max(0, int(limit))]
     results = [repair_citation_metadata_item(item, db_dir=db_dir) for item in limited]
     ready = sum(1 for item in results if bool((item.get("after") or {}).get("ok")))
+    ready_before = sum(1 for item in results if bool((item.get("before") or {}).get("ok")))
     partial = sum(1 for item in results if str(item.get("repair_status") or "") == "partial")
     retryable = sum(1 for item in results if bool(item.get("retryable")))
     failed = sum(1 for item in results if str(item.get("repair_status") or "") == "error")
     changed = sum(1 for item in results if bool(item.get("changed")))
     persisted = sum(1 for item in results if bool(item.get("persisted")))
+    fixed_counter: dict[str, int] = {}
+    remaining_counter: dict[str, int] = {}
+    changed_field_counter: dict[str, int] = {}
+    source_counter: dict[str, int] = {}
+    before_scores: list[int] = []
+    after_scores: list[int] = []
+    for item in results:
+        before = item.get("before") if isinstance(item.get("before"), Mapping) else {}
+        after = item.get("after") if isinstance(item.get("after"), Mapping) else {}
+        before_scores.append(_int_value(before.get("score")))
+        after_scores.append(_int_value(after.get("score")))
+        for code in item.get("fixed_issue_codes") or []:
+            text = _text(code)
+            if text:
+                fixed_counter[text] = fixed_counter.get(text, 0) + 1
+        for code in item.get("remaining_issue_codes") or []:
+            text = _text(code)
+            if text:
+                remaining_counter[text] = remaining_counter.get(text, 0) + 1
+        for field in item.get("changed_fields") or []:
+            text = _text(field)
+            if text:
+                changed_field_counter[text] = changed_field_counter.get(text, 0) + 1
+        for source in item.get("repair_sources") or []:
+            text = _text(source)
+            if text:
+                source_counter[text] = source_counter.get(text, 0) + 1
+
+    def _counter_items(counter: Mapping[str, int], limit: int = 8) -> list[dict[str, Any]]:
+        rows = sorted(counter.items(), key=lambda pair: (-int(pair[1]), pair[0]))
+        return [{"name": str(name), "count": int(count)} for name, count in rows[:limit]]
+
+    before_avg = int(round(sum(before_scores) / len(before_scores))) if before_scores else 0
+    after_avg = int(round(sum(after_scores) / len(after_scores))) if after_scores else 0
     return {
         "ok": failed == 0,
         "requested": len(limited),
@@ -694,6 +802,21 @@ def repair_citation_metadata_batch(
         "failed": int(failed),
         "changed": int(changed),
         "persisted": int(persisted),
+        "impact": {
+            "requested": len(limited),
+            "ready_before": int(ready_before),
+            "ready_after": int(ready),
+            "ready_delta": int(ready - ready_before),
+            "changed": int(changed),
+            "persisted": int(persisted),
+            "before_avg_score": before_avg,
+            "after_avg_score": after_avg,
+            "score_delta": int(after_avg - before_avg),
+            "fixed_issue_codes": _counter_items(fixed_counter),
+            "remaining_issue_codes": _counter_items(remaining_counter),
+            "changed_fields": _counter_items(changed_field_counter),
+            "repair_sources": _counter_items(source_counter),
+        },
         "items": results,
     }
 

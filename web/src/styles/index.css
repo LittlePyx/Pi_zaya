@@ -1507,6 +1507,28 @@ body.kb-reader-resizing .kb-reader-content {
   color: color-mix(in srgb, var(--accent) 76%, var(--text-main));
 }
 
+.kb-shelf-repair-impact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.kb-shelf-repair-impact span {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, #22c55e 24%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, #22c55e 8%, var(--panel));
+  color: color-mix(in srgb, #15803d 80%, var(--text-main));
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 680;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .kb-shelf-batch-row {
   display: flex;
   flex-wrap: wrap;

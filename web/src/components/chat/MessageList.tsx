@@ -25,7 +25,7 @@ import {
 } from './citationState'
 import { RefsPanel } from '../refs/RefsPanel'
 import type { ChatImageAttachment, Message } from '../../api/chat'
-import { referencesApi, type ReaderDocAnchor } from '../../api/references'
+import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact } from '../../api/references'
 import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -3716,6 +3716,14 @@ function normalizeDoiLike(value: string): string {
     .trim()
 }
 
+function extractDoiLike(value: string): string {
+  const text = String(value || '').trim()
+  const direct = normalizeDoiLike(text)
+  if (/^10\.\d{4,9}\//i.test(direct)) return direct
+  const match = text.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i)
+  return match ? normalizeDoiLike(match[0]) : ''
+}
+
 function normalizeTitleLike(value: string): string {
   return String(value || '')
     .toLowerCase()
@@ -3990,6 +3998,10 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.num === b.num
     && a.anchor === b.anchor
     && a.bibliometricsChecked === b.bibliometricsChecked
+    && JSON.stringify(a.metadataQuality || null) === JSON.stringify(b.metadataQuality || null)
+    && a.metadataRepairStatus === b.metadataRepairStatus
+    && JSON.stringify(a.metadataRepairSources || []) === JSON.stringify(b.metadataRepairSources || [])
+    && JSON.stringify(a.metadataChangedFields || []) === JSON.stringify(b.metadataChangedFields || [])
     && a.summaryLine === b.summaryLine
     && a.summarySource === b.summarySource
     && a.summaryProvider === b.summaryProvider
@@ -4155,6 +4167,23 @@ function year4(value: string): string {
   return match ? match[0] : ''
 }
 
+function metadataQualityOk(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const rec = value as Record<string, unknown>
+  const status = String(rec.status || '').trim().toLowerCase()
+  return rec.ok === true || status === 'ready'
+}
+
+function metadataRepairTrusted(candidateMeta: Record<string, unknown>): boolean {
+  const qualityOk = metadataQualityOk(candidateMeta.metadata_quality || candidateMeta.metadataQuality)
+  const repairStatus = String(candidateMeta.metadata_repair_status || candidateMeta.metadataRepairStatus || '').trim().toLowerCase()
+  const changedFields = Array.isArray(candidateMeta.metadata_changed_fields)
+    ? candidateMeta.metadata_changed_fields
+    : candidateMeta.metadataChangedFields
+  const changedCount = Array.isArray(changedFields) ? changedFields.length : 0
+  return qualityOk && (changedCount > 0 || ['ready', 'repaired'].includes(repairStatus))
+}
+
 function jaccardTokens(a: string, b: string): number {
   const aSet = new Set(normalizeTextLite(a).split(' ').filter(Boolean))
   const bSet = new Set(normalizeTextLite(b).split(' ').filter(Boolean))
@@ -4178,10 +4207,15 @@ function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<string, un
   }
 
   const baseDoi = normalizeDoiLike(base.doi || base.doiUrl)
-  const baseRawDoi = normalizeDoiLike(base.raw || base.citeFmt)
+  const baseRawDoi = extractDoiLike(base.raw || base.citeFmt)
   const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
-  if (baseDoi && mergedDoi && baseDoi !== mergedDoi) return null
+  const trustedRepair = metadataRepairTrusted(candidateMeta)
+  if (baseDoi && mergedDoi && baseDoi !== mergedDoi) {
+    if (!(trustedRepair && base.isInpaper && !baseRawDoi)) return null
+  }
   if (baseRawDoi && mergedDoi && baseRawDoi === mergedDoi) return mergedItem
+  if (baseRawDoi && mergedDoi && baseRawDoi !== mergedDoi) return null
+  if (trustedRepair) return mergedItem
 
   const titleSignal = jaccardTokens(base.title || base.main, mergedItem.title || mergedItem.main) >= 0.55
   const authorSignal = (
@@ -4262,6 +4296,7 @@ export function MessageList({
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
   const [shelfSummaryLoadingKey, setShelfSummaryLoadingKey] = useState('')
   const [shelfRepairLoadingKey, setShelfRepairLoadingKey] = useState('')
+  const [shelfRepairImpact, setShelfRepairImpact] = useState<ShelfMetadataRepairImpact | null>(null)
   const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
   const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
   const assistantLocatePrepCacheRef = useRef(new Map<string, AssistantLocatePrep>())
@@ -4816,8 +4851,17 @@ export function MessageList({
     }
     const loadRepairCandidates = referencesApi.repairShelfMetadata([basePayload, strictTitlePayload], 2)
       .then((res) => {
+        setShelfRepairImpact(res.impact || null)
         const repaired = Array.isArray(res.items) ? res.items : []
-        return repaired.map((entry) => entry.meta || {}).filter((meta) => meta && Object.keys(meta).length > 0)
+        return repaired
+          .map((entry) => ({
+            ...(entry.meta || {}),
+            metadata_quality: entry.after || (entry.meta || {}).metadata_quality,
+            metadata_repair_status: entry.repair_status,
+            metadata_changed_fields: entry.changed_fields || [],
+            metadata_repair_sources: entry.repair_sources || [],
+          }))
+          .filter((meta) => meta && Object.keys(meta).length > 0)
       })
       .catch(() => Promise.all([
         referencesApi.bibliometrics(basePayload).catch(() => ({})),
@@ -6573,6 +6617,7 @@ export function MessageList({
         focusedKey={focusedShelfKey}
         summaryLoadingKey={shelfSummaryLoadingKey}
         repairLoadingKey={shelfRepairLoadingKey}
+        repairImpact={shelfRepairImpact}
         snapshots={savedShelfSnapshots}
         selectedSnapshotId={selectedSavedSnapshotId}
         snapshotDiff={selectedSnapshotDiff}
@@ -6595,6 +6640,7 @@ export function MessageList({
           setFocusedShelfKey('')
           setShelfSummaryLoadingKey('')
           setShelfRepairLoadingKey('')
+          setShelfRepairImpact(null)
         }}
         onUpdateTags={(key, tags) => {
           const nextTags = normalizeShelfTags(tags)

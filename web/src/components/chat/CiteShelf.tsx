@@ -3,6 +3,7 @@ import { Button, Input, Select, message } from 'antd'
 import { FileSearchOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ConversionQualitySummary, LibrarySourceQualityItem } from '../../api/library'
+import type { ShelfMetadataQuality, ShelfMetadataRepairImpact } from '../../api/references'
 import { libraryApi } from '../../api/library'
 import {
   citationCardView,
@@ -24,6 +25,7 @@ interface Props {
   focusedKey: string
   summaryLoadingKey: string
   repairLoadingKey: string
+  repairImpact: ShelfMetadataRepairImpact | null
   onToggle: () => void
   onClear: () => void
   onSelect: (item: CiteShelfItem) => void
@@ -79,6 +81,8 @@ const hasConflictingVenueSignals = (item: CiteShelfItem): boolean => {
 }
 
 const shouldAutoRepairItem = (item: CiteShelfItem, display = citationDisplay(item)): boolean => {
+  if (metadataQualityReady(item)) return false
+  if (metadataQualityNeedsRepair(item)) return true
   const rawTitle = String(item.title || '').trim()
   const visibleTitle = String(display.main || rawTitle || item.main || '').trim()
   const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
@@ -136,6 +140,39 @@ const sourceQualityNeedsReview = (quality?: ConversionQualitySummary | null): bo
 const sourceListKey = (sources: Array<{ source_path: string; source_name?: string }>): string =>
   sources.map((item) => `${item.source_path}\t${item.source_name || ''}`).join('\n')
 
+const metadataQuality = (item: CiteShelfItem): ShelfMetadataQuality | null => {
+  const raw = item.metadataQuality
+  if (!raw || typeof raw !== 'object') return null
+  return raw as unknown as ShelfMetadataQuality
+}
+
+const metadataQualityReady = (item: CiteShelfItem): boolean => {
+  const quality = metadataQuality(item)
+  if (!quality) return false
+  const status = String(quality.status || '').trim().toLowerCase()
+  return quality.ok === true || status === 'ready'
+}
+
+const metadataQualityNeedsRepair = (item: CiteShelfItem): boolean => {
+  const quality = metadataQuality(item)
+  if (!quality) return false
+  if (metadataQualityReady(item)) return false
+  return Boolean(quality.repairable || quality.retryable || (quality.issues || []).length > 0)
+}
+
+const metadataIssueChip = (code: string): string => {
+  const key = String(code || '').trim().toLowerCase()
+  if (key === 'missing_doi') return '自动匹配 DOI'
+  if (key === 'doi_not_promoted') return '写入 DOI'
+  if (key === 'missing_authors') return '自动补作者'
+  if (key === 'missing_venue') return '自动补期刊/会议'
+  if (key === 'missing_year') return '自动补年份'
+  if (key === 'weak_or_missing_title') return '自动校正标题'
+  if (key === 'missing_source') return '来源缺失'
+  if (key.startsWith('external_metadata_')) return '外部元数据校验'
+  return key ? key.replace(/_/g, ' ') : '自动补全'
+}
+
 export function CiteShelf({
   open,
   items,
@@ -145,6 +182,7 @@ export function CiteShelf({
   focusedKey,
   summaryLoadingKey,
   repairLoadingKey,
+  repairImpact,
   onToggle,
   onClear,
   onSelect,
@@ -243,6 +281,23 @@ export function CiteShelf({
     display: ReturnType<typeof citationDisplay>,
   ): { chips: string[]; tip: string; needsRepair: boolean } => {
     const chips: string[] = []
+    const contract = metadataQuality(item)
+    if (contract && metadataQualityReady(item)) {
+      return { chips: [], tip: '', needsRepair: false }
+    }
+    if (contract && Array.isArray(contract.issues) && contract.issues.length > 0) {
+      for (const issue of contract.issues) {
+        const code = String(issue.code || '').trim()
+        const chip = metadataIssueChip(code)
+        if (chip && !chips.includes(chip)) chips.push(chip)
+      }
+      const needsRepair = metadataQualityNeedsRepair(item)
+      const score = Number(contract.score || 0)
+      const tip = needsRepair
+        ? `系统会用参考文献原文、索引缓存和 Crossref 自动补全；当前 Q${Number.isFinite(score) ? Math.round(score) : 0}。`
+        : '系统已记录元数据质量状态。'
+      return { chips: chips.slice(0, 3), tip, needsRepair }
+    }
     const rawTitle = String(item.title || '').trim()
     const visibleTitle = String(display.main || rawTitle || item.main || '').trim()
     const hasWeakTitle = isLikelyWeakCitationTitle(visibleTitle)
@@ -553,6 +608,16 @@ export function CiteShelf({
       }
       setSourceQualityByPath((prev) => ({ ...prev, ...next }))
     }
+    const refreshIndexAndRepairSources = async (needsReindex: boolean) => {
+      if (needsReindex) {
+        try {
+          await libraryApi.reindex()
+        } catch {
+          // Source quality will still be refreshed so the UI can show the latest diagnostics.
+        }
+      }
+      await refreshRepairSources()
+    }
     const clearRepairing = () => {
       setSourceRepairingKey((cur) => (cur === repairKey ? '' : cur))
     }
@@ -565,6 +630,8 @@ export function CiteShelf({
         replace: true,
       })
       const queued = Number(res.enqueued || 0)
+      const repaired = Number(res.repaired || 0)
+      const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
       if (queued > 0) {
         if (!silent) message.success(S.shelf_source_quality_repair_queued.replace('{n}', String(queued)))
         watchingConversion = true
@@ -573,13 +640,16 @@ export function CiteShelf({
           () => {},
           () => {
             sourceRepairStreamRef.current = null
-            void refreshRepairSources().finally(clearRepairing)
+            void refreshIndexAndRepairSources(needsReindex).finally(clearRepairing)
           },
           () => {
             sourceRepairStreamRef.current = null
-            void refreshRepairSources().finally(clearRepairing)
+            void refreshIndexAndRepairSources(needsReindex).finally(clearRepairing)
           },
         )
+      } else if (repaired > 0) {
+        if (!silent) message.success(`Markdown repaired: ${repaired}`)
+        await refreshIndexAndRepairSources(needsReindex)
       } else {
         if (!silent) message.info(S.shelf_source_quality_repair_none)
         await refreshRepairSources()
@@ -915,6 +985,15 @@ export function CiteShelf({
                     {S.shelf_readiness_summaries.replace('{n}', `${shelfReadiness.summaryRate}%`)}
                   </span>
                 </div>
+                {repairImpact ? (
+                  <div className="kb-shelf-repair-impact" data-testid="citation-shelf-repair-impact">
+                    <span>已自动补全 {repairImpact.changed} 条</span>
+                    {repairImpact.score_delta ? <span>Q{repairImpact.before_avg_score} -&gt; Q{repairImpact.after_avg_score}</span> : null}
+                    {(repairImpact.changed_fields || []).slice(0, 3).map((field) => (
+                      <span key={`field-${field.name}`}>{field.name} x{field.count}</span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {selectedCount > 0 ? (

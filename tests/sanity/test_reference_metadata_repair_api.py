@@ -50,3 +50,71 @@ def test_shelf_metadata_repair_route_returns_quality_contract(tmp_path, monkeypa
     assert item["after"]["status"] == "ready"
     assert item["meta"]["doi"] == "10.1561/2200000016"
     assert item["persisted"] is True
+    assert payload["impact"]["ready_delta"] == 1
+    assert payload["impact"]["changed_fields"]
+
+
+def test_shelf_metadata_repair_hydrates_from_reference_index(tmp_path, monkeypatch):
+    def fake_enrich(detail):
+        return dict(detail)
+
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    source_path = str(tmp_path / "md" / "source.en.md")
+    (db_dir / "references_index.json").write_text(
+        """
+{
+  "docs": {
+    "source": {
+      "path": "__SOURCE_PATH__",
+      "name": "source.en.md",
+      "refs": {
+        "7": {
+          "num": 7,
+          "raw": "[7] Boyd S, Parikh N, Chu E. Alternating direction method of multipliers. Foundations and Trends in Machine Learning, 2011. doi:10.1561/2200000016",
+          "title": "Alternating direction method of multipliers",
+          "authors": "Boyd S, Parikh N, Chu E",
+          "venue": "Foundations and Trends in Machine Learning",
+          "year": "2011"
+        }
+      }
+    }
+  }
+}
+""".replace("__SOURCE_PATH__", source_path.replace("\\", "\\\\")),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/shelf/metadata/repair",
+        json={
+            "items": [
+                {
+                    "key": "source-r7",
+                    "anchor": "ref-7",
+                    "source_path": source_path,
+                    "source_name": "source.en.md",
+                    "ref_num": 7,
+                    "title": "ADMM",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ready"] == 1
+    assert payload["changed"] == 1
+    assert payload["impact"]["repair_sources"] == [{"name": "reference_index", "count": 1}]
+    item = payload["items"][0]
+    assert item["repair_sources"] == ["reference_index"]
+    assert "doi" in item["changed_fields"]
+    assert "missing_doi" in item["fixed_issue_codes"]
+    assert item["after"]["status"] == "ready"
+    assert item["meta"]["title"] == "Alternating direction method of multipliers"
+    assert item["meta"]["doi"] == "10.1561/2200000016"
+    assert item["meta"]["metadata_quality"]["status"] == "ready"

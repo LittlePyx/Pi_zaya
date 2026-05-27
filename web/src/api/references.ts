@@ -56,6 +56,9 @@ export interface ShelfMetadataRepairItem {
   changed_fields: string[]
   repair_status: 'ready' | 'repaired' | 'partial' | 'retryable' | 'unchanged' | 'error' | string
   retryable: boolean
+  fixed_issue_codes?: string[]
+  remaining_issue_codes?: string[]
+  repair_sources?: string[]
   error_kind?: string
   error_detail?: string
   before: ShelfMetadataQuality
@@ -63,6 +66,22 @@ export interface ShelfMetadataRepairItem {
   meta: Record<string, unknown>
   persisted?: boolean
   persisted_targets?: string[]
+}
+
+export interface ShelfMetadataRepairImpact {
+  requested: number
+  ready_before: number
+  ready_after: number
+  ready_delta: number
+  changed: number
+  persisted: number
+  before_avg_score: number
+  after_avg_score: number
+  score_delta: number
+  fixed_issue_codes?: Array<{ name: string, count: number }>
+  remaining_issue_codes?: Array<{ name: string, count: number }>
+  changed_fields?: Array<{ name: string, count: number }>
+  repair_sources?: Array<{ name: string, count: number }>
 }
 
 export interface ShelfMetadataRepairResponse {
@@ -74,6 +93,7 @@ export interface ShelfMetadataRepairResponse {
   failed: number
   changed: number
   persisted?: number
+  impact?: ShelfMetadataRepairImpact
   items: ShelfMetadataRepairItem[]
 }
 
