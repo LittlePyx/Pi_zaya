@@ -30,6 +30,66 @@ def test_build_generation_prompt_bundle_adds_abstract_rule_for_citeless_family()
     assert out["paper_guide_contract_enabled"] is False
 
 
+def test_normal_prompt_bundle_adds_user_facing_quality_protocol_with_hits():
+    out = _build_generation_prompt_bundle(
+        prompt="Compare the method trade-offs.",
+        ctx="DOC-1 [SID:s12345678] demo\nThe method improves resolution.",
+        paper_guide_mode=False,
+        paper_guide_bound_source_ready=False,
+        paper_guide_prompt_family="",
+        answer_intent="compare",
+        answer_depth="medium",
+        answer_output_mode="reading_guide",
+        answer_contract_v1=False,
+        has_answer_hits=True,
+        locked_citation_source=None,
+        image_first_prompt=False,
+        anchor_grounded_answer=False,
+        paper_guide_special_focus_block="",
+        paper_guide_support_slots_block="",
+        paper_guide_evidence_cards_block="",
+        paper_guide_citation_grounding_block="",
+        image_attachment_count=0,
+    )
+
+    system = out["system"]
+    assert "User-facing research answer quality protocol:" in system
+    assert "Conclusion, Evidence, Limits, Next Steps" in system
+    assert "Every paper-specific claim based on retrieved snippets" in system
+    assert "[10001]" in system
+    assert "Do not use bare [1] [2] [3]" in system
+    assert "Retrieved context (with deep-read supplements):" in out["user"]
+
+
+def test_normal_prompt_bundle_adds_no_hit_quality_protocol():
+    out = _build_generation_prompt_bundle(
+        prompt="What should I read next?",
+        ctx="",
+        paper_guide_mode=False,
+        paper_guide_bound_source_ready=False,
+        paper_guide_prompt_family="",
+        answer_intent="reading",
+        answer_depth="medium",
+        answer_output_mode="reading_guide",
+        answer_contract_v1=False,
+        has_answer_hits=False,
+        locked_citation_source=None,
+        image_first_prompt=False,
+        anchor_grounded_answer=False,
+        paper_guide_special_focus_block="",
+        paper_guide_support_slots_block="",
+        paper_guide_evidence_cards_block="",
+        paper_guide_citation_grounding_block="",
+        image_attachment_count=0,
+    )
+
+    system = out["system"]
+    assert "User-facing research answer quality protocol:" in system
+    assert "no matching library snippets were retrieved" in system
+    assert "general guidance" in system
+    assert "Retrieved context (with deep-read supplements):\n(none)" in out["user"]
+
+
 def test_build_generation_prompt_bundle_adds_citation_lock_for_non_citeless_family():
     out = _build_generation_prompt_bundle(
         prompt="How is APR grounded?",

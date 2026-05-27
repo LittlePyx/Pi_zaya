@@ -49,6 +49,24 @@ def _build_generation_prompt_bundle(
         "For math, use inline $...$ for short symbols and $$...$$ for longer equations; do not wrap equations in backticks.\n"
         "If the user asks for code, pseudocode, or derivation, provide directly usable output instead of only high-level discussion.\n"
     )
+    if not paper_guide_mode:
+        system += (
+            "\nUser-facing research answer quality protocol:\n"
+            "- Start with the direct answer to the user's actual question before background or reading advice.\n"
+            "- For research questions with retrieved context, prefer this compact shape unless the user requested code, translation, or a table: Conclusion, Evidence, Limits, Next Steps.\n"
+            "- Evidence should pair each important claim with the retrieved snippet marker that supports it.\n"
+            "- Put missing, weak, or conflicting retrieved support under Limits instead of smoothing it over.\n"
+            "- Keep the final Next Steps item actionable and source-aware, such as the exact section, figure, table, or paper family to inspect next.\n"
+        )
+        if has_answer_hits:
+            system += (
+                "- Every paper-specific claim based on retrieved snippets must end with offset snippet citations such as [10001] or [10002].\n"
+                "- Do not use bare [1] [2] [3] for retrieved snippets; those can collide with a paper's own bibliography numbers.\n"
+            )
+        else:
+            system += (
+                "- If no retrieved context is available, explicitly say that no matching library snippets were retrieved, then label any answer as general guidance.\n"
+            )
     if paper_guide_mode:
         system += (
             "\nStructured citation protocol:\n"

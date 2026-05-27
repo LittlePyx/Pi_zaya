@@ -276,7 +276,7 @@ const FRAGMENT_LEAD_OK_RE = /^(?:a|an|the|this|these|those|most|many|some|severa
 function splitEvidenceSentences(value: string): string[] {
   return String(value || '')
     .trim()
-    .split(/(?<=[。！？!?\.])\s+/)
+    .split(/(?<=[。！？!?.])\s+/)
     .map((item) => item.trim())
     .filter(Boolean)
 }
@@ -287,7 +287,7 @@ function looksFragmentaryEvidenceSentence(value: string): boolean {
   if (/^[a-z]{2,}\b/.test(text) && !FRAGMENT_LEAD_OK_RE.test(text)) return true
   if (/^(?:and|or|of|that|which|from|into|onto|within|without|using|used|measured|allowing)\b/i.test(text)) return true
   if (text.length > 80 && /\b(?:and|or|of|to|with|by|from|into|onto)$/i.test(text)) return true
-  if (text.length > 120 && !/[。！？!?\.]$/.test(text)) return true
+  if (text.length > 120 && !/[。！？!?.]$/.test(text)) return true
   return false
 }
 
@@ -590,6 +590,11 @@ function normalizeDoiLike(value: unknown): string {
     .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
     .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
     .trim()
+}
+
+function doiUrlFrom(value: unknown): string {
+  const doi = normalizeDoiLike(value)
+  return doi ? `https://doi.org/${doi}` : ''
 }
 
 function pickText(rec: Record<string, unknown>, ...keys: string[]): string {
@@ -906,6 +911,12 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'systemBTraceContext',
   ] as const) {
     detail[key] = stripEvidenceMetadataPrefix(detail[key], detail)
+  }
+  if (!detail.doiUrl && detail.doi) {
+    detail.doiUrl = doiUrlFrom(detail.doi)
+  }
+  if (!detail.externalDoiUrl && detail.externalDoi) {
+    detail.externalDoiUrl = doiUrlFrom(detail.externalDoi)
   }
   if (!detail.isInpaper) {
     detail.raw = stripEvidenceMetadataPrefix(detail.raw, detail)

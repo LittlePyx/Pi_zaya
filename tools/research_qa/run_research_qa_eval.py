@@ -15,7 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from api.reference_card_quality import summarize_citation_detail_quality
+from api.reference_card_quality import (
+    summarize_citation_detail_quality,
+    summarize_citation_shelf_quality,
+    summarize_ref_card_hit_quality,
+)
 from kb.citation_audit import summarize_system_b_citation_audit
 
 
@@ -459,22 +463,23 @@ def _unique_doc_ids_in_payload(fixture: ResearchQaFixture, payload: Any) -> list
     return sorted(doc_id for doc_id in fixture.docs_by_id if _doc_matches_payload(fixture, doc_id, payload))
 
 
-def _ref_card_quality_failures(refs_payload: Any, forbidden_phrases: list[str], user_msg_id: int | str | None = None) -> list[str]:
-    failures: list[str] = []
+def _ref_card_quality_summary(
+    refs_payload: Any,
+    forbidden_phrases: list[str],
+    user_msg_id: int | str | None = None,
+) -> dict[str, Any]:
     hits = _extract_ref_hits(refs_payload, user_msg_id=user_msg_id)
-    for idx, hit in enumerate(hits[:5], start=1):
-        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
-        summary = str(ui_meta.get("summary_line") or "").strip()
-        why = str(ui_meta.get("why_line") or "").strip()
-        if len(summary) < 12:
-            failures.append(f"ref_card_{idx}_summary_too_short")
-        if len(why) < 12:
-            failures.append(f"ref_card_{idx}_why_too_short")
-        card_text = f"{summary}\n{why}\n{_payload_text(hit)}"
-        for phrase in forbidden_phrases:
-            if _contains_term(card_text, phrase):
-                failures.append(f"ref_card_{idx}_forbidden_phrase:{phrase}")
-    return failures
+    return summarize_ref_card_hit_quality(hits[:5], forbidden_phrases=forbidden_phrases)
+
+
+def _ref_card_quality_failures(ref_card_quality: dict[str, Any]) -> list[str]:
+    summary = ref_card_quality if isinstance(ref_card_quality, dict) else {}
+    return [
+        f"ref_card_{item.get('index')}_{item.get('name')}"
+        + (f":{item.get('detail')}" if item.get("detail") else "")
+        for item in _as_list(summary.get("failures"))
+        if isinstance(item, dict)
+    ]
 
 
 def _ref_pack_state_failures(refs_payload: Any, user_msg_id: int | str | None = None) -> list[str]:
@@ -552,6 +557,45 @@ def _citation_quality_failures(
         failures.append(f"system_a_quality_count:{actual_system_a}<{min_system_a}")
     if min_system_b and actual_system_b < min_system_b:
         failures.append(f"system_b_quality_count:{actual_system_b}<{min_system_b}")
+    return summary, failures
+
+
+def _shelf_quality_failures(
+    citation_details: list[dict[str, Any]],
+    expected: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    summary = summarize_citation_shelf_quality(citation_details)
+    failures: list[str] = []
+    if not bool(summary.get("ok")):
+        failures.extend(
+            f"shelf_{item.get('index')}_{item.get('name')}"
+            for item in _as_list(summary.get("failures"))
+            if isinstance(item, dict)
+        )
+    min_ok = _expected_int(expected, "minCitationShelfQualityCount", _expected_int(expected, "minCitationCount", 1))
+    ok_count = int(summary.get("ok_count") or 0)
+    if min_ok and ok_count < min_ok:
+        failures.append(f"shelf_quality_count:{ok_count}<{min_ok}")
+    min_metadata_ready = _expected_int(expected, "minCitationShelfMetadataReadyCount")
+    metadata_ready = int(summary.get("metadata_ready_count") or 0)
+    if min_metadata_ready and metadata_ready < min_metadata_ready:
+        failures.append(f"shelf_metadata_ready_count:{metadata_ready}<{min_metadata_ready}")
+    min_export_ready = _expected_int(expected, "minCitationShelfExportReadyCount")
+    export_ready = int(summary.get("export_ready_count") or 0)
+    if min_export_ready and export_ready < min_export_ready:
+        failures.append(f"shelf_export_ready_count:{export_ready}<{min_export_ready}")
+    min_doi = _expected_int(expected, "minCitationShelfDoiCount")
+    doi_count = int(summary.get("doi_count") or 0)
+    if min_doi and doi_count < min_doi:
+        failures.append(f"shelf_doi_count:{doi_count}<{min_doi}")
+    min_source_click = _expected_int(expected, "minCitationShelfSourceClickCount")
+    source_clickable = int(summary.get("source_clickable_count") or 0)
+    if min_source_click and source_clickable < min_source_click:
+        failures.append(f"shelf_source_clickable_count:{source_clickable}<{min_source_click}")
+    max_review = _expected_optional_int(expected, "maxCitationShelfMetadataReviewCount")
+    review_count = int(summary.get("review_count") or 0)
+    if max_review is not None and review_count > max_review:
+        failures.append(f"shelf_metadata_review_count:{review_count}>{max_review}")
     return summary, failures
 
 
@@ -752,6 +796,7 @@ def validate_case(
         add_check("system_b_includes_required_docs", not missing_system_b_docs, missing_system_b_docs)
 
     citation_quality: dict[str, Any] = {}
+    shelf_quality: dict[str, Any] = {}
     system_b_audit = summarize_system_b_citation_audit(citation_details)
     if _should_check_citation_card_quality(expected):
         citation_quality, citation_quality_failures = _citation_quality_failures(citation_details, expected)
@@ -762,6 +807,13 @@ def validate_case(
             not citation_quality_failures and bool(citation_details),
             citation_quality_failures or citation_quality,
         )
+    if bool(expected.get("requireCitationShelfQuality")):
+        shelf_quality, shelf_quality_failures = _shelf_quality_failures(citation_details, expected)
+        add_check(
+            "citation_shelf_quality",
+            not shelf_quality_failures and bool(citation_details),
+            shelf_quality_failures or shelf_quality,
+        )
     if _system_b_audit_expected(expected):
         system_b_audit_failures = _system_b_audit_failures(system_b_audit, expected)
         add_check(
@@ -770,11 +822,12 @@ def validate_case(
             system_b_audit_failures or system_b_audit,
         )
 
-    card_failures = _ref_card_quality_failures(
+    ref_card_quality = _ref_card_quality_summary(
         refs_payload,
         fixture.forbidden_phrases,
         user_msg_id=user_msg_id,
     )
+    card_failures = _ref_card_quality_failures(ref_card_quality)
     add_check("refs_card_copy_quality", not card_failures, card_failures)
 
     required_primary_terms = [
@@ -805,6 +858,8 @@ def validate_case(
         "ref_doc_ids": _unique_doc_ids_in_payload(fixture, refs_payload),
         "citation_doc_ids": _unique_doc_ids_in_payload(fixture, citation_details),
         "citation_quality": citation_quality,
+        "citation_shelf_quality": shelf_quality,
+        "ref_card_quality": ref_card_quality,
         "system_b_audit": system_b_audit,
     }
 
@@ -841,6 +896,65 @@ def _build_report(rows: list[dict[str, Any]], *, fixture_path: Path, base_url: s
         quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
         failure_names = [str(item.get("name") or "") for item in _as_list(quality.get("failures")) if isinstance(item, dict)]
         lines.append(f"- `{row.get('id')}`: {', '.join(failure_names) or 'unknown'}")
+    card_rows: list[tuple[str, dict[str, Any]]] = []
+    for row in rows:
+        quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+        ref_card_quality = quality.get("ref_card_quality") if isinstance(quality.get("ref_card_quality"), dict) else {}
+        if ref_card_quality:
+            card_rows.append((str(row.get("id") or ""), ref_card_quality))
+    lines.extend(["", "## Ref Card Quality", ""])
+    if not card_rows:
+        lines.append("- None")
+    for case_id, card_quality in card_rows:
+        failures = [item for item in _as_list(card_quality.get("failures")) if isinstance(item, dict)]
+        warnings = [item for item in _as_list(card_quality.get("warnings")) if isinstance(item, dict)]
+        lines.append(
+            "- "
+            f"`{case_id}`: ok={bool(card_quality.get('ok'))}, "
+            f"cards={int(card_quality.get('count') or 0)}, "
+            f"ok_cards={int(card_quality.get('ok_count') or 0)}, "
+            f"failures={len(failures)}, warnings={len(warnings)}, "
+            f"min_score={float(card_quality.get('min_score') or 0.0):.3f}"
+        )
+        for failure in failures[:5]:
+            lines.append(
+                "  - "
+                f"card {int(failure.get('index') or 0)}: "
+                f"{failure.get('name')}"
+                + (f" ({failure.get('field')})" if failure.get("field") else "")
+                + (f" - {failure.get('detail')}" if failure.get("detail") else "")
+            )
+    shelf_rows: list[tuple[str, dict[str, Any]]] = []
+    for row in rows:
+        quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+        shelf_quality = quality.get("citation_shelf_quality") if isinstance(quality.get("citation_shelf_quality"), dict) else {}
+        if shelf_quality:
+            shelf_rows.append((str(row.get("id") or ""), shelf_quality))
+    lines.extend(["", "## Citation Shelf Quality", ""])
+    if not shelf_rows:
+        lines.append("- None")
+    for case_id, shelf_quality in shelf_rows:
+        failures = [item for item in _as_list(shelf_quality.get("failures")) if isinstance(item, dict)]
+        warnings = [item for item in _as_list(shelf_quality.get("warnings")) if isinstance(item, dict)]
+        lines.append(
+            "- "
+            f"`{case_id}`: ok={bool(shelf_quality.get('ok'))}, "
+            f"items={int(shelf_quality.get('count') or 0)}, "
+            f"ok_items={int(shelf_quality.get('ok_count') or 0)}, "
+            f"metadata_ready={int(shelf_quality.get('metadata_ready_count') or 0)}, "
+            f"doi={int(shelf_quality.get('doi_count') or 0)}, "
+            f"source_clickable={int(shelf_quality.get('source_clickable_count') or 0)}, "
+            f"failures={len(failures)}, warnings={len(warnings)}, "
+            f"min_score={float(shelf_quality.get('min_score') or 0.0):.3f}"
+        )
+        for failure in failures[:5]:
+            lines.append(
+                "  - "
+                f"item {int(failure.get('index') or 0)}: "
+                f"{failure.get('name')}"
+                + (f" ({failure.get('field')})" if failure.get("field") else "")
+                + (f" - {failure.get('detail')}" if failure.get("detail") else "")
+            )
     audit_rows: list[tuple[str, dict[str, Any]]] = []
     for row in rows:
         quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}

@@ -3,7 +3,10 @@ import {
   libraryApi,
   type ConvertActiveTask,
   type LibraryFileItem,
+  type LibraryQualityOverviewResponse,
   type LibrarySuggestionActionBody,
+  type LibraryQualityRepairBody,
+  type LibraryQualityRepairResponse,
   type LibraryMetaBatchUpdateBody,
   type LibraryMetaUpdateBody,
   type LibrarySuggestionRegenerateBody,
@@ -46,7 +49,12 @@ interface LibraryState {
     queued: number
     running: number
     reconverting: number
+    quality_review: number
+    quality_ready: number
   } | null
+  qualityOverview: LibraryQualityOverviewResponse | null
+  qualityOverviewLoading: boolean
+  qualityOverviewError: string
   converting: boolean
   progress: ConvertProgressState | null
   sseController: AbortController | null
@@ -54,9 +62,11 @@ interface LibraryState {
   refSyncController: AbortController | null
   loadPdfs: () => Promise<void>
   loadFiles: (scope?: string) => Promise<void>
+  loadQualityOverview: (scope?: string) => Promise<void>
   upload: (file: File, baseName?: string) => Promise<{ name: string; duplicate?: boolean; existing?: string }>
   convert: (name: string, mode?: string, replace?: boolean) => Promise<void>
   convertPending: (mode?: string, limit?: number) => Promise<{ ok: boolean; enqueued: number; skipped_busy: number; pending_total: number }>
+  repairQuality: (body: LibraryQualityRepairBody) => Promise<LibraryQualityRepairResponse>
   openFile: (pdfName: string, target?: 'pdf' | 'md' | 'pdf_dir' | 'md_dir') => Promise<void>
   deleteFile: (pdfName: string, alsoMd?: boolean) => Promise<{ ok: boolean; pdf_deleted: boolean; md_deleted: boolean; removed_queued: number; warnings: string[]; needs_reindex: boolean }>
   updatePaperMeta: (body: LibraryMetaUpdateBody) => Promise<LibraryFileItem | null>
@@ -93,6 +103,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   files: [],
   viewScope: '200',
   fileCounts: null,
+  qualityOverview: null,
+  qualityOverviewLoading: false,
+  qualityOverviewError: '',
   converting: false,
   progress: null,
   sseController: null,
@@ -104,14 +117,49 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   },
 
   loadFiles: async (scope = '200') => {
-    const view = await libraryApi.listFiles(scope)
+    set({ qualityOverviewLoading: true, qualityOverviewError: '' })
+    const [viewResult, overviewResult] = await Promise.allSettled([
+      libraryApi.listFiles(scope),
+      libraryApi.qualityOverview('all'),
+    ])
+    if (viewResult.status === 'rejected') {
+      set({ qualityOverviewLoading: false })
+      throw viewResult.reason
+    }
+    const view = viewResult.value
     const files = Array.isArray(view.items) ? view.items : []
+    const overviewPatch = overviewResult.status === 'fulfilled'
+      ? {
+        qualityOverview: overviewResult.value,
+        qualityOverviewLoading: false,
+        qualityOverviewError: '',
+      }
+      : {
+        qualityOverview: null,
+        qualityOverviewLoading: false,
+        qualityOverviewError: overviewResult.reason instanceof Error ? overviewResult.reason.message : String(overviewResult.reason || 'quality overview failed'),
+      }
     set({
       viewScope: scope,
       files,
       fileCounts: view.counts || null,
       pdfs: files.map((item) => ({ name: item.name, path: item.path })),
+      ...overviewPatch,
     })
+  },
+
+  loadQualityOverview: async (scope = 'all') => {
+    set({ qualityOverviewLoading: true, qualityOverviewError: '' })
+    try {
+      const overview = await libraryApi.qualityOverview(scope)
+      set({ qualityOverview: overview, qualityOverviewLoading: false, qualityOverviewError: '' })
+    } catch (err) {
+      set({
+        qualityOverview: null,
+        qualityOverviewLoading: false,
+        qualityOverviewError: err instanceof Error ? err.message : String(err || 'quality overview failed'),
+      })
+    }
   },
 
   upload: async (file, baseName) => {
@@ -128,6 +176,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   convertPending: async (mode = 'balanced', limit = 0) => {
     const res = await libraryApi.convertPending(mode, limit)
     if (res.enqueued > 0) {
+      set({ converting: true, progress: null })
+      await get().loadFiles(get().viewScope || '200')
+      get().startProgressStream()
+    } else {
+      await get().loadFiles(get().viewScope || '200')
+    }
+    return res
+  },
+
+  repairQuality: async (body) => {
+    const res = await libraryApi.repairQuality(body)
+    if (Number(res.enqueued || 0) > 0) {
       set({ converting: true, progress: null })
       await get().loadFiles(get().viewScope || '200')
       get().startProgressStream()

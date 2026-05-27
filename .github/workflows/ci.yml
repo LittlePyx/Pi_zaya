@@ -59,3 +59,9 @@ jobs:
 
       - name: Run backend unit tests
         run: python -m pytest tests/unit -q
+
+      - name: Check research QA regression fixture
+        run: python tools/research_qa/run_research_qa_eval.py --dry-run
+
+      - name: Check converter quality regression manifest
+        run: python tools/converter_quality/run_converter_quality_eval.py --dry-run

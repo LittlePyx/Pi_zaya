@@ -61,6 +61,7 @@ def test_convert_pipeline_fast_mode(sample_pdf, output_dir):
     # Check for content presence
     assert "Test Title" in content
     assert "This is a test paragraph with some content." in content
+    assert content.lstrip().startswith("<!-- kb_page: 1 -->")
     
     # Check simple structure based on heuristics (fontsize)
     # The pipeline might not perfectly identify H1 without LLM, but let's see.
@@ -72,6 +73,12 @@ def test_convert_pipeline_fast_mode(sample_pdf, output_dir):
     assert (output_dir / "assets" / "anchor_index.json").exists()
     assert (output_dir / "assets" / "equation_index.json").exists()
     assert (output_dir / "assets" / "reference_index.json").exists()
+
+
+def test_ensure_page_marker_inserts_and_normalizes_marker():
+    assert PDFConverter._ensure_page_marker("# Page body", 2).startswith("<!-- kb_page: 3 -->")
+    assert PDFConverter._ensure_page_marker("<!-- kb_page: 99 -->\n\n# Page body", 2).startswith("<!-- kb_page: 3 -->")
+    assert PDFConverter._ensure_page_marker("", 0) == "<!-- kb_page: 1 -->"
 
 def test_convert_pipeline_missing_file(output_dir):
     """Test error handling for missing file."""

@@ -198,6 +198,17 @@ class PDFConverter:
         # Track heading hierarchy across pages
         self.heading_stack: List[Tuple[int, str]] = []  # (level, text)
 
+    @staticmethod
+    def _ensure_page_marker(md: str | None, page_index: int) -> str:
+        marker = f"<!-- kb_page: {int(page_index) + 1} -->"
+        text = str(md or "").strip()
+        if not text:
+            return marker
+        page_marker_re = re.compile(r"^\s*<!--\s*kb_page\s*:\s*\d{1,5}\s*-->\s*", flags=re.IGNORECASE)
+        if page_marker_re.match(text):
+            return page_marker_re.sub(f"{marker}\n\n", text, count=1).strip()
+        return f"{marker}\n\n{text}"
+
     def convert(self, pdf_path: str, save_dir: str) -> None:
         """Convert PDF to Markdown using the new converter."""
         print("=" * 60, flush=True)
@@ -269,7 +280,11 @@ class PDFConverter:
                 print(f"[MODE] Vision-direct ({mode_name}): each page screenshot -> VL model -> Markdown", flush=True)
                 md_pages = self._process_batch_vision_direct(doc, pdf_path, assets_dir, speed_mode=speed_mode)
             
-        final_md = "\n\n".join(filter(None, md_pages))
+        final_md = "\n\n".join(
+            self._ensure_page_marker(page_md, idx)
+            for idx, page_md in enumerate(md_pages)
+            if page_md
+        )
 
         # Post-process: run as best-effort to avoid whole-job failure on one cleanup stage.
         # In production this is better than aborting after long page processing.

@@ -70,6 +70,55 @@ def test_research_qa_fixture_enforces_system_b_trace_policy():
         assert expected.get("minSystemBCompleteRate") == 1.0
 
 
+def test_research_qa_fixture_cases_have_acceptance_contracts():
+    fixture = load_fixture()
+    assert fixture.cases
+    doc_ids = {str(item.get("id") or "") for item in fixture.docs}
+
+    for case in fixture.cases:
+        case_id = str(case.get("id") or "")
+        question = str(case.get("question") or "").strip()
+        expected = case.get("expected") if isinstance(case.get("expected"), dict) else {}
+        acceptance = case.get("acceptance") if isinstance(case.get("acceptance"), list) else []
+        case_doc_ids = [str(item) for item in case.get("docIds") or [] if str(item or "").strip()]
+
+        assert case_id, "case id is required"
+        assert question, f"{case_id} must include a natural research question"
+        assert len(acceptance) >= 2, f"{case_id} must describe user-facing acceptance criteria"
+        assert expected, f"{case_id} must include machine-checkable expectations"
+        assert case_doc_ids, f"{case_id} must bind at least one library document"
+        assert not (set(case_doc_ids) - doc_ids), f"{case_id} references unknown docs"
+        assert expected.get("requiredAnswerTerms"), f"{case_id} must define answer terms"
+        assert expected.get("requiredRefDocIds"), f"{case_id} must define required refs docs"
+        assert expected.get("requiredCitationDocIds"), f"{case_id} must define required citation docs"
+
+
+def test_research_qa_fixture_real_regression_cases_require_card_quality_gates():
+    fixture = load_fixture()
+    strict_case_ids = {
+        "spi-roadmap-beginner",
+        "cassi-to-3d-sci-lineage",
+        "microscopy-methods-map",
+        "single-photon-reading-pair",
+        "piln-dl-spi-position",
+    }
+
+    for case_id in strict_case_ids:
+        expected = _case_by_id(fixture, case_id).get("expected") or {}
+        assert expected.get("requireRefsReady") is True
+        assert expected.get("requirePolishStatus") is True
+        assert expected.get("requireCitationShelfQuality") is True
+        assert int(expected.get("minCitationShelfMetadataReadyCount") or 0) >= 1
+        assert int(expected.get("minCitationShelfDoiCount") or 0) >= 1
+        assert int(expected.get("minCitationShelfSourceClickCount") or 0) >= 1
+        assert expected.get("maxCitationShelfMetadataReviewCount") == 0
+        assert "full" in expected.get("allowedRefPolishStatuses", [])
+        assert "heuristic" in expected.get("allowedRefPolishStatuses", [])
+        assert int(expected.get("minRefHits") or 0) >= 2
+        assert int(expected.get("minCitationCount") or 0) >= 2
+        assert int(expected.get("minCitationDocCount") or 0) >= 1
+
+
 def test_validate_case_accepts_grounded_system_b_answer():
     fixture = load_fixture()
     case = _case_by_id(fixture, "scinerf-admm-origin")
@@ -183,7 +232,11 @@ def test_validate_case_accepts_multi_doc_ordinary_question_with_system_b_and_pol
                     "source_path": dl_path,
                     "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
                     "title": "Principles and prospects for single-pixel imaging",
-                    "raw": "Principles and prospects for single-pixel imaging.",
+                    "authors": "Edgar M P; Gibson G M; Padgett M J",
+                    "venue": "Nature Photonics",
+                    "year": "2019",
+                    "doi": "10.1038/s41566-018-0300-7",
+                    "raw": "Edgar M P, Gibson G M, Padgett M J. Principles and prospects for single-pixel imaging. Nature Photonics, 2019. doi:10.1038/s41566-018-0300-7.",
                     "heading_path": "Deep learning SPI review / References",
                     "location_label": "Deep learning SPI review / References",
                     "answer_claim": "The reading route should include upstream single-pixel imaging foundations.",
@@ -451,6 +504,97 @@ def test_validate_case_flags_system_b_audit_policy_failures():
     assert quality["system_b_audit"]["reference_index_fallback_count"] == 1
 
 
+def test_validate_case_flags_citation_shelf_quality_failures():
+    fixture = load_fixture()
+    case = {
+        "id": "shelf-policy",
+        "expected": {
+            "requireCitationShelfQuality": True,
+            "minCitationShelfQualityCount": 1,
+        },
+    }
+    result = {
+        "status": "done",
+        "done": True,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "A weak citation [1](#bad-cite).",
+            "cite_details": [
+                {
+                    "num": 1,
+                    "anchor": "bad-cite",
+                    "source_path": "demo.en.md",
+                    "title": "INTRODUCTION",
+                    "summary_line": "No summary available",
+                }
+            ],
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert quality["ok"] is False
+    assert "citation_shelf_quality" in failed_names
+    assert quality["citation_shelf_quality"]["count"] == 1
+    assert any(
+        item["name"] == "shelf_template_phrase_visible"
+        for item in quality["citation_shelf_quality"]["failures"]
+    )
+
+
+def test_validate_case_enforces_citation_shelf_metadata_contract():
+    fixture = load_fixture()
+    case = {
+        "id": "shelf-metadata-policy",
+        "expected": {
+            "requireCitationShelfQuality": True,
+            "minCitationShelfQualityCount": 1,
+            "minCitationShelfMetadataReadyCount": 1,
+            "minCitationShelfDoiCount": 1,
+            "minCitationShelfSourceClickCount": 1,
+            "maxCitationShelfMetadataReviewCount": 0,
+        },
+    }
+    result = {
+        "status": "done",
+        "done": True,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "A citation [1](#bad-cite).",
+            "cite_details": [
+                {
+                    "num": 1,
+                    "anchor": "bad-cite",
+                    "is_inpaper": True,
+                    "source_path": "demo.en.md",
+                    "title": "Distributed optimization and statistical learning via the alternating direction method of multipliers",
+                    "authors": "Stephen Boyd; Neal Parikh; Eric Chu",
+                    "venue": "Foundations and Trends in Machine Learning",
+                    "year": "2011",
+                    "raw": "[1] Boyd et al. Distributed optimization and statistical learning via the alternating direction method of multipliers. doi:10.1561/2200000016",
+                    "summary_line": "This source identifies ADMM as an upstream optimization method used by existing snapshot-compressive imaging work.",
+                }
+            ],
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    failed_names = {item["name"] for item in quality["failures"]}
+
+    assert quality["ok"] is False
+    assert "citation_shelf_quality" in failed_names
+    assert quality["citation_shelf_quality"]["doi_count"] == 1
+    assert quality["citation_shelf_quality"]["metadata_ready_count"] == 0
+    assert any(
+        item["name"] == "shelf_doi_not_promoted"
+        for item in quality["citation_shelf_quality"]["failures"]
+    )
+    check = next(item for item in quality["checks"] if item["name"] == "citation_shelf_quality")
+    assert "shelf_metadata_ready_count:0<1" in check["detail"]
+    assert "shelf_metadata_review_count:1>0" in check["detail"]
+
+
 def test_research_qa_report_surfaces_system_b_audit(tmp_path):
     report = _build_report(
         [
@@ -458,12 +602,42 @@ def test_research_qa_report_surfaces_system_b_audit(tmp_path):
                 "id": "case-a",
                 "quality": {
                     "ok": True,
+                    "ref_card_quality": {
+                        "ok": False,
+                        "count": 2,
+                        "ok_count": 1,
+                        "min_score": 0.8,
+                        "failures": [
+                            {
+                                "index": 2,
+                                "name": "ref_card_template_phrase_visible",
+                                "field": "summary_line",
+                                "detail": "This hit is directly relevant",
+                            }
+                        ],
+                        "warnings": [],
+                    },
                     "system_b_audit": {
                         "system_b_total": 2,
                         "trace_complete_count": 1,
                         "needs_review_count": 1,
                         "answer_context_only_count": 1,
                         "reference_index_fallback_count": 1,
+                    },
+                    "citation_shelf_quality": {
+                        "ok": False,
+                        "count": 2,
+                        "ok_count": 1,
+                        "min_score": 0.76,
+                        "failures": [
+                            {
+                                "index": 2,
+                                "name": "shelf_summary_too_short",
+                                "field": "summary",
+                                "detail": "short",
+                            }
+                        ],
+                        "warnings": [],
                     },
                 },
             }
@@ -475,6 +649,12 @@ def test_research_qa_report_surfaces_system_b_audit(tmp_path):
 
     assert "## System B Audit" in report
     assert "`case-a`: total=2, complete=1, review=1, answer_context_only=1, fallback=1" in report
+    assert "## Ref Card Quality" in report
+    assert "`case-a`: ok=False, cards=2, ok_cards=1, failures=1, warnings=0, min_score=0.800" in report
+    assert "card 2: ref_card_template_phrase_visible (summary_line) - This hit is directly relevant" in report
+    assert "## Citation Shelf Quality" in report
+    assert "`case-a`: ok=False, items=2, ok_items=1, metadata_ready=0, doi=0, source_clickable=0, failures=1, warnings=0, min_score=0.760" in report
+    assert "item 2: shelf_summary_too_short (summary) - short" in report
 
 
 def test_validate_case_accepts_common_zh_en_synonyms():

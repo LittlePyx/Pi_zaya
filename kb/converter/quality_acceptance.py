@@ -1,0 +1,316 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote
+
+from kb.converter.quality_compare import summarize_markdown_quality
+from kb.reference_index import extract_references_map_from_md
+
+
+_PAGE_MARKER_RE = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", re.IGNORECASE)
+_IMAGE_RE = re.compile(r"!\[[^\]]*]\(([^)]+)\)")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
+_MOJIBAKE_RE = re.compile(
+    "|".join(
+        [
+            r"\ufffd",
+            r"\u951b",
+            r"\u9428",
+            r"\u7ecb",
+            r"\u9225",
+            r"\u9286",
+            r"\u7039",
+            r"\u6d93",
+            r"\u6769",
+            r"\u934f",
+            r"\u7ed4",
+            r"\u6d63",
+            r"\u93c4",
+            r"\u5bee",
+            r"\u95c2",
+            r"\u71b6",
+            r"\u52ec",
+            r"\u579a",
+            r"\u70b2",
+            r"\u53e7",
+        ]
+    )
+)
+_DISPLAY_MATH_DELIMITER_RE = re.compile(r"^\s*\$\$\s*$")
+
+
+@dataclass(frozen=True)
+class ConversionQualityMetrics:
+    chars: int
+    lines: int
+    nonempty_lines: int
+    heading_count: int
+    h1_count: int
+    h2_count: int
+    h3_plus_count: int
+    heading_level_jump_count: int
+    has_abstract_heading: bool
+    page_marker_count: int
+    page_marker_min: int
+    page_marker_max: int
+    page_marker_gap_count: int
+    image_count: int
+    missing_image_count: int
+    caption_count: int
+    table_block_count: int
+    display_math_block_count: int
+    unclosed_display_math_block_count: int
+    inline_math_count: int
+    reference_line_count: int
+    extracted_reference_count: int
+    max_reference_index: int
+    body_citation_marker_count: int
+    body_citation_expanded_index_count: int
+    mojibake_count: int
+    analyzer_error_count: int
+    analyzer_warning_count: int
+
+
+def _resolve_repo_path(path_value: str | Path, *, repo_root: Path | None = None) -> Path:
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    root = repo_root or Path.cwd()
+    return root / path
+
+
+def _heading_level_jump_count(md_text: str) -> int:
+    levels = [len(match.group(1)) for match in _HEADING_RE.finditer(md_text or "")]
+    jumps = 0
+    previous = 0
+    for level in levels:
+        if previous > 0 and level > previous + 1:
+            jumps += 1
+        previous = level
+    return jumps
+
+
+def _page_marker_stats(md_text: str) -> tuple[int, int, int, int]:
+    pages = []
+    for match in _PAGE_MARKER_RE.finditer(md_text or ""):
+        try:
+            pages.append(int(match.group(1)))
+        except Exception:
+            continue
+    if not pages:
+        return 0, 0, 0, 0
+    unique = sorted(set(pages))
+    expected = set(range(unique[0], unique[-1] + 1))
+    gaps = len(expected - set(unique))
+    duplicates = len(pages) - len(unique)
+    return len(pages), unique[0], unique[-1], gaps + duplicates
+
+
+def _display_math_unclosed_count(md_text: str) -> int:
+    in_block = False
+    unclosed = 0
+    for raw in str(md_text or "").splitlines():
+        if not _DISPLAY_MATH_DELIMITER_RE.match(raw):
+            continue
+        in_block = not in_block
+    if in_block:
+        unclosed += 1
+    return unclosed
+
+
+def _image_target_path(md_path: Path, target: str) -> Path | None:
+    raw = str(target or "").strip().strip("<>")
+    if not raw or raw.startswith(("http://", "https://", "data:", "#")):
+        return None
+    raw = raw.split("#", 1)[0].split("?", 1)[0]
+    if not raw:
+        return None
+    return (md_path.parent / unquote(raw)).resolve()
+
+
+def _missing_image_count(md_path: Path, md_text: str) -> int:
+    missing = 0
+    for match in _IMAGE_RE.finditer(md_text or ""):
+        target = _image_target_path(md_path, match.group(1))
+        if target is not None and not target.exists():
+            missing += 1
+    return missing
+
+
+def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> ConversionQualityMetrics:
+    path = Path(md_path)
+    text = path.read_text(encoding="utf-8", errors="replace") if md_text is None else str(md_text or "")
+    base = summarize_markdown_quality(text)
+    page_count, page_min, page_max, page_gaps = _page_marker_stats(text)
+    references = extract_references_map_from_md(text)
+    return ConversionQualityMetrics(
+        chars=base.chars,
+        lines=base.lines,
+        nonempty_lines=base.nonempty_lines,
+        heading_count=base.heading_count,
+        h1_count=base.h1_count,
+        h2_count=base.h2_count,
+        h3_plus_count=base.h3_plus_count,
+        heading_level_jump_count=_heading_level_jump_count(text),
+        has_abstract_heading=base.has_abstract_heading,
+        page_marker_count=page_count,
+        page_marker_min=page_min,
+        page_marker_max=page_max,
+        page_marker_gap_count=page_gaps,
+        image_count=base.image_count,
+        missing_image_count=_missing_image_count(path, text),
+        caption_count=base.caption_count,
+        table_block_count=base.table_block_count,
+        display_math_block_count=base.display_math_block_count,
+        unclosed_display_math_block_count=_display_math_unclosed_count(text),
+        inline_math_count=base.inline_math_count,
+        reference_line_count=base.reference_line_count,
+        extracted_reference_count=len(references),
+        max_reference_index=base.max_reference_index,
+        body_citation_marker_count=base.body_citation_marker_count,
+        body_citation_expanded_index_count=base.body_citation_expanded_index_count,
+        mojibake_count=len(_MOJIBAKE_RE.findall(text)),
+        analyzer_error_count=base.analyzer_error_count,
+        analyzer_warning_count=base.analyzer_warning_count,
+    )
+
+
+def _as_int(mapping: dict[str, Any], key: str, default: int = 0) -> int:
+    try:
+        return int(mapping.get(key, default) or default)
+    except Exception:
+        return int(default)
+
+
+def _as_bool(mapping: dict[str, Any], key: str, default: bool = False) -> bool:
+    value = mapping.get(key, default)
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _contains_failures(md_text: str, checks: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    for item in list(checks.get("must_contain_text") or []):
+        needle = str(item or "")
+        if needle and needle not in md_text:
+            failures.append(f"missing_text:{needle[:80]}")
+    for item in list(checks.get("must_not_contain_text") or []):
+        needle = str(item or "")
+        if needle and needle in md_text:
+            failures.append(f"forbidden_text_present:{needle[:80]}")
+    stripped = str(md_text or "").lstrip()
+    for item in list(checks.get("must_start_with") or []):
+        needle = str(item or "")
+        if needle and not stripped.startswith(needle):
+            failures.append(f"missing_prefix:{needle[:80]}")
+    for item in list(checks.get("must_not_start_with") or []):
+        needle = str(item or "")
+        if needle and stripped.startswith(needle):
+            failures.append(f"forbidden_prefix_present:{needle[:80]}")
+    cursor = -1
+    for item in list(checks.get("ordered_text") or []):
+        needle = str(item or "")
+        if not needle:
+            continue
+        pos = md_text.find(needle, cursor + 1)
+        if pos < 0:
+            failures.append(f"ordered_text_missing:{needle[:80]}")
+            continue
+        cursor = pos
+    return failures
+
+
+def evaluate_conversion_quality(
+    md_path: Path,
+    *,
+    checks: dict[str, Any] | None = None,
+    md_text: str | None = None,
+) -> dict[str, Any]:
+    path = Path(md_path)
+    text = path.read_text(encoding="utf-8", errors="replace") if md_text is None else str(md_text or "")
+    cfg = dict(checks or {})
+    metrics = summarize_conversion_quality(path, text)
+    values = asdict(metrics)
+    failures: list[str] = []
+
+    minimum_checks = {
+        "min_chars": "chars",
+        "min_nonempty_lines": "nonempty_lines",
+        "min_headings": "heading_count",
+        "min_h1": "h1_count",
+        "min_h2": "h2_count",
+        "min_page_markers": "page_marker_count",
+        "min_images": "image_count",
+        "min_captions": "caption_count",
+        "min_tables": "table_block_count",
+        "min_display_math": "display_math_block_count",
+        "min_inline_math": "inline_math_count",
+        "min_references": "extracted_reference_count",
+        "min_reference_lines": "reference_line_count",
+        "min_max_reference_index": "max_reference_index",
+        "min_body_citations": "body_citation_marker_count",
+    }
+    for check_key, metric_key in minimum_checks.items():
+        if check_key not in cfg:
+            continue
+        expected = _as_int(cfg, check_key)
+        actual = int(values.get(metric_key) or 0)
+        if actual < expected:
+            failures.append(f"{metric_key}:{actual}<{expected}")
+
+    maximum_checks = {
+        "max_missing_images": "missing_image_count",
+        "max_page_marker_gaps": "page_marker_gap_count",
+        "max_heading_level_jumps": "heading_level_jump_count",
+        "max_unclosed_display_math": "unclosed_display_math_block_count",
+        "max_mojibake": "mojibake_count",
+        "max_analyzer_errors": "analyzer_error_count",
+        "max_analyzer_warnings": "analyzer_warning_count",
+    }
+    for check_key, metric_key in maximum_checks.items():
+        if check_key not in cfg:
+            continue
+        expected = _as_int(cfg, check_key)
+        actual = int(values.get(metric_key) or 0)
+        if actual > expected:
+            failures.append(f"{metric_key}:{actual}>{expected}")
+
+    if _as_bool(cfg, "require_abstract_heading") and not metrics.has_abstract_heading:
+        failures.append("missing_abstract_heading")
+
+    failures.extend(_contains_failures(text, cfg))
+
+    return {
+        "ok": not failures,
+        "path": str(path),
+        "metrics": values,
+        "failures": failures,
+    }
+
+
+def load_quality_manifest(path: Path | str, *, repo_root: Path | None = None) -> dict[str, Any]:
+    root = repo_root or Path.cwd()
+    manifest_path = _resolve_repo_path(path, repo_root=root)
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    defaults = dict(data.get("defaults") or {})
+    cases: list[dict[str, Any]] = []
+    for raw_case in list(data.get("cases") or []):
+        if not isinstance(raw_case, dict):
+            continue
+        case = dict(raw_case)
+        checks = dict(defaults)
+        checks.update(case.get("checks") or {})
+        case["checks"] = checks
+        md_path = _resolve_repo_path(str(case.get("md_path") or ""), repo_root=root)
+        case["_md_abspath"] = str(md_path)
+        case["_exists"] = md_path.exists()
+        cases.append(case)
+    out = dict(data)
+    out["cases"] = cases
+    out["_manifest_path"] = str(manifest_path)
+    return out

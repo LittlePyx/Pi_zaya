@@ -10,6 +10,8 @@ from kb.evidence_text import source_title_candidate
 REF_CARD_POLISH_CONTRACT_VERSION = 1
 REF_CARD_VIEW_CONTRACT_VERSION = 1
 CITATION_CARD_QUALITY_CONTRACT_VERSION = 2
+REF_CARD_QUALITY_CONTRACT_VERSION = 1
+CITATION_SHELF_QUALITY_CONTRACT_VERSION = 2
 
 POLISH_STATUSES = {"full", "heuristic", "pending", "failed"}
 LLM_SUMMARY_GENERATIONS = {"llm_grounded", "llm_pack", "llm_abstract"}
@@ -46,6 +48,7 @@ _NARRATIVE_METADATA_RE = re.compile(
     re.IGNORECASE,
 )
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s，。；;,)）]+", re.IGNORECASE)
+_YEAR_HINT_RE = re.compile(r"\b(?:18|19|20)\d{2}\b")
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -526,6 +529,451 @@ def summarize_citation_detail_quality(details: list[Mapping[str, Any]] | tuple[M
         "warnings": warnings,
         "min_score": min((float(item.get("score") or 0.0) for item in items), default=1.0),
         "system_b_audit": summarize_system_b_citation_audit(details),
+    }
+
+
+_WEAK_SHELF_TITLE_RE = re.compile(
+    r"^(?:abstract|introduction|related\s+work|background|methods?|experiments?|results?|discussion|conclusion|references?)$",
+    re.IGNORECASE,
+)
+
+
+def _card_view(data: Mapping[str, Any]) -> dict[str, Any]:
+    return _as_dict(data.get("card_view") or data.get("cardView"))
+
+
+def _card_view_header_text(data: Mapping[str, Any], key: str) -> str:
+    return _clean_ref_card_text(_as_dict(_card_view(data).get("header")).get(key), max_len=260)
+
+
+def _card_view_section_text(data: Mapping[str, Any], *section_ids: str) -> str:
+    wanted = {_norm(item) for item in section_ids if _norm(item)}
+    for section in list(_card_view(data).get("sections") or []):
+        if not isinstance(section, Mapping):
+            continue
+        section_id = _norm(section.get("id"))
+        if wanted and section_id not in wanted:
+            continue
+        text = _clean_ref_card_text(section.get("text") or section.get("title"), max_len=620)
+        if text:
+            return text
+    return ""
+
+
+def _shelf_title(data: Mapping[str, Any]) -> str:
+    header_title = _card_view_header_text(data, "title")
+    if header_title:
+        return header_title
+    title = _clean_ref_card_text(_first_text(data, ("card_title", "title", "raw", "cite_fmt")), max_len=260)
+    source_title = source_title_candidate(_first_text(data, ("source_name", "source_path")))
+    if source_title and (not title or _WEAK_SHELF_TITLE_RE.match(title) or _looks_redundant_narrative_metadata(title, data)):
+        return _clean_ref_card_text(source_title, max_len=260)
+    return title or _clean_ref_card_text(_first_text(data, ("source_name", "source_path")), max_len=260)
+
+
+def _shelf_subtitle(data: Mapping[str, Any]) -> str:
+    return _clean_ref_card_text(
+        _card_view_header_text(data, "subtitle")
+        or _first_text(data, ("authors", "venue", "year", "heading_path", "location_label", "source_name", "source_path")),
+        max_len=320,
+    )
+
+
+def _shelf_summary(data: Mapping[str, Any]) -> str:
+    card_view = _card_view(data)
+    view_summary = _clean_ref_card_text(card_view.get("summary"), max_len=520)
+    if view_summary:
+        return view_summary
+    for section_ids in (("takeaway",), ("context_summary",), ("summary",), ("evidence",), ("support",)):
+        text = _card_view_section_text(data, *section_ids)
+        if text:
+            return text
+    return _clean_ref_card_text(
+        _first_text(
+            data,
+            (
+                "summary_line",
+                "card_takeaway",
+                "card_context_summary",
+                "upstream_work_role",
+                "user_question_relation",
+                "answer_claim",
+                "card_claim",
+                "citation_context",
+                "evidence_quote",
+                "card_evidence",
+            ),
+        ),
+        max_len=520,
+    )
+
+
+def _has_doi_hint(data: Mapping[str, Any]) -> bool:
+    explicit = _first_text(
+        data,
+        ("doi", "doi_url", "doiUrl", "external_doi", "external_doi_url", "externalDoi", "externalDoiUrl"),
+    )
+    if explicit and (_DOI_RE.search(explicit) or explicit.lower().startswith("10.")):
+        return True
+    return bool(_DOI_RE.search(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry"))))
+
+
+def _has_year_hint(data: Mapping[str, Any]) -> bool:
+    explicit = _first_text(data, ("year", "published_year", "publishedYear"))
+    if _YEAR_HINT_RE.fullmatch(explicit):
+        return True
+    return bool(_YEAR_HINT_RE.search(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry"))))
+
+
+def _source_clickable(data: Mapping[str, Any]) -> bool:
+    reader_open = _as_dict(data.get("reader_open") or data.get("readerOpen"))
+    return bool(
+        _first_text(data, ("source_path", "sourcePath"))
+        or _first_text(reader_open, ("sourcePath", "source_path"))
+    )
+
+
+def _shelf_metadata_contract(
+    data: Mapping[str, Any],
+    *,
+    title: str,
+    summary: str,
+    source_identity: str,
+    route: str,
+) -> dict[str, Any]:
+    has_author = bool(_first_text(data, ("authors", "external_authors", "externalAuthors")))
+    has_venue = bool(_first_text(data, ("venue", "external_venue", "externalVenue")))
+    has_year = _has_year_hint(data)
+    has_doi = _has_doi_hint(data)
+    source_open = _source_clickable(data)
+    has_summary = len(_text(summary)) >= 24
+    title_ready = len(_text(title)) >= 8 and not _WEAK_SHELF_TITLE_RE.match(_text(title))
+    bibliographic = route == "system_b" or bool(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry")))
+    external_status = _norm(data.get("external_metadata_status") or data.get("externalMetadataStatus"))
+    untrusted_external = external_status in {"candidate", "conflict"}
+    export_ready = bool(title_ready and source_identity and has_author and has_venue and has_year and has_doi)
+    source_ready = bool(source_open and source_identity and title_ready and has_summary)
+    metadata_ready = export_ready if bibliographic else source_ready
+    review_needed = bool(untrusted_external or not metadata_ready)
+    return {
+        "title_ready": title_ready,
+        "has_source_identity": bool(source_identity),
+        "source_clickable": source_open,
+        "has_author": has_author,
+        "has_venue": has_venue,
+        "has_year": has_year,
+        "has_doi": has_doi,
+        "has_summary": has_summary,
+        "bibliographic": bibliographic,
+        "export_ready": export_ready,
+        "metadata_ready": metadata_ready,
+        "review_needed": review_needed,
+        "external_metadata_status": external_status,
+    }
+
+
+def citation_shelf_item_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return a quality contract for one item after it is saved into the citation shelf."""
+
+    data = _as_dict(detail)
+    route = _citation_route(data)
+    failures: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    def fail(name: str, *, field: str = "", detail: Any = "") -> None:
+        failures.append(_quality_issue(name, field=field, detail=detail, severity="error"))
+
+    def warn(name: str, *, field: str = "", detail: Any = "") -> None:
+        warnings.append(_quality_issue(name, field=field, detail=detail, severity="warning"))
+
+    num = _intish(data.get("num") or data.get("ref_num"))
+    anchor = _text(data.get("anchor"))
+    title = _shelf_title(data)
+    subtitle = _shelf_subtitle(data)
+    summary = _shelf_summary(data)
+    source_identity = _first_text(data, ("source_name", "source_path", "title", "raw", "cite_fmt"))
+    export_identity = _first_text(data, ("cite_fmt", "raw", "title", "source_name", "source_path"))
+    metadata = _shelf_metadata_contract(
+        data,
+        title=title,
+        summary=summary,
+        source_identity=source_identity,
+        route=route,
+    )
+
+    if num <= 0:
+        fail("shelf_missing_citation_number")
+    if not anchor:
+        fail("shelf_missing_click_anchor")
+    if not source_identity:
+        fail("shelf_missing_source_identity")
+    if not export_identity:
+        fail("shelf_missing_export_identity")
+
+    if len(title) < 8:
+        fail("shelf_title_too_short", field="title", detail=title)
+    elif _WEAK_SHELF_TITLE_RE.match(title) and not _first_text(data, ("source_name", "raw", "cite_fmt")):
+        fail("shelf_weak_generic_title", field="title", detail=title)
+
+    visible_texts = {
+        "title": title,
+        "subtitle": subtitle,
+        "summary": summary,
+    }
+    for field, text in visible_texts.items():
+        if not text:
+            continue
+        if _has_raw_markdown(text):
+            fail("shelf_raw_markdown_visible", field=field, detail=text[:120])
+        if _has_template_phrase(text):
+            fail("shelf_template_phrase_visible", field=field, detail=text[:120])
+        if _looks_broken_evidence(text):
+            fail("shelf_broken_text", field=field, detail=text[:160])
+
+    if len(summary) < 24:
+        fail("shelf_summary_too_short", field="summary", detail=summary)
+    elif route == "system_b" and _substantially_same_visible_text(summary, _first_text(data, ("raw", "cite_fmt", "title"))):
+        fail("shelf_summary_duplicates_reference", field="summary", detail=summary[:160])
+
+    raw_doi = bool(_DOI_RE.search(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry"))))
+    if raw_doi and not _first_text(data, ("doi", "doi_url", "doiUrl")):
+        fail("shelf_doi_not_promoted", field="doi", detail="DOI is present in reference text but missing from DOI fields.")
+    if metadata["external_metadata_status"] in {"candidate", "conflict"}:
+        fail(
+            "shelf_untrusted_external_metadata_visible",
+            field="external_metadata_status",
+            detail=metadata["external_metadata_status"],
+        )
+
+    if _card_view(data):
+        card_quality = _as_dict(_card_view(data).get("quality"))
+        flags = _string_list(card_quality.get("flags")) + _string_list(data.get("card_quality_flags"))
+        hard_flags = {
+            "candidate_binding",
+            "binding_mismatch",
+            "missing_evidence_quote",
+            "missing_citation_context",
+            "reference_entry_only",
+        }
+        if hard_flags & {_norm(item) for item in flags}:
+            fail("shelf_card_view_hard_quality_flag", field="card_view.quality.flags", detail=", ".join(sorted(hard_flags & {_norm(item) for item in flags})))
+    else:
+        warn("shelf_missing_card_view", field="card_view")
+
+    if route == "system_b":
+        if not metadata["has_author"]:
+            warn("shelf_missing_author_hint", field="authors")
+        if not metadata["has_venue"]:
+            warn("shelf_missing_venue_hint", field="venue")
+        if not metadata["has_year"]:
+            warn("shelf_missing_year_hint", field="year")
+        if not metadata["has_doi"]:
+            warn("shelf_missing_doi", field="doi")
+    elif not _first_text(data, ("source_path", "source_name")):
+        fail("shelf_system_a_missing_source", field="source_path")
+    if not metadata["source_clickable"]:
+        warn("shelf_source_not_clickable", field="source_path")
+
+    score = max(0.0, 1.0 - len(failures) * 0.2 - len(warnings) * 0.04)
+    return {
+        "quality_contract_version": CITATION_SHELF_QUALITY_CONTRACT_VERSION,
+        "ok": not failures,
+        "score": round(score, 3),
+        "route": route,
+        "num": num,
+        "anchor": anchor,
+        "title": title,
+        "summary": summary,
+        "metadata": metadata,
+        "failures": failures,
+        "warnings": warnings,
+    }
+
+
+def summarize_citation_shelf_quality(details: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...]) -> dict[str, Any]:
+    items = [citation_shelf_item_quality(item) for item in details if isinstance(item, Mapping)]
+    route_counts = {"system_a": 0, "system_b": 0}
+    ok_route_counts = {"system_a": 0, "system_b": 0}
+    failures: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    metadata_ready_count = 0
+    export_ready_count = 0
+    doi_count = 0
+    source_clickable_count = 0
+    review_count = 0
+    for idx, item in enumerate(items, start=1):
+        route = str(item.get("route") or "")
+        if route in route_counts:
+            route_counts[route] += 1
+            if bool(item.get("ok")):
+                ok_route_counts[route] += 1
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+        if bool(metadata.get("metadata_ready")):
+            metadata_ready_count += 1
+        if bool(metadata.get("export_ready")):
+            export_ready_count += 1
+        if bool(metadata.get("has_doi")):
+            doi_count += 1
+        if bool(metadata.get("source_clickable")):
+            source_clickable_count += 1
+        if bool(metadata.get("review_needed")):
+            review_count += 1
+        for failure in list(item.get("failures") or []):
+            if isinstance(failure, Mapping):
+                failures.append({"index": idx, **dict(failure)})
+        for warning in list(item.get("warnings") or []):
+            if isinstance(warning, Mapping):
+                warnings.append({"index": idx, **dict(warning)})
+    return {
+        "quality_contract_version": CITATION_SHELF_QUALITY_CONTRACT_VERSION,
+        "ok": not failures,
+        "count": len(items),
+        "ok_count": sum(1 for item in items if bool(item.get("ok"))),
+        "metadata_ready_count": metadata_ready_count,
+        "export_ready_count": export_ready_count,
+        "doi_count": doi_count,
+        "source_clickable_count": source_clickable_count,
+        "review_count": review_count,
+        "route_counts": route_counts,
+        "ok_route_counts": ok_route_counts,
+        "failures": failures,
+        "warnings": warnings,
+        "min_score": min((float(item.get("score") or 0.0) for item in items), default=1.0),
+    }
+
+
+def _visible_ref_card_texts(hit: Mapping[str, Any]) -> dict[str, str]:
+    ui = _as_dict(hit.get("ui_meta"))
+    card_view = _as_dict(ui.get("card_view"))
+    sections = [item for item in list(card_view.get("sections") or []) if isinstance(item, Mapping)]
+    section_texts = {
+        f"card_view_{_norm(section.get('id')) or idx}": _first_text(section, ("text", "title"))
+        for idx, section in enumerate(sections, start=1)
+    }
+    return {
+        "summary_line": _first_text(ui, ("summary_line",)),
+        "why_line": _first_text(ui, ("why_line",)),
+        "heading_path": _first_text(ui, ("heading_path", "section_label", "subsection_label")),
+        "primary_evidence": _first_text(
+            _as_dict(ui.get("primary_evidence")),
+            ("snippet", "quote", "text", "evidence_quote", "anchor_text"),
+        ),
+        "reader_open_snippet": _first_text(_as_dict(ui.get("reader_open")), ("snippet", "highlightSnippet", "anchorText")),
+        **section_texts,
+    }
+
+
+def ref_card_hit_quality(
+    hit: Mapping[str, Any] | None,
+    *,
+    forbidden_phrases: list[str] | tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Return a compact quality contract for one references-panel card."""
+
+    data = _as_dict(hit)
+    ui = _as_dict(data.get("ui_meta"))
+    meta = _as_dict(data.get("meta"))
+    failures: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+
+    def fail(name: str, *, field: str = "", detail: Any = "") -> None:
+        failures.append(_quality_issue(name, field=field, detail=detail, severity="error"))
+
+    def warn(name: str, *, field: str = "", detail: Any = "") -> None:
+        warnings.append(_quality_issue(name, field=field, detail=detail, severity="warning"))
+
+    source_identity = _first_text(ui, ("display_name", "source_path")) or _first_text(meta, ("source_path", "source_name"))
+    if not source_identity:
+        fail("ref_card_missing_source_identity")
+
+    summary = _first_text(ui, ("summary_line",))
+    why = _first_text(ui, ("why_line",))
+    if len(summary) < 12:
+        fail("ref_card_summary_too_short", field="summary_line")
+    if len(why) < 12:
+        fail("ref_card_why_too_short", field="why_line")
+    if summary and why and _substantially_same_visible_text(summary, why):
+        fail("ref_card_duplicate_summary_why", field="summary_line/why_line", detail=summary[:120])
+
+    visible_texts = _visible_ref_card_texts(data)
+    compact_forbidden = [str(item or "").strip() for item in forbidden_phrases if str(item or "").strip()]
+    for field, text in visible_texts.items():
+        if not text:
+            continue
+        if _has_raw_markdown(text):
+            fail("ref_card_raw_markdown_visible", field=field, detail=text[:120])
+        if _has_template_phrase(text):
+            fail("ref_card_template_phrase_visible", field=field, detail=text[:120])
+        if field in {"summary_line", "why_line", "card_view_summary", "card_view_why"}:
+            if _looks_redundant_narrative_metadata(text, {**meta, **ui}):
+                fail("ref_card_narrative_metadata_repeated", field=field, detail=text[:120])
+        if field in {"primary_evidence", "reader_open_snippet"} and _looks_broken_evidence(text):
+            fail("ref_card_broken_evidence", field=field, detail=text[:160])
+        lowered = _norm(text)
+        for phrase in compact_forbidden:
+            if _norm(phrase) and _norm(phrase) in lowered:
+                fail("ref_card_forbidden_phrase", field=field, detail=phrase)
+
+    polish = _norm(ui.get("polish_status"))
+    if polish and polish not in POLISH_STATUSES:
+        fail("ref_card_unknown_polish_status", field="polish_status", detail=polish)
+
+    card_view = _as_dict(ui.get("card_view"))
+    if card_view:
+        sections = [item for item in list(card_view.get("sections") or []) if isinstance(item, Mapping)]
+        section_ids = {_norm(section.get("id")) for section in sections}
+        if "summary" not in section_ids:
+            warn("ref_card_view_missing_summary_section", field="card_view.sections")
+        if "why" not in section_ids:
+            warn("ref_card_view_missing_why_section", field="card_view.sections")
+
+    reader_open = _as_dict(ui.get("reader_open"))
+    can_open = bool(ui.get("can_open")) or bool(reader_open)
+    if can_open:
+        reader_source = _first_text(reader_open, ("sourcePath", "source_path")) or _first_text(ui, ("source_path",))
+        if not reader_source:
+            fail("ref_card_reader_missing_source", field="reader_open.sourcePath")
+        has_locator = any(
+            _first_text(reader_open, (key,))
+            for key in ("blockId", "block_id", "anchorId", "anchor_id", "headingPath", "heading_path", "snippet")
+        )
+        if not has_locator:
+            warn("ref_card_reader_weak_locator", field="reader_open")
+
+    score = max(0.0, 1.0 - len(failures) * 0.2 - len(warnings) * 0.04)
+    return {
+        "quality_contract_version": REF_CARD_QUALITY_CONTRACT_VERSION,
+        "ok": not failures,
+        "score": round(score, 3),
+        "source": source_identity,
+        "failures": failures,
+        "warnings": warnings,
+    }
+
+
+def summarize_ref_card_hit_quality(
+    hits: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    *,
+    forbidden_phrases: list[str] | tuple[str, ...] = (),
+) -> dict[str, Any]:
+    items = [ref_card_hit_quality(item, forbidden_phrases=forbidden_phrases) for item in hits if isinstance(item, Mapping)]
+    failures: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    for idx, item in enumerate(items, start=1):
+        for failure in list(item.get("failures") or []):
+            if isinstance(failure, Mapping):
+                failures.append({"index": idx, **dict(failure)})
+        for warning in list(item.get("warnings") or []):
+            if isinstance(warning, Mapping):
+                warnings.append({"index": idx, **dict(warning)})
+    return {
+        "quality_contract_version": REF_CARD_QUALITY_CONTRACT_VERSION,
+        "ok": not failures,
+        "count": len(items),
+        "ok_count": sum(1 for item in items if bool(item.get("ok"))),
+        "failures": failures,
+        "warnings": warnings,
+        "min_score": min((float(item.get("score") or 0.0) for item in items), default=1.0),
     }
 
 

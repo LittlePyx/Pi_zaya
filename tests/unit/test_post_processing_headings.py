@@ -10,6 +10,25 @@ Some trailing footer text 2401397 (20 of 21) ## ADVANCED SCIENCE NEWS www.advanc
     assert "\n## ADVANCED SCIENCE NEWS" in out or out.startswith("## ADVANCED SCIENCE NEWS")
 
 
+def test_split_inline_structural_heading_labels_from_two_column_pdf_text():
+    src = """
+# Adaptive foveated single-pixel imaging with dynamic supersampling
+
+## Abstract
+
+In contrast to conventional multipixel cameras, single-pixel cameras capture images using a single detector.
+
+INTRODUCTION Computational imaging encompasses techniques that image using single-pixel detectors in place of conventional multipixel image sensors. This is achieved by encoding spatial information in the temporal dimension.
+
+RESULTS Foveated single-pixel imaging Single-pixel imaging is based on the measurement of the level of correlation between the scene and a series of patterns.
+"""
+    out = postprocess_markdown(src)
+    assert "\n## INTRODUCTION\n\nComputational imaging encompasses" in f"\n{out}\n"
+    assert "\n## RESULTS\n\nFoveated single-pixel imaging" in f"\n{out}\n"
+    assert "INTRODUCTION Computational" not in out
+    assert "RESULTS Foveated" not in out
+
+
 def test_split_inline_all_caps_title_after_page_marker():
     src = """
 [225] ... 2401397 (20 of 21) ADVANCED SCIENCE NEWS www.advancedsciencenews.com
@@ -209,6 +228,24 @@ with h_det and h_ill denoting the detection and illumination amplitude PSFs.
     assert "## I = obj ⊛ h_det h_ill" not in out
     assert "\nI = obj ⊛ h_det h_ill\n" in f"\n{out}\n"
     assert "with h_det and h_ill denoting the detection and illumination amplitude PSFs." in out
+
+
+def test_demote_spaced_formula_explanation_heading_fragment():
+    src = """
+## RESULTS
+
+$$
+\\mathbf{o}_{un} = \\frac{1}{N} \\sum_{n=1}^{N} a_n \\mathbf{h}_n
+$$
+
+## T o un , which follows from the orthogonality of the Hadamard vectors ( h n
+
+is measured by projecting the scene onto the nth Hadamard mask.
+"""
+    out = postprocess_markdown(src)
+    assert "## T o un , which follows" not in out
+    assert "\nT o un , which follows from the orthogonality" in f"\n{out}\n"
+    assert "is measured by projecting the scene" in out
 
 
 def test_do_not_promote_numeric_table_rows_as_numbered_headings():

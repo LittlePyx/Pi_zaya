@@ -141,6 +141,338 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
     assert len(list(queue_meta.get("active_tasks") or [])) == 2
 
 
+def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    good_pdf = pdf_dir / "good.pdf"
+    broken_pdf = pdf_dir / "broken.pdf"
+    pending_pdf = pdf_dir / "pending.pdf"
+    for p in (good_pdf, broken_pdf, pending_pdf):
+        p.write_bytes(b"%PDF-1.4 test")
+
+    good_assets = md_dir / "good" / "assets"
+    good_assets.mkdir(parents=True, exist_ok=True)
+    (good_assets / "fig.png").write_bytes(b"png")
+    (md_dir / "good" / "good.en.md").write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Good Paper",
+                "## Abstract",
+                "This paper cites prior work [1-2].",
+                "## Method",
+                "![Figure 1](assets/fig.png)",
+                "**Figure 1.** Diagram.",
+                "$$",
+                "x=y",
+                "$$",
+                "## References",
+                "[1] First reference.",
+                "[2] Second reference.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    broken_folder = md_dir / "broken"
+    broken_folder.mkdir(parents=True, exist_ok=True)
+    (broken_folder / "broken.en.md").write_text(
+        "\n".join(
+            [
+                "# Broken Paper",
+                "![missing](assets/missing.png)",
+                "$$",
+                "x=y",
+                "\u951b",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeStore:
+        def list_records_by_paths(self, paths):
+            return {}
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+
+    client = TestClient(app)
+    response = client.get("/api/library/files", params={"scope": "all"})
+    assert response.status_code == 200
+    payload = response.json()
+
+    by_name = {str(item.get("name") or ""): item for item in list(payload.get("items") or [])}
+    good_quality = by_name["good.pdf"]["conversion_quality"]
+    assert good_quality["status"] == "good"
+    assert good_quality["score"] >= 90
+    assert good_quality["metrics"]["references"] == 2
+    assert good_quality["metrics"]["missing_images"] == 0
+
+    broken_quality = by_name["broken.pdf"]["conversion_quality"]
+    assert broken_quality["status"] == "error"
+    assert broken_quality["has_review_issue"] is True
+    issue_codes = {str(item.get("code") or "") for item in list(broken_quality.get("issues") or [])}
+    assert {"missing_images", "unclosed_display_math", "mojibake"}.issubset(issue_codes)
+    assert by_name["pending.pdf"]["conversion_quality"] is None
+    assert int((payload.get("counts") or {}).get("quality_review") or 0) == 1
+    assert int((payload.get("counts") or {}).get("quality_ready") or 0) == 1
+
+    monkeypatch.setattr(
+        library_router,
+        "_latest_research_qa_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "error",
+            "summary": {"total": 4, "passed": 3, "failed": 1},
+            "top_failures": [{"name": "refs_include_required_docs", "count": 1}],
+            "latest_path": str(tmp_path / "research_qa_eval" / "latest"),
+            "report_path": str(tmp_path / "research_qa_eval" / "latest" / "report.md"),
+            "updated_at": 1,
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_latest_citation_card_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "error",
+            "summary": {
+                "tracked_checks": 8,
+                "failed_checks": 2,
+                "citation_card_failed": 1,
+                "shelf_failed": 1,
+                "ref_card_failed": 0,
+                "system_b_failed": 0,
+            },
+            "top_failures": [{"name": "citation_card_quality", "count": 1}],
+            "latest_path": str(tmp_path / "research_qa_eval" / "latest"),
+            "updated_at": 1,
+        },
+    )
+
+    overview_response = client.get("/api/library/quality/overview", params={"scope": "all"})
+    assert overview_response.status_code == 200
+    overview = overview_response.json()
+    assert overview["ok"] is True
+    assert overview["status"] == "error"
+    summary = overview["summary"]
+    assert summary["converted"] == 2
+    assert summary["assessed"] == 2
+    assert summary["review"] == 1
+    assert summary["good"] == 1
+    assert summary["avg_score"] > 0
+    top_codes = {str(item.get("code") or "") for item in list(overview.get("top_issues") or [])}
+    assert "missing_images" in top_codes
+    recommended = list(overview.get("recommended") or [])
+    assert recommended
+    assert recommended[0]["name"] == "broken.pdf"
+    assert recommended[0]["score"] == broken_quality["score"]
+    domains = overview["domains"]
+    assert domains["conversion"]["summary"]["review"] == 1
+    assert domains["research_qa"]["summary"]["failed"] == 1
+    assert domains["citation_cards"]["summary"]["failed_checks"] == 2
+    priority_domains = {str(item.get("domain") or "") for item in list(overview.get("priority_actions") or [])}
+    assert {"conversion", "research_qa", "citation_cards"}.issubset(priority_domains)
+    full_chain = overview["full_chain"]
+    assert full_chain["status"] == "error"
+    assert full_chain["score"] < 100
+    stage_keys = {str(item.get("key") or "") for item in list(full_chain.get("stages") or [])}
+    assert {"conversion", "research_qa", "retrieval", "citations", "shelf", "repair_loop"}.issubset(stage_keys)
+    root_codes = {str(item.get("code") or "") for item in list(full_chain.get("root_causes") or [])}
+    assert "missing_images" in root_codes
+    feature_health = overview["feature_health"]
+    assert feature_health["status"] == "error"
+    feature_keys = {str(item.get("key") or "") for item in list(feature_health.get("items") or [])}
+    assert {"pdf_conversion", "general_qa", "paper_guide", "citation_cards", "literature_basket", "reader_locate", "repair_loop"}.issubset(feature_keys)
+
+
+def test_library_source_quality_route_resolves_pdf_and_md_sources(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf = pdf_dir / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    md_folder = md_dir / "source"
+    md_folder.mkdir(parents=True, exist_ok=True)
+    md = md_folder / "source.en.md"
+    md.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Source",
+                "## Abstract",
+                "A clean source with citation [1].",
+                "## References",
+                "[1] Reference.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    broken_md = md_dir / "broken" / "broken.en.md"
+    broken_md.parent.mkdir(parents=True, exist_ok=True)
+    broken_md.write_text(
+        "\n".join(
+            [
+                "# Broken",
+                "![missing](assets/missing.png)",
+                "$$",
+                "x=y",
+                "\u951b",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/sources",
+        json={
+            "sources": [
+                {"source_path": str(pdf), "source_name": "source.pdf"},
+                {"source_path": str(broken_md), "source_name": "broken.en.md"},
+                {"source_path": str(tmp_path / "outside.md"), "source_name": "outside.md"},
+            ]
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    items = list(payload.get("items") or [])
+    assert len(items) == 3
+
+    by_name = {str(item.get("source_name") or ""): item for item in items}
+    assert by_name["source.pdf"]["md_exists"] is True
+    assert by_name["source.pdf"]["conversion_quality"]["status"] == "good"
+    assert by_name["broken.en.md"]["conversion_quality"]["status"] == "error"
+    assert by_name["outside.md"]["conversion_quality"] is None
+    assert int(payload.get("review_count") or 0) == 1
+
+
+def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    direct_pdf = pdf_dir / "direct.pdf"
+    source_pdf = pdf_dir / "source.pdf"
+    for path in (direct_pdf, source_pdf):
+        path.write_bytes(b"%PDF-1.4 test")
+
+    source_md = md_dir / "source" / "source.en.md"
+    source_md.parent.mkdir(parents=True, exist_ok=True)
+    source_md.write_text("# Source\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(
+        library_router,
+        "_build_bg_task",
+        lambda **kwargs: {
+            "_tid": f"task-{Path(kwargs['pdf_path']).name}",
+            "name": Path(kwargs["pdf_path"]).name,
+            "pdf": str(kwargs["pdf_path"]),
+            "replace": kwargs.get("replace"),
+            "speed_mode": kwargs.get("speed_mode"),
+            "no_llm": kwargs.get("no_llm"),
+        },
+    )
+    enqueued: list[dict] = []
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/repair",
+        json={
+            "pdf_names": ["direct.pdf"],
+            "sources": [{"source_path": str(source_md), "source_name": "source.en.md"}],
+            "speed_mode": "no_llm",
+            "replace": True,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["requested"] == 2
+    assert payload["enqueued"] == 2
+    assert payload["repaired"] == 1
+    assert payload["skipped_busy"] == 0
+    assert {item.get("pdf_name") for item in payload["items"] if item.get("enqueued")} == {"direct.pdf", "source.pdf"}
+    source_item = next(item for item in payload["items"] if item.get("pdf_name") == "source.pdf")
+    assert source_item["repair_changed"] is True
+    assert "ensure_page_anchor" in source_item["repair_applied"]
+    assert source_item["repair_before_score"] < source_item["repair_after_score"]
+    assert source_md.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
+    assert len(enqueued) == 2
+    assert {str(task.get("name") or "") for task in enqueued} == {"direct.pdf", "source.pdf"}
+    assert {str(task.get("speed_mode") or "") for task in enqueued} == {"no_llm"}
+    assert all(bool(task.get("no_llm")) for task in enqueued)
+
+
+def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    busy_pdf = pdf_dir / "busy.pdf"
+    busy_pdf.write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        lambda: {
+            "running": False,
+            "current": "",
+            "queue": [{"pdf": str(busy_pdf), "name": "busy.pdf", "replace": True, "_tid": "q1"}],
+        },
+    )
+    enqueued: list[dict] = []
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/repair", json={"pdf_names": ["busy.pdf"]})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["requested"] == 1
+    assert payload["enqueued"] == 0
+    assert payload["skipped_busy"] == 1
+    assert payload["items"][0]["skipped_busy"] is True
+    assert enqueued == []
+
+
 def test_convert_pending_enqueues_only_idle_pending(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -314,6 +646,364 @@ def test_open_library_file_route_opens_dir_without_pdf_name(monkeypatch, tmp_pat
     response = client.post("/api/library/file/open", json={"pdf_name": "", "target": "pdf_dir"})
     assert response.status_code == 200
     assert opened == [str(pdf_dir)]
+
+
+def test_open_quality_artifact_route_opens_latest_report(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    eval_root = tmp_path / "test_results" / "research_qa_eval"
+    run_dir = eval_root / "20260101-120000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    summary = run_dir / "summary.json"
+    raw = run_dir / "raw_results.jsonl"
+    report = run_dir / "report.md"
+    summary.write_text(json.dumps({"total": 1, "passed": 0, "failed": 1}), encoding="utf-8")
+    raw.write_text('{"id":"case-1","quality":{"ok":false,"failures":[{"name":"citation_card_quality"}]}}\n', encoding="utf-8")
+    report.write_text("# report\n", encoding="utf-8")
+
+    opened: list[str] = []
+    monkeypatch.setattr(library_router, "_RESEARCH_QA_EVAL_ROOT", eval_root)
+    monkeypatch.setattr(library_router, "open_in_explorer", lambda path: opened.append(str(path)))
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/artifact/open", json={"domain": "research_qa", "target": "report"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["target"] == "report"
+    assert payload["path"] == str(report)
+    assert opened == [str(report)]
+
+
+def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    eval_root = tmp_path / "test_results" / "research_qa_eval"
+    run_dir = eval_root / "20260101-120000"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "summary.json").write_text(
+        json.dumps({"total": 2, "passed": 1, "failed": 1}),
+        encoding="utf-8",
+    )
+    (eval_root / "rerun_history.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "case_id": "case-a",
+                        "status": "failed",
+                        "quality_ok": False,
+                        "failures": [{"name": "refs_include_required_docs", "detail": "paper-a"}],
+                        "finished_at": 1790000100,
+                        "latency_ms": 2100,
+                        "report_path": str(run_dir / "report.md"),
+                        "raw_path": str(run_dir / "raw_results.jsonl"),
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "case_id": "case-a",
+                        "status": "passed",
+                        "quality_ok": True,
+                        "failures": [],
+                        "finished_at": 1790000000,
+                        "latency_ms": 1900,
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "raw_results.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "case-a",
+                "question": "Why does the citation fail?",
+                "status": "done",
+                "latency_ms": 123.4,
+                "expected": {
+                    "requiredRefDocIds": ["paper-a"],
+                    "requiredCitationDocIds": ["paper-b"],
+                },
+                "assistant_message": {
+                    "cite_details": [
+                        {
+                            "num": 1,
+                            "anchor": "cite-a1",
+                            "source_name": "Paper B",
+                            "source_path": "paper-b.md",
+                            "title": "Paper B title",
+                            "heading_path": "Introduction",
+                            "evidence_quote": "The answer quotes Paper B.",
+                        },
+                        {
+                            "num": 2,
+                            "anchor": "cite-b1",
+                            "is_inpaper": True,
+                            "source_name": "Paper A",
+                            "source_path": "paper-a.md",
+                            "title": "Paper A upstream",
+                            "heading_path": "Related work",
+                            "citation_context": "Paper A is discussed by Paper B.",
+                        },
+                    ],
+                },
+                "refs_payload": {
+                    "hits": [
+                        {
+                            "text": "Paper C retrieval snippet.",
+                            "meta": {
+                                "source_path": "paper-c.md",
+                                "heading_path": "Methods",
+                                "ref_pack_state": "ready",
+                            },
+                            "ui_meta": {
+                                "display_name": "Paper C",
+                                "score": 9.1,
+                                "summary_line": "Paper C summary.",
+                                "why_line": "Paper C was retrieved for the question.",
+                                "polish_status": "full",
+                            },
+                        }
+                    ]
+                },
+                "quality": {
+                    "ok": False,
+                    "failures": [
+                        {"name": "citation_card_quality", "detail": ["missing source title"]},
+                        {"name": "refs_include_required_docs", "detail": ["paper-a"]},
+                    ],
+                    "ref_doc_ids": ["paper-c"],
+                    "citation_doc_ids": ["paper-b"],
+                    "citation_count": 2,
+                    "system_b_count": 1,
+                    "ref_hit_count": 3,
+                    "answer_preview": "preview",
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "report.md").write_text("# report\n", encoding="utf-8")
+    (eval_root / "action_history.jsonl").write_text(
+        json.dumps(
+            {
+                "id": "hist-1",
+                "stage_key": "retrieval",
+                "stage_label": "Retrieval coverage",
+                "action": "rebuild_index",
+                "status": "success",
+                "summary": "Rebuilt retrieval index",
+                "detail": "Next QA check: case-a",
+                "target_ids": ["case-a"],
+                "metrics": {"target_count": 1},
+                "created_at": 1790000200,
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeStore:
+        def list_records_by_paths(self, paths):
+            return {}
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(library_router, "_RESEARCH_QA_EVAL_ROOT", eval_root)
+
+    client = TestClient(app)
+    response = client.get("/api/library/quality/overview", params={"scope": "all"})
+    assert response.status_code == 200
+    payload = response.json()
+    failure_cases = list(payload.get("failure_cases") or [])
+    assert len(failure_cases) == 1
+    case = failure_cases[0]
+    assert case["id"] == "case-a"
+    assert case["question"] == "Why does the citation fail?"
+    assert case["doc_ids"] == ["paper-a", "paper-b", "paper-c"]
+    assert case["missing_expected_doc_ids"] == ["paper-a"]
+    assert case["citation_count"] == 2
+    assert case["diagnostic_summary"]["citation_routes"] == {"system_a": 1, "system_b": 1}
+    assert case["citation_diagnostics"][0]["route"] == "system_a"
+    assert case["citation_diagnostics"][0]["title"] == "Paper B title"
+    assert case["citation_diagnostics"][1]["route"] == "system_b"
+    assert case["ref_diagnostics"][0]["title"] == "Paper C"
+    assert case["ref_diagnostics"][0]["summary_line"] == "Paper C summary."
+    assert case["rerun_status"]["available"] is True
+    assert case["rerun_status"]["last_status"] == "failed"
+    assert case["rerun_status"]["last_passed_at"] == 1790000000
+    assert case["rerun_status"]["consecutive_failed"] == 1
+    assert payload["rerun_summary"]["total"] == 2
+    assert payload["rerun_summary"]["passed"] == 1
+    assert payload["rerun_summary"]["failed"] == 1
+    full_chain = payload["full_chain"]
+    assert full_chain["status"] == "error"
+    stage_keys = {str(item.get("key") or "") for item in list(full_chain.get("stages") or [])}
+    assert {"research_qa", "retrieval", "citations", "repair_loop"}.issubset(stage_keys)
+    full_chain_root_codes = {str(item.get("code") or "") for item in list(full_chain.get("root_causes") or [])}
+    assert "retrieval_missing_expected_docs" in full_chain_root_codes
+    assert "citation_card_quality" in full_chain_root_codes
+    assert full_chain["action_history"][0]["summary"] == "Rebuilt retrieval index"
+    feature_health = payload["feature_health"]
+    feature_keys = {str(item.get("key") or "") for item in list(feature_health.get("items") or [])}
+    assert "paper_guide" in feature_keys
+    assert "literature_basket" in feature_keys
+    source_titles = {str(item.get("title") or item.get("source_name") or "") for item in case.get("source_diagnostics") or []}
+    assert {"Paper B title", "Paper A upstream", "Paper C"}.issubset(source_titles)
+    root_codes = {str(item.get("code") or "") for item in case.get("root_causes") or []}
+    assert "retrieval_missing_expected_docs" in root_codes
+    assert "citation_card_quality" in root_codes
+    action_kinds = {str(item.get("kind") or "") for item in case.get("repair_actions") or []}
+    assert {"apply_repair_plan", "open_replay", "rebuild_index", "open_artifact"}.issubset(action_kinds)
+    repair_plan = next(item for item in case.get("repair_actions") or [] if item.get("kind") == "apply_repair_plan")
+    repair_step_kinds = [str(item.get("kind") or "") for item in repair_plan.get("steps") or []]
+    assert repair_step_kinds == ["repair_shelf_metadata", "rebuild_index", "rerun_case"]
+    assert "Rerun QA acceptance" in str(repair_plan.get("detail") or "")
+    failures = list(case.get("failures") or [])
+    assert failures[0]["name"] == "citation_card_quality"
+    assert failures[0]["domain"] == "citation_cards"
+    assert failures[1]["domain"] == "research_qa"
+
+
+def test_research_qa_rerun_route_runs_single_case(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    eval_root = tmp_path / "test_results" / "research_qa_eval"
+    run_dir = eval_root / "20260101_130000"
+    captured: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["cwd"] = kwargs.get("cwd")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "summary.json").write_text(
+            json.dumps({"total": 1, "passed": 1, "failed": 0, "output_dir": str(run_dir)}),
+            encoding="utf-8",
+        )
+        (run_dir / "raw_results.jsonl").write_text(
+            json.dumps(
+                {
+                    "id": "case-a",
+                    "quality": {"ok": True, "failures": []},
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (run_dir / "report.md").write_text("# report\n", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout=f"[OK] research QA eval finished: {run_dir}\n", stderr="")
+
+    monkeypatch.setattr(library_router, "_RESEARCH_QA_EVAL_ROOT", eval_root)
+    monkeypatch.setattr(library_router.subprocess, "run", fake_run)
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/research-qa/rerun", json={"case_id": "case-a", "base_url": "http://127.0.0.1:8005"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["status"] == "passed"
+    assert payload["quality_ok"] is True
+    assert payload["case_id"] == "case-a"
+    assert payload["report_path"] == str(run_dir / "report.md")
+    history_path = eval_root / "rerun_history.jsonl"
+    history_rows = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert history_rows[-1]["case_id"] == "case-a"
+    assert history_rows[-1]["status"] == "passed"
+    assert history_rows[-1]["quality_ok"] is True
+    assert "--case-id" in captured["cmd"]
+    assert "case-a" in captured["cmd"]
+    assert "--base-url" in captured["cmd"]
+    assert "http://127.0.0.1:8005" in captured["cmd"]
+
+
+def test_research_qa_rerun_route_classifies_connection_error(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    eval_root = tmp_path / "test_results" / "research_qa_eval"
+
+    def fake_run(cmd, **kwargs):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="requests.exceptions.ConnectionError: Failed to establish a new connection: [Errno 111] Connection refused",
+        )
+
+    monkeypatch.setattr(library_router, "_RESEARCH_QA_EVAL_ROOT", eval_root)
+    monkeypatch.setattr(library_router.subprocess, "run", fake_run)
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/research-qa/rerun", json={"case_id": "case-a"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error_kind"] == "connection"
+    assert "Connection refused" in payload["error_detail"]
+    history_path = eval_root / "rerun_history.jsonl"
+    history_rows = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert history_rows[-1]["error_kind"] == "connection"
+
+
+def test_quality_action_history_route_persists_stage_results(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    eval_root = tmp_path / "test_results" / "research_qa_eval"
+    monkeypatch.setattr(library_router, "_RESEARCH_QA_EVAL_ROOT", eval_root)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/action-history",
+        json={
+            "stage_key": "retrieval",
+            "stage_label": "Retrieval coverage",
+            "action": "rebuild_index",
+            "status": "success",
+            "summary": "Rebuilt retrieval index",
+            "detail": "Next QA check: case-a",
+            "target_ids": ["case-a"],
+            "metrics": {"target_count": 1},
+            "before": {"status": "error", "score": 42, "count": 1, "detail": "1 missed doc"},
+            "after": {"status": "good", "score": 96, "count": 0, "detail": "coverage passed"},
+            "delta": {"improved": True, "score_delta": 54, "count_delta": 1, "summary": "Improved: error -> good"},
+            "improved": True,
+            "verification": {"type": "research_qa_rerun", "case_id": "case-a", "quality_ok": True},
+            "created_at": 1790000200,
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["item"]["stage_key"] == "retrieval"
+    history_path = eval_root / "action_history.jsonl"
+    history_rows = [json.loads(line) for line in history_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert history_rows[-1]["summary"] == "Rebuilt retrieval index"
+    assert history_rows[-1]["target_ids"] == ["case-a"]
+    assert history_rows[-1]["before"]["status"] == "error"
+    assert history_rows[-1]["after"]["count"] == 0
+    assert history_rows[-1]["delta"]["improved"] is True
+    assert history_rows[-1]["improved"] is True
+    assert history_rows[-1]["verification"]["case_id"] == "case-a"
+
+    list_response = client.get("/api/library/quality/action-history", params={"limit": 5})
+    assert list_response.status_code == 200
+    rows = list_response.json()["items"]
+    assert rows[0]["stage_label"] == "Retrieval coverage"
+    assert rows[0]["metrics"]["target_count"] == 1
+    assert rows[0]["delta"]["score_delta"] == 54
+    assert rows[0]["verification"]["quality_ok"] is True
 
 
 def test_start_convert_route_infers_no_llm_from_mode(monkeypatch, tmp_path: Path):

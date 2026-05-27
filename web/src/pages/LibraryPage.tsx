@@ -40,8 +40,26 @@ import {
   ApiOutlined,
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
-import type { LibraryFileItem, RenameSuggestionItem } from '../api/library'
+import type {
+  ConversionQualitySummary,
+  LibraryFileItem,
+  LibraryQualityActionDelta,
+  LibraryQualityActionHistoryItem,
+  LibraryQualityActionSnapshot,
+  LibraryQualityDomain,
+  LibraryQualityFeatureHealth,
+  LibraryQualityFeatureHealthItem,
+  LibraryQualityFailureCase,
+  LibraryQualityFullChain,
+  LibraryQualityFullChainStage,
+  LibraryQualityOverviewResponse,
+  LibraryQualityPriorityAction,
+  LibraryQualityRepairAction,
+  LibraryResearchQaRerunResponse,
+  RenameSuggestionItem,
+} from '../api/library'
 import { libraryApi } from '../api/library'
+import { referencesApi } from '../api/references'
 import { useChatStore } from '../stores/chatStore'
 import { settingsApi } from '../api/settings'
 import { useLibraryStore } from '../stores/libraryStore'
@@ -82,6 +100,8 @@ type UploadDraft = {
 }
 
 const CONVERT_MODE = 'balanced'
+const QUALITY_REPAIR_HISTORY_STORAGE_KEY = 'kb.library.qualityRepairHistory.v1'
+const QUALITY_REPAIR_HISTORY_LIMIT = 40
 const PAPER_CATEGORY_PRESETS = [
   'NeRF',
   '3DGS',
@@ -120,6 +140,58 @@ type LibraryBatchMetaDraft = {
   reading_status: ReadingStatusValue
   add_tags: string[]
   remove_tags: string[]
+}
+
+type QualityRepairBaseline = {
+  quality: ConversionQualitySummary | null
+  startedAt: number
+}
+
+type QualityRepairHistoryRecord = {
+  name: string
+  beforeScore: number
+  afterScore: number
+  beforeStatus: string
+  afterStatus: string
+  fixedIssues: string[]
+  remainingIssues: string[]
+  updatedAt: number
+}
+
+type QualityIssueStat = {
+  key: string
+  label: string
+  severity: string
+  papers: number
+  count: number
+  repairStrategy?: string
+}
+
+type QualityReportRecommendationView = {
+  name: string
+  score: number
+  issues: string[]
+}
+
+type QualityDomainView = {
+  key: 'conversion' | 'research_qa' | 'citation_cards'
+  label: string
+  available: boolean
+  status: string
+  statusLabel: string
+  countText: string
+  detailText: string
+  failureText: string
+}
+
+type QualityFullChainActionResult = {
+  status: 'success' | 'warning' | 'error' | 'info'
+  summary: string
+  detail?: string
+  deltaText?: string
+  verificationText?: string
+  improved?: boolean | null
+  updatedAt: number
 }
 
 type CategoryCardItem = {
@@ -267,6 +339,258 @@ function normalizeTextValue(value: unknown) {
   return String(value || '').replace(/\s+/g, ' ').trim()
 }
 
+function qualityDomainNumber(domain: LibraryQualityDomain | undefined, key: string) {
+  const value = domain?.summary?.[key]
+  const num = Number(value || 0)
+  return Number.isFinite(num) ? num : 0
+}
+
+function qualityDomainStatus(domain: LibraryQualityDomain | undefined, fallback = 'unknown') {
+  return normalizeTextValue(domain?.status || fallback).toLowerCase() || 'unknown'
+}
+
+function qualityStatusText(status: string, S: Record<string, string>) {
+  if (status === 'good') return S.lib_quality_domain_status_good
+  if (status === 'error') return S.lib_quality_domain_status_error
+  if (status === 'warning') return S.lib_quality_domain_status_warning
+  return S.lib_quality_domain_status_unknown
+}
+
+function qualityCompareRank(status: string) {
+  const clean = normalizeTextValue(status).toLowerCase()
+  if (clean === 'error') return 3
+  if (clean === 'warning') return 2
+  if (clean === 'unknown') return 1
+  if (clean === 'good' || clean === 'success') return 0
+  return 1
+}
+
+function qualityWorstStatus(values: string[]) {
+  let worst = ''
+  for (const value of values) {
+    const clean = normalizeTextValue(value).toLowerCase()
+    if (!clean) continue
+    if (!worst || qualityCompareRank(clean) > qualityCompareRank(worst)) worst = clean
+  }
+  return worst || 'unknown'
+}
+
+function qualityFeatureMatchesStage(item: LibraryQualityFeatureHealthItem, stageKey: string) {
+  const key = normalizeTextValue(stageKey).toLowerCase()
+  const itemKey = normalizeTextValue(item.key).toLowerCase()
+  const targetStage = normalizeTextValue(item.target_stage).toLowerCase()
+  if (targetStage === key || itemKey === key) return true
+  if (key === 'conversion') return itemKey === 'pdf_conversion'
+  if (key === 'research_qa') return itemKey === 'general_qa' || itemKey === 'paper_guide'
+  if (key === 'citations') return itemKey === 'citation_cards' || itemKey === 'reader_locate'
+  if (key === 'shelf') return itemKey === 'literature_basket'
+  if (key === 'repair_loop') return itemKey === 'repair_loop'
+  return false
+}
+
+function qualityOverviewStageSnapshot(
+  overview: LibraryQualityOverviewResponse | null | undefined,
+  stageKey: string,
+): LibraryQualityActionSnapshot {
+  const key = normalizeTextValue(stageKey).toLowerCase()
+  const stages = Array.isArray(overview?.full_chain?.stages) ? overview?.full_chain?.stages || [] : []
+  const stage = stages.find((item) => normalizeTextValue(item.key).toLowerCase() === key)
+  const featureItems = (Array.isArray(overview?.feature_health?.items) ? overview?.feature_health?.items || [] : [])
+    .filter((item) => qualityFeatureMatchesStage(item, key))
+  const featureScores = featureItems
+    .map((item) => Number(item.score || 0))
+    .filter((score) => Number.isFinite(score) && score > 0)
+  const stageCount = Number(stage?.count || 0)
+  const featureCount = featureItems.reduce((sum, item) => sum + Number(item.count || 0), 0)
+  const score = featureScores.length > 0
+    ? Math.round(featureScores.reduce((sum, scoreValue) => sum + scoreValue, 0) / featureScores.length)
+    : Math.round(Number(overview?.full_chain?.score || 0))
+  const status = qualityWorstStatus([
+    normalizeTextValue(stage?.status),
+    ...featureItems.map((item) => normalizeTextValue(item.status)),
+  ])
+  return {
+    status,
+    score: Math.max(0, Math.min(100, score)),
+    count: Math.max(0, stageCount || featureCount),
+    summary: normalizeTextValue(stage?.label || key),
+    detail: normalizeTextValue(stage?.detail || featureItems[0]?.summary || overview?.full_chain?.summary || overview?.status),
+    blocking: Boolean(stage?.blocking || featureItems.some((item) => item.blocking)),
+  }
+}
+
+function qualitySnapshotLabel(snapshot: LibraryQualityActionSnapshot | undefined) {
+  if (!snapshot) return ''
+  const bits: string[] = []
+  const status = normalizeTextValue(snapshot.status)
+  const score = Number(snapshot.score || 0)
+  const count = Number(snapshot.count || 0)
+  if (status) bits.push(status)
+  if (score > 0) bits.push(`Q${Math.round(score)}`)
+  if (count > 0) bits.push(`${count} open`)
+  return bits.join(' / ')
+}
+
+function qualityBuildActionDelta(
+  before: LibraryQualityActionSnapshot | undefined,
+  after: LibraryQualityActionSnapshot | undefined,
+): LibraryQualityActionDelta {
+  const beforeStatus = normalizeTextValue(before?.status).toLowerCase()
+  const afterStatus = normalizeTextValue(after?.status).toLowerCase()
+  if (!beforeStatus || !afterStatus) {
+    return { improved: null, summary: 'Verification pending' }
+  }
+  const scoreDelta = Math.round(Number(after?.score || 0) - Number(before?.score || 0))
+  const countDelta = Math.round(Number(before?.count || 0) - Number(after?.count || 0))
+  const statusDelta = qualityCompareRank(beforeStatus) - qualityCompareRank(afterStatus)
+  const improved = statusDelta > 0 || scoreDelta >= 3 || countDelta > 0
+  const worsened = statusDelta < 0 || scoreDelta <= -3 || countDelta < 0
+  const beforeLabel = qualitySnapshotLabel(before)
+  const afterLabel = qualitySnapshotLabel(after)
+  let summary = 'No measurable change yet'
+  if (improved) {
+    summary = `Improved: ${beforeLabel || beforeStatus} -> ${afterLabel || afterStatus}`
+  } else if (worsened) {
+    summary = `Needs follow-up: ${beforeLabel || beforeStatus} -> ${afterLabel || afterStatus}`
+  }
+  return {
+    improved,
+    worsened,
+    status_changed: beforeStatus !== afterStatus,
+    score_delta: scoreDelta,
+    count_delta: countDelta,
+    summary,
+  }
+}
+
+function qualityActionDeltaText(item: Pick<LibraryQualityActionHistoryItem, 'delta' | 'improved' | 'before' | 'after'>) {
+  const explicit = normalizeTextValue(item.delta?.summary)
+  if (explicit) return explicit
+  const before = item.before
+  const after = item.after
+  if (before || after) return qualityBuildActionDelta(before, after).summary || ''
+  if (item.improved === true) return 'Improved'
+  if (item.improved === false) return 'No measurable change yet'
+  return ''
+}
+
+function qualityVerificationFromRerun(rerun: LibraryResearchQaRerunResponse | null | undefined) {
+  if (!rerun) return {}
+  return {
+    type: 'research_qa_rerun',
+    case_id: normalizeTextValue(rerun.case_id),
+    status: normalizeTextValue(rerun.status),
+    quality_ok: Boolean(rerun.quality_ok || rerun.status === 'passed'),
+    failure_count: Number(rerun.failures?.length || 0),
+    error_kind: normalizeTextValue(rerun.error_kind),
+    error_detail: normalizeTextValue(rerun.error_detail),
+  }
+}
+
+function qualityVerificationText(verification: Record<string, string | number | boolean | null | undefined> | undefined) {
+  if (!verification || !Object.keys(verification).length) return ''
+  const type = normalizeTextValue(verification.type)
+  if (type === 'research_qa_rerun') {
+    const caseId = normalizeTextValue(verification.case_id)
+    const status = normalizeTextValue(verification.status).toLowerCase()
+    const errorKind = normalizeTextValue(verification.error_kind)
+    if (verification.quality_ok === true || status === 'passed') return caseId ? `QA rerun passed: ${caseId}` : 'QA rerun passed'
+    if (errorKind) return `QA rerun needs service: ${errorKind}`
+    if (status) return caseId ? `QA rerun ${status}: ${caseId}` : `QA rerun ${status}`
+  }
+  return ''
+}
+
+function qualityTopFailureText(domain: LibraryQualityDomain | undefined) {
+  const first = Array.isArray(domain?.top_failures) ? domain?.top_failures?.[0] : null
+  const name = normalizeTextValue(first?.name)
+  if (!name) return ''
+  const count = Number(first?.count || 0)
+  return count > 0 ? `${name} x${count}` : name
+}
+
+function qualityActionText(action: LibraryQualityPriorityAction, S: Record<string, string>) {
+  const domain = normalizeTextValue(action.domain)
+  const label = normalizeTextValue(action.label)
+  if (domain === 'conversion') return S.lib_quality_action_conversion
+  if (domain === 'research_qa' && label.toLowerCase().includes('run')) return S.lib_quality_action_research_qa_run
+  if (domain === 'research_qa') return S.lib_quality_action_research_qa
+  if (domain === 'citation_cards') return S.lib_quality_action_citation_cards
+  return label || domain
+}
+
+function qualityFullChainActionText(stage: LibraryQualityFullChainStage) {
+  const action = normalizeTextValue(stage.action).toLowerCase()
+  const status = normalizeTextValue(stage.status).toLowerCase()
+  if (status === 'good' && action.startsWith('monitor_')) return 'Verified'
+  if (action === 'repair_conversion') return 'Repair'
+  if (action === 'fix_failed_qa_cases') return 'Fix case'
+  if (action === 'run_research_qa') return 'Open runbook'
+  if (action === 'rebuild_index') return 'Rebuild'
+  if (action === 'repair_citation_cards') return 'Repair cards'
+  if (action === 'repair_shelf_metadata') return 'Repair metadata'
+  if (action === 'rerun_failed_cases') return 'Rerun'
+  if (action.startsWith('monitor_')) return 'Review'
+  return normalizeTextValue(stage.action).replace(/_/g, ' ') || 'Review'
+}
+
+function qualityFailureCaseMatchesStage(item: LibraryQualityFailureCase, stageKey: string) {
+  const key = normalizeTextValue(stageKey).toLowerCase()
+  const names = new Set([
+    ...(item.failure_names || []),
+    ...((item.failures || []).map((failure) => failure.name)),
+  ].map((value) => normalizeTextValue(value).toLowerCase()).filter(Boolean))
+  const rootCodes = new Set(
+    (item.root_causes || []).map((cause) => normalizeTextValue(cause.code).toLowerCase()).filter(Boolean),
+  )
+  const actions = new Set(
+    (item.root_causes || []).map((cause) => normalizeTextValue(cause.action).toLowerCase()).filter(Boolean),
+  )
+  if (key === 'research_qa' || key === 'repair_loop') return true
+  if (key === 'retrieval') {
+    return Boolean(item.missing_expected_doc_ids?.length)
+      || names.has('refs_include_required_docs')
+      || rootCodes.has('retrieval_missing_expected_docs')
+      || rootCodes.has('empty_reference_basket')
+      || actions.has('rebuild_index')
+  }
+  if (key === 'citations') {
+    return names.has('citation_card_quality')
+      || names.has('refs_card_copy_quality')
+      || names.has('system_b_audit')
+      || rootCodes.has('citation_card_quality')
+      || rootCodes.has('citation_missing_expected_docs')
+      || rootCodes.has('system_b_mapping')
+  }
+  if (key === 'shelf') {
+    return names.has('citation_shelf_quality')
+      || names.has('citation_card_quality')
+      || rootCodes.has('citation_card_quality')
+      || actions.has('inspect_cards')
+  }
+  return false
+}
+
+function qualityActionHistoryActionText(item: LibraryQualityActionHistoryItem) {
+  const stageKey = normalizeTextValue(item.stage_key).toLowerCase()
+  const hasTarget = Boolean((item.target_ids || []).some((value) => normalizeTextValue(value)))
+  if (stageKey === 'conversion') return hasTarget ? 'Focus source' : 'Review'
+  if (['research_qa', 'retrieval', 'repair_loop', 'citations', 'shelf'].includes(stageKey)) {
+    return hasTarget ? 'Open replay' : (stageKey === 'citations' || stageKey === 'shelf' ? 'Open report' : 'Review')
+  }
+  if (stageKey === 'citation_cards') return 'Open report'
+  return hasTarget ? 'Open target' : 'Review'
+}
+
+function qualityFeatureActionText(item: LibraryQualityFeatureHealthItem) {
+  const action = normalizeTextValue(item.action).toLowerCase()
+  if (action.startsWith('repair_')) return 'Repair'
+  if (action.startsWith('fix_')) return 'Fix'
+  if (action.startsWith('run_')) return 'Run'
+  if (action.startsWith('inspect_')) return 'Inspect'
+  return 'Review'
+}
+
 function normalizeTextList(values: unknown[]) {
   const out: string[] = []
   const seen = new Set<string>()
@@ -316,6 +640,168 @@ function suggestionBasisTagColor(meta?: SuggestionMetaInfo) {
   return 'default'
 }
 
+function conversionQualityStatus(quality?: ConversionQualitySummary | null) {
+  return String(quality?.status || '').trim().toLowerCase()
+}
+
+function conversionQualityToneClass(quality?: ConversionQualitySummary | null) {
+  const status = conversionQualityStatus(quality)
+  if (status === 'good') return 'is-good'
+  if (status === 'error') return 'is-error'
+  if (status === 'warning') return 'is-warning'
+  return 'is-unknown'
+}
+
+function conversionQualityLabel(quality?: ConversionQualitySummary | null) {
+  if (!quality) return ''
+  const score = Number(quality.score || 0)
+  const scoreText = Number.isFinite(score) ? `Q${Math.max(0, Math.min(100, Math.round(score)))}` : 'Q?'
+  const status = conversionQualityStatus(quality)
+  if (status === 'good') return scoreText
+  if (status === 'error') return `Repair ${scoreText}`
+  return `Review ${scoreText}`
+}
+
+function conversionMetric(quality: ConversionQualitySummary | null | undefined, key: keyof ConversionQualitySummary['metrics']) {
+  const value = Number(quality?.metrics?.[key] || 0)
+  return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0
+}
+
+function conversionQualityNeedsReview(quality?: ConversionQualitySummary | null) {
+  const status = conversionQualityStatus(quality)
+  return Boolean(quality?.has_review_issue) || status === 'warning' || status === 'error'
+}
+
+function conversionQualityScore(quality?: ConversionQualitySummary | null) {
+  const value = Number(quality?.score || 0)
+  return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0
+}
+
+function conversionQualityIssueEntries(quality?: ConversionQualitySummary | null) {
+  return (Array.isArray(quality?.issues) ? quality?.issues || [] : [])
+    .map((issue) => {
+      const label = normalizeTextValue(issue.label || issue.code)
+      const key = normalizeTextValue(issue.code || issue.label).toLowerCase()
+      return key && label ? { key, label } : null
+    })
+    .filter((item): item is { key: string; label: string } => Boolean(item))
+}
+
+function summarizeConversionQualityRepair(
+  before: ConversionQualitySummary | null,
+  after: ConversionQualitySummary | null,
+  S: Record<string, string>,
+) {
+  const beforeScore = conversionQualityScore(before)
+  const afterScore = conversionQualityScore(after)
+  const beforeIssues = conversionQualityIssueEntries(before)
+  const afterIssueKeys = new Set(conversionQualityIssueEntries(after).map((item) => item.key))
+  const fixedIssues = beforeIssues
+    .filter((item) => !afterIssueKeys.has(item.key))
+    .map((item) => item.label)
+    .slice(0, 3)
+  const remaining = conversionQualityIssueEntries(after).length
+  const template = after && !conversionQualityNeedsReview(after)
+    ? S.quality_repair_result_pass
+    : S.quality_repair_result_review
+  const base = String(template || 'Repair checked: Q{before} -> Q{after}')
+    .replace('{before}', String(beforeScore))
+    .replace('{after}', String(afterScore))
+    .replace('{n}', String(remaining))
+  if (!fixedIssues.length) return base
+  return `${base} · ${String(S.quality_repair_result_fixed_issues || 'Fixed: {issues}').replace('{issues}', fixedIssues.join(' / '))}`
+}
+
+function buildQualityRepairHistoryRecord(
+  name: string,
+  before: ConversionQualitySummary | null,
+  after: ConversionQualitySummary | null,
+): QualityRepairHistoryRecord {
+  const afterIssues = conversionQualityIssueEntries(after)
+  const afterIssueKeys = new Set(afterIssues.map((item) => item.key))
+  const fixedIssues = conversionQualityIssueEntries(before)
+    .filter((item) => !afterIssueKeys.has(item.key))
+    .map((item) => item.label)
+    .slice(0, 6)
+  return {
+    name,
+    beforeScore: conversionQualityScore(before),
+    afterScore: conversionQualityScore(after),
+    beforeStatus: conversionQualityStatus(before),
+    afterStatus: conversionQualityStatus(after),
+    fixedIssues,
+    remainingIssues: afterIssues.map((item) => item.label).slice(0, 6),
+    updatedAt: Date.now(),
+  }
+}
+
+function normalizeQualityRepairHistory(value: unknown): Record<string, QualityRepairHistoryRecord> {
+  const source = (value && typeof value === 'object') ? value as Record<string, unknown> : {}
+  const entries = Object.entries(source)
+    .map(([key, raw]) => {
+      const item = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {}
+      const name = normalizeTextValue(item.name || key)
+      if (!name) return null
+      return {
+        name,
+        beforeScore: Math.max(0, Math.min(100, Math.round(Number(item.beforeScore || 0)))),
+        afterScore: Math.max(0, Math.min(100, Math.round(Number(item.afterScore || 0)))),
+        beforeStatus: normalizeTextValue(item.beforeStatus),
+        afterStatus: normalizeTextValue(item.afterStatus),
+        fixedIssues: uniqueTextValues(Array.isArray(item.fixedIssues) ? item.fixedIssues : []),
+        remainingIssues: uniqueTextValues(Array.isArray(item.remainingIssues) ? item.remainingIssues : []),
+        updatedAt: Math.max(0, Number(item.updatedAt || 0)),
+      } satisfies QualityRepairHistoryRecord
+    })
+    .filter((item): item is QualityRepairHistoryRecord => Boolean(item))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, QUALITY_REPAIR_HISTORY_LIMIT)
+  return Object.fromEntries(entries.map((item) => [item.name, item]))
+}
+
+function loadQualityRepairHistory(): Record<string, QualityRepairHistoryRecord> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(QUALITY_REPAIR_HISTORY_STORAGE_KEY)
+    if (!raw) return {}
+    return normalizeQualityRepairHistory(JSON.parse(raw))
+  } catch {
+    return {}
+  }
+}
+
+function saveQualityRepairHistory(records: Record<string, QualityRepairHistoryRecord>) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(QUALITY_REPAIR_HISTORY_STORAGE_KEY, JSON.stringify(normalizeQualityRepairHistory(records)))
+  } catch {
+    // Storage is best-effort; the current-session repair result remains visible.
+  }
+}
+
+function formatQualityRepairHistoryTime(ts: number) {
+  if (!Number.isFinite(ts) || ts <= 0) return ''
+  try {
+    return new Date(ts).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ''
+  }
+}
+
+function formatQualityRepairRecordSummary(record: QualityRepairHistoryRecord, S: Record<string, string>) {
+  const template = record.remainingIssues.length <= 0 ? S.quality_repair_result_pass : S.quality_repair_result_review
+  const base = String(template || 'Repair checked: Q{before} -> Q{after}')
+    .replace('{before}', String(record.beforeScore))
+    .replace('{after}', String(record.afterScore))
+    .replace('{n}', String(record.remainingIssues.length))
+  if (!record.fixedIssues.length) return base
+  return `${base} · ${String(S.quality_repair_result_fixed_issues || 'Fixed: {issues}').replace('{issues}', record.fixedIssues.slice(0, 3).join(' / '))}`
+}
+
+function hasConversionQualityIssue(item: LibraryFileItem) {
+  return Boolean(item.conversion_quality?.has_review_issue)
+}
+
 function toTextOptions(values: string[]) {
   return values.map((value) => ({ value, label: value }))
 }
@@ -325,6 +811,15 @@ function optionMatchesInput(input: string, option?: TextOption) {
   if (!needle) return true
   const hay = normalizeTextValue(option?.value || option?.label || '').toLowerCase()
   return hay.includes(needle)
+}
+
+function saveResearchQaReplayFailureCase(item: LibraryQualityFailureCase) {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem('kb.researchQaReplay.failureCase.v1', JSON.stringify(item))
+  } catch {
+    // Replay still works from fixture data if session storage is unavailable.
+  }
 }
 
 export default function LibraryPage() {
@@ -348,6 +843,7 @@ export default function LibraryPage() {
   const [onlyUnread, setOnlyUnread] = useState(false)
   const [onlyUnclassified, setOnlyUnclassified] = useState(false)
   const [onlySuggested, setOnlySuggested] = useState(false)
+  const [onlyQualityIssues, setOnlyQualityIssues] = useState(false)
   const [metaDrawerOpen, setMetaDrawerOpen] = useState(false)
   const [metaSaving, setMetaSaving] = useState(false)
   const [metaSuggestionSaving, setMetaSuggestionSaving] = useState(false)
@@ -361,6 +857,17 @@ export default function LibraryPage() {
   const [selectedLibraryNames, setSelectedLibraryNames] = useState<Record<string, boolean>>({})
   const [batchDrawerOpen, setBatchDrawerOpen] = useState(false)
   const [batchSaving, setBatchSaving] = useState(false)
+  const [qualityRepairingNames, setQualityRepairingNames] = useState<Record<string, boolean>>({})
+  const [qualityRepairResults, setQualityRepairResults] = useState<Record<string, string>>({})
+  const [qualityRepairHistory, setQualityRepairHistory] = useState<Record<string, QualityRepairHistoryRecord>>(() => loadQualityRepairHistory())
+  const [qualityHistoryFocusNames, setQualityHistoryFocusNames] = useState<string[]>([])
+  const [qualityArtifactOpening, setQualityArtifactOpening] = useState('')
+  const [qualityCaseActionKey, setQualityCaseActionKey] = useState('')
+  const [qualityFullChainActionKey, setQualityFullChainActionKey] = useState('')
+  const [qualityFullChainResults, setQualityFullChainResults] = useState<Record<string, QualityFullChainActionResult>>({})
+  const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
+  const [qualityFailureFilter, setQualityFailureFilter] = useState('')
+  const qualityRepairBaselinesRef = useRef<Record<string, QualityRepairBaseline>>({})
   const [batchDraft, setBatchDraft] = useState<LibraryBatchMetaDraft>({
     apply_paper_category: false,
     paper_category: '',
@@ -407,6 +914,295 @@ export default function LibraryPage() {
 
   const pendingFiles = useMemo(() => store.files.filter((x) => x.category === 'pending'), [store.files])
   const convertedFiles = useMemo(() => store.files.filter((x) => x.category === 'converted'), [store.files])
+  const qualityReviewCount = useMemo(() => store.files.filter((x) => hasConversionQualityIssue(x)).length, [store.files])
+  const qualityReadyCount = useMemo(
+    () => store.files.filter((x) => conversionQualityStatus(x.conversion_quality) === 'good').length,
+    [store.files],
+  )
+  const backendQualityOverview = store.qualityOverview?.ok ? store.qualityOverview : null
+  const fallbackQualityReportStats = useMemo(() => {
+    const assessed = store.files.filter((item) => item.conversion_quality)
+    const convertedWithoutQuality = store.files.filter((item) => item.category === 'converted' && !item.conversion_quality).length
+    const scores = assessed
+      .map((item) => conversionQualityScore(item.conversion_quality))
+      .filter((score) => Number.isFinite(score) && score > 0)
+    const avgScore = scores.length > 0
+      ? Math.round(scores.reduce((acc, score) => acc + score, 0) / scores.length)
+      : 0
+    return {
+      assessed: assessed.length,
+      converted: convertedFiles.length,
+      review: qualityReviewCount,
+      good: qualityReadyCount,
+      unknown: convertedWithoutQuality,
+      avgScore,
+    }
+  }, [convertedFiles.length, qualityReadyCount, qualityReviewCount, store.files])
+  const qualityReportStats = useMemo(() => {
+    const summary = backendQualityOverview?.summary
+    if (!summary) return fallbackQualityReportStats
+    return {
+      assessed: Number(summary.assessed || 0),
+      converted: Number(summary.converted || 0),
+      review: Number(summary.review || 0),
+      good: Number(summary.good || 0),
+      unknown: Number(summary.unknown || 0),
+      avgScore: Number(summary.avg_score || 0),
+    }
+  }, [backendQualityOverview, fallbackQualityReportStats])
+  const fallbackQualityIssueStats = useMemo<QualityIssueStat[]>(() => {
+    const stats = new Map<string, QualityIssueStat>()
+    for (const item of store.files) {
+      const seenInPaper = new Set<string>()
+      for (const issue of item.conversion_quality?.issues || []) {
+        const label = normalizeTextValue(issue.label || issue.code)
+        const key = normalizeTextValue(issue.code || issue.label).toLowerCase()
+        if (!key || !label) continue
+        const existing = stats.get(key) || {
+          key,
+          label,
+          severity: String(issue.severity || '').trim().toLowerCase(),
+          papers: 0,
+          count: 0,
+        }
+        existing.count += Math.max(1, Math.round(Number(issue.count || 0) || 1))
+        if (!seenInPaper.has(key)) {
+          existing.papers += 1
+          seenInPaper.add(key)
+        }
+        if (String(issue.severity || '').trim().toLowerCase() === 'error') existing.severity = 'error'
+        stats.set(key, existing)
+      }
+    }
+    const severityWeight = (severity: string) => (severity === 'error' ? 2 : severity === 'warning' ? 1 : 0)
+    return Array.from(stats.values())
+      .sort((a, b) => severityWeight(b.severity) - severityWeight(a.severity)
+        || b.papers - a.papers
+        || b.count - a.count
+        || a.label.localeCompare(b.label, 'en'))
+      .slice(0, 5)
+  }, [store.files])
+  const qualityIssueStats = useMemo<QualityIssueStat[]>(() => {
+    const issues = Array.isArray(backendQualityOverview?.top_issues) ? backendQualityOverview.top_issues : []
+    if (!issues.length) return fallbackQualityIssueStats
+    return issues.slice(0, 5).map((issue) => ({
+      key: normalizeTextValue(issue.code || issue.label).toLowerCase(),
+      label: normalizeTextValue(issue.label || issue.code),
+      severity: normalizeTextValue(issue.severity || 'warning').toLowerCase(),
+      papers: Number(issue.papers || 0),
+      count: Number(issue.count || 0),
+      repairStrategy: normalizeTextValue(issue.repair_strategy),
+    })).filter((issue) => Boolean(issue.key && issue.label))
+  }, [backendQualityOverview, fallbackQualityIssueStats])
+  const qualityRepairHistoryList = useMemo(
+    () => Object.values(qualityRepairHistory).sort((a, b) => b.updatedAt - a.updatedAt),
+    [qualityRepairHistory],
+  )
+  const qualityRepairHistoryStats = useMemo(() => {
+    const total = qualityRepairHistoryList.length
+    const fixedCount = qualityRepairHistoryList.reduce((acc, item) => acc + item.fixedIssues.length, 0)
+    const improved = qualityRepairHistoryList.filter((item) => item.afterScore > item.beforeScore).length
+    const avgDelta = total > 0
+      ? Math.round(qualityRepairHistoryList.reduce((acc, item) => acc + (item.afterScore - item.beforeScore), 0) / total)
+      : 0
+    return { total, fixedCount, improved, avgDelta }
+  }, [qualityRepairHistoryList])
+  const qualityHistoryFocusSet = useMemo(
+    () => new Set(qualityHistoryFocusNames.map((name) => String(name || '').trim()).filter(Boolean)),
+    [qualityHistoryFocusNames],
+  )
+  const qualityHistoryRemainingNames = useMemo(() => {
+    const availableNames = new Set(store.files.map((item) => item.name))
+    return qualityRepairHistoryList
+      .filter((record) => record.remainingIssues.length > 0 && availableNames.has(record.name))
+      .map((record) => record.name)
+  }, [qualityRepairHistoryList, store.files])
+  const localQualityRepairRecommendedItems = useMemo(() => (
+    store.files
+      .filter((item) => item.task_state === 'idle' && hasConversionQualityIssue(item))
+      .sort((a, b) => {
+        const aHistory = qualityRepairHistory[a.name]
+        const bHistory = qualityRepairHistory[b.name]
+        const aRemaining = aHistory?.remainingIssues.length || 0
+        const bRemaining = bHistory?.remainingIssues.length || 0
+        const aScore = conversionQualityScore(a.conversion_quality)
+        const bScore = conversionQualityScore(b.conversion_quality)
+        return bRemaining - aRemaining
+          || aScore - bScore
+          || String(a.name || '').localeCompare(String(b.name || ''), 'en')
+      })
+      .slice(0, 5)
+  ), [qualityRepairHistory, store.files])
+  const qualityReportRecommendations = useMemo<QualityReportRecommendationView[]>(() => {
+    const overviewItems = Array.isArray(backendQualityOverview?.recommended) ? backendQualityOverview.recommended : []
+    if (overviewItems.length > 0) {
+      return overviewItems.slice(0, 5)
+        .map((item) => ({
+          name: normalizeTextValue(item.name),
+          score: Math.max(0, Math.min(100, Math.round(Number(item.score || 0)))),
+          issues: (Array.isArray(item.issues) ? item.issues : [])
+            .map((issue) => normalizeTextValue(issue.label || issue.code))
+            .filter(Boolean)
+            .slice(0, 2),
+        }))
+        .filter((item) => Boolean(item.name))
+    }
+    return localQualityRepairRecommendedItems.slice(0, 5).map((item) => ({
+      name: item.name,
+      score: conversionQualityScore(item.conversion_quality),
+      issues: conversionQualityIssueEntries(item.conversion_quality).map((issue) => issue.label).slice(0, 2),
+    }))
+  }, [backendQualityOverview, localQualityRepairRecommendedItems])
+  const qualityDomainViews = useMemo<QualityDomainView[]>(() => {
+    const domains = backendQualityOverview?.domains || {}
+    const conversion = domains.conversion
+    const researchQa = domains.research_qa
+    const citationCards = domains.citation_cards
+
+    const conversionStatus = qualityDomainStatus(conversion, backendQualityOverview?.status || 'unknown')
+    const conversionReview = conversion ? qualityDomainNumber(conversion, 'review') : qualityReportStats.review
+    const conversionGood = conversion ? qualityDomainNumber(conversion, 'good') : qualityReportStats.good
+    const conversionAvg = conversion ? qualityDomainNumber(conversion, 'avg_score') : qualityReportStats.avgScore
+    const conversionUnknown = conversion ? qualityDomainNumber(conversion, 'unknown') : qualityReportStats.unknown
+
+    const qaStatus = qualityDomainStatus(researchQa)
+    const qaAvailable = researchQa?.available !== false && Boolean(researchQa)
+    const qaTotal = qualityDomainNumber(researchQa, 'total')
+    const qaPassed = qualityDomainNumber(researchQa, 'passed')
+    const qaFailed = qualityDomainNumber(researchQa, 'failed')
+
+    const cardStatus = qualityDomainStatus(citationCards)
+    const cardsAvailable = citationCards?.available !== false && Boolean(citationCards)
+    const trackedChecks = qualityDomainNumber(citationCards, 'tracked_checks')
+    const failedChecks = qualityDomainNumber(citationCards, 'failed_checks')
+
+    return [
+      {
+        key: 'conversion',
+        label: S.lib_quality_domain_conversion,
+        available: true,
+        status: conversionStatus,
+        statusLabel: qualityStatusText(conversionStatus, S),
+        countText: conversionReview > 0
+          ? `${conversionReview} ${S.lib_quality_domain_failed}`
+          : `${conversionGood} ${S.lib_quality_domain_passed}`,
+        detailText: `Q${Math.round(conversionAvg)} · ${conversionUnknown} ${S.lib_quality_report_unknown}`,
+        failureText: qualityTopFailureText(conversion),
+      },
+      {
+        key: 'research_qa',
+        label: S.lib_quality_domain_research_qa,
+        available: qaAvailable,
+        status: qaAvailable ? qaStatus : 'unknown',
+        statusLabel: qaAvailable ? qualityStatusText(qaStatus, S) : S.lib_quality_domain_unavailable,
+        countText: qaAvailable
+          ? (qaFailed > 0 ? `${qaFailed} ${S.lib_quality_domain_failed}` : `${qaPassed}/${qaTotal} ${S.lib_quality_domain_passed}`)
+          : S.lib_quality_domain_unavailable,
+        detailText: qaAvailable ? S.lib_quality_domain_cases.replace('{n}', String(qaTotal)) : '',
+        failureText: qualityTopFailureText(researchQa),
+      },
+      {
+        key: 'citation_cards',
+        label: S.lib_quality_domain_citation_cards,
+        available: cardsAvailable,
+        status: cardsAvailable ? cardStatus : 'unknown',
+        statusLabel: cardsAvailable ? qualityStatusText(cardStatus, S) : S.lib_quality_domain_unavailable,
+        countText: cardsAvailable
+          ? (failedChecks > 0 ? `${failedChecks} ${S.lib_quality_domain_failed}` : `${trackedChecks} ${S.lib_quality_domain_passed}`)
+          : S.lib_quality_domain_unavailable,
+        detailText: cardsAvailable ? S.lib_quality_domain_checks.replace('{n}', String(trackedChecks)) : '',
+        failureText: qualityTopFailureText(citationCards),
+      },
+    ]
+  }, [backendQualityOverview, qualityReportStats, S])
+  const qualityPriorityActions = useMemo<LibraryQualityPriorityAction[]>(
+    () => (Array.isArray(backendQualityOverview?.priority_actions) ? backendQualityOverview.priority_actions : [])
+      .filter((item) => item && normalizeTextValue(item.domain))
+      .slice(0, 4),
+    [backendQualityOverview],
+  )
+  const qualityFullChain = useMemo<LibraryQualityFullChain | null>(() => {
+    const fullChain = backendQualityOverview?.full_chain
+    if (!fullChain || fullChain.available === false) return null
+    return fullChain
+  }, [backendQualityOverview])
+  const qualityFullChainStages = useMemo(
+    () => (Array.isArray(qualityFullChain?.stages) ? qualityFullChain.stages : [])
+      .filter((stage) => stage && normalizeTextValue(stage.key))
+      .slice(0, 6),
+    [qualityFullChain],
+  )
+  const qualityFullChainRootCauses = useMemo(
+    () => (Array.isArray(qualityFullChain?.root_causes) ? qualityFullChain.root_causes : [])
+      .filter((cause) => cause && normalizeTextValue(cause.code || cause.label))
+      .slice(0, 5),
+    [qualityFullChain],
+  )
+  const qualityFullChainActionHistory = useMemo<LibraryQualityActionHistoryItem[]>(
+    () => (Array.isArray(qualityFullChain?.action_history) ? qualityFullChain.action_history : [])
+      .filter((item) => item && normalizeTextValue(item.stage_key) && normalizeTextValue(item.summary))
+      .slice(0, 8),
+    [qualityFullChain],
+  )
+  const qualityFullChainPersistedResults = useMemo<Record<string, QualityFullChainActionResult>>(() => {
+    const out: Record<string, QualityFullChainActionResult> = {}
+    for (const item of qualityFullChainActionHistory) {
+      const key = normalizeTextValue(item.stage_key).toLowerCase()
+      if (!key || out[key]) continue
+      const status = normalizeTextValue(item.status).toLowerCase()
+      out[key] = {
+        status: status === 'success' || status === 'warning' || status === 'error' ? status : 'info',
+        summary: normalizeTextValue(item.summary),
+        detail: normalizeTextValue(item.detail),
+        deltaText: qualityActionDeltaText(item),
+        verificationText: qualityVerificationText(item.verification),
+        improved: typeof item.improved === 'boolean' ? item.improved : item.delta?.improved,
+        updatedAt: Number(item.created_at || 0) * 1000,
+      }
+    }
+    return out
+  }, [qualityFullChainActionHistory])
+  const qualityFeatureHealth = useMemo<LibraryQualityFeatureHealth | null>(() => {
+    const featureHealth = backendQualityOverview?.feature_health
+    if (!featureHealth || featureHealth.available === false) return null
+    return featureHealth
+  }, [backendQualityOverview])
+  const qualityFeatureHealthItems = useMemo<LibraryQualityFeatureHealthItem[]>(
+    () => (Array.isArray(qualityFeatureHealth?.items) ? qualityFeatureHealth.items : [])
+      .filter((item) => item && normalizeTextValue(item.key))
+      .slice(0, 8),
+    [qualityFeatureHealth],
+  )
+  const qualityRerunSummary = backendQualityOverview?.rerun_summary
+  const qualityFailureCases = useMemo<LibraryQualityFailureCase[]>(
+    () => (Array.isArray(backendQualityOverview?.failure_cases) ? backendQualityOverview.failure_cases : [])
+      .filter((item) => item && normalizeTextValue(item.id))
+      .slice(0, 12),
+    [backendQualityOverview],
+  )
+  const qualityFailureFilters = useMemo(() => {
+    const stats = new Map<string, number>()
+    for (const item of qualityFailureCases) {
+      for (const failure of item.failures || []) {
+        const name = normalizeTextValue(failure.name)
+        if (!name) continue
+        stats.set(name, (stats.get(name) || 0) + 1)
+      }
+    }
+    return Array.from(stats.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'en'))
+      .slice(0, 6)
+      .map(([name, count]) => ({ name, count }))
+  }, [qualityFailureCases])
+  const visibleQualityFailureCases = useMemo(() => {
+    const filter = normalizeTextValue(qualityFailureFilter)
+    if (!filter) return qualityFailureCases
+    return qualityFailureCases.filter((item) => (item.failures || []).some((failure) => normalizeTextValue(failure.name) === filter))
+  }, [qualityFailureCases, qualityFailureFilter])
+  const qualityRepairRecommendedNames = useMemo(
+    () => qualityReportRecommendations.map((item) => item.name).filter(Boolean),
+    [qualityReportRecommendations],
+  )
   const renameOnlyDiff = true
   const renameVisible = useMemo(() => (renameOnlyDiff ? renameItems.filter((x) => x.diff) : renameItems), [renameOnlyDiff, renameItems])
   const selectedUploadCount = useMemo(() => uploadDrafts.filter((x) => x.selected).length, [uploadDrafts])
@@ -429,7 +1225,7 @@ export default function LibraryPage() {
     return Array.from(counter.entries())
       .map(([key, count]) => ({ key, count, label: FAILED_REASON_META(S)[key].label }))
       .sort((a, b) => b.count - a.count)
-  }, [failedUploadDrafts])
+  }, [failedUploadDrafts, S])
   const filteredUploadDrafts = useMemo(() => {
     const withReason = (items: UploadDraft[]) => (
       uploadErrorReason === 'all'
@@ -450,7 +1246,7 @@ export default function LibraryPage() {
       { value: 'dup_error', label: S.lib_upload_filter_dup.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'error' && isDuplicateFailure(x.note)).length)) },
       { value: 'saved', label: S.lib_upload_filter_saved.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'saved').length)) },
     ],
-    [uploadDrafts],
+    [uploadDrafts, S],
   )
   const activeErrorReasonText = useMemo(() => {
     const map: Record<UploadErrorReason, string> = {
@@ -462,7 +1258,7 @@ export default function LibraryPage() {
       other: FAILED_REASON_META(S).other.label,
     }
     return map[uploadErrorReason]
-  }, [uploadErrorReason])
+  }, [uploadErrorReason, S])
   const convertPercent = useMemo(() => {
     if (!store.progress || store.progress.total <= 0) return 0
     const tasks = Array.isArray(store.progress.activeTasks) ? store.progress.activeTasks : []
@@ -516,7 +1312,7 @@ export default function LibraryPage() {
   }, [store.progress])
   const convertStageLabel = useMemo(
     () => deriveConvertStageLabel(String(store.progress?.curPageMsg || ''), S),
-    [store.progress],
+    [store.progress, S],
   )
   const refSyncPercent = useMemo(
     () => (store.refSync && store.refSync.docsTotal > 0
@@ -577,6 +1373,8 @@ export default function LibraryPage() {
     setOnlyUnread(false)
     setOnlyUnclassified(false)
     setOnlySuggested(false)
+    setOnlyQualityIssues(false)
+    setQualityHistoryFocusNames([])
   }
 
   const hasActiveTaxonomyFilters = Boolean(
@@ -587,6 +1385,8 @@ export default function LibraryPage() {
     || onlyUnread
     || onlyUnclassified
     || onlySuggested
+    || onlyQualityIssues
+    || qualityHistoryFocusNames.length > 0
   )
   const activeTaxonomyFilterCount = [
     normalizedKeyword,
@@ -596,17 +1396,23 @@ export default function LibraryPage() {
     onlyUnread ? 'onlyUnread' : '',
     onlyUnclassified ? 'onlyUnclassified' : '',
     onlySuggested ? 'onlySuggested' : '',
+    onlyQualityIssues ? 'onlyQualityIssues' : '',
+    qualityHistoryFocusNames.length > 0 ? 'qualityHistoryFocus' : '',
   ].filter(Boolean).length
 
   const filterFiles = useCallback(
     (items: LibraryFileItem[], options: FilterFilesOptions = {}) =>
       items.filter((item) => {
+        if (qualityHistoryFocusSet.size > 0 && !qualityHistoryFocusSet.has(item.name)) return false
         const keywordText = [
           item.name,
           item.paper_category,
           item.reading_status,
           item.note,
           item.suggested_category,
+          item.conversion_quality?.label,
+          item.conversion_quality?.summary,
+          ...(item.conversion_quality?.issues || []).flatMap((issue) => [issue.code, issue.label]),
           ...(item.user_tags || []),
           ...(item.suggested_tags || []),
         ]
@@ -619,9 +1425,10 @@ export default function LibraryPage() {
         if (onlyUnread && String(item.reading_status || '') !== 'unread') return false
         if (onlyUnclassified && String(item.paper_category || '').trim()) return false
         if (onlySuggested && !item.has_suggestions) return false
+        if (onlyQualityIssues && !hasConversionQualityIssue(item)) return false
         return true
       }),
-    [normalizedKeyword, onlySuggested, onlyUnclassified, onlyUnread, paperCategoryFilter, paperTagFilter, readingStatusFilter],
+    [normalizedKeyword, onlyQualityIssues, onlySuggested, onlyUnclassified, onlyUnread, paperCategoryFilter, paperTagFilter, qualityHistoryFocusSet, readingStatusFilter],
   )
 
   const visiblePending = useMemo(
@@ -688,7 +1495,7 @@ export default function LibraryPage() {
     }
 
     return out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'en'))
-  }, [visibleAllWithoutCategory])
+  }, [visibleAllWithoutCategory, S])
 
   const tagCards = useMemo<TagCardItem[]>(() => {
     const groups = new Map<string, LibraryFileItem[]>()
@@ -729,7 +1536,7 @@ export default function LibraryPage() {
     }
 
     return out.sort((a, b) => b.count - a.count || a.label.localeCompare(b.label, 'en'))
-  }, [visibleAllWithoutTag])
+  }, [visibleAllWithoutTag, S])
 
   const currentListItems = useMemo(() => {
     if (tabKey === 'pending') return visiblePending
@@ -743,6 +1550,12 @@ export default function LibraryPage() {
   )
 
   const selectedLibraryCount = selectedLibraryNamesList.length
+  const selectedQualityReviewNames = useMemo(
+    () => store.files
+      .filter((item) => Boolean(selectedLibraryNames[item.name]) && hasConversionQualityIssue(item) && item.task_state === 'idle')
+      .map((item) => item.name),
+    [store.files, selectedLibraryNames],
+  )
   const metaSuggestionCount = (metaItem?.suggested_category ? 1 : 0) + (metaItem?.suggested_tags?.length || 0)
   const metaDraftCategory = normalizeTextValue(metaDraft.paper_category)
   const metaDraftTags = normalizeTextList(metaDraft.user_tags)
@@ -796,6 +1609,31 @@ export default function LibraryPage() {
     })
   }, [store.files])
 
+  useEffect(() => {
+    const pending = qualityRepairBaselinesRef.current
+    const pendingNames = Object.keys(pending)
+    if (!pendingNames.length) return
+    const nextPending = { ...pending }
+    const nextResults: Record<string, string> = {}
+    const nextHistory: Record<string, QualityRepairHistoryRecord> = {}
+    for (const item of store.files) {
+      const baseline = pending[item.name]
+      if (!baseline) continue
+      if (item.task_state !== 'idle' || !item.conversion_quality) continue
+      nextResults[item.name] = summarizeConversionQualityRepair(baseline.quality, item.conversion_quality, S)
+      nextHistory[item.name] = buildQualityRepairHistoryRecord(item.name, baseline.quality, item.conversion_quality)
+      delete nextPending[item.name]
+    }
+    if (Object.keys(nextResults).length <= 0) return
+    qualityRepairBaselinesRef.current = nextPending
+    setQualityRepairResults((cur) => ({ ...cur, ...nextResults }))
+    setQualityRepairHistory((cur) => {
+      const merged = normalizeQualityRepairHistory({ ...cur, ...nextHistory })
+      saveQualityRepairHistory(merged)
+      return merged
+    })
+  }, [store.files, S])
+
   const saveDirs = useCallback(async () => {
     if (!pdfDirDraft.trim() || !mdDirDraft.trim()) {
       message.warning(S.lib_msg_dir_empty)
@@ -815,7 +1653,7 @@ export default function LibraryPage() {
     } finally {
       setSavingDirs(false)
     }
-  }, [mdDirDraft, pdfDirDraft, scope, store, updateSettings])
+  }, [mdDirDraft, pdfDirDraft, scope, store, updateSettings, S])
 
   const ensureDirsReady = useCallback(async () => {
     if (!dirDirty) return true
@@ -907,7 +1745,7 @@ export default function LibraryPage() {
           : x
       )))
     }
-  }, [ensureDirsReady, uploadDrafts, uploadUseLlm])
+  }, [ensureDirsReady, uploadDrafts, uploadUseLlm, S])
 
   const inspectSelectedDrafts = async () => {
     const selected = uploadDrafts.filter((x) => x.selected && x.status !== 'inspecting')
@@ -1138,6 +1976,756 @@ export default function LibraryPage() {
     await store.convert(item.name, CONVERT_MODE, true)
   }
 
+  const recordQualityFullChainResult = (
+    stageKey: string,
+    result: Omit<QualityFullChainActionResult, 'updatedAt'>,
+    meta: {
+      stageLabel?: string
+      action?: string
+      targetIds?: string[]
+      metrics?: Record<string, string | number | boolean | null | undefined>
+      before?: LibraryQualityActionSnapshot
+      after?: LibraryQualityActionSnapshot
+      verification?: Record<string, string | number | boolean | null | undefined>
+    } = {},
+  ) => {
+    const key = normalizeTextValue(stageKey).toLowerCase()
+    if (!key) return
+    const nowMs = Date.now()
+    const hasSnapshots = Boolean(meta.before || meta.after)
+    const verificationOk = meta.verification?.quality_ok === true
+    const rawDelta: LibraryQualityActionDelta = hasSnapshots ? qualityBuildActionDelta(meta.before, meta.after) : {}
+    const delta: LibraryQualityActionDelta = hasSnapshots && rawDelta.improved === false && verificationOk
+      ? {
+        ...rawDelta,
+        improved: true,
+        worsened: false,
+        summary: 'Improved: QA rerun passed; overview unchanged',
+      }
+      : rawDelta
+    const improved = typeof delta.improved === 'boolean' ? delta.improved : null
+    const verificationText = qualityVerificationText(meta.verification)
+    const resultStatus = result.status === 'success' && improved === false ? 'warning' : result.status
+    setQualityFullChainResults((cur) => ({
+      ...cur,
+      [key]: {
+        ...result,
+        status: resultStatus,
+        deltaText: hasSnapshots ? delta.summary : '',
+        verificationText,
+        improved,
+        updatedAt: nowMs,
+      },
+    }))
+    void libraryApi.recordQualityAction({
+      stage_key: key,
+      stage_label: normalizeTextValue(meta.stageLabel || key),
+      action: normalizeTextValue(meta.action),
+      status: resultStatus,
+      summary: result.summary,
+      detail: result.detail,
+      target_ids: meta.targetIds || [],
+      metrics: meta.metrics || {},
+      before: meta.before,
+      after: meta.after,
+      delta: hasSnapshots ? delta : {},
+      improved,
+      verification: meta.verification || {},
+      created_at: Math.floor(nowMs / 1000),
+    }).catch(() => {
+      // Persisting the audit trail should never block the repair flow.
+    })
+  }
+
+  const repairQualityByNames = async (names: string[]) => {
+    const targets = Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)))
+    if (!targets.length) {
+      message.info(S.lib_msg_quality_repair_none)
+      return { ok: true, targetCount: 0, queued: 0, repaired: 0 }
+    }
+    const startedAt = Date.now()
+    const baselineByName = new Map(store.files.map((item) => [item.name, item.conversion_quality || null]))
+    qualityRepairBaselinesRef.current = {
+      ...qualityRepairBaselinesRef.current,
+      ...Object.fromEntries(targets.map((name) => [name, { quality: baselineByName.get(name) || null, startedAt }])),
+    }
+    setQualityRepairResults((cur) => {
+      const next = { ...cur }
+      for (const name of targets) delete next[name]
+      return next
+    })
+    setQualityRepairingNames((cur) => {
+      const next = { ...cur }
+      for (const name of targets) next[name] = true
+      return next
+    })
+    try {
+      const res = await store.repairQuality({
+        pdf_names: targets,
+        speed_mode: CONVERT_MODE,
+        replace: true,
+      })
+      const queued = Number(res.enqueued || 0)
+      const repaired = Number(res.repaired || 0)
+      if (queued > 0 || repaired > 0) {
+        message.success(
+          queued > 0
+            ? S.lib_msg_quality_repair_enqueued.replace('{n}', String(queued))
+            : `Markdown repaired: ${repaired}`,
+        )
+      } else {
+        qualityRepairBaselinesRef.current = Object.fromEntries(
+          Object.entries(qualityRepairBaselinesRef.current).filter(([name]) => !targets.includes(name)),
+        )
+        message.info(S.lib_msg_quality_repair_none)
+      }
+      await store.loadFiles(scope)
+      return { ok: true, targetCount: targets.length, queued, repaired }
+    } catch (err) {
+      qualityRepairBaselinesRef.current = Object.fromEntries(
+        Object.entries(qualityRepairBaselinesRef.current).filter(([name]) => !targets.includes(name)),
+      )
+      message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
+      return { ok: false, targetCount: targets.length, queued: 0, repaired: 0 }
+    } finally {
+      setQualityRepairingNames((cur) => {
+        const next = { ...cur }
+        for (const name of targets) delete next[name]
+        return next
+      })
+    }
+  }
+
+  const handleRepairQualityOne = async (item: LibraryFileItem) => {
+    if (item.task_state !== 'idle' || !hasConversionQualityIssue(item)) return
+    await repairQualityByNames([item.name])
+  }
+
+  const handleRepairSelectedQuality = async () => {
+    await repairQualityByNames(selectedQualityReviewNames)
+  }
+
+  const handleFocusQualityReview = () => {
+    if (qualityReviewCount <= 0) {
+      message.info(S.lib_quality_report_no_issues)
+      return
+    }
+    setQualityHistoryFocusNames([])
+    setOnlyQualityIssues(true)
+    setBrowseMode('list')
+    setTabKey('all')
+  }
+
+  const handleFocusQualityIssue = (label: string) => {
+    const keyword = String(label || '').trim()
+    if (!keyword) return
+    setFileKeyword(keyword)
+    setQualityHistoryFocusNames([])
+    setOnlyQualityIssues(true)
+    setBrowseMode('list')
+    setTabKey('all')
+  }
+
+  const focusQualityHistoryNames = (names: string[]) => {
+    const availableNames = new Set(store.files.map((item) => item.name))
+    const rawTargets = Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)))
+    const targets = rawTargets.filter((name) => availableNames.has(name))
+    if (!targets.length) {
+      if (rawTargets.length > 0) {
+        setQualityHistoryFocusNames(rawTargets)
+        setBrowseMode('list')
+        setTabKey('all')
+        if (scope !== 'all') {
+          setScope('all')
+          void store.loadFiles('all')
+        }
+        return
+      }
+      message.info(S.lib_quality_history_no_remaining)
+      return
+    }
+    setQualityHistoryFocusNames(targets)
+    setBrowseMode('list')
+    setTabKey('all')
+  }
+
+  const handleFocusQualityHistoryRemaining = () => {
+    focusQualityHistoryNames(qualityHistoryRemainingNames)
+  }
+
+  const handleRepairRecommendedQuality = async () => {
+    if (!qualityRepairRecommendedNames.length) {
+      message.info(S.lib_quality_history_no_recommended)
+      return { ok: true, targetCount: 0, queued: 0, repaired: 0 }
+    }
+    return repairQualityByNames(qualityRepairRecommendedNames)
+  }
+
+  const openQualityArtifact = async (domain: 'research_qa' | 'citation_cards', target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook') => {
+    const key = `${domain}:${target}`
+    setQualityArtifactOpening(key)
+    try {
+      await libraryApi.openQualityArtifact(domain, target)
+      message.success(S.lib_quality_artifact_opened)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.lib_quality_artifact_open_failed)
+    } finally {
+      setQualityArtifactOpening('')
+    }
+  }
+
+  const handleQualityPriorityAction = async (action: LibraryQualityPriorityAction) => {
+    const domain = normalizeTextValue(action.domain)
+    if (domain === 'conversion') {
+      handleFocusQualityReview()
+      return
+    }
+    if (domain === 'research_qa' || domain === 'citation_cards') {
+      const label = normalizeTextValue(action.label).toLowerCase()
+      await openQualityArtifact(domain, label.includes('run') ? 'runbook' : 'report')
+    }
+  }
+
+  const openResearchQaReplayCase = (item: LibraryQualityFailureCase) => {
+    const caseId = normalizeTextValue(item.id)
+    if (!caseId) {
+      void openQualityArtifact('research_qa', 'report')
+      return
+    }
+    saveResearchQaReplayFailureCase(item)
+    nav(`/__research_qa_replay__?case=${encodeURIComponent(caseId)}&source=quality`)
+  }
+
+  const qualityCaseRepairSources = (item: LibraryQualityFailureCase) => {
+    return (item.source_diagnostics || [])
+      .filter((source) => Boolean(source.repairable))
+      .filter((source) => Boolean(source.needs_repair) || ['error', 'warning'].includes(normalizeTextValue(source.quality_status).toLowerCase()))
+      .map((source) => ({
+        source_path: normalizeTextValue(source.source_path || source.md_path || source.pdf_path),
+        source_name: normalizeTextValue(source.source_name || source.title),
+      }))
+      .filter((source) => source.source_path || source.source_name)
+  }
+
+  const waitForLibraryConversionDone = async (timeoutMs = 180000) => {
+    return new Promise<boolean>((resolve) => {
+      let settled = false
+      let ctrl: AbortController | null = null
+      let timer = 0
+      const finish = (ok: boolean) => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        ctrl?.abort()
+        resolve(ok)
+      }
+      timer = window.setTimeout(() => {
+        finish(false)
+      }, timeoutMs)
+      ctrl = libraryApi.streamConvertStatus(
+        (data) => {
+          if (data.done) finish(true)
+        },
+        () => finish(true),
+        () => finish(false),
+      )
+    })
+  }
+
+  const repairQualityCaseSources = async (
+    item: LibraryQualityFailureCase,
+    opts: { manageActionKey?: boolean; waitForCompletion?: boolean; silent?: boolean; actionKey?: string } = {},
+  ): Promise<{ queued: number; completed: boolean }> => {
+    const sources = qualityCaseRepairSources(item)
+    if (!sources.length) {
+      if (!opts.silent) message.info(S.lib_msg_quality_repair_none)
+      return { queued: 0, completed: true }
+    }
+    const key = opts.actionKey || `${item.id}:repair_sources`
+    const manageActionKey = opts.manageActionKey !== false
+    if (manageActionKey) setQualityCaseActionKey(key)
+    try {
+      const res = await store.repairQuality({
+        sources,
+        speed_mode: CONVERT_MODE,
+        replace: true,
+      })
+      const queued = Number(res.enqueued || 0)
+      const repaired = Number(res.repaired || 0)
+      if (queued > 0) {
+        if (!opts.silent) message.success(S.lib_msg_quality_repair_enqueued.replace('{n}', String(queued)))
+        const completed = opts.waitForCompletion ? await waitForLibraryConversionDone() : false
+        return { queued, completed }
+      } else if (repaired > 0) {
+        if (!opts.silent) message.success(`Markdown repaired: ${repaired}`)
+        return { queued: 0, completed: true }
+      } else {
+        if (!opts.silent) message.info(S.lib_msg_quality_repair_none)
+        return { queued: 0, completed: true }
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
+      return { queued: 0, completed: false }
+    } finally {
+      if (manageActionKey) setQualityCaseActionKey('')
+    }
+  }
+
+  const copyQualityFailureSummary = async (item: LibraryQualityFailureCase) => {
+    const lines = [
+      `Case: ${normalizeTextValue(item.id)}`,
+      `Question: ${normalizeTextValue(item.question)}`,
+      `Failures: ${(item.failure_names || []).join(' / ') || 'none'}`,
+      `Missing docs: ${(item.missing_expected_doc_ids || []).join(' / ') || 'none'}`,
+      `Root causes: ${(item.root_causes || []).map((cause) => cause.label).join(' / ') || 'unknown'}`,
+      `Sources: ${(item.source_diagnostics || []).map((source) => source.title || source.source_name || source.source_path).filter(Boolean).join(' / ') || 'none'}`,
+    ].join('\n')
+    try {
+      await navigator.clipboard.writeText(lines)
+      message.success(S.copied || 'Copied')
+    } catch {
+      message.error(S.copy_failed || 'Copy failed')
+    }
+  }
+
+  const storeQualityCaseRerunResult = (caseId: string, res: LibraryResearchQaRerunResponse) => {
+    setQualityCaseRerunResults((cur) => ({ ...cur, [caseId]: res }))
+    if (res.status === 'passed' || res.quality_ok) {
+      message.success(`QA case passed: ${caseId}`)
+    } else if (res.status === 'failed') {
+      message.warning(`QA case still failing: ${caseId}`)
+    } else if (normalizeTextValue(res.error_kind).toLowerCase() === 'connection') {
+      message.warning(`QA service is unreachable: ${caseId}`)
+    } else if (normalizeTextValue(res.error_kind).toLowerCase() === 'timeout') {
+      message.warning(`QA rerun timed out: ${caseId}`)
+    } else {
+      message.error(`QA rerun error: ${caseId}`)
+    }
+  }
+
+  const runQualityFailureCaseRerun = async (item: LibraryQualityFailureCase) => {
+    const caseId = normalizeTextValue(item.id)
+    if (!caseId) return null
+    const res = await libraryApi.rerunResearchQaCase({ case_id: caseId })
+    storeQualityCaseRerunResult(caseId, res)
+    await store.loadQualityOverview('all')
+    return res
+  }
+
+  const rerunQualityFailureCase = async (item: LibraryQualityFailureCase) => {
+    const caseId = normalizeTextValue(item.id)
+    if (!caseId) return
+    const key = `${item.id}:rerun_case:`
+    setQualityCaseActionKey(key)
+    try {
+      await runQualityFailureCaseRerun(item)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'QA rerun failed')
+    } finally {
+      setQualityCaseActionKey('')
+    }
+  }
+
+  const repairQualityCaseShelfMetadata = async (item: LibraryQualityFailureCase) => {
+    const rawItems = [
+      ...(Array.isArray(item.citation_diagnostics) ? item.citation_diagnostics : []),
+      ...(Array.isArray(item.ref_diagnostics) ? item.ref_diagnostics : []),
+    ]
+    const candidates = rawItems
+      .map((entry, index) => ({
+        record: entry as unknown as Record<string, unknown>,
+        index,
+      }))
+      .map(({ record, index }) => ({
+        ...record,
+        key: `${item.id}:meta:${index}`,
+        anchor: normalizeTextValue(record.anchor) || `${item.id}-meta-${index}`,
+        title: normalizeTextValue(record.title),
+        source_path: normalizeTextValue(record.source_path),
+        source_name: normalizeTextValue(record.source_name || record.title),
+        raw: normalizeTextValue(record.raw || record.evidence_quote),
+      }))
+      .filter((entry) => entry.source_path || entry.source_name || entry.title || entry.raw)
+      .slice(0, 12)
+    if (!candidates.length) return { ready: 0, changed: 0, retryable: 0 }
+    const res = await referencesApi.repairShelfMetadata(candidates as Array<Record<string, unknown>>, candidates.length)
+    const ready = Number(res.ready || 0)
+    const changed = Number(res.changed || 0)
+    const retryable = Number(res.retryable || 0)
+    if (retryable > 0) {
+      message.warning(`Metadata repair queued for retry: ${retryable}`)
+    } else if (changed > 0) {
+      message.success(`Citation metadata repaired: ${changed}`)
+    }
+    return { ready, changed, retryable }
+  }
+
+  const applyQualityFailureRepairPlan = async (item: LibraryQualityFailureCase, action: LibraryQualityRepairAction) => {
+    const caseId = normalizeTextValue(item.id)
+    const steps = Array.isArray(action.steps) ? action.steps : []
+    const stepKinds = new Set(steps.map((step) => normalizeTextValue(step.kind)))
+    const key = `${item.id}:apply_repair_plan:${action.target || ''}`
+    setQualityCaseActionKey(key)
+    try {
+      if (stepKinds.has('repair_sources')) {
+        const result = await repairQualityCaseSources(item, {
+          actionKey: key,
+          manageActionKey: false,
+          waitForCompletion: true,
+        })
+        if (result.queued > 0 && !result.completed) {
+          message.warning('Source repair is still running; QA rerun will wait for the next refresh.')
+          await store.loadQualityOverview('all')
+          return { ok: true, caseId, status: 'source_repair_running', rerun: null as LibraryResearchQaRerunResponse | null }
+        }
+      }
+      if (stepKinds.has('repair_shelf_metadata')) {
+        await repairQualityCaseShelfMetadata(item)
+      }
+      if (stepKinds.has('rebuild_index')) {
+        const ok = await handleReindex()
+        if (!ok) return { ok: false, caseId, status: 'reindex_failed', rerun: null as LibraryResearchQaRerunResponse | null }
+      }
+      if (stepKinds.has('rerun_case') && caseId) {
+        const rerun = await runQualityFailureCaseRerun(item)
+        return { ok: Boolean(rerun?.quality_ok || rerun?.status === 'passed'), caseId, status: String(rerun?.status || ''), rerun }
+      } else {
+        await store.loadQualityOverview('all')
+      }
+      return { ok: true, caseId, status: 'repaired', rerun: null as LibraryResearchQaRerunResponse | null }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Quality repair plan failed')
+      return { ok: false, caseId, status: 'error', rerun: null as LibraryResearchQaRerunResponse | null }
+    } finally {
+      setQualityCaseActionKey('')
+    }
+  }
+
+  const handleQualityFailureAction = async (item: LibraryQualityFailureCase, actionOrKind: LibraryQualityRepairAction | string, target = '') => {
+    const actionKind = typeof actionOrKind === 'string' ? actionOrKind : actionOrKind.kind
+    const actionTarget = typeof actionOrKind === 'string' ? target : (actionOrKind.target || target)
+    const key = `${item.id}:${actionKind}:${actionTarget}`
+    if (actionKind === 'open_replay') {
+      openResearchQaReplayCase(item)
+      return
+    }
+    if (actionKind === 'apply_repair_plan' && typeof actionOrKind !== 'string') {
+      await applyQualityFailureRepairPlan(item, actionOrKind)
+      return
+    }
+    if (actionKind === 'rerun_case') {
+      await rerunQualityFailureCase(item)
+      return
+    }
+    if (actionKind === 'repair_sources') {
+      await repairQualityCaseSources(item)
+      return
+    }
+    if (actionKind === 'rebuild_index') {
+      setQualityCaseActionKey(key)
+      try {
+        await handleReindex()
+      } finally {
+        setQualityCaseActionKey('')
+      }
+      return
+    }
+    if (actionKind === 'open_artifact') {
+      await openQualityArtifact('research_qa', actionTarget === 'raw' ? 'raw' : 'report')
+    }
+  }
+
+  const firstQualityCaseForStage = (stageKey: string) => (
+    qualityFailureCases.find((item) => qualityFailureCaseMatchesStage(item, stageKey)) || qualityFailureCases[0] || null
+  )
+
+  const repairQualityStageShelfMetadata = async (stageKey: string) => {
+    const targets = qualityFailureCases.filter((item) => qualityFailureCaseMatchesStage(item, stageKey)).slice(0, 3)
+    if (!targets.length) {
+      await openQualityArtifact('citation_cards', 'report')
+      return { targetCount: 0, targetIds: [] as string[], ready: 0, changed: 0, retryable: 0 }
+    }
+    let changed = 0
+    let ready = 0
+    let retryable = 0
+    for (const item of targets) {
+      const res = await repairQualityCaseShelfMetadata(item)
+      changed += Number(res.changed || 0)
+      ready += Number(res.ready || 0)
+      retryable += Number(res.retryable || 0)
+    }
+    if (changed <= 0 && ready <= 0) {
+      message.info('No repairable citation metadata found in the current failed cases.')
+    }
+    await store.loadQualityOverview('all')
+    return { targetCount: targets.length, targetIds: targets.map((item) => normalizeTextValue(item.id)).filter(Boolean), ready, changed, retryable }
+  }
+
+  const refreshQualityOverviewSnapshot = async () => {
+    await store.loadQualityOverview('all')
+    const overview = useLibraryStore.getState().qualityOverview
+    return overview?.ok ? overview : null
+  }
+
+  const handleQualityFullChainStage = async (stage: LibraryQualityFullChainStage) => {
+    const stageKey = normalizeTextValue(stage.key).toLowerCase()
+    const action = normalizeTextValue(stage.action).toLowerCase()
+    const caseTarget = firstQualityCaseForStage(stageKey)
+    const beforeOverview = backendQualityOverview
+    const beforeSnapshot = qualityOverviewStageSnapshot(beforeOverview, stageKey)
+    const recordStageResult = (
+      result: Omit<QualityFullChainActionResult, 'updatedAt'>,
+      meta: {
+        targetIds?: string[]
+        metrics?: Record<string, string | number | boolean | null | undefined>
+        afterOverview?: LibraryQualityOverviewResponse | null
+        verification?: Record<string, string | number | boolean | null | undefined>
+      } = {},
+    ) => {
+      const latestOverview = meta.afterOverview
+        || (useLibraryStore.getState().qualityOverview?.ok ? useLibraryStore.getState().qualityOverview : null)
+        || backendQualityOverview
+      const afterSnapshot = qualityOverviewStageSnapshot(latestOverview, stageKey)
+      recordQualityFullChainResult(stageKey, result, {
+        stageLabel: stage.label,
+        action: stage.action,
+        before: beforeSnapshot,
+        after: afterSnapshot,
+        verification: meta.verification,
+        targetIds: meta.targetIds,
+        metrics: meta.metrics,
+      })
+    }
+    setQualityFullChainActionKey(stageKey)
+    try {
+      if (stageKey === 'conversion' || action === 'repair_conversion') {
+        if (qualityRepairRecommendedNames.length > 0) {
+          const repair = await handleRepairRecommendedQuality()
+          const completed = Number(repair?.queued || 0) > 0 ? await waitForLibraryConversionDone() : true
+          const rerun = completed && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
+          const afterOverview = await refreshQualityOverviewSnapshot()
+          const repaired = Number(repair?.repaired || 0)
+          const queued = Number(repair?.queued || 0)
+          recordStageResult({
+            status: queued > 0 || repaired > 0 ? 'success' : (repair?.ok ? 'info' : 'error'),
+            summary: queued > 0
+              ? (completed ? `Verified ${queued} conversion repairs` : `Queued ${queued} conversion repairs`)
+              : (repaired > 0 ? `Markdown autofix repaired ${repaired} sources` : (repair?.ok ? 'No conversion repair was queued' : 'Conversion repair failed')),
+            detail: rerun?.case_id ? `Regression check: ${rerun.case_id}` : (repair?.targetCount ? `${repair.targetCount} recommended sources checked` : undefined),
+          }, {
+            targetIds: qualityRepairRecommendedNames.slice(0, 12),
+            metrics: {
+              queued,
+              repaired,
+              target_count: Number(repair?.targetCount || 0),
+              conversion_completed: Boolean(completed),
+              qa_rerun_quality_ok: Boolean(rerun?.quality_ok || rerun?.status === 'passed'),
+            },
+            afterOverview,
+            verification: qualityVerificationFromRerun(rerun),
+          })
+        } else {
+          handleFocusQualityReview()
+          recordStageResult({
+            status: 'info',
+            summary: 'Focused the conversion review list',
+          })
+        }
+        return
+      }
+      if (stageKey === 'retrieval' || action === 'rebuild_index') {
+        const ok = await handleReindex()
+        const rerun = ok && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
+        if (ok && !rerun) await store.loadQualityOverview('all')
+        const afterOverview = await refreshQualityOverviewSnapshot()
+        const rerunPassed = Boolean(rerun?.quality_ok || rerun?.status === 'passed')
+        recordStageResult({
+          status: ok ? (rerun && !rerunPassed ? 'warning' : 'success') : 'error',
+          summary: ok
+            ? (rerun ? (rerunPassed ? `Reindex verified: ${caseTarget?.id}` : `Reindex done; QA still failing: ${caseTarget?.id}`) : 'Rebuilt retrieval index')
+            : 'Retrieval index rebuild failed',
+          detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : (caseTarget?.id ? `Regression check: ${caseTarget.id}` : undefined),
+        }, {
+          targetIds: caseTarget?.id ? [caseTarget.id] : [],
+          metrics: {
+            qa_rerun_quality_ok: rerun ? rerunPassed : false,
+            failure_count: Number(rerun?.failures?.length || 0),
+          },
+          afterOverview,
+          verification: qualityVerificationFromRerun(rerun),
+        })
+        return
+      }
+      if (stageKey === 'citations' || stageKey === 'shelf' || action === 'repair_citation_cards' || action === 'repair_shelf_metadata') {
+        const result = await repairQualityStageShelfMetadata(stageKey === 'citations' ? 'citations' : 'shelf')
+        const rerun = result.targetCount > 0 && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
+        const afterOverview = await refreshQualityOverviewSnapshot()
+        const rerunPassed = Boolean(rerun?.quality_ok || rerun?.status === 'passed')
+        recordStageResult({
+          status: result.retryable > 0 || (rerun && !rerunPassed) ? 'warning' : (result.changed > 0 || result.ready > 0 ? 'success' : 'info'),
+          summary: rerun
+            ? (rerunPassed ? `Metadata repair verified: ${caseTarget?.id}` : `Metadata checked; QA still failing: ${caseTarget?.id}`)
+            : (result.changed > 0
+              ? `Metadata repaired: ${result.changed}`
+              : (result.ready > 0 ? `Metadata already ready: ${result.ready}` : 'Opened citation quality report')),
+          detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : (result.targetCount > 0 ? `${result.targetCount} failed cases checked` : undefined),
+        }, {
+          targetIds: result.targetIds,
+          metrics: {
+            changed: result.changed,
+            ready: result.ready,
+            retryable: result.retryable,
+            target_count: result.targetCount,
+            qa_rerun_quality_ok: rerun ? rerunPassed : false,
+          },
+          afterOverview,
+          verification: qualityVerificationFromRerun(rerun),
+        })
+        return
+      }
+      if (stageKey === 'repair_loop' || action === 'rerun_failed_cases') {
+        if (caseTarget) {
+          const rerun = await runQualityFailureCaseRerun(caseTarget)
+          const afterOverview = await refreshQualityOverviewSnapshot()
+          recordStageResult({
+            status: rerun?.quality_ok || rerun?.status === 'passed' ? 'success' : 'warning',
+            summary: rerun?.quality_ok || rerun?.status === 'passed'
+              ? `Rerun passed: ${caseTarget.id}`
+              : `Rerun still failing: ${caseTarget.id}`,
+            detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : undefined,
+          }, {
+            targetIds: [caseTarget.id],
+            metrics: {
+              quality_ok: Boolean(rerun?.quality_ok),
+              failure_count: Number(rerun?.failures?.length || 0),
+            },
+            afterOverview,
+            verification: qualityVerificationFromRerun(rerun),
+          })
+        } else {
+          await openQualityArtifact('research_qa', 'report')
+          recordStageResult({
+            status: 'info',
+            summary: 'Opened QA report',
+          })
+        }
+        return
+      }
+      if (stageKey === 'research_qa' || action === 'fix_failed_qa_cases') {
+        const plan = caseTarget?.repair_actions?.find((item) => item.kind === 'apply_repair_plan')
+        if (caseTarget && plan) {
+          const result = await applyQualityFailureRepairPlan(caseTarget, plan)
+          const afterOverview = await refreshQualityOverviewSnapshot()
+          recordStageResult({
+            status: result?.ok ? 'success' : 'warning',
+            summary: result?.rerun?.quality_ok || result?.rerun?.status === 'passed'
+              ? `Repair plan passed: ${caseTarget.id}`
+              : `Repair plan ran: ${caseTarget.id}`,
+            detail: result?.status ? `Last status: ${result.status}` : undefined,
+          }, {
+            targetIds: [caseTarget.id],
+            metrics: {
+              quality_ok: Boolean(result?.rerun?.quality_ok),
+              has_rerun: Boolean(result?.rerun),
+            },
+            afterOverview,
+            verification: qualityVerificationFromRerun(result?.rerun),
+          })
+        } else if (caseTarget) {
+          const rerun = await runQualityFailureCaseRerun(caseTarget)
+          const afterOverview = await refreshQualityOverviewSnapshot()
+          recordStageResult({
+            status: rerun?.quality_ok || rerun?.status === 'passed' ? 'success' : 'warning',
+            summary: rerun?.quality_ok || rerun?.status === 'passed'
+              ? `QA case passed: ${caseTarget.id}`
+              : `QA case still failing: ${caseTarget.id}`,
+            detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : undefined,
+          }, {
+            targetIds: [caseTarget.id],
+            metrics: {
+              quality_ok: Boolean(rerun?.quality_ok),
+              failure_count: Number(rerun?.failures?.length || 0),
+            },
+            afterOverview,
+            verification: qualityVerificationFromRerun(rerun),
+          })
+        } else {
+          await openQualityArtifact('research_qa', action === 'run_research_qa' ? 'runbook' : 'report')
+          recordStageResult({
+            status: 'info',
+            summary: action === 'run_research_qa' ? 'Opened QA runbook' : 'Opened QA report',
+          })
+        }
+        return
+      }
+      if (stageKey === 'citation_cards') {
+        await openQualityArtifact('citation_cards', 'report')
+        recordStageResult({
+          status: 'info',
+          summary: 'Opened citation-card quality report',
+        })
+        return
+      }
+      message.info('No direct action is available for this quality stage yet.')
+      recordStageResult({
+        status: 'info',
+        summary: 'No direct action available for this stage',
+      })
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Quality stage action failed')
+    } finally {
+      setQualityFullChainActionKey('')
+    }
+  }
+
+  const handleQualityFeatureHealthAction = async (item: LibraryQualityFeatureHealthItem) => {
+    const targetStage = normalizeTextValue(item.target_stage).toLowerCase()
+    const stage = qualityFullChainStages.find((stageItem) => normalizeTextValue(stageItem.key).toLowerCase() === targetStage)
+    if (stage) {
+      await handleQualityFullChainStage(stage)
+      return
+    }
+    const featureKey = normalizeTextValue(item.key).toLowerCase()
+    if (featureKey === 'pdf_conversion') {
+      handleFocusQualityReview()
+      return
+    }
+    if (featureKey === 'citation_cards' || featureKey === 'literature_basket') {
+      await openQualityArtifact('citation_cards', 'report')
+      return
+    }
+    await openQualityArtifact('research_qa', featureKey === 'general_qa' ? 'report' : 'runbook')
+  }
+
+  const handleQualityActionHistoryOpen = async (item: LibraryQualityActionHistoryItem) => {
+    const stageKey = normalizeTextValue(item.stage_key).toLowerCase()
+    const targetIds = normalizeTextList(item.target_ids || [])
+    const firstTarget = targetIds[0] || ''
+    if (stageKey === 'conversion') {
+      if (targetIds.length > 0) {
+        focusQualityHistoryNames(targetIds)
+      } else {
+        handleFocusQualityReview()
+      }
+      return
+    }
+    if (['research_qa', 'retrieval', 'repair_loop', 'citations', 'shelf'].includes(stageKey)) {
+      if (firstTarget) {
+        const failureCase = qualityFailureCases.find((row) => normalizeTextValue(row.id) === firstTarget)
+        if (failureCase) saveResearchQaReplayFailureCase(failureCase)
+        nav(`/__research_qa_replay__?case=${encodeURIComponent(firstTarget)}&source=quality-history`)
+        return
+      }
+      await openQualityArtifact(stageKey === 'citations' || stageKey === 'shelf' ? 'citation_cards' : 'research_qa', 'report')
+      return
+    }
+    if (stageKey === 'citation_cards') {
+      await openQualityArtifact('citation_cards', 'report')
+      return
+    }
+    await openQualityArtifact('research_qa', 'report')
+  }
+
   const handleDeleteOne = async (item: LibraryFileItem) => {
     const res = await store.deleteFile(item.name, true)
     if (res.ok) {
@@ -1166,14 +2754,14 @@ export default function LibraryPage() {
     })
   }
 
-  const handleReindex = async () => {
+  const handleReindex = async (): Promise<boolean> => {
     const hide = message.loading(S.lib_msg_updating_kb, 0)
     try {
       const res = await store.reindex()
       hide()
       if (!res.ok) {
         message.error(S.lib_msg_exec_fail)
-        return
+        return false
       }
       message.success(S.lib_msg_exec_done)
       if (res.refsync_error) {
@@ -1181,9 +2769,11 @@ export default function LibraryPage() {
       } else if (res.refsync?.started) {
         message.info(S.lib_msg_refsync_started_bg)
       }
+      return true
     } catch (err) {
       hide()
       message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+      return false
     }
   }
 
@@ -1491,9 +3081,22 @@ export default function LibraryPage() {
     const itemProgressPercent = itemProgress.total > 0
       ? Math.round((itemProgress.done / Math.max(1, itemProgress.total)) * 100)
       : 0
+    const quality = item.conversion_quality
+    const qualityIssues = Array.isArray(quality?.issues) ? quality.issues.slice(0, 3) : []
+    const mathCount = conversionMetric(quality, 'display_math') + conversionMetric(quality, 'inline_math')
+    const qualityNeedsRepair = hasConversionQualityIssue(item)
+    const qualityRepairing = Boolean(qualityRepairingNames[item.name])
+    const qualityRepairRecord = qualityRepairHistory[item.name]
+    const qualityRepairResult = String(
+      qualityRepairResults[item.name] || (qualityRepairRecord ? formatQualityRepairRecordSummary(qualityRepairRecord, S) : ''),
+    ).trim()
 
     return (
-      <div className={`kb-lib-file-row${isSelected ? ' is-selected' : ''}${suggestionCount > 0 ? ' has-suggestions' : ''}`}>
+      <div
+        className={`kb-lib-file-row${isSelected ? ' is-selected' : ''}${suggestionCount > 0 ? ' has-suggestions' : ''}`}
+        data-testid="library-file-row"
+        data-library-file-name={item.name}
+      >
         <div className="kb-lib-file-select">
           <Checkbox
             checked={isSelected}
@@ -1508,6 +3111,16 @@ export default function LibraryPage() {
             </div>
             <div className="kb-lib-file-submeta">
               <span className={`kb-lib-file-status-chip ${statusTone}`}>{tag.text}</span>
+              {quality ? (
+                <span
+                  className={`kb-lib-file-quality-chip ${conversionQualityToneClass(quality)}`}
+                  data-testid="library-file-quality-chip"
+                  data-quality-status={conversionQualityStatus(quality)}
+                  title={quality.summary}
+                >
+                  {conversionQualityLabel(quality)}
+                </span>
+              ) : null}
               {!item.md_exists ? <span className="kb-lib-file-meta-muted">{S.lib_file_no_md}</span> : null}
               {suggestionCount > 0 ? (
                 <span className="kb-lib-file-submeta-chip is-suggestion">
@@ -1547,6 +3160,43 @@ export default function LibraryPage() {
                   #{tagValue}
                 </button>
               ))}
+            </div>
+          ) : null}
+
+          {quality ? (
+            <div className="kb-lib-quality-line" data-testid="library-file-quality-line">
+              <span className="kb-lib-quality-metric">pages {conversionMetric(quality, 'page_markers')}</span>
+              <span className="kb-lib-quality-metric">refs {conversionMetric(quality, 'references') || conversionMetric(quality, 'reference_lines')}</span>
+              <span className="kb-lib-quality-metric">fig {conversionMetric(quality, 'figures')}</span>
+              <span className="kb-lib-quality-metric">math {mathCount}</span>
+              {qualityIssues.map((issue) => (
+                <span
+                  key={`${item.name}-${issue.code}`}
+                  className={`kb-lib-quality-issue ${String(issue.severity || '') === 'error' ? 'is-error' : 'is-warning'}`}
+                  title={issue.label}
+                >
+                  {issue.label}
+                </span>
+              ))}
+              {qualityNeedsRepair ? (
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  className="kb-lib-quality-repair-btn"
+                  data-testid="library-quality-repair"
+                  loading={qualityRepairing}
+                  disabled={item.task_state !== 'idle'}
+                  onClick={() => { void handleRepairQualityOne(item) }}
+                >
+                  {S.lib_btn_repair_quality}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {qualityRepairResult ? (
+            <div className="kb-lib-quality-repair-result" data-testid="library-quality-repair-result">
+              {qualityRepairResult}
             </div>
           ) : null}
 
@@ -1799,6 +3449,8 @@ export default function LibraryPage() {
     queued: store.files.filter((x) => x.task_state === 'queued').length,
     running: store.files.filter((x) => x.task_state === 'running').length,
     reconverting: 0,
+    quality_review: qualityReviewCount,
+    quality_ready: qualityReadyCount,
   }
 
   const directoriesConfigured = Boolean(pdfDirDraft.trim() && mdDirDraft.trim())
@@ -1809,6 +3461,7 @@ export default function LibraryPage() {
     { key: 'converted', label: S.lib_stats_converted, value: counts.converted },
     { key: 'queued', label: S.lib_stats_queued, value: counts.queued },
     { key: 'running', label: S.lib_stats_running, value: counts.running },
+    { key: 'quality', label: 'Quality review', value: counts.quality_review },
   ]
 
   const renameHasResults = renameItems.length > 0
@@ -2359,6 +4012,667 @@ export default function LibraryPage() {
         </Card>
       ) : null}
 
+      {(qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
+        <Card size="small" className="kb-lib-card kb-lib-quality-report" data-testid="library-quality-report">
+          <div className="kb-lib-quality-report-head">
+            <div className="kb-lib-quality-report-copy">
+              <Text className="kb-lib-quality-report-title">{S.lib_quality_report_title}</Text>
+              <Text type="secondary" className="kb-lib-quality-report-hint">
+                {S.lib_quality_report_hint
+                  .replace('{assessed}', String(qualityReportStats.assessed))
+                  .replace('{converted}', String(qualityReportStats.converted))
+                  .replace('{review}', String(qualityReportStats.review))
+                  .replace('{avg}', String(qualityReportStats.avgScore))}
+              </Text>
+            </div>
+            <div className="kb-lib-quality-report-actions">
+              <Button
+                size="small"
+                className="kb-lib-action-quiet"
+                disabled={qualityReportStats.review <= 0}
+                data-testid="library-quality-report-focus-review"
+                onClick={handleFocusQualityReview}
+              >
+                {S.lib_quality_report_focus_review}
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                disabled={qualityRepairRecommendedNames.length <= 0}
+                loading={qualityRepairRecommendedNames.some((name) => Boolean(qualityRepairingNames[name]))}
+                data-testid="library-quality-report-repair-recommended"
+                onClick={() => { void handleRepairRecommendedQuality() }}
+              >
+                {S.lib_quality_report_repair_top.replace('{n}', String(qualityRepairRecommendedNames.length))}
+              </Button>
+            </div>
+          </div>
+          <div className="kb-lib-quality-report-metrics">
+            <span className="kb-lib-quality-report-metric is-good" data-testid="library-quality-report-good">
+              <span>{S.lib_quality_report_good}</span>
+              <strong>{qualityReportStats.good}</strong>
+            </span>
+            <button
+              type="button"
+              className="kb-lib-quality-report-metric is-review"
+              disabled={qualityReportStats.review <= 0}
+              data-testid="library-quality-report-review"
+              onClick={handleFocusQualityReview}
+            >
+              <span>{S.lib_quality_report_review}</span>
+              <strong>{qualityReportStats.review}</strong>
+            </button>
+            <span className="kb-lib-quality-report-metric is-unknown" data-testid="library-quality-report-unknown">
+              <span>{S.lib_quality_report_unknown}</span>
+              <strong>{qualityReportStats.unknown}</strong>
+            </span>
+            <span className="kb-lib-quality-report-metric is-score" data-testid="library-quality-report-avg">
+              <span>{S.lib_quality_report_avg.replace('{score}', String(qualityReportStats.avgScore))}</span>
+            </span>
+          </div>
+          <div className="kb-lib-quality-domain-section">
+            <Text className="kb-lib-quality-report-section-title">{S.lib_quality_domains_title}</Text>
+            <div className="kb-lib-quality-domain-grid" data-testid="library-quality-domains">
+              {qualityDomainViews.map((domain) => {
+                const artifactDomain = domain.key === 'citation_cards' ? 'citation_cards' : 'research_qa'
+                return (
+                  <div
+                    key={domain.key}
+                    className={`kb-lib-quality-domain-card is-${domain.status}`}
+                    data-quality-domain={domain.key}
+                  >
+                    <div className="kb-lib-quality-domain-head">
+                      <span>{domain.label}</span>
+                      <Tag color={domain.status === 'good' ? 'success' : domain.status === 'error' ? 'error' : domain.status === 'warning' ? 'warning' : 'default'}>
+                        {domain.statusLabel}
+                      </Tag>
+                    </div>
+                    <strong>{domain.countText}</strong>
+                    {domain.detailText ? <span>{domain.detailText}</span> : null}
+                    {domain.failureText ? <em>{domain.failureText}</em> : null}
+                    <div className="kb-lib-quality-domain-actions">
+                      {domain.key === 'conversion' ? (
+                        <Button
+                          size="small"
+                          className="kb-lib-quality-domain-action"
+                          disabled={qualityReportStats.review <= 0}
+                          onClick={handleFocusQualityReview}
+                        >
+                          {S.lib_quality_report_focus_review}
+                        </Button>
+                      ) : (
+                        <>
+                          <Button
+                            size="small"
+                            className="kb-lib-quality-domain-action"
+                            loading={qualityArtifactOpening === `${artifactDomain}:${domain.available ? 'report' : 'runbook'}`}
+                            onClick={() => {
+                              void openQualityArtifact(artifactDomain, domain.available ? 'report' : 'runbook')
+                            }}
+                          >
+                            {domain.available ? S.lib_quality_artifact_open_report : S.lib_quality_artifact_open_runbook}
+                          </Button>
+                          {domain.available ? (
+                            <Button
+                              size="small"
+                              className="kb-lib-quality-domain-action"
+                              loading={qualityArtifactOpening === `${artifactDomain}:folder`}
+                              onClick={() => {
+                                void openQualityArtifact(artifactDomain, 'folder')
+                              }}
+                            >
+                              {S.lib_quality_artifact_open_folder}
+                            </Button>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+          {qualityFeatureHealth && qualityFeatureHealthItems.length > 0 ? (
+            <div
+              className={`kb-lib-quality-feature-health is-${normalizeTextValue(qualityFeatureHealth.status).toLowerCase() || 'unknown'}`}
+              data-testid="library-quality-feature-health"
+            >
+              <div className="kb-lib-quality-feature-health-head">
+                <div>
+                  <Text className="kb-lib-quality-report-section-title">Feature health</Text>
+                  <strong>Q{Math.max(0, Math.min(100, Math.round(Number(qualityFeatureHealth.score || 0))))}</strong>
+                </div>
+                <Tag color={qualityFeatureHealth.status === 'good' ? 'success' : qualityFeatureHealth.status === 'error' ? 'error' : qualityFeatureHealth.status === 'warning' ? 'warning' : 'default'}>
+                  {qualityStatusText(normalizeTextValue(qualityFeatureHealth.status).toLowerCase(), S)}
+                </Tag>
+              </div>
+              {qualityFeatureHealth.summary ? <p>{qualityFeatureHealth.summary}</p> : null}
+              <div className="kb-lib-quality-feature-health-grid">
+                {qualityFeatureHealthItems.map((item) => {
+                  const featureStatus = normalizeTextValue(item.status).toLowerCase() || 'unknown'
+                  const featureAction = qualityFeatureActionText(item)
+                  const featureStageKey = normalizeTextValue(item.target_stage || item.key).toLowerCase()
+                  const featureStageResult = qualityFullChainResults[featureStageKey] || qualityFullChainPersistedResults[featureStageKey]
+                  return (
+                    <div
+                      key={item.key}
+                      className={`kb-lib-quality-feature-card is-${featureStatus}${item.blocking ? ' is-blocking' : ''}`}
+                      data-quality-feature={item.key}
+                      data-testid="library-quality-feature-card"
+                    >
+                      <div className="kb-lib-quality-feature-card-head">
+                        <span>{item.label}</span>
+                        <Tag color={featureStatus === 'good' ? 'success' : featureStatus === 'error' ? 'error' : featureStatus === 'warning' ? 'warning' : 'default'}>
+                          {qualityStatusText(featureStatus, S)}
+                        </Tag>
+                      </div>
+                      <strong>{item.summary || item.detail}</strong>
+                      {item.detail ? <span>{item.detail}</span> : null}
+                      {featureStageResult?.deltaText || featureStageResult?.verificationText ? (
+                        <div
+                          className={`kb-lib-quality-feature-result is-${featureStageResult.status}`}
+                          data-testid="library-quality-feature-result"
+                        >
+                          {featureStageResult.deltaText ? <span>{featureStageResult.deltaText}</span> : null}
+                          {featureStageResult.verificationText ? <em>{featureStageResult.verificationText}</em> : null}
+                        </div>
+                      ) : null}
+                      <div className="kb-lib-quality-feature-card-foot">
+                        <em>Q{Math.max(0, Math.min(100, Math.round(Number(item.score || 0))))}</em>
+                        <button
+                          type="button"
+                          className="kb-lib-quality-feature-action"
+                          data-testid="library-quality-feature-action"
+                          onClick={() => { void handleQualityFeatureHealthAction(item) }}
+                        >
+                          {featureAction}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
+          {qualityFullChain ? (
+            <div
+              className={`kb-lib-quality-full-chain is-${normalizeTextValue(qualityFullChain.status).toLowerCase() || 'unknown'}`}
+              data-testid="library-quality-full-chain"
+            >
+              <div className="kb-lib-quality-full-chain-head">
+                <div>
+                  <Text className="kb-lib-quality-report-section-title">Full-chain health</Text>
+                  <strong>Q{Math.max(0, Math.min(100, Math.round(Number(qualityFullChain.score || 0))))}</strong>
+                </div>
+                <Tag color={qualityFullChain.status === 'good' ? 'success' : qualityFullChain.status === 'error' ? 'error' : qualityFullChain.status === 'warning' ? 'warning' : 'default'}>
+                  {qualityStatusText(normalizeTextValue(qualityFullChain.status).toLowerCase(), S)}
+                </Tag>
+              </div>
+              {qualityFullChain.summary ? (
+                <p>{qualityFullChain.summary}</p>
+              ) : null}
+              {qualityFullChainStages.length > 0 ? (
+                <div className="kb-lib-quality-full-chain-stages">
+                  {qualityFullChainStages.map((stage) => {
+                    const stageStatus = normalizeTextValue(stage.status).toLowerCase() || 'unknown'
+                    const stageCount = Number(stage.count || 0)
+                    const stageActionText = qualityFullChainActionText(stage)
+                    const cleanStageKey = normalizeTextValue(stage.key).toLowerCase()
+                    const stageBusy = qualityFullChainActionKey === cleanStageKey
+                    const stageResult = qualityFullChainResults[cleanStageKey] || qualityFullChainPersistedResults[cleanStageKey]
+                    return (
+                      <div
+                        key={stage.key}
+                        className={`kb-lib-quality-full-chain-stage is-${stageStatus}${stage.blocking ? ' is-blocking' : ''}`}
+                        data-quality-stage={stage.key}
+                        data-testid="library-quality-full-chain-stage"
+                      >
+                        <div>
+                          <span>{stage.label}</span>
+                          <Tag color={stageStatus === 'good' ? 'success' : stageStatus === 'error' ? 'error' : stageStatus === 'warning' ? 'warning' : 'default'}>
+                            {qualityStatusText(stageStatus, S)}
+                          </Tag>
+                        </div>
+                        <strong>{stage.detail || normalizeTextValue(stage.action).replace(/_/g, ' ')}</strong>
+                        <div className="kb-lib-quality-full-chain-stage-foot">
+                          <em>{stageCount > 0 ? `${stageCount}` : normalizeTextValue(stage.action).replace(/_/g, ' ')}</em>
+                          <button
+                            type="button"
+                            className="kb-lib-quality-full-chain-stage-action"
+                            disabled={Boolean(qualityFullChainActionKey) && !stageBusy}
+                            data-testid="library-quality-full-chain-stage-action"
+                            onClick={() => { void handleQualityFullChainStage(stage) }}
+                          >
+                            {stageBusy ? 'Working' : stageActionText}
+                          </button>
+                        </div>
+                        {stageResult ? (
+                          <div
+                            className={`kb-lib-quality-full-chain-stage-result is-${stageResult.status}`}
+                            data-testid="library-quality-full-chain-stage-result"
+                          >
+                            <span>{stageResult.summary}</span>
+                            {stageResult.detail ? <em>{stageResult.detail}</em> : null}
+                            {stageResult.deltaText ? <em>{stageResult.deltaText}</em> : null}
+                            {stageResult.verificationText ? <em>{stageResult.verificationText}</em> : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : null}
+              {qualityFullChainRootCauses.length > 0 ? (
+                <div className="kb-lib-quality-full-chain-roots">
+                  {qualityFullChainRootCauses.map((cause) => {
+                    const causeSeverity = normalizeTextValue(cause.severity).toLowerCase() || 'warning'
+                    return (
+                      <em
+                        key={`${cause.domain}-${cause.code}`}
+                        className={`is-${causeSeverity}`}
+                        data-testid="library-quality-full-chain-root-cause"
+                      >
+                        {cause.label || cause.code}
+                        <span>{cause.code} x{Number(cause.count || 0)}</span>
+                      </em>
+                    )
+                  })}
+                </div>
+              ) : null}
+              {qualityFullChainActionHistory.length > 0 ? (
+                <div className="kb-lib-quality-full-chain-history" data-testid="library-quality-full-chain-history">
+                  <Text className="kb-lib-quality-report-section-title">Recent actions</Text>
+                  <div className="kb-lib-quality-full-chain-history-list">
+                    {qualityFullChainActionHistory.slice(0, 4).map((item) => {
+                      const actionStatus = normalizeTextValue(item.status).toLowerCase() || 'info'
+                      const createdAt = Number(item.created_at || 0) * 1000
+                      const actionText = qualityActionHistoryActionText(item)
+                      const deltaText = qualityActionDeltaText(item)
+                      return (
+                        <div
+                          key={item.id || `${item.stage_key}-${item.created_at}-${item.summary}`}
+                          className={`kb-lib-quality-full-chain-history-row is-${actionStatus}`}
+                          data-testid="library-quality-full-chain-history-row"
+                        >
+                          <span>{item.stage_label || item.stage_key}</span>
+                          <strong>{item.summary}</strong>
+                          <em>{deltaText || formatQualityRepairHistoryTime(createdAt)}</em>
+                          <button
+                            type="button"
+                            className="kb-lib-quality-full-chain-history-open"
+                            data-testid="library-quality-full-chain-history-open"
+                            onClick={() => { void handleQualityActionHistoryOpen(item) }}
+                          >
+                            {actionText}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {qualityPriorityActions.length > 0 ? (
+            <div className="kb-lib-quality-priority-actions" data-testid="library-quality-priority-actions">
+              <Text className="kb-lib-quality-report-section-title">{S.lib_quality_priority_actions}</Text>
+              <div className="kb-lib-quality-priority-list">
+                {qualityPriorityActions.map((action) => {
+                  const severity = normalizeTextValue(action.severity || 'warning').toLowerCase() || 'warning'
+                  const count = Number(action.count || 0)
+                  return (
+                    <button
+                      key={`${action.domain}-${action.label}`}
+                      type="button"
+                      className={`kb-lib-quality-priority-pill is-${severity}`}
+                      data-quality-action-domain={action.domain}
+                      onClick={() => { void handleQualityPriorityAction(action) }}
+                    >
+                      <strong>{qualityActionText(action, S)}</strong>
+                      <em>{count > 0 ? String(count) : qualityStatusText(severity, S)}</em>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          ) : null}
+          {qualityRerunSummary?.available ? (
+            <div className="kb-lib-quality-rerun-summary" data-testid="library-quality-rerun-summary">
+              <Text className="kb-lib-quality-report-section-title">Rerun history</Text>
+              <div className="kb-lib-quality-rerun-summary-grid">
+                <span>Runs <strong>{qualityRerunSummary.total}</strong></span>
+                <span>Passed <strong>{qualityRerunSummary.passed}</strong></span>
+                <span>Failed <strong>{qualityRerunSummary.failed + qualityRerunSummary.error}</strong></span>
+                <span>Cases <strong>{qualityRerunSummary.case_count}</strong></span>
+              </div>
+              {qualityRerunSummary.top_failures?.length ? (
+                <div className="kb-lib-quality-rerun-summary-failures">
+                  {qualityRerunSummary.top_failures.slice(0, 3).map((item) => (
+                    <em key={item.name}>{item.name} x{item.count}</em>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {qualityFailureCases.length > 0 ? (
+            <div className="kb-lib-quality-failure-cases" data-testid="library-quality-failure-cases">
+              <div className="kb-lib-quality-failure-head">
+                <Text className="kb-lib-quality-report-section-title">
+                  {S.lib_quality_failure_cases.replace('{n}', String(qualityFailureCases.length))}
+                </Text>
+                <Button
+                  size="small"
+                  className="kb-lib-quality-domain-action"
+                  loading={qualityArtifactOpening === 'research_qa:report'}
+                  onClick={() => { void openQualityArtifact('research_qa', 'report') }}
+                >
+                  {S.lib_quality_failure_open_report}
+                </Button>
+              </div>
+              {qualityFailureFilters.length > 0 ? (
+                <div className="kb-lib-quality-failure-filters">
+                  <button
+                    type="button"
+                    className={`kb-lib-quality-failure-filter${!qualityFailureFilter ? ' is-active' : ''}`}
+                    data-testid="library-quality-failure-filter-all"
+                    onClick={() => setQualityFailureFilter('')}
+                  >
+                    {S.lib_quality_failure_all}
+                  </button>
+                  {qualityFailureFilters.map((item) => (
+                    <button
+                      key={item.name}
+                      type="button"
+                      className={`kb-lib-quality-failure-filter${qualityFailureFilter === item.name ? ' is-active' : ''}`}
+                      data-testid="library-quality-failure-filter"
+                      onClick={() => setQualityFailureFilter(item.name)}
+                    >
+                      <span>{item.name}</span>
+                      <strong>{item.count}</strong>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {visibleQualityFailureCases.length > 0 ? (
+                <div className="kb-lib-quality-failure-list">
+                  {visibleQualityFailureCases.slice(0, 4).map((item) => {
+                    const docIds = Array.isArray(item.doc_ids) ? item.doc_ids.filter(Boolean) : []
+                    const failures = Array.isArray(item.failures) ? item.failures : []
+                    const missingDocIds = Array.isArray(item.missing_expected_doc_ids) ? item.missing_expected_doc_ids.filter(Boolean) : []
+                    const routeSummary = item.diagnostic_summary?.citation_routes || {}
+                    const rootCauses = Array.isArray(item.root_causes) && item.root_causes.length > 0
+                      ? item.root_causes
+                      : failures.slice(0, 2).map((failure) => ({
+                        code: failure.name,
+                        label: failure.name,
+                        severity: failure.domain === 'citation_cards' ? 'error' : 'warning',
+                        detail: failure.detail || '',
+                        action: 'inspect_replay',
+                      }))
+                    const sourceDiagnostics = Array.isArray(item.source_diagnostics) ? item.source_diagnostics : []
+                    const repairActions = Array.isArray(item.repair_actions) && item.repair_actions.length > 0
+                      ? item.repair_actions
+                      : [
+                        { id: 'open_replay', kind: 'open_replay', label: 'Open replay', severity: 'warning', enabled: true, detail: '' },
+                        { id: 'rerun_case', kind: 'rerun_case', label: 'Rerun case', severity: 'warning', enabled: true, detail: '' },
+                        { id: 'open_report', kind: 'open_artifact', target: 'report', label: 'Open report', severity: 'warning', enabled: true, detail: '' },
+                      ]
+                    const rerunResult = qualityCaseRerunResults[item.id]
+                    const persistedRerun = item.rerun_status?.available ? item.rerun_status : null
+                    const rerunView = rerunResult
+                      ? {
+                        label: 'Rerun',
+                        status: rerunResult.status,
+                        failures: (rerunResult.failures || []).map((failure) => failure.name),
+                        latencyMs: rerunResult.latency_ms,
+                        consecutiveFailed: 0,
+                      }
+                      : persistedRerun
+                        ? {
+                          label: 'Last rerun',
+                          status: persistedRerun.last_status,
+                          failures: persistedRerun.failure_names || [],
+                          latencyMs: persistedRerun.last_latency_ms,
+                          consecutiveFailed: persistedRerun.consecutive_failed,
+                        }
+                        : null
+                    return (
+                      <div
+                        key={item.id}
+                        role="button"
+                        tabIndex={0}
+                        className="kb-lib-quality-failure-case"
+                        data-testid="library-quality-failure-case"
+                        onClick={() => openResearchQaReplayCase(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            openResearchQaReplayCase(item)
+                          }
+                        }}
+                      >
+                        <span className="kb-lib-quality-failure-case-title">{item.id}</span>
+                        <span className="kb-lib-quality-failure-case-question">{item.question || S.lib_quality_failure_question_empty}</span>
+                        <span className="kb-lib-quality-failure-case-badges">
+                          {failures.slice(0, 3).map((failure) => (
+                            <em key={`${item.id}-${failure.name}`}>{failure.name}</em>
+                          ))}
+                        </span>
+                        {docIds.length > 0 ? (
+                          <span className="kb-lib-quality-failure-case-docs">
+                            {S.lib_quality_failure_case_docs.replace('{docs}', docIds.slice(0, 4).join(' / '))}
+                          </span>
+                        ) : null}
+                        <span className="kb-lib-quality-failure-case-diagnostics">
+                          {missingDocIds.length > 0 ? <em>Missing {missingDocIds.slice(0, 3).join(' / ')}</em> : null}
+                          <em>A {routeSummary.system_a || 0} / B {routeSummary.system_b || 0}</em>
+                          {sourceDiagnostics.length > 0 ? <em>Sources {sourceDiagnostics.length}</em> : null}
+                        </span>
+                        <span className="kb-lib-quality-root-causes" data-testid="library-quality-root-causes">
+                          {rootCauses.slice(0, 3).map((cause) => {
+                            const severity = normalizeTextValue(cause.severity).toLowerCase() || 'warning'
+                            return (
+                              <em key={`${item.id}-${cause.code}`} className={`is-${severity}`}>
+                                {cause.label}
+                              </em>
+                            )
+                          })}
+                        </span>
+                        {sourceDiagnostics.length > 0 ? (
+                          <span className="kb-lib-quality-source-diag" data-testid="library-quality-source-diagnostics">
+                            {sourceDiagnostics.slice(0, 2).map((source) => {
+                              const status = normalizeTextValue(source.quality_status).toLowerCase() || 'unknown'
+                              const label = source.title || source.source_name || source.source_path || 'source'
+                              return (
+                                <em key={`${item.id}-${source.source_path || source.source_name}`} className={`is-${status}`}>
+                                  {label}{source.quality_score > 0 ? ` Q${source.quality_score}` : ''}
+                                </em>
+                              )
+                            })}
+                          </span>
+                        ) : null}
+                        {rerunView ? (
+                          <span className={`kb-lib-quality-rerun-result is-${rerunView.status}`} data-testid="library-quality-rerun-result">
+                            {rerunView.label} {rerunView.status}
+                            {rerunView.consecutiveFailed ? ` · ${rerunView.consecutiveFailed}x failing` : ''}
+                            {rerunView.failures?.length ? ` · ${rerunView.failures.slice(0, 2).join(' / ')}` : ''}
+                            {rerunView.latencyMs ? ` · ${Math.round(rerunView.latencyMs / 1000)}s` : ''}
+                          </span>
+                        ) : null}
+                        <span className="kb-lib-quality-failure-actions" data-testid="library-quality-failure-actions">
+                          {repairActions.slice(0, 6).map((action) => {
+                            const loadingKey = `${item.id}:${action.kind}:${action.target || ''}`
+                            return (
+                              <Button
+                                key={`${item.id}-${action.id || action.kind}`}
+                                size="small"
+                                className="kb-lib-quality-failure-action"
+                                disabled={action.enabled === false}
+                                loading={
+                                  qualityCaseActionKey === loadingKey
+                                  || (action.kind === 'repair_sources' && qualityCaseActionKey === `${item.id}:repair_sources`)
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  void handleQualityFailureAction(item, action)
+                                }}
+                              >
+                                {action.label}
+                              </Button>
+                            )
+                          })}
+                          <Button
+                            size="small"
+                            className="kb-lib-quality-failure-action"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              void copyQualityFailureSummary(item)
+                            }}
+                          >
+                            Copy summary
+                          </Button>
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <Text type="secondary" className="kb-lib-quality-report-empty">{S.lib_quality_failure_no_match}</Text>
+              )}
+            </div>
+          ) : null}
+          <div className="kb-lib-quality-report-body">
+            <div className="kb-lib-quality-report-section">
+              <Text className="kb-lib-quality-report-section-title">{S.lib_quality_report_top_issues}</Text>
+              {qualityIssueStats.length > 0 ? (
+                <div className="kb-lib-quality-report-issues">
+                  {qualityIssueStats.map((issue) => (
+                    <button
+                      key={issue.key}
+                      type="button"
+                      className={`kb-lib-quality-report-issue is-${issue.severity || 'warning'}`}
+                      data-testid="library-quality-report-issue"
+                      onClick={() => handleFocusQualityIssue(issue.label)}
+                    >
+                      <span>{issue.label}</span>
+                      {issue.repairStrategy ? <em>{issue.repairStrategy}</em> : null}
+                      <strong>{S.lib_quality_report_papers.replace('{n}', String(issue.papers))}</strong>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <Text type="secondary" className="kb-lib-quality-report-empty">{S.lib_quality_report_no_issues}</Text>
+              )}
+            </div>
+            <div className="kb-lib-quality-report-section">
+              <Text className="kb-lib-quality-report-section-title">{S.lib_quality_report_recommended}</Text>
+              {qualityReportRecommendations.length > 0 ? (
+                <div className="kb-lib-quality-report-recommendations" data-testid="library-quality-report-recommended">
+                  {qualityReportRecommendations.slice(0, 3).map((item) => (
+                    <button
+                      key={item.name}
+                      type="button"
+                      className="kb-lib-quality-report-recommendation"
+                      onClick={() => focusQualityHistoryNames([item.name])}
+                    >
+                      <span className="kb-lib-quality-report-rec-title">{stripKnownSourceExt(item.name) || item.name}</span>
+                      <span className="kb-lib-quality-report-rec-meta">
+                        Q{item.score}
+                        {item.issues.length > 0 ? ` · ${item.issues.join(' / ')}` : ''}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <Text type="secondary" className="kb-lib-quality-report-empty">{S.lib_quality_report_no_issues}</Text>
+              )}
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {qualityRepairHistoryList.length > 0 ? (
+        <Card size="small" className="kb-lib-card kb-lib-quality-history" data-testid="library-quality-history">
+          <div className="kb-lib-quality-history-head">
+            <div>
+              <Text className="kb-lib-quality-history-title">{S.lib_quality_history_title}</Text>
+              <Text type="secondary" className="kb-lib-quality-history-hint">
+                {S.lib_quality_history_hint
+                  .replace('{n}', String(qualityRepairHistoryStats.total))
+                  .replace('{delta}', String(qualityRepairHistoryStats.avgDelta >= 0 ? `+${qualityRepairHistoryStats.avgDelta}` : qualityRepairHistoryStats.avgDelta))
+                  .replace('{issues}', String(qualityRepairHistoryStats.fixedCount))}
+              </Text>
+            </div>
+            <div className="kb-lib-quality-history-side">
+              <div className="kb-lib-quality-history-metrics">
+                <span data-testid="library-quality-history-count">{S.lib_quality_history_count.replace('{n}', String(qualityRepairHistoryStats.total))}</span>
+                <span>{S.lib_quality_history_improved.replace('{n}', String(qualityRepairHistoryStats.improved))}</span>
+              </div>
+              <div className="kb-lib-quality-history-actions">
+                <Button
+                  size="small"
+                  className="kb-lib-action-quiet"
+                  disabled={qualityHistoryRemainingNames.length <= 0}
+                  data-testid="library-quality-history-focus-remaining"
+                  onClick={handleFocusQualityHistoryRemaining}
+                >
+                  {S.lib_quality_history_focus_remaining}
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  disabled={qualityRepairRecommendedNames.length <= 0}
+                  loading={qualityRepairRecommendedNames.some((name) => Boolean(qualityRepairingNames[name]))}
+                  data-testid="library-quality-history-repair-recommended"
+                  onClick={() => { void handleRepairRecommendedQuality() }}
+                >
+                  {S.lib_quality_history_repair_recommended.replace('{n}', String(qualityRepairRecommendedNames.length))}
+                </Button>
+                {qualityHistoryFocusNames.length > 0 ? (
+                  <Button
+                    size="small"
+                    className="kb-lib-action-quiet"
+                    data-testid="library-quality-history-clear-focus"
+                    onClick={() => setQualityHistoryFocusNames([])}
+                  >
+                    {S.lib_quality_history_clear_focus}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+          <div className="kb-lib-quality-history-list">
+            {qualityRepairHistoryList.slice(0, 4).map((record) => (
+              <div key={`${record.name}-${record.updatedAt}`} className="kb-lib-quality-history-row" data-testid="library-quality-history-row">
+                <button
+                  type="button"
+                  className="kb-lib-quality-history-paper"
+                  title={record.name}
+                  data-testid="library-quality-history-paper"
+                  onClick={() => focusQualityHistoryNames([record.name])}
+                >
+                  {stripKnownSourceExt(record.name) || record.name}
+                </button>
+                <div className="kb-lib-quality-history-result">
+                  <span className="kb-lib-quality-history-score">Q{record.beforeScore} -&gt; Q{record.afterScore}</span>
+                  {record.fixedIssues.length > 0 ? (
+                    <span className="kb-lib-quality-history-fixed">
+                      {S.lib_quality_history_fixed.replace('{issues}', record.fixedIssues.slice(0, 2).join(' / '))}
+                    </span>
+                  ) : null}
+                  {record.remainingIssues.length > 0 ? (
+                    <span className="kb-lib-quality-history-remaining">
+                      {S.lib_quality_history_remaining.replace('{n}', String(record.remainingIssues.length))}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="kb-lib-quality-history-time">{formatQualityRepairHistoryTime(record.updatedAt)}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      ) : null}
+
       <Card size="small" className="kb-lib-card kb-lib-taxonomy-bar" title={S.lib_taxonomy_title}>
         <div className="kb-lib-taxonomy-shell">
           <div className="kb-lib-taxonomy-top">
@@ -2476,6 +4790,24 @@ export default function LibraryPage() {
                 >
                   {S.lib_taxonomy_has_suggestions}
                 </button>
+                <button
+                  type="button"
+                  className={`kb-lib-taxonomy-pill is-quality${onlyQualityIssues ? ' is-active' : ''}`}
+                  data-testid="library-quality-issues-filter"
+                  onClick={() => setOnlyQualityIssues((value) => !value)}
+                >
+                  Quality review {qualityReviewCount}
+                </button>
+                {qualityHistoryFocusNames.length > 0 ? (
+                  <button
+                    type="button"
+                    className="kb-lib-taxonomy-pill is-quality is-active"
+                    data-testid="library-quality-history-active-filter"
+                    onClick={() => setQualityHistoryFocusNames([])}
+                  >
+                    {S.lib_quality_history_focus_badge.replace('{n}', String(qualityHistoryFocusNames.length))}
+                  </button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -2496,6 +4828,16 @@ export default function LibraryPage() {
             <div className="kb-lib-batch-actions">
               <Button onClick={selectCurrentListItems}>{S.lib_btn_select_current_list}</Button>
               <Button onClick={clearLibrarySelection} disabled={!selectedLibraryCount}>{S.lib_btn_clear_selection}</Button>
+              {selectedQualityReviewNames.length > 0 ? (
+                <Button
+                  icon={<ReloadOutlined />}
+                  loading={selectedQualityReviewNames.some((name) => Boolean(qualityRepairingNames[name]))}
+                  onClick={() => { void handleRepairSelectedQuality() }}
+                  data-testid="library-quality-repair-selected"
+                >
+                  {S.lib_btn_repair_quality_selected}
+                </Button>
+              ) : null}
               <Button type="primary" onClick={openBatchEditor} disabled={!selectedLibraryCount}>{S.lib_batch_title}</Button>
             </div>
           </div>

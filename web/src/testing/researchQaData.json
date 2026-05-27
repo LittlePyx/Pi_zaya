@@ -332,6 +332,11 @@
         "minSystemBCompleteRate": 1.0,
         "requireRefsReady": true,
         "requirePolishStatus": true,
+        "requireCitationShelfQuality": true,
+        "minCitationShelfMetadataReadyCount": 1,
+        "minCitationShelfDoiCount": 1,
+        "minCitationShelfSourceClickCount": 1,
+        "maxCitationShelfMetadataReviewCount": 0,
         "allowedRefPolishStatuses": ["full", "heuristic"]
       }
     },
@@ -361,6 +366,11 @@
         "minSystemBCompleteRate": 1.0,
         "requireRefsReady": true,
         "requirePolishStatus": true,
+        "requireCitationShelfQuality": true,
+        "minCitationShelfMetadataReadyCount": 1,
+        "minCitationShelfDoiCount": 1,
+        "minCitationShelfSourceClickCount": 1,
+        "maxCitationShelfMetadataReviewCount": 0,
         "allowedRefPolishStatuses": ["full", "heuristic"]
       }
     },
@@ -390,6 +400,11 @@
         "minSystemBCompleteRate": 1.0,
         "requireRefsReady": true,
         "requirePolishStatus": true,
+        "requireCitationShelfQuality": true,
+        "minCitationShelfMetadataReadyCount": 1,
+        "minCitationShelfDoiCount": 1,
+        "minCitationShelfSourceClickCount": 1,
+        "maxCitationShelfMetadataReviewCount": 0,
         "allowedRefPolishStatuses": ["full", "heuristic"]
       }
     },
@@ -420,6 +435,11 @@
         "minSystemBCompleteRate": 1.0,
         "requireRefsReady": true,
         "requirePolishStatus": true,
+        "requireCitationShelfQuality": true,
+        "minCitationShelfMetadataReadyCount": 1,
+        "minCitationShelfDoiCount": 1,
+        "minCitationShelfSourceClickCount": 1,
+        "maxCitationShelfMetadataReviewCount": 0,
         "allowedRefPolishStatuses": ["full", "heuristic"]
       }
     },
@@ -449,6 +469,11 @@
         "minSystemBCompleteRate": 1.0,
         "requireRefsReady": true,
         "requirePolishStatus": true,
+        "requireCitationShelfQuality": true,
+        "minCitationShelfMetadataReadyCount": 1,
+        "minCitationShelfDoiCount": 1,
+        "minCitationShelfSourceClickCount": 1,
+        "maxCitationShelfMetadataReviewCount": 0,
         "allowedRefPolishStatuses": ["full", "heuristic"]
       }
     }

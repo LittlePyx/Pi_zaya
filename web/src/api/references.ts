@@ -29,6 +29,54 @@ export interface ReaderDocBlock {
   number?: number
 }
 
+export interface ShelfMetadataQualityIssue {
+  code: string
+  label: string
+  field: string
+  severity: string
+  detail?: string
+}
+
+export interface ShelfMetadataQuality {
+  contract_version: number
+  ok: boolean
+  status: 'ready' | 'warning' | 'error' | string
+  score: number
+  missing_fields: string[]
+  issues: ShelfMetadataQualityIssue[]
+  repairable: boolean
+  retryable: boolean
+  doi?: string
+}
+
+export interface ShelfMetadataRepairItem {
+  key: string
+  ok: boolean
+  changed: boolean
+  changed_fields: string[]
+  repair_status: 'ready' | 'repaired' | 'partial' | 'retryable' | 'unchanged' | 'error' | string
+  retryable: boolean
+  error_kind?: string
+  error_detail?: string
+  before: ShelfMetadataQuality
+  after: ShelfMetadataQuality
+  meta: Record<string, unknown>
+  persisted?: boolean
+  persisted_targets?: string[]
+}
+
+export interface ShelfMetadataRepairResponse {
+  ok: boolean
+  requested: number
+  ready: number
+  partial: number
+  retryable: number
+  failed: number
+  changed: number
+  persisted?: number
+  items: ShelfMetadataRepairItem[]
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value !== 'object') return JSON.stringify(value)
@@ -122,6 +170,11 @@ export const referencesApi = {
         meta,
       }),
     ),
+  repairShelfMetadata: (items: Array<Record<string, unknown>>, limit?: number) =>
+    api.post<ShelfMetadataRepairResponse>('/api/references/shelf/metadata/repair', {
+      items,
+      limit: limit ?? items.length,
+    }),
   citationCardPolishCached: (meta: Record<string, unknown>, waitSeconds = 4) => {
     const key = stableStringify({
       polish_client_version: 3,

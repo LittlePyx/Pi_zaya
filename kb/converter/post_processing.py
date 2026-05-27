@@ -328,6 +328,62 @@ def _split_inline_heading_markers(md: str) -> str:
 
     return "\n".join(out)
 
+
+def _split_inline_structural_heading_labels(md: str) -> str:
+    if not md:
+        return md
+    label_map = {
+        "ABSTRACT": "Abstract",
+        "INTRODUCTION": "INTRODUCTION",
+        "BACKGROUND": "Background",
+        "RELATED WORK": "Related Work",
+        "METHOD": "Methods",
+        "METHODS": "Methods",
+        "MATERIALS AND METHODS": "Materials and Methods",
+        "RESULT": "RESULTS",
+        "RESULTS": "RESULTS",
+        "DISCUSSION": "Discussion",
+        "CONCLUSION": "Conclusion",
+        "CONCLUSIONS": "Conclusions",
+        "REFERENCES": "References",
+    }
+    label_alt = "|".join(re.escape(key) for key in sorted(label_map, key=len, reverse=True))
+    label_re = re.compile(rf"^({label_alt})\s+(.{{20,}})$")
+    lines = md.splitlines()
+    out: list[str] = []
+    in_fence = False
+    in_math = False
+    for line in lines:
+        st = str(line or "").strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if st == "$$":
+            in_math = not in_math
+            out.append(line)
+            continue
+        if in_fence or in_math or re.match(r"^#{1,6}\s+", st):
+            out.append(line)
+            continue
+        match = label_re.match(st)
+        if not match:
+            out.append(line)
+            continue
+        label = (match.group(1) or "").strip()
+        tail = (match.group(2) or "").strip()
+        if not tail or tail.startswith(("[", "(", "{", "|", "![", "$$")):
+            out.append(line)
+            continue
+        if label in {"REFERENCES"} and not re.match(r"^\[\s*\d{1,4}\s*\]", tail):
+            out.append(line)
+            continue
+        out.append(f"## {label_map.get(label, label.title())}")
+        out.append("")
+        out.append(tail)
+    return "\n".join(out)
+
+
 def _fix_split_numbered_headings(md: str) -> str:
     # "1\nIntroduction" -> "1 Introduction"
     # Copied from legacy converter logic roughly
@@ -963,6 +1019,8 @@ def _looks_like_formulaish_heading_text(text: str) -> bool:
         return False
     if _is_caption_heading_text(t):
         return False
+    if re.match(r"^(?:[A-Za-z]\s+){1,5}[A-Za-z]{1,3}\b.*\bwhich\s+follows\b", t, flags=re.IGNORECASE):
+        return True
     if not (mathish or controlish):
         if _parse_appendix_heading_level(t) is not None:
             return False
@@ -2545,6 +2603,7 @@ def postprocess_markdown(md: str) -> str:
     md = _normalize_markdown_tables(md)
     md = _reflow_hard_wrapped_paragraphs(md)
     md = _split_inline_heading_markers(md)
+    md = _split_inline_structural_heading_labels(md)
     md = fix_math_markdown(md)
     md = _normalize_math_for_typora(md)
     md = _cleanup_stray_latex_in_text(md)

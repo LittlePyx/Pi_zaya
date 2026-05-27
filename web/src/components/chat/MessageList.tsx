@@ -2719,7 +2719,7 @@ function messageLocatePayloadSignature(message: Message, renderPacketValue: unkn
           String(seg.evidence_mode || '').trim(),
           String(seg.locate_policy || '').trim(),
           String(seg.locate_surface_policy || '').trim(),
-          Boolean(seg.must_locate) ? 'must' : '',
+          seg.must_locate ? 'must' : '',
           String(seg.primary_block_id || '').trim(),
           String(seg.primary_anchor_id || '').trim(),
           evidenceIds.join(','),
@@ -2732,7 +2732,7 @@ function messageLocatePayloadSignature(message: Message, renderPacketValue: unkn
     return [
       String(provenance.status || '').trim(),
       String(provenance.mapping_mode || '').trim(),
-      Boolean(provenance.strict_identity_ready) ? 'strict-ready' : 'strict-pending',
+      provenance.strict_identity_ready ? 'strict-ready' : 'strict-pending',
       String(provenance.source_path || '').trim(),
       String(provenance.md_path || '').trim(),
       Number(provenance.must_locate_count || 0) || 0,
@@ -2807,7 +2807,7 @@ function extractPanelLettersFromText(text: string): string[] {
     seen.add(ch)
     out.push(ch)
   }
-  for (const m of src.matchAll(/\bpanel\s*[\(\[]?\s*([a-z])\s*[\)\]]?/gi)) {
+  for (const m of src.matchAll(/\bpanel\s*[([]?\s*([a-z])\s*[\])]?/gi)) {
     push(String(m[1] || ''))
   }
   for (const m of src.matchAll(/(?:^|[\s,;:])\(\s*([a-z])\s*\)(?=[\s,;:.]|$)/gi)) {
@@ -4178,8 +4178,10 @@ function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<string, un
   }
 
   const baseDoi = normalizeDoiLike(base.doi || base.doiUrl)
+  const baseRawDoi = normalizeDoiLike(base.raw || base.citeFmt)
   const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
   if (baseDoi && mergedDoi && baseDoi !== mergedDoi) return null
+  if (baseRawDoi && mergedDoi && baseRawDoi === mergedDoi) return mergedItem
 
   const titleSignal = jaccardTokens(base.title || base.main, mergedItem.title || mergedItem.main) >= 0.55
   const authorSignal = (
@@ -4812,10 +4814,17 @@ export function MessageList({
       cite_fmt: '',
       citeFmt: '',
     }
-    Promise.all([
-      referencesApi.bibliometrics(basePayload).catch(() => ({})),
-      referencesApi.bibliometrics(strictTitlePayload).catch(() => ({})),
-    ])
+    const loadRepairCandidates = referencesApi.repairShelfMetadata([basePayload, strictTitlePayload], 2)
+      .then((res) => {
+        const repaired = Array.isArray(res.items) ? res.items : []
+        return repaired.map((entry) => entry.meta || {}).filter((meta) => meta && Object.keys(meta).length > 0)
+      })
+      .catch(() => Promise.all([
+        referencesApi.bibliometrics(basePayload).catch(() => ({})),
+        referencesApi.bibliometrics(strictTitlePayload).catch(() => ({})),
+      ]))
+
+    loadRepairCandidates
       .then((metas) => {
         const candidates = metas.filter((meta) => meta && Object.keys(meta).length > 0)
         let didUpdate = false
@@ -5409,6 +5418,7 @@ export function MessageList({
     paperGuideSourceName,
     paperGuideSourcePath,
     refs,
+    S,
   ])
 
   useEffect(() => {
@@ -6570,6 +6580,9 @@ export function MessageList({
         onSelect={(item) => {
           setFocusedShelfKey(item.key)
           fetchShelfSummaryForItem(item)
+        }}
+        onOpenSource={(item) => {
+          openReaderFromDetail(item as unknown as CiteDetail)
         }}
         onRemove={(key) => {
           setShelfItems((current) => current.filter((item) => item.key !== key))

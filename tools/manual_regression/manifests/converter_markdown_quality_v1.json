@@ -1,0 +1,123 @@
+{
+  "suite_id": "converter_markdown_quality_v1",
+  "description": "Structural quality gates for converted research-paper Markdown used by retrieval, citations, reader-open targets, and the literature basket.",
+  "defaults": {
+    "min_chars": 20000,
+    "min_headings": 5,
+    "min_h1": 1,
+    "max_missing_images": 0,
+    "max_page_marker_gaps": 0,
+    "max_unclosed_display_math": 0,
+    "max_mojibake": 0,
+    "max_analyzer_errors": 0
+  },
+  "cases": [
+    {
+      "id": "scinerf_structured_cvpr",
+      "title": "SCINeRF CVPR paper keeps title, abstract, figures, tables, equations, and references",
+      "md_path": "db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+      "checks": {
+        "min_chars": 45000,
+        "min_nonempty_lines": 150,
+        "min_headings": 12,
+        "min_h2": 6,
+        "require_abstract_heading": true,
+        "min_images": 5,
+        "min_captions": 8,
+        "min_tables": 4,
+        "min_display_math": 5,
+        "min_inline_math": 40,
+        "min_references": 50,
+        "min_reference_lines": 50,
+        "min_body_citations": 50,
+        "must_contain_text": [
+          "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+          "Snapshot Compressive Imaging",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "natcomm_single_photon_figures_tables",
+      "title": "NatCommun single-photon paper keeps abstract, figure/table density, math, and references",
+      "md_path": "db/NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning/NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.en.md",
+      "checks": {
+        "min_chars": 58000,
+        "min_nonempty_lines": 240,
+        "min_headings": 20,
+        "min_h2": 6,
+        "require_abstract_heading": true,
+        "min_images": 6,
+        "min_captions": 7,
+        "min_tables": 3,
+        "min_display_math": 8,
+        "min_inline_math": 60,
+        "min_references": 50,
+        "min_reference_lines": 50,
+        "min_body_citations": 40,
+        "must_contain_text": [
+          "High-resolution single-photon imaging with physics-informed deep learning",
+          "physics-informed deep learning",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "visual_computing_denoising_formula_refs",
+      "title": "Image denoising review keeps section structure, formulas, table, and long bibliography",
+      "md_path": "db/Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques/Visual Computing for Industry, Biomedicine, and Art-2019-Brief review...techniques.en.md",
+      "checks": {
+        "min_chars": 55000,
+        "min_nonempty_lines": 260,
+        "min_headings": 24,
+        "min_h2": 15,
+        "require_abstract_heading": true,
+        "min_images": 3,
+        "min_captions": 3,
+        "min_tables": 1,
+        "min_display_math": 15,
+        "min_inline_math": 200,
+        "min_references": 100,
+        "min_reference_lines": 100,
+        "min_body_citations": 100,
+        "max_analyzer_warnings": 3,
+        "must_contain_text": [
+          "Brief review of image denoising techniques",
+          "image denoising",
+          "## References"
+        ]
+      }
+    },
+    {
+      "id": "sciadv_foveated_figures_refs",
+      "title": "Science Advances foveated SPI paper keeps figures, equations, title, and references",
+      "md_path": "db/SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling/SciAdv-2017-Adaptive foveated single-pixel imaging with dynamic supersampling.en.md",
+      "checks": {
+        "min_chars": 45000,
+        "min_nonempty_lines": 130,
+        "min_headings": 18,
+        "min_h2": 15,
+        "require_abstract_heading": true,
+        "min_images": 5,
+        "min_captions": 2,
+        "min_display_math": 2,
+        "min_inline_math": 60,
+        "min_references": 60,
+        "min_reference_lines": 60,
+        "must_not_start_with": [
+          "# INTRODUCTION"
+        ],
+        "ordered_text": [
+          "Adaptive foveated single-pixel imaging with dynamic supersampling",
+          "## Abstract",
+          "## RESULTS"
+        ],
+        "must_contain_text": [
+          "Adaptive foveated single-pixel imaging with dynamic supersampling",
+          "single-pixel cameras capture images",
+          "## References"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+from __future__ import annotations
+
+import json
+
+from api import reference_metadata_quality as mq
+
+
+def test_repair_promotes_doi_from_reference_text(monkeypatch):
+    raw = (
+        "[24] Gehm M, Brady D. Single-shot compressive spectral imaging with a "
+        "dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013"
+    )
+
+    def fake_enrich(detail):
+        assert "10.1364/OE.15.014013" in str(detail.get("raw") or "")
+        return {
+            **dict(detail),
+            "title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+            "authors": "Gehm M, Brady D",
+            "venue": "Optics Express",
+            "year": "2007",
+            "doi": "10.1364/OE.15.014013",
+            "doi_url": "https://doi.org/10.1364/OE.15.014013",
+        }
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
+
+    result = mq.repair_citation_metadata_item(
+        {
+            "key": "demo",
+            "anchor": "a1",
+            "source_path": "paper.md",
+            "title": "Reference 24",
+            "raw": raw,
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["repair_status"] == "repaired"
+    assert "doi" in result["changed_fields"]
+    assert result["before"]["status"] == "error"
+    assert result["after"]["status"] == "ready"
+    assert result["meta"]["doi"] == "10.1364/OE.15.014013"
+
+
+def test_repair_classifies_connection_errors_as_retryable(monkeypatch):
+    def fake_enrich(detail):
+        raise ConnectionError("Crossref connection refused")
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
+
+    result = mq.repair_citation_metadata_item(
+        {
+            "key": "demo",
+            "anchor": "a1",
+            "source_path": "paper.md",
+            "title": "Single-shot compressive spectral imaging",
+            "raw": "[1] Demo reference, 2007.",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["repair_status"] == "retryable"
+    assert result["retryable"] is True
+    assert result["error_kind"] == "connection"
+
+
+def test_repair_persists_reference_index_and_crossref_cache(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    source_path = tmp_path / "paper.en.md"
+    raw = (
+        "[24] Gehm M, Brady D. Single-shot compressive spectral imaging with a "
+        "dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013"
+    )
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    str(source_path).lower(): {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "24": {
+                                "num": 24,
+                                "raw": raw,
+                                "title": "Reference 24",
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_enrich(detail):
+        return {
+            **dict(detail),
+            "title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+            "authors": "Gehm M, Brady D",
+            "venue": "Optics Express",
+            "year": "2007",
+            "doi": "10.1364/OE.15.014013",
+            "doi_url": "https://doi.org/10.1364/OE.15.014013",
+        }
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
+
+    result = mq.repair_citation_metadata_batch(
+        [
+            {
+                "key": "demo",
+                "source_path": str(source_path),
+                "num": 24,
+                "title": "Reference 24",
+                "raw": raw,
+            }
+        ],
+        db_dir=db_dir,
+    )
+
+    assert result["persisted"] == 1
+    item = result["items"][0]
+    assert sorted(item["persisted_targets"]) == ["crossref_cache", "reference_index"]
+    index_data = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    ref = next(iter(index_data["docs"].values()))["refs"]["24"]
+    assert ref["doi"] == "10.1364/OE.15.014013"
+    assert ref["authors"] == "Gehm M, Brady D"
+    assert ref["venue"] == "Optics Express"
+    assert ref["crossref_ok"] is True
+    cache = json.loads((db_dir / "crossref_cache.json").read_text(encoding="utf-8"))
+    cached = cache["doi"]["10.1364/oe.15.014013"]
+    assert cached["title"] == "Single-shot compressive spectral imaging with a dual-disperser architecture"
+    assert cached["venue"] == "Optics Express"

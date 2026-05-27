@@ -4,8 +4,12 @@ from api.reference_card_quality import (
     attach_ref_card_polish_contract,
     attach_refs_pack_polish_contract,
     citation_detail_quality,
+    citation_shelf_item_quality,
+    ref_card_hit_quality,
     refs_pack_has_full_llm_copy,
     summarize_citation_detail_quality,
+    summarize_citation_shelf_quality,
+    summarize_ref_card_hit_quality,
 )
 from api.reference_card_payload import build_ref_card_ui_payload
 
@@ -126,6 +130,79 @@ def test_ref_card_payload_builder_attaches_polish_contract():
     sections = {section["id"]: section for section in payload["card_view"]["sections"]}
     assert sections["summary"]["text"] == "A concise LLM-grounded summary."
     assert sections["why"]["text"] == "A concise LLM-grounded relevance note."
+
+
+def test_ref_card_hit_quality_accepts_grounded_openable_card():
+    quality = ref_card_hit_quality(
+        {
+            "text": "The method maps low-dimensional measurements back to target images.",
+            "meta": {"source_path": "demo.en.md", "ref_pack_state": "ready"},
+            "ui_meta": {
+                "display_name": "Demo SPI paper",
+                "source_path": "demo.en.md",
+                "heading_path": "4. Strategy and Advantages / Data-driven strategy",
+                "summary_line": "This card explains how the model maps compressed measurements back to images.",
+                "why_line": "It directly supports the user's question about reconstruction quality under low sampling.",
+                "polish_status": "full",
+                "can_open": True,
+                "reader_open": {
+                    "sourcePath": "demo.en.md",
+                    "headingPath": "4. Strategy and Advantages",
+                    "blockId": "blk-1",
+                    "anchorId": "p-1",
+                    "snippet": "The encoder samples the image into low-dimensional measurements.",
+                },
+            },
+        }
+    )
+
+    assert quality["ok"] is True
+    assert quality["score"] == 1.0
+
+
+def test_ref_card_hit_quality_rejects_template_duplicate_and_broken_copy():
+    quality = ref_card_hit_quality(
+        {
+            "text": "## Foveated single-pixel imaging has attrac...",
+            "ui_meta": {
+                "display_name": "Foveated SPI",
+                "summary_line": "This hit is directly relevant to the user question.",
+                "why_line": "This hit is directly relevant to the user question.",
+                "polish_status": "sparkly",
+                "reader_open": {"sourcePath": "demo.en.md", "snippet": "## Foveated single-pixel imaging has attrac..."},
+            },
+        },
+        forbidden_phrases=["directly relevant"],
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "ref_card_template_phrase_visible" in names
+    assert "ref_card_duplicate_summary_why" in names
+    assert "ref_card_forbidden_phrase" in names
+    assert "ref_card_unknown_polish_status" in names
+    assert "ref_card_raw_markdown_visible" in names
+    assert "ref_card_broken_evidence" in names
+
+
+def test_summarize_ref_card_hit_quality_indexes_failures():
+    summary = summarize_ref_card_hit_quality(
+        [
+            {
+                "ui_meta": {
+                    "display_name": "Good",
+                    "summary_line": "This card has a focused summary for the answer.",
+                    "why_line": "It explains why this source belongs in the answer.",
+                }
+            },
+            {"ui_meta": {"summary_line": "short", "why_line": "short"}},
+        ]
+    )
+
+    assert summary["ok"] is False
+    assert summary["count"] == 2
+    assert summary["ok_count"] == 1
+    assert any(item["index"] == 2 and item["name"] == "ref_card_summary_too_short" for item in summary["failures"])
 
 
 def test_citation_detail_quality_accepts_grounded_system_a_card():
@@ -356,3 +433,76 @@ def test_summarize_citation_detail_quality_audits_system_b_sources():
     assert audit["answer_context_only_count"] == 1
     assert audit["trace_complete_count"] == 1
     assert audit["needs_review_count"] == 1
+
+
+def test_citation_shelf_item_quality_accepts_exportable_system_b_item():
+    quality = citation_shelf_item_quality(
+        {
+            "num": 4,
+            "anchor": "r4",
+            "is_inpaper": True,
+            "source_name": "SCINeRF.pdf",
+            "title": "Distributed Optimization and Statistical Learning via ADMM",
+            "authors": "Boyd et al.",
+            "venue": "Foundations and Trends in Machine Learning",
+            "year": "2011",
+            "doi": "10.1561/2200000016",
+            "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+            "card_view": {
+                "header": {
+                    "title": "Distributed Optimization and Statistical Learning via ADMM",
+                    "subtitle": "SCINeRF / Related Work",
+                },
+                "sections": [
+                    {
+                        "id": "takeaway",
+                        "text": "This upstream paper provides the ADMM optimization framework used by earlier SCI reconstruction methods.",
+                    }
+                ],
+                "summary": "This upstream paper provides the ADMM optimization framework used by earlier SCI reconstruction methods.",
+                "quality": {"flags": []},
+            },
+        }
+    )
+
+    assert quality["ok"] is True
+    assert quality["route"] == "system_b"
+    assert quality["title"].startswith("Distributed Optimization")
+
+
+def test_citation_shelf_item_quality_rejects_placeholder_summary_and_markdown():
+    quality = citation_shelf_item_quality(
+        {
+            "num": 1,
+            "anchor": "a1",
+            "source_path": "demo.en.md",
+            "title": "INTRODUCTION",
+            "summary_line": "No summary available",
+            "evidence_quote": "## Broken evidence has attrac...",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is False
+    assert "shelf_template_phrase_visible" in names
+    assert "shelf_summary_too_short" in names
+
+
+def test_summarize_citation_shelf_quality_indexes_failures():
+    summary = summarize_citation_shelf_quality(
+        [
+            {
+                "num": 1,
+                "anchor": "a1",
+                "source_name": "Demo citation shelf paper.pdf",
+                "source_path": "demo.en.md",
+                "summary_line": "This shelf note explains why the cited evidence is useful for the answer.",
+            },
+            {"num": 2, "anchor": "a2", "summary_line": "short"},
+        ]
+    )
+
+    assert summary["ok"] is False
+    assert summary["count"] == 2
+    assert summary["ok_count"] == 1
+    assert any(item["index"] == 2 and item["name"] == "shelf_missing_source_identity" for item in summary["failures"])

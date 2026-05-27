@@ -31,6 +31,7 @@ export interface LibraryFileItem {
   md_exists: boolean
   md_path: string
   md_folder: string
+  conversion_quality: ConversionQualitySummary | null
   category: 'pending' | 'converted'
   task_state: 'idle' | 'queued' | 'running'
   status: string
@@ -46,6 +47,44 @@ export interface LibraryFileItem {
   has_suggestions: boolean
   suggested_category: string
   suggested_tags: string[]
+}
+
+export interface ConversionQualityIssue {
+  code: string
+  label: string
+  severity: 'warning' | 'error' | string
+  count: number
+  repairable?: boolean
+  repair_strategy?: string
+  repair_steps?: string[]
+}
+
+export interface ConversionQualitySummary {
+  status: 'good' | 'warning' | 'error' | string
+  label: string
+  score: number
+  summary: string
+  has_review_issue: boolean
+  issues: ConversionQualityIssue[]
+  metrics: {
+    chars?: number
+    headings?: number
+    page_markers?: number
+    page_marker_gaps?: number
+    figures?: number
+    missing_images?: number
+    captions?: number
+    tables?: number
+    display_math?: number
+    inline_math?: number
+    unclosed_display_math?: number
+    references?: number
+    reference_lines?: number
+    body_citations?: number
+    mojibake?: number
+    analyzer_errors?: number
+    analyzer_warnings?: number
+  }
 }
 
 export interface LibraryMetaUpdateBody {
@@ -157,6 +196,8 @@ export interface LibraryFilesResponse {
     queued: number
     running: number
     reconverting: number
+    quality_review: number
+    quality_ready: number
   }
   truncated: boolean
   scope: string
@@ -271,6 +312,401 @@ export interface LibraryReindexResponse {
   refsync_error: string
 }
 
+export interface LibrarySourceQualityItem {
+  source_path: string
+  source_name: string
+  pdf_path: string
+  md_path: string
+  md_exists: boolean
+  conversion_quality: ConversionQualitySummary | null
+}
+
+export interface LibrarySourceQualityResponse {
+  ok: boolean
+  items: LibrarySourceQualityItem[]
+  review_count: number
+}
+
+export interface LibraryQualityOverviewIssue {
+  code: string
+  label: string
+  severity: string
+  papers: number
+  count: number
+  repairable?: boolean
+  repair_strategy?: string
+  repair_steps?: string[]
+}
+
+export interface LibraryQualityOverviewRecommendation {
+  name: string
+  path: string
+  md_path: string
+  status: string
+  score: number
+  summary: string
+  task_state: string
+  issues: ConversionQualityIssue[]
+}
+
+export interface LibraryQualityDomainSummary {
+  [key: string]: string | number | boolean | null | undefined
+}
+
+export interface LibraryQualityDomain {
+  available?: boolean
+  status: 'good' | 'warning' | 'error' | 'unknown' | string
+  summary?: LibraryQualityDomainSummary
+  top_failures?: Array<{ name: string, count: number }>
+  latest_path?: string
+  report_path?: string
+  updated_at?: number
+}
+
+export interface LibraryQualityPriorityAction {
+  domain: string
+  severity: 'good' | 'warning' | 'error' | 'unknown' | string
+  label: string
+  count: number
+  detail?: string
+}
+
+export interface LibraryQualityFullChainStage {
+  key: string
+  label: string
+  status: 'good' | 'warning' | 'error' | 'unknown' | string
+  detail: string
+  action: string
+  count: number
+  blocking: boolean
+  metrics?: Record<string, string | number | boolean | null | undefined>
+}
+
+export interface LibraryQualityFullChainRootCause {
+  code: string
+  label: string
+  domain: string
+  count: number
+  severity: 'good' | 'warning' | 'error' | 'unknown' | string
+}
+
+export interface LibraryQualityActionSnapshot {
+  status?: 'good' | 'warning' | 'error' | 'unknown' | string
+  score?: number
+  count?: number
+  summary?: string
+  detail?: string
+  blocking?: boolean
+}
+
+export interface LibraryQualityActionDelta {
+  improved?: boolean | null
+  worsened?: boolean
+  status_changed?: boolean
+  score_delta?: number
+  count_delta?: number
+  summary?: string
+}
+
+export interface LibraryQualityActionHistoryItem {
+  id: string
+  stage_key: string
+  stage_label: string
+  action: string
+  status: 'success' | 'warning' | 'error' | 'info' | 'good' | string
+  summary: string
+  detail?: string
+  target_ids?: string[]
+  metrics?: Record<string, string | number | boolean | null | undefined>
+  before?: LibraryQualityActionSnapshot
+  after?: LibraryQualityActionSnapshot
+  delta?: LibraryQualityActionDelta
+  improved?: boolean | null
+  verification?: Record<string, string | number | boolean | null | undefined>
+  created_at: number
+}
+
+export interface LibraryQualityFullChain {
+  available: boolean
+  status: 'good' | 'warning' | 'error' | 'unknown' | string
+  score: number
+  summary: string
+  stages: LibraryQualityFullChainStage[]
+  root_causes: LibraryQualityFullChainRootCause[]
+  next_actions: LibraryQualityPriorityAction[]
+  action_history?: LibraryQualityActionHistoryItem[]
+}
+
+export interface LibraryQualityFeatureHealthItem {
+  key: string
+  label: string
+  status: 'good' | 'warning' | 'error' | 'unknown' | string
+  score: number
+  summary: string
+  detail: string
+  action: string
+  target_stage: string
+  count: number
+  blocking: boolean
+  metrics?: Record<string, string | number | boolean | null | undefined>
+}
+
+export interface LibraryQualityFeatureHealth {
+  available: boolean
+  status: 'good' | 'warning' | 'error' | 'unknown' | string
+  score: number
+  summary: string
+  items: LibraryQualityFeatureHealthItem[]
+}
+
+export interface LibraryQualityFailure {
+  name: string
+  domain: string
+  detail?: string
+}
+
+export interface LibraryQualityCitationDiagnostic {
+  route: 'system_a' | 'system_b' | string
+  num: number
+  anchor: string
+  title: string
+  source_name: string
+  source_path: string
+  heading_path: string
+  evidence_quote: string
+  answer_claim?: string
+  support_relation?: string
+  trace?: string
+}
+
+export interface LibraryQualityRefDiagnostic {
+  title: string
+  source_name: string
+  source_path: string
+  heading_path: string
+  score: number
+  summary_line: string
+  why_line: string
+  polish_status: string
+  ref_pack_state: string
+  evidence_quote: string
+}
+
+export interface LibraryQualitySourceDiagnostic {
+  source_path: string
+  source_name: string
+  title: string
+  roles: string[]
+  pdf_path: string
+  md_path: string
+  md_exists: boolean
+  repairable: boolean
+  needs_repair: boolean
+  quality_status: 'good' | 'warning' | 'error' | 'unknown' | string
+  quality_score: number
+  quality_summary: string
+  quality_issues: ConversionQualityIssue[]
+}
+
+export interface LibraryQualityRootCause {
+  code: string
+  label: string
+  severity: 'good' | 'warning' | 'error' | 'unknown' | string
+  detail: string
+  action: string
+}
+
+export interface LibraryQualityRepairAction {
+  id: string
+  kind: 'apply_repair_plan' | 'open_replay' | 'rerun_case' | 'repair_sources' | 'rebuild_index' | 'open_artifact' | string
+  label: string
+  severity: 'good' | 'warning' | 'error' | 'unknown' | string
+  enabled: boolean
+  detail: string
+  target?: string
+  source_count?: number
+  steps?: Array<{
+    kind: 'repair_sources' | 'repair_shelf_metadata' | 'rebuild_index' | 'rerun_case' | string
+    label?: string
+    target?: string
+    source_count?: number
+  }>
+  acceptance?: string
+}
+
+export interface LibraryQualityRerunStatus {
+  available: boolean
+  run_count: number
+  last_status: 'passed' | 'failed' | 'error' | 'complete' | string
+  last_quality_ok: boolean
+  last_finished_at: number
+  last_latency_ms: number
+  last_passed_at: number
+  consecutive_failed: number
+  failure_names: string[]
+  report_path: string
+  raw_path: string
+  error_kind?: string
+  error_detail?: string
+}
+
+export interface LibraryQualityFailureCase {
+  id: string
+  question: string
+  status: string
+  conv_id: string
+  latency_ms: number
+  failures: LibraryQualityFailure[]
+  failure_names: string[]
+  expected_doc_ids: string[]
+  ref_doc_ids: string[]
+  citation_doc_ids: string[]
+  missing_expected_doc_ids?: string[]
+  doc_ids: string[]
+  citation_count: number
+  system_b_count: number
+  ref_hit_count: number
+  diagnostic_summary?: {
+    citation_routes?: {
+      system_a?: number
+      system_b?: number
+      [key: string]: number | undefined
+    }
+    missing_expected_doc_count?: number
+    citation_diagnostic_count?: number
+    ref_diagnostic_count?: number
+  }
+  citation_diagnostics?: LibraryQualityCitationDiagnostic[]
+  ref_diagnostics?: LibraryQualityRefDiagnostic[]
+  source_diagnostics?: LibraryQualitySourceDiagnostic[]
+  root_causes?: LibraryQualityRootCause[]
+  repair_actions?: LibraryQualityRepairAction[]
+  rerun_status?: LibraryQualityRerunStatus
+  answer_preview: string
+}
+
+export interface LibraryQualityArtifactOpenResponse {
+  ok: boolean
+  domain: string
+  target: string
+  path: string
+}
+
+export interface LibraryQualityOverviewResponse {
+  ok: boolean
+  status: 'good' | 'warning' | 'error' | string
+  summary: {
+    total_view: number
+    total_all: number
+    converted: number
+    pending: number
+    queued: number
+    running: number
+    assessed: number
+    good: number
+    review: number
+    unknown: number
+    avg_score: number
+  }
+  top_issues: LibraryQualityOverviewIssue[]
+  recommended: LibraryQualityOverviewRecommendation[]
+  domains?: Record<string, LibraryQualityDomain>
+  full_chain?: LibraryQualityFullChain
+  feature_health?: LibraryQualityFeatureHealth
+  failure_cases?: LibraryQualityFailureCase[]
+  rerun_summary?: {
+    available: boolean
+    total: number
+    passed: number
+    failed: number
+    error: number
+    case_count: number
+    latest_finished_at: number
+    latest_status: string
+    top_failures?: Array<{ name: string, count: number }>
+  }
+  priority_actions?: LibraryQualityPriorityAction[]
+  queue: LibraryFilesResponse['queue']
+  scope: string
+  truncated: boolean
+}
+
+export interface LibraryQualityRepairItem {
+  source_path: string
+  source_name: string
+  pdf_name: string
+  pdf_path: string
+  md_path?: string
+  ok: boolean
+  enqueued: boolean
+  repaired?: boolean
+  repair_changed?: boolean
+  repair_applied?: string[]
+  repair_before_score?: number
+  repair_after_score?: number
+  remaining_issue_codes?: string[]
+  repair_error?: string
+  skipped_busy: boolean
+  error: string
+  task_id: string
+}
+
+export interface LibraryQualityRepairResponse {
+  ok: boolean
+  requested: number
+  enqueued: number
+  repaired?: number
+  skipped_busy: number
+  failed: number
+  items: LibraryQualityRepairItem[]
+}
+
+export interface LibraryQualityRepairBody {
+  pdf_names?: string[]
+  sources?: Array<{ source_path: string; source_name?: string }>
+  speed_mode?: string
+  no_llm?: boolean
+  replace?: boolean
+  md_autofix?: boolean
+}
+
+export interface LibraryQualityActionHistoryBody {
+  stage_key: string
+  stage_label?: string
+  action?: string
+  status?: 'success' | 'warning' | 'error' | 'info' | 'good' | string
+  summary: string
+  detail?: string
+  target_ids?: string[]
+  metrics?: Record<string, string | number | boolean | null | undefined>
+  before?: LibraryQualityActionSnapshot
+  after?: LibraryQualityActionSnapshot
+  delta?: LibraryQualityActionDelta
+  improved?: boolean | null
+  verification?: Record<string, string | number | boolean | null | undefined>
+  created_at?: number
+}
+
+export interface LibraryResearchQaRerunResponse {
+  ok: boolean
+  case_id: string
+  status: 'passed' | 'failed' | 'error' | 'complete' | string
+  quality_ok: boolean
+  returncode: number
+  summary: Record<string, unknown>
+  failures: LibraryQualityFailure[]
+  output_dir: string
+  report_path: string
+  raw_path: string
+  stdout_tail: string
+  stderr_tail: string
+  error_kind?: string
+  error_detail?: string
+  started_at: number
+  finished_at: number
+  latency_ms: number
+}
+
 export const libraryApi = {
   listPdfs: () => api.get<{ name: string; path: string }[]>('/api/library/pdfs'),
   listFiles: (scope = '200') =>
@@ -356,6 +792,23 @@ export const libraryApi = {
     api.post<LibrarySuggestionRegenerateResponse>('/api/library/meta/suggestions/regenerate', body),
   applySuggestionAction: (body: LibrarySuggestionActionBody) =>
     api.post<LibrarySuggestionActionResponse>('/api/library/meta/suggestions/apply', body),
+  qualityOverview: (scope = 'all') =>
+    api.get<LibraryQualityOverviewResponse>(`/api/library/quality/overview?scope=${encodeURIComponent(scope)}`),
+  qualityActionHistory: (limit = 20) =>
+    api.get<{ ok: boolean; items: LibraryQualityActionHistoryItem[] }>(`/api/library/quality/action-history?limit=${encodeURIComponent(String(limit))}`),
+  recordQualityAction: (body: LibraryQualityActionHistoryBody) =>
+    api.post<{ ok: boolean; item: LibraryQualityActionHistoryItem }>('/api/library/quality/action-history', body),
+  sourceQuality: (sources: Array<{ source_path: string; source_name?: string }>) =>
+    api.post<LibrarySourceQualityResponse>('/api/library/quality/sources', { sources }),
+  openQualityArtifact: (domain: 'research_qa' | 'citation_cards' | string, target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook' | string = 'report') =>
+    api.post<LibraryQualityArtifactOpenResponse>('/api/library/quality/artifact/open', {
+      domain,
+      target,
+    }),
+  repairQuality: (body: LibraryQualityRepairBody) =>
+    api.post<LibraryQualityRepairResponse>('/api/library/quality/repair', body),
+  rerunResearchQaCase: (body: { case_id: string, base_url?: string, timeout_s?: number, top_k?: number, max_tokens?: number, dry_run?: boolean }) =>
+    api.post<LibraryResearchQaRerunResponse>('/api/library/quality/research-qa/rerun', body),
 
   streamConvertStatus: (
     onData: (data: ConvertProgress) => void,

@@ -28,6 +28,7 @@ from api.reference_ui import (
     open_reference_source,
 )
 from api.reference_card_quality import refs_pack_has_full_llm_copy
+from api.reference_metadata_quality import repair_citation_metadata_batch
 from api.reference_card_copy import (
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
@@ -1651,6 +1652,11 @@ class BibliometricsBody(BaseModel):
     meta: dict
 
 
+class ShelfMetadataRepairBody(BaseModel):
+    items: list[dict]
+    limit: int | None = None
+
+
 class CitationCardPolishBody(BaseModel):
     meta: dict
     wait_s: float | None = None
@@ -1697,6 +1703,14 @@ def get_reference_citation_meta(body: CitationMetaBody):
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     return enrich_citation_detail_meta(body.meta or {})
+
+
+@router.post("/shelf/metadata/repair")
+def repair_shelf_metadata(body: ShelfMetadataRepairBody):
+    limit = 40
+    if body.limit is not None:
+        limit = max(1, min(80, int(body.limit)))
+    return repair_citation_metadata_batch(list(body.items or []), limit=limit, db_dir=get_settings().db_dir)
 
 
 def _run_citation_card_polish_job(key: str, detail: dict) -> None:
