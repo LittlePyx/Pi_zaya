@@ -853,6 +853,50 @@ def _list_dict_items(value) -> list[dict]:
     return [dict(item) for item in value if isinstance(item, dict)]
 
 
+def _research_qa_quality_issue_rows(summary: dict, key: str = "failures") -> dict[int, list[dict]]:
+    rows: dict[int, list[dict]] = {}
+    source = summary if isinstance(summary, dict) else {}
+    for item in list(source.get(key) or []):
+        if not isinstance(item, dict):
+            continue
+        index = _safe_int(item.get("index"), 0)
+        if index <= 0:
+            continue
+        issue = {
+            "name": _compact_text(item.get("name"), limit=120),
+            "field": _compact_text(item.get("field"), limit=120),
+            "detail": _compact_text(item.get("detail"), limit=220),
+            "severity": _compact_text(item.get("severity"), limit=40) or ("warning" if key == "warnings" else "error"),
+        }
+        if not issue["name"]:
+            continue
+        rows.setdefault(index, []).append(issue)
+    return rows
+
+
+def _research_qa_quality_gate_summary(quality: dict) -> dict:
+    source = quality if isinstance(quality, dict) else {}
+    citation_quality = source.get("citation_quality") if isinstance(source.get("citation_quality"), dict) else {}
+    shelf_quality = source.get("citation_shelf_quality") if isinstance(source.get("citation_shelf_quality"), dict) else {}
+    ref_card_quality = source.get("ref_card_quality") if isinstance(source.get("ref_card_quality"), dict) else {}
+    system_b_audit = source.get("system_b_audit") if isinstance(source.get("system_b_audit"), dict) else {}
+    return {
+        "citation_card_failure_count": len(_list_dict_items(citation_quality.get("failures"))),
+        "citation_card_warning_count": len(_list_dict_items(citation_quality.get("warnings"))),
+        "shelf_failure_count": len(_list_dict_items(shelf_quality.get("failures"))),
+        "shelf_warning_count": len(_list_dict_items(shelf_quality.get("warnings"))),
+        "shelf_metadata_ready_count": _safe_int(shelf_quality.get("metadata_ready_count"), 0),
+        "shelf_doi_count": _safe_int(shelf_quality.get("doi_count"), 0),
+        "shelf_source_clickable_count": _safe_int(shelf_quality.get("source_clickable_count"), 0),
+        "shelf_review_count": _safe_int(shelf_quality.get("review_count"), 0),
+        "ref_card_failure_count": len(_list_dict_items(ref_card_quality.get("failures"))),
+        "ref_card_warning_count": len(_list_dict_items(ref_card_quality.get("warnings"))),
+        "system_b_needs_review_count": _safe_int(system_b_audit.get("needs_review_count"), 0),
+        "system_b_answer_context_only_count": _safe_int(system_b_audit.get("answer_context_only_count"), 0),
+        "system_b_reference_index_fallback_count": _safe_int(system_b_audit.get("reference_index_fallback_count"), 0),
+    }
+
+
 def _research_qa_citation_details(row: dict) -> list[dict]:
     details: list[dict] = []
 
@@ -930,8 +974,23 @@ def _research_qa_ref_hits(row: dict) -> list[dict]:
 
 def _research_qa_citation_diagnostics(row: dict, *, limit: int = 8) -> list[dict]:
     out: list[dict] = []
-    for item in _research_qa_citation_details(row)[:limit]:
+    quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+    citation_quality = quality.get("citation_quality") if isinstance(quality.get("citation_quality"), dict) else {}
+    shelf_quality = quality.get("citation_shelf_quality") if isinstance(quality.get("citation_shelf_quality"), dict) else {}
+    card_failures = _research_qa_quality_issue_rows(citation_quality, "failures")
+    card_warnings = _research_qa_quality_issue_rows(citation_quality, "warnings")
+    shelf_failures = _research_qa_quality_issue_rows(shelf_quality, "failures")
+    shelf_warnings = _research_qa_quality_issue_rows(shelf_quality, "warnings")
+    for index, item in enumerate(_research_qa_citation_details(row)[:limit], start=1):
         is_system_b = bool(item.get("is_inpaper")) or str(item.get("route") or "").strip().lower() == "system_b"
+        quality_issues = [
+            *card_failures.get(index, []),
+            *card_warnings.get(index, []),
+        ]
+        shelf_quality_issues = [
+            *shelf_failures.get(index, []),
+            *shelf_warnings.get(index, []),
+        ]
         out.append(
             {
                 "route": "system_b" if is_system_b else "system_a",
@@ -945,6 +1004,9 @@ def _research_qa_citation_diagnostics(row: dict, *, limit: int = 8) -> list[dict
                 "answer_claim": _compact_text(item.get("answer_claim"), limit=220),
                 "support_relation": _compact_text(item.get("support_relation"), item.get("user_question_relation"), limit=180),
                 "trace": _compact_text(item.get("citation_context_source"), item.get("mapping_source"), item.get("anchor_kind"), limit=120),
+                "quality_issues": quality_issues,
+                "shelf_quality_issues": shelf_quality_issues,
+                "quality_issue_count": len(quality_issues) + len(shelf_quality_issues),
             }
         )
     return out
@@ -952,13 +1014,21 @@ def _research_qa_citation_diagnostics(row: dict, *, limit: int = 8) -> list[dict
 
 def _research_qa_ref_diagnostics(row: dict, *, limit: int = 8) -> list[dict]:
     out: list[dict] = []
-    for hit in _research_qa_ref_hits(row)[:limit]:
+    quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+    ref_card_quality = quality.get("ref_card_quality") if isinstance(quality.get("ref_card_quality"), dict) else {}
+    ref_failures = _research_qa_quality_issue_rows(ref_card_quality, "failures")
+    ref_warnings = _research_qa_quality_issue_rows(ref_card_quality, "warnings")
+    for index, hit in enumerate(_research_qa_ref_hits(row)[:limit], start=1):
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
         citation_meta = (ui_meta or {}).get("citation_meta") if isinstance((ui_meta or {}).get("citation_meta"), dict) else {}
         score = (ui_meta or {}).get("score")
         if score in (None, ""):
             score = hit.get("score")
+        quality_issues = [
+            *ref_failures.get(index, []),
+            *ref_warnings.get(index, []),
+        ]
         out.append(
             {
                 "title": _compact_text((ui_meta or {}).get("display_name"), (citation_meta or {}).get("title"), (meta or {}).get("source_name"), limit=180),
@@ -971,6 +1041,8 @@ def _research_qa_ref_diagnostics(row: dict, *, limit: int = 8) -> list[dict]:
                 "polish_status": _compact_text((ui_meta or {}).get("polish_status"), limit=80),
                 "ref_pack_state": _compact_text((meta or {}).get("ref_pack_state"), limit=80),
                 "evidence_quote": _compact_text(hit.get("text"), limit=260),
+                "quality_issues": quality_issues,
+                "quality_issue_count": len(quality_issues),
             }
         )
     return out
@@ -1715,6 +1787,7 @@ def _latest_research_qa_failure_cases(*, limit: int = 12, rerun_history: list[di
                     "missing_expected_doc_count": len(missing_expected_doc_ids),
                     "citation_diagnostic_count": len(citation_diagnostics),
                     "ref_diagnostic_count": len(ref_diagnostics),
+                    **_research_qa_quality_gate_summary(quality),
                 },
                 "citation_diagnostics": citation_diagnostics,
                 "ref_diagnostics": ref_diagnostics,

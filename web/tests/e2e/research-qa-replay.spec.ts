@@ -181,6 +181,14 @@ test('research QA replay opens a single diagnostic case from quality center', as
         missing_expected_doc_count: 1,
         citation_diagnostic_count: 1,
         ref_diagnostic_count: 1,
+        citation_card_failure_count: 1,
+        shelf_failure_count: 1,
+        ref_card_failure_count: 1,
+        shelf_metadata_ready_count: 0,
+        shelf_doi_count: 0,
+        shelf_source_clickable_count: 1,
+        shelf_review_count: 1,
+        system_b_needs_review_count: 0,
       },
       citation_diagnostics: [
         {
@@ -192,6 +200,12 @@ test('research QA replay opens a single diagnostic case from quality center', as
           source_path: 'db/scinerf/scinerf.en.md',
           heading_path: 'Method / ADMM',
           evidence_quote: 'ADMM is used as an optimization component.',
+          quality_issues: [
+            { name: 'system_a_missing_evidence', field: 'evidence_quote', severity: 'error' },
+          ],
+          shelf_quality_issues: [
+            { name: 'shelf_doi_not_promoted', field: 'doi', severity: 'error' },
+          ],
         },
       ],
       ref_diagnostics: [
@@ -206,6 +220,9 @@ test('research QA replay opens a single diagnostic case from quality center', as
           polish_status: 'full',
           ref_pack_state: 'ready',
           evidence_quote: 'ADMM solver context.',
+          quality_issues: [
+            { name: 'ref_card_summary_too_short', field: 'summary_line', severity: 'error' },
+          ],
         },
       ],
     }))
@@ -217,8 +234,15 @@ test('research QA replay opens a single diagnostic case from quality center', as
   await expect(page.getByTestId('research-qa-diagnostic-failures')).toContainText('citation_card_quality')
   await expect(page.getByTestId('research-qa-diagnostic-docs')).toContainText('scinerf')
   await expect(page.getByTestId('research-qa-diagnostic-missing-docs')).toContainText('scigs')
+  await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('citation failures 1')
+  await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('shelf failures 1')
+  await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('ref failures 1')
+  await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('shelf review 1')
   await expect(page.getByTestId('research-qa-diagnostic-citations')).toContainText('SCINeRF citation')
+  await expect(page.getByTestId('research-qa-diagnostic-citations')).toContainText('system_a_missing_evidence')
+  await expect(page.getByTestId('research-qa-diagnostic-citations')).toContainText('shelf_doi_not_promoted')
   await expect(page.getByTestId('research-qa-diagnostic-refs')).toContainText('SCINeRF ref card')
+  await expect(page.getByTestId('research-qa-diagnostic-refs')).toContainText('ref_card_summary_too_short')
   await expect(page.getByTestId('research-qa-case-scinerf-admm-origin')).toBeVisible()
   await expect(page.getByTestId('research-qa-case-scigs-dynamic-3d')).toHaveCount(0)
 })

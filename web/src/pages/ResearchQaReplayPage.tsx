@@ -5,6 +5,7 @@ import type { ReaderOpenPayload } from '../components/chat/reader/readerTypes'
 import type { Message } from '../api/chat'
 import type {
   LibraryQualityCitationDiagnostic,
+  LibraryQualityDiagnosticIssue,
   LibraryQualityFailureCase,
   LibraryQualityRefDiagnostic,
 } from '../api/library'
@@ -51,6 +52,39 @@ function numberValue(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function diagnosticIssues(value: unknown): LibraryQualityDiagnosticIssue[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is LibraryQualityDiagnosticIssue => Boolean(item && typeof item === 'object'))
+    : []
+}
+
+function issueLabel(issue: LibraryQualityDiagnosticIssue) {
+  const name = textValue(issue.name, 'issue')
+  const field = textValue(issue.field)
+  return field ? `${name} / ${field}` : name
+}
+
+function issuePills(issues: LibraryQualityDiagnosticIssue[], prefix: string) {
+  if (!issues.length) return null
+  return (
+    <div className="mt-2 flex flex-wrap gap-1" data-testid={`${prefix}-issues`}>
+      {issues.slice(0, 4).map((issue, index) => (
+        <span
+          key={`${prefix}-${issue.name}-${issue.field || ''}-${index}`}
+          className={`rounded-full border px-2 py-0.5 text-[11px] ${
+            issue.severity === 'warning'
+              ? 'border-amber-500/30 bg-amber-500/10 text-amber-700'
+              : 'border-red-500/30 bg-red-500/10 text-red-700'
+          }`}
+          title={textValue(issue.detail) || undefined}
+        >
+          {issueLabel(issue)}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function citationDiagnosticsFromFixture(cites: Array<Record<string, unknown>>): LibraryQualityCitationDiagnostic[] {
   return cites.slice(0, 8).map((item) => {
     const isSystemB = isSystemBCitation(item)
@@ -66,6 +100,9 @@ function citationDiagnosticsFromFixture(cites: Array<Record<string, unknown>>): 
       answer_claim: textValue(item.answer_claim),
       support_relation: textValue(item.support_relation || item.user_question_relation),
       trace: textValue(item.citation_context_source || item.mapping_source || item.anchor_kind),
+      quality_issues: diagnosticIssues(item.quality_issues),
+      shelf_quality_issues: diagnosticIssues(item.shelf_quality_issues),
+      quality_issue_count: numberValue(item.quality_issue_count),
     }
   })
 }
@@ -86,6 +123,8 @@ function refDiagnosticsFromFixture(refs: Array<Record<string, unknown>>): Librar
       polish_status: textValue(uiMeta.polish_status),
       ref_pack_state: textValue(meta.ref_pack_state),
       evidence_quote: textValue(hit.text),
+      quality_issues: diagnosticIssues(hit.quality_issues),
+      quality_issue_count: numberValue(hit.quality_issue_count),
     }
   })
 }
@@ -150,6 +189,36 @@ export default function ResearchQaReplayPage() {
       system_b: citationDiagnostics.filter((item) => item.route === 'system_b').length,
     }
   }, [failureCase, citationDiagnostics])
+  const qualityGateSummary = useMemo(() => {
+    const summary = failureCase?.diagnostic_summary || {}
+    const citationIssues = citationDiagnostics.reduce(
+      (total, item) => total + diagnosticIssues(item.quality_issues).length,
+      0,
+    )
+    const shelfIssues = citationDiagnostics.reduce(
+      (total, item) => total + diagnosticIssues(item.shelf_quality_issues).length,
+      0,
+    )
+    const refIssues = refDiagnostics.reduce(
+      (total, item) => total + diagnosticIssues(item.quality_issues).length,
+      0,
+    )
+    return {
+      citationFailures: numberValue(summary.citation_card_failure_count, citationIssues),
+      citationWarnings: numberValue(summary.citation_card_warning_count, 0),
+      shelfFailures: numberValue(summary.shelf_failure_count, shelfIssues),
+      shelfWarnings: numberValue(summary.shelf_warning_count, 0),
+      shelfMetadataReady: numberValue(summary.shelf_metadata_ready_count, 0),
+      shelfDoi: numberValue(summary.shelf_doi_count, 0),
+      shelfSourceClickable: numberValue(summary.shelf_source_clickable_count, 0),
+      shelfReview: numberValue(summary.shelf_review_count, 0),
+      refFailures: numberValue(summary.ref_card_failure_count, refIssues),
+      refWarnings: numberValue(summary.ref_card_warning_count, 0),
+      systemBReview: numberValue(summary.system_b_needs_review_count, 0),
+      systemBAnswerContextOnly: numberValue(summary.system_b_answer_context_only_count, 0),
+      systemBFallback: numberValue(summary.system_b_reference_index_fallback_count, 0),
+    }
+  }, [failureCase, citationDiagnostics, refDiagnostics])
 
   return (
     <div className="min-h-screen bg-[var(--bg)] px-5 py-5 text-[var(--text)]">
@@ -242,6 +311,43 @@ export default function ResearchQaReplayPage() {
               </div>
             </div>
 
+            <div
+              className="mt-3 rounded-[8px] border border-[var(--border)] bg-[var(--panel-2)] p-3"
+              data-testid="research-qa-diagnostic-quality-gates"
+            >
+              <div className="text-xs font-semibold text-[var(--muted-text)]">Card quality gates</div>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  citation failures {qualityGateSummary.citationFailures}
+                </span>
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  shelf failures {qualityGateSummary.shelfFailures}
+                </span>
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  ref failures {qualityGateSummary.refFailures}
+                </span>
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  metadata ready {qualityGateSummary.shelfMetadataReady}
+                </span>
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  DOI {qualityGateSummary.shelfDoi}
+                </span>
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  source open {qualityGateSummary.shelfSourceClickable}
+                </span>
+                {qualityGateSummary.shelfReview > 0 ? (
+                  <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-amber-700">
+                    shelf review {qualityGateSummary.shelfReview}
+                  </span>
+                ) : null}
+                {qualityGateSummary.systemBReview > 0 || qualityGateSummary.systemBAnswerContextOnly > 0 || qualityGateSummary.systemBFallback > 0 ? (
+                  <span className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-700">
+                    system B review {qualityGateSummary.systemBReview}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
             {missingExpectedDocIds.length > 0 ? (
               <div
                 className="mt-3 rounded-[8px] border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700"
@@ -268,6 +374,13 @@ export default function ResearchQaReplayPage() {
                       </div>
                       {item.heading_path ? <div className="mt-1 truncate text-[var(--muted-text)]">{item.heading_path}</div> : null}
                       {item.evidence_quote ? <div className="mt-1 line-clamp-2 text-[var(--muted-text)]">{item.evidence_quote}</div> : null}
+                      {issuePills(
+                        [
+                          ...diagnosticIssues(item.quality_issues),
+                          ...diagnosticIssues(item.shelf_quality_issues),
+                        ],
+                        `research-qa-diagnostic-citation-${index}`,
+                      )}
                     </div>
                   )) : (
                     <div className="text-xs text-[var(--muted-text)]">No citation diagnostics captured.</div>
@@ -293,6 +406,7 @@ export default function ResearchQaReplayPage() {
                       {item.polish_status || item.ref_pack_state ? (
                         <div className="mt-1 text-[var(--muted-text)]">{[item.polish_status, item.ref_pack_state].filter(Boolean).join(' / ')}</div>
                       ) : null}
+                      {issuePills(diagnosticIssues(item.quality_issues), `research-qa-diagnostic-ref-${index}`)}
                     </div>
                   )) : (
                     <div className="text-xs text-[var(--muted-text)]">No reference basket diagnostics captured.</div>

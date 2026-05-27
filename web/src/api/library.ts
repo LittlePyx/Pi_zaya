@@ -465,6 +465,13 @@ export interface LibraryQualityFailure {
   detail?: string
 }
 
+export interface LibraryQualityDiagnosticIssue {
+  name: string
+  field?: string
+  detail?: string
+  severity?: 'warning' | 'error' | string
+}
+
 export interface LibraryQualityCitationDiagnostic {
   route: 'system_a' | 'system_b' | string
   num: number
@@ -477,6 +484,9 @@ export interface LibraryQualityCitationDiagnostic {
   answer_claim?: string
   support_relation?: string
   trace?: string
+  quality_issues?: LibraryQualityDiagnosticIssue[]
+  shelf_quality_issues?: LibraryQualityDiagnosticIssue[]
+  quality_issue_count?: number
 }
 
 export interface LibraryQualityRefDiagnostic {
@@ -490,6 +500,8 @@ export interface LibraryQualityRefDiagnostic {
   polish_status: string
   ref_pack_state: string
   evidence_quote: string
+  quality_issues?: LibraryQualityDiagnosticIssue[]
+  quality_issue_count?: number
 }
 
 export interface LibraryQualitySourceDiagnostic {
@@ -575,6 +587,19 @@ export interface LibraryQualityFailureCase {
     missing_expected_doc_count?: number
     citation_diagnostic_count?: number
     ref_diagnostic_count?: number
+    citation_card_failure_count?: number
+    citation_card_warning_count?: number
+    shelf_failure_count?: number
+    shelf_warning_count?: number
+    shelf_metadata_ready_count?: number
+    shelf_doi_count?: number
+    shelf_source_clickable_count?: number
+    shelf_review_count?: number
+    ref_card_failure_count?: number
+    ref_card_warning_count?: number
+    system_b_needs_review_count?: number
+    system_b_answer_context_only_count?: number
+    system_b_reference_index_fallback_count?: number
   }
   citation_diagnostics?: LibraryQualityCitationDiagnostic[]
   ref_diagnostics?: LibraryQualityRefDiagnostic[]

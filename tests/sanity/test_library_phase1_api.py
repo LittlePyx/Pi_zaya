@@ -788,6 +788,58 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
                         {"name": "citation_card_quality", "detail": ["missing source title"]},
                         {"name": "refs_include_required_docs", "detail": ["paper-a"]},
                     ],
+                    "citation_quality": {
+                        "failures": [
+                            {
+                                "index": 2,
+                                "name": "system_b_missing_citing_context",
+                                "field": "citation_context",
+                                "detail": "missing context",
+                                "severity": "error",
+                            }
+                        ],
+                        "warnings": [],
+                    },
+                    "citation_shelf_quality": {
+                        "metadata_ready_count": 0,
+                        "doi_count": 1,
+                        "source_clickable_count": 2,
+                        "review_count": 1,
+                        "failures": [
+                            {
+                                "index": 1,
+                                "name": "shelf_template_phrase_visible",
+                                "field": "summary",
+                                "detail": "No summary available",
+                                "severity": "error",
+                            }
+                        ],
+                        "warnings": [
+                            {
+                                "index": 2,
+                                "name": "shelf_missing_doi",
+                                "field": "doi",
+                                "severity": "warning",
+                            }
+                        ],
+                    },
+                    "ref_card_quality": {
+                        "failures": [
+                            {
+                                "index": 1,
+                                "name": "ref_card_summary_too_short",
+                                "field": "summary_line",
+                                "detail": "Paper C summary.",
+                                "severity": "error",
+                            }
+                        ],
+                        "warnings": [],
+                    },
+                    "system_b_audit": {
+                        "needs_review_count": 1,
+                        "answer_context_only_count": 0,
+                        "reference_index_fallback_count": 0,
+                    },
                     "ref_doc_ids": ["paper-c"],
                     "citation_doc_ids": ["paper-b"],
                     "citation_count": 2,
@@ -845,11 +897,24 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
     assert case["missing_expected_doc_ids"] == ["paper-a"]
     assert case["citation_count"] == 2
     assert case["diagnostic_summary"]["citation_routes"] == {"system_a": 1, "system_b": 1}
+    assert case["diagnostic_summary"]["citation_card_failure_count"] == 1
+    assert case["diagnostic_summary"]["shelf_failure_count"] == 1
+    assert case["diagnostic_summary"]["shelf_warning_count"] == 1
+    assert case["diagnostic_summary"]["shelf_metadata_ready_count"] == 0
+    assert case["diagnostic_summary"]["shelf_doi_count"] == 1
+    assert case["diagnostic_summary"]["shelf_source_clickable_count"] == 2
+    assert case["diagnostic_summary"]["shelf_review_count"] == 1
+    assert case["diagnostic_summary"]["ref_card_failure_count"] == 1
+    assert case["diagnostic_summary"]["system_b_needs_review_count"] == 1
     assert case["citation_diagnostics"][0]["route"] == "system_a"
     assert case["citation_diagnostics"][0]["title"] == "Paper B title"
+    assert case["citation_diagnostics"][0]["shelf_quality_issues"][0]["name"] == "shelf_template_phrase_visible"
     assert case["citation_diagnostics"][1]["route"] == "system_b"
+    assert case["citation_diagnostics"][1]["quality_issues"][0]["name"] == "system_b_missing_citing_context"
+    assert case["citation_diagnostics"][1]["shelf_quality_issues"][0]["name"] == "shelf_missing_doi"
     assert case["ref_diagnostics"][0]["title"] == "Paper C"
     assert case["ref_diagnostics"][0]["summary_line"] == "Paper C summary."
+    assert case["ref_diagnostics"][0]["quality_issues"][0]["name"] == "ref_card_summary_too_short"
     assert case["rerun_status"]["available"] is True
     assert case["rerun_status"]["last_status"] == "failed"
     assert case["rerun_status"]["last_passed_at"] == 1790000000
