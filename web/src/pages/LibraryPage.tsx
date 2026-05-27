@@ -55,6 +55,7 @@ import type {
   LibraryQualityOverviewResponse,
   LibraryQualityPriorityAction,
   LibraryQualityRepairAction,
+  LibraryQualityRepairImpact,
   LibraryResearchQaRerunResponse,
   RenameSuggestionItem,
 } from '../api/library'
@@ -156,6 +157,11 @@ type QualityRepairHistoryRecord = {
   fixedIssues: string[]
   remainingIssues: string[]
   updatedAt: number
+}
+
+type QualityRepairRunOptions = {
+  autoReindexImmediate?: boolean
+  autoReindexQueued?: boolean
 }
 
 type QualityIssueStat = {
@@ -798,6 +804,19 @@ function formatQualityRepairRecordSummary(record: QualityRepairHistoryRecord, S:
   return `${base} · ${String(S.quality_repair_result_fixed_issues || 'Fixed: {issues}').replace('{issues}', record.fixedIssues.slice(0, 3).join(' / '))}`
 }
 
+function formatSignedNumber(value: number) {
+  const n = Math.round(Number(value || 0))
+  return n > 0 ? `+${n}` : String(n)
+}
+
+function qualityRepairImpactIndexText(impact: LibraryQualityRepairImpact) {
+  if (!impact.needs_reindex) return 'Index current'
+  if (impact.reindexed === true) return 'Index refreshed'
+  if (impact.reindexed === false && Number(impact.enqueued || 0) <= 0) return 'Index refresh needs retry'
+  if (Number(impact.enqueued || 0) > 0) return 'Index will refresh after conversion'
+  return 'Index refresh pending'
+}
+
 function hasConversionQualityIssue(item: LibraryFileItem) {
   return Boolean(item.conversion_quality?.has_review_issue)
 }
@@ -859,6 +878,7 @@ export default function LibraryPage() {
   const [batchSaving, setBatchSaving] = useState(false)
   const [qualityRepairingNames, setQualityRepairingNames] = useState<Record<string, boolean>>({})
   const [qualityRepairResults, setQualityRepairResults] = useState<Record<string, string>>({})
+  const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
   const [qualityRepairHistory, setQualityRepairHistory] = useState<Record<string, QualityRepairHistoryRecord>>(() => loadQualityRepairHistory())
   const [qualityHistoryFocusNames, setQualityHistoryFocusNames] = useState<string[]>([])
   const [qualityArtifactOpening, setQualityArtifactOpening] = useState('')
@@ -2037,11 +2057,11 @@ export default function LibraryPage() {
     })
   }
 
-  const repairQualityByNames = async (names: string[]) => {
+  const repairQualityByNames = async (names: string[], opts: QualityRepairRunOptions = {}) => {
     const targets = Array.from(new Set(names.map((name) => String(name || '').trim()).filter(Boolean)))
     if (!targets.length) {
       message.info(S.lib_msg_quality_repair_none)
-      return { ok: true, targetCount: 0, queued: 0, repaired: 0 }
+      return { ok: true, targetCount: 0, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
     }
     const startedAt = Date.now()
     const baselineByName = new Map(store.files.map((item) => [item.name, item.conversion_quality || null]))
@@ -2064,9 +2084,17 @@ export default function LibraryPage() {
         pdf_names: targets,
         speed_mode: CONVERT_MODE,
         replace: true,
+      }, {
+        autoReindexAfterQueued: opts.autoReindexQueued !== false,
       })
       const queued = Number(res.enqueued || 0)
       const repaired = Number(res.repaired || 0)
+      const impact = res.impact || null
+      const needsReindex = Boolean(res.needs_reindex || impact?.needs_reindex)
+      let reindexed = false
+      if (impact) {
+        setQualityRepairImpact(impact)
+      }
       if (queued > 0 || repaired > 0) {
         message.success(
           queued > 0
@@ -2080,13 +2108,20 @@ export default function LibraryPage() {
         message.info(S.lib_msg_quality_repair_none)
       }
       await store.loadFiles(scope)
-      return { ok: true, targetCount: targets.length, queued, repaired }
+      if (needsReindex && repaired > 0 && queued <= 0 && opts.autoReindexImmediate !== false) {
+        reindexed = await handleReindex()
+        if (impact) {
+          setQualityRepairImpact({ ...impact, reindexed })
+        }
+        if (reindexed) await store.loadFiles(scope)
+      }
+      return { ok: true, targetCount: targets.length, queued, repaired, needsReindex, reindexed, impact }
     } catch (err) {
       qualityRepairBaselinesRef.current = Object.fromEntries(
         Object.entries(qualityRepairBaselinesRef.current).filter(([name]) => !targets.includes(name)),
       )
       message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
-      return { ok: false, targetCount: targets.length, queued: 0, repaired: 0 }
+      return { ok: false, targetCount: targets.length, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
     } finally {
       setQualityRepairingNames((cur) => {
         const next = { ...cur }
@@ -2153,12 +2188,12 @@ export default function LibraryPage() {
     focusQualityHistoryNames(qualityHistoryRemainingNames)
   }
 
-  const handleRepairRecommendedQuality = async () => {
+  const handleRepairRecommendedQuality = async (opts: QualityRepairRunOptions = {}) => {
     if (!qualityRepairRecommendedNames.length) {
       message.info(S.lib_quality_history_no_recommended)
-      return { ok: true, targetCount: 0, queued: 0, repaired: 0 }
+      return { ok: true, targetCount: 0, queued: 0, repaired: 0, needsReindex: false, reindexed: false, impact: null as LibraryQualityRepairImpact | null }
     }
-    return repairQualityByNames(qualityRepairRecommendedNames)
+    return repairQualityByNames(qualityRepairRecommendedNames, opts)
   }
 
   const openQualityArtifact = async (domain: 'research_qa' | 'citation_cards', target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook') => {
@@ -2234,12 +2269,19 @@ export default function LibraryPage() {
 
   const repairQualityCaseSources = async (
     item: LibraryQualityFailureCase,
-    opts: { manageActionKey?: boolean; waitForCompletion?: boolean; silent?: boolean; actionKey?: string } = {},
-  ): Promise<{ queued: number; completed: boolean }> => {
+    opts: { manageActionKey?: boolean; waitForCompletion?: boolean; silent?: boolean; actionKey?: string } & QualityRepairRunOptions = {},
+  ): Promise<{
+    queued: number
+    completed: boolean
+    repaired: number
+    needsReindex: boolean
+    reindexed: boolean
+    impact: LibraryQualityRepairImpact | null
+  }> => {
     const sources = qualityCaseRepairSources(item)
     if (!sources.length) {
       if (!opts.silent) message.info(S.lib_msg_quality_repair_none)
-      return { queued: 0, completed: true }
+      return { queued: 0, completed: true, repaired: 0, needsReindex: false, reindexed: false, impact: null }
     }
     const key = opts.actionKey || `${item.id}:repair_sources`
     const manageActionKey = opts.manageActionKey !== false
@@ -2249,23 +2291,41 @@ export default function LibraryPage() {
         sources,
         speed_mode: CONVERT_MODE,
         replace: true,
+      }, {
+        autoReindexAfterQueued: opts.waitForCompletion ? false : opts.autoReindexQueued !== false,
       })
       const queued = Number(res.enqueued || 0)
       const repaired = Number(res.repaired || 0)
+      const impact = res.impact || null
+      const needsReindex = Boolean(res.needs_reindex || impact?.needs_reindex)
+      let reindexed = false
+      if (impact) {
+        setQualityRepairImpact(impact)
+      }
       if (queued > 0) {
         if (!opts.silent) message.success(S.lib_msg_quality_repair_enqueued.replace('{n}', String(queued)))
         const completed = opts.waitForCompletion ? await waitForLibraryConversionDone() : false
-        return { queued, completed }
+        if (completed && needsReindex && opts.autoReindexImmediate !== false) {
+          reindexed = await handleReindex()
+          if (impact) setQualityRepairImpact({ ...impact, reindexed })
+          if (reindexed) await store.loadFiles(scope)
+        }
+        return { queued, completed, repaired, needsReindex, reindexed, impact }
       } else if (repaired > 0) {
         if (!opts.silent) message.success(`Markdown repaired: ${repaired}`)
-        return { queued: 0, completed: true }
+        if (needsReindex && opts.autoReindexImmediate !== false) {
+          reindexed = await handleReindex()
+          if (impact) setQualityRepairImpact({ ...impact, reindexed })
+          if (reindexed) await store.loadFiles(scope)
+        }
+        return { queued: 0, completed: true, repaired, needsReindex, reindexed, impact }
       } else {
         if (!opts.silent) message.info(S.lib_msg_quality_repair_none)
-        return { queued: 0, completed: true }
+        return { queued: 0, completed: true, repaired, needsReindex, reindexed, impact }
       }
     } catch (err) {
       message.error(err instanceof Error ? err.message : S.lib_msg_quality_repair_failed)
-      return { queued: 0, completed: false }
+      return { queued: 0, completed: false, repaired: 0, needsReindex: false, reindexed: false, impact: null }
     } finally {
       if (manageActionKey) setQualityCaseActionKey('')
     }
@@ -2367,12 +2427,15 @@ export default function LibraryPage() {
     const key = `${item.id}:apply_repair_plan:${action.target || ''}`
     setQualityCaseActionKey(key)
     try {
+      let sourceRepairImpact: LibraryQualityRepairImpact | null = null
       if (stepKinds.has('repair_sources')) {
         const result = await repairQualityCaseSources(item, {
           actionKey: key,
           manageActionKey: false,
           waitForCompletion: true,
+          autoReindexImmediate: !stepKinds.has('rebuild_index'),
         })
+        sourceRepairImpact = result.impact
         if (result.queued > 0 && !result.completed) {
           message.warning('Source repair is still running; QA rerun will wait for the next refresh.')
           await store.loadQualityOverview('all')
@@ -2384,6 +2447,7 @@ export default function LibraryPage() {
       }
       if (stepKinds.has('rebuild_index')) {
         const ok = await handleReindex()
+        if (sourceRepairImpact) setQualityRepairImpact({ ...sourceRepairImpact, reindexed: ok })
         if (!ok) return { ok: false, caseId, status: 'reindex_failed', rerun: null as LibraryResearchQaRerunResponse | null }
       }
       if (stepKinds.has('rerun_case') && caseId) {
@@ -2500,18 +2564,35 @@ export default function LibraryPage() {
     try {
       if (stageKey === 'conversion' || action === 'repair_conversion') {
         if (qualityRepairRecommendedNames.length > 0) {
-          const repair = await handleRepairRecommendedQuality()
+          const repair = await handleRepairRecommendedQuality({
+            autoReindexImmediate: false,
+            autoReindexQueued: false,
+          })
           const completed = Number(repair?.queued || 0) > 0 ? await waitForLibraryConversionDone() : true
-          const rerun = completed && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
-          const afterOverview = await refreshQualityOverviewSnapshot()
           const repaired = Number(repair?.repaired || 0)
           const queued = Number(repair?.queued || 0)
+          const needsReindex = Boolean(repair?.needsReindex || repair?.impact?.needs_reindex)
+          const reindexed = completed && needsReindex ? await handleReindex() : false
+          if (repair?.impact && needsReindex) {
+            setQualityRepairImpact({ ...repair.impact, reindexed })
+          }
+          if (reindexed) await store.loadFiles(scope)
+          const rerun = completed && (!needsReindex || reindexed) && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
+          const afterOverview = await refreshQualityOverviewSnapshot()
+          const repairOk = Boolean(repair?.ok)
+          const reindexFailed = Boolean(completed && needsReindex && !reindexed)
           recordStageResult({
-            status: queued > 0 || repaired > 0 ? 'success' : (repair?.ok ? 'info' : 'error'),
+            status: reindexFailed ? 'warning' : (queued > 0 || repaired > 0 ? 'success' : (repairOk ? 'info' : 'error')),
             summary: queued > 0
-              ? (completed ? `Verified ${queued} conversion repairs` : `Queued ${queued} conversion repairs`)
-              : (repaired > 0 ? `Markdown autofix repaired ${repaired} sources` : (repair?.ok ? 'No conversion repair was queued' : 'Conversion repair failed')),
-            detail: rerun?.case_id ? `Regression check: ${rerun.case_id}` : (repair?.targetCount ? `${repair.targetCount} recommended sources checked` : undefined),
+              ? (completed
+                ? (reindexFailed ? `Converted ${queued} sources; index refresh failed` : `Verified ${queued} conversion repairs`)
+                : `Queued ${queued} conversion repairs`)
+              : (repaired > 0
+                ? (reindexFailed ? `Markdown autofix repaired ${repaired}; index refresh failed` : `Markdown autofix repaired ${repaired} sources`)
+                : (repairOk ? 'No conversion repair was queued' : 'Conversion repair failed')),
+            detail: rerun?.case_id
+              ? `Regression check: ${rerun.case_id}`
+              : (reindexFailed ? 'Rebuild the retrieval index before rerunning QA.' : (repair?.targetCount ? `${repair.targetCount} recommended sources checked` : undefined)),
           }, {
             targetIds: qualityRepairRecommendedNames.slice(0, 12),
             metrics: {
@@ -2519,6 +2600,8 @@ export default function LibraryPage() {
               repaired,
               target_count: Number(repair?.targetCount || 0),
               conversion_completed: Boolean(completed),
+              needs_reindex: needsReindex,
+              reindexed,
               qa_rerun_quality_ok: Boolean(rerun?.quality_ok || rerun?.status === 'passed'),
             },
             afterOverview,
@@ -4070,6 +4153,44 @@ export default function LibraryPage() {
               <span>{S.lib_quality_report_avg.replace('{score}', String(qualityReportStats.avgScore))}</span>
             </span>
           </div>
+          {qualityRepairImpact ? (
+            <div className="kb-lib-quality-repair-impact" data-testid="library-quality-repair-impact">
+              <div className="kb-lib-quality-repair-impact-head">
+                <Text className="kb-lib-quality-report-section-title">Repair impact</Text>
+                <Tag color={qualityRepairImpact.reindexed === true ? 'success' : (qualityRepairImpact.needs_reindex ? (qualityRepairImpact.reindexed === false ? 'warning' : 'processing') : 'success')}>
+                  {qualityRepairImpactIndexText(qualityRepairImpact)}
+                </Tag>
+              </div>
+              <div className="kb-lib-quality-repair-impact-grid">
+                <span>
+                  <em>Repaired</em>
+                  <strong>{qualityRepairImpact.repaired}</strong>
+                </span>
+                <span>
+                  <em>Queued</em>
+                  <strong>{qualityRepairImpact.enqueued}</strong>
+                </span>
+                <span>
+                  <em>Improved</em>
+                  <strong>{qualityRepairImpact.improved}</strong>
+                </span>
+                <span>
+                  <em>Score</em>
+                  <strong>Q{qualityRepairImpact.before_avg_score} -&gt; Q{qualityRepairImpact.after_avg_score} ({formatSignedNumber(qualityRepairImpact.score_delta)})</strong>
+                </span>
+              </div>
+              {(qualityRepairImpact.fixed_issue_codes || []).length > 0 || (qualityRepairImpact.remaining_issue_codes || []).length > 0 ? (
+                <div className="kb-lib-quality-repair-impact-issues">
+                  {(qualityRepairImpact.fixed_issue_codes || []).slice(0, 5).map((issue) => (
+                    <span key={`fixed-${issue.name}`} className="is-fixed">{issue.name} x{issue.count}</span>
+                  ))}
+                  {(qualityRepairImpact.remaining_issue_codes || []).slice(0, 3).map((issue) => (
+                    <span key={`remaining-${issue.name}`} className="is-remaining">{issue.name} x{issue.count}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="kb-lib-quality-domain-section">
             <Text className="kb-lib-quality-report-section-title">{S.lib_quality_domains_title}</Text>
             <div className="kb-lib-quality-domain-grid" data-testid="library-quality-domains">

@@ -4100,17 +4100,29 @@ def repair_library_quality(body: QualityRepairBody):
                 if repair_changed:
                     repaired += 1
                 skip_enqueue_after_repair = repair_changed and not bool(after_quality.get("has_review_issue"))
+                before_issue_codes = [
+                    str(issue.get("code") or "")
+                    for issue in list(before_quality.get("issues") or [])
+                    if isinstance(issue, dict) and str(issue.get("code") or "").strip()
+                ]
+                after_issue_codes = [
+                    str(issue.get("code") or "")
+                    for issue in list(after_quality.get("issues") or [])
+                    if isinstance(issue, dict) and str(issue.get("code") or "").strip()
+                ]
+                after_issue_set = set(after_issue_codes)
+                fixed_issue_codes = [code for code in before_issue_codes if code and code not in after_issue_set]
                 repair_payload = {
                     "repaired": repair_changed,
                     "repair_changed": repair_changed,
                     "repair_applied": list(repair_result.get("applied") or [])[:12],
                     "repair_before_score": _safe_int(before_quality.get("score"), 0),
                     "repair_after_score": _safe_int(after_quality.get("score"), 0),
-                    "remaining_issue_codes": [
-                        str(issue.get("code") or "")
-                        for issue in list(after_quality.get("issues") or [])
-                        if isinstance(issue, dict) and str(issue.get("code") or "").strip()
-                    ][:12],
+                    "quality_before": before_quality,
+                    "quality_after": after_quality,
+                    "before_issue_codes": before_issue_codes[:12],
+                    "fixed_issue_codes": fixed_issue_codes[:12],
+                    "remaining_issue_codes": after_issue_codes[:12],
                     "md_path": str(md_path),
                     "repair_unsafe": bool(repair_result.get("unsafe")),
                     "repair_regression_reasons": list(repair_result.get("regression_reasons") or [])[:8],
@@ -4144,11 +4156,50 @@ def repair_library_quality(body: QualityRepairBody):
             items.append({**base_item, **repair_payload, "error": str(exc)[:240] or "enqueue failed"})
             failed += 1
 
+    repaired_items = [item for item in items if bool(item.get("repair_changed"))]
+    fixed_counter: Counter = Counter()
+    remaining_counter: Counter = Counter()
+    before_scores: list[int] = []
+    after_scores: list[int] = []
+    improved = 0
+    for item in repaired_items:
+        before_score = _safe_int(item.get("repair_before_score"), 0)
+        after_score = _safe_int(item.get("repair_after_score"), 0)
+        before_scores.append(before_score)
+        after_scores.append(after_score)
+        if after_score > before_score:
+            improved += 1
+        for code in _list_strings(item.get("fixed_issue_codes")):
+            fixed_counter[code] += 1
+        for code in _list_strings(item.get("remaining_issue_codes")):
+            remaining_counter[code] += 1
+    needs_reindex = bool(repaired_items) or enqueued > 0
+    impact = {
+        "requested": int(requested),
+        "repaired": int(len(repaired_items)),
+        "improved": int(improved),
+        "enqueued": int(enqueued),
+        "skipped_busy": int(skipped_busy),
+        "failed": int(failed),
+        "needs_reindex": bool(needs_reindex),
+        "before_avg_score": int(round(sum(before_scores) / len(before_scores))) if before_scores else 0,
+        "after_avg_score": int(round(sum(after_scores) / len(after_scores))) if after_scores else 0,
+        "score_delta": (
+            int(round(sum(after_scores) / len(after_scores))) - int(round(sum(before_scores) / len(before_scores)))
+            if before_scores and after_scores
+            else 0
+        ),
+        "fixed_issue_codes": _counter_items(fixed_counter, limit=8),
+        "remaining_issue_codes": _counter_items(remaining_counter, limit=8),
+    }
+
     return {
         "ok": failed == 0,
         "requested": int(requested),
         "enqueued": int(enqueued),
         "repaired": int(repaired),
+        "needs_reindex": bool(needs_reindex),
+        "impact": impact,
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
         "items": items,

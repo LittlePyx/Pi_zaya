@@ -56,6 +56,7 @@ interface LibraryState {
   qualityOverviewLoading: boolean
   qualityOverviewError: string
   converting: boolean
+  pendingRepairReindex: boolean
   progress: ConvertProgressState | null
   sseController: AbortController | null
   refSync: RefSyncState | null
@@ -66,7 +67,10 @@ interface LibraryState {
   upload: (file: File, baseName?: string) => Promise<{ name: string; duplicate?: boolean; existing?: string }>
   convert: (name: string, mode?: string, replace?: boolean) => Promise<void>
   convertPending: (mode?: string, limit?: number) => Promise<{ ok: boolean; enqueued: number; skipped_busy: number; pending_total: number }>
-  repairQuality: (body: LibraryQualityRepairBody) => Promise<LibraryQualityRepairResponse>
+  repairQuality: (
+    body: LibraryQualityRepairBody,
+    options?: { autoReindexAfterQueued?: boolean },
+  ) => Promise<LibraryQualityRepairResponse>
   openFile: (pdfName: string, target?: 'pdf' | 'md' | 'pdf_dir' | 'md_dir') => Promise<void>
   deleteFile: (pdfName: string, alsoMd?: boolean) => Promise<{ ok: boolean; pdf_deleted: boolean; md_deleted: boolean; removed_queued: number; warnings: string[]; needs_reindex: boolean }>
   updatePaperMeta: (body: LibraryMetaUpdateBody) => Promise<LibraryFileItem | null>
@@ -107,6 +111,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   qualityOverviewLoading: false,
   qualityOverviewError: '',
   converting: false,
+  pendingRepairReindex: false,
   progress: null,
   sseController: null,
   refSync: null,
@@ -185,10 +190,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     return res
   },
 
-  repairQuality: async (body) => {
+  repairQuality: async (body, options) => {
     const res = await libraryApi.repairQuality(body)
+    const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
+    const autoReindexAfterQueued = options?.autoReindexAfterQueued !== false
+    const shouldAutoReindex = Number(res.enqueued || 0) > 0 && needsReindex && autoReindexAfterQueued
     if (Number(res.enqueued || 0) > 0) {
-      set({ converting: true, progress: null })
+      set((state) => ({ converting: true, progress: null, pendingRepairReindex: state.pendingRepairReindex || shouldAutoReindex }))
       await get().loadFiles(get().viewScope || '200')
       get().startProgressStream()
     } else {
@@ -324,8 +332,21 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         })
       },
       () => {
-        set({ converting: false, progress: null, sseController: null })
-        get().loadFiles(get().viewScope || '200')
+        const shouldReindex = get().pendingRepairReindex
+        const scope = get().viewScope || '200'
+        set({ converting: false, progress: null, sseController: null, pendingRepairReindex: false })
+        if (shouldReindex) {
+          void (async () => {
+            try {
+              await get().reindex()
+            } catch {
+              // A failed automatic refresh should not leave the conversion stream stuck.
+            }
+            await get().loadFiles(scope)
+          })()
+        } else {
+          void get().loadFiles(scope)
+        }
       },
       () => {
         set({ converting: false, progress: null, sseController: null })

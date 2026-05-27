@@ -644,6 +644,10 @@ export interface LibraryQualityRepairItem {
   repair_applied?: string[]
   repair_before_score?: number
   repair_after_score?: number
+  quality_before?: ConversionQualitySummary
+  quality_after?: ConversionQualitySummary
+  before_issue_codes?: string[]
+  fixed_issue_codes?: string[]
   remaining_issue_codes?: string[]
   repair_error?: string
   skipped_busy: boolean
@@ -651,11 +655,29 @@ export interface LibraryQualityRepairItem {
   task_id: string
 }
 
+export interface LibraryQualityRepairImpact {
+  requested: number
+  repaired: number
+  improved: number
+  enqueued: number
+  skipped_busy: number
+  failed: number
+  needs_reindex: boolean
+  before_avg_score: number
+  after_avg_score: number
+  score_delta: number
+  reindexed?: boolean
+  fixed_issue_codes?: Array<{ name: string, count: number }>
+  remaining_issue_codes?: Array<{ name: string, count: number }>
+}
+
 export interface LibraryQualityRepairResponse {
   ok: boolean
   requested: number
   enqueued: number
   repaired?: number
+  needs_reindex?: boolean
+  impact?: LibraryQualityRepairImpact
   skipped_busy: number
   failed: number
   items: LibraryQualityRepairItem[]

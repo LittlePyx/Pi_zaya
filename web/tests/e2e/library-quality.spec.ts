@@ -794,14 +794,32 @@ test.beforeEach(async ({ page }) => {
     const payload = route.request().postDataJSON() as { pdf_names?: string[], sources?: Array<{ source_path?: string, source_name?: string }> }
     const names = Array.isArray(payload.pdf_names) ? payload.pdf_names : []
     const sources = Array.isArray(payload.sources) ? payload.sources : []
+    const requested = names.length + sources.length
+    const repaired = requested > 0 ? requested : 0
     for (const name of names) repairRequestedNames.add(name)
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
-        requested: names.length + sources.length,
-        enqueued: names.length + sources.length,
+        requested,
+        enqueued: requested,
+        repaired,
+        needs_reindex: requested > 0,
+        impact: {
+          requested,
+          repaired,
+          improved: repaired,
+          enqueued: requested,
+          skipped_busy: 0,
+          failed: 0,
+          needs_reindex: requested > 0,
+          before_avg_score: 38,
+          after_avg_score: 94,
+          score_delta: 56,
+          fixed_issue_codes: [{ name: 'missing_images', count: repaired || 1 }],
+          remaining_issue_codes: [],
+        },
         skipped_busy: 0,
         failed: 0,
         items: [
@@ -812,6 +830,16 @@ test.beforeEach(async ({ page }) => {
             pdf_path: `F:\\kb\\pdfs\\${name}`,
             ok: true,
             enqueued: true,
+            repaired: true,
+            repair_changed: true,
+            repair_applied: ['ensure_page_anchor'],
+            repair_before_score: 38,
+            repair_after_score: 94,
+            quality_before: { status: 'error', score: 38, has_review_issue: true, issues: [{ code: 'missing_images' }] },
+            quality_after: { status: 'good', score: 94, has_review_issue: false, issues: [] },
+            before_issue_codes: ['missing_images'],
+            fixed_issue_codes: ['missing_images'],
+            remaining_issue_codes: [],
             skipped_busy: false,
             error: '',
             task_id: `repair-${idx}`,
@@ -823,6 +851,16 @@ test.beforeEach(async ({ page }) => {
             pdf_path: `F:\\kb\\pdfs\\${source.source_name || `source-${idx}`}.pdf`,
             ok: true,
             enqueued: true,
+            repaired: true,
+            repair_changed: true,
+            repair_applied: ['ensure_page_anchor'],
+            repair_before_score: 38,
+            repair_after_score: 94,
+            quality_before: { status: 'error', score: 38, has_review_issue: true, issues: [{ code: 'missing_images' }] },
+            quality_after: { status: 'good', score: 94, has_review_issue: false, issues: [] },
+            before_issue_codes: ['missing_images'],
+            fixed_issue_codes: ['missing_images'],
+            remaining_issue_codes: [],
             skipped_busy: false,
             error: '',
             task_id: `source-repair-${idx}`,
@@ -1037,6 +1075,9 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(broken.getByTestId('library-quality-repair-result')).toContainText('Q38')
   await expect(broken.getByTestId('library-quality-repair-result')).toContainText('Q94')
   await expect(broken.getByTestId('library-quality-repair-result')).toContainText('Missing image assets')
+  await expect(page.getByTestId('library-quality-repair-impact')).toContainText('Repair impact')
+  await expect(page.getByTestId('library-quality-repair-impact')).toContainText('Q38')
+  await expect(page.getByTestId('library-quality-repair-impact')).toContainText('missing_images')
   await expect(page.getByTestId('library-quality-report-review')).toContainText('1')
   await expect(page.getByTestId('library-quality-report-good')).toContainText('2')
   await expect(page.getByTestId('library-quality-report-repair-recommended')).toContainText('1')

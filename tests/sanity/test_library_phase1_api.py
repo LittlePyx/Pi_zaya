@@ -418,12 +418,20 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert payload["requested"] == 2
     assert payload["enqueued"] == 2
     assert payload["repaired"] == 1
+    assert payload["needs_reindex"] is True
+    assert payload["impact"]["repaired"] == 1
+    assert payload["impact"]["enqueued"] == 2
+    assert payload["impact"]["before_avg_score"] < payload["impact"]["after_avg_score"]
     assert payload["skipped_busy"] == 0
     assert {item.get("pdf_name") for item in payload["items"] if item.get("enqueued")} == {"direct.pdf", "source.pdf"}
     source_item = next(item for item in payload["items"] if item.get("pdf_name") == "source.pdf")
     assert source_item["repair_changed"] is True
     assert "ensure_page_anchor" in source_item["repair_applied"]
     assert source_item["repair_before_score"] < source_item["repair_after_score"]
+    assert "missing_page_markers" in source_item["fixed_issue_codes"]
+    assert source_item["quality_before"]["status"] == "warning"
+    assert source_item["quality_after"]["status"] == "warning"
+    assert source_item["remaining_issue_codes"]
     assert source_md.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
     assert len(enqueued) == 2
     assert {str(task.get("name") or "") for task in enqueued} == {"direct.pdf", "source.pdf"}
