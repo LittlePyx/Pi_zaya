@@ -208,6 +208,56 @@ def test_repair_hydrates_from_crossref_cache_without_network(tmp_path, monkeypat
     assert result["meta"]["metadata_quality"]["status"] == "ready"
 
 
+def test_repair_reuses_ready_persisted_metadata_without_enrichment(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    (db_dir / "crossref_cache.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doi": {
+                    "10.1364/oe.15.014013": {
+                        "title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+                        "authors": "Gehm M, Brady D",
+                        "venue": "Optics Express",
+                        "year": "2007",
+                        "doi": "10.1364/OE.15.014013",
+                        "doi_url": "https://doi.org/10.1364/OE.15.014013",
+                        "summary_line": "The paper introduces a single-shot compressive spectral imaging design.",
+                        "summary_source": "abstract",
+                        "summary_provider": "crossref",
+                    }
+                },
+                "bib": {},
+                "title": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_enrich(detail):
+        raise AssertionError("persisted metadata should be enough")
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fail_enrich)
+
+    result = mq.repair_citation_metadata_item(
+        {
+            "key": "cache-ready",
+            "source_path": "paper.md",
+            "raw": "[24] Gehm M, Brady D. doi:10.1364/OE.15.014013",
+        },
+        db_dir=db_dir,
+    )
+
+    assert result["ok"] is True
+    assert result["repair_status"] == "repaired"
+    assert "crossref_cache:doi" in result["repair_sources"]
+    assert result["meta"]["metadata_quality"]["status"] == "ready"
+    assert result["meta"]["metadata_export_acceptance"]["export_ready"] is True
+    assert result["meta"]["summary_source"] == "abstract"
+
+
 def test_repair_batch_reports_export_acceptance(tmp_path, monkeypatch):
     monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda detail: {
         **dict(detail),

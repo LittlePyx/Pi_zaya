@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -127,3 +128,59 @@ def test_shelf_metadata_repair_hydrates_from_reference_index(tmp_path, monkeypat
     assert item["meta"]["title"] == "Alternating direction method of multipliers"
     assert item["meta"]["doi"] == "10.1561/2200000016"
     assert item["meta"]["metadata_quality"]["status"] == "ready"
+
+
+def test_bibliometrics_route_reuses_persisted_repair_cache(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    (db_dir / "crossref_cache.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doi": {
+                    "10.1561/2200000016": {
+                        "title": "Alternating direction method of multipliers",
+                        "authors": "Boyd S, Parikh N, Chu E",
+                        "venue": "Foundations and Trends in Machine Learning",
+                        "year": "2011",
+                        "doi": "10.1561/2200000016",
+                        "doi_url": "https://doi.org/10.1561/2200000016",
+                        "summary_line": "The paper introduces the ADMM optimization framework.",
+                        "summary_source": "abstract",
+                        "summary_provider": "crossref",
+                    }
+                },
+                "bib": {},
+                "title": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_enrich(detail):
+        raise AssertionError("route should reuse persisted repair metadata")
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fail_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "admm-cache",
+                "source_path": "source.md",
+                "raw": "[1] Boyd et al. doi:10.1561/2200000016",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "Alternating direction method of multipliers"
+    assert payload["authors"] == "Boyd S, Parikh N, Chu E"
+    assert payload["venue"] == "Foundations and Trends in Machine Learning"
+    assert payload["metadata_quality"]["status"] == "ready"
+    assert payload["metadata_export_acceptance"]["export_ready"] is True
+    assert payload["summary_source"] == "abstract"

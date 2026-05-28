@@ -31,6 +31,8 @@ _PERSIST_FIELDS = (
     "conference_tier",
     "conference_ccf",
     "summary_line",
+    "summary_source",
+    "summary_provider",
 )
 _EXPORT_IDENTITY_FIELDS = ("source", "title", "authors", "venue", "year", "doi")
 
@@ -1044,6 +1046,46 @@ def _metadata_from_crossref_cache(meta: Mapping[str, Any], db_dir: str | Path | 
     return {}
 
 
+def hydrate_repaired_citation_metadata(
+    detail: Mapping[str, Any] | None,
+    *,
+    db_dir: str | Path | None = None,
+    include_quality: bool = True,
+) -> dict[str, Any]:
+    """Load previously repaired citation metadata from local durable stores."""
+    original = _canonicalize_detail(detail)
+    if not db_dir:
+        return dict(original)
+    local_meta = _metadata_from_reference_index(original, db_dir)
+    cache_meta = _metadata_from_crossref_cache({**original, **local_meta}, db_dir)
+    if not local_meta and not cache_meta:
+        return dict(original)
+
+    sources: list[str] = []
+    if local_meta:
+        sources.append("reference_index")
+    if cache_meta:
+        source = _text(cache_meta.get("metadata_repair_source") or "crossref_cache")
+        if source:
+            sources.append(source)
+    merged = _canonicalize_detail({**original, **local_meta, **cache_meta})
+    if sources:
+        merged["metadata_repair_sources"] = sorted(set(sources))
+        merged["metadata_repair_source"] = sources[0]
+    if include_quality:
+        quality = citation_metadata_quality(merged)
+        acceptance = citation_metadata_export_acceptance({**merged, "metadata_quality": quality})
+        merged["metadata_quality"] = quality
+        merged["metadata_export_acceptance"] = acceptance
+        if quality.get("ok"):
+            merged["metadata_repair_status"] = "ready"
+        elif quality.get("retryable"):
+            merged["metadata_repair_status"] = "retryable"
+        else:
+            merged["metadata_repair_status"] = "partial"
+    return merged
+
+
 def persist_repaired_citation_metadata(meta: Mapping[str, Any], db_dir: str | Path | None = None) -> list[str]:
     if not db_dir:
         return []
@@ -1079,18 +1121,21 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
     before = citation_metadata_quality(original)
     before_acceptance = citation_metadata_export_acceptance({**original, "metadata_quality": before})
     try:
-        local_meta = _metadata_from_reference_index(original, db_dir)
-        cache_meta = _metadata_from_crossref_cache({**original, **local_meta}, db_dir)
-        repair_sources: list[str] = []
-        if local_meta:
-            repair_sources.append("reference_index")
-        if cache_meta:
-            repair_sources.append(str(cache_meta.get("metadata_repair_source") or "crossref_cache"))
-        seed = _canonicalize_detail({**original, **local_meta, **cache_meta}) if (local_meta or cache_meta) else original
-        repaired = enrich_citation_detail_meta(seed)
-        if not isinstance(repaired, dict):
-            repaired = {}
-        merged = _canonicalize_detail({**seed, **repaired})
+        seed = hydrate_repaired_citation_metadata(original, db_dir=db_dir, include_quality=False)
+        repair_sources = [
+            str(item or "").strip()
+            for item in list(seed.get("metadata_repair_sources") or [])
+            if str(item or "").strip()
+        ]
+        seed_quality = citation_metadata_quality(seed)
+        seed_acceptance = citation_metadata_export_acceptance({**seed, "metadata_quality": seed_quality})
+        if bool(seed_quality.get("ok")) and bool(seed_acceptance.get("export_ready")):
+            merged = _canonicalize_detail(seed)
+        else:
+            repaired = enrich_citation_detail_meta(seed)
+            if not isinstance(repaired, dict):
+                repaired = {}
+            merged = _canonicalize_detail({**seed, **repaired})
         raw_doi = _norm_doi(_raw_reference_text(seed))
         if raw_doi and not _norm_doi(merged.get("doi") or merged.get("doi_url")):
             merged["doi"] = raw_doi

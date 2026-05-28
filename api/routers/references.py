@@ -28,7 +28,7 @@ from api.reference_ui import (
     open_reference_source,
 )
 from api.reference_card_quality import refs_pack_has_full_llm_copy
-from api.reference_metadata_quality import repair_citation_metadata_batch
+from api.reference_metadata_quality import hydrate_repaired_citation_metadata, repair_citation_metadata_batch
 from api.reference_card_copy import (
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
@@ -1820,7 +1820,18 @@ def get_reference_citation_meta(body: CitationMetaBody):
 
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
-    return enrich_citation_detail_meta(body.meta or {})
+    meta = body.meta or {}
+    hydrated = hydrate_repaired_citation_metadata(meta, db_dir=get_settings().db_dir)
+    quality = hydrated.get("metadata_quality") if isinstance(hydrated.get("metadata_quality"), dict) else {}
+    acceptance = (
+        hydrated.get("metadata_export_acceptance")
+        if isinstance(hydrated.get("metadata_export_acceptance"), dict)
+        else {}
+    )
+    if bool(quality.get("ok")) and bool(acceptance.get("export_ready")):
+        return hydrated
+    seed = {**dict(meta or {}), **dict(hydrated or {})}
+    return enrich_citation_detail_meta(seed)
 
 
 @router.post("/shelf/metadata/repair")
