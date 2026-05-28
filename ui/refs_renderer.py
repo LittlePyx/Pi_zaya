@@ -3978,30 +3978,36 @@ def _assess_system_a_hit_binding(
     source_name: str,
 ) -> dict:
     claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
-    evidence_surface = " ".join(
+    evidence_body_surface = " ".join(
         [
             str(evidence_quote or ""),
             str((hit or {}).get("text") or ""),
             str(heading or ""),
-            str(source_name or ""),
             str((meta or {}).get("why_line") or ""),
         ]
     )
+    evidence_surface = " ".join([evidence_body_surface, str(source_name or "")])
     claim_domains = _system_a_domain_terms(claim)
     evidence_domains = _system_a_domain_terms(evidence_surface)
+    evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
     domain_overlap = claim_domains & evidence_domains
+    body_domain_overlap = claim_domains & evidence_body_domains
     claim_keywords = _system_a_keyword_terms(claim)
     evidence_keywords = _system_a_keyword_terms(evidence_surface)
     keyword_overlap = claim_keywords & evidence_keywords
     prefer_zh = _system_a_prefers_zh(claim)
 
     strong_claim_terms = claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
-    missing_strong_terms = strong_claim_terms - evidence_domains
-    matched_strong_terms = strong_claim_terms & evidence_domains
+    missing_strong_terms = strong_claim_terms - evidence_body_domains
+    matched_strong_terms = strong_claim_terms & evidence_body_domains
     source_identity_overlap = _system_a_has_source_identity_overlap(claim, evidence_surface, source_name)
-    if strong_claim_terms and not matched_strong_terms and not source_identity_overlap:
+    # A single answer sentence can carry multiple citations.  If this hit already
+    # shares a concrete body/heading domain term with the sentence, keep
+    # evaluating it instead of suppressing it for a strong term that belongs to a
+    # neighboring citation. Source-name overlap alone is too weak for this bypass.
+    if strong_claim_terms and not matched_strong_terms and not source_identity_overlap and not body_domain_overlap:
         missing = _system_a_term_label(missing_strong_terms)
-        evidence_label = _system_a_term_label(evidence_domains) or "retrieved passage"
+        evidence_label = _system_a_term_label(evidence_body_domains or evidence_domains) or "retrieved passage"
         reason = (
             f"答案句的关键术语“{missing}”没有出现在该命中证据中；该命中更像是在讨论“{evidence_label}”。"
             if prefer_zh

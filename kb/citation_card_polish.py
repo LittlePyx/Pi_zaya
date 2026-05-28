@@ -410,6 +410,15 @@ def _baseline_texts(base: Mapping[str, Any]) -> dict[str, str]:
     }
 
 
+def _merged_baseline_texts(raw: Mapping[str, Any], base: Mapping[str, Any]) -> dict[str, str]:
+    baseline = _baseline_texts(base)
+    raw_baseline = _baseline_texts(raw)
+    for key, value in raw_baseline.items():
+        if value and not baseline.get(key):
+            baseline[key] = value
+    return baseline
+
+
 def _reject_polish_reason(
     *,
     key: str,
@@ -555,7 +564,7 @@ def polish_citation_card_detail(
         "citation_card_polish_checked": True,
         "citation_card_polish_route": route,
     }
-    baseline = _baseline_texts(base)
+    baseline = _merged_baseline_texts(rec, base)
     accepted_keys: list[str] = []
     rejected: list[str] = []
     for key in _TEXT_PATCH_KEYS:
