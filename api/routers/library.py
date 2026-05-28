@@ -4167,7 +4167,9 @@ def repair_library_quality(body: QualityRepairBody):
         requested += 1
         resolved = _resolve_quality_source(source_path=source_path, source_name=source_name)
         pdf_path_raw = str(resolved.get("pdf_path") or "").strip()
-        if not pdf_path_raw:
+        md_path_raw = str(resolved.get("md_path") or "").strip()
+        md_exists = bool(resolved.get("md_exists")) and bool(md_path_raw)
+        if not pdf_path_raw and not md_exists:
             items.append({
                 "source_path": source_path,
                 "source_name": source_name,
@@ -4176,7 +4178,7 @@ def repair_library_quality(body: QualityRepairBody):
                 "ok": False,
                 "enqueued": False,
                 "skipped_busy": False,
-                "error": "source pdf not found",
+                "error": "source pdf or markdown not found",
                 "task_id": "",
             })
             continue
@@ -4184,27 +4186,32 @@ def repair_library_quality(body: QualityRepairBody):
             "source_path": source_path,
             "source_name": source_name,
             "pdf_path": pdf_path_raw,
-            "md_path": str(resolved.get("md_path") or ""),
+            "md_path": md_path_raw,
         })
 
     enqueued = 0
     repaired = 0
     skipped_busy = 0
     failed = sum(1 for item in items if not bool(item.get("ok")))
-    seen_pdf_paths: set[str] = set()
+    seen_target_paths: set[str] = set()
     for target in targets:
-        pdf_path = Path(str(target.get("pdf_path") or "")).expanduser()
-        pdf_name = pdf_path.name
-        key = _normalized_path_key(pdf_path).lower()
-        if not key or key in seen_pdf_paths:
+        pdf_path_raw = str(target.get("pdf_path") or "").strip()
+        md_path_raw = str(target.get("md_path") or "").strip()
+        pdf_path = Path(pdf_path_raw).expanduser() if pdf_path_raw else None
+        pdf_name = pdf_path.name if pdf_path is not None else (
+            str(target.get("source_name") or "").strip() or Path(md_path_raw.replace("\\", "/")).name
+        )
+        dedupe_key = _normalized_path_key(pdf_path) if pdf_path is not None else _normalized_path_key(md_path_raw)
+        key = dedupe_key.lower()
+        if not key or key in seen_target_paths:
             continue
-        seen_pdf_paths.add(key)
+        seen_target_paths.add(key)
 
         base_item = {
             "source_path": str(target.get("source_path") or ""),
             "source_name": str(target.get("source_name") or ""),
             "pdf_name": pdf_name,
-            "pdf_path": str(pdf_path),
+            "pdf_path": str(pdf_path or ""),
             "ok": False,
             "enqueued": False,
             "repaired": False,
@@ -4225,23 +4232,31 @@ def repair_library_quality(body: QualityRepairBody):
             "repair_error": "",
             "task_id": "",
         }
-        if (not _path_is_within(pdf_path, [pdf_d])) or (not _path_is_file(pdf_path)):
+        pdf_available = bool(
+            pdf_path is not None
+            and _path_is_within(pdf_path, [pdf_d])
+            and _path_is_file(pdf_path)
+        )
+        if pdf_path is not None and not pdf_available:
             items.append({**base_item, "error": "pdf not found"})
             failed += 1
             continue
 
-        task_info = task_by_path.get(_normalized_path_key(pdf_path)) or task_by_name.get(pdf_name) or {}
-        if bool(task_info.get("queued")) or bool(task_info.get("running")):
-            items.append({**base_item, "skipped_busy": True, "error": "already queued or running"})
-            skipped_busy += 1
-            continue
+        if pdf_available and pdf_path is not None:
+            task_info = task_by_path.get(_normalized_path_key(pdf_path)) or task_by_name.get(pdf_name) or {}
+            if bool(task_info.get("queued")) or bool(task_info.get("running")):
+                items.append({**base_item, "skipped_busy": True, "error": "already queued or running"})
+                skipped_busy += 1
+                continue
 
-        md_path_raw = str(target.get("md_path") or "").strip()
         if md_path_raw:
             md_path = Path(md_path_raw).expanduser()
             md_exists = _path_is_file(md_path)
-        else:
+        elif pdf_path is not None:
             _md_folder, md_path, md_exists = _resolve_md_output_paths(md_d, pdf_path)
+        else:
+            md_path = Path()
+            md_exists = False
         repair_payload: dict = {}
         active_plan: dict = {}
         if bool(body.md_autofix) and md_exists and _path_is_within(md_path, [md_d]):
@@ -4378,6 +4393,15 @@ def repair_library_quality(body: QualityRepairBody):
                 except Exception:
                     pass
             items.append({**base_item, **repair_payload, "ok": True, "enqueued": False})
+            continue
+
+        if not pdf_available or pdf_path is None:
+            items.append({
+                **base_item,
+                **repair_payload,
+                "error": "source pdf not found for reconversion",
+            })
+            failed += 1
             continue
 
         try:

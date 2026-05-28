@@ -473,6 +473,83 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert all(isinstance(task.get("repair_context"), dict) for task in enqueued)
 
 
+def test_library_quality_repair_route_autofixes_markdown_without_pdf(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    md_path = md_dir / "standalone" / "standalone.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Standalone Markdown",
+                "",
+                "## Abstract",
+                "",
+                "This converted paper already has enough structure, references, and readable text for indexing.",
+                "",
+                "## Method",
+                "",
+                "The method section remains usable after a deterministic source-level repair.",
+                "",
+                "## References",
+                "",
+                "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    enqueued: list[dict] = []
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/repair",
+        json={
+            "sources": [{"source_path": str(md_path), "source_name": "standalone.en.md"}],
+            "md_autofix": True,
+            "replace": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["requested"] == 1
+    assert payload["enqueued"] == 0
+    assert payload["repaired"] == 1
+    assert payload["needs_reindex"] is True
+    assert payload["impact"]["repaired"] == 1
+    assert payload["impact"]["enqueued"] == 0
+    assert enqueued == []
+
+    item = payload["items"][0]
+    assert item["ok"] is True
+    assert item["pdf_path"] == ""
+    assert item["md_path"] == str(md_path)
+    assert item["repair_changed"] is True
+    assert "ensure_page_anchor" in item["repair_applied"]
+    assert "missing_page_markers" in item["fixed_issue_codes"]
+    assert item["quality_before"]["status"] == "warning"
+    assert item["quality_after"]["status"] == "good"
+    assert item["repair_plan"]["action"] == "none"
+    assert item["repair_attempt"]["event"] == "repair_closed"
+    assert md_path.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
+
+
 def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
