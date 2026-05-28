@@ -54,6 +54,14 @@ def write_doc_chunks(db_dir: Path, doc_id: str, chunks: list[dict]) -> None:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
 
 
+def delete_doc_chunks(db_dir: Path, doc_id: str) -> bool:
+    p = doc_chunks_path(db_dir, doc_id)
+    if not p.exists():
+        return False
+    p.unlink()
+    return True
+
+
 def load_all_chunks(db_dir: Path) -> list[dict]:
     chunks: list[dict] = []
     d = _chunks_dir(db_dir)
@@ -84,4 +92,3 @@ def prune_missing_docs(db_dir: Path, docs_index: dict) -> int:
             p.unlink()
         removed += 1
     return removed
-

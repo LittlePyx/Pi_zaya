@@ -159,6 +159,8 @@ def _worker(
             crossref_time_budget_s=float(max(5.0, crossref_time_budget_s)),
             doi_prefetch_workers=int(max(1, doi_prefetch_workers)),
             doc_prepare_workers=int(max(1, min(8, doi_prefetch_workers))),
+            quality_gate=True,
+            quality_gate_autofix=True,
             pdf_root=pdf_root,
             library_db_path=library_db_path,
             progress_cb=_on_progress,

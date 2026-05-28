@@ -2034,6 +2034,9 @@ def build_reference_index(
     crossref_time_budget_s: float = 45.0,
     doi_prefetch_workers: int = 1,
     doc_prepare_workers: int = 1,
+    quality_gate: bool = False,
+    quality_gate_autofix: bool = True,
+    allow_blocked_quality: bool = False,
     pdf_root: Path | None = None,
     library_db_path: Path | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
@@ -2075,6 +2078,7 @@ def build_reference_index(
     docs_out: dict[str, dict] = {}
     docs_updated = 0
     docs_reused = 0
+    docs_quality_blocked = 0
     refs_total = 0
     refs_with_doi = 0
     refs_crossref_ok = 0
@@ -2104,7 +2108,7 @@ def build_reference_index(
             return
 
     _emit_progress("prepare", docs_done=0, current="")
-    if int(doc_prepare_workers) > 1 and total_docs > 1:
+    if (not bool(quality_gate)) and int(doc_prepare_workers) > 1 and total_docs > 1:
         prep_max_workers = int(max(1, min(8, int(doc_prepare_workers), int(total_docs))))
         prep_executor = ThreadPoolExecutor(max_workers=prep_max_workers)
         for p0 in md_files:
@@ -2126,6 +2130,26 @@ def build_reference_index(
             if not src_key:
                 continue
             _emit_progress("doc_start", docs_done=max(0, doc_i - 1), current=p.name)
+
+            quality_fields: dict[str, Any] = {}
+            if bool(quality_gate):
+                try:
+                    from kb.converter.quality_gate import index_quality_document_fields, prepare_markdown_for_index
+
+                    quality_assessment = prepare_markdown_for_index(
+                        p,
+                        auto_repair=bool(quality_gate_autofix),
+                        allow_blocked=bool(allow_blocked_quality),
+                    )
+                    quality_fields = index_quality_document_fields(quality_assessment)
+                    if not bool(quality_assessment.get("indexable")):
+                        docs_quality_blocked += 1
+                        _emit_progress("doc_done", docs_done=doc_i, current=p.name)
+                        continue
+                except Exception:
+                    docs_quality_blocked += 1
+                    _emit_progress("doc_done", docs_done=doc_i, current=p.name)
+                    continue
 
             try:
                 sha1 = compute_file_sha1(p)
@@ -2171,7 +2195,12 @@ def build_reference_index(
                     or (not prev_needs_rebuild_for_enrich)
                 )
             ):
-                docs_out[src_key] = prev_doc
+                if quality_fields:
+                    merged_prev_doc = dict(prev_doc)
+                    merged_prev_doc.update(quality_fields)
+                    docs_out[src_key] = merged_prev_doc
+                else:
+                    docs_out[src_key] = prev_doc
                 docs_reused += 1
                 refs = prev_doc.get("refs")
                 if isinstance(refs, dict):
@@ -2556,6 +2585,7 @@ def build_reference_index(
                 "reference_catalog_ref_count": int(reference_catalog.get("ref_count") or 0),
                 "reference_catalog_missing_numbers": list(reference_catalog.get("missing_numbers") or []),
                 "refs": refs_obj,
+                **quality_fields,
             }
     
             if (
@@ -2616,6 +2646,7 @@ def build_reference_index(
         "docs_indexed": len(docs_out),
         "docs_updated": int(docs_updated),
         "docs_reused": int(docs_reused),
+        "docs_quality_blocked": int(docs_quality_blocked),
         "refs_total": int(refs_total),
         "refs_with_doi": int(refs_with_doi),
         "refs_crossref_ok": int(refs_crossref_ok),
