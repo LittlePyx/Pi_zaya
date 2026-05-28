@@ -68,6 +68,15 @@ _REFS_CONVERSATION_WARMING_LOCK = threading.Lock()
 _CITATION_CARD_POLISH_CACHE: dict[str, dict] = {}
 _CITATION_CARD_POLISH_WARMING: set[str] = set()
 _CITATION_CARD_POLISH_LOCK = threading.Lock()
+_SHELF_METADATA_BACKFILL_LOCK = threading.Lock()
+_SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
+    "ok": True,
+    "status": "idle",
+    "phase": "idle",
+    "running": False,
+    "progress": {"percent": 0, "processed": 0, "total": 0},
+    "updated_at": 0.0,
+}
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
 _REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 10
@@ -1860,6 +1869,151 @@ def repair_shelf_metadata(body: ShelfMetadataRepairBody):
     return result
 
 
+def _backfill_progress(percent: int, *, processed: int = 0, total: int = 0) -> dict:
+    return {
+        "percent": max(0, min(100, int(percent or 0))),
+        "processed": max(0, int(processed or 0)),
+        "total": max(0, int(total or 0)),
+    }
+
+
+def _shelf_metadata_backfill_snapshot() -> dict:
+    with _SHELF_METADATA_BACKFILL_LOCK:
+        try:
+            return json.loads(json.dumps(_SHELF_METADATA_BACKFILL_STATE, ensure_ascii=False, default=str))
+        except Exception:
+            return dict(_SHELF_METADATA_BACKFILL_STATE)
+
+
+def _set_shelf_metadata_backfill_state(**patch) -> dict:
+    with _SHELF_METADATA_BACKFILL_LOCK:
+        _SHELF_METADATA_BACKFILL_STATE.update(patch)
+        _SHELF_METADATA_BACKFILL_STATE["updated_at"] = time.time()
+        try:
+            return json.loads(json.dumps(_SHELF_METADATA_BACKFILL_STATE, ensure_ascii=False, default=str))
+        except Exception:
+            return dict(_SHELF_METADATA_BACKFILL_STATE)
+
+
+def _run_shelf_metadata_backfill_job(job_id: str, *, db_dir: str | Path, limit: int, scan_limit: int) -> None:
+    try:
+        scan_window = max(limit, scan_limit)
+        _set_shelf_metadata_backfill_state(
+            status="running",
+            phase="scanning",
+            running=True,
+            progress=_backfill_progress(8),
+        )
+        before = scan_reference_metadata_backfill_targets(db_dir=db_dir, limit=scan_window)
+        targets = [
+            dict(item)
+            for item in list(before.get("targets") or [])[:limit]
+            if isinstance(item, dict)
+        ]
+        target_total = len(targets)
+        _set_shelf_metadata_backfill_state(
+            phase="repairing" if target_total else "verifying",
+            scan=before,
+            target_total=int(before.get("target_count") or target_total),
+            progress=_backfill_progress(28, processed=0, total=target_total),
+        )
+        repair = repair_citation_metadata_batch(targets, limit=limit, db_dir=db_dir)
+        _set_shelf_metadata_backfill_state(
+            phase="verifying",
+            progress=_backfill_progress(82, processed=target_total, total=target_total),
+            result={**repair, "scan": before},
+        )
+        after = scan_reference_metadata_backfill_targets(db_dir=db_dir, limit=scan_window)
+        result = {
+            **repair,
+            "scan": before,
+            "after_scan": after,
+            "preheated": max(_shelf_repair_int(repair.get("changed")), _shelf_repair_int(repair.get("persisted"))),
+            "remaining_targets": _shelf_repair_int(after.get("needs_repair")),
+        }
+        verification = _shelf_metadata_repair_verification(result)
+        result["verification"] = verification
+        repair_run = _record_shelf_metadata_quality_run(result=result, items=targets)
+        if repair_run:
+            result["repair_run_id"] = str(repair_run.get("run_id") or "")
+            result["repair_run"] = repair_run
+        phase = "completed"
+        if str(verification.get("status") or "") in {"retryable", "partial", "failed"}:
+            phase = f"completed_{verification.get('status')}"
+        _set_shelf_metadata_backfill_state(
+            ok=bool(result.get("ok", True)),
+            status="completed",
+            phase=phase,
+            running=False,
+            finished_at=time.time(),
+            progress=_backfill_progress(100, processed=target_total, total=target_total),
+            result=result,
+            after_scan=after,
+            verification=verification,
+            repair_run_id=str((repair_run or {}).get("run_id") or ""),
+            repair_run=repair_run or {},
+        )
+    except Exception as exc:
+        _set_shelf_metadata_backfill_state(
+            ok=False,
+            status="error",
+            phase="error",
+            running=False,
+            finished_at=time.time(),
+            progress=_backfill_progress(100),
+            error_kind=type(exc).__name__,
+            error_detail=str(exc or "")[:500],
+        )
+
+
+def _start_shelf_metadata_backfill_job(*, limit: int, scan_limit: int) -> dict:
+    db_dir = get_settings().db_dir
+    now = time.time()
+    job_id = f"shelf-meta-{int(now * 1000)}"
+    with _SHELF_METADATA_BACKFILL_LOCK:
+        if bool(_SHELF_METADATA_BACKFILL_STATE.get("running")):
+            try:
+                state = json.loads(json.dumps(_SHELF_METADATA_BACKFILL_STATE, ensure_ascii=False, default=str))
+            except Exception:
+                state = dict(_SHELF_METADATA_BACKFILL_STATE)
+            return {"started": False, "reason": "already_running", "state": state}
+        _SHELF_METADATA_BACKFILL_STATE.clear()
+        _SHELF_METADATA_BACKFILL_STATE.update(
+            {
+                "ok": True,
+                "job_id": job_id,
+                "status": "running",
+                "phase": "queued",
+                "running": True,
+                "limit": int(limit),
+                "scan_limit": int(scan_limit),
+                "started_at": now,
+                "updated_at": now,
+                "progress": _backfill_progress(1),
+            }
+        )
+    try:
+        threading.Thread(
+            target=_run_shelf_metadata_backfill_job,
+            kwargs={"job_id": job_id, "db_dir": db_dir, "limit": int(limit), "scan_limit": int(scan_limit)},
+            daemon=True,
+            name=f"kb_shelf_meta_backfill_{job_id[-6:]}",
+        ).start()
+    except Exception as exc:
+        state = _set_shelf_metadata_backfill_state(
+            ok=False,
+            status="error",
+            phase="error",
+            running=False,
+            finished_at=time.time(),
+            progress=_backfill_progress(100),
+            error_kind=type(exc).__name__,
+            error_detail=str(exc or "")[:500],
+        )
+        return {"started": False, "reason": "start_failed", "state": state}
+    return {"started": True, "job_id": job_id, "state": _shelf_metadata_backfill_snapshot()}
+
+
 @router.get("/shelf/metadata/backfill/scan")
 def scan_shelf_metadata_backfill(limit: int = 120):
     scan_limit = max(1, min(500, int(limit or 120)))
@@ -1883,6 +2037,18 @@ def backfill_shelf_metadata(body: ShelfMetadataBackfillBody):
         result["repair_run_id"] = str(repair_run.get("run_id") or "")
         result["repair_run"] = repair_run
     return result
+
+
+@router.get("/shelf/metadata/backfill/status")
+def shelf_metadata_backfill_status():
+    return _shelf_metadata_backfill_snapshot()
+
+
+@router.post("/shelf/metadata/backfill/start")
+def start_shelf_metadata_backfill(body: ShelfMetadataBackfillBody):
+    limit = 40 if body.limit is None else max(1, min(80, int(body.limit)))
+    scan_limit = 240 if body.scan_limit is None else max(limit, min(1000, int(body.scan_limit)))
+    return _start_shelf_metadata_backfill_job(limit=limit, scan_limit=scan_limit)
 
 
 def _run_citation_card_polish_job(key: str, detail: dict) -> None:

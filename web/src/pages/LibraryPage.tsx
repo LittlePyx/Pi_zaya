@@ -62,7 +62,7 @@ import type {
   RenameSuggestionItem,
 } from '../api/library'
 import { libraryApi } from '../api/library'
-import { referencesApi } from '../api/references'
+import { referencesApi, type ShelfMetadataBackfillJobState } from '../api/references'
 import { useChatStore } from '../stores/chatStore'
 import { settingsApi } from '../api/settings'
 import { useLibraryStore } from '../stores/libraryStore'
@@ -972,6 +972,8 @@ export default function LibraryPage() {
   const [qualityCaseActionKey, setQualityCaseActionKey] = useState('')
   const [qualityFullChainActionKey, setQualityFullChainActionKey] = useState('')
   const [qualityFullChainResults, setQualityFullChainResults] = useState<Record<string, QualityFullChainActionResult>>({})
+  const [shelfMetadataBackfillState, setShelfMetadataBackfillState] = useState<ShelfMetadataBackfillJobState | null>(null)
+  const [shelfMetadataBackfillRefreshing, setShelfMetadataBackfillRefreshing] = useState(false)
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
   const qualityRepairBaselinesRef = useRef<Record<string, QualityRepairBaseline>>({})
@@ -1028,6 +1030,40 @@ export default function LibraryPage() {
   )
   const backendQualityOverview = store.qualityOverview?.ok ? store.qualityOverview : null
   const latestBackendRepairRun = backendQualityOverview?.repair_runs?.[0] || null
+  const refreshShelfMetadataBackfillState = useCallback(async (silent = true) => {
+    if (!silent) setShelfMetadataBackfillRefreshing(true)
+    try {
+      const state = await referencesApi.shelfMetadataBackfillStatus()
+      setShelfMetadataBackfillState(state)
+      return state
+    } catch (err) {
+      if (!silent) message.error(err instanceof Error ? err.message : 'Metadata backfill status failed')
+      return null
+    } finally {
+      if (!silent) setShelfMetadataBackfillRefreshing(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    referencesApi.shelfMetadataBackfillStatus()
+      .then((state) => {
+        if (!cancelled) setShelfMetadataBackfillState(state)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!shelfMetadataBackfillState?.running) return
+    const timer = window.setInterval(() => {
+      void refreshShelfMetadataBackfillState(true)
+    }, 1600)
+    return () => window.clearInterval(timer)
+  }, [refreshShelfMetadataBackfillState, shelfMetadataBackfillState?.job_id, shelfMetadataBackfillState?.running])
+
   useEffect(() => {
     if (!latestBackendRepairRun) return
     setQualityRepairRun((cur) => {
@@ -1325,6 +1361,21 @@ export default function LibraryPage() {
       .slice(0, 8),
     [qualityFeatureHealth],
   )
+  const shelfMetadataBackfillScan = useMemo(() => {
+    const state = shelfMetadataBackfillState
+    return state?.after_scan || state?.result?.after_scan || state?.scan || state?.result?.scan || null
+  }, [shelfMetadataBackfillState])
+  const shelfMetadataBackfillResult = shelfMetadataBackfillState?.result || null
+  const shelfMetadataBackfillProgress = Math.max(0, Math.min(100, Math.round(Number(shelfMetadataBackfillState?.progress?.percent || 0))))
+  const shelfMetadataBackfillPhase = normalizeTextValue(shelfMetadataBackfillState?.phase || shelfMetadataBackfillState?.status || 'idle').replace(/_/g, ' ')
+  const shelfMetadataBackfillRunning = Boolean(shelfMetadataBackfillState?.running)
+  const shelfMetadataBackfillTone = shelfMetadataBackfillRunning
+    ? 'warning'
+    : normalizeTextValue(shelfMetadataBackfillState?.status).toLowerCase() === 'error'
+      ? 'error'
+      : shelfMetadataBackfillScan
+        ? (Number(shelfMetadataBackfillScan.needs_repair || 0) > 0 ? 'warning' : 'good')
+        : 'unknown'
   const qualityRerunSummary = backendQualityOverview?.rerun_summary
   const qualityFailureCases = useMemo<LibraryQualityFailureCase[]>(
     () => (Array.isArray(backendQualityOverview?.failure_cases) ? backendQualityOverview.failure_cases : [])
@@ -2727,18 +2778,22 @@ export default function LibraryPage() {
   const repairQualityStageShelfMetadata = async (stageKey: string) => {
     const targets = qualityFailureCases.filter((item) => qualityFailureCaseMatchesStage(item, stageKey)).slice(0, 3)
     if (!targets.length) {
-      const res = await referencesApi.backfillShelfMetadata(40, 240)
-      const ready = Number(res.ready || 0)
-      const exportReady = Number(res.acceptance?.export_ready_after || res.export_ready || ready)
-      const changed = Number(res.changed || res.preheated || 0)
-      const retryable = Number(res.retryable || 0)
-      const unresolved = Number(res.acceptance?.unresolved_after || res.unresolved || res.remaining_targets || 0)
-      const targetCount = Number(res.requested || res.scan?.target_count || 0)
-      const verification = (res.verification || res.repair_run?.verification || {}) as Record<string, unknown>
-      if (res.repair_run) {
+      const state = await startShelfMetadataBackfill({ silent: true })
+      const res = state?.result || null
+      const scan = state?.after_scan || res?.after_scan || state?.scan || res?.scan || null
+      const ready = Number(res?.ready || scan?.ready || 0)
+      const exportReady = Number(res?.acceptance?.export_ready_after || res?.export_ready || scan?.export_ready || ready)
+      const changed = Number(res?.changed || res?.preheated || 0)
+      const retryable = Number(res?.retryable || scan?.retryable || 0)
+      const unresolved = Number(res?.acceptance?.unresolved_after || res?.unresolved || res?.remaining_targets || scan?.needs_repair || 0)
+      const targetCount = Number(res?.requested || scan?.target_count || state?.target_total || 0)
+      const verification = (state?.verification || res?.verification || res?.repair_run?.verification || {}) as Record<string, unknown>
+      if (res?.repair_run) {
         setQualityRepairRun(res.repair_run as unknown as LibraryQualityRepairRun)
       }
-      if (changed > 0) {
+      if (state?.running) {
+        message.success('Library metadata backfill is running')
+      } else if (changed > 0) {
         message.success(`Library metadata backfilled: ${changed}`)
       } else if (retryable > 0) {
         message.warning(`Library metadata can retry: ${retryable}`)
@@ -2748,7 +2803,7 @@ export default function LibraryPage() {
         message.info('No repairable library metadata found.')
       }
       await store.loadQualityOverview('all')
-      return { targetCount, targetIds: [] as string[], ready, exportReady, changed, retryable, unresolved, verification }
+      return { targetCount, targetIds: [] as string[], ready, exportReady, changed, retryable, unresolved, verification, running: Boolean(state?.running) }
     }
     let changed = 0
     let ready = 0
@@ -2771,13 +2826,37 @@ export default function LibraryPage() {
       message.info('No repairable citation metadata found in the current failed cases.')
     }
     await store.loadQualityOverview('all')
-    return { targetCount: targets.length, targetIds: targets.map((item) => normalizeTextValue(item.id)).filter(Boolean), ready, exportReady, changed, retryable, unresolved, verification }
+    return { targetCount: targets.length, targetIds: targets.map((item) => normalizeTextValue(item.id)).filter(Boolean), ready, exportReady, changed, retryable, unresolved, verification, running: false }
   }
 
   const refreshQualityOverviewSnapshot = async () => {
     await store.loadQualityOverview('all')
     const overview = useLibraryStore.getState().qualityOverview
     return overview?.ok ? overview : null
+  }
+
+  async function startShelfMetadataBackfill(options: { silent?: boolean } = {}) {
+    setShelfMetadataBackfillRefreshing(true)
+    try {
+      const res = await referencesApi.startShelfMetadataBackfill(40, 240)
+      setShelfMetadataBackfillState(res.state)
+      const state = res.state || null
+      if (!options.silent) {
+        if (res.started) {
+          message.success('Library metadata backfill started')
+        } else if (state?.running || res.reason === 'already_running') {
+          message.info('Library metadata backfill is already running')
+        } else {
+          message.warning('Library metadata backfill did not start')
+        }
+      }
+      return state
+    } catch (err) {
+      if (!options.silent) message.error(err instanceof Error ? err.message : 'Metadata backfill failed to start')
+      return null
+    } finally {
+      setShelfMetadataBackfillRefreshing(false)
+    }
   }
 
   const handleQualityFullChainStage = async (stage: LibraryQualityFullChainStage) => {
@@ -2903,14 +2982,19 @@ export default function LibraryPage() {
             research_qa: qaVerification,
           }
           : (Object.keys(shelfVerification).length ? shelfVerification : qaVerification)
+        const resultRunning = Boolean(result.running)
         recordStageResult({
-          status: result.retryable > 0 || result.unresolved > 0 || (rerun && !rerunPassed) ? 'warning' : (result.changed > 0 || result.ready > 0 ? 'success' : 'info'),
-          summary: rerun
+          status: resultRunning ? 'success' : (result.retryable > 0 || result.unresolved > 0 || (rerun && !rerunPassed) ? 'warning' : (result.changed > 0 || result.ready > 0 ? 'success' : 'info')),
+          summary: resultRunning
+            ? 'Metadata backfill started'
+            : rerun
             ? (rerunPassed ? `Metadata repair verified: ${caseTarget?.id}` : `Metadata checked; QA still failing: ${caseTarget?.id}`)
             : (result.changed > 0
               ? (result.unresolved > 0 ? `Metadata repaired ${result.changed}; ${result.unresolved} still missing` : `Metadata repaired: ${result.changed}`)
               : (result.exportReady > 0 ? `Metadata export ready: ${result.exportReady}` : (result.ready > 0 ? `Metadata already ready: ${result.ready}` : 'Opened citation quality report'))),
-          detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : (result.targetCount > 0 ? `${result.targetCount} failed cases checked` : undefined),
+          detail: resultRunning
+            ? (result.targetCount > 0 ? `${result.targetCount} metadata targets queued` : 'Scanning the reference index')
+            : (rerun?.failures?.length ? `${rerun.failures.length} failures remain` : (result.targetCount > 0 ? `${result.targetCount} failed cases checked` : undefined)),
         }, {
           targetIds: result.targetIds,
           metrics: {
@@ -2920,6 +3004,7 @@ export default function LibraryPage() {
             retryable: result.retryable,
             unresolved: result.unresolved,
             target_count: result.targetCount,
+            async_running: resultRunning,
             qa_rerun_quality_ok: rerun ? rerunPassed : false,
           },
           afterOverview,
@@ -4630,6 +4715,71 @@ export default function LibraryPage() {
                   </div>
                 )
               })}
+            </div>
+          </div>
+          <div
+            className={`kb-lib-quality-metadata-backfill is-${shelfMetadataBackfillTone}`}
+            data-testid="library-metadata-backfill-health"
+          >
+            <div className="kb-lib-quality-metadata-backfill-head">
+              <div>
+                <Text className="kb-lib-quality-report-section-title">Literature metadata</Text>
+                <strong>{shelfMetadataBackfillScan ? `${Number(shelfMetadataBackfillScan.export_ready || 0)}/${Number(shelfMetadataBackfillScan.scanned || 0)}` : 'Not scanned'}</strong>
+              </div>
+              <Tag color={shelfMetadataBackfillRunning ? 'processing' : shelfMetadataBackfillTone === 'good' ? 'success' : shelfMetadataBackfillTone === 'error' ? 'error' : shelfMetadataBackfillTone === 'warning' ? 'warning' : 'default'}>
+                {shelfMetadataBackfillRunning ? shelfMetadataBackfillPhase : (shelfMetadataBackfillTone === 'unknown' ? 'Idle' : qualityStatusText(shelfMetadataBackfillTone, S))}
+              </Tag>
+            </div>
+            <div className="kb-lib-quality-metadata-backfill-grid">
+              <span>
+                <strong>{Number(shelfMetadataBackfillScan?.scanned || 0)}</strong>
+                <em>refs scanned</em>
+              </span>
+              <span>
+                <strong>{Number(shelfMetadataBackfillScan?.target_count || 0)}</strong>
+                <em>repairable</em>
+              </span>
+              <span>
+                <strong>{Number(shelfMetadataBackfillScan?.needs_repair || 0)}</strong>
+                <em>remaining</em>
+              </span>
+              <span>
+                <strong>{Number(shelfMetadataBackfillResult?.preheated || shelfMetadataBackfillResult?.persisted || shelfMetadataBackfillResult?.changed || 0)}</strong>
+                <em>preheated</em>
+              </span>
+            </div>
+            {shelfMetadataBackfillRunning ? (
+              <Progress percent={shelfMetadataBackfillProgress} size="small" showInfo={false} />
+            ) : null}
+            {(shelfMetadataBackfillScan?.missing_fields || []).length > 0 ? (
+              <div className="kb-lib-quality-metadata-backfill-fields">
+                {(shelfMetadataBackfillScan?.missing_fields || []).slice(0, 5).map((field) => (
+                  <em key={field.name}>{field.name} x{field.count}</em>
+                ))}
+              </div>
+            ) : null}
+            {shelfMetadataBackfillState?.error_detail ? (
+              <p>{shelfMetadataBackfillState.error_detail}</p>
+            ) : shelfMetadataBackfillResult?.verification ? (
+              <p>{qualityVerificationText(shelfMetadataBackfillResult.verification as unknown as Record<string, unknown>)}</p>
+            ) : null}
+            <div className="kb-lib-quality-metadata-backfill-actions">
+              <Button
+                size="small"
+                loading={shelfMetadataBackfillRefreshing || shelfMetadataBackfillRunning}
+                disabled={shelfMetadataBackfillRunning}
+                onClick={() => { void startShelfMetadataBackfill({ silent: false }) }}
+              >
+                {shelfMetadataBackfillRunning ? 'Running' : 'Preheat'}
+              </Button>
+              <Button
+                size="small"
+                type="text"
+                loading={shelfMetadataBackfillRefreshing && !shelfMetadataBackfillRunning}
+                onClick={() => { void refreshShelfMetadataBackfillState(false) }}
+              >
+                Refresh
+              </Button>
             </div>
           </div>
           {qualityFeatureHealth && qualityFeatureHealthItems.length > 0 ? (

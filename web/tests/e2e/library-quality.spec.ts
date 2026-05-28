@@ -37,6 +37,63 @@ test.beforeEach(async ({ page }) => {
   const repairCompletedNames = new Set<string>()
   const isRepairing = (name: string) => repairRequestedNames.has(name) && !repairCompletedNames.has(name)
   let latestRepairRun: Record<string, unknown> | null = null
+  let shelfMetadataBackfillState: Record<string, unknown> = {
+    ok: true,
+    job_id: 'shelf-meta-fixture',
+    status: 'completed',
+    phase: 'completed',
+    running: false,
+    progress: { percent: 100, processed: 2, total: 2 },
+    scan: {
+      ok: true,
+      docs: 3,
+      scanned: 42,
+      ready: 28,
+      export_ready: 24,
+      needs_repair: 18,
+      repairable: 12,
+      retryable: 12,
+      target_count: 12,
+      returned_count: 12,
+      target_limit: 120,
+      truncated: false,
+      missing_fields: [
+        { name: 'authors', count: 8 },
+        { name: 'venue', count: 6 },
+        { name: 'year', count: 3 },
+      ],
+      issue_codes: [],
+      sources: [],
+      targets: [],
+    },
+    result: {
+      ok: true,
+      requested: 2,
+      ready: 2,
+      export_ready: 2,
+      partial: 0,
+      retryable: 0,
+      failed: 0,
+      unresolved: 0,
+      changed: 1,
+      persisted: 2,
+      preheated: 2,
+      remaining_targets: 16,
+      items: [],
+      verification: {
+        type: 'shelf_metadata_repair',
+        status: 'passed',
+        quality_ok: true,
+        target_count: 2,
+        metadata_ready_after: 2,
+        export_ready_after: 2,
+        changed: 1,
+        retryable: 0,
+        failed: 0,
+        unresolved_after: 0,
+      },
+    },
+  }
   await page.addInitScript(() => {
     window.localStorage.removeItem('kb.library.qualityRepairHistory.v1')
   })
@@ -69,6 +126,27 @@ test.beforeEach(async ({ page }) => {
       status: 200,
       contentType: 'text/event-stream',
       body: 'data: {"running":false,"done":true,"status":"idle","stage":"","message":"","current":"","docs_done":0,"docs_total":0}\n\n',
+    })
+  })
+  await page.route('**/api/references/shelf/metadata/backfill/status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(shelfMetadataBackfillState),
+    })
+  })
+  await page.route('**/api/references/shelf/metadata/backfill/start', async (route) => {
+    shelfMetadataBackfillState = {
+      ...shelfMetadataBackfillState,
+      status: 'running',
+      phase: 'repairing',
+      running: true,
+      progress: { percent: 34, processed: 0, total: 12 },
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ started: true, job_id: 'shelf-meta-fixture-2', state: shelfMetadataBackfillState }),
     })
   })
   await page.route('**/api/library/quality/overview**', async (route) => {
@@ -1201,6 +1279,10 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="citation_cards"]')).toContainText('citation_card_quality x1')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="citation_cards"]')).toContainText('shelf export 1/2')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="reader_locate"]')).toContainText('target anchor drift x1')
+  await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('Literature metadata')
+  await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('24/42')
+  await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('authors x8')
+  await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('preheated')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Feature health')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Paper Guide')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Literature basket')

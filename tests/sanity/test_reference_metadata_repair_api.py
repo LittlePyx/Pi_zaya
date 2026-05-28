@@ -11,6 +11,31 @@ from api.routers import library as library_router
 from api.routers import references as references_router
 
 
+class _ImmediateThread:
+    def __init__(self, target, args=(), kwargs=None, **_kwargs):
+        self.target = target
+        self.args = args
+        self.kwargs = kwargs or {}
+
+    def start(self) -> None:
+        self.target(*self.args, **self.kwargs)
+
+
+def _reset_backfill_state() -> None:
+    with references_router._SHELF_METADATA_BACKFILL_LOCK:
+        references_router._SHELF_METADATA_BACKFILL_STATE.clear()
+        references_router._SHELF_METADATA_BACKFILL_STATE.update(
+            {
+                "ok": True,
+                "status": "idle",
+                "phase": "idle",
+                "running": False,
+                "progress": {"percent": 0, "processed": 0, "total": 0},
+                "updated_at": 0.0,
+            }
+        )
+
+
 def test_shelf_metadata_repair_route_returns_quality_contract(tmp_path, monkeypatch):
     def fake_enrich(detail):
         return {
@@ -248,3 +273,70 @@ def test_shelf_metadata_backfill_route_scans_and_repairs_reference_index(tmp_pat
     assert payload["verification"]["quality_ok"] is True
     assert payload["repair_run"]["phase"] == "shelf_metadata_verified"
     assert payload["after_scan"]["needs_repair"] == 0
+
+
+def test_shelf_metadata_backfill_start_runs_background_job_and_reports_status(tmp_path, monkeypatch):
+    _reset_backfill_state()
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    source_path = tmp_path / "md" / "source.en.md"
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    "source": {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "1": {
+                                "num": 1,
+                                "raw": "[1] Boyd et al. Alternating direction method of multipliers. 2011. doi:10.1561/2200000016",
+                                "title": "Reference 1",
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_enrich(detail):
+        return {
+            **dict(detail),
+            "title": "Alternating direction method of multipliers",
+            "authors": "Boyd S, Parikh N, Chu E",
+            "venue": "Foundations and Trends in Machine Learning",
+            "year": "2011",
+            "doi": "10.1561/2200000016",
+            "doi_url": "https://doi.org/10.1561/2200000016",
+        }
+
+    monkeypatch.setattr(references_router.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/shelf/metadata/backfill/start",
+        json={"limit": 10, "scan_limit": 20},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["started"] is True
+    state = payload["state"]
+    assert state["status"] == "completed"
+    assert state["running"] is False
+    assert state["progress"]["percent"] == 100
+    assert state["result"]["requested"] == 1
+    assert state["after_scan"]["needs_repair"] == 0
+
+    status_response = client.get("/api/references/shelf/metadata/backfill/status")
+    assert status_response.status_code == 200
+    status = status_response.json()
+    assert status["job_id"] == state["job_id"]
+    assert status["result"]["verification"]["quality_ok"] is True

@@ -174,6 +174,40 @@ export interface ShelfMetadataBackfillResponse extends ShelfMetadataRepairRespon
   remaining_targets?: number
 }
 
+export interface ShelfMetadataBackfillJobState {
+  ok?: boolean
+  job_id?: string
+  status: 'idle' | 'running' | 'completed' | 'error' | string
+  phase: string
+  running: boolean
+  limit?: number
+  scan_limit?: number
+  started_at?: number
+  updated_at?: number
+  finished_at?: number
+  target_total?: number
+  progress?: {
+    percent?: number
+    processed?: number
+    total?: number
+  }
+  scan?: ShelfMetadataBackfillScanResponse
+  after_scan?: ShelfMetadataBackfillScanResponse
+  result?: ShelfMetadataBackfillResponse
+  verification?: ShelfMetadataRepairVerification | Record<string, unknown>
+  repair_run_id?: string
+  repair_run?: Record<string, unknown>
+  error_kind?: string
+  error_detail?: string
+}
+
+export interface ShelfMetadataBackfillStartResponse {
+  started: boolean
+  reason?: string
+  job_id?: string
+  state: ShelfMetadataBackfillJobState
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value !== 'object') return JSON.stringify(value)
@@ -276,6 +310,13 @@ export const referencesApi = {
     api.get<ShelfMetadataBackfillScanResponse>(`/api/references/shelf/metadata/backfill/scan?limit=${encodeURIComponent(String(limit))}`),
   backfillShelfMetadata: (limit = 40, scanLimit = 240) =>
     api.post<ShelfMetadataBackfillResponse>('/api/references/shelf/metadata/backfill', {
+      limit,
+      scan_limit: scanLimit,
+    }),
+  shelfMetadataBackfillStatus: () =>
+    api.get<ShelfMetadataBackfillJobState>('/api/references/shelf/metadata/backfill/status'),
+  startShelfMetadataBackfill: (limit = 40, scanLimit = 240) =>
+    api.post<ShelfMetadataBackfillStartResponse>('/api/references/shelf/metadata/backfill/start', {
       limit,
       scan_limit: scanLimit,
     }),
