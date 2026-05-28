@@ -518,6 +518,25 @@ function qualityVerificationText(verification: Record<string, unknown> | undefin
     if (status === 'failed') return `Reader locate still failing: ${failed}/${total}`
     if (status === 'skipped') return 'No linked Reader locate event'
   }
+  if (type === 'shelf_metadata_repair') {
+    const status = normalizeTextValue(verification.status).toLowerCase()
+    const ready = Number(verification.export_ready_after || 0)
+    const total = Number(verification.target_count || 0)
+    const retryable = Number(verification.retryable || 0)
+    const unresolved = Number(verification.unresolved_after || 0)
+    if (verification.quality_ok === true || status === 'passed') return `Metadata export verified: ${ready}/${total}`
+    if (status === 'retryable') return `Metadata repair can retry: ${retryable}/${total}`
+    if (status === 'failed') return `Metadata still missing fields: ${unresolved}/${total}`
+    if (status === 'partial') return `Metadata partially ready: ${ready}/${total}`
+    if (status === 'skipped') return 'No shelf metadata target'
+  }
+  if (type === 'combined_shelf_metadata_verification') {
+    const shelf = verification.shelf_metadata as Record<string, unknown> | undefined
+    const research = verification.research_qa as Record<string, unknown> | undefined
+    const shelfText: string = qualityVerificationText(shelf)
+    const researchText: string = qualityVerificationText(research)
+    return [shelfText, researchText].filter(Boolean).join(' 路 ')
+  }
   if (type === 'combined_repair_verification') {
     const research = verification.research_qa as Record<string, unknown> | undefined
     const reader = verification.reader_locate as Record<string, unknown> | undefined
@@ -847,6 +866,9 @@ function qualityRepairRunStatusText(run: LibraryQualityRepairRun | null) {
   if (phase === 'verification_failed') return 'Run tracked: verification failed'
   if (phase === 'verification_blocked') return 'Run tracked: verification blocked'
   if (phase === 'verification_needs_reader_reopen') return 'Run tracked: needs reader reopen'
+  if (phase === 'shelf_metadata_verified') return 'Run tracked: metadata verified'
+  if (phase === 'shelf_metadata_retryable') return 'Run tracked: metadata retryable'
+  if (phase === 'shelf_metadata_unresolved') return 'Run tracked: metadata unresolved'
   if (status === 'completed' || phase === 'reindex_complete') return 'Run tracked: completed'
   if (status === 'failed' || phase === 'repair_failed') return 'Run tracked: failed'
   if (phase === 'source_reconversion_queued') return 'Run tracked: waiting for conversion'
@@ -859,6 +881,8 @@ function qualityRepairRunTagColor(run: LibraryQualityRepairRun | null) {
   const phase = normalizeTextValue(run?.phase).toLowerCase()
   if (phase === 'verification_passed') return 'success'
   if (phase === 'verification_failed' || phase === 'verification_blocked' || phase === 'verification_needs_reader_reopen') return 'warning'
+  if (phase === 'shelf_metadata_verified') return 'success'
+  if (phase === 'shelf_metadata_retryable' || phase === 'shelf_metadata_unresolved') return 'warning'
   if (status === 'completed' || phase === 'reindex_complete') return 'success'
   if (status === 'failed' || phase === 'repair_failed') return 'error'
   if (status === 'queued' || phase === 'source_reconversion_queued') return 'processing'
@@ -2105,7 +2129,7 @@ export default function LibraryPage() {
       metrics?: Record<string, string | number | boolean | null | undefined>
       before?: LibraryQualityActionSnapshot
       after?: LibraryQualityActionSnapshot
-      verification?: Record<string, string | number | boolean | null | undefined>
+      verification?: Record<string, unknown>
     } = {},
   ) => {
     const key = normalizeTextValue(stageKey).toLowerCase()
@@ -2588,17 +2612,22 @@ export default function LibraryPage() {
       }))
       .filter((entry) => entry.source_path || entry.source_name || entry.title || entry.raw)
       .slice(0, 12)
-    if (!candidates.length) return { ready: 0, changed: 0, retryable: 0 }
+    if (!candidates.length) return { ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown> }
     const res = await referencesApi.repairShelfMetadata(candidates as Array<Record<string, unknown>>, candidates.length)
     const ready = Number(res.ready || 0)
+    const exportReady = Number(res.acceptance?.export_ready_after || res.export_ready || ready)
     const changed = Number(res.changed || 0)
     const retryable = Number(res.retryable || 0)
+    const unresolved = Number(res.acceptance?.unresolved_after || res.unresolved || 0)
+    if (res.repair_run) {
+      setQualityRepairRun(res.repair_run as unknown as LibraryQualityRepairRun)
+    }
     if (retryable > 0) {
       message.warning(`Metadata repair queued for retry: ${retryable}`)
     } else if (changed > 0) {
       message.success(`Citation metadata repaired: ${changed}`)
     }
-    return { ready, changed, retryable }
+    return { ready, exportReady, changed, retryable, unresolved, verification: (res.verification || res.repair_run?.verification || {}) as Record<string, unknown> }
   }
 
   const applyQualityFailureRepairPlan = async (item: LibraryQualityFailureCase, action: LibraryQualityRepairAction) => {
@@ -2688,22 +2717,30 @@ export default function LibraryPage() {
     const targets = qualityFailureCases.filter((item) => qualityFailureCaseMatchesStage(item, stageKey)).slice(0, 3)
     if (!targets.length) {
       await openQualityArtifact('citation_cards', 'report')
-      return { targetCount: 0, targetIds: [] as string[], ready: 0, changed: 0, retryable: 0 }
+      return { targetCount: 0, targetIds: [] as string[], ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown> }
     }
     let changed = 0
     let ready = 0
+    let exportReady = 0
     let retryable = 0
+    let unresolved = 0
+    let verification: Record<string, unknown> = {}
     for (const item of targets) {
       const res = await repairQualityCaseShelfMetadata(item)
       changed += Number(res.changed || 0)
       ready += Number(res.ready || 0)
+      exportReady += Number(res.exportReady || 0)
       retryable += Number(res.retryable || 0)
+      unresolved += Number(res.unresolved || 0)
+      if (!Object.keys(verification).length && res.verification && Object.keys(res.verification).length) {
+        verification = res.verification
+      }
     }
     if (changed <= 0 && ready <= 0) {
       message.info('No repairable citation metadata found in the current failed cases.')
     }
     await store.loadQualityOverview('all')
-    return { targetCount: targets.length, targetIds: targets.map((item) => normalizeTextValue(item.id)).filter(Boolean), ready, changed, retryable }
+    return { targetCount: targets.length, targetIds: targets.map((item) => normalizeTextValue(item.id)).filter(Boolean), ready, exportReady, changed, retryable, unresolved, verification }
   }
 
   const refreshQualityOverviewSnapshot = async () => {
@@ -2724,7 +2761,7 @@ export default function LibraryPage() {
         targetIds?: string[]
         metrics?: Record<string, string | number | boolean | null | undefined>
         afterOverview?: LibraryQualityOverviewResponse | null
-        verification?: Record<string, string | number | boolean | null | undefined>
+        verification?: Record<string, unknown>
       } = {},
     ) => {
       const latestOverview = meta.afterOverview
@@ -2825,25 +2862,37 @@ export default function LibraryPage() {
         const rerun = result.targetCount > 0 && caseTarget ? await runQualityFailureCaseRerun(caseTarget) : null
         const afterOverview = await refreshQualityOverviewSnapshot()
         const rerunPassed = Boolean(rerun?.quality_ok || rerun?.status === 'passed')
+        const shelfVerification = result.verification && Object.keys(result.verification).length ? result.verification : {}
+        const qaVerification = qualityVerificationFromRerun(rerun)
+        const verification = Object.keys(shelfVerification).length && Object.keys(qaVerification).length
+          ? {
+            type: 'combined_shelf_metadata_verification',
+            quality_ok: Boolean(shelfVerification.quality_ok) && Boolean(qaVerification.quality_ok),
+            shelf_metadata: shelfVerification,
+            research_qa: qaVerification,
+          }
+          : (Object.keys(shelfVerification).length ? shelfVerification : qaVerification)
         recordStageResult({
-          status: result.retryable > 0 || (rerun && !rerunPassed) ? 'warning' : (result.changed > 0 || result.ready > 0 ? 'success' : 'info'),
+          status: result.retryable > 0 || result.unresolved > 0 || (rerun && !rerunPassed) ? 'warning' : (result.changed > 0 || result.ready > 0 ? 'success' : 'info'),
           summary: rerun
             ? (rerunPassed ? `Metadata repair verified: ${caseTarget?.id}` : `Metadata checked; QA still failing: ${caseTarget?.id}`)
             : (result.changed > 0
-              ? `Metadata repaired: ${result.changed}`
-              : (result.ready > 0 ? `Metadata already ready: ${result.ready}` : 'Opened citation quality report')),
+              ? (result.unresolved > 0 ? `Metadata repaired ${result.changed}; ${result.unresolved} still missing` : `Metadata repaired: ${result.changed}`)
+              : (result.exportReady > 0 ? `Metadata export ready: ${result.exportReady}` : (result.ready > 0 ? `Metadata already ready: ${result.ready}` : 'Opened citation quality report'))),
           detail: rerun?.failures?.length ? `${rerun.failures.length} failures remain` : (result.targetCount > 0 ? `${result.targetCount} failed cases checked` : undefined),
         }, {
           targetIds: result.targetIds,
           metrics: {
             changed: result.changed,
             ready: result.ready,
+            export_ready: result.exportReady,
             retryable: result.retryable,
+            unresolved: result.unresolved,
             target_count: result.targetCount,
             qa_rerun_quality_ok: rerun ? rerunPassed : false,
           },
           afterOverview,
-          verification: qualityVerificationFromRerun(rerun),
+          verification,
         })
         return
       }

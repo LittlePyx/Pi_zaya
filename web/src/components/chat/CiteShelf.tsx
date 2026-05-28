@@ -575,7 +575,7 @@ export function CiteShelf({
     const bibliographicEntry = Boolean(item.isInpaper || item.raw || item.citeFmt || hasDoi || item.externalDoi || item.externalDoiUrl)
     const needsRepair = shouldAutoRepairItem(item, display)
 
-    if (externalNeedsReview) chips.push('元数据待核对')
+    if (externalNeedsReview) chips.push('外部元数据校准中')
     if (bibliographicEntry && !hasDoi) chips.push(S.shelf_missing_doi)
     if (bibliographicEntry && !hasAuthors) chips.push(S.shelf_missing_author)
     if (bibliographicEntry && !hasVenue) chips.push(S.shelf_missing_venue)
@@ -586,7 +586,7 @@ export function CiteShelf({
     if (!chips.length) return { chips: [], tip: '', needsRepair }
 
     let tip = S.shelf_auto_fix_tip
-    if (externalNeedsReview) tip = item.externalMetadataReason || '外部元数据与原参考条目需要核对，标题/作者以原条目为准，DOI 和指标先作为线索。'
+    if (externalNeedsReview) tip = item.externalMetadataReason || '系统会以原参考条目为准自动比对 Crossref 与本地索引，DOI 和指标先作为校准线索。'
     else if (bibliographicEntry && !hasDoi) tip = S.shelf_no_doi_tip
     else if (hasMetaConflict) tip = S.shelf_conflict_tip
     else if (hasWeakStoredTitle && !hasWeakTitle) tip = S.shelf_weak_stored_tip

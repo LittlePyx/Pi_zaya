@@ -32,6 +32,7 @@ _PERSIST_FIELDS = (
     "conference_ccf",
     "summary_line",
 )
+_EXPORT_IDENTITY_FIELDS = ("source", "title", "authors", "venue", "year", "doi")
 
 
 def _text(value: Any) -> str:
@@ -423,6 +424,150 @@ def citation_metadata_quality(detail: Mapping[str, Any] | None) -> dict[str, Any
         "repairable": bool(_has_repair_seed(data)),
         "retryable": bool(status != "ready" and _has_repair_seed(data)),
         "doi": doi,
+    }
+
+
+def _counter_rows(counter: Mapping[str, int], limit: int = 8) -> list[dict[str, Any]]:
+    rows = sorted(counter.items(), key=lambda pair: (-int(pair[1]), pair[0]))
+    return [{"name": str(name), "count": int(count)} for name, count in rows[:limit]]
+
+
+def _quality_issue_codes(quality: Mapping[str, Any]) -> list[str]:
+    return [
+        str(issue.get("code") or "")
+        for issue in list((quality or {}).get("issues") or [])
+        if isinstance(issue, Mapping) and str(issue.get("code") or "")
+    ]
+
+
+def _summary_export_state(detail: Mapping[str, Any]) -> dict[str, Any]:
+    summary = _text(detail.get("summary_line") or detail.get("summaryLine"))
+    raw_contract = detail.get("summary_quality") or detail.get("summaryQuality")
+    contract = raw_contract if isinstance(raw_contract, Mapping) else {}
+    status = _text(contract.get("status")).lower()
+    source = _text(contract.get("source") or detail.get("summary_source") or detail.get("summarySource")).lower()
+    provider = _text(contract.get("provider") or detail.get("summary_provider") or detail.get("summaryProvider")).lower()
+    score = _int_value(contract.get("score")) if contract else 0
+    contract_ready = bool(contract.get("ok")) or status == "grounded"
+    export_ready = bool(contract.get("export_ready")) if "export_ready" in contract else bool(summary and (contract_ready or (source and source != "metadata")))
+    if not summary:
+        export_ready = False
+    return {
+        "present": bool(summary),
+        "export_ready": bool(export_ready),
+        "status": status or ("grounded" if export_ready else ("missing" if not summary else "fallback")),
+        "score": int(score),
+        "source": source,
+        "provider": provider,
+        "issues": list(contract.get("issues") or []) if isinstance(contract.get("issues"), list) else [],
+    }
+
+
+def citation_metadata_export_acceptance(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = _canonicalize_detail(detail)
+    raw_quality = data.get("metadata_quality") or data.get("metadataQuality")
+    quality = dict(raw_quality) if isinstance(raw_quality, Mapping) else citation_metadata_quality(data)
+    source = _text(data.get("source_path") or data.get("sourcePath") or data.get("source_name") or data.get("sourceName"))
+    title = _text(data.get("title") or data.get("card_title") or data.get("cardTitle"))
+    authors = _text(data.get("authors"))
+    venue = _text(data.get("venue"))
+    year = _text(data.get("year"))
+    doi = _norm_doi(data.get("doi") or data.get("doi_url") or data.get("doiUrl"))
+    missing_fields = set(str(field or "") for field in list(quality.get("missing_fields") or []) if str(field or ""))
+    field_ready = {
+        "source": bool(source) and "source" not in missing_fields,
+        "title": bool(title) and not _looks_weak_title(title) and "title" not in missing_fields,
+        "authors": bool(authors) and not _looks_weak_authors(authors) and "authors" not in missing_fields,
+        "venue": bool(venue) and not _looks_weak_venue(venue) and "venue" not in missing_fields,
+        "year": bool(re.fullmatch(r"(?:18|19|20)\d{2}", year)) and "year" not in missing_fields,
+        "doi": bool(doi) and "doi" not in missing_fields,
+    }
+    summary = _summary_export_state(data)
+    metadata_ready = bool(quality.get("ok")) or _text(quality.get("status")).lower() == "ready"
+    export_ready = bool(metadata_ready and all(field_ready.get(field) for field in _EXPORT_IDENTITY_FIELDS))
+    return {
+        "contract_version": 1,
+        "quality_ok": bool(metadata_ready),
+        "export_ready": export_ready,
+        "required_fields": list(_EXPORT_IDENTITY_FIELDS),
+        "field_ready": field_ready,
+        "missing_fields": [field for field in _EXPORT_IDENTITY_FIELDS if not field_ready.get(field)],
+        "issue_codes": _quality_issue_codes(quality),
+        "score": _int_value(quality.get("score")),
+        "doi": doi,
+        "summary": summary,
+        "summary_export_ready": bool(summary.get("export_ready")),
+        "summary_status": str(summary.get("status") or ""),
+    }
+
+
+def summarize_shelf_metadata_acceptance(results: list[Mapping[str, Any]]) -> dict[str, Any]:
+    rows = [item for item in list(results or []) if isinstance(item, Mapping)]
+    requested = len(rows)
+    export_ready_before = 0
+    export_ready_after = 0
+    summary_export_ready_after = 0
+    metadata_ready_before = 0
+    metadata_ready_after = 0
+    retryable = 0
+    failed = 0
+    unresolved = 0
+    field_counter: dict[str, int] = {}
+    issue_counter: dict[str, int] = {}
+    retryable_keys: list[str] = []
+    unresolved_keys: list[str] = []
+    failed_keys: list[str] = []
+    for item in rows:
+        key = _text(item.get("key"))
+        before = item.get("before") if isinstance(item.get("before"), Mapping) else {}
+        after = item.get("after") if isinstance(item.get("after"), Mapping) else {}
+        before_acc = item.get("before_export_acceptance") if isinstance(item.get("before_export_acceptance"), Mapping) else {}
+        after_acc = item.get("export_acceptance") if isinstance(item.get("export_acceptance"), Mapping) else {}
+        metadata_ready_before += 1 if (bool(before.get("ok")) or _text(before.get("status")).lower() == "ready") else 0
+        metadata_ready_after += 1 if (bool(after.get("ok")) or _text(after.get("status")).lower() == "ready") else 0
+        export_ready_before += 1 if bool(before_acc.get("export_ready")) else 0
+        export_ready_after += 1 if bool(after_acc.get("export_ready")) else 0
+        summary = after_acc.get("summary") if isinstance(after_acc.get("summary"), Mapping) else {}
+        summary_export_ready_after += 1 if bool(after_acc.get("summary_export_ready") or summary.get("export_ready")) else 0
+        is_retryable = bool(item.get("retryable"))
+        is_failed = _text(item.get("repair_status")).lower() == "error"
+        is_unresolved = not bool(after_acc.get("export_ready")) and not is_retryable
+        retryable += 1 if is_retryable else 0
+        failed += 1 if is_failed else 0
+        unresolved += 1 if is_unresolved else 0
+        if is_retryable and key:
+            retryable_keys.append(key)
+        if is_failed and key:
+            failed_keys.append(key)
+        if is_unresolved and key:
+            unresolved_keys.append(key)
+        for field in list(after_acc.get("missing_fields") or []):
+            text = _text(field)
+            if text:
+                field_counter[text] = field_counter.get(text, 0) + 1
+        for code in list(after_acc.get("issue_codes") or item.get("remaining_issue_codes") or []):
+            text = _text(code)
+            if text:
+                issue_counter[text] = issue_counter.get(text, 0) + 1
+    return {
+        "contract_version": 1,
+        "requested": int(requested),
+        "quality_ok": requested > 0 and export_ready_after == requested and retryable == 0 and failed == 0,
+        "metadata_ready_before": int(metadata_ready_before),
+        "metadata_ready_after": int(metadata_ready_after),
+        "metadata_ready_delta": int(metadata_ready_after - metadata_ready_before),
+        "export_ready_before": int(export_ready_before),
+        "export_ready_after": int(export_ready_after),
+        "export_ready_delta": int(export_ready_after - export_ready_before),
+        "summary_export_ready_after": int(summary_export_ready_after),
+        "retryable": int(retryable),
+        "failed": int(failed),
+        "unresolved_after": int(unresolved),
+        "remaining_fields": _counter_rows(field_counter),
+        "remaining_issue_codes": _counter_rows(issue_counter),
+        "retryable_keys": retryable_keys[:12],
+        "unresolved_keys": unresolved_keys[:12],
+        "failed_keys": failed_keys[:12],
     }
 
 
@@ -932,6 +1077,7 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
     original = _canonicalize_detail(detail)
     key = _text(original.get("key") or original.get("anchor") or original.get("doi") or original.get("title"))
     before = citation_metadata_quality(original)
+    before_acceptance = citation_metadata_export_acceptance({**original, "metadata_quality": before})
     try:
         local_meta = _metadata_from_reference_index(original, db_dir)
         cache_meta = _metadata_from_crossref_cache({**original, **local_meta}, db_dir)
@@ -950,6 +1096,7 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
             merged["doi"] = raw_doi
             merged["doi_url"] = _doi_url(raw_doi)
         after = citation_metadata_quality(merged)
+        after_acceptance = citation_metadata_export_acceptance({**merged, "metadata_quality": after})
         promoted_raw_doi = bool(raw_doi and _norm_doi(merged.get("doi") or merged.get("doi_url")) == raw_doi)
         changed = _changed_fields(original, merged)
         if promoted_raw_doi and "doi" not in changed:
@@ -964,6 +1111,7 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
         else:
             repair_status = "unchanged"
         merged["metadata_quality"] = after
+        merged["metadata_export_acceptance"] = after_acceptance
         merged["metadata_repair_status"] = repair_status
         if repair_sources:
             merged["metadata_repair_sources"] = repair_sources
@@ -995,12 +1143,15 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
             "repair_sources": repair_sources,
             "before": before,
             "after": after,
+            "before_export_acceptance": before_acceptance,
+            "export_acceptance": after_acceptance,
             "meta": merged,
             "persisted": bool(persisted_targets),
             "persisted_targets": persisted_targets,
         }
     except Exception as exc:
         error_kind, error_detail = _classify_error(exc)
+        after_acceptance = citation_metadata_export_acceptance({**original, "metadata_quality": before})
         return {
             "key": key,
             "ok": False,
@@ -1012,6 +1163,8 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
             "error_detail": error_detail,
             "before": before,
             "after": before,
+            "before_export_acceptance": before_acceptance,
+            "export_acceptance": after_acceptance,
             "meta": original,
             "persisted": False,
             "persisted_targets": [],
@@ -1026,6 +1179,7 @@ def repair_citation_metadata_batch(
 ) -> dict[str, Any]:
     limited = [item for item in list(items or []) if isinstance(item, Mapping)][: max(0, int(limit))]
     results = [repair_citation_metadata_item(item, db_dir=db_dir) for item in limited]
+    acceptance = summarize_shelf_metadata_acceptance(results)
     ready = sum(1 for item in results if bool((item.get("after") or {}).get("ok")))
     ready_before = sum(1 for item in results if bool((item.get("before") or {}).get("ok")))
     partial = sum(1 for item in results if str(item.get("repair_status") or "") == "partial")
@@ -1071,16 +1225,24 @@ def repair_citation_metadata_batch(
         "ok": failed == 0,
         "requested": len(limited),
         "ready": int(ready),
+        "export_ready": int(acceptance.get("export_ready_after") or 0),
         "partial": int(partial),
         "retryable": int(retryable),
         "failed": int(failed),
+        "unresolved": int(acceptance.get("unresolved_after") or 0),
         "changed": int(changed),
         "persisted": int(persisted),
+        "acceptance": acceptance,
         "impact": {
             "requested": len(limited),
             "ready_before": int(ready_before),
             "ready_after": int(ready),
             "ready_delta": int(ready - ready_before),
+            "export_ready_before": int(acceptance.get("export_ready_before") or 0),
+            "export_ready_after": int(acceptance.get("export_ready_after") or 0),
+            "export_ready_delta": int(acceptance.get("export_ready_delta") or 0),
+            "unresolved_after": int(acceptance.get("unresolved_after") or 0),
+            "summary_export_ready_after": int(acceptance.get("summary_export_ready_after") or 0),
             "changed": int(changed),
             "persisted": int(persisted),
             "before_avg_score": before_avg,

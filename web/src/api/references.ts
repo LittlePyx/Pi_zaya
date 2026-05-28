@@ -63,9 +63,49 @@ export interface ShelfMetadataRepairItem {
   error_detail?: string
   before: ShelfMetadataQuality
   after: ShelfMetadataQuality
+  before_export_acceptance?: Record<string, unknown>
+  export_acceptance?: Record<string, unknown>
   meta: Record<string, unknown>
   persisted?: boolean
   persisted_targets?: string[]
+}
+
+export interface ShelfMetadataRepairAcceptance {
+  contract_version: number
+  requested: number
+  quality_ok: boolean
+  metadata_ready_before: number
+  metadata_ready_after: number
+  metadata_ready_delta: number
+  export_ready_before: number
+  export_ready_after: number
+  export_ready_delta: number
+  summary_export_ready_after: number
+  retryable: number
+  failed: number
+  unresolved_after: number
+  remaining_fields?: Array<{ name: string, count: number }>
+  remaining_issue_codes?: Array<{ name: string, count: number }>
+  retryable_keys?: string[]
+  unresolved_keys?: string[]
+  failed_keys?: string[]
+}
+
+export interface ShelfMetadataRepairVerification {
+  type: 'shelf_metadata_repair' | string
+  status: 'passed' | 'retryable' | 'failed' | 'partial' | 'skipped' | string
+  quality_ok: boolean
+  target_count: number
+  metadata_ready_after: number
+  export_ready_after: number
+  changed: number
+  retryable: number
+  failed: number
+  unresolved_after: number
+  remaining_fields?: Array<{ name: string, count: number }>
+  remaining_issue_codes?: Array<{ name: string, count: number }>
+  summary_export_ready_after?: number
+  detail?: string
 }
 
 export interface ShelfMetadataRepairImpact {
@@ -73,6 +113,11 @@ export interface ShelfMetadataRepairImpact {
   ready_before: number
   ready_after: number
   ready_delta: number
+  export_ready_before?: number
+  export_ready_after?: number
+  export_ready_delta?: number
+  unresolved_after?: number
+  summary_export_ready_after?: number
   changed: number
   persisted: number
   before_avg_score: number
@@ -88,11 +133,17 @@ export interface ShelfMetadataRepairResponse {
   ok: boolean
   requested: number
   ready: number
+  export_ready?: number
   partial: number
   retryable: number
   failed: number
+  unresolved?: number
   changed: number
   persisted?: number
+  acceptance?: ShelfMetadataRepairAcceptance
+  verification?: ShelfMetadataRepairVerification
+  repair_run_id?: string
+  repair_run?: Record<string, unknown>
   impact?: ShelfMetadataRepairImpact
   items: ShelfMetadataRepairItem[]
 }

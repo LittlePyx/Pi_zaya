@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from api import reference_metadata_quality as mq
 from api.main import app
+from api.routers import library as library_router
 from api.routers import references as references_router
 
 
@@ -23,6 +24,7 @@ def test_shelf_metadata_repair_route_returns_quality_contract(tmp_path, monkeypa
 
     monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
     monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=tmp_path / "db"))
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
 
     client = TestClient(app)
     response = client.post(
@@ -51,6 +53,10 @@ def test_shelf_metadata_repair_route_returns_quality_contract(tmp_path, monkeypa
     assert item["meta"]["doi"] == "10.1561/2200000016"
     assert item["persisted"] is True
     assert payload["impact"]["ready_delta"] == 1
+    assert payload["acceptance"]["export_ready_after"] == 1
+    assert payload["verification"]["type"] == "shelf_metadata_repair"
+    assert payload["verification"]["quality_ok"] is True
+    assert payload["repair_run"]["verification"]["export_ready_after"] == 1
     assert payload["impact"]["changed_fields"]
 
 
@@ -87,6 +93,7 @@ def test_shelf_metadata_repair_hydrates_from_reference_index(tmp_path, monkeypat
 
     monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
     monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
 
     client = TestClient(app)
     response = client.post(
@@ -108,7 +115,9 @@ def test_shelf_metadata_repair_hydrates_from_reference_index(tmp_path, monkeypat
     assert response.status_code == 200
     payload = response.json()
     assert payload["ready"] == 1
+    assert payload["export_ready"] == 1
     assert payload["changed"] == 1
+    assert payload["repair_run"]["phase"] == "shelf_metadata_verified"
     assert payload["impact"]["repair_sources"] == [{"name": "reference_index", "count": 1}]
     item = payload["items"][0]
     assert item["repair_sources"] == ["reference_index"]

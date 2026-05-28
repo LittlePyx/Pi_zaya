@@ -537,7 +537,7 @@ export interface LibraryQualityActionHistoryItem {
   after?: LibraryQualityActionSnapshot
   delta?: LibraryQualityActionDelta
   improved?: boolean | null
-  verification?: Record<string, string | number | boolean | null | undefined>
+  verification?: Record<string, unknown>
   created_at: number
 }
 
@@ -835,7 +835,7 @@ export interface LibraryQualityRepairRun {
   target_names: string[]
   target_sources: string[]
   impact?: LibraryQualityRepairImpact | Record<string, unknown>
-  verification?: Record<string, string | number | boolean | string[] | null | undefined>
+  verification?: Record<string, unknown>
   detail: string
 }
 
@@ -884,7 +884,7 @@ export interface LibraryQualityActionHistoryBody {
   after?: LibraryQualityActionSnapshot
   delta?: LibraryQualityActionDelta
   improved?: boolean | null
-  verification?: Record<string, string | number | boolean | null | undefined>
+  verification?: Record<string, unknown>
   created_at?: number
 }
 

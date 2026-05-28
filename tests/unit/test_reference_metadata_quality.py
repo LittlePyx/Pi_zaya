@@ -208,6 +208,48 @@ def test_repair_hydrates_from_crossref_cache_without_network(tmp_path, monkeypat
     assert result["meta"]["metadata_quality"]["status"] == "ready"
 
 
+def test_repair_batch_reports_export_acceptance(tmp_path, monkeypatch):
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda detail: {
+        **dict(detail),
+        "title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+        "authors": "Gehm M, Brady D",
+        "venue": "Optics Express",
+        "year": "2007",
+        "doi": "10.1364/OE.15.014013",
+        "doi_url": "https://doi.org/10.1364/OE.15.014013",
+        "summary_line": "The abstract describes a single-shot compressive spectral imaging architecture.",
+        "summary_source": "abstract",
+        "summary_quality": {
+            "contract_version": 1,
+            "ok": True,
+            "status": "grounded",
+            "score": 94,
+            "source": "abstract",
+            "issues": [],
+            "export_ready": True,
+        },
+    })
+
+    result = mq.repair_citation_metadata_batch(
+        [
+            {
+                "key": "demo",
+                "source_path": "paper.md",
+                "title": "Reference 24",
+                "raw": "[24] Gehm M, Brady D. Optics Express, 2007. doi:10.1364/OE.15.014013",
+            }
+        ],
+        db_dir=tmp_path / "db",
+    )
+
+    assert result["export_ready"] == 1
+    assert result["acceptance"]["quality_ok"] is True
+    assert result["acceptance"]["export_ready_after"] == 1
+    assert result["acceptance"]["summary_export_ready_after"] == 1
+    assert result["impact"]["export_ready_delta"] == 1
+    assert result["items"][0]["export_acceptance"]["missing_fields"] == []
+
+
 def test_repair_normalizes_crossref_style_cache_record(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir()

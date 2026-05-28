@@ -1666,6 +1666,124 @@ class ReaderDocBody(BaseModel):
     source_path: str
 
 
+def _shelf_repair_text(value) -> str:
+    return str(value or "").strip()
+
+
+def _shelf_repair_int(value) -> int:
+    try:
+        n = int(float(str(value or "0").strip()))
+    except Exception:
+        return 0
+    return n if n > 0 else 0
+
+
+def _shelf_metadata_repair_targets(items: list[dict]) -> tuple[list[str], list[str]]:
+    names: list[str] = []
+    sources: list[str] = []
+    seen_names: set[str] = set()
+    seen_sources: set[str] = set()
+    for item in list(items or [])[:80]:
+        if not isinstance(item, dict):
+            continue
+        name = _shelf_repair_text(item.get("source_name") or item.get("sourceName") or item.get("title"))
+        source = _shelf_repair_text(item.get("source_path") or item.get("sourcePath") or name)
+        if name:
+            key = name.lower()
+            if key not in seen_names:
+                seen_names.add(key)
+                names.append(name)
+        if source:
+            key = source.replace("\\", "/").lower()
+            if key not in seen_sources:
+                seen_sources.add(key)
+                sources.append(source)
+    return names[:40], sources[:40]
+
+
+def _shelf_metadata_repair_verification(result: dict) -> dict:
+    acceptance = result.get("acceptance") if isinstance(result.get("acceptance"), dict) else {}
+    requested = _shelf_repair_int(result.get("requested"))
+    export_ready = _shelf_repair_int(acceptance.get("export_ready_after") or result.get("export_ready"))
+    metadata_ready = _shelf_repair_int(acceptance.get("metadata_ready_after") or result.get("ready"))
+    retryable = _shelf_repair_int(acceptance.get("retryable") or result.get("retryable"))
+    failed = _shelf_repair_int(acceptance.get("failed") or result.get("failed"))
+    unresolved = _shelf_repair_int(acceptance.get("unresolved_after") or result.get("unresolved"))
+    changed = _shelf_repair_int(result.get("changed"))
+    if requested <= 0:
+        status = "skipped"
+    elif export_ready >= requested and retryable <= 0 and failed <= 0 and unresolved <= 0:
+        status = "passed"
+    elif retryable > 0:
+        status = "retryable"
+    elif unresolved > 0 or failed > 0:
+        status = "failed"
+    else:
+        status = "partial"
+    quality_ok = status == "passed"
+    return {
+        "type": "shelf_metadata_repair",
+        "status": status,
+        "quality_ok": quality_ok,
+        "target_count": requested,
+        "metadata_ready_after": metadata_ready,
+        "export_ready_after": export_ready,
+        "changed": changed,
+        "retryable": retryable,
+        "failed": failed,
+        "unresolved_after": unresolved,
+        "remaining_fields": list(acceptance.get("remaining_fields") or [])[:8],
+        "remaining_issue_codes": list(acceptance.get("remaining_issue_codes") or [])[:8],
+        "summary_export_ready_after": _shelf_repair_int(acceptance.get("summary_export_ready_after")),
+        "detail": (
+            f"Metadata export verified for {export_ready}/{requested} shelf items."
+            if quality_ok
+            else (
+                f"Metadata repair can retry for {retryable}/{requested} shelf items."
+                if retryable > 0
+                else f"Metadata export still missing fields for {unresolved}/{requested} shelf items."
+            )
+        ),
+    }
+
+
+def _record_shelf_metadata_quality_run(*, result: dict, items: list[dict]) -> dict:
+    try:
+        from api.routers import library as library_router
+
+        verification = result.get("verification") if isinstance(result.get("verification"), dict) else _shelf_metadata_repair_verification(result)
+        names, sources = _shelf_metadata_repair_targets(items)
+        acceptance = result.get("acceptance") if isinstance(result.get("acceptance"), dict) else {}
+        impact = dict(result.get("impact") or {}) if isinstance(result.get("impact"), dict) else {}
+        impact["repair_kind"] = "shelf_metadata"
+        if acceptance:
+            impact["acceptance"] = acceptance
+        status = "completed" if bool(verification.get("quality_ok")) else ("info" if str(verification.get("status") or "") == "skipped" else "warning")
+        phase = "shelf_metadata_verified" if status == "completed" else (
+            "shelf_metadata_retryable" if str(verification.get("status") or "") == "retryable" else "shelf_metadata_unresolved"
+        )
+        return library_router._append_quality_repair_run(
+            {
+                "status": status,
+                "phase": phase,
+                "requested": result.get("requested"),
+                "enqueued": 0,
+                "repaired": result.get("changed"),
+                "failed": _shelf_repair_int(verification.get("failed")) + _shelf_repair_int(verification.get("unresolved_after")),
+                "skipped_busy": 0,
+                "needs_reindex": False,
+                "reindexed": True,
+                "target_names": names,
+                "target_sources": sources,
+                "impact": impact,
+                "verification": verification,
+                "detail": _shelf_repair_text(verification.get("detail")),
+            }
+        )
+    except Exception:
+        return {}
+
+
 _ASSET_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _MD_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
@@ -1710,7 +1828,15 @@ def repair_shelf_metadata(body: ShelfMetadataRepairBody):
     limit = 40
     if body.limit is not None:
         limit = max(1, min(80, int(body.limit)))
-    return repair_citation_metadata_batch(list(body.items or []), limit=limit, db_dir=get_settings().db_dir)
+    items = list(body.items or [])
+    result = repair_citation_metadata_batch(items, limit=limit, db_dir=get_settings().db_dir)
+    verification = _shelf_metadata_repair_verification(result)
+    result["verification"] = verification
+    repair_run = _record_shelf_metadata_quality_run(result=result, items=items[:limit])
+    if repair_run:
+        result["repair_run_id"] = str(repair_run.get("run_id") or "")
+        result["repair_run"] = repair_run
+    return result
 
 
 def _run_citation_card_polish_job(key: str, detail: dict) -> None:
