@@ -211,6 +211,47 @@ def test_bibliometrics_route_reuses_persisted_repair_cache(tmp_path, monkeypatch
     assert payload["summary_source"] == "abstract"
 
 
+def test_bibliometrics_route_attaches_quality_contract_to_enriched_result(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    def fake_enrich(detail):
+        return {
+            **dict(detail),
+            "title": "The missing cone problem and low-pass distortion in optical serial sectioning microscopy",
+            "authors": "Macias-Garza F, Bovik A C, Diller K R",
+            "venue": "IEEE Transactions on Acoustics, Speech, and Signal Processing",
+            "year": "1988",
+            "doi": "10.1109/TASSP.1988.1164940",
+            "doi_url": "https://doi.org/10.1109/TASSP.1988.1164940",
+        }
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "missing-cone",
+                "source_path": "source.md",
+                "raw": "[3] Macias-Garza F et al. The missing cone problem and low-pass distortion. 1988.",
+                "title": "Upstream reference",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["bibliometrics_checked"] is True
+    assert payload["metadata_quality"]["status"] == "ready"
+    assert payload["metadata_quality"]["ok"] is True
+    assert payload["metadata_export_acceptance"]["export_ready"] is True
+    assert payload["metadata_repair_status"] == "ready"
+    assert payload["doi"] == "10.1109/TASSP.1988.1164940"
+
+
 def test_shelf_metadata_backfill_route_scans_and_repairs_reference_index(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir(parents=True, exist_ok=True)

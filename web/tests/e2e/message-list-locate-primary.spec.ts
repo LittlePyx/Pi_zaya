@@ -525,6 +525,100 @@ test('citation shelf reflects actual reader locate result after opening source',
   }
 })
 
+test('citation shelf hydrates persisted quality-center metadata on open', async ({ page }) => {
+  await page.route('**/api/references/citation-meta', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+  await page.route('**/api/library/source-quality', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          conversion_quality: { status: 'good', has_review_issue: false, score: 98, issues: [] },
+        })),
+      }),
+    })
+  })
+  let bibliometricsRequests = 0
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    bibliometricsRequests += 1
+    const payload = route.request().postDataJSON() as { meta?: Record<string, unknown> } | undefined
+    const meta = payload?.meta || {}
+    if (bibliometricsRequests === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({}),
+      })
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...meta,
+        title: 'The missing cone problem and low-pass distortion in optical serial sectioning microscopy',
+        authors: 'Macias-Garza F, Bovik A C, Diller K R',
+        venue: 'IEEE Transactions on Acoustics, Speech, and Signal Processing',
+        year: '1988',
+        doi: '10.1109/TASSP.1988.1164940',
+        doi_url: 'https://doi.org/10.1109/TASSP.1988.1164940',
+        summary_line: 'The abstract explains how missing spatial frequencies create low-pass distortion in optical serial sectioning microscopy.',
+        summary_source: 'abstract',
+        summary_provider: 'crossref',
+        summary_quality: { contract_version: 1, ok: true, status: 'grounded', score: 94, source: 'abstract', provider: 'crossref', issues: [], export_ready: true },
+        bibliometrics_checked: true,
+        metadata_quality: { contract_version: 1, ok: true, status: 'ready', score: 100, missing_fields: [], issues: [], repairable: true, retryable: false, doi: '10.1109/TASSP.1988.1164940' },
+        metadata_repair_status: 'ready',
+        metadata_changed_fields: ['title', 'authors', 'venue', 'year', 'doi', 'doi_url'],
+        metadata_repair_sources: ['reference_index'],
+      }),
+    })
+  })
+  let repairRequests = 0
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    repairRequests += 1
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(shelfMetadataRepairFixture(payload.items || [], false)),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
+  const citeChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await expect.poll(() => bibliometricsRequests).toBeGreaterThan(0)
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  const shelf = page.getByTestId('citation-shelf')
+  await expect(shelf).toHaveClass(/translate-x-0/)
+  await expect.poll(() => bibliometricsRequests).toBeGreaterThan(1)
+  await expect(page.getByTestId('citation-shelf-item-title')).toContainText('The missing cone problem')
+  await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
+  await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
+  await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
+  await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
+  await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
+  expect(repairRequests).toBeLessThanOrEqual(1)
+})
+
 test('citation popover upgrades to waited LLM polish when it is ready', async ({ page }) => {
   await mockReaderDoc(page)
   let observedWaitSeconds = 0

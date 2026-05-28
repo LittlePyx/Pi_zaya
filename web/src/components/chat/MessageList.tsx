@@ -19,6 +19,7 @@ import {
   normalizeCiteDetail,
   normalizeShelfNote,
   normalizeShelfTags,
+  shelfItemMetadataQualityReady,
   shelfItemNeedsMetadataRepair,
   shelfItemRepairFingerprint,
   shelfStorageKey,
@@ -51,6 +52,8 @@ const SHELF_SAVED_MAX_ITEMS = 16
 const SHELF_SAVED_SUFFIX = ':saved_snapshots'
 const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
 const SHELF_AUTO_REPAIR_RETRY_MS = 15000
+const SHELF_METADATA_HYDRATE_BATCH_SIZE = 8
+const SHELF_METADATA_HYDRATE_RETRY_MS = 15000
 const MESSAGE_LIST_PREP_PERF_LIMIT = 180
 
 interface MessageListPrepPerfEvent {
@@ -4001,6 +4004,17 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.metadataRepairStatus === b.metadataRepairStatus
     && JSON.stringify(a.metadataRepairSources || []) === JSON.stringify(b.metadataRepairSources || [])
     && JSON.stringify(a.metadataChangedFields || []) === JSON.stringify(b.metadataChangedFields || [])
+    && a.externalMetadataStatus === b.externalMetadataStatus
+    && a.externalMetadataReason === b.externalMetadataReason
+    && a.externalMatchMethod === b.externalMatchMethod
+    && a.externalMatchScore === b.externalMatchScore
+    && a.externalTitleSimilarity === b.externalTitleSimilarity
+    && a.externalTitle === b.externalTitle
+    && a.externalAuthors === b.externalAuthors
+    && a.externalVenue === b.externalVenue
+    && a.externalYear === b.externalYear
+    && a.externalDoi === b.externalDoi
+    && a.externalDoiUrl === b.externalDoiUrl
     && a.summaryLine === b.summaryLine
     && a.summarySource === b.summarySource
     && a.summaryProvider === b.summaryProvider
@@ -4073,7 +4087,60 @@ function preferPositiveNumber(current: number, incoming: number): number {
   return 0
 }
 
+function preferStringArray(current: string[], incoming: string[], preferIncoming = false): string[] {
+  const cur = Array.isArray(current) ? current.map((item) => String(item || '').trim()).filter(Boolean) : []
+  const inc = Array.isArray(incoming) ? incoming.map((item) => String(item || '').trim()).filter(Boolean) : []
+  if (preferIncoming && inc.length > 0) return inc
+  return cur.length > 0 ? cur : inc
+}
+
+function metadataQualityRecordReady(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const rec = value as Record<string, unknown>
+  const status = String(rec.status || '').trim().toLowerCase()
+  return rec.ok === true || status === 'ready'
+}
+
+function preferMetadataQuality(
+  current: Record<string, unknown> | null,
+  incoming: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  const currentReady = metadataQualityRecordReady(current)
+  const incomingReady = metadataQualityRecordReady(incoming)
+  if (currentReady || !incomingReady) return current || incoming || null
+  return incoming
+}
+
+function shelfItemHasMetadataHydrationSeed(item: CiteShelfItem): boolean {
+  return Boolean(
+    item.raw
+    || item.citeFmt
+    || item.title
+    || item.doi
+    || item.doiUrl
+    || item.sourcePath
+    || item.sourceName
+  )
+}
+
+function shelfItemNeedsPersistedMetadataHydrate(item: CiteShelfItem): boolean {
+  if (!shelfItemHasMetadataHydrationSeed(item)) return false
+  if (shelfItemMetadataQualityReady(item)) return false
+  return shelfItemNeedsMetadataRepair(item) || !item.bibliometricsChecked || !item.metadataQuality
+}
+
+function shelfMetadataHydrateAttemptKey(item: CiteShelfItem): string {
+  return [
+    item.key,
+    shelfItemRepairFingerprint(item),
+  ].join('|')
+}
+
 function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteShelfItem {
+  const incomingMetadataReady = metadataQualityRecordReady(live.metadataQuality)
+  const currentMetadataReady = metadataQualityRecordReady(item.metadataQuality)
+  const metadataQuality = preferMetadataQuality(item.metadataQuality, live.metadataQuality)
+  const preferIncomingMetadata = incomingMetadataReady && !currentMetadataReady
   const mergedLike = {
     ...item,
     traceConvId: preferExistingText(item.traceConvId, live.traceConvId),
@@ -4110,6 +4177,23 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     summarySource: preferExistingText(item.summarySource, live.summarySource),
     summaryProvider: preferExistingText(item.summaryProvider, live.summaryProvider),
     summaryQuality: item.summaryQuality || live.summaryQuality,
+    metadataQuality,
+    metadataRepairStatus: preferIncomingMetadata
+      ? preferExistingText(live.metadataRepairStatus, item.metadataRepairStatus)
+      : preferExistingText(item.metadataRepairStatus, live.metadataRepairStatus),
+    metadataRepairSources: preferStringArray(item.metadataRepairSources, live.metadataRepairSources, preferIncomingMetadata),
+    metadataChangedFields: preferStringArray(item.metadataChangedFields, live.metadataChangedFields, preferIncomingMetadata),
+    externalMetadataStatus: preferExistingText(item.externalMetadataStatus, live.externalMetadataStatus),
+    externalMetadataReason: preferExistingText(item.externalMetadataReason, live.externalMetadataReason),
+    externalMatchMethod: preferExistingText(item.externalMatchMethod, live.externalMatchMethod),
+    externalMatchScore: preferPositiveNumber(item.externalMatchScore, live.externalMatchScore),
+    externalTitleSimilarity: preferPositiveNumber(item.externalTitleSimilarity, live.externalTitleSimilarity),
+    externalTitle: preferRicherField('title', item.externalTitle, live.externalTitle),
+    externalAuthors: preferRicherField('authors', item.externalAuthors, live.externalAuthors),
+    externalVenue: preferRicherField('venue', item.externalVenue, live.externalVenue),
+    externalYear: preferRicherField('year', item.externalYear, live.externalYear),
+    externalDoi: preferExistingText(item.externalDoi, live.externalDoi),
+    externalDoiUrl: preferExistingText(item.externalDoiUrl, live.externalDoiUrl),
     answerClaim: preferRicherField('title', item.answerClaim, live.answerClaim),
     headingPath: preferExistingText(item.headingPath, live.headingPath),
     evidenceQuote: preferRicherField('title', item.evidenceQuote, live.evidenceQuote),
@@ -4249,6 +4333,9 @@ export function MessageList({
   const shelfAutoRepairingKeySetRef = useRef(new Set<string>())
   const shelfAutoRepairFingerprintsRef = useRef<Record<string, string>>({})
   const shelfAutoRepairRetryAfterRef = useRef<Record<string, number>>({})
+  const shelfMetadataHydrateTimerRef = useRef<number | null>(null)
+  const shelfMetadataHydrateInFlightRef = useRef(new Set<string>())
+  const shelfMetadataHydrateAttemptedAtRef = useRef<Record<string, number>>({})
   const setShelfAutoRepairingKeySet = useCallback((nextSet: Set<string>) => {
     shelfAutoRepairingKeySetRef.current = nextSet
     setShelfAutoRepairingKeys(Array.from(nextSet))
@@ -4267,6 +4354,9 @@ export function MessageList({
       }
       if (shelfAutoRepairTimerRef.current !== null) {
         window.clearTimeout(shelfAutoRepairTimerRef.current)
+      }
+      if (shelfMetadataHydrateTimerRef.current !== null) {
+        window.clearTimeout(shelfMetadataHydrateTimerRef.current)
       }
     }
   }, [])
@@ -4489,9 +4579,15 @@ export function MessageList({
       window.clearTimeout(shelfAutoRepairTimerRef.current)
       shelfAutoRepairTimerRef.current = null
     }
+    if (shelfMetadataHydrateTimerRef.current !== null) {
+      window.clearTimeout(shelfMetadataHydrateTimerRef.current)
+      shelfMetadataHydrateTimerRef.current = null
+    }
     setShelfAutoRepairingKeySet(new Set())
     shelfAutoRepairFingerprintsRef.current = {}
     shelfAutoRepairRetryAfterRef.current = {}
+    shelfMetadataHydrateInFlightRef.current = new Set()
+    shelfMetadataHydrateAttemptedAtRef.current = {}
     if (prevStorageKey !== nextStorageKey) {
       const prevRevision = Number(shelfRevisionByKeyRef.current[prevStorageKey] || 0)
       const latest = latestShelfStateRef.current
@@ -4909,6 +5005,60 @@ export function MessageList({
       setShelfAutoRepairingKeySet(nextInFlight)
     }
   }, [applyShelfMetadataRepairCandidates, setShelfAutoRepairingKeySet])
+
+  useEffect(() => {
+    if (shelfMetadataHydrateTimerRef.current !== null) {
+      window.clearTimeout(shelfMetadataHydrateTimerRef.current)
+      shelfMetadataHydrateTimerRef.current = null
+    }
+    if (!shelfOpen || shelfItems.length <= 0) return
+    shelfMetadataHydrateTimerRef.current = window.setTimeout(() => {
+      shelfMetadataHydrateTimerRef.current = null
+      const now = Date.now()
+      const targets: Array<{ item: CiteShelfItem; attemptKey: string }> = []
+      for (const item of shelfItems) {
+        if (targets.length >= SHELF_METADATA_HYDRATE_BATCH_SIZE) break
+        if (item.key === shelfRepairLoadingKey) continue
+        if (shelfAutoRepairingKeySetRef.current.has(item.key)) continue
+        if (shelfMetadataHydrateInFlightRef.current.has(item.key)) continue
+        if (!shelfItemNeedsPersistedMetadataHydrate(item)) continue
+        const attemptKey = shelfMetadataHydrateAttemptKey(item)
+        const lastAttempt = Number(shelfMetadataHydrateAttemptedAtRef.current[attemptKey] || 0)
+        if (lastAttempt > 0 && now - lastAttempt < SHELF_METADATA_HYDRATE_RETRY_MS) continue
+        targets.push({ item, attemptKey })
+      }
+      if (targets.length <= 0) return
+
+      const inFlight = new Set(shelfMetadataHydrateInFlightRef.current)
+      for (const target of targets) {
+        inFlight.add(target.item.key)
+        shelfMetadataHydrateAttemptedAtRef.current[target.attemptKey] = now
+      }
+      shelfMetadataHydrateInFlightRef.current = inFlight
+      void Promise.all(targets.map(({ item }) => (
+        referencesApi.bibliometrics(item as unknown as Record<string, unknown>)
+          .catch(() => ({}))
+          .then((meta) => ({ key: item.key, meta }))
+      ))).then((results) => {
+        const updates = results
+          .filter((entry) => entry.meta && Object.keys(entry.meta).length > 0)
+          .map((entry) => ({ key: entry.key, metas: [entry.meta] }))
+        if (updates.length > 0) {
+          applyShelfMetadataRepairCandidates(updates)
+        }
+      }).finally(() => {
+        const nextInFlight = new Set(shelfMetadataHydrateInFlightRef.current)
+        for (const target of targets) nextInFlight.delete(target.item.key)
+        shelfMetadataHydrateInFlightRef.current = nextInFlight
+      })
+    }, 160)
+    return () => {
+      if (shelfMetadataHydrateTimerRef.current !== null) {
+        window.clearTimeout(shelfMetadataHydrateTimerRef.current)
+        shelfMetadataHydrateTimerRef.current = null
+      }
+    }
+  }, [applyShelfMetadataRepairCandidates, shelfItems, shelfOpen, shelfRepairLoadingKey])
 
   useEffect(() => {
     if (shelfAutoRepairTimerRef.current !== null) {

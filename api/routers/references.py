@@ -30,6 +30,8 @@ from api.reference_ui import (
 from api.reference_card_quality import refs_pack_has_full_llm_copy
 from api.reference_metadata_quality import (
     backfill_reference_metadata,
+    citation_metadata_export_acceptance,
+    citation_metadata_quality,
     hydrate_repaired_citation_metadata,
     repair_citation_metadata_batch,
     scan_reference_metadata_backfill_targets,
@@ -1837,6 +1839,25 @@ def get_reference_citation_meta(body: CitationMetaBody):
     )
 
 
+def _bibliometrics_quality_contract(meta: dict | None) -> dict:
+    data = dict(meta or {})
+    quality = data.get("metadata_quality") if isinstance(data.get("metadata_quality"), dict) else None
+    if not quality:
+        quality = citation_metadata_quality(data)
+    acceptance = citation_metadata_export_acceptance({**data, "metadata_quality": quality})
+    data["metadata_quality"] = quality
+    data["metadata_export_acceptance"] = acceptance
+    data["bibliometrics_checked"] = True
+    current_status = str(data.get("metadata_repair_status") or "").strip().lower()
+    if bool(quality.get("ok")):
+        data["metadata_repair_status"] = current_status if current_status in {"ready", "repaired"} else "ready"
+    elif bool(quality.get("retryable")):
+        data["metadata_repair_status"] = current_status or "retryable"
+    else:
+        data["metadata_repair_status"] = current_status or "partial"
+    return data
+
+
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     meta = body.meta or {}
@@ -1848,9 +1869,12 @@ def get_bibliometrics(body: BibliometricsBody):
         else {}
     )
     if bool(quality.get("ok")) and bool(acceptance.get("export_ready")):
-        return hydrated
+        return _bibliometrics_quality_contract(hydrated)
     seed = {**dict(meta or {}), **dict(hydrated or {})}
-    return enrich_citation_detail_meta(seed)
+    enriched = enrich_citation_detail_meta(seed)
+    if not isinstance(enriched, dict):
+        enriched = {}
+    return _bibliometrics_quality_contract({**seed, **enriched})
 
 
 @router.post("/shelf/metadata/repair")
