@@ -1976,6 +1976,24 @@ body.kb-reader-resizing .kb-reader-content {
   background: color-mix(in srgb, var(--accent) 13%, var(--panel));
 }
 
+.kb-shelf-source-open.is-ready {
+  border-color: color-mix(in srgb, #10b981 36%, var(--border));
+  background: color-mix(in srgb, #10b981 10%, var(--panel));
+  color: color-mix(in srgb, #047857 82%, var(--text-main));
+}
+
+.kb-shelf-source-open.is-partial {
+  border-color: color-mix(in srgb, #2563eb 28%, var(--border));
+  background: color-mix(in srgb, #2563eb 8%, var(--panel));
+  color: color-mix(in srgb, #1d4ed8 78%, var(--text-main));
+}
+
+.kb-shelf-source-open.is-review {
+  border-color: color-mix(in srgb, #f59e0b 38%, var(--border));
+  background: color-mix(in srgb, #f59e0b 12%, var(--panel));
+  color: color-mix(in srgb, #b45309 86%, var(--text-main));
+}
+
 .kb-shelf-item-title {
   color: var(--text-main);
   font-size: clamp(12.5px, 0.86rem, 14px);
@@ -2345,6 +2363,45 @@ body.kb-reader-resizing .kb-reader-content {
   font-size: 9.5px;
   line-height: 1;
   white-space: nowrap;
+}
+
+.kb-shelf-source-open-quality {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, var(--msg-user-bg));
+  color: color-mix(in srgb, var(--text-main) 68%, transparent);
+  font-size: 9.5px;
+  line-height: 1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.kb-shelf-source-open-quality.is-ready {
+  border-color: color-mix(in srgb, #10b981 34%, var(--border));
+  background: color-mix(in srgb, #10b981 9%, var(--panel));
+  color: color-mix(in srgb, #047857 78%, var(--text-main));
+}
+
+.kb-shelf-source-open-quality.is-partial {
+  border-color: color-mix(in srgb, #2563eb 28%, var(--border));
+  background: color-mix(in srgb, #2563eb 8%, var(--panel));
+  color: color-mix(in srgb, #1d4ed8 76%, var(--text-main));
+}
+
+.kb-shelf-source-open-quality.is-review {
+  border-color: color-mix(in srgb, #f59e0b 34%, var(--border));
+  background: color-mix(in srgb, #f59e0b 10%, var(--panel));
+  color: color-mix(in srgb, #b45309 84%, var(--text-main));
+}
+
+.kb-shelf-source-open-quality.is-missing {
+  border-color: color-mix(in srgb, #ef4444 30%, var(--border));
+  background: color-mix(in srgb, #ef4444 8%, var(--panel));
+  color: color-mix(in srgb, #b91c1c 78%, var(--text-main));
 }
 
 .kb-shelf-dup {

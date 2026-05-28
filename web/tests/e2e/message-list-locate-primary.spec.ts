@@ -549,8 +549,14 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
   await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-partial/)
 
   await popover.locator('.kb-cite-pop-close').click()
+  await page.getByTestId('citation-shelf-open-source').click()
+  const openPayload = page.getByTestId('message-list-open-payload')
+  await expect(openPayload).toContainText(READER_REGRESSION_SOURCE_PATH)
+  await expect(openPayload).toContainText('"strictLocate": false')
+
   await page.getByTestId('citation-shelf-add-visible').click()
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
@@ -595,11 +601,13 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   if (csvPath) {
     const csv = await readFile(csvPath, 'utf8')
     expect(csv).toContain('title,authors,year,venue,doi,source,source_quality_status,source_quality_issues')
+    expect(csv).toContain('source_open_status,source_open_precision,source_open_reason')
     expect(csv).toContain('summary_source,summary_provider,summary_quality_status,summary_quality_score,summary')
     expect(csv).toContain('The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
     expect(csv).toContain('Macias-Garza F, Bovik A C, Diller K R')
     expect(csv).toContain('IEEE Transactions on Acoustics, Speech, and Signal Processing')
     expect(csv).toContain('10.1109/tassp.1988.1164940')
+    expect(csv).toContain('partial,section')
     expect(csv).toContain('abstract,crossref,grounded,94')
   }
 })

@@ -45,6 +45,17 @@ const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
 type GroupMode = 'none' | 'tag' | 'source'
 type SourceQualityByPath = Record<string, LibrarySourceQualityItem>
 type ShelfExportKind = 'bib' | 'csv' | 'ris'
+type SourceOpenQualityTone = 'ready' | 'partial' | 'review' | 'missing'
+
+interface SourceOpenQualityView {
+  status: 'ready' | 'partial' | 'repairing' | 'missing'
+  precision: 'exact_anchor' | 'page' | 'section' | 'source_only' | 'needs_repair' | 'missing'
+  label: string
+  reason: string
+  tone: SourceOpenQualityTone
+  canOpen: boolean
+  strictLocate: boolean
+}
 
 const GROUP_MODE_LABEL = (S: Record<string, string>): Record<GroupMode, string> => ({
   none: S.shelf_no_group,
@@ -164,6 +175,106 @@ const sourceQualityStatus = (quality?: ConversionQualitySummary | null): string 
 
 const sourceQualityNeedsReview = (quality?: ConversionQualitySummary | null): boolean =>
   Boolean(quality?.has_review_issue) || ['warning', 'error'].includes(sourceQualityStatus(quality))
+
+const sourceQualityIssueReason = (quality?: ConversionQualitySummary | null): string => {
+  if (!quality) return ''
+  const issue = (quality.issues || []).find((item) => item?.label || item?.code)
+  return String(issue?.label || issue?.code || quality.summary || quality.label || quality.status || '').trim()
+}
+
+const sourceQualityForItem = (
+  item: CiteShelfItem,
+  sourceQualityByPath: SourceQualityByPath,
+): ConversionQualitySummary | null => {
+  const sourcePath = String(item.sourcePath || '').trim()
+  return sourcePath ? sourceQualityByPath[sourcePath]?.conversion_quality || null : null
+}
+
+const sourceOpenQualityView = (
+  item: CiteShelfItem,
+  sourceQuality: ConversionQualitySummary | null | undefined,
+  S: Record<string, string>,
+): SourceOpenQualityView => {
+  const sourcePath = String(item.sourcePath || '').trim()
+  if (!sourcePath) {
+    return {
+      status: 'missing',
+      precision: 'missing',
+      label: S.shelf_source_open_missing,
+      reason: S.shelf_source_open_missing,
+      tone: 'missing',
+      canOpen: false,
+      strictLocate: false,
+    }
+  }
+  if (sourceQualityNeedsReview(sourceQuality)) {
+    const issue = sourceQualityIssueReason(sourceQuality)
+    return {
+      status: 'repairing',
+      precision: 'needs_repair',
+      label: S.shelf_source_open_repair,
+      reason: issue ? `${S.shelf_source_open_repair}: ${issue}` : S.shelf_source_open_repair,
+      tone: 'review',
+      canOpen: true,
+      strictLocate: false,
+    }
+  }
+
+  const blockId = String(item.blockId || '').trim()
+  const anchorId = String(item.anchorId || '').trim()
+  if (blockId || anchorId) {
+    const anchor = anchorId || blockId
+    return {
+      status: 'ready',
+      precision: 'exact_anchor',
+      label: S.shelf_source_open_exact,
+      reason: anchor ? `${S.shelf_source_open_exact}: ${anchor}` : S.shelf_source_open_exact,
+      tone: 'ready',
+      canOpen: true,
+      strictLocate: true,
+    }
+  }
+
+  const pageStart = Number(item.pageStart || 0)
+  const pageEnd = Number(item.pageEnd || 0)
+  if ((Number.isFinite(pageStart) && pageStart > 0) || (Number.isFinite(pageEnd) && pageEnd > 0)) {
+    const pageLabel = pageStart > 0 && pageEnd > 0 && pageEnd !== pageStart
+      ? `${pageStart}-${pageEnd}`
+      : String(pageStart || pageEnd)
+    return {
+      status: 'partial',
+      precision: 'page',
+      label: S.shelf_source_open_page,
+      reason: pageLabel ? `${S.shelf_source_open_page}: p.${pageLabel}` : S.shelf_source_open_page,
+      tone: 'partial',
+      canOpen: true,
+      strictLocate: false,
+    }
+  }
+
+  const section = String(item.headingPath || item.locationLabel || item.cardLocator || '').trim()
+  if (section) {
+    return {
+      status: 'partial',
+      precision: 'section',
+      label: S.shelf_source_open_section,
+      reason: `${S.shelf_source_open_section}: ${section}`,
+      tone: 'partial',
+      canOpen: true,
+      strictLocate: false,
+    }
+  }
+
+  return {
+    status: 'partial',
+    precision: 'source_only',
+    label: S.shelf_source_open_file,
+    reason: S.shelf_source_open_file,
+    tone: 'partial',
+    canOpen: true,
+    strictLocate: false,
+  }
+}
 
 const sourceListKey = (sources: Array<{ source_path: string; source_name?: string }>): string =>
   sources.map((item) => `${item.source_path}\t${item.source_name || ''}`).join('\n')
@@ -472,18 +583,27 @@ export function CiteShelf({
     let duplicateItems = 0
     let summaryReady = 0
     let summaryReview = 0
+    let sourceOpenable = 0
+    let sourceOpenExact = 0
+    let sourceOpenPartial = 0
+    let sourceOpenReview = 0
     for (const item of items) {
       const display = citationDisplay(item)
       const needsMetadataReview = shouldAutoRepairItem(item, display)
       const isDuplicate = (duplicateCountByIdentity[paperIdentity(item)] || 0) > 1
       const hasSummary = Boolean(String(item.summaryLine || citationCardView(item).summary || '').trim())
       const summaryView = summaryQualityView(item, S)
+      const sourceOpenView = sourceOpenQualityView(item, sourceQualityForItem(item, sourceQualityByPath), S)
 
       if (needsMetadataReview) metadataReview += 1
       else metadataReadyItems += 1
       if (isDuplicate) duplicateItems += 1
       if (hasSummary && summaryView.ok) summaryReady += 1
       else summaryReview += 1
+      if (sourceOpenView.status === 'repairing') sourceOpenReview += 1
+      if (sourceOpenView.canOpen && sourceOpenView.status !== 'repairing') sourceOpenable += 1
+      if (sourceOpenView.precision === 'exact_anchor') sourceOpenExact += 1
+      if (sourceOpenView.status === 'partial') sourceOpenPartial += 1
     }
     const total = items.length
     const summaryRate = total > 0 ? Math.round((summaryReady / total) * 100) : 0
@@ -494,9 +614,13 @@ export function CiteShelf({
       duplicateItems,
       summaryRate,
       summaryReview,
-      status: total <= 0 ? 'empty' : metadataReview > 0 ? 'review' : 'ready',
+      sourceOpenable,
+      sourceOpenExact,
+      sourceOpenPartial,
+      sourceOpenReview,
+      status: total <= 0 ? 'empty' : (metadataReview > 0 || sourceOpenReview > 0) ? 'review' : 'ready',
     }
-  }, [S, duplicateCountByIdentity, items])
+  }, [S, duplicateCountByIdentity, items, sourceQualityByPath])
 
   const visibleItems = useMemo(() => {
     const keyword = searchText.trim().toLowerCase()
@@ -817,6 +941,9 @@ export function CiteShelf({
         'source',
         'source_quality_status',
         'source_quality_issues',
+        'source_open_status',
+        'source_open_precision',
+        'source_open_reason',
         'reference_num',
         'citation_count',
         'journal_if',
@@ -830,10 +957,7 @@ export function CiteShelf({
         'summary',
       ]
       const rows = exportItems.map((item) => ([
-        (() => {
-          const sourcePath = String(item.sourcePath || '').trim()
-          return sourcePath ? sourceQualityByPath[sourcePath]?.conversion_quality : null
-        })(),
+        sourceQualityForItem(item, sourceQualityByPath),
         item,
       ] as const)).map(([sourceQuality, item]) => ([
         citationCardView(item).header.title || item.title || item.main,
@@ -844,6 +968,9 @@ export function CiteShelf({
         item.sourceName || item.sourcePath,
         sourceQuality?.status || '',
         (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
+        sourceOpenQualityView(item, sourceQuality, S).status,
+        sourceOpenQualityView(item, sourceQuality, S).precision,
+        sourceOpenQualityView(item, sourceQuality, S).reason,
         item.num || '',
         item.citationCount || 0,
         item.journalIf,
@@ -1063,6 +1190,20 @@ export function CiteShelf({
                   {shelfReadiness.duplicateItems > 0 ? (
                     <span className="kb-shelf-readiness-chip is-review">
                       {S.shelf_readiness_dups.replace('{n}', String(shelfReadiness.duplicateItems))}
+                    </span>
+                  ) : null}
+                  {shelfReadiness.sourceOpenReview > 0 ? (
+                    <span className="kb-shelf-readiness-chip is-review">
+                      {S.shelf_readiness_source_open_review.replace('{n}', String(shelfReadiness.sourceOpenReview))}
+                    </span>
+                  ) : (
+                    <span className="kb-shelf-readiness-chip">
+                      {S.shelf_readiness_source_open_ready.replace('{n}', String(shelfReadiness.sourceOpenable))}
+                    </span>
+                  )}
+                  {shelfReadiness.sourceOpenPartial > 0 ? (
+                    <span className="kb-shelf-readiness-chip is-calibrating">
+                      {S.shelf_readiness_source_open_partial.replace('{n}', String(shelfReadiness.sourceOpenPartial))}
                     </span>
                   ) : null}
                   {shelfReadiness.summaryReview > 0 ? (
@@ -1289,6 +1430,8 @@ export function CiteShelf({
                         ? summarySourceLabel(item.summarySource, item.summaryProvider)
                         : summarySourceLabel('citation_card')
                       const shelfSummaryQuality = summaryQualityView(item, S)
+                      const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
+                      const itemSourceOpenQuality = sourceOpenQualityView(item, itemSourceQuality, S)
                       const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
                       const tagOptions = [...TAG_PRESETS, ...allTags]
                         .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
@@ -1335,9 +1478,9 @@ export function CiteShelf({
                               {item.sourcePath && onOpenSource ? (
                                 <button
                                   type="button"
-                                  className="kb-shelf-source-open"
+                                  className={`kb-shelf-source-open is-${itemSourceOpenQuality.tone}`}
                                   aria-label={S.locate_label}
-                                  title={S.locate_label}
+                                  title={itemSourceOpenQuality.reason || S.locate_label}
                                   data-testid="citation-shelf-open-source"
                                   onClick={(event) => {
                                     event.stopPropagation()
@@ -1402,6 +1545,13 @@ export function CiteShelf({
                               {duplicateCount > 1 ? (
                                 <span className="kb-shelf-dup">{S.shelf_dup.replace('{n}', String(duplicateCount))}</span>
                               ) : null}
+                              <span
+                                className={`kb-shelf-source-open-quality is-${itemSourceOpenQuality.tone}`}
+                                data-testid="citation-shelf-source-open-quality"
+                                title={itemSourceOpenQuality.reason}
+                              >
+                                {itemSourceOpenQuality.label}
+                              </span>
                               {itemTags.map((tag) => (
                                 <span key={`${item.key}-tag-${tag}`} className="kb-shelf-tag">
                                   #{tag}
