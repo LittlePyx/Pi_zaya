@@ -739,6 +739,47 @@ def test_validate_case_accepts_scientific_translation_synonyms():
     assert quality["ok"] is True
 
 
+def test_validate_case_accepts_super_resolution_as_resolution_alias():
+    fixture = load_fixture()
+    case = _case_by_id(fixture, "s2ism-thick-samples")
+    source_path = source_path_for_doc(fixture, "s2ism")
+    result = {
+        "status": "done",
+        "done": True,
+        "user_msg_id": 104,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "s2ISM 同时讨论超分辨、SNR 和 optical sectioning；厚样本会带来离焦背景。",
+            "cite_details": [
+                {
+                    "source_path": source_path,
+                    "source_name": "Structured detection for high-SNR image scanning microscopy in thick samples",
+                    "is_inpaper": False,
+                }
+            ],
+        },
+        "refs_payload": {
+            "104": {
+                "hits": [
+                    {
+                        "text": "Structured detection improves sectioning and SNR.",
+                        "ui_meta": {
+                            "source_path": source_path,
+                            "display_name": "Structured detection for high-SNR image scanning microscopy in thick samples",
+                            "summary_line": "s2ISM explains the trade-off between super-resolution, SNR and sectioning.",
+                            "why_line": "The user asks about thick samples, and this card points to that trade-off.",
+                        },
+                    }
+                ]
+            }
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+
+    assert quality["ok"] is True
+
+
 def test_validate_case_accepts_foveated_chinese_paraphrase():
     fixture = load_fixture()
     case = _case_by_id(fixture, "foveated-dynamic-supersampling")

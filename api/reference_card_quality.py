@@ -408,7 +408,7 @@ def citation_detail_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
             fail("raw_markdown_visible", field=field, detail=text[:120])
         if _has_template_phrase(text):
             fail("template_phrase_visible", field=field, detail=text[:120])
-        if field in {"card_takeaway", "card_claim", "card_context_summary", "card_support_explanation"} and _looks_redundant_narrative_metadata(text, data):
+        if field in {"card_takeaway", "card_claim", "card_context_summary"} and _looks_redundant_narrative_metadata(text, data):
             fail("narrative_metadata_repeated", field=field, detail=text[:120])
     comparable_visible = [
         (field, text)
@@ -648,7 +648,7 @@ def _shelf_metadata_contract(
     source_open = _source_clickable(data)
     has_summary = len(_text(summary)) >= 24
     title_ready = len(_text(title)) >= 8 and not _WEAK_SHELF_TITLE_RE.match(_text(title))
-    bibliographic = route == "system_b" or bool(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry")))
+    bibliographic = route == "system_b"
     external_status = _norm(data.get("external_metadata_status") or data.get("externalMetadataStatus"))
     untrusted_external = external_status in {"candidate", "conflict"}
     export_ready = bool(title_ready and source_identity and has_author and has_venue and has_year and has_doi)

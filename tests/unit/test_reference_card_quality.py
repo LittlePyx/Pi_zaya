@@ -306,13 +306,38 @@ def test_citation_detail_quality_rejects_metadata_repeated_in_card_copy():
     assert "narrative_metadata_repeated" in names
 
 
+def test_citation_detail_quality_accepts_system_b_support_relation_language():
+    quality = citation_detail_quality(
+        {
+            "num": 4,
+            "anchor": "r4",
+            "is_inpaper": True,
+            "source_name": "SCINeRF Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+            "title": "Distributed Optimization and Statistical Learning via ADMM",
+            "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+            "heading_path": "SCINeRF / 2. Related Work",
+            "answer_claim": "ADMM is prior optimization background, not a new SCINeRF invention.",
+            "citation_context": "Most existing methods employ ADMM-based optimization for snapshot compressive imaging.",
+            "card_takeaway": "This upstream work provides the optimization framework behind the cited ADMM method.",
+            "card_support_explanation": "It maps the answer claim back to a reference cited by the current paper.",
+            "system_b_trace_complete": True,
+            "system_b_trace_score": 0.82,
+            "system_b_trace_reference": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is True
+    assert "narrative_metadata_repeated" not in names
+
+
 def test_citation_detail_quality_accepts_grounded_system_b_card():
     quality = citation_detail_quality(
         {
             "num": 4,
             "anchor": "r4",
             "is_inpaper": True,
-            "source_name": "SCINeRF.pdf",
+            "source_name": "SCINeRF Neural Radiance Fields from a Snapshot Compressive Image.pdf",
             "title": "Distributed Optimization and Statistical Learning via ADMM",
             "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
             "heading_path": "SCINeRF / 2. Related Work / Snapshot Compressive Imaging",
@@ -468,6 +493,26 @@ def test_citation_shelf_item_quality_accepts_exportable_system_b_item():
     assert quality["ok"] is True
     assert quality["route"] == "system_b"
     assert quality["title"].startswith("Distributed Optimization")
+
+
+def test_citation_shelf_item_quality_treats_system_a_raw_as_evidence_not_bibliography():
+    quality = citation_shelf_item_quality(
+        {
+            "num": 1,
+            "anchor": "a1",
+            "source_name": "SCINeRF Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+            "source_path": "scinerf.en.md",
+            "title": "3.2 Image Formation Model of Video SCI",
+            "raw": "Due to the mask modulation, the image restoration problem is not ill-posed anymore.",
+            "evidence_quote": "Due to the mask modulation, the image restoration problem is not ill-posed anymore.",
+            "summary_line": "This evidence explains why the SCI forward model can recover virtual frames from a compressed image.",
+        }
+    )
+
+    assert quality["ok"] is True
+    assert quality["metadata"]["bibliographic"] is False
+    assert quality["metadata"]["metadata_ready"] is True
+    assert quality["metadata"]["review_needed"] is False
 
 
 def test_citation_shelf_item_quality_rejects_placeholder_summary_and_markdown():

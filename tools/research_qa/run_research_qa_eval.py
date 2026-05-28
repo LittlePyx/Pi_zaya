@@ -154,7 +154,7 @@ def _term_aliases(term: str) -> list[str]:
         "重要": ["重要", "重点", "重点区域", "关键", "变化剧烈", "边缘", "纹理", "salient", "important"],
         "wave": ["wave", "wave optics", "波动", "波前", "光场", "角度信息"],
         "重聚焦": ["重聚焦", "重新对焦", "重对焦", "refocus", "refocusing"],
-        "resolution": ["resolution", "分辨率"],
+        "resolution": ["resolution", "分辨率", "超分辨", "超分辨率", "空间分辨", "横向分辨率", "轴向分辨率"],
         "noise": ["noise", "噪声"],
         "ray tracing": ["ray tracing", "ray-tracing", "ray transfer matrix", "射线追踪"],
         "SNR": ["SNR", "signal-to-noise", "signal to noise", "信噪比"],
