@@ -55,12 +55,24 @@ def _doi_url(doi: Any) -> str:
     return f"https://doi.org/{clean}" if clean else ""
 
 
+def _raw_reference_text(detail: Mapping[str, Any] | None) -> str:
+    data = detail or {}
+    return _text(
+        data.get("raw")
+        or data.get("cite_fmt")
+        or data.get("citeFmt")
+        or data.get("card_reference_entry")
+        or data.get("cardReferenceEntry")
+    )
+
+
 def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
     out = dict(detail or {})
     for canonical, aliases in {
         "doi_url": ("doiUrl",),
         "cite_fmt": ("citeFmt",),
         "card_title": ("cardTitle",),
+        "card_reference_entry": ("cardReferenceEntry",),
         "source_path": ("sourcePath",),
         "source_name": ("sourceName",),
         "ref_num": ("refNum", "reference_num", "referenceNum"),
@@ -71,8 +83,14 @@ def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
             if _text(out.get(alias)):
                 out[canonical] = out.get(alias)
                 break
+    reference_entry = _text(out.get("card_reference_entry") or out.get("cardReferenceEntry"))
+    if reference_entry:
+        if not _text(out.get("raw")):
+            out["raw"] = reference_entry
+        if not _text(out.get("cite_fmt")):
+            out["cite_fmt"] = reference_entry
     if not _text(out.get("doi")):
-        raw_doi = _norm_doi(out.get("doi_url") or out.get("doiUrl") or out.get("raw") or out.get("cite_fmt"))
+        raw_doi = _norm_doi(out.get("doi_url") or out.get("doiUrl") or _raw_reference_text(out))
         if raw_doi:
             out["doi"] = raw_doi
             if not _text(out.get("doi_url")):
@@ -133,6 +151,8 @@ def _has_repair_seed(detail: Mapping[str, Any]) -> bool:
             "raw",
             "cite_fmt",
             "citeFmt",
+            "card_reference_entry",
+            "cardReferenceEntry",
             "title",
             "card_title",
             "cardTitle",
@@ -151,9 +171,10 @@ def citation_metadata_quality(detail: Mapping[str, Any] | None) -> dict[str, Any
     venue = _text(data.get("venue"))
     year = _text(data.get("year"))
     doi = _norm_doi(data.get("doi") or data.get("doi_url") or data.get("doiUrl"))
-    raw = _text(data.get("raw") or data.get("cite_fmt") or data.get("citeFmt"))
+    raw = _raw_reference_text(data)
     source = _text(data.get("source_path") or data.get("sourcePath") or data.get("source_name") or data.get("sourceName"))
     external_status = _text(data.get("external_metadata_status") or data.get("externalMetadataStatus")).lower()
+    external_doi = _norm_doi(data.get("external_doi") or data.get("externalDoi") or data.get("external_doi_url") or data.get("externalDoiUrl"))
     issues: list[dict[str, Any]] = []
 
     if not source:
@@ -172,7 +193,21 @@ def citation_metadata_quality(detail: Mapping[str, Any] | None) -> dict[str, Any
             issues.append(_issue("doi_not_promoted", "DOI present in reference text but not promoted", field="doi", severity="error", detail=raw_doi))
         else:
             issues.append(_issue("missing_doi", "Missing DOI", field="doi", severity="warning"))
-    if external_status in {"candidate", "conflict"}:
+
+    identity_complete = bool(
+        source
+        and not _looks_weak_title(title)
+        and not _looks_weak_authors(authors)
+        and not _looks_weak_venue(venue)
+        and re.fullmatch(r"(?:18|19|20)\d{2}", year)
+        and doi
+    )
+    external_conflicts_with_visible_doi = bool(doi and external_doi and doi.lower() != external_doi.lower())
+    external_needs_review = bool(
+        external_status == "conflict"
+        or (external_status == "candidate" and ((not identity_complete) or external_conflicts_with_visible_doi))
+    )
+    if external_status in {"candidate", "conflict"} and external_needs_review:
         issues.append(
             _issue(
                 f"external_metadata_{external_status}",
@@ -369,7 +404,7 @@ def _metadata_payload(meta: Mapping[str, Any]) -> dict[str, Any]:
 
 def _reference_entry_payload(ref: Mapping[str, Any], meta: Mapping[str, Any]) -> dict[str, Any]:
     merged = _canonicalize_detail({**dict(meta or {}), **dict(ref or {})})
-    raw = _text(ref.get("raw") or ref.get("cite_fmt") or ref.get("citeFmt") or meta.get("raw") or meta.get("cite_fmt"))
+    raw = _raw_reference_text(ref) or _raw_reference_text(meta)
     if raw:
         merged.setdefault("raw", raw)
         merged.setdefault("cite_fmt", raw)
@@ -491,7 +526,7 @@ def _reference_match_score(meta: Mapping[str, Any], ref: Mapping[str, Any], ref_
     ref_num = _int_value(ref.get("num") or ref_key)
     if wanted_num > 0 and ref_num == wanted_num:
         score += 95.0
-    meta_doi = _norm_doi(meta.get("doi") or meta.get("doi_url") or meta.get("raw") or meta.get("cite_fmt"))
+    meta_doi = _norm_doi(meta.get("doi") or meta.get("doi_url") or _raw_reference_text(meta))
     ref_doi = _norm_doi(ref.get("doi") or ref.get("doi_url") or ref.get("raw"))
     if meta_doi and ref_doi:
         if meta_doi.lower() == ref_doi.lower():
@@ -511,7 +546,7 @@ def _reference_match_score(meta: Mapping[str, Any], ref: Mapping[str, Any], ref_
     elif title_score >= 0.68:
         score += 30.0 * title_score
 
-    meta_raw = normalize_title_for_match(_text(meta.get("raw") or meta.get("cite_fmt") or meta_title))
+    meta_raw = normalize_title_for_match(_raw_reference_text(meta) or meta_title)
     ref_raw = normalize_title_for_match(_text(ref.get("raw") or ref_title))
     if meta_raw and ref_raw:
         if meta_raw in ref_raw or ref_raw in meta_raw:
@@ -630,6 +665,55 @@ def _metadata_from_reference_index(meta: Mapping[str, Any], db_dir: str | Path |
     return payload
 
 
+def _metadata_from_crossref_cache(meta: Mapping[str, Any], db_dir: str | Path | None) -> dict[str, Any]:
+    if not db_dir:
+        return {}
+    path = Path(db_dir) / CROSSREF_CACHE_FILE_NAME
+    if not path.exists():
+        return {}
+    cache = _json_load_dict(path)
+    if not cache:
+        return {}
+
+    data = _canonicalize_detail(meta)
+    doi = _norm_doi(data.get("doi") or data.get("doi_url") or _raw_reference_text(data)).lower()
+    raw_key = normalize_title_for_match(_raw_reference_text(data))[:260]
+    title_key = normalize_title_for_match(_text(data.get("title") or data.get("card_title") or data.get("cardTitle")))[:260]
+    candidates: list[tuple[str, Mapping[str, Any]]] = []
+
+    if doi:
+        bucket = cache.get("doi")
+        if isinstance(bucket, Mapping):
+            value = bucket.get(doi)
+            if isinstance(value, Mapping):
+                candidates.append(("crossref_cache:doi", value))
+
+    if raw_key:
+        bucket = cache.get("bib")
+        if isinstance(bucket, Mapping):
+            value = bucket.get(raw_key)
+            if isinstance(value, Mapping):
+                candidates.append(("crossref_cache:bib", value))
+
+    if title_key:
+        bucket = cache.get("title")
+        if isinstance(bucket, Mapping):
+            value = bucket.get(title_key)
+            if isinstance(value, Mapping):
+                candidates.append(("crossref_cache:title", value))
+
+    for source, candidate in candidates:
+        payload = _metadata_payload(candidate)
+        if not payload:
+            continue
+        cand_doi = _norm_doi(payload.get("doi") or payload.get("doi_url")).lower()
+        if doi and cand_doi and cand_doi != doi:
+            continue
+        payload["metadata_repair_source"] = source
+        return payload
+    return {}
+
+
 def persist_repaired_citation_metadata(meta: Mapping[str, Any], db_dir: str | Path | None = None) -> list[str]:
     if not db_dir:
         return []
@@ -665,13 +749,18 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
     before = citation_metadata_quality(original)
     try:
         local_meta = _metadata_from_reference_index(original, db_dir)
-        repair_sources: list[str] = ["reference_index"] if local_meta else []
-        seed = _canonicalize_detail({**original, **local_meta}) if local_meta else original
+        cache_meta = _metadata_from_crossref_cache({**original, **local_meta}, db_dir)
+        repair_sources: list[str] = []
+        if local_meta:
+            repair_sources.append("reference_index")
+        if cache_meta:
+            repair_sources.append(str(cache_meta.get("metadata_repair_source") or "crossref_cache"))
+        seed = _canonicalize_detail({**original, **local_meta, **cache_meta}) if (local_meta or cache_meta) else original
         repaired = enrich_citation_detail_meta(seed)
         if not isinstance(repaired, dict):
             repaired = {}
         merged = _canonicalize_detail({**seed, **repaired})
-        raw_doi = _norm_doi(seed.get("raw") or seed.get("cite_fmt") or seed.get("citeFmt"))
+        raw_doi = _norm_doi(_raw_reference_text(seed))
         if raw_doi and not _norm_doi(merged.get("doi") or merged.get("doi_url")):
             merged["doi"] = raw_doi
             merged["doi_url"] = _doi_url(raw_doi)

@@ -628,7 +628,17 @@ def _has_doi_hint(data: Mapping[str, Any]) -> bool:
     )
     if explicit and (_DOI_RE.search(explicit) or explicit.lower().startswith("10.")):
         return True
-    return bool(_DOI_RE.search(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry"))))
+    return bool(_DOI_RE.search(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry", "cardReferenceEntry"))))
+
+
+def _doi_key(value: Any) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    match = _DOI_RE.search(text)
+    if match:
+        return str(match.group(0) or "").strip(" \t\r\n.,;:()[]{}<>").lower()
+    return text.strip(" \t\r\n.,;:()[]{}<>").lower() if text.lower().startswith("10.") else ""
 
 
 def _has_year_hint(data: Mapping[str, Any]) -> bool:
@@ -663,9 +673,21 @@ def _shelf_metadata_contract(
     title_ready = len(_text(title)) >= 8 and not _WEAK_SHELF_TITLE_RE.match(_text(title))
     bibliographic = route == "system_b"
     external_status = _norm(data.get("external_metadata_status") or data.get("externalMetadataStatus"))
-    untrusted_external = external_status in {"candidate", "conflict"}
     export_ready = bool(title_ready and source_identity and has_author and has_venue and has_year and has_doi)
     source_ready = bool(source_open and source_identity and title_ready and has_summary)
+    external_doi = _first_text(data, ("external_doi", "externalDoi", "external_doi_url", "externalDoiUrl"))
+    visible_doi = _first_text(data, ("doi", "doi_url", "doiUrl"))
+    external_doi_key = _doi_key(external_doi)
+    visible_doi_key = _doi_key(visible_doi)
+    external_doi_conflict = bool(
+        external_doi_key
+        and visible_doi_key
+        and external_doi_key != visible_doi_key
+    )
+    untrusted_external = bool(
+        external_status == "conflict"
+        or (external_status == "candidate" and (not export_ready or external_doi_conflict))
+    )
     metadata_ready = export_ready if bibliographic else source_ready
     review_needed = bool(untrusted_external or not metadata_ready)
     return {
@@ -682,6 +704,7 @@ def _shelf_metadata_contract(
         "metadata_ready": metadata_ready,
         "review_needed": review_needed,
         "external_metadata_status": external_status,
+        "external_review_needed": untrusted_external,
     }
 
 
@@ -748,10 +771,10 @@ def citation_shelf_item_quality(detail: Mapping[str, Any] | None) -> dict[str, A
     elif route == "system_b" and _substantially_same_visible_text(summary, _first_text(data, ("raw", "cite_fmt", "title"))):
         fail("shelf_summary_duplicates_reference", field="summary", detail=summary[:160])
 
-    raw_doi = bool(_DOI_RE.search(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry"))))
+    raw_doi = bool(_DOI_RE.search(_first_text(data, ("raw", "cite_fmt", "citeFmt", "card_reference_entry", "cardReferenceEntry"))))
     if raw_doi and not _first_text(data, ("doi", "doi_url", "doiUrl")):
         fail("shelf_doi_not_promoted", field="doi", detail="DOI is present in reference text but missing from DOI fields.")
-    if metadata["external_metadata_status"] in {"candidate", "conflict"}:
+    if metadata["external_review_needed"]:
         fail(
             "shelf_untrusted_external_metadata_visible",
             field="external_metadata_status",

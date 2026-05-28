@@ -38,6 +38,7 @@ from api.reference_intent import (
 from kb.answer_contract import _prefer_zh_locale
 from kb.config import load_settings
 from kb.citation_meta import (
+    extract_first_doi,
     fetch_best_crossref_for_reference,
     fetch_best_crossref_meta,
     fetch_crossref_work_by_doi,
@@ -11292,7 +11293,24 @@ def ensure_source_citation_meta(*, source_path: str, pdf_root: Path | None, md_r
 
 def enrich_citation_detail_meta(detail: dict) -> dict:
     meta = _normalize_reference_for_popup(detail or {}) or dict(detail or {})
-    raw0 = str(meta.get("cite_fmt") or meta.get("raw") or "").strip()
+    raw0 = str(
+        meta.get("raw")
+        or meta.get("card_reference_entry")
+        or meta.get("cardReferenceEntry")
+        or meta.get("cite_fmt")
+        or meta.get("citeFmt")
+        or ""
+    ).strip()
+    if raw0:
+        if not str(meta.get("raw") or "").strip():
+            meta["raw"] = raw0
+        if not str(meta.get("cite_fmt") or meta.get("citeFmt") or "").strip():
+            meta["cite_fmt"] = raw0
+        if not _normalize_doi_like(str(meta.get("doi") or meta.get("doi_url") or "")):
+            raw_doi0 = extract_first_doi(raw0)
+            if raw_doi0:
+                meta["doi"] = raw_doi0
+                meta["doi_url"] = build_doi_url(raw_doi0)
 
     def _fallback_parse_raw_reference(raw: str) -> dict:
         s = str(raw or "").strip()
@@ -11371,7 +11389,14 @@ def enrich_citation_detail_meta(detail: dict) -> dict:
         meta = _merge_meta_prefer_richer(meta, arxiv_backfill0)
 
     title = str(meta.get("title") or "").strip()
-    raw = str(meta.get("cite_fmt") or meta.get("raw") or "").strip()
+    raw = str(
+        meta.get("raw")
+        or meta.get("card_reference_entry")
+        or meta.get("cardReferenceEntry")
+        or meta.get("cite_fmt")
+        or meta.get("citeFmt")
+        or ""
+    ).strip()
     venue = str(meta.get("venue") or "").strip()
     year = str(meta.get("year") or "").strip()
     doi = str(meta.get("doi") or "").strip()

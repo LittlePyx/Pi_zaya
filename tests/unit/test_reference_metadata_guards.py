@@ -220,6 +220,10 @@ def test_enrich_citation_detail_meta_backfills_arxiv_doi_from_raw(monkeypatch):
     monkeypatch.setattr(reference_ui, "fetch_crossref_meta", lambda *args, **kwargs: None)
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)
     monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_crossref_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_openalex_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_semantic_scholar_paper_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_doi_landing_page_abstract", lambda doi: "")
     monkeypatch.setattr(reference_ui, "_openalex_arxiv_meta_by_title", lambda title: {})
     monkeypatch.setattr(reference_ui, "_enrich_bibliometrics", lambda meta: dict(meta or {}))
 
@@ -235,6 +239,35 @@ def test_enrich_citation_detail_meta_backfills_arxiv_doi_from_raw(monkeypatch):
 
     assert str(out.get("doi") or "") == "10.48550/arXiv.2008.03824"
     assert str(out.get("doi_url") or "") == "https://doi.org/10.48550/arXiv.2008.03824"
+
+
+def test_enrich_citation_detail_meta_uses_card_reference_entry_as_raw_seed(monkeypatch):
+    monkeypatch.setattr(reference_ui, "fetch_crossref_meta", lambda *args, **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_best_crossref_meta", lambda **kwargs: None)
+    monkeypatch.setattr(reference_ui, "fetch_crossref_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_openalex_work_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_semantic_scholar_paper_by_doi", lambda doi: {})
+    monkeypatch.setattr(reference_ui, "_doi_landing_page_abstract", lambda doi: "")
+    monkeypatch.setattr(reference_ui, "_openalex_arxiv_meta_by_title", lambda title: {})
+    monkeypatch.setattr(reference_ui, "_enrich_bibliometrics", lambda meta: dict(meta or {}))
+
+    out = enrich_citation_detail_meta(
+        {
+            "title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+            "authors": "M. E. Gehm and D. J. Brady",
+            "venue": "Optics Express",
+            "year": "2007",
+            "card_reference_entry": (
+                "[24] M. E. Gehm and D. J. Brady. Single-shot compressive spectral imaging "
+                "with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013"
+            ),
+        }
+    )
+
+    assert "M. E. Gehm" in str(out.get("raw") or "")
+    assert str(out.get("doi") or "") == "10.1364/OE.15.014013"
+    assert str(out.get("doi_url") or "") == "https://doi.org/10.1364/OE.15.014013"
 
 
 def test_enrich_citation_detail_meta_openalex_arxiv_title_fallback(monkeypatch):

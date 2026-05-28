@@ -538,6 +538,33 @@ def test_citation_shelf_item_quality_accepts_exportable_system_b_item():
     assert quality["title"].startswith("Distributed Optimization")
 
 
+def test_citation_shelf_item_quality_does_not_show_candidate_review_when_identity_is_complete():
+    quality = citation_shelf_item_quality(
+        {
+            "num": 4,
+            "anchor": "r4",
+            "is_inpaper": True,
+            "source_name": "Distributed Optimization and Statistical Learning via ADMM.pdf",
+            "title": "Distributed Optimization and Statistical Learning via ADMM",
+            "authors": "Boyd et al.",
+            "venue": "Foundations and Trends in Machine Learning",
+            "year": "2011",
+            "doi": "10.1561/2200000016",
+            "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+            "summary_line": "This upstream paper provides the ADMM optimization framework used by earlier SCI reconstruction methods.",
+            "external_metadata_status": "candidate",
+            "external_metadata_reason": "Low-similarity metrics candidate kept as a clue.",
+            "external_doi": "10.1561/2200000016",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is True
+    assert quality["metadata"]["metadata_ready"] is True
+    assert quality["metadata"]["review_needed"] is False
+    assert "shelf_untrusted_external_metadata_visible" not in names
+
+
 def test_citation_shelf_item_quality_treats_system_a_raw_as_evidence_not_bibliography():
     quality = citation_shelf_item_quality(
         {
