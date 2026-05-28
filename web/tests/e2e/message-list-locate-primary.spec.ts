@@ -705,7 +705,9 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
       }),
     })
   })
+  let repairRequestCount = 0
   await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    repairRequestCount += 1
     const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
     const items = Array.isArray(payload.items) ? payload.items : []
     await route.fulfill({
@@ -842,6 +844,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
   await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-partial/)
+  const repairCountAfterAutoFill = repairRequestCount
 
   await popover.locator('.kb-cite-pop-close').click()
   await page.getByTestId('citation-shelf-open-source').click()
@@ -902,6 +905,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
     expect(csv).toContain('partial,section')
     expect(csv).toContain('abstract,crossref,grounded,94')
   }
+  expect(repairRequestCount).toBe(repairCountAfterAutoFill)
 })
 
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {

@@ -627,6 +627,66 @@ function metadataRepairMetaTrusted(meta: Record<string, unknown>): boolean {
   return qualityOk && (changedCount > 0 || ['ready', 'repaired'].includes(repairStatus))
 }
 
+export function shelfItemMetadataQualityReady(item: CiteShelfItem): boolean {
+  const quality = item.metadataQuality
+  if (!quality || typeof quality !== 'object') return false
+  return metadataQualityOk(quality)
+}
+
+export function shelfItemMetadataQualityNeedsRepair(item: CiteShelfItem): boolean {
+  const quality = item.metadataQuality
+  if (!quality || typeof quality !== 'object') return false
+  if (shelfItemMetadataQualityReady(item)) return false
+  const rec = quality as Record<string, unknown>
+  const issues = Array.isArray(rec.issues) ? rec.issues : []
+  return Boolean(rec.repairable || rec.retryable || issues.length > 0)
+}
+
+export function shelfItemHasConflictingVenueSignals(item: CiteShelfItem): boolean {
+  const hasJournalSignal = Boolean(String(item.journalIf || item.journalQuartile || item.journalIfSource || '').trim())
+  const hasConfSignal = Boolean(
+    String(item.conferenceTier || item.conferenceCcf || item.conferenceName || item.conferenceAcronym || '').trim(),
+  )
+  const venueKind = String(item.venueKind || '').trim().toLowerCase()
+  return (
+    (venueKind === 'conference' && hasJournalSignal)
+    || (venueKind === 'journal' && hasConfSignal)
+    || (hasJournalSignal && hasConfSignal)
+  )
+}
+
+export function shelfItemNeedsMetadataRepair(item: CiteShelfItem, display = citationDisplay(item)): boolean {
+  if (shelfItemMetadataQualityReady(item)) return false
+  if (shelfItemMetadataQualityNeedsRepair(item)) return true
+  const rawTitle = String(item.title || '').trim()
+  const visibleTitle = String(display.main || rawTitle || item.main || '').trim()
+  const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
+  const hasAuthors = Boolean(String(item.authors || '').trim())
+  const hasVenue = Boolean(String(item.venue || '').trim())
+  const unresolved = !item.bibliometricsChecked
+  const rawTitleNeedsRepair = isLikelyWeakCitationTitle(rawTitle)
+  const visibleTitleNeedsRepair = isLikelyWeakCitationTitle(visibleTitle)
+  return (
+    shelfItemHasConflictingVenueSignals(item)
+    || (hasDoi && (rawTitleNeedsRepair || unresolved))
+    || (!hasDoi && unresolved && (visibleTitleNeedsRepair || !hasAuthors || !hasVenue))
+  )
+}
+
+export function shelfItemRepairFingerprint(item: CiteShelfItem, display = citationDisplay(item)): string {
+  return [
+    normalizeDoiLike(item.doi || item.doiUrl),
+    String(item.title || '').trim(),
+    String(display.main || '').trim(),
+    String(item.authors || '').trim(),
+    String(item.venue || '').trim(),
+    String(item.year || '').trim(),
+    String(item.venueKind || '').trim(),
+    String(item.citationCount || 0),
+    item.bibliometricsChecked ? '1' : '0',
+  ].join('|')
+}
+
 function pickText(rec: Record<string, unknown>, ...keys: string[]): string {
   for (const key of keys) {
     const value = asText(rec[key])

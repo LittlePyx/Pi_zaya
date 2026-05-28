@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Typography, message } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
 import { MarkdownRenderer } from './MarkdownRenderer'
@@ -19,6 +19,8 @@ import {
   normalizeCiteDetail,
   normalizeShelfNote,
   normalizeShelfTags,
+  shelfItemNeedsMetadataRepair,
+  shelfItemRepairFingerprint,
   shelfStorageKey,
   strictRepairMerge,
   toShelfItem,
@@ -27,7 +29,7 @@ import {
 } from './citationState'
 import { RefsPanel } from '../refs/RefsPanel'
 import type { ChatImageAttachment, Message } from '../../api/chat'
-import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact } from '../../api/references'
+import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact, type ShelfMetadataRepairItem } from '../../api/references'
 import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -47,6 +49,8 @@ const SHELF_SCHEMA_VERSION = 4
 const SHELF_SAVED_SCHEMA_VERSION = 1
 const SHELF_SAVED_MAX_ITEMS = 16
 const SHELF_SAVED_SUFFIX = ':saved_snapshots'
+const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
+const SHELF_AUTO_REPAIR_RETRY_MS = 15000
 const MESSAGE_LIST_PREP_PERF_LIMIT = 180
 
 interface MessageListPrepPerfEvent {
@@ -4154,6 +4158,29 @@ function snapshotDiffCounts(currentItems: CiteShelfItem[], baselineItems: CiteSh
   return { added, removed }
 }
 
+function shelfRepairPayloads(item: CiteShelfItem): Array<Record<string, unknown>> {
+  const basePayload = item as unknown as Record<string, unknown>
+  return [
+    basePayload,
+    {
+      ...basePayload,
+      raw: '',
+      cite_fmt: '',
+      citeFmt: '',
+    },
+  ]
+}
+
+function shelfRepairMetaFromEntry(entry: ShelfMetadataRepairItem): Record<string, unknown> {
+  return {
+    ...(entry.meta || {}),
+    metadata_quality: entry.after || (entry.meta || {}).metadata_quality,
+    metadata_repair_status: entry.repair_status,
+    metadata_changed_fields: entry.changed_fields || [],
+    metadata_repair_sources: entry.repair_sources || [],
+  }
+}
+
 function shouldRequestCitationCardPolish(detail: CiteDetail): boolean {
   const polishStatus = String(detail.citationCardPolishStatus || '').trim().toLowerCase()
   if (['full', 'failed', 'disabled', 'empty'].includes(polishStatus)) return false
@@ -4200,6 +4227,7 @@ export function MessageList({
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
   const [shelfSummaryLoadingKey, setShelfSummaryLoadingKey] = useState('')
   const [shelfRepairLoadingKey, setShelfRepairLoadingKey] = useState('')
+  const [shelfAutoRepairingKeys, setShelfAutoRepairingKeys] = useState<string[]>([])
   const [shelfRepairImpact, setShelfRepairImpact] = useState<ShelfMetadataRepairImpact | null>(null)
   const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
   const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
@@ -4217,6 +4245,14 @@ export function MessageList({
     items: [],
   })
   const flushShelfSnapshotRef = useRef<(() => void) | null>(null)
+  const shelfAutoRepairTimerRef = useRef<number | null>(null)
+  const shelfAutoRepairingKeySetRef = useRef(new Set<string>())
+  const shelfAutoRepairFingerprintsRef = useRef<Record<string, string>>({})
+  const shelfAutoRepairRetryAfterRef = useRef<Record<string, number>>({})
+  const setShelfAutoRepairingKeySet = useCallback((nextSet: Set<string>) => {
+    shelfAutoRepairingKeySetRef.current = nextSet
+    setShelfAutoRepairingKeys(Array.from(nextSet))
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -4228,6 +4264,9 @@ export function MessageList({
       }
       if (citationPolishRetryTimerRef.current !== null) {
         window.clearTimeout(citationPolishRetryTimerRef.current)
+      }
+      if (shelfAutoRepairTimerRef.current !== null) {
+        window.clearTimeout(shelfAutoRepairTimerRef.current)
       }
     }
   }, [])
@@ -4446,6 +4485,13 @@ export function MessageList({
       window.clearTimeout(persistShelfTimerRef.current)
       persistShelfTimerRef.current = null
     }
+    if (shelfAutoRepairTimerRef.current !== null) {
+      window.clearTimeout(shelfAutoRepairTimerRef.current)
+      shelfAutoRepairTimerRef.current = null
+    }
+    setShelfAutoRepairingKeySet(new Set())
+    shelfAutoRepairFingerprintsRef.current = {}
+    shelfAutoRepairRetryAfterRef.current = {}
     if (prevStorageKey !== nextStorageKey) {
       const prevRevision = Number(shelfRevisionByKeyRef.current[prevStorageKey] || 0)
       const latest = latestShelfStateRef.current
@@ -4480,7 +4526,7 @@ export function MessageList({
     setShelfOpen(snapshot.open)
     setFocusedShelfKey('')
     activeStorageKeyRef.current = nextStorageKey
-  }, [activeConvId])
+  }, [activeConvId, setShelfAutoRepairingKeySet])
 
   useEffect(() => {
     const storageKey = shelfStorageKey(activeConvId)
@@ -4744,7 +4790,7 @@ export function MessageList({
       })
   }
 
-  const applyShelfMetadataRepairCandidates = (
+  const applyShelfMetadataRepairCandidates = useCallback((
     updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>,
   ): boolean => {
     if (updates.length <= 0) return false
@@ -4772,36 +4818,23 @@ export function MessageList({
       return entry
     }))
     return didUpdate
-  }
+  }, [])
 
   const repairShelfItemMeta = (item: CiteShelfItem, options?: { silent?: boolean }) => {
     if (shelfRepairLoadingKey === item.key) return
     const silent = Boolean(options?.silent)
     setShelfRepairLoadingKey(item.key)
-    const basePayload = item as unknown as Record<string, unknown>
-    const strictTitlePayload: Record<string, unknown> = {
-      ...basePayload,
-      raw: '',
-      cite_fmt: '',
-      citeFmt: '',
-    }
-    const loadRepairCandidates = referencesApi.repairShelfMetadata([basePayload, strictTitlePayload], 2)
+    const payloads = shelfRepairPayloads(item)
+    const loadRepairCandidates = referencesApi.repairShelfMetadata(payloads, payloads.length)
       .then((res) => {
         setShelfRepairImpact(res.impact || null)
         const repaired = Array.isArray(res.items) ? res.items : []
         return repaired
-          .map((entry) => ({
-            ...(entry.meta || {}),
-            metadata_quality: entry.after || (entry.meta || {}).metadata_quality,
-            metadata_repair_status: entry.repair_status,
-            metadata_changed_fields: entry.changed_fields || [],
-            metadata_repair_sources: entry.repair_sources || [],
-          }))
+          .map(shelfRepairMetaFromEntry)
           .filter((meta) => meta && Object.keys(meta).length > 0)
       })
       .catch(() => Promise.all([
-        referencesApi.bibliometrics(basePayload).catch(() => ({})),
-        referencesApi.bibliometrics(strictTitlePayload).catch(() => ({})),
+        ...payloads.map((payload) => referencesApi.bibliometrics(payload).catch(() => ({}))),
       ]))
 
     loadRepairCandidates
@@ -4820,6 +4853,94 @@ export function MessageList({
         setShelfRepairLoadingKey((current) => (current === item.key ? '' : current))
       })
   }
+
+  const repairShelfItemsMetadataBatch = useCallback(async (targets: CiteShelfItem[]) => {
+    const uniqueTargets: CiteShelfItem[] = []
+    const seen = new Set<string>()
+    for (const item of targets) {
+      const key = String(item.key || '').trim()
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      uniqueTargets.push(item)
+      if (uniqueTargets.length >= SHELF_AUTO_REPAIR_BATCH_SIZE) break
+    }
+    if (uniqueTargets.length <= 0) return
+
+    const inFlight = new Set(shelfAutoRepairingKeySetRef.current)
+    for (const item of uniqueTargets) {
+      inFlight.add(item.key)
+    }
+    setShelfAutoRepairingKeySet(inFlight)
+    const requestedFingerprints = new Map(uniqueTargets.map((item) => [
+      item.key,
+      shelfItemRepairFingerprint(item),
+    ]))
+
+    try {
+      const payloads = uniqueTargets.flatMap(shelfRepairPayloads)
+      const res = await referencesApi.repairShelfMetadata(payloads, payloads.length)
+      setShelfRepairImpact(res.impact || null)
+      const metasByKey = new Map<string, Array<Record<string, unknown>>>()
+      for (const entry of Array.isArray(res.items) ? res.items : []) {
+        const meta = shelfRepairMetaFromEntry(entry)
+        if (!meta || Object.keys(meta).length <= 0) continue
+        const key = String(entry.key || meta.key || '').trim()
+        if (!key) continue
+        metasByKey.set(key, [...(metasByKey.get(key) || []), meta])
+      }
+      applyShelfMetadataRepairCandidates(
+        Array.from(metasByKey.entries()).map(([key, metas]) => ({ key, metas })),
+      )
+      for (const item of uniqueTargets) {
+        const fingerprint = requestedFingerprints.get(item.key)
+        if (fingerprint) shelfAutoRepairFingerprintsRef.current[item.key] = fingerprint
+        delete shelfAutoRepairRetryAfterRef.current[item.key]
+      }
+    } catch {
+      const retryAt = Date.now() + SHELF_AUTO_REPAIR_RETRY_MS
+      for (const item of uniqueTargets) {
+        shelfAutoRepairRetryAfterRef.current[item.key] = retryAt
+      }
+    } finally {
+      const nextInFlight = new Set(shelfAutoRepairingKeySetRef.current)
+      for (const item of uniqueTargets) {
+        nextInFlight.delete(item.key)
+      }
+      setShelfAutoRepairingKeySet(nextInFlight)
+    }
+  }, [applyShelfMetadataRepairCandidates, setShelfAutoRepairingKeySet])
+
+  useEffect(() => {
+    if (shelfAutoRepairTimerRef.current !== null) {
+      window.clearTimeout(shelfAutoRepairTimerRef.current)
+      shelfAutoRepairTimerRef.current = null
+    }
+    if (shelfItems.length <= 0) return
+    shelfAutoRepairTimerRef.current = window.setTimeout(() => {
+      shelfAutoRepairTimerRef.current = null
+      const now = Date.now()
+      const inFlight = shelfAutoRepairingKeySetRef.current
+      const targets: CiteShelfItem[] = []
+      for (const item of shelfItems) {
+        if (targets.length >= SHELF_AUTO_REPAIR_BATCH_SIZE) break
+        if (inFlight.has(item.key) || item.key === shelfRepairLoadingKey) continue
+        if (!shelfItemNeedsMetadataRepair(item)) continue
+        const fingerprint = shelfItemRepairFingerprint(item)
+        if (shelfAutoRepairFingerprintsRef.current[item.key] === fingerprint) continue
+        if ((shelfAutoRepairRetryAfterRef.current[item.key] || 0) > now) continue
+        targets.push(item)
+      }
+      if (targets.length > 0) {
+        void repairShelfItemsMetadataBatch(targets)
+      }
+    }, 250)
+    return () => {
+      if (shelfAutoRepairTimerRef.current !== null) {
+        window.clearTimeout(shelfAutoRepairTimerRef.current)
+        shelfAutoRepairTimerRef.current = null
+      }
+    }
+  }, [repairShelfItemsMetadataBatch, shelfItems, shelfRepairLoadingKey])
 
   const clearCitationHoverTimers = () => {
     if (citationHoverOpenTimerRef.current !== null) {
@@ -6542,6 +6663,7 @@ export function MessageList({
         focusedKey={focusedShelfKey}
         summaryLoadingKey={shelfSummaryLoadingKey}
         repairLoadingKey={shelfRepairLoadingKey}
+        repairingKeys={shelfAutoRepairingKeys}
         repairImpact={shelfRepairImpact}
         snapshots={savedShelfSnapshots}
         selectedSnapshotId={selectedSavedSnapshotId}
@@ -6559,12 +6681,20 @@ export function MessageList({
           if (focusedShelfKey === key) setFocusedShelfKey('')
           if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
           if (shelfRepairLoadingKey === key) setShelfRepairLoadingKey('')
+          const nextRepairing = new Set(shelfAutoRepairingKeySetRef.current)
+          nextRepairing.delete(key)
+          setShelfAutoRepairingKeySet(nextRepairing)
+          delete shelfAutoRepairFingerprintsRef.current[key]
+          delete shelfAutoRepairRetryAfterRef.current[key]
         }}
         onClear={() => {
           setShelfItems([])
           setFocusedShelfKey('')
           setShelfSummaryLoadingKey('')
           setShelfRepairLoadingKey('')
+          setShelfAutoRepairingKeySet(new Set())
+          shelfAutoRepairFingerprintsRef.current = {}
+          shelfAutoRepairRetryAfterRef.current = {}
           setShelfRepairImpact(null)
         }}
         onUpdateTags={(key, tags) => {

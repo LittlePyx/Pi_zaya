@@ -13,6 +13,8 @@ import {
   citeMetricSummary,
   isLikelyWeakCitationTitle,
   normalizeShelfTags,
+  shelfItemHasConflictingVenueSignals,
+  shelfItemNeedsMetadataRepair,
   strictRepairMerge,
   summarySourceLabel,
 } from './citationState'
@@ -30,6 +32,7 @@ interface Props {
   summaryLoadingKey: string
   repairLoadingKey: string
   repairImpact: ShelfMetadataRepairImpact | null
+  repairingKeys?: string[]
   onToggle: () => void
   onClear: () => void
   onSelect: (item: CiteShelfItem) => void
@@ -84,49 +87,6 @@ const normalizeTitle = (value: string): string =>
     .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-
-const hasConflictingVenueSignals = (item: CiteShelfItem): boolean => {
-  const hasJournalSignal = Boolean(String(item.journalIf || item.journalQuartile || item.journalIfSource || '').trim())
-  const hasConfSignal = Boolean(
-    String(item.conferenceTier || item.conferenceCcf || item.conferenceName || item.conferenceAcronym || '').trim(),
-  )
-  const venueKind = String(item.venueKind || '').trim().toLowerCase()
-  return (
-    (venueKind === 'conference' && hasJournalSignal)
-    || (venueKind === 'journal' && hasConfSignal)
-    || (hasJournalSignal && hasConfSignal)
-  )
-}
-
-const shouldAutoRepairItem = (item: CiteShelfItem, display = citationDisplay(item)): boolean => {
-  if (metadataQualityReady(item)) return false
-  if (metadataQualityNeedsRepair(item)) return true
-  const rawTitle = String(item.title || '').trim()
-  const visibleTitle = String(display.main || rawTitle || item.main || '').trim()
-  const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
-  const hasAuthors = Boolean(String(item.authors || '').trim())
-  const hasVenue = Boolean(String(item.venue || '').trim())
-  const unresolved = !item.bibliometricsChecked
-  const rawTitleNeedsRepair = isLikelyWeakCitationTitle(rawTitle)
-  const visibleTitleNeedsRepair = isLikelyWeakCitationTitle(visibleTitle)
-  return (
-    hasConflictingVenueSignals(item)
-    || (hasDoi && (rawTitleNeedsRepair || unresolved))
-    || (!hasDoi && unresolved && (visibleTitleNeedsRepair || !hasAuthors || !hasVenue))
-  )
-}
-
-const autoRepairFingerprint = (item: CiteShelfItem, display = citationDisplay(item)): string => [
-  normalizeDoiLike(item.doi || item.doiUrl),
-  String(item.title || '').trim(),
-  String(display.main || '').trim(),
-  String(item.authors || '').trim(),
-  String(item.venue || '').trim(),
-  String(item.year || '').trim(),
-  String(item.venueKind || '').trim(),
-  String(item.citationCount || 0),
-  item.bibliometricsChecked ? '1' : '0',
-].join('|')
 
 const paperIdentity = (item: CiteShelfItem): string => {
   const doiKey = normalizeDoiLike(item.doi || item.doiUrl)
@@ -451,6 +411,7 @@ export function CiteShelf({
   summaryLoadingKey,
   repairLoadingKey,
   repairImpact,
+  repairingKeys = [],
   onToggle,
   onClear,
   onSelect,
@@ -483,7 +444,10 @@ export function CiteShelf({
   const copyStateTimerRef = useRef<number | null>(null)
   const sourceRepairStreamRef = useRef<AbortController | null>(null)
   const autoSourceRepairKeysRef = useRef<Record<string, boolean>>({})
-  const autoRepairFingerprintsRef = useRef<Record<string, string>>({})
+  const repairLoadingKeySet = useMemo(
+    () => new Set([repairLoadingKey, ...repairingKeys].map((key) => String(key || '').trim()).filter(Boolean)),
+    [repairLoadingKey, repairingKeys],
+  )
 
   const sourceQualitySources = useMemo(() => {
     const seen = new Set<string>()
@@ -575,11 +539,11 @@ export function CiteShelf({
     const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
     const hasAuthors = Boolean(String(item.authors || '').trim())
     const hasVenue = Boolean(String(item.venue || '').trim())
-    const hasMetaConflict = hasConflictingVenueSignals(item)
+    const hasMetaConflict = shelfItemHasConflictingVenueSignals(item)
     const externalNeedsReview = externalMetadataNeedsVisibleReview(item, display)
     const unresolved = !item.bibliometricsChecked
     const bibliographicEntry = Boolean(item.isInpaper || item.raw || item.citeFmt || hasDoi || item.externalDoi || item.externalDoiUrl)
-    const needsRepair = shouldAutoRepairItem(item, display)
+    const needsRepair = shelfItemNeedsMetadataRepair(item, display)
 
     if (externalNeedsReview) chips.push('外部元数据校准中')
     if (bibliographicEntry && !hasDoi) chips.push(S.shelf_missing_doi)
@@ -599,19 +563,6 @@ export function CiteShelf({
     else if (hasWeakTitle) tip = S.shelf_weak_title_tip
     return { chips: chips.slice(0, 3), tip, needsRepair }
   }
-
-  useEffect(() => {
-    if (repairLoadingKey) return
-    for (const item of items) {
-      const display = citationDisplay(item)
-      if (!shouldAutoRepairItem(item, display)) continue
-      const fingerprint = autoRepairFingerprint(item, display)
-      if (autoRepairFingerprintsRef.current[item.key] === fingerprint) continue
-      autoRepairFingerprintsRef.current[item.key] = fingerprint
-      onRepair(item, { silent: true })
-      return
-    }
-  }, [items, onRepair, repairLoadingKey])
 
   useEffect(() => {
     if (!open || sourceQualitySources.length <= 0) return
@@ -675,7 +626,7 @@ export function CiteShelf({
     let sourceOpenReview = 0
     for (const item of items) {
       const display = citationDisplay(item)
-      const needsMetadataReview = shouldAutoRepairItem(item, display)
+      const needsMetadataReview = shelfItemNeedsMetadataRepair(item, display)
       const isDuplicate = (duplicateCountByIdentity[paperIdentity(item)] || 0) > 1
       const hasSummary = Boolean(String(item.summaryLine || citationCardView(item).summary || '').trim())
       const summaryView = summaryQualityView(item, S)
@@ -788,7 +739,7 @@ export function CiteShelf({
     [items, selectedKeys],
   )
   const selectedMetadataReviewItems = useMemo(
-    () => selectedItems.filter((item) => shouldAutoRepairItem(item, citationDisplay(item))),
+    () => selectedItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item))),
     [selectedItems],
   )
   const selectedMetadataReviewCount = selectedMetadataReviewItems.length
@@ -1064,7 +1015,7 @@ export function CiteShelf({
   })
 
   const repairMetadataBeforeExport = async (kind: ShelfExportKind, exportItems: CiteShelfItem[]): Promise<CiteShelfItem[]> => {
-    const candidates = exportItems.filter((item) => shouldAutoRepairItem(item, citationDisplay(item)))
+    const candidates = exportItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
     if (candidates.length <= 0) return exportItems
 
     const payloads = candidates.flatMap((item) => repairPayloadsForExport(item))
@@ -1091,14 +1042,14 @@ export function CiteShelf({
       let repairedReadyCount = 0
       let unresolvedCount = 0
       const repairedItems = exportItems.map((item) => {
-        const wasReady = !shouldAutoRepairItem(item, citationDisplay(item))
+        const wasReady = !shelfItemNeedsMetadataRepair(item, citationDisplay(item))
         const metas = metasByKey.get(item.key) || []
         let next = item
         for (const meta of metas) {
           const accepted = strictRepairMerge(next, meta)
           if (accepted) next = accepted
         }
-        const isReady = !shouldAutoRepairItem(next, citationDisplay(next))
+        const isReady = !shelfItemNeedsMetadataRepair(next, citationDisplay(next))
         if (!wasReady && isReady) repairedReadyCount += 1
         if (!isReady) unresolvedCount += 1
         return next
@@ -1784,14 +1735,14 @@ export function CiteShelf({
                                   type="button"
                                   className="kb-shelf-repair-btn"
                                   aria-live="polite"
-                                  disabled={repairLoadingKey === item.key}
+                                  disabled={repairLoadingKeySet.has(item.key)}
                                   data-testid="citation-shelf-repair"
                                   onClick={(event) => {
                                     event.stopPropagation()
                                     onRepair(item)
                                   }}
                                 >
-                                  {repairLoadingKey === item.key ? S.shelf_repairing : S.shelf_auto_repair}
+                                  {repairLoadingKeySet.has(item.key) ? S.shelf_repairing : S.shelf_auto_repair}
                                 </button>
                               ) : null}
                             </div>
