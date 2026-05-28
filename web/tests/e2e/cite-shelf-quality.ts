@@ -66,6 +66,7 @@ export async function expectCitationShelfQuality(
       '.kb-shelf-repair-btn',
       '.kb-shelf-summary-text',
       '.kb-shelf-summary-source',
+      '.kb-shelf-summary-quality',
       '.kb-shelf-doi',
       '.kb-shelf-readiness-status',
       '.kb-shelf-readiness-count',

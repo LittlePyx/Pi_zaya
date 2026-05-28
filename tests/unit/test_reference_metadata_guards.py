@@ -324,6 +324,8 @@ def test_enrich_citation_detail_meta_uses_crossref_abstract_summary(monkeypatch)
     )
 
     assert str(out.get("summary_source") or "") == "abstract"
+    assert (out.get("summary_quality") or {}).get("status") == "grounded"
+    assert (out.get("summary_quality") or {}).get("export_ready") is True
     assert "compressive imaging method" in str(out.get("summary_line") or "").lower()
 
 
@@ -342,6 +344,13 @@ def test_enrich_citation_detail_meta_falls_back_to_metadata_summary(monkeypatch)
     )
 
     assert str(out.get("summary_source") or "") == "metadata"
+    assert (out.get("summary_quality") or {}).get("status") == "fallback"
+    assert (out.get("summary_quality") or {}).get("export_ready") is False
+    assert "metadata_only" in {
+        str(issue.get("code") or "")
+        for issue in (out.get("summary_quality") or {}).get("issues", [])
+        if isinstance(issue, dict)
+    }
     summary_line = str(out.get("summary_line") or "")
     assert "当前仅检索到文献元数据" in summary_line
     assert "建议通过 DOI 查看原文摘要与正文" in summary_line

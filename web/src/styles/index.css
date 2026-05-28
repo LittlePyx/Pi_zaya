@@ -1263,6 +1263,38 @@ body.kb-reader-resizing .kb-reader-content {
   overflow-wrap: anywhere;
 }
 
+.kb-shelf-summary-quality {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.kb-shelf-summary-quality.is-ready {
+  color: color-mix(in srgb, #0f766e 82%, var(--text-main));
+  background: color-mix(in srgb, #ccfbf1 62%, var(--panel));
+  border-color: color-mix(in srgb, #2dd4bf 50%, var(--border));
+}
+
+.kb-shelf-summary-quality.is-fallback {
+  color: color-mix(in srgb, #854d0e 82%, var(--text-main));
+  background: color-mix(in srgb, #fef3c7 58%, var(--panel));
+  border-color: color-mix(in srgb, #f59e0b 46%, var(--border));
+}
+
+.kb-shelf-summary-quality.is-review {
+  color: color-mix(in srgb, #991b1b 78%, var(--text-main));
+  background: color-mix(in srgb, #fee2e2 58%, var(--panel));
+  border-color: color-mix(in srgb, #f87171 44%, var(--border));
+}
+
 .kb-shelf-summary-list {
   margin: 6px 0 0;
   padding-left: 18px;

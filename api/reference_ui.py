@@ -10904,6 +10904,75 @@ def _translate_summary_to_zh(text: str) -> str:
     return _summary_excerpt(out, max_sentences=3, max_len=360)
 
 
+def _summary_quality_contract(meta: dict) -> dict:
+    data = dict(meta or {})
+    summary = _summary_excerpt(str(data.get("summary_line") or ""), max_sentences=3, max_len=360)
+    source = str(data.get("summary_source") or "").strip().lower()
+    provider = str(data.get("summary_provider") or "").strip().lower()
+    generation = str(data.get("summary_generation") or "").strip().lower()
+    title = str(data.get("title") or "").strip()
+    issues: list[dict[str, str]] = []
+
+    if not summary:
+        issues.append({"code": "missing_summary", "severity": "error", "field": "summary_line"})
+    elif not _is_summary_quality_ok(summary):
+        issues.append({"code": "weak_summary", "severity": "warning", "field": "summary_line"})
+    if summary and title and _looks_like_title_echo(summary, title):
+        issues.append({"code": "title_echo", "severity": "warning", "field": "summary_line"})
+    if source == "metadata":
+        issues.append({"code": "metadata_only", "severity": "warning", "field": "summary_source"})
+    elif summary and not source:
+        issues.append({"code": "missing_summary_source", "severity": "warning", "field": "summary_source"})
+
+    trusted_sources = {
+        "abstract",
+        "fulltext",
+        "citation_context",
+        "reference_primary_evidence",
+        "navigation",
+        "exact_anchor",
+        "section_intent_rescue",
+        "doc_list_seed",
+        "doc_list_prompt_aligned",
+    }
+    error_count = sum(1 for item in issues if item.get("severity") == "error")
+    warning_count = sum(1 for item in issues if item.get("severity") == "warning")
+    trusted = bool(summary and source in trusted_sources and error_count == 0 and not any(item.get("code") == "title_echo" for item in issues))
+    if error_count:
+        status = "error"
+    elif warning_count:
+        status = "fallback" if source == "metadata" else "warning"
+    elif trusted:
+        status = "grounded"
+    else:
+        status = "fallback"
+    score = max(0, 100 - error_count * 45 - warning_count * 14)
+    if trusted:
+        score = max(score, 92)
+    elif source == "metadata":
+        score = min(score, 68)
+    elif source in {"citation_card", "citation_card_view"}:
+        score = min(max(score, 74), 86)
+
+    return {
+        "contract_version": 1,
+        "ok": bool(trusted and error_count == 0),
+        "status": status,
+        "score": int(score),
+        "source": source,
+        "provider": provider,
+        "generation": generation,
+        "issues": issues,
+        "export_ready": bool(summary and source != "metadata" and error_count == 0),
+    }
+
+
+def _attach_summary_quality(meta: dict) -> dict:
+    out = dict(meta or {})
+    out["summary_quality"] = _summary_quality_contract(out)
+    return out
+
+
 def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
     out = dict(meta or {})
     existing_line = _summary_excerpt(str(out.get("summary_line") or ""), max_sentences=3, max_len=360)
@@ -10917,12 +10986,12 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
             out["summary_line"] = final_line or _translate_summary_to_zh(existing_line)
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
-            return out
+            return _attach_summary_quality(out)
         else:
             out["summary_line"] = _translate_summary_to_zh(existing_line)
             out["summary_source"] = existing_source if existing_source in {"fulltext", "abstract", "metadata"} else "fulltext"
             out["summary_generation"] = "fulltext_existing"
-            return out
+            return _attach_summary_quality(out)
 
     if allow_crossref_abstract:
         abstract_line = _summary_from_crossref_abstract(out)
@@ -10932,7 +11001,7 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "crossref"
-            return out
+            return _attach_summary_quality(out)
         openalex_line = _summary_from_openalex_abstract(out)
         if openalex_line:
             final_line, generation = _finalize_abstract_summary_line(title=title, abstract_text=openalex_line)
@@ -10940,7 +11009,7 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "openalex"
-            return out
+            return _attach_summary_quality(out)
         semantic_line = _summary_from_semantic_scholar_abstract(out)
         if semantic_line:
             final_line, generation = _finalize_abstract_summary_line(title=title, abstract_text=semantic_line)
@@ -10948,7 +11017,7 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "semantic_scholar"
-            return out
+            return _attach_summary_quality(out)
         landing_line = _summary_from_doi_landing_page(out)
         if landing_line:
             final_line, generation = _finalize_abstract_summary_line(title=title, abstract_text=landing_line)
@@ -10956,21 +11025,21 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
             out["summary_source"] = "abstract"
             out["summary_generation"] = generation or "translated_abstract"
             out["summary_provider"] = "doi_landing_page"
-            return out
+            return _attach_summary_quality(out)
 
     context_fallback = _contextual_summary_line(out)
     if context_fallback:
         out["summary_line"] = context_fallback
         out["summary_source"] = "citation_context"
         out["summary_generation"] = "citation_context_fallback"
-        return out
+        return _attach_summary_quality(out)
 
     fallback = _metadata_summary_line(out)
     if fallback:
         out["summary_line"] = fallback
         out["summary_source"] = "metadata"
         out["summary_generation"] = "metadata_only"
-    return out
+    return _attach_summary_quality(out)
 
 
 _EXTERNAL_IDENTITY_KEYS = {

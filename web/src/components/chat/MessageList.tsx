@@ -4005,6 +4005,7 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.summaryLine === b.summaryLine
     && a.summarySource === b.summarySource
     && a.summaryProvider === b.summaryProvider
+    && JSON.stringify(a.summaryQuality || null) === JSON.stringify(b.summaryQuality || null)
     && a.answerClaim === b.answerClaim
     && a.headingPath === b.headingPath
     && a.evidenceQuote === b.evidenceQuote
@@ -4109,6 +4110,7 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     summaryLine: preferRicherField('title', item.summaryLine, live.summaryLine),
     summarySource: preferExistingText(item.summarySource, live.summarySource),
     summaryProvider: preferExistingText(item.summaryProvider, live.summaryProvider),
+    summaryQuality: item.summaryQuality || live.summaryQuality,
     answerClaim: preferRicherField('title', item.answerClaim, live.answerClaim),
     headingPath: preferExistingText(item.headingPath, live.headingPath),
     evidenceQuote: preferRicherField('title', item.evidenceQuote, live.evidenceQuote),
@@ -4817,7 +4819,9 @@ export function MessageList({
   const fetchShelfSummaryForItem = (item: CiteShelfItem) => {
     const summaryLine = String(item.summaryLine || '').trim()
     const summarySource = String(item.summarySource || '').trim().toLowerCase()
-    if (summaryLine && (summarySource === 'abstract' || summarySource === 'fulltext')) return
+    const quality = item.summaryQuality || {}
+    const qualityOk = quality.ok === true || String(quality.status || '').trim().toLowerCase() === 'grounded'
+    if (summaryLine && (qualityOk || summarySource === 'abstract' || summarySource === 'fulltext')) return
     setShelfSummaryLoadingKey(item.key)
     referencesApi.bibliometricsCached(item as unknown as Record<string, unknown>)
       .then((meta) => {

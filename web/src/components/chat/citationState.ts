@@ -85,6 +85,7 @@ export interface CiteDetail {
   summaryLine: string
   summarySource: string
   summaryProvider: string
+  summaryQuality: Record<string, unknown> | null
   answerClaim: string
   headingPath: string
   evidenceQuote: string
@@ -849,6 +850,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     summaryLine: pickText(rec, 'summary_line', 'summaryLine'),
     summarySource: pickText(rec, 'summary_source', 'summarySource'),
     summaryProvider: pickText(rec, 'summary_provider', 'summaryProvider'),
+    summaryQuality: pickRecord(rec, 'summary_quality', 'summaryQuality'),
     answerClaim: pickText(rec, 'answer_claim', 'answerClaim'),
     headingPath: pickText(rec, 'heading_path', 'headingPath'),
     evidenceQuote: pickText(rec, 'evidence_quote', 'evidenceQuote'),
@@ -1201,6 +1203,21 @@ function appendUniqueSummaryLine(lines: string[], value: string): void {
   lines.push(text)
 }
 
+function trustedShelfSummarySource(source: string): boolean {
+  const s = String(source || '').trim().toLowerCase()
+  return [
+    'abstract',
+    'fulltext',
+    'citation_context',
+    'reference_primary_evidence',
+    'navigation',
+    'exact_anchor',
+    'section_intent_rescue',
+    'doc_list_seed',
+    'doc_list_prompt_aligned',
+  ].includes(s)
+}
+
 function titleBasedShelfSummary(detail: CiteDetail): string {
   const title = trimShelfSummary(detail.title || '', 180)
   if (!title) return ''
@@ -1218,11 +1235,22 @@ function titleBasedShelfSummary(detail: CiteDetail): string {
 }
 
 function deriveShelfSummary(detail: CiteDetail): { line: string; source: string } {
+  const existing = trimShelfSummary(detail.summaryLine, 420)
+  const existingSource = String(detail.summarySource || '').trim().toLowerCase()
+  const summaryQuality = detail.summaryQuality || {}
+  const qualityOk = summaryQuality.ok === true || String(summaryQuality.status || '').trim().toLowerCase() === 'grounded'
+  if (
+    existing
+    && !(detail.isInpaper && looksLowValueCitationContext(existing))
+    && (trustedShelfSummarySource(existingSource) || qualityOk)
+  ) {
+    return { line: existing, source: detail.summarySource || 'fulltext' }
+  }
+
   const viewSummary = trimShelfSummary(citationCardView(detail).summary, 420)
   if (viewSummary) {
     return { line: viewSummary, source: 'citation_card_view' }
   }
-  const existing = trimShelfSummary(detail.summaryLine, 420)
   const suppressRawSystemBContext = detail.isInpaper
     && (
       detail.cardQualityFlags.includes('weak_citation_context')
@@ -1305,6 +1333,7 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'summary_line',
     'summary_source',
     'summary_provider',
+    'summary_quality',
     'metadata_quality',
     'metadata_repair_status',
     'metadata_repair_sources',

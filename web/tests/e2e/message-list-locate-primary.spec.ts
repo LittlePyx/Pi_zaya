@@ -506,6 +506,10 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
             year: '1988',
             doi: '10.1109/TASSP.1988.1164940',
             doi_url: 'https://doi.org/10.1109/TASSP.1988.1164940',
+            summary_line: 'The abstract explains how missing spatial frequencies create low-pass distortion in optical serial sectioning microscopy.',
+            summary_source: 'abstract',
+            summary_provider: 'crossref',
+            summary_quality: { contract_version: 1, ok: true, status: 'grounded', score: 94, source: 'abstract', provider: 'crossref', issues: [], export_ready: true },
             bibliometrics_checked: true,
             metadata_quality: { contract_version: 1, ok: true, status: 'ready', score: 100, missing_fields: [], issues: [], repairable: true, retryable: false, doi: '10.1109/TASSP.1988.1164940' },
             metadata_repair_status: 'repaired',
@@ -544,6 +548,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await expect(page.getByTestId('citation-shelf-repair-impact')).toContainText('doi')
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
+  await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
 
   await popover.locator('.kb-cite-pop-close').click()
   await page.getByTestId('citation-shelf-add-visible').click()
@@ -590,10 +595,12 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   if (csvPath) {
     const csv = await readFile(csvPath, 'utf8')
     expect(csv).toContain('title,authors,year,venue,doi,source,source_quality_status,source_quality_issues')
+    expect(csv).toContain('summary_source,summary_provider,summary_quality_status,summary_quality_score,summary')
     expect(csv).toContain('The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
     expect(csv).toContain('Macias-Garza F, Bovik A C, Diller K R')
     expect(csv).toContain('IEEE Transactions on Acoustics, Speech, and Signal Processing')
     expect(csv).toContain('10.1109/tassp.1988.1164940')
+    expect(csv).toContain('abstract,crossref,grounded,94')
   }
 })
 

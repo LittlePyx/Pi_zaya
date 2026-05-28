@@ -188,6 +188,51 @@ const metadataQualityNeedsRepair = (item: CiteShelfItem): boolean => {
   return Boolean(quality.repairable || quality.retryable || (quality.issues || []).length > 0)
 }
 
+const summaryQuality = (item: CiteShelfItem): Record<string, unknown> | null => {
+  const raw = item.summaryQuality
+  if (!raw || typeof raw !== 'object') return null
+  return raw
+}
+
+const trustedSummarySource = (source: string): boolean => [
+  'abstract',
+  'fulltext',
+  'citation_context',
+  'reference_primary_evidence',
+  'navigation',
+  'exact_anchor',
+  'section_intent_rescue',
+  'doc_list_seed',
+  'doc_list_prompt_aligned',
+].includes(String(source || '').trim().toLowerCase())
+
+const summaryQualityView = (
+  item: CiteShelfItem,
+  S: Record<string, string>,
+): { ok: boolean; status: string; score: number; label: string; tone: 'ready' | 'fallback' | 'review' } => {
+  const contract = summaryQuality(item)
+  const source = String(contract?.source || item.summarySource || '').trim().toLowerCase()
+  const status = String(contract?.status || '').trim().toLowerCase()
+  const scoreRaw = Number(contract?.score || 0)
+  const score = Number.isFinite(scoreRaw) && scoreRaw > 0
+    ? Math.round(scoreRaw)
+    : (trustedSummarySource(source) ? 92 : source === 'metadata' ? 68 : 78)
+  const ok = contract?.ok === true || status === 'grounded' || trustedSummarySource(source)
+  const fallback = status === 'fallback' || source === 'metadata' || (!ok && Boolean(item.summaryLine))
+  const label = ok
+    ? S.shelf_summary_quality_grounded
+    : fallback
+      ? S.shelf_summary_quality_fallback
+      : S.shelf_summary_quality_review
+  return {
+    ok,
+    status: status || (ok ? 'grounded' : fallback ? 'fallback' : 'review'),
+    score,
+    label: label.replace('{score}', String(score)),
+    tone: ok ? 'ready' : fallback ? 'fallback' : 'review',
+  }
+}
+
 const metadataIssueChip = (code: string): string => {
   const key = String(code || '').trim().toLowerCase()
   if (key === 'missing_doi') return '自动匹配 DOI'
@@ -426,16 +471,19 @@ export function CiteShelf({
     let metadataReview = 0
     let duplicateItems = 0
     let summaryReady = 0
+    let summaryReview = 0
     for (const item of items) {
       const display = citationDisplay(item)
       const needsMetadataReview = shouldAutoRepairItem(item, display)
       const isDuplicate = (duplicateCountByIdentity[paperIdentity(item)] || 0) > 1
       const hasSummary = Boolean(String(item.summaryLine || citationCardView(item).summary || '').trim())
+      const summaryView = summaryQualityView(item, S)
 
       if (needsMetadataReview) metadataReview += 1
       else metadataReadyItems += 1
       if (isDuplicate) duplicateItems += 1
-      if (hasSummary) summaryReady += 1
+      if (hasSummary && summaryView.ok) summaryReady += 1
+      else summaryReview += 1
     }
     const total = items.length
     const summaryRate = total > 0 ? Math.round((summaryReady / total) * 100) : 0
@@ -445,9 +493,10 @@ export function CiteShelf({
       metadataReview,
       duplicateItems,
       summaryRate,
+      summaryReview,
       status: total <= 0 ? 'empty' : metadataReview > 0 ? 'review' : 'ready',
     }
-  }, [duplicateCountByIdentity, items])
+  }, [S, duplicateCountByIdentity, items])
 
   const visibleItems = useMemo(() => {
     const keyword = searchText.trim().toLowerCase()
@@ -774,6 +823,10 @@ export function CiteShelf({
         'journal_quartile',
         'conference_tier',
         'conference_ccf',
+        'summary_source',
+        'summary_provider',
+        'summary_quality_status',
+        'summary_quality_score',
         'summary',
       ]
       const rows = exportItems.map((item) => ([
@@ -797,6 +850,10 @@ export function CiteShelf({
         item.journalQuartile,
         item.conferenceTier,
         item.conferenceCcf,
+        item.summarySource,
+        item.summaryProvider,
+        summaryQualityView(item, S).status,
+        summaryQualityView(item, S).score,
         item.summaryLine || citationCardView(item).summary,
       ].map((field) => csvEscape(field)).join(',')))
       const csv = `${headers.join(',')}\n${rows.join('\n')}`
@@ -1008,9 +1065,15 @@ export function CiteShelf({
                       {S.shelf_readiness_dups.replace('{n}', String(shelfReadiness.duplicateItems))}
                     </span>
                   ) : null}
-                  <span className="kb-shelf-readiness-chip">
-                    {S.shelf_readiness_summaries.replace('{n}', `${shelfReadiness.summaryRate}%`)}
-                  </span>
+                  {shelfReadiness.summaryReview > 0 ? (
+                    <span className="kb-shelf-readiness-chip is-review">
+                      {S.shelf_readiness_summary_review.replace('{n}', String(shelfReadiness.summaryReview))}
+                    </span>
+                  ) : (
+                    <span className="kb-shelf-readiness-chip">
+                      {S.shelf_readiness_summary_grounded.replace('{n}', `${shelfReadiness.summaryRate}%`)}
+                    </span>
+                  )}
                 </div>
                 {repairImpact ? (
                   <div className="kb-shelf-repair-impact" data-testid="citation-shelf-repair-impact">
@@ -1225,6 +1288,7 @@ export function CiteShelf({
                       const shelfSummarySource = item.summaryLine
                         ? summarySourceLabel(item.summarySource, item.summaryProvider)
                         : summarySourceLabel('citation_card')
+                      const shelfSummaryQuality = summaryQualityView(item, S)
                       const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
                       const tagOptions = [...TAG_PRESETS, ...allTags]
                         .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
@@ -1432,6 +1496,12 @@ export function CiteShelf({
                                     <span className="kb-shelf-summary-head">{S.shelf_summary_head}</span>
                                     <span className="kb-shelf-summary-sep" aria-hidden="true">·</span>
                                     <span className="kb-shelf-summary-source">{shelfSummarySource}</span>
+                                    <span
+                                      className={`kb-shelf-summary-quality is-${shelfSummaryQuality.tone}`}
+                                      data-testid="citation-shelf-summary-quality"
+                                    >
+                                      {shelfSummaryQuality.label}
+                                    </span>
                                   </div>
                                   {(() => {
                                     const lines = splitSummary(shelfSummaryLine)
