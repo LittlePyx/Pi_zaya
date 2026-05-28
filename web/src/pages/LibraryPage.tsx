@@ -495,7 +495,7 @@ function qualityVerificationFromRerun(rerun: LibraryResearchQaRerunResponse | nu
   }
 }
 
-function qualityVerificationText(verification: Record<string, unknown> | undefined) {
+function qualityVerificationText(verification: Record<string, unknown> | undefined): string {
   if (!verification || !Object.keys(verification).length) return ''
   const type = normalizeTextValue(verification.type)
   if (type === 'research_qa_rerun') {
@@ -506,6 +506,24 @@ function qualityVerificationText(verification: Record<string, unknown> | undefin
     if (status === 'skipped') return 'No linked QA case'
     if (errorKind) return `QA rerun needs service: ${errorKind}`
     if (status) return caseId ? `QA rerun ${status}: ${caseId}` : `QA rerun ${status}`
+  }
+  if (type === 'reader_locate_repair') {
+    const status = normalizeTextValue(verification.status).toLowerCase()
+    const passed = Number(verification.passed || 0)
+    const total = Number(verification.target_count || 0)
+    const failed = Number(verification.failed || 0)
+    const needsReopen = Number(verification.needs_reader_reopen || 0)
+    if (verification.quality_ok === true || status === 'passed') return `Reader locate verified: ${passed}/${total}`
+    if (status === 'needs_reader_reopen') return `Reader locate needs reopen: ${needsReopen}/${total}`
+    if (status === 'failed') return `Reader locate still failing: ${failed}/${total}`
+    if (status === 'skipped') return 'No linked Reader locate event'
+  }
+  if (type === 'combined_repair_verification') {
+    const research = verification.research_qa as Record<string, unknown> | undefined
+    const reader = verification.reader_locate as Record<string, unknown> | undefined
+    const researchText: string = qualityVerificationText(research)
+    const readerText: string = qualityVerificationText(reader)
+    return [researchText, readerText].filter(Boolean).join(' · ')
   }
   return ''
 }
@@ -828,6 +846,7 @@ function qualityRepairRunStatusText(run: LibraryQualityRepairRun | null) {
   if (phase === 'verification_passed') return 'Run tracked: verified'
   if (phase === 'verification_failed') return 'Run tracked: verification failed'
   if (phase === 'verification_blocked') return 'Run tracked: verification blocked'
+  if (phase === 'verification_needs_reader_reopen') return 'Run tracked: needs reader reopen'
   if (status === 'completed' || phase === 'reindex_complete') return 'Run tracked: completed'
   if (status === 'failed' || phase === 'repair_failed') return 'Run tracked: failed'
   if (phase === 'source_reconversion_queued') return 'Run tracked: waiting for conversion'
@@ -839,7 +858,7 @@ function qualityRepairRunTagColor(run: LibraryQualityRepairRun | null) {
   const status = normalizeTextValue(run?.status).toLowerCase()
   const phase = normalizeTextValue(run?.phase).toLowerCase()
   if (phase === 'verification_passed') return 'success'
-  if (phase === 'verification_failed' || phase === 'verification_blocked') return 'warning'
+  if (phase === 'verification_failed' || phase === 'verification_blocked' || phase === 'verification_needs_reader_reopen') return 'warning'
   if (status === 'completed' || phase === 'reindex_complete') return 'success'
   if (status === 'failed' || phase === 'repair_failed') return 'error'
   if (status === 'queued' || phase === 'source_reconversion_queued') return 'processing'
@@ -851,7 +870,7 @@ function qualityRepairRunCanAdvance(run: LibraryQualityRepairRun | null) {
   if (!run) return false
   const status = normalizeTextValue(run.status).toLowerCase()
   const phase = normalizeTextValue(run.phase).toLowerCase()
-  if (phase === 'verification_failed' || phase === 'verification_blocked') return true
+  if (phase === 'verification_failed' || phase === 'verification_blocked' || phase === 'verification_needs_reader_reopen') return true
   if (status === 'completed' || phase === 'reindex_complete' || phase === 'repair_complete' || phase === 'verification_passed') return false
   return Boolean(run.needs_reindex || status === 'queued' || status === 'reindex_pending' || phase === 'source_reconversion_queued' || phase === 'reindex_pending' || phase === 'reindex_failed')
 }
@@ -2333,13 +2352,17 @@ export default function LibraryPage() {
         message.info(S.lib_msg_quality_repair_none)
       }
       if (needsReindex && enqueued <= 0) {
-        const reindexed = await handleReindex()
-        if (res.impact) setQualityRepairImpact({ ...res.impact, reindexed })
         if (res.repair_run?.run_id) {
-          const status = reindexed ? 'completed' : 'warning'
-          const phase = reindexed ? 'reindex_complete' : 'reindex_failed'
-          setQualityRepairRun({ ...res.repair_run, status, phase, reindexed })
-          libraryApi.updateQualityRepairRun(res.repair_run.run_id, { status, phase, reindexed }).catch(() => {})
+          const advanced = await libraryApi.advanceQualityRepairRun(res.repair_run.run_id)
+          setQualityRepairRun(advanced.item)
+          if (advanced.reindex?.ok) {
+            setQualityRepairImpact(res.impact ? { ...res.impact, reindexed: true } : null)
+          } else if (advanced.reindex) {
+            setQualityRepairImpact(res.impact ? { ...res.impact, reindexed: false } : null)
+          }
+        } else {
+          const reindexed = await handleReindex()
+          if (res.impact) setQualityRepairImpact({ ...res.impact, reindexed })
         }
       }
       await store.loadQualityOverview('all')

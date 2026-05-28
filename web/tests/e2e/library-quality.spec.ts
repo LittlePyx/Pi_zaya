@@ -32,6 +32,7 @@ const baseItem = {
 test.beforeEach(async ({ page }) => {
   const brokenName = 'Optica-2024-Broken conversion.pdf'
   const weakName = 'Applied Optics-2023-Weak anchors.pdf'
+  const readerLocateSourcePath = 'F:\\kb\\md\\weak\\weak.en.md'
   const repairRequestedNames = new Set<string>()
   const repairCompletedNames = new Set<string>()
   const isRepairing = (name: string) => repairRequestedNames.has(name) && !repairCompletedNames.has(name)
@@ -167,6 +168,38 @@ test.beforeEach(async ({ page }) => {
             latest_path: 'test_results/research_qa_eval/latest',
             updated_at: 1,
           },
+          reader_locate: {
+            available: true,
+            status: 'error',
+            summary: { total: 2, exact: 1, block: 0, degraded: 0, failed: 1, repairable: 1, strict_miss: 1, affected_sources: 1 },
+            top_failures: [{ name: 'target anchor drift', count: 1 }],
+          },
+        },
+        reader_locate: {
+          available: true,
+          status: 'error',
+          summary: { total: 2, exact: 1, block: 0, degraded: 0, failed: 1, repairable: 1, strict_miss: 1, affected_sources: 1 },
+          top_failures: [{ name: 'target anchor drift', count: 1 }],
+          recommended_sources: [
+            {
+              source_path: readerLocateSourcePath,
+              source_name: 'weak.en.md',
+              pdf_path: `F:\\kb\\pdfs\\${weakName}`,
+              md_path: readerLocateSourcePath,
+              md_exists: true,
+              total: 2,
+              failed: 1,
+              degraded: 0,
+              repairable: 1,
+              strict_miss: 1,
+              latest_status: 'failed',
+              latest_precision: 'failed',
+              latest_reason: 'target anchor drift',
+              latest_at: 1790000000,
+              recommended_action: 'repair_conversion_and_reindex',
+            },
+          ],
+          latest: [],
         },
         full_chain: {
           available: true,
@@ -357,6 +390,7 @@ test.beforeEach(async ({ page }) => {
         },
         priority_actions: [
           ...(review > 0 ? [{ domain: 'conversion', severity: 'error', label: 'Repair conversion quality', count: recommended.length }] : []),
+          { domain: 'reader_locate', severity: 'error', label: 'Repair reader locate sources', count: 1 },
           { domain: 'research_qa', severity: 'error', label: 'Fix failed research QA cases', count: 1 },
           { domain: 'citation_cards', severity: 'error', label: 'Fix citation and card quality', count: 2 },
         ],
@@ -653,13 +687,27 @@ test.beforeEach(async ({ page }) => {
           remaining_issue_codes: [],
         },
         verification: {
-          type: 'research_qa_rerun',
-          case_id: 'scinerf-admm-origin',
+          type: 'combined_repair_verification',
           status: 'passed',
           quality_ok: true,
-          failure_count: 0,
+          research_qa: {
+            type: 'research_qa_rerun',
+            case_id: 'scinerf-admm-origin',
+            status: 'passed',
+            quality_ok: true,
+            failure_count: 0,
+          },
+          reader_locate: {
+            type: 'reader_locate_repair',
+            status: 'passed',
+            quality_ok: true,
+            target_count: 1,
+            passed: 1,
+            failed: 0,
+            needs_reader_reopen: 0,
+          },
         },
-        detail: 'Verification passed for Research QA case scinerf-admm-origin.',
+        detail: 'Research QA and Reader locate verification passed for scinerf-admm-origin.',
       }
       latestRepairRun = item
       await route.fulfill({
@@ -1093,6 +1141,7 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-quality-report-avg')).toContainText('Q70')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="research_qa"]')).toContainText('refs_include_required_docs x1')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="citation_cards"]')).toContainText('citation_card_quality x1')
+  await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="reader_locate"]')).toContainText('target anchor drift x1')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Feature health')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Paper Guide')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Literature basket')
@@ -1123,6 +1172,7 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(shelfStage.getByTestId('library-quality-full-chain-stage-result')).toContainText('QA rerun passed')
   await expect(page.getByTestId('library-quality-priority-actions').locator('[data-quality-action-domain="research_qa"]')).toContainText('1')
   await expect(page.getByTestId('library-quality-priority-actions').locator('[data-quality-action-domain="citation_cards"]')).toContainText('2')
+  await expect(page.getByTestId('library-quality-priority-actions').locator('[data-quality-action-domain="reader_locate"]')).toContainText('1')
   await expect(page.getByTestId('library-quality-rerun-summary')).toContainText('Runs')
   await expect(page.getByTestId('library-quality-rerun-summary')).toContainText('refs_include_required_docs x2')
   await expect(page.getByTestId('library-quality-failure-cases')).toContainText('scinerf-admm-origin')
@@ -1227,6 +1277,7 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-quality-repair-run')).toContainText('run-repa')
   await expect(page.getByTestId('library-quality-repair-run')).toContainText('verified')
   await expect(page.getByTestId('library-quality-repair-run')).toContainText('QA rerun passed')
+  await expect(page.getByTestId('library-quality-repair-run')).toContainText('Reader locate verified')
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('Q38')
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('missing_images')
   await expect(page.getByTestId('library-quality-report-review')).toContainText('1')

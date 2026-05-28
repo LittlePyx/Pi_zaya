@@ -1732,6 +1732,287 @@ def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
     }
 
 
+def _reader_locate_all_event_rows(*, limit: int = 4000) -> list[dict]:
+    rows = _read_jsonl_artifact(_reader_locate_events_path(), limit=max(1000, min(10000, int(limit or 4000))))
+    out: list[dict] = []
+    for raw in rows:
+        row = _normalize_reader_locate_event(raw)
+        if row:
+            out.append(row)
+    out.sort(key=lambda item: (_safe_int(item.get("created_at"), 0), str(item.get("id") or "")), reverse=True)
+    return out
+
+
+def _reader_locate_event_problem(row: dict) -> bool:
+    status = str((row or {}).get("status") or "").strip().lower()
+    precision = str((row or {}).get("precision") or "").strip().lower()
+    strict = bool((row or {}).get("strict_locate"))
+    return (
+        status == "failed"
+        or precision == "failed"
+        or status in _READER_LOCATE_DEGRADED_STATUSES
+        or precision in _READER_LOCATE_DEGRADED_STATUSES
+        or bool((row or {}).get("repairable"))
+        or (strict and status not in _READER_LOCATE_GOOD_STATUSES)
+    )
+
+
+def _reader_locate_event_tokens(row: dict) -> set[str]:
+    tokens: set[str] = set()
+    for field in ("source_path", "source_name", "pdf_path", "md_path"):
+        text = str((row or {}).get(field) or "").strip()
+        if not text:
+            continue
+        folded = text.replace("\\", "/").lower()
+        tokens.add(folded)
+        base = Path(folded).name
+        if base:
+            tokens.add(base)
+            stem = _strip_known_source_ext(base).lower()
+            if stem:
+                tokens.add(stem)
+        key = _normalized_path_key(text).replace("\\", "/").lower()
+        if key:
+            tokens.add(key)
+    return {token for token in tokens if token}
+
+
+def _reader_locate_run_problem_events(run: dict, rows: list[dict]) -> list[dict]:
+    run_tokens = _quality_repair_run_match_tokens(run)
+    if not run_tokens:
+        return []
+    run_created_at = _safe_int((run or {}).get("created_at"), 0)
+    latest_problem_by_identity: dict[str, dict] = {}
+    for row in rows:
+        if not _reader_locate_event_problem(row):
+            continue
+        created_at = _safe_int(row.get("created_at"), 0)
+        if run_created_at > 0 and created_at > run_created_at:
+            continue
+        if not run_tokens.intersection(_reader_locate_event_tokens(row)):
+            continue
+        identity = _reader_locate_identity(row)
+        if not identity:
+            continue
+        prev = latest_problem_by_identity.get(identity)
+        if not prev or created_at >= _safe_int(prev.get("created_at"), 0):
+            latest_problem_by_identity[identity] = row
+    out = list(latest_problem_by_identity.values())
+    out.sort(key=lambda item: (_safe_int(item.get("created_at"), 0), str(item.get("id") or "")), reverse=True)
+    return out[:40]
+
+
+def _reader_locate_newer_good_event(problem: dict, rows: list[dict], *, after_at: int) -> dict:
+    identity = _reader_locate_identity(problem)
+    problem_source_key = str(problem.get("source_key") or _reader_locate_source_key(problem)).lower()
+    candidates: list[dict] = []
+    for row in rows:
+        created_at = _safe_int(row.get("created_at"), 0)
+        if after_at > 0 and created_at <= after_at:
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status not in _READER_LOCATE_GOOD_STATUSES:
+            continue
+        same_identity = bool(identity) and _reader_locate_identity(row) == identity
+        same_source = problem_source_key and str(row.get("source_key") or _reader_locate_source_key(row)).lower() == problem_source_key
+        if same_identity or (not identity.startswith("feedback:") and same_source):
+            candidates.append(row)
+    candidates.sort(key=lambda item: (_safe_int(item.get("created_at"), 0), str(item.get("id") or "")), reverse=True)
+    return candidates[0] if candidates else {}
+
+
+def _fold_reader_locate_heading(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\[[^\]]+\]\([^)]+\)", " ", text)
+    text = re.sub(r"[#*_`~>\[\]().,:;|\\/-]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _reader_locate_source_target_check(row: dict) -> dict:
+    source_path = str((row or {}).get("source_path") or row.get("md_path") or row.get("pdf_path") or "").strip()
+    source_name = str((row or {}).get("source_name") or "").strip()
+    resolved = _resolve_quality_source(source_path=source_path, source_name=source_name)
+    md_path_raw = str(resolved.get("md_path") or "").strip()
+    if not bool(resolved.get("md_exists")) or not md_path_raw:
+        return {
+            "status": "failed",
+            "reason": "markdown source is missing after repair",
+            "md_path": md_path_raw,
+            "source_quality_status": "missing",
+            "source_quality_score": 0,
+            "checks": {"md_exists": False},
+        }
+
+    md_path = Path(md_path_raw).expanduser()
+    quality = _conversion_quality_summary(md_path) or {}
+    quality_status = str(quality.get("status") or "unknown").strip().lower()
+    quality_score = _safe_int(quality.get("score"), 0)
+    try:
+        text = md_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception as exc:
+        return {
+            "status": "failed",
+            "reason": f"markdown source cannot be read: {exc}",
+            "md_path": md_path_raw,
+            "source_quality_status": quality_status,
+            "source_quality_score": quality_score,
+            "checks": {"md_exists": True, "readable": False},
+        }
+
+    anchor_id = str((row or {}).get("anchor_id") or "").strip()
+    block_id = str((row or {}).get("block_id") or "").strip()
+    heading_path = str((row or {}).get("heading_path") or "").strip()
+    target_ids = [value for value in [anchor_id, block_id] if value]
+    missing_ids = [value for value in target_ids if value not in text]
+    found_ids = [value for value in target_ids if value and value in text]
+
+    headings = [_fold_reader_locate_heading(match.group(1)) for match in re.finditer(r"(?m)^\s{0,3}#{1,6}\s+(.+?)\s*$", text)]
+    heading_parts = [
+        _fold_reader_locate_heading(part)
+        for part in re.split(r"\s*(?:/|>|→|\||::)\s*", heading_path)
+        if _fold_reader_locate_heading(part)
+    ]
+    heading_found = False
+    if heading_parts:
+        for part in reversed(heading_parts[-3:]):
+            if any(part and (part == heading or part in heading or heading in part) for heading in headings):
+                heading_found = True
+                break
+
+    checks = {
+        "md_exists": True,
+        "readable": True,
+        "found_ids": found_ids,
+        "missing_ids": missing_ids,
+        "heading_found": heading_found,
+        "source_quality_status": quality_status,
+        "source_quality_score": quality_score,
+    }
+    if missing_ids:
+        return {
+            "status": "failed",
+            "reason": "target anchor/block is still missing after repair",
+            "md_path": md_path_raw,
+            "source_quality_status": quality_status,
+            "source_quality_score": quality_score,
+            "checks": checks,
+        }
+    if found_ids or heading_found:
+        return {
+            "status": "passed",
+            "reason": "target anchor/block or heading is present after repair",
+            "md_path": md_path_raw,
+            "source_quality_status": quality_status,
+            "source_quality_score": quality_score,
+            "checks": checks,
+        }
+    if quality_status == "good" and not bool(quality.get("has_review_issue")):
+        return {
+            "status": "needs_reader_reopen",
+            "reason": "source quality is ready, but this event has no backend-verifiable target id",
+            "md_path": md_path_raw,
+            "source_quality_status": quality_status,
+            "source_quality_score": quality_score,
+            "checks": checks,
+        }
+    return {
+        "status": "failed",
+        "reason": "source still has conversion quality issues and no target anchor was verified",
+        "md_path": md_path_raw,
+        "source_quality_status": quality_status,
+        "source_quality_score": quality_score,
+        "checks": checks,
+    }
+
+
+def _reader_locate_repair_verification(run: dict) -> dict:
+    rows = _reader_locate_all_event_rows(limit=4000)
+    problems = _reader_locate_run_problem_events(run, rows)
+    if not problems:
+        return {
+            "type": "reader_locate_repair",
+            "status": "skipped",
+            "quality_ok": False,
+            "target_count": 0,
+            "passed": 0,
+            "failed": 0,
+            "needs_reader_reopen": 0,
+            "detail": "No matching Reader locate failure or degraded event was linked to this repair run.",
+        }
+    after_at = _safe_int((run or {}).get("updated_at"), 0) or _safe_int((run or {}).get("created_at"), 0)
+    checked: list[dict] = []
+    passed = 0
+    failed = 0
+    needs_reopen = 0
+    for problem in problems[:20]:
+        newer_good = _reader_locate_newer_good_event(problem, rows, after_at=after_at)
+        if newer_good:
+            status = "passed"
+            reason = "a newer exact/block reader locate event verified this source"
+            check = {
+                "status": status,
+                "reason": reason,
+                "source_path": str(problem.get("source_path") or ""),
+                "source_name": str(problem.get("source_name") or ""),
+                "locate_feedback_key": str(problem.get("locate_feedback_key") or ""),
+                "previous_status": str(problem.get("status") or ""),
+                "verified_by_event_at": _safe_int(newer_good.get("created_at"), 0),
+                "recommended_action": str(problem.get("recommended_action") or ""),
+            }
+        else:
+            target_check = _reader_locate_source_target_check(problem)
+            status = str(target_check.get("status") or "failed")
+            reason = str(target_check.get("reason") or "")
+            check = {
+                "status": status,
+                "reason": reason,
+                "source_path": str(problem.get("source_path") or ""),
+                "source_name": str(problem.get("source_name") or ""),
+                "locate_feedback_key": str(problem.get("locate_feedback_key") or ""),
+                "previous_status": str(problem.get("status") or ""),
+                "previous_precision": str(problem.get("precision") or ""),
+                "recommended_action": str(problem.get("recommended_action") or ""),
+                "md_path": str(target_check.get("md_path") or ""),
+                "source_quality_status": str(target_check.get("source_quality_status") or ""),
+                "source_quality_score": _safe_int(target_check.get("source_quality_score"), 0),
+                "checks": target_check.get("checks") if isinstance(target_check.get("checks"), dict) else {},
+            }
+        if status == "passed":
+            passed += 1
+        elif status == "needs_reader_reopen":
+            needs_reopen += 1
+        else:
+            failed += 1
+        checked.append(check)
+    if failed > 0:
+        status = "failed"
+    elif needs_reopen > 0:
+        status = "needs_reader_reopen"
+    else:
+        status = "passed"
+    return {
+        "type": "reader_locate_repair",
+        "status": status,
+        "quality_ok": status == "passed",
+        "target_count": len(problems),
+        "passed": int(passed),
+        "failed": int(failed),
+        "needs_reader_reopen": int(needs_reopen),
+        "checked": checked[:12],
+        "detail": (
+            f"Reader locate verification passed for {passed}/{len(problems)} targets."
+            if status == "passed"
+            else (
+                f"Reader locate needs a user reopen for {needs_reopen}/{len(problems)} targets."
+                if status == "needs_reader_reopen"
+                else f"Reader locate verification still failing for {failed}/{len(problems)} targets."
+            )
+        ),
+    }
+
+
 def _research_qa_rerun_history_rows(*, limit: int = 1000) -> list[dict]:
     rows = _read_jsonl_artifact(_research_qa_rerun_history_path(), limit=limit)
     rows.sort(key=lambda item: (_safe_int(item.get("finished_at"), 0), _safe_int(item.get("started_at"), 0)), reverse=True)
@@ -2200,11 +2481,35 @@ def _quality_repair_run_verification_from_rerun(result: dict) -> dict:
 def _quality_repair_run_verification_patch(run: dict, *, body) -> dict:
     if body is not None and not bool(getattr(body, "verify", True)):
         return {}
+    reader_verification = _reader_locate_repair_verification(run)
+    reader_has_targets = _safe_int(reader_verification.get("target_count"), 0) > 0
+    reader_status = str(reader_verification.get("status") or "").strip().lower()
     case_id = str(getattr(body, "case_id", "") or "").strip() if body is not None else ""
     candidate_cases = _quality_repair_run_candidate_cases(run, limit=3)
     if not case_id and candidate_cases:
         case_id = str(candidate_cases[0].get("id") or "").strip()
     if not case_id:
+        if reader_has_targets:
+            if bool(reader_verification.get("quality_ok")) or reader_status == "passed":
+                return {
+                    "status": "completed",
+                    "phase": "verification_passed",
+                    "verification": reader_verification,
+                    "detail": str(reader_verification.get("detail") or "Reader locate verification passed."),
+                }
+            if reader_status == "needs_reader_reopen":
+                return {
+                    "status": "warning",
+                    "phase": "verification_needs_reader_reopen",
+                    "verification": reader_verification,
+                    "detail": str(reader_verification.get("detail") or "Reader locate needs a user reopen to confirm exact positioning."),
+                }
+            return {
+                "status": "warning",
+                "phase": "verification_failed",
+                "verification": reader_verification,
+                "detail": str(reader_verification.get("detail") or "Reader locate verification still failing."),
+            }
         return {
             "verification": {
                 "type": "research_qa_rerun",
@@ -2245,6 +2550,37 @@ def _quality_repair_run_verification_patch(run: dict, *, body) -> dict:
             "finished_at": int(time.time()),
         }
     verification = _quality_repair_run_verification_from_rerun(result)
+    if reader_has_targets:
+        qa_ok = bool(verification.get("quality_ok")) or str(verification.get("status") or "").lower() == "passed"
+        reader_ok = bool(reader_verification.get("quality_ok")) or reader_status == "passed"
+        combined = {
+            "type": "combined_repair_verification",
+            "status": "passed" if qa_ok and reader_ok else ("blocked" if str(verification.get("status") or "").lower() == "error" else "failed"),
+            "quality_ok": bool(qa_ok and reader_ok),
+            "research_qa": verification,
+            "reader_locate": reader_verification,
+        }
+        if qa_ok and reader_ok:
+            return {
+                "status": "completed",
+                "phase": "verification_passed",
+                "verification": combined,
+                "detail": f"Research QA and Reader locate verification passed for {case_id}.",
+            }
+        if qa_ok and reader_status == "needs_reader_reopen":
+            return {
+                "status": "warning",
+                "phase": "verification_needs_reader_reopen",
+                "verification": combined,
+                "detail": str(reader_verification.get("detail") or "Reader locate needs a user reopen to confirm exact positioning."),
+            }
+        if qa_ok:
+            return {
+                "status": "warning",
+                "phase": "verification_failed",
+                "verification": combined,
+                "detail": str(reader_verification.get("detail") or "Reader locate verification still failing."),
+            }
     status = str(verification.get("status") or "").lower()
     failures = _list_strings(verification.get("failures"))
     if bool(verification.get("quality_ok")) or status == "passed":

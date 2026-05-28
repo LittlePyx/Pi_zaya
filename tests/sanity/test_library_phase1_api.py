@@ -522,6 +522,111 @@ def test_library_reader_locate_quality_events_feed_overview(monkeypatch, tmp_pat
     assert rows_payload["summary"]["summary"]["failed"] == 1
 
 
+def test_library_reader_locate_repair_run_verifies_anchor_targets(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf = pdf_dir / "target.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    md = md_dir / "target" / "target.en.md"
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(
+        "\n".join(
+            [
+                '<!-- kb_page: 1 -->',
+                '# Target Paper',
+                '## Method',
+                '<span id="a-method-1"></span>',
+                '<p id="p-method-1">The repaired method paragraph is now addressable.</p>',
+                '## References',
+                '[1] Reference.',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_reader_locate_events_path", lambda: tmp_path / "reader_locate_events.jsonl")
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(library_router, "_latest_research_qa_failure_cases", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        library_router,
+        "_run_library_reindex",
+        lambda: {
+            "ok": True,
+            "stdout": "ingest ok",
+            "stderr": "",
+            "structured_indices": {"version": 2, "scanned": 1, "rebuilt": 1, "skipped": 0, "failed": 0, "citation_mention_count": 1, "errors": []},
+            "structured_indices_error": "",
+            "refsync": {"started": True, "run_id": 99},
+            "refsync_error": "",
+        },
+    )
+
+    library_router._append_reader_locate_event(
+        {
+            "created_at": 100,
+            "source_path": str(md),
+            "source_name": "target.en.md",
+            "locate_feedback_key": "cite-target-1",
+            "locate_request_id": 1,
+            "status": "failed",
+            "precision": "failed",
+            "ok": False,
+            "repairable": True,
+            "strict_locate": True,
+            "reason": "target anchor was missing before repair",
+            "block_id": "p-method-1",
+            "anchor_id": "a-method-1",
+            "heading_path": "Method",
+        }
+    )
+    library_router._append_quality_repair_run(
+        {
+            "run_id": "reader-locate-run",
+            "status": "reindex_pending",
+            "phase": "reindex_pending",
+            "created_at": 200,
+            "updated_at": 200,
+            "requested": 1,
+            "enqueued": 0,
+            "repaired": 1,
+            "failed": 0,
+            "skipped_busy": 0,
+            "needs_reindex": True,
+            "target_names": ["target.en.md"],
+            "target_sources": [str(md)],
+            "impact": {"requested": 1, "repaired": 1, "enqueued": 0, "needs_reindex": True},
+            "detail": "Markdown source repair completed; index refresh is pending.",
+        }
+    )
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/repair-runs/reader-locate-run/advance")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["advanced"] is True
+    assert payload["item"]["status"] == "completed"
+    assert payload["item"]["phase"] == "verification_passed"
+    assert payload["item"]["reindexed"] is True
+    verification = payload["item"]["verification"]
+    assert verification["type"] == "reader_locate_repair"
+    assert verification["status"] == "passed"
+    assert verification["quality_ok"] is True
+    assert verification["target_count"] == 1
+    assert verification["passed"] == 1
+    assert verification["checked"][0]["status"] == "passed"
+    assert verification["checked"][0]["checks"]["found_ids"] == ["a-method-1", "p-method-1"]
+
+
 def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
