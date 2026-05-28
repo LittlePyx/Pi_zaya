@@ -643,6 +643,213 @@ def test_library_reader_locate_repair_run_verifies_anchor_targets(monkeypatch, t
     assert verification["checked"][0]["checks"]["found_ids"] == ["a-method-1", "p-method-1"]
 
 
+def test_library_quality_repair_reindexes_reader_locate_failure_when_markdown_is_good(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    md = md_dir / "ready" / "ready.en.md"
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Ready Paper",
+                "## Abstract",
+                "This paper has enough text for a good conversion-quality assessment and source indexing.",
+                "## Method",
+                '<span id="a-method-1"></span>',
+                '<p id="p-method-1">The method paragraph is already present but the reader locate index was stale.</p>',
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_reader_locate_events_path", lambda: tmp_path / "reader_locate_events.jsonl")
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(db_dir), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    enqueued: list[dict] = []
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+    monkeypatch.setattr(
+        library_router,
+        "_run_library_reindex",
+        lambda: {
+            "ok": True,
+            "stdout": "ingest ok",
+            "stderr": "",
+            "structured_indices": {"version": 2, "scanned": 1, "rebuilt": 1, "skipped": 0, "failed": 0, "citation_mention_count": 0, "errors": []},
+            "structured_indices_error": "",
+            "refsync": {"started": True, "run_id": 7},
+            "refsync_error": "",
+        },
+    )
+
+    library_router._append_reader_locate_event(
+        {
+            "created_at": 100,
+            "source_path": str(md),
+            "source_name": "ready.en.md",
+            "locate_feedback_key": "cite-ready-1",
+            "locate_request_id": 1,
+            "status": "failed",
+            "precision": "failed",
+            "ok": False,
+            "repairable": True,
+            "strict_locate": True,
+            "reason": "source block index was stale",
+            "block_id": "p-method-1",
+            "anchor_id": "a-method-1",
+            "heading_path": "Ready Paper / Method",
+        }
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/repair",
+        json={"sources": [{"source_path": str(md), "source_name": "ready.en.md"}], "md_autofix": False},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enqueued"] == 0
+    assert payload["repaired"] == 0
+    assert payload["needs_reindex"] is True
+    assert payload["impact"]["reader_locate_reindex"] == 1
+    assert payload["repair_run"]["status"] == "reindex_pending"
+    assert payload["repair_run"]["phase"] == "reindex_pending"
+    assert enqueued == []
+    item = payload["items"][0]
+    assert item["ok"] is True
+    assert item["reader_locate_reindex_required"] is True
+    assert item["reader_locate_problem_count"] == 1
+    assert item["planned_action"] == "reindex"
+    assert item["planned_scope"] == "source_blocks"
+    assert item["repair_attempt"]["event"] == "reader_locate_reindex_required"
+    assert item["repair_attempt"]["status"] == "reindex_pending"
+
+    advance = client.post(f"/api/library/quality/repair-runs/{payload['repair_run_id']}/advance")
+    assert advance.status_code == 200
+    advanced = advance.json()
+    assert advanced["item"]["status"] == "completed"
+    assert advanced["item"]["phase"] == "verification_passed"
+    assert advanced["item"]["verification"]["type"] == "reader_locate_repair"
+    assert advanced["item"]["verification"]["status"] == "passed"
+    assert advanced["item"]["verification"]["checked"][0]["checks"]["found_ids"] == ["a-method-1", "p-method-1"]
+
+
+def test_library_quality_repair_ignores_reader_locate_failure_after_newer_exact_open(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    md = md_dir / "ready" / "ready.en.md"
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Ready Paper",
+                "## Abstract",
+                "This paper has enough text for a good conversion-quality assessment and source indexing.",
+                "## Method",
+                '<span id="a-method-1"></span>',
+                '<p id="p-method-1">The method paragraph is already present and was later located exactly.</p>',
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_reader_locate_events_path", lambda: tmp_path / "reader_locate_events.jsonl")
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(db_dir), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    enqueued: list[dict] = []
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})))
+
+    base_event = {
+        "source_path": str(md),
+        "source_name": "ready.en.md",
+        "locate_feedback_key": "cite-ready-1",
+        "locate_request_id": 1,
+        "strict_locate": True,
+        "block_id": "p-method-1",
+        "anchor_id": "a-method-1",
+        "heading_path": "Ready Paper / Method",
+    }
+    library_router._append_reader_locate_event(
+        {
+            **base_event,
+            "created_at": 100,
+            "status": "failed",
+            "precision": "failed",
+            "ok": False,
+            "repairable": True,
+            "reason": "source block index was stale",
+        }
+    )
+    library_router._append_reader_locate_event(
+        {
+            **base_event,
+            "created_at": 200,
+            "status": "exact",
+            "precision": "exact_anchor",
+            "ok": True,
+            "repairable": False,
+            "reason": "reader reopen verified the exact anchor",
+        }
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/repair",
+        json={"sources": [{"source_path": str(md), "source_name": "ready.en.md"}], "md_autofix": False},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enqueued"] == 0
+    assert payload["repaired"] == 0
+    assert payload["needs_reindex"] is False
+    assert payload["impact"]["reader_locate_reindex"] == 0
+    assert payload["repair_run"]["status"] == "completed"
+    assert payload["repair_run"]["phase"] == "repair_complete"
+    assert enqueued == []
+    item = payload["items"][0]
+    assert item["ok"] is True
+    assert "reader_locate_reindex_required" not in item
+    assert "reader_locate_problem_count" not in item
+    assert item["repair_attempt"]["event"] == "repair_closed"
+
+
 def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

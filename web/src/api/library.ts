@@ -828,6 +828,10 @@ export interface LibraryQualityRepairItem {
   planned_scope?: string
   planned_speed_mode?: string
   planned_no_llm?: boolean
+  reader_locate_problem_count?: number
+  reader_locate_recommended_actions?: string[]
+  reader_locate_problem_keys?: string[]
+  reader_locate_reindex_required?: boolean
   repair_attempt?: ConversionRepairAttempt
   repair_error?: string
   skipped_busy: boolean
@@ -843,6 +847,7 @@ export interface LibraryQualityRepairImpact {
   skipped_busy: number
   failed: number
   needs_reindex: boolean
+  reader_locate_reindex?: number
   before_avg_score: number
   after_avg_score: number
   score_delta: number

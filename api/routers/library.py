@@ -1986,6 +1986,51 @@ def _reader_locate_run_problem_events(run: dict, rows: list[dict]) -> list[dict]
     return out[:40]
 
 
+def _reader_locate_source_problem_events(
+    *,
+    source_path: str = "",
+    source_name: str = "",
+    pdf_path: str = "",
+    md_path: str = "",
+    limit: int = 20,
+) -> list[dict]:
+    target_tokens = _reader_locate_event_tokens(
+        {
+            "source_path": source_path,
+            "source_name": source_name,
+            "pdf_path": pdf_path,
+            "md_path": md_path,
+        }
+    )
+    if not target_tokens:
+        return []
+    rows = _reader_locate_all_event_rows(limit=4000)
+    latest_problem_by_identity: dict[str, dict] = {}
+    for row in rows:
+        if not _reader_locate_event_problem(row):
+            continue
+        if not target_tokens.intersection(_reader_locate_event_tokens(row)):
+            continue
+        identity = _reader_locate_identity(row)
+        if not identity:
+            continue
+        prev = latest_problem_by_identity.get(identity)
+        if not prev or _safe_int(row.get("created_at"), 0) >= _safe_int(prev.get("created_at"), 0):
+            latest_problem_by_identity[identity] = row
+    out = list(latest_problem_by_identity.values())
+    out = [
+        problem
+        for problem in out
+        if not _reader_locate_newer_good_event(
+            problem,
+            rows,
+            after_at=_safe_int(problem.get("created_at"), 0),
+        )
+    ]
+    out.sort(key=lambda item: (_safe_int(item.get("created_at"), 0), str(item.get("id") or "")), reverse=True)
+    return out[: max(0, min(80, int(limit or 20)))]
+
+
 def _reader_locate_newer_good_event(problem: dict, rows: list[dict], *, after_at: int) -> dict:
     identity = _reader_locate_identity(problem)
     problem_source_key = str(problem.get("source_key") or _reader_locate_source_key(problem)).lower()
@@ -5723,6 +5768,20 @@ def repair_library_quality(body: QualityRepairBody):
         else:
             md_path = Path()
             md_exists = False
+        reader_locate_problems = _reader_locate_source_problem_events(
+            source_path=str(target.get("source_path") or ""),
+            source_name=str(target.get("source_name") or ""),
+            pdf_path=str(pdf_path or ""),
+            md_path=str(md_path) if md_exists else str(md_path_raw or ""),
+            limit=20,
+        )
+        reader_locate_recommended_actions = sorted(
+            set(
+                str(item.get("recommended_action") or _reader_locate_recommended_action(item))
+                for item in reader_locate_problems
+                if str(item.get("recommended_action") or _reader_locate_recommended_action(item)).strip()
+            )
+        )
         repair_payload: dict = {}
         active_plan: dict = {}
         if bool(body.md_autofix) and md_exists and _path_is_within(md_path, [md_d]):
@@ -5841,20 +5900,62 @@ def repair_library_quality(body: QualityRepairBody):
             }
 
         plan_action = str(active_plan.get("action") or "").strip().lower()
+        reader_locate_reindex_required = bool(reader_locate_problems) and md_exists and plan_action in {"", "none"}
+        if reader_locate_problems:
+            repair_payload["reader_locate_problem_count"] = len(reader_locate_problems)
+            repair_payload["reader_locate_recommended_actions"] = reader_locate_recommended_actions[:8]
+            repair_payload["reader_locate_problem_keys"] = [
+                str(item.get("locate_feedback_key") or item.get("id") or "")
+                for item in reader_locate_problems[:8]
+                if str(item.get("locate_feedback_key") or item.get("id") or "").strip()
+            ]
+        if reader_locate_reindex_required:
+            repair_payload["reader_locate_reindex_required"] = True
+            repair_payload["planned_action"] = "reindex"
+            repair_payload["planned_scope"] = "source_blocks"
+            repair_payload["repair_plan"] = {
+                **dict(active_plan or {}),
+                "action": "reindex",
+                "scope": "source_blocks",
+                "reason": "Reader locate reported a degraded or failed target; rebuild structured source anchors and indexes.",
+                "issue_codes": list(active_plan.get("issue_codes") or []),
+                "reader_locate_recommended_actions": reader_locate_recommended_actions[:8],
+            }
         if md_exists and plan_action != "reconvert":
             if md_exists and _path_is_within(md_path, [md_d]):
                 try:
+                    attempt_event = "reader_locate_reindex_required" if reader_locate_reindex_required else "repair_closed"
                     repair_payload["repair_attempt"] = append_conversion_repair_attempt(
                         md_path,
-                        event="repair_closed",
-                        status="success" if plan_action in {"", "none"} else str(plan_action or "success"),
-                        action=str(active_plan.get("action") or "none"),
-                        scope=str(active_plan.get("scope") or ""),
+                        event=attempt_event,
+                        status=(
+                            "reindex_pending"
+                            if reader_locate_reindex_required
+                            else ("success" if plan_action in {"", "none"} else str(plan_action or "success"))
+                        ),
+                        action="reindex" if reader_locate_reindex_required else str(active_plan.get("action") or "none"),
+                        scope="source_blocks" if reader_locate_reindex_required else str(active_plan.get("scope") or ""),
                         speed_mode=str(active_plan.get("speed_mode") or ""),
                         issue_codes=list(active_plan.get("issue_codes") or []),
-                        source="library_quality_repair",
-                        reason=str(active_plan.get("reason") or ""),
-                        detail="No source reconversion required after quality repair planning.",
+                        source="reader_locate_quality" if reader_locate_reindex_required else "library_quality_repair",
+                        reason=(
+                            "Reader locate failure/degradation requires source index rebuild."
+                            if reader_locate_reindex_required
+                            else str(active_plan.get("reason") or "")
+                        ),
+                        detail=(
+                            "Reader locate failed or degraded while Markdown quality is otherwise closed; rebuild structured source anchors."
+                            if reader_locate_reindex_required
+                            else "No source reconversion required after quality repair planning."
+                        ),
+                        extra=(
+                            {
+                                "reader_locate_problem_count": len(reader_locate_problems),
+                                "reader_locate_recommended_actions": reader_locate_recommended_actions[:8],
+                            }
+                            if reader_locate_reindex_required
+                            else None
+                        ),
                     )
                 except Exception:
                     pass
@@ -5934,7 +6035,8 @@ def repair_library_quality(body: QualityRepairBody):
             fixed_counter[code] += 1
         for code in _list_strings(item.get("remaining_issue_codes")):
             remaining_counter[code] += 1
-    needs_reindex = bool(repaired_items) or enqueued > 0
+    reader_locate_reindex_items = [item for item in items if bool(item.get("reader_locate_reindex_required"))]
+    needs_reindex = bool(repaired_items) or enqueued > 0 or bool(reader_locate_reindex_items)
     impact = {
         "requested": int(requested),
         "repaired": int(len(repaired_items)),
@@ -5943,6 +6045,7 @@ def repair_library_quality(body: QualityRepairBody):
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
         "needs_reindex": bool(needs_reindex),
+        "reader_locate_reindex": int(len(reader_locate_reindex_items)),
         "before_avg_score": int(round(sum(before_scores) / len(before_scores))) if before_scores else 0,
         "after_avg_score": int(round(sum(after_scores) / len(after_scores))) if after_scores else 0,
         "score_delta": (
@@ -5983,7 +6086,11 @@ def repair_library_quality(body: QualityRepairBody):
         "detail": (
             "Source reconversion queued; index refresh should run after conversion."
             if enqueued > 0
-            else ("Markdown source repair completed; index refresh is pending." if needs_reindex else "No source repair required.")
+            else (
+                "Reader locate source anchors need index refresh."
+                if reader_locate_reindex_items and not repaired_items
+                else ("Markdown source repair completed; index refresh is pending." if needs_reindex else "No source repair required.")
+            )
         ),
     })
 

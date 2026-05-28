@@ -377,6 +377,7 @@ export const S = {
   shelf_source_open_section_verified: '已退到章节',
   shelf_source_open_file_verified: '已打开来源',
   shelf_source_open_failed: '定位失败，自动修复',
+  shelf_source_open_repaired_reopen: '来源已修复，重新打开校验',
   shelf_readiness_source_open_ready: '来源可打开 {n}',
   shelf_readiness_source_open_partial: '粗定位 {n}',
   shelf_readiness_source_open_review: '来源自动修复 {n}',

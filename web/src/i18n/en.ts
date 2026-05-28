@@ -377,6 +377,7 @@ export const S = {
   shelf_source_open_section_verified: 'Section fallback',
   shelf_source_open_file_verified: 'Source opened',
   shelf_source_open_failed: 'Locate failed, repairing',
+  shelf_source_open_repaired_reopen: 'Source repaired, reopen to verify',
   shelf_readiness_source_open_ready: 'Sources open {n}',
   shelf_readiness_source_open_partial: 'Broad locate {n}',
   shelf_readiness_source_open_review: 'Source repair {n}',

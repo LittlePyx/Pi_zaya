@@ -26,6 +26,7 @@ const DESKTOP_READER_MAX_WIDTH = 760
 const DESKTOP_READER_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const READER_WIDTH_STORAGE_KEY = 'kb:paper-guide-reader-width'
 const READER_COLLAPSED_STORAGE_KEY = 'kb:paper-guide-reader-collapsed'
+const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
 const TIMELINE_RAIL_LABEL = '\u65f6\u95f4\u7ebf'
 const showLegacyUiBlocks = false
 
@@ -136,6 +137,7 @@ export default function ChatPage() {
   const timelineJumpTokenRef = useRef(1)
   const readerLocateRequestRef = useRef(1)
   const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
+  const readerLocateSourceRepairAtRef = useRef<Record<string, number>>({})
   const splitLayoutRef = useRef<HTMLDivElement | null>(null)
   const readerResizeGuideRef = useRef<HTMLDivElement | null>(null)
   const readerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -587,6 +589,8 @@ export default function ChatPage() {
   const handleReaderLocateResult = useCallback((result: ReaderLocateResult) => {
     const feedbackKey = String(result.locateFeedbackKey || '').trim()
     if (!feedbackKey) return
+    const sourcePath = String(result.sourcePath || '').trim()
+    const sourceName = String(result.sourceName || '').trim()
     const submitKey = [
       feedbackKey,
       result.locateRequestId,
@@ -598,8 +602,8 @@ export default function ChatPage() {
     if (!readerLocateQualitySubmittedRef.current.has(submitKey)) {
       readerLocateQualitySubmittedRef.current.add(submitKey)
       libraryApi.recordReaderLocateQuality({
-        source_path: String(result.sourcePath || ''),
-        source_name: result.sourceName,
+        source_path: sourcePath,
+        source_name: sourceName,
         locate_feedback_key: feedbackKey,
         locate_request_id: result.locateRequestId,
         status: result.status,
@@ -615,6 +619,40 @@ export default function ChatPage() {
         anchor_kind: result.anchorKind,
         heading_path: result.headingPath,
       }).catch(() => {})
+    }
+    const locateStatus = String(result.status || '').trim().toLowerCase()
+    const needsSourceRepair = Boolean(
+      sourcePath
+      && (
+        result.repairable
+        || locateStatus === 'failed'
+        || (result.strictLocate && !['exact', 'block'].includes(locateStatus))
+      ),
+    )
+    if (needsSourceRepair) {
+      const repairKey = sourcePath || sourceName
+      const now = Date.now()
+      const last = Number(readerLocateSourceRepairAtRef.current[repairKey] || 0)
+      if (repairKey && now - last >= READER_LOCATE_AUTO_REPAIR_RETRY_MS) {
+        readerLocateSourceRepairAtRef.current[repairKey] = now
+        libraryApi.repairQuality({
+          sources: [{ source_path: sourcePath, source_name: sourceName }],
+          speed_mode: 'balanced',
+          replace: true,
+          md_autofix: true,
+        })
+          .then((res) => {
+            const runId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
+            const queued = Number(res.enqueued || 0)
+            if (runId && queued <= 0 && Boolean(res.needs_reindex || res.impact?.needs_reindex)) {
+              return libraryApi.advanceQualityRepairRun(runId).catch(() => undefined)
+            }
+            return undefined
+          })
+          .catch(() => {
+            delete readerLocateSourceRepairAtRef.current[repairKey]
+          })
+      }
     }
     setReaderLocateResults((current) => {
       const prev = current[feedbackKey]

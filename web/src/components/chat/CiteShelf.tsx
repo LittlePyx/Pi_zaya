@@ -143,6 +143,18 @@ const sourceQualityStatus = (quality?: ConversionQualitySummary | null): string 
 const sourceQualityNeedsReview = (quality?: ConversionQualitySummary | null): boolean =>
   Boolean(quality?.has_review_issue) || ['warning', 'error'].includes(sourceQualityStatus(quality))
 
+const sourceQualityHasReaderLocateRepair = (quality?: ConversionQualitySummary | null): boolean => {
+  const attempt = quality?.conversion_report?.latest_repair_attempt
+  const event = String(attempt?.event || '').trim().toLowerCase()
+  const source = String(attempt?.source || '').trim().toLowerCase()
+  const extra = attempt?.extra || {}
+  return (
+    event === 'reader_locate_reindex_required'
+    || source === 'reader_locate_quality'
+    || Number(extra.reader_locate_problem_count || 0) > 0
+  )
+}
+
 const sourceQualityIssueReason = (quality?: ConversionQualitySummary | null): string => {
   if (!quality) return ''
   const issue = (quality.issues || []).find((item) => item?.label || item?.code)
@@ -180,6 +192,26 @@ const sourceOpenQualityView = (
     const resultStatus = String(locateResult.status || '').trim().toLowerCase()
     const resultPrecision = String(locateResult.precision || '').trim().toLowerCase()
     const reason = String(locateResult.reason || locateResult.hint || '').trim()
+    const sourceRepairClosed = sourceQualityHasReaderLocateRepair(sourceQuality) && !sourceQualityNeedsReview(sourceQuality)
+    if (sourceRepairClosed && ['failed', 'fuzzy', 'section', 'source_only'].includes(resultStatus)) {
+      const repairedPrecision: SourceOpenQualityView['precision'] = resultPrecision === 'fuzzy'
+        ? 'fuzzy'
+        : resultPrecision === 'section'
+          ? 'section'
+          : 'source_only'
+      return {
+        status: 'partial',
+        precision: repairedPrecision,
+        label: S.shelf_source_open_repaired_reopen,
+        reason: reason
+          ? `${S.shelf_source_open_repaired_reopen}: ${reason}`
+          : S.shelf_source_open_repaired_reopen,
+        tone: 'partial',
+        canOpen: true,
+        strictLocate: Boolean(locateResult.strictLocate),
+        repairable: false,
+      }
+    }
     if (resultStatus === 'failed') {
       return {
         status: 'failed',
