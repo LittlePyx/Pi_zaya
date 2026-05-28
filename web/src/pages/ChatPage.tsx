@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { startTransition, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Button, message, Typography } from 'antd'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -8,7 +8,7 @@ import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
-import type { ReaderOpenPayload, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
+import type { ReaderLocateResult, ReaderOpenPayload, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
 import type { ChatUploadItem, Message } from '../api/chat'
 import { useT } from '../i18n'
 
@@ -124,6 +124,7 @@ export default function ChatPage() {
   const [readerCollapsed, setReaderCollapsed] = useState(loadStoredReaderCollapsed)
   const [readerWidth, setReaderWidth] = useState(loadStoredReaderWidth)
   const [readerSessionHighlights, setReaderSessionHighlights] = useState<Record<string, ReaderSessionHighlight[]>>({})
+  const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
   const [desktopReaderEligible, setDesktopReaderEligible] = useState(
     () => (typeof window !== 'undefined' ? window.innerWidth >= DESKTOP_READER_BREAKPOINT : false),
   )
@@ -575,10 +576,29 @@ export default function ChatPage() {
       initialAltIndex: Number.isFinite(Number(payload.initialAltIndex))
         ? Number(payload.initialAltIndex)
         : undefined,
+      locateFeedbackKey: String(payload.locateFeedbackKey || '').trim() || undefined,
     })
     setReaderCollapsed(false)
     setReaderOpen(true)
   }
+
+  const handleReaderLocateResult = useCallback((result: ReaderLocateResult) => {
+    const feedbackKey = String(result.locateFeedbackKey || '').trim()
+    if (!feedbackKey) return
+    setReaderLocateResults((current) => {
+      const prev = current[feedbackKey]
+      if (
+        prev
+        && prev.locateRequestId === result.locateRequestId
+        && prev.status === result.status
+        && prev.precision === result.precision
+        && prev.hint === result.hint
+      ) {
+        return current
+      }
+      return { ...current, [feedbackKey]: result }
+    })
+  }, [])
 
   const appendReaderSelection = (text: string) => {
     const raw = String(text || '')
@@ -907,6 +927,7 @@ export default function ChatPage() {
                       })
                     }}
                     onOpenReader={openReader}
+                    readerLocateResults={readerLocateResults}
                     paperGuideSourcePath={effectiveGuide.sourcePath}
                     paperGuideSourceName={effectiveGuide.sourceName}
                   />
@@ -1062,6 +1083,7 @@ export default function ChatPage() {
                       sessionHighlights={activeReaderSessionHighlights}
                       onAddSessionHighlight={addReaderSessionHighlight}
                       onRemoveSessionHighlight={removeReaderSessionHighlight}
+                      onLocateResult={handleReaderLocateResult}
                     />
                   )}
                 </div>
@@ -1079,6 +1101,7 @@ export default function ChatPage() {
           sessionHighlights={activeReaderSessionHighlights}
           onAddSessionHighlight={addReaderSessionHighlight}
           onRemoveSessionHighlight={removeReaderSessionHighlight}
+          onLocateResult={handleReaderLocateResult}
         />
       ) : null}
     </div>

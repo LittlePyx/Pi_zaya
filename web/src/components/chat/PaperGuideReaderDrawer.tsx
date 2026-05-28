@@ -13,6 +13,7 @@ import { useReaderHighlightWorkspace } from './reader/useReaderHighlightWorkspac
 import { useReaderEvidenceNavigator } from './reader/useReaderEvidenceNavigator'
 import type {
   ReaderLocateCandidate,
+  ReaderLocateResult,
   ReaderOpenPayload,
   ReaderSessionHighlight,
 } from './reader/readerTypes'
@@ -50,6 +51,7 @@ interface Props {
   sessionHighlights?: ReaderSessionHighlight[]
   onAddSessionHighlight?: (highlight: ReaderSessionHighlight) => void
   onRemoveSessionHighlight?: (highlightId: string) => void
+  onLocateResult?: (result: ReaderLocateResult) => void
 }
 
 function locateResultBadge(
@@ -144,6 +146,7 @@ export function PaperGuideReaderDrawer({
   sessionHighlights = [],
   onAddSessionHighlight,
   onRemoveSessionHighlight,
+  onLocateResult,
 }: Props) {
   const contentRef = useRef<HTMLDivElement>(null)
   const [drawerReady, setDrawerReady] = useState(false)
@@ -462,6 +465,7 @@ export function PaperGuideReaderDrawer({
 
   const {
     locateHint,
+    locateResult,
     equationBindingReady,
     equationBindingBoundCount,
   } = useReaderLocateEngine({
@@ -487,6 +491,52 @@ export function PaperGuideReaderDrawer({
     activeHitLevel,
     expectsEquationBinding,
   })
+
+  useEffect(() => {
+    if (!open || !locateResult || !onLocateResult) return
+    onLocateResult({
+      ...locateResult,
+      sourceName: sourceName || title || undefined,
+      locateFeedbackKey: String(payload?.locateFeedbackKey || locateResult.locateFeedbackKey || '').trim() || undefined,
+    })
+  }, [locateResult, onLocateResult, open, payload?.locateFeedbackKey, sourceName, title])
+
+  useEffect(() => {
+    if (!open || !error || !onLocateResult || !sourcePath) return
+    onLocateResult({
+      locateRequestId,
+      sourcePath,
+      sourceName: sourceName || title || undefined,
+      locateFeedbackKey: String(payload?.locateFeedbackKey || '').trim() || undefined,
+      status: 'failed',
+      precision: 'failed',
+      ok: false,
+      repairable: true,
+      strictLocate,
+      hint: String(error || '').trim() || 'Reader source could not be loaded.',
+      reason: String(error || '').trim() || 'Reader source could not be loaded.',
+      activeAltIndex,
+      blockId: activeBlockId || undefined,
+      anchorId: activeAnchorId || undefined,
+      anchorKind: activeAnchorKind || undefined,
+      headingPath: activeHeadingPath || undefined,
+    })
+  }, [
+    activeAltIndex,
+    activeAnchorId,
+    activeAnchorKind,
+    activeBlockId,
+    activeHeadingPath,
+    error,
+    locateRequestId,
+    onLocateResult,
+    open,
+    payload?.locateFeedbackKey,
+    sourceName,
+    sourcePath,
+    strictLocate,
+    title,
+  ])
 
   const sourceTitleAttr = String(sourcePath || sourceName || title || '').trim()
   const metaLocationText = activeHeadingPath || 'Document start'

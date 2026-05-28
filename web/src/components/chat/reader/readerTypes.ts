@@ -48,6 +48,37 @@ export interface ReaderOpenPayload {
   visibleAlternatives?: ReaderLocateCandidate[]
   evidenceAlternatives?: ReaderLocateCandidate[]
   initialAltIndex?: number
+  locateFeedbackKey?: string
+}
+
+export type ReaderLocateResultStatus = 'exact' | 'block' | 'fuzzy' | 'section' | 'source_only' | 'failed'
+
+export type ReaderLocateResultPrecision =
+  | 'exact_anchor'
+  | 'block'
+  | 'phrase'
+  | 'fuzzy'
+  | 'section'
+  | 'source_only'
+  | 'failed'
+
+export interface ReaderLocateResult {
+  locateRequestId: number
+  sourcePath: string
+  sourceName?: string
+  locateFeedbackKey?: string
+  status: ReaderLocateResultStatus
+  precision: ReaderLocateResultPrecision
+  ok: boolean
+  repairable: boolean
+  strictLocate: boolean
+  hint: string
+  reason: string
+  activeAltIndex?: number
+  blockId?: string
+  anchorId?: string
+  anchorKind?: string
+  headingPath?: string
 }
 
 export interface ReaderSessionHighlight {

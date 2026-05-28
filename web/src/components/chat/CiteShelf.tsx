@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
 import { FileSearchOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
+import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ConversionQualitySummary, LibrarySourceQualityItem } from '../../api/library'
 import type { ShelfMetadataQuality, ShelfMetadataRepairImpact } from '../../api/references'
 import { libraryApi } from '../../api/library'
@@ -19,6 +20,7 @@ import { useT } from '../../i18n'
 interface Props {
   open: boolean
   items: CiteShelfItem[]
+  readerLocateResults?: Record<string, ReaderLocateResult>
   snapshots: Array<{ id: string; name: string; createdAt: number }>
   selectedSnapshotId: string
   snapshotDiff: string
@@ -48,13 +50,14 @@ type ShelfExportKind = 'bib' | 'csv' | 'ris'
 type SourceOpenQualityTone = 'ready' | 'partial' | 'review' | 'missing'
 
 interface SourceOpenQualityView {
-  status: 'ready' | 'partial' | 'repairing' | 'missing'
-  precision: 'exact_anchor' | 'page' | 'section' | 'source_only' | 'needs_repair' | 'missing'
+  status: 'ready' | 'partial' | 'repairing' | 'missing' | 'verified' | 'degraded' | 'failed'
+  precision: 'exact_anchor' | 'block' | 'phrase' | 'fuzzy' | 'page' | 'section' | 'source_only' | 'needs_repair' | 'missing' | 'failed'
   label: string
   reason: string
   tone: SourceOpenQualityTone
   canOpen: boolean
   strictLocate: boolean
+  repairable: boolean
 }
 
 const GROUP_MODE_LABEL = (S: Record<string, string>): Record<GroupMode, string> => ({
@@ -194,6 +197,7 @@ const sourceOpenQualityView = (
   item: CiteShelfItem,
   sourceQuality: ConversionQualitySummary | null | undefined,
   S: Record<string, string>,
+  locateResult?: ReaderLocateResult | null,
 ): SourceOpenQualityView => {
   const sourcePath = String(item.sourcePath || '').trim()
   if (!sourcePath) {
@@ -205,6 +209,76 @@ const sourceOpenQualityView = (
       tone: 'missing',
       canOpen: false,
       strictLocate: false,
+      repairable: false,
+    }
+  }
+  if (locateResult && String(locateResult.sourcePath || '').trim() === sourcePath) {
+    const resultStatus = String(locateResult.status || '').trim().toLowerCase()
+    const resultPrecision = String(locateResult.precision || '').trim().toLowerCase()
+    const reason = String(locateResult.reason || locateResult.hint || '').trim()
+    if (resultStatus === 'failed') {
+      return {
+        status: 'failed',
+        precision: 'failed',
+        label: S.shelf_source_open_failed,
+        reason: reason ? `${S.shelf_source_open_failed}: ${reason}` : S.shelf_source_open_failed,
+        tone: 'review',
+        canOpen: true,
+        strictLocate: Boolean(locateResult.strictLocate),
+        repairable: true,
+      }
+    }
+    if (resultStatus === 'exact' || resultStatus === 'block') {
+      return {
+        status: 'verified',
+        precision: resultPrecision === 'phrase'
+          ? 'phrase'
+          : resultPrecision === 'block'
+            ? 'block'
+            : 'exact_anchor',
+        label: resultStatus === 'block' ? S.shelf_source_open_verified_block : S.shelf_source_open_verified,
+        reason: reason ? `${S.shelf_source_open_verified}: ${reason}` : S.shelf_source_open_verified,
+        tone: 'ready',
+        canOpen: true,
+        strictLocate: Boolean(locateResult.strictLocate),
+        repairable: false,
+      }
+    }
+    if (resultStatus === 'fuzzy') {
+      return {
+        status: 'degraded',
+        precision: 'fuzzy',
+        label: S.shelf_source_open_fuzzy,
+        reason: reason ? `${S.shelf_source_open_fuzzy}: ${reason}` : S.shelf_source_open_fuzzy,
+        tone: locateResult.repairable ? 'review' : 'partial',
+        canOpen: true,
+        strictLocate: Boolean(locateResult.strictLocate),
+        repairable: Boolean(locateResult.repairable),
+      }
+    }
+    if (resultStatus === 'section') {
+      return {
+        status: 'degraded',
+        precision: 'section',
+        label: S.shelf_source_open_section_verified,
+        reason: reason ? `${S.shelf_source_open_section_verified}: ${reason}` : S.shelf_source_open_section_verified,
+        tone: locateResult.repairable ? 'review' : 'partial',
+        canOpen: true,
+        strictLocate: Boolean(locateResult.strictLocate),
+        repairable: Boolean(locateResult.repairable),
+      }
+    }
+    if (resultStatus === 'source_only') {
+      return {
+        status: 'degraded',
+        precision: 'source_only',
+        label: S.shelf_source_open_file_verified,
+        reason: reason ? `${S.shelf_source_open_file_verified}: ${reason}` : S.shelf_source_open_file_verified,
+        tone: locateResult.repairable ? 'review' : 'partial',
+        canOpen: true,
+        strictLocate: Boolean(locateResult.strictLocate),
+        repairable: Boolean(locateResult.repairable),
+      }
     }
   }
   if (sourceQualityNeedsReview(sourceQuality)) {
@@ -217,6 +291,7 @@ const sourceOpenQualityView = (
       tone: 'review',
       canOpen: true,
       strictLocate: false,
+      repairable: true,
     }
   }
 
@@ -232,6 +307,7 @@ const sourceOpenQualityView = (
       tone: 'ready',
       canOpen: true,
       strictLocate: true,
+      repairable: false,
     }
   }
 
@@ -249,6 +325,7 @@ const sourceOpenQualityView = (
       tone: 'partial',
       canOpen: true,
       strictLocate: false,
+      repairable: false,
     }
   }
 
@@ -262,6 +339,7 @@ const sourceOpenQualityView = (
       tone: 'partial',
       canOpen: true,
       strictLocate: false,
+      repairable: false,
     }
   }
 
@@ -273,6 +351,7 @@ const sourceOpenQualityView = (
     tone: 'partial',
     canOpen: true,
     strictLocate: false,
+    repairable: false,
   }
 }
 
@@ -360,6 +439,7 @@ const metadataIssueChip = (code: string): string => {
 export function CiteShelf({
   open,
   items,
+  readerLocateResults = {},
   snapshots,
   selectedSnapshotId,
   snapshotDiff,
@@ -593,17 +673,22 @@ export function CiteShelf({
       const isDuplicate = (duplicateCountByIdentity[paperIdentity(item)] || 0) > 1
       const hasSummary = Boolean(String(item.summaryLine || citationCardView(item).summary || '').trim())
       const summaryView = summaryQualityView(item, S)
-      const sourceOpenView = sourceOpenQualityView(item, sourceQualityForItem(item, sourceQualityByPath), S)
+      const sourceOpenView = sourceOpenQualityView(
+        item,
+        sourceQualityForItem(item, sourceQualityByPath),
+        S,
+        readerLocateResults[item.key],
+      )
 
       if (needsMetadataReview) metadataReview += 1
       else metadataReadyItems += 1
       if (isDuplicate) duplicateItems += 1
       if (hasSummary && summaryView.ok) summaryReady += 1
       else summaryReview += 1
-      if (sourceOpenView.status === 'repairing') sourceOpenReview += 1
-      if (sourceOpenView.canOpen && sourceOpenView.status !== 'repairing') sourceOpenable += 1
+      if (sourceOpenView.status === 'repairing' || sourceOpenView.status === 'failed' || sourceOpenView.repairable) sourceOpenReview += 1
+      if (sourceOpenView.canOpen && sourceOpenView.status !== 'repairing' && sourceOpenView.status !== 'failed') sourceOpenable += 1
       if (sourceOpenView.precision === 'exact_anchor') sourceOpenExact += 1
-      if (sourceOpenView.status === 'partial') sourceOpenPartial += 1
+      if (sourceOpenView.status === 'partial' || sourceOpenView.status === 'degraded') sourceOpenPartial += 1
     }
     const total = items.length
     const summaryRate = total > 0 ? Math.round((summaryReady / total) * 100) : 0
@@ -620,7 +705,7 @@ export function CiteShelf({
       sourceOpenReview,
       status: total <= 0 ? 'empty' : (metadataReview > 0 || sourceOpenReview > 0) ? 'review' : 'ready',
     }
-  }, [S, duplicateCountByIdentity, items, sourceQualityByPath])
+  }, [S, duplicateCountByIdentity, items, readerLocateResults, sourceQualityByPath])
 
   const visibleItems = useMemo(() => {
     const keyword = searchText.trim().toLowerCase()
@@ -711,7 +796,13 @@ export function CiteShelf({
     for (const item of selectedItems) {
       const sourcePath = String(item.sourcePath || '').trim()
       if (!sourcePath || seen.has(sourcePath)) continue
-      if (!sourceQualityNeedsReview(sourceQualityByPath[sourcePath]?.conversion_quality)) continue
+      const locateView = sourceOpenQualityView(
+        item,
+        sourceQualityByPath[sourcePath]?.conversion_quality || null,
+        S,
+        readerLocateResults[item.key],
+      )
+      if (!sourceQualityNeedsReview(sourceQualityByPath[sourcePath]?.conversion_quality) && !locateView.repairable) continue
       seen.add(sourcePath)
       out.push({
         source_path: sourcePath,
@@ -719,10 +810,35 @@ export function CiteShelf({
       })
     }
     return out
-  }, [selectedItems, sourceQualityByPath])
+  }, [S, readerLocateResults, selectedItems, sourceQualityByPath])
   const selectedReviewSourceKey = useMemo(
     () => sourceListKey(selectedReviewSources),
     [selectedReviewSources],
+  )
+  const locateRepairSources = useMemo(() => {
+    const seen = new Set<string>()
+    const out: Array<{ source_path: string; source_name: string }> = []
+    for (const item of items) {
+      const sourcePath = String(item.sourcePath || '').trim()
+      if (!sourcePath || seen.has(sourcePath)) continue
+      const locateView = sourceOpenQualityView(
+        item,
+        sourceQualityByPath[sourcePath]?.conversion_quality || null,
+        S,
+        readerLocateResults[item.key],
+      )
+      if (!locateView.repairable) continue
+      seen.add(sourcePath)
+      out.push({
+        source_path: sourcePath,
+        source_name: String(item.sourceName || item.title || item.main || '').trim(),
+      })
+    }
+    return out
+  }, [S, items, readerLocateResults, sourceQualityByPath])
+  const locateRepairSourceKey = useMemo(
+    () => sourceListKey(locateRepairSources),
+    [locateRepairSources],
   )
   const visibleKeySet = useMemo(() => new Set(visibleItems.map((item) => item.key)), [visibleItems])
   const visibleSelectedCount = useMemo(
@@ -878,6 +994,23 @@ export function CiteShelf({
     return () => window.clearTimeout(timer)
   }, [open, repairSources, selectedReviewSourceKey, selectedReviewSources, sourceRepairingKey])
 
+  useEffect(() => {
+    if (!open || locateRepairSources.length <= 0 || sourceRepairingKey) return
+    const pending = locateRepairSources.filter((item) => {
+      const key = `locate:${item.source_path || item.source_name}`
+      return key && !autoSourceRepairKeysRef.current[key]
+    })
+    if (pending.length <= 0) return
+    const timer = window.setTimeout(() => {
+      for (const item of pending) {
+        const key = `locate:${item.source_path || item.source_name}`
+        if (key) autoSourceRepairKeysRef.current[key] = true
+      }
+      void repairSources(pending, { silent: true, repairKey: sourceListKey(pending) })
+    }, 450)
+    return () => window.clearTimeout(timer)
+  }, [locateRepairSourceKey, locateRepairSources, open, repairSources, sourceRepairingKey])
+
   const nowStamp = () => {
     const d = new Date()
     const pad = (v: number) => String(v).padStart(2, '0')
@@ -968,9 +1101,9 @@ export function CiteShelf({
         item.sourceName || item.sourcePath,
         sourceQuality?.status || '',
         (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
-        sourceOpenQualityView(item, sourceQuality, S).status,
-        sourceOpenQualityView(item, sourceQuality, S).precision,
-        sourceOpenQualityView(item, sourceQuality, S).reason,
+        sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).status,
+        sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).precision,
+        sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).reason,
         item.num || '',
         item.citationCount || 0,
         item.journalIf,
@@ -1431,7 +1564,12 @@ export function CiteShelf({
                         : summarySourceLabel('citation_card')
                       const shelfSummaryQuality = summaryQualityView(item, S)
                       const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
-                      const itemSourceOpenQuality = sourceOpenQualityView(item, itemSourceQuality, S)
+                      const itemSourceOpenQuality = sourceOpenQualityView(
+                        item,
+                        itemSourceQuality,
+                        S,
+                        readerLocateResults[item.key],
+                      )
                       const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
                       const tagOptions = [...TAG_PRESETS, ...allTags]
                         .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)

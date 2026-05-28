@@ -53,6 +53,12 @@ export function useReaderSelectionInteractions({
   const syncSelectionState = useCallback(() => {
     const nextRaw = selectionStateInside(contentRef.current)
     if (!nextRaw) {
+      const nativeText = String(window.getSelection?.()?.toString() || '').trim()
+      if (nativeText) {
+        setSelection((current) => current || nativeText)
+        setSelectionBubble((current) => current)
+        return
+      }
       setSelection('')
       setSelectionBubble(null)
       return
@@ -67,6 +73,7 @@ export function useReaderSelectionInteractions({
   }, [contentRef, sessionHighlights])
 
   const queueSelectionStateSync = () => {
+    syncSelectionState()
     if (selectionSyncRafRef.current != null) {
       window.cancelAnimationFrame(selectionSyncRafRef.current)
     }

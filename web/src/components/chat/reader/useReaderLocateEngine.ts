@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { ReaderDocBlock } from '../../../api/references'
-import type { ReaderLocateCandidate } from './readerTypes'
+import type {
+  ReaderLocateCandidate,
+  ReaderLocateResult,
+  ReaderLocateResultPrecision,
+  ReaderLocateResultStatus,
+} from './readerTypes'
 import {
   bindVisibleEquationAnchors,
   buildHighlightQueries,
@@ -93,6 +98,7 @@ export function useReaderLocateEngine({
   const stickyLocateHighlightRef = useRef<StickyLocateHighlight | null>(null)
   const lastAutoScrollKeyRef = useRef('')
   const [locateHint, setLocateHint] = useState('')
+  const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
   const [equationBindingReady, setEquationBindingReady] = useState(false)
   const [equationBindingBoundCount, setEquationBindingBoundCount] = useState(0)
 
@@ -101,6 +107,7 @@ export function useReaderLocateEngine({
     stickyLocateHighlightRef.current = null
     lastAutoScrollKeyRef.current = ''
     setLocateHint('')
+    setLocateResult(null)
     const root = contentRef.current
     if (!root) return
     clearReaderFocusClasses(root)
@@ -307,7 +314,7 @@ export function useReaderLocateEngine({
         scrollRafIds.push(second)
       })
       scrollRafIds.push(first)
-      ;[120, 320, 720, 1280, 2200, 3400].forEach((delay) => {
+      ;[120, 320, 720].forEach((delay) => {
         const timer = window.setTimeout(run, delay)
         scrollTimerIds.push(timer)
       })
@@ -325,6 +332,33 @@ export function useReaderLocateEngine({
       attempts += 1
       scheduleLocate(Math.min(60 + attempts * 35, 220))
       return true
+    }
+    const publishLocateResult = (
+      status: ReaderLocateResultStatus,
+      precision: ReaderLocateResultPrecision,
+      hint: string,
+      options: { target?: HTMLElement | null; repairable?: boolean; reason?: string } = {},
+    ) => {
+      const target = options.target || null
+      const targetBlockId = String(target?.getAttribute('data-kb-block-id') || '').trim()
+      const targetAnchorId = String(target?.getAttribute('data-kb-anchor-id') || '').trim()
+      const ok = status !== 'failed'
+      setLocateResult({
+        locateRequestId,
+        sourcePath,
+        status,
+        precision,
+        ok,
+        repairable: Boolean(options.repairable || (!ok && strictLocate)),
+        strictLocate,
+        hint: String(hint || '').trim(),
+        reason: String(options.reason || hint || '').trim(),
+        activeAltIndex,
+        blockId: targetBlockId || activeBlockId || undefined,
+        anchorId: targetAnchorId || activeAnchorId || undefined,
+        anchorKind: activeAnchorKind || undefined,
+        headingPath: activeHeadingPath || undefined,
+      })
     }
     const runLocate = () => {
       if (cancelled) return
@@ -394,13 +428,15 @@ export function useReaderLocateEngine({
       }
       if (!target && strictLocate && !allowHeadingOnlyFallback) {
         if (retryLocate()) return
-        setLocateHint(hasDirectIdentityHint
+        const hint = hasDirectIdentityHint
           ? (
             hasHitLevelContract
               ? 'Exact evidence block not found. Strict locate stopped before heading fallback.'
               : 'Exact evidence block not found. Strict locate stopped before fuzzy fallback.'
           )
-          : 'Strict locate could not resolve an exact evidence block.')
+          : 'Strict locate could not resolve an exact evidence block.'
+        setLocateHint(hint)
+        publishLocateResult('failed', 'failed', hint, { repairable: true })
         finishLocate()
         return
       }
@@ -614,13 +650,18 @@ export function useReaderLocateEngine({
       }
       if (!target) {
         if (retryLocate()) return
+        let hint = ''
         if (strictLocate && allowHeadingOnlyFallback) {
-          setLocateHint(hasDirectIdentityHint
+          hint = hasDirectIdentityHint
             ? 'Exact and block locate failed. Heading fallback was not found.'
-            : 'Heading fallback was not found.')
+            : 'Heading fallback was not found.'
         } else if (activeFocusSnippet || activeHeadingPath) {
-          setLocateHint('Exact snippet not found. Ask again to generate a finer mapping.')
+          hint = 'Exact snippet not found. Ask again to generate a finer mapping.'
         }
+        if (hint) setLocateHint(hint)
+        publishLocateResult('failed', 'failed', hint || 'Reader could not resolve a source location.', {
+          repairable: Boolean(strictLocate || hasDirectIdentityHint || activeFocusSnippet || activeHeadingPath),
+        })
         finishLocate()
         return
       }
@@ -730,6 +771,48 @@ export function useReaderLocateEngine({
       if (nextLocateHint) {
         setLocateHint(nextLocateHint)
       }
+      const focusedBlockId = String(focusedBlock.getAttribute('data-kb-block-id') || '').trim()
+      const focusedAnchorId = String(focusedBlock.getAttribute('data-kb-anchor-id') || '').trim()
+      const directIdentityMatched = Boolean(
+        (activeBlockId && focusedBlockId === activeBlockId)
+        || (activeAnchorId && focusedAnchorId === activeAnchorId)
+        || (hasDirectIdentityHint && target),
+      )
+      let resultStatus: ReaderLocateResultStatus = 'block'
+      let resultPrecision: ReaderLocateResultPrecision = 'block'
+      if (!activeFocusSnippet && !activeHeadingPath && !hasDirectIdentityHint) {
+        resultStatus = 'source_only'
+        resultPrecision = 'source_only'
+      } else if (usedHeadingFallback || (headingTarget && target === headingTarget)) {
+        resultStatus = 'section'
+        resultPrecision = 'section'
+      } else if (exactHit || inlineFormulaHit) {
+        resultStatus = 'exact'
+        resultPrecision = exactHit ? 'phrase' : 'exact_anchor'
+      } else if (
+        anchorKindForLocate === 'equation'
+        || anchorKindForLocate === 'figure'
+        || directIdentityMatched
+      ) {
+        resultStatus = directIdentityMatched || anchorKindForLocate === 'equation' || anchorKindForLocate === 'figure'
+          ? 'exact'
+          : 'block'
+        resultPrecision = directIdentityMatched || anchorKindForLocate === 'equation' || anchorKindForLocate === 'figure'
+          ? 'exact_anchor'
+          : 'block'
+      } else if (allowFuzzyFallback && (activeFocusSnippet || activeHighlightSnippet)) {
+        resultStatus = 'fuzzy'
+        resultPrecision = 'fuzzy'
+      }
+      const effectiveHint = nextLocateHint || (resultStatus === 'source_only'
+        ? 'Source opened without a finer locate target.'
+        : resultStatus === 'section'
+          ? 'Section-level locate matched.'
+          : 'Reader locate matched.')
+      publishLocateResult(resultStatus, resultPrecision, effectiveHint, {
+        target: focusedBlock,
+        repairable: Boolean(strictLocate && (resultStatus === 'fuzzy' || resultStatus === 'section' || resultStatus === 'source_only')),
+      })
       finishLocate()
     }
     const root = contentRef.current
@@ -777,6 +860,7 @@ export function useReaderLocateEngine({
 
   return {
     locateHint,
+    locateResult,
     equationBindingReady,
     equationBindingBoundCount,
   }

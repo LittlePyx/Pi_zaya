@@ -346,6 +346,60 @@ test('system A citation popover shows source location, evidence quote, and opens
   await expect(payload).toContainText('"strictLocate": true')
 })
 
+test('citation shelf reflects actual reader locate result after opening source', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.route('**/api/library/source-quality', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          conversion_quality: { status: 'good', has_review_issue: false, score: 98, issues: [] },
+        })),
+      }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
+
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').last().click()
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-ready/)
+  await popover.locator('.kb-cite-pop-close').click()
+
+  await page.getByTestId('citation-shelf-open-source').click()
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(/Exact target|Bound block/)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-ready/)
+
+  await page.getByTestId('citation-shelf-add-visible').click()
+  const csvDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-csv').click()
+  if (await page.getByTestId('citation-shelf-export-preflight').isVisible().catch(() => false)) {
+    await page.getByTestId('citation-shelf-export-preflight-continue').click()
+  }
+  const csvDownload = await csvDownloadPromise
+  const csvPath = await csvDownload.path()
+  expect(csvPath, 'CSV export should produce a downloadable file').not.toBeNull()
+  if (csvPath) {
+    const csv = await readFile(csvPath, 'utf8')
+    expect(csv).toContain('source_open_status,source_open_precision,source_open_reason')
+    expect(csv).toContain('verified,phrase')
+  }
+})
+
 test('citation popover upgrades to waited LLM polish when it is ready', async ({ page }) => {
   await mockReaderDoc(page)
   let observedWaitSeconds = 0

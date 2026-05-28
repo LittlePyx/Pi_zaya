@@ -8,6 +8,7 @@ import { CiteShelf } from './CiteShelf'
 import type {
   ReaderLocateCandidate,
   ReaderLocateClaimGroup,
+  ReaderLocateResult,
   ReaderLocateTarget,
   ReaderOpenPayload,
 } from './reader/readerTypes'
@@ -113,6 +114,7 @@ interface Props {
   trackedMessageIds?: number[]
   onTrackedMessageActive?: (messageId: number | null) => void
   onOpenReader?: (payload: ReaderOpenPayload) => void
+  readerLocateResults?: Record<string, ReaderLocateResult>
   paperGuideSourcePath?: string
   paperGuideSourceName?: string
 }
@@ -4278,6 +4280,7 @@ export function MessageList({
   trackedMessageIds,
   onTrackedMessageActive,
   onOpenReader,
+  readerLocateResults = {},
   paperGuideSourcePath,
   paperGuideSourceName,
 }: Props) {
@@ -5136,6 +5139,7 @@ export function MessageList({
       anchorId: String(detail.anchorId || '').trim(),
       anchorKind: String(detail.anchorKind || '').trim(),
       strictLocate: Boolean(detail.blockId || detail.anchorId),
+      locateFeedbackKey: String((detail as CiteShelfItem).key || toShelfItem(detail).key || '').trim(),
     })
     if (!payload) return
     onOpenReader(payload)
@@ -6618,6 +6622,7 @@ export function MessageList({
       <CiteShelf
         open={shelfOpen}
         items={shelfItems}
+        readerLocateResults={readerLocateResults}
         focusedKey={focusedShelfKey}
         summaryLoadingKey={shelfSummaryLoadingKey}
         repairLoadingKey={shelfRepairLoadingKey}

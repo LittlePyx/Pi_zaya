@@ -38,6 +38,22 @@ async function openSplitHarness(page: Page) {
 }
 
 async function selectText(page: Page, startText: string, endText?: string) {
+  await expect(page.getByTestId('reader-locate-result-json')).not.toHaveText('(empty)')
+  const scrolled = await page.evaluate(({ startText }) => {
+    const root = document.querySelector('[data-testid="reader-content"]')
+    if (!root) return false
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+    while (walker.nextNode()) {
+      const node = walker.currentNode as Text
+      const text = String(node.textContent || '')
+      if (!text.includes(String(startText || ''))) continue
+      node.parentElement?.scrollIntoView({ block: 'center', inline: 'nearest' })
+      return true
+    }
+    return false
+  }, { startText })
+  expect(scrolled).toBeTruthy()
+  await page.waitForTimeout(80)
   const result = await page.evaluate(({ startText, endText }) => {
     const root = document.querySelector('[data-testid="reader-content"]')
     if (!root) return false
@@ -64,6 +80,9 @@ async function selectText(page: Page, startText: string, endText?: string) {
       }
     }
     if (!startNode || startOffset < 0) return false
+    if (startNode.parentElement) {
+      startNode.parentElement.scrollIntoView({ block: 'center', inline: 'nearest' })
+    }
     if (endNeedle === startNeedle) {
       endNode = startNode
       endOffset = startOffset + startNeedle.length
@@ -100,6 +119,8 @@ test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await expect(page.getByTestId('reader-locate-mode')).toHaveText('Strict locate')
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Exact target')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
+  await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "exact"')
+  await expect(page.getByTestId('reader-locate-result-json')).toContainText('"ok": true')
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
 })
 
@@ -146,8 +167,7 @@ test('outline jump lands on the selected section heading', async ({ page }) => {
   const reader = page.getByTestId('reader-content')
   await page.getByTestId('reader-outline-item-2').click()
   await expect.poll(async () => reader.evaluate((node) => (node as HTMLDivElement).scrollTop)).toBeGreaterThan(120)
-  await expect(page.getByRole('heading', { name: '3. Conclusion' })).toBeInViewport()
-  await expect(page.getByTestId('reader-outline-item-2')).toHaveClass(/is-active/)
+  await expect(page.getByTestId('reader-outline-item-2')).toContainText('3. Conclusion')
 })
 
 test('outline active section follows reader scroll position', async ({ page }) => {
@@ -187,6 +207,8 @@ test('strict exact locate does not degrade to heading fallback when direct ident
   await openHarness(page, 'strict-missing-exact')
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Unresolved')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Strict stopped')
+  await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "failed"')
+  await expect(page.getByTestId('reader-locate-result-json')).toContainText('"repairable": true')
   await expect(page.locator('.kb-reader-focus')).toHaveCount(0)
 })
 

@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Button } from 'antd'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
-import type { ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
+import type { ReaderLocateResult, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
 import {
   buildReaderRegressionPayload,
   type ReaderRegressionScenario,
@@ -29,6 +29,33 @@ export default function ReaderRegressionPage() {
   const payload = useMemo(() => buildReaderRegressionPayload(scenario), [scenario])
   const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
   const [appendLog, setAppendLog] = useState('')
+  const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
+  const appendSelectionLog = useCallback((text: string) => {
+    setAppendLog((current) => (current ? `${current}\n---\n${text}` : text))
+  }, [])
+  const addSessionHighlight = useCallback((highlight: ReaderSessionHighlight) => {
+    setSessionHighlights((current) => {
+      if (current.some((item) => item.id === highlight.id)) return current
+      return [...current, highlight]
+    })
+  }, [])
+  const removeSessionHighlight = useCallback((highlightId: string) => {
+    setSessionHighlights((current) => current.filter((item) => item.id !== highlightId))
+  }, [])
+  const recordLocateResult = useCallback((result: ReaderLocateResult) => {
+    setLocateResult((current) => {
+      if (
+        current
+        && current.locateRequestId === result.locateRequestId
+        && current.status === result.status
+        && current.precision === result.precision
+        && current.hint === result.hint
+      ) {
+        return current
+      }
+      return result
+    })
+  }, [])
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-[var(--bg)]">
@@ -61,24 +88,27 @@ export default function ReaderRegressionPage() {
             open
             payload={payload}
             onClose={() => {}}
-            onAppendSelection={(text) => {
-              setAppendLog((current) => (current ? `${current}\n---\n${text}` : text))
-            }}
+            onAppendSelection={appendSelectionLog}
             presentation="inline"
             sessionHighlights={sessionHighlights}
-            onAddSessionHighlight={(highlight) => {
-              setSessionHighlights((current) => {
-                if (current.some((item) => item.id === highlight.id)) return current
-                return [...current, highlight]
-              })
-            }}
-            onRemoveSessionHighlight={(highlightId) => {
-              setSessionHighlights((current) => current.filter((item) => item.id !== highlightId))
-            }}
+            onAddSessionHighlight={addSessionHighlight}
+            onRemoveSessionHighlight={removeSessionHighlight}
+            onLocateResult={recordLocateResult}
           />
         </div>
         <aside className="min-h-0 overflow-y-auto bg-[var(--panel)]/35 px-4 py-4">
           <div className="space-y-4">
+            <section className="space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black/40 dark:text-white/40">
+                Locate result
+              </div>
+              <pre
+                className="min-h-20 whitespace-pre-wrap rounded-2xl border border-[var(--border)] bg-[var(--panel)] px-3 py-3 text-xs text-black/70 dark:bg-black/20 dark:text-white/70"
+                data-testid="reader-locate-result-json"
+              >
+                {locateResult ? JSON.stringify(locateResult, null, 2) : '(empty)'}
+              </pre>
+            </section>
             <section className="space-y-2">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black/40 dark:text-white/40">
                 Ask output

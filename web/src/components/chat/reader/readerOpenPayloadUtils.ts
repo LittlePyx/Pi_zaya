@@ -25,6 +25,7 @@ export function buildBasicReaderOpenPayload(input: {
   evidenceAlternatives?: ReaderLocateCandidate[]
   initialAltIndex?: number
   fallbackSourceName?: string
+  locateFeedbackKey?: string
 }): ReaderOpenPayload | null {
   const sourcePath = String(input?.sourcePath || '').trim()
   if (!sourcePath) return null
@@ -61,5 +62,6 @@ export function buildBasicReaderOpenPayload(input: {
     initialAltIndex: Number.isFinite(Number(input?.initialAltIndex))
       ? Math.max(0, Math.floor(Number(input?.initialAltIndex)))
       : undefined,
+    locateFeedbackKey: String(input?.locateFeedbackKey || '').trim() || undefined,
   }
 }

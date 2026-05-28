@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { MessageList } from '../components/chat/MessageList'
+import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type { Message } from '../api/chat'
-import type { ReaderOpenPayload } from '../components/chat/reader/readerTypes'
+import type { ReaderLocateResult, ReaderOpenPayload } from '../components/chat/reader/readerTypes'
 import {
   READER_REGRESSION_SOURCE_NAME,
   READER_REGRESSION_SOURCE_PATH,
@@ -1138,6 +1139,27 @@ export default function MessageListRegressionPage() {
     ? ''
     : READER_REGRESSION_SOURCE_NAME
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
+  const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
+  const readerEnabled = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('reader') === '1'
+    : false
+  const recordLocateResult = useCallback((result: ReaderLocateResult) => {
+    const key = String(result.locateFeedbackKey || '').trim()
+    if (!key) return
+    setReaderLocateResults((current) => {
+      const prev = current[key]
+      if (
+        prev
+        && prev.locateRequestId === result.locateRequestId
+        && prev.status === result.status
+        && prev.precision === result.precision
+        && prev.hint === result.hint
+      ) {
+        return current
+      }
+      return { ...current, [key]: result }
+    })
+  }, [])
 
   return (
     <div className="min-h-screen bg-[var(--bg)] px-6 py-6">
@@ -1156,6 +1178,7 @@ export default function MessageListRegressionPage() {
             messages={regressionMessages}
             refs={regressionRefs}
             onOpenReader={(nextPayload) => setPayload(nextPayload)}
+            readerLocateResults={readerLocateResults}
             paperGuideSourcePath={regressionGuideSourcePath}
             paperGuideSourceName={regressionGuideSourceName}
           />
@@ -1172,6 +1195,19 @@ export default function MessageListRegressionPage() {
             {payload ? JSON.stringify(payload, null, 2) : '(empty)'}
           </pre>
         </div>
+
+        {readerEnabled && payload ? (
+          <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
+            <PaperGuideReaderDrawer
+              open
+              payload={payload}
+              onClose={() => {}}
+              onAppendSelection={() => {}}
+              presentation="inline"
+              onLocateResult={recordLocateResult}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   )
