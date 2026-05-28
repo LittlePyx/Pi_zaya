@@ -163,6 +163,13 @@ test.beforeEach(async ({ page }) => {
               shelf_failed: 1,
               ref_card_failed: 0,
               system_b_failed: 0,
+              shelf_item_count: 2,
+              shelf_metadata_ready_count: 1,
+              shelf_export_ready_count: 1,
+              shelf_summary_export_ready_count: 1,
+              shelf_doi_count: 1,
+              shelf_source_clickable_count: 2,
+              shelf_review_count: 1,
             },
             top_failures: [{ name: 'citation_card_quality', count: 1 }],
             latest_path: 'test_results/research_qa_eval/latest',
@@ -250,10 +257,11 @@ test.beforeEach(async ({ page }) => {
               key: 'shelf',
               label: 'Literature basket',
               status: 'error',
-              detail: '1 literature basket checks failed',
+              detail: '1 literature basket checks failed; export-ready 1/2, summaries 1/2',
               action: 'repair_shelf_metadata',
               count: 1,
               blocking: true,
+              metrics: { items: 2, export_ready: 1, summary_export_ready: 1 },
             },
             {
               key: 'repair_loop',
@@ -355,12 +363,13 @@ test.beforeEach(async ({ page }) => {
               label: 'Literature basket',
               status: 'error',
               score: 44,
-              summary: '1 basket quality checks failed',
-              detail: 'Checks DOI, authors, venue, recommendation reason, source-open, and export readiness.',
+              summary: '1 basket checks failed; export-ready 1/2',
+              detail: 'Checks structured DOI, authors, venue, grounded summary, source-open, and export readiness.',
               action: 'repair_shelf_metadata',
               target_stage: 'shelf',
               count: 1,
               blocking: true,
+              metrics: { shelf_failed: 1, items: 2, metadata_ready: 1, export_ready: 1, summary_export_ready: 1, doi: 1, source_clickable: 2, review: 1 },
             },
             {
               key: 'reader_locate',
@@ -1172,6 +1181,7 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-quality-report-avg')).toContainText('Q70')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="research_qa"]')).toContainText('refs_include_required_docs x1')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="citation_cards"]')).toContainText('citation_card_quality x1')
+  await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="citation_cards"]')).toContainText('shelf export 1/2')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="reader_locate"]')).toContainText('target anchor drift x1')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Feature health')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Paper Guide')

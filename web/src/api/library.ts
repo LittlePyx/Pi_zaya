@@ -707,6 +707,8 @@ export interface LibraryQualityFailureCase {
     shelf_failure_count?: number
     shelf_warning_count?: number
     shelf_metadata_ready_count?: number
+    shelf_export_ready_count?: number
+    shelf_summary_export_ready_count?: number
     shelf_doi_count?: number
     shelf_source_clickable_count?: number
     shelf_review_count?: number

@@ -276,6 +276,13 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
                 "shelf_failed": 1,
                 "ref_card_failed": 0,
                 "system_b_failed": 0,
+                "shelf_item_count": 2,
+                "shelf_metadata_ready_count": 1,
+                "shelf_export_ready_count": 1,
+                "shelf_summary_export_ready_count": 1,
+                "shelf_doi_count": 1,
+                "shelf_source_clickable_count": 2,
+                "shelf_review_count": 1,
             },
             "top_failures": [{"name": "citation_card_quality", "count": 1}],
             "latest_path": str(tmp_path / "research_qa_eval" / "latest"),
@@ -304,6 +311,8 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
     assert domains["conversion"]["summary"]["review"] == 1
     assert domains["research_qa"]["summary"]["failed"] == 1
     assert domains["citation_cards"]["summary"]["failed_checks"] == 2
+    assert domains["citation_cards"]["summary"]["shelf_export_ready_count"] == 1
+    assert domains["citation_cards"]["summary"]["shelf_summary_export_ready_count"] == 1
     priority_domains = {str(item.get("domain") or "") for item in list(overview.get("priority_actions") or [])}
     assert {"conversion", "research_qa", "citation_cards"}.issubset(priority_domains)
     full_chain = overview["full_chain"]
@@ -443,6 +452,13 @@ def test_library_reader_locate_quality_events_feed_overview(monkeypatch, tmp_pat
                 "shelf_failed": 0,
                 "ref_card_failed": 0,
                 "system_b_failed": 0,
+                "shelf_item_count": 1,
+                "shelf_metadata_ready_count": 1,
+                "shelf_export_ready_count": 1,
+                "shelf_summary_export_ready_count": 1,
+                "shelf_doi_count": 1,
+                "shelf_source_clickable_count": 1,
+                "shelf_review_count": 0,
             },
             "top_failures": [],
         },
@@ -1455,7 +1471,10 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
                         "warnings": [],
                     },
                     "citation_shelf_quality": {
+                        "count": 2,
                         "metadata_ready_count": 0,
+                        "export_ready_count": 0,
+                        "summary_export_ready_count": 1,
                         "doi_count": 1,
                         "source_clickable_count": 2,
                         "review_count": 1,
@@ -1555,11 +1574,16 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
     assert case["diagnostic_summary"]["shelf_failure_count"] == 1
     assert case["diagnostic_summary"]["shelf_warning_count"] == 1
     assert case["diagnostic_summary"]["shelf_metadata_ready_count"] == 0
+    assert case["diagnostic_summary"]["shelf_export_ready_count"] == 0
+    assert case["diagnostic_summary"]["shelf_summary_export_ready_count"] == 1
     assert case["diagnostic_summary"]["shelf_doi_count"] == 1
     assert case["diagnostic_summary"]["shelf_source_clickable_count"] == 2
     assert case["diagnostic_summary"]["shelf_review_count"] == 1
     assert case["diagnostic_summary"]["ref_card_failure_count"] == 1
     assert case["diagnostic_summary"]["system_b_needs_review_count"] == 1
+    assert payload["domains"]["citation_cards"]["summary"]["shelf_item_count"] == 2
+    assert payload["domains"]["citation_cards"]["summary"]["shelf_export_ready_count"] == 0
+    assert payload["domains"]["citation_cards"]["summary"]["shelf_summary_export_ready_count"] == 1
     assert case["citation_diagnostics"][0]["route"] == "system_a"
     assert case["citation_diagnostics"][0]["title"] == "Paper B title"
     assert case["citation_diagnostics"][0]["shelf_quality_issues"][0]["name"] == "shelf_template_phrase_visible"

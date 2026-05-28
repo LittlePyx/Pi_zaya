@@ -109,6 +109,7 @@ def test_research_qa_fixture_real_regression_cases_require_card_quality_gates():
         assert expected.get("requirePolishStatus") is True
         assert expected.get("requireCitationShelfQuality") is True
         assert int(expected.get("minCitationShelfMetadataReadyCount") or 0) >= 1
+        assert int(expected.get("minCitationShelfExportReadyCount") or 0) >= 1
         assert int(expected.get("minCitationShelfDoiCount") or 0) >= 1
         assert int(expected.get("minCitationShelfSourceClickCount") or 0) >= 1
         assert expected.get("maxCitationShelfMetadataReviewCount") == 0
@@ -551,6 +552,7 @@ def test_validate_case_enforces_citation_shelf_metadata_contract():
             "requireCitationShelfQuality": True,
             "minCitationShelfQualityCount": 1,
             "minCitationShelfMetadataReadyCount": 1,
+            "minCitationShelfExportReadyCount": 1,
             "minCitationShelfDoiCount": 1,
             "minCitationShelfSourceClickCount": 1,
             "maxCitationShelfMetadataReviewCount": 0,
@@ -585,14 +587,63 @@ def test_validate_case_enforces_citation_shelf_metadata_contract():
     assert quality["ok"] is False
     assert "citation_shelf_quality" in failed_names
     assert quality["citation_shelf_quality"]["doi_count"] == 1
-    assert quality["citation_shelf_quality"]["metadata_ready_count"] == 0
+    assert quality["citation_shelf_quality"]["metadata_ready_count"] == 1
+    assert quality["citation_shelf_quality"]["export_ready_count"] == 1
     assert any(
         item["name"] == "shelf_doi_not_promoted"
         for item in quality["citation_shelf_quality"]["failures"]
     )
     check = next(item for item in quality["checks"] if item["name"] == "citation_shelf_quality")
-    assert "shelf_metadata_ready_count:0<1" in check["detail"]
-    assert "shelf_metadata_review_count:1>0" in check["detail"]
+    assert "shelf_1_shelf_doi_not_promoted" in check["detail"]
+    assert "shelf_quality_count:0<1" in check["detail"]
+
+
+def test_validate_case_enforces_citation_shelf_export_readiness():
+    fixture = load_fixture()
+    case = {
+        "id": "shelf-export-policy",
+        "expected": {
+            "requireCitationShelfQuality": True,
+            "minCitationShelfQualityCount": 1,
+            "minCitationShelfMetadataReadyCount": 1,
+            "minCitationShelfExportReadyCount": 1,
+            "minCitationShelfDoiCount": 1,
+            "minCitationShelfSourceClickCount": 1,
+        },
+    }
+    result = {
+        "status": "done",
+        "done": True,
+        "assistant_message": {
+            "role": "assistant",
+            "content": "A citation [1](#weak-export).",
+            "cite_details": [
+                {
+                    "num": 1,
+                    "anchor": "weak-export",
+                    "is_inpaper": True,
+                    "source_path": "demo.en.md",
+                    "title": "Single-shot compressive spectral imaging",
+                    "raw": "Gehm et al. Single-shot compressive spectral imaging.",
+                    "summary_line": "This upstream paper identifies a single-shot compressive spectral imaging baseline for later SCI work.",
+                    "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
+                }
+            ],
+        },
+    }
+
+    quality = validate_case(case, fixture, result)
+    check = next(item for item in quality["checks"] if item["name"] == "citation_shelf_quality")
+    failure_names = {item["name"] for item in quality["citation_shelf_quality"]["failures"]}
+
+    assert quality["ok"] is False
+    assert quality["citation_shelf_quality"]["metadata_ready_count"] == 0
+    assert quality["citation_shelf_quality"]["export_ready_count"] == 0
+    assert quality["citation_shelf_quality"]["summary_export_ready_count"] == 1
+    assert "shelf_export_missing_doi" in failure_names
+    assert "shelf_export_missing_authors" in failure_names
+    assert "shelf_export_ready_count:0<1" in check["detail"]
+    assert "shelf_doi_count:0<1" in check["detail"]
 
 
 def test_research_qa_report_surfaces_system_b_audit(tmp_path):
@@ -628,6 +679,11 @@ def test_research_qa_report_surfaces_system_b_audit(tmp_path):
                         "ok": False,
                         "count": 2,
                         "ok_count": 1,
+                        "metadata_ready_count": 1,
+                        "export_ready_count": 1,
+                        "summary_export_ready_count": 1,
+                        "doi_count": 1,
+                        "source_clickable_count": 1,
                         "min_score": 0.76,
                         "failures": [
                             {
@@ -653,7 +709,7 @@ def test_research_qa_report_surfaces_system_b_audit(tmp_path):
     assert "`case-a`: ok=False, cards=2, ok_cards=1, failures=1, warnings=0, min_score=0.800" in report
     assert "card 2: ref_card_template_phrase_visible (summary_line) - This hit is directly relevant" in report
     assert "## Citation Shelf Quality" in report
-    assert "`case-a`: ok=False, items=2, ok_items=1, metadata_ready=0, doi=0, source_clickable=0, failures=1, warnings=0, min_score=0.760" in report
+    assert "`case-a`: ok=False, items=2, ok_items=1, metadata_ready=1, export_ready=1, summary_export_ready=1, doi=1, source_clickable=1, failures=1, warnings=0, min_score=0.760" in report
     assert "item 2: shelf_summary_too_short (summary) - short" in report
 
 

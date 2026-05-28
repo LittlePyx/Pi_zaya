@@ -51,6 +51,16 @@ _DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s，。；;,)）]+", re.IGNORECASE)
 _YEAR_HINT_RE = re.compile(r"\b(?:18|19|20)\d{2}\b")
 
 
+def _metadata_export_acceptance(data: Mapping[str, Any]) -> dict[str, Any]:
+    try:
+        from api.reference_metadata_quality import citation_metadata_export_acceptance
+
+        result = citation_metadata_export_acceptance(data)
+    except Exception:
+        result = {}
+    return result if isinstance(result, dict) else {}
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
@@ -672,8 +682,16 @@ def _shelf_metadata_contract(
     has_summary = len(_text(summary)) >= 24
     title_ready = len(_text(title)) >= 8 and not _WEAK_SHELF_TITLE_RE.match(_text(title))
     bibliographic = route == "system_b"
+    export_acceptance = _metadata_export_acceptance(data)
+    field_ready = export_acceptance.get("field_ready") if isinstance(export_acceptance.get("field_ready"), Mapping) else {}
+    if bibliographic and export_acceptance:
+        has_author = bool(field_ready.get("authors"))
+        has_venue = bool(field_ready.get("venue"))
+        has_year = bool(field_ready.get("year"))
+        has_doi = bool(field_ready.get("doi"))
+        title_ready = bool(field_ready.get("title"))
     external_status = _norm(data.get("external_metadata_status") or data.get("externalMetadataStatus"))
-    export_ready = bool(title_ready and source_identity and has_author and has_venue and has_year and has_doi)
+    export_ready = bool(export_acceptance.get("export_ready")) if bibliographic and export_acceptance else bool(title_ready and source_identity and has_author and has_venue and has_year and has_doi)
     source_ready = bool(source_open and source_identity and title_ready and has_summary)
     external_doi = _first_text(data, ("external_doi", "externalDoi", "external_doi_url", "externalDoiUrl"))
     visible_doi = _first_text(data, ("doi", "doi_url", "doiUrl"))
@@ -705,6 +723,10 @@ def _shelf_metadata_contract(
         "review_needed": review_needed,
         "external_metadata_status": external_status,
         "external_review_needed": untrusted_external,
+        "export_acceptance": export_acceptance,
+        "missing_export_fields": list(export_acceptance.get("missing_fields") or []) if export_acceptance else [],
+        "summary_export_ready": bool(export_acceptance.get("summary_export_ready")) if export_acceptance else False,
+        "summary_status": str(export_acceptance.get("summary_status") or "") if export_acceptance else "",
     }
 
 
@@ -805,6 +827,10 @@ def citation_shelf_item_quality(detail: Mapping[str, Any] | None) -> dict[str, A
             warn("shelf_missing_year_hint", field="year")
         if not metadata["has_doi"]:
             warn("shelf_missing_doi", field="doi")
+        for field in list(metadata.get("missing_export_fields") or []):
+            if field in {"source"}:
+                continue
+            fail(f"shelf_export_missing_{field}", field=str(field))
     elif not _first_text(data, ("source_path", "source_name")):
         fail("shelf_system_a_missing_source", field="source_path")
     if not metadata["source_clickable"]:
@@ -834,6 +860,7 @@ def summarize_citation_shelf_quality(details: list[Mapping[str, Any]] | tuple[Ma
     warnings: list[dict[str, Any]] = []
     metadata_ready_count = 0
     export_ready_count = 0
+    summary_export_ready_count = 0
     doi_count = 0
     source_clickable_count = 0
     review_count = 0
@@ -848,6 +875,8 @@ def summarize_citation_shelf_quality(details: list[Mapping[str, Any]] | tuple[Ma
             metadata_ready_count += 1
         if bool(metadata.get("export_ready")):
             export_ready_count += 1
+        if bool(metadata.get("summary_export_ready")):
+            summary_export_ready_count += 1
         if bool(metadata.get("has_doi")):
             doi_count += 1
         if bool(metadata.get("source_clickable")):
@@ -867,6 +896,7 @@ def summarize_citation_shelf_quality(details: list[Mapping[str, Any]] | tuple[Ma
         "ok_count": sum(1 for item in items if bool(item.get("ok"))),
         "metadata_ready_count": metadata_ready_count,
         "export_ready_count": export_ready_count,
+        "summary_export_ready_count": summary_export_ready_count,
         "doi_count": doi_count,
         "source_clickable_count": source_clickable_count,
         "review_count": review_count,

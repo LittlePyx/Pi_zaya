@@ -516,6 +516,8 @@ def test_citation_shelf_item_quality_accepts_exportable_system_b_item():
             "year": "2011",
             "doi": "10.1561/2200000016",
             "raw": "Boyd et al. Distributed Optimization and Statistical Learning via ADMM.",
+            "summary_line": "This upstream paper provides the ADMM optimization framework used by earlier SCI reconstruction methods.",
+            "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
             "card_view": {
                 "header": {
                     "title": "Distributed Optimization and Statistical Learning via ADMM",
@@ -536,6 +538,37 @@ def test_citation_shelf_item_quality_accepts_exportable_system_b_item():
     assert quality["ok"] is True
     assert quality["route"] == "system_b"
     assert quality["title"].startswith("Distributed Optimization")
+    assert quality["metadata"]["export_ready"] is True
+    assert quality["metadata"]["summary_export_ready"] is True
+    assert quality["metadata"]["export_acceptance"]["export_ready"] is True
+
+
+def test_citation_shelf_item_quality_requires_structured_export_fields_for_system_b():
+    detail = {
+        "num": 7,
+        "anchor": "r7",
+        "is_inpaper": True,
+        "source_path": "refs/scigs.en.md",
+        "source_name": "SCIGS references",
+        "title": "Single-shot compressive spectral imaging",
+        "raw": "Gehm et al. Single-shot compressive spectral imaging.",
+        "summary_line": "This upstream paper defines a single-shot compressive spectral imaging baseline used by later SCI systems.",
+        "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
+    }
+
+    quality = citation_shelf_item_quality(detail)
+    names = {item["name"] for item in quality["failures"]}
+
+    assert quality["ok"] is False
+    assert quality["metadata"]["export_ready"] is False
+    assert quality["metadata"]["summary_export_ready"] is True
+    assert quality["metadata"]["missing_export_fields"] == ["authors", "venue", "year", "doi"]
+    assert {"shelf_export_missing_authors", "shelf_export_missing_venue", "shelf_export_missing_year", "shelf_export_missing_doi"}.issubset(names)
+
+    summary = summarize_citation_shelf_quality([detail])
+    assert summary["export_ready_count"] == 0
+    assert summary["summary_export_ready_count"] == 1
+    assert summary["doi_count"] == 0
 
 
 def test_citation_shelf_item_quality_does_not_show_candidate_review_when_identity_is_complete():

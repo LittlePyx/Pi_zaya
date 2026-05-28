@@ -954,6 +954,8 @@ def _research_qa_quality_gate_summary(quality: dict) -> dict:
         "shelf_failure_count": len(_list_dict_items(shelf_quality.get("failures"))),
         "shelf_warning_count": len(_list_dict_items(shelf_quality.get("warnings"))),
         "shelf_metadata_ready_count": _safe_int(shelf_quality.get("metadata_ready_count"), 0),
+        "shelf_export_ready_count": _safe_int(shelf_quality.get("export_ready_count"), 0),
+        "shelf_summary_export_ready_count": _safe_int(shelf_quality.get("summary_export_ready_count"), 0),
         "shelf_doi_count": _safe_int(shelf_quality.get("doi_count"), 0),
         "shelf_source_clickable_count": _safe_int(shelf_quality.get("source_clickable_count"), 0),
         "shelf_review_count": _safe_int(shelf_quality.get("review_count"), 0),
@@ -2784,6 +2786,13 @@ def _latest_citation_card_quality_summary() -> dict:
                 "shelf_failed": 0,
                 "ref_card_failed": 0,
                 "system_b_failed": 0,
+                "shelf_item_count": 0,
+                "shelf_metadata_ready_count": 0,
+                "shelf_export_ready_count": 0,
+                "shelf_summary_export_ready_count": 0,
+                "shelf_doi_count": 0,
+                "shelf_source_clickable_count": 0,
+                "shelf_review_count": 0,
             },
             "top_failures": [],
             "latest_path": "",
@@ -2803,10 +2812,26 @@ def _latest_citation_card_quality_summary() -> dict:
         "shelf_failed": 0,
         "ref_card_failed": 0,
         "system_b_failed": 0,
+        "shelf_item_count": 0,
+        "shelf_metadata_ready_count": 0,
+        "shelf_export_ready_count": 0,
+        "shelf_summary_export_ready_count": 0,
+        "shelf_doi_count": 0,
+        "shelf_source_clickable_count": 0,
+        "shelf_review_count": 0,
     }
     failures: Counter = Counter()
     for row in rows:
         quality = row.get("quality") if isinstance(row.get("quality"), dict) else {}
+        shelf_quality = quality.get("citation_shelf_quality") if isinstance(quality.get("citation_shelf_quality"), dict) else {}
+        if shelf_quality:
+            summary["shelf_item_count"] = int(summary["shelf_item_count"]) + _safe_int(shelf_quality.get("count"), 0)
+            summary["shelf_metadata_ready_count"] = int(summary["shelf_metadata_ready_count"]) + _safe_int(shelf_quality.get("metadata_ready_count"), 0)
+            summary["shelf_export_ready_count"] = int(summary["shelf_export_ready_count"]) + _safe_int(shelf_quality.get("export_ready_count"), 0)
+            summary["shelf_summary_export_ready_count"] = int(summary["shelf_summary_export_ready_count"]) + _safe_int(shelf_quality.get("summary_export_ready_count"), 0)
+            summary["shelf_doi_count"] = int(summary["shelf_doi_count"]) + _safe_int(shelf_quality.get("doi_count"), 0)
+            summary["shelf_source_clickable_count"] = int(summary["shelf_source_clickable_count"]) + _safe_int(shelf_quality.get("source_clickable_count"), 0)
+            summary["shelf_review_count"] = int(summary["shelf_review_count"]) + _safe_int(shelf_quality.get("review_count"), 0)
         for check in list((quality or {}).get("checks") or []):
             if not isinstance(check, dict):
                 continue
@@ -3059,6 +3084,9 @@ def _quality_full_chain_check(
     card_summary = citation_cards.get("summary") if isinstance(citation_cards.get("summary"), dict) else {}
     card_available = bool(citation_cards.get("available"))
     shelf_failed = _safe_int(card_summary.get("shelf_failed"), 0)
+    shelf_items = _safe_int(card_summary.get("shelf_item_count"), 0)
+    shelf_export_ready = _safe_int(card_summary.get("shelf_export_ready_count"), 0)
+    shelf_summary_export_ready = _safe_int(card_summary.get("shelf_summary_export_ready_count"), 0)
     card_failed = (
         _safe_int(card_summary.get("citation_card_failed"), 0)
         + _safe_int(card_summary.get("ref_card_failed"), 0)
@@ -3071,10 +3099,19 @@ def _quality_full_chain_check(
         else ("Waiting for citation-card acceptance results" if not card_available else "Citation cards passed acceptance")
     )
     shelf_status = "error" if shelf_failed > 0 else ("warning" if not card_available else "good")
+    shelf_export_detail = (
+        f"export-ready {shelf_export_ready}/{shelf_items}, summaries {shelf_summary_export_ready}/{shelf_items}"
+        if shelf_items > 0
+        else ""
+    )
     shelf_detail = (
-        f"{shelf_failed} literature basket checks failed"
+        f"{shelf_failed} literature basket checks failed" + (f"; {shelf_export_detail}" if shelf_export_detail else "")
         if shelf_failed > 0
-        else ("Waiting for shelf acceptance results" if not card_available else "Literature basket checks passed")
+        else (
+            "Waiting for shelf acceptance results"
+            if not card_available
+            else (f"Literature basket checks passed; {shelf_export_detail}" if shelf_export_detail else "Literature basket checks passed")
+        )
     )
 
     rerun_available = bool((rerun_summary or {}).get("available"))
@@ -3141,6 +3178,11 @@ def _quality_full_chain_check(
             action="repair_shelf_metadata" if shelf_failed > 0 else "monitor_literature_basket",
             count=shelf_failed,
             blocking=shelf_status == "error",
+            metrics={
+                "items": shelf_items,
+                "export_ready": shelf_export_ready,
+                "summary_export_ready": shelf_summary_export_ready,
+            },
         ),
         _quality_full_chain_stage(
             "repair_loop",
@@ -3270,6 +3312,13 @@ def _quality_feature_health(
     ref_card_failed = _safe_int(card_summary.get("ref_card_failed"), 0)
     system_b_failed = _safe_int(card_summary.get("system_b_failed"), 0)
     shelf_failed = _safe_int(card_summary.get("shelf_failed"), 0)
+    shelf_items = _safe_int(card_summary.get("shelf_item_count"), 0)
+    shelf_metadata_ready = _safe_int(card_summary.get("shelf_metadata_ready_count"), 0)
+    shelf_export_ready = _safe_int(card_summary.get("shelf_export_ready_count"), 0)
+    shelf_summary_export_ready = _safe_int(card_summary.get("shelf_summary_export_ready_count"), 0)
+    shelf_doi = _safe_int(card_summary.get("shelf_doi_count"), 0)
+    shelf_source_clickable = _safe_int(card_summary.get("shelf_source_clickable_count"), 0)
+    shelf_review = _safe_int(card_summary.get("shelf_review_count"), 0)
     card_failed = citation_card_failed + ref_card_failed + system_b_failed
     card_status = str((stages.get("citations") or {}).get("status") or ("warning" if not card_available else "good")).lower()
     shelf_status = str((stages.get("shelf") or {}).get("status") or ("warning" if not card_available else "good")).lower()
@@ -3379,13 +3428,26 @@ def _quality_feature_health(
             "Literature basket",
             shelf_status,
             score=_feature_score_from_status(shelf_status, good=96, warning=73, error=44),
-            summary="Basket metadata is export-ready" if shelf_status == "good" else f"{shelf_failed} basket quality checks failed",
-            detail="Checks DOI, authors, venue, recommendation reason, source-open, and export readiness.",
+            summary=(
+                f"Basket export-ready {shelf_export_ready}/{shelf_items}"
+                if shelf_status == "good" and shelf_items > 0
+                else ("Basket metadata is export-ready" if shelf_status == "good" else f"{shelf_failed} basket checks failed; export-ready {shelf_export_ready}/{shelf_items}")
+            ),
+            detail="Checks structured DOI, authors, venue, grounded summary, source-open, and export readiness.",
             action="repair_shelf_metadata" if shelf_failed > 0 else "review_literature_basket",
             target_stage="shelf",
             count=shelf_failed,
             blocking=shelf_status == "error",
-            metrics={"shelf_failed": shelf_failed},
+            metrics={
+                "shelf_failed": shelf_failed,
+                "items": shelf_items,
+                "metadata_ready": shelf_metadata_ready,
+                "export_ready": shelf_export_ready,
+                "summary_export_ready": shelf_summary_export_ready,
+                "doi": shelf_doi,
+                "source_clickable": shelf_source_clickable,
+                "review": shelf_review,
+            },
         ),
         _quality_feature_health_item(
             "reader_locate",

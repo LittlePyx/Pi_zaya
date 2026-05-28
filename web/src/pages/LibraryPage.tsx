@@ -1193,6 +1193,10 @@ export default function LibraryPage() {
     const cardsAvailable = citationCards?.available !== false && Boolean(citationCards)
     const trackedChecks = qualityDomainNumber(citationCards, 'tracked_checks')
     const failedChecks = qualityDomainNumber(citationCards, 'failed_checks')
+    const shelfItems = qualityDomainNumber(citationCards, 'shelf_item_count')
+    const shelfExportReady = qualityDomainNumber(citationCards, 'shelf_export_ready_count')
+    const shelfSummaryExportReady = qualityDomainNumber(citationCards, 'shelf_summary_export_ready_count')
+    const shelfExportDetail = shelfItems > 0 ? `; shelf export ${shelfExportReady}/${shelfItems}; summaries ${shelfSummaryExportReady}/${shelfItems}` : ''
     const readerStatus = qualityDomainStatus(readerLocate)
     const readerAvailable = readerLocate?.available !== false && Boolean(readerLocate)
     const readerTotal = qualityDomainNumber(readerLocate, 'total')
@@ -1234,7 +1238,9 @@ export default function LibraryPage() {
         countText: cardsAvailable
           ? (failedChecks > 0 ? `${failedChecks} ${S.lib_quality_domain_failed}` : `${trackedChecks} ${S.lib_quality_domain_passed}`)
           : S.lib_quality_domain_unavailable,
-        detailText: cardsAvailable ? S.lib_quality_domain_checks.replace('{n}', String(trackedChecks)) : '',
+        detailText: cardsAvailable
+          ? `${S.lib_quality_domain_checks.replace('{n}', String(trackedChecks))}${shelfExportDetail}`
+          : '',
         failureText: qualityTopFailureText(citationCards),
       },
       {

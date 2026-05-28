@@ -185,6 +185,8 @@ test('research QA replay opens a single diagnostic case from quality center', as
         shelf_failure_count: 1,
         ref_card_failure_count: 1,
         shelf_metadata_ready_count: 0,
+        shelf_export_ready_count: 0,
+        shelf_summary_export_ready_count: 1,
         shelf_doi_count: 0,
         shelf_source_clickable_count: 1,
         shelf_review_count: 1,
@@ -237,6 +239,8 @@ test('research QA replay opens a single diagnostic case from quality center', as
   await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('citation failures 1')
   await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('shelf failures 1')
   await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('ref failures 1')
+  await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('export ready 0')
+  await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('summary export 1')
   await expect(page.getByTestId('research-qa-diagnostic-quality-gates')).toContainText('shelf review 1')
   await expect(page.getByTestId('research-qa-diagnostic-citations')).toContainText('SCINeRF citation')
   await expect(page.getByTestId('research-qa-diagnostic-citations')).toContainText('system_a_missing_evidence')

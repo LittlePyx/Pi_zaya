@@ -209,6 +209,8 @@ export default function ResearchQaReplayPage() {
       shelfFailures: numberValue(summary.shelf_failure_count, shelfIssues),
       shelfWarnings: numberValue(summary.shelf_warning_count, 0),
       shelfMetadataReady: numberValue(summary.shelf_metadata_ready_count, 0),
+      shelfExportReady: numberValue(summary.shelf_export_ready_count, 0),
+      shelfSummaryExportReady: numberValue(summary.shelf_summary_export_ready_count, 0),
       shelfDoi: numberValue(summary.shelf_doi_count, 0),
       shelfSourceClickable: numberValue(summary.shelf_source_clickable_count, 0),
       shelfReview: numberValue(summary.shelf_review_count, 0),
@@ -328,6 +330,12 @@ export default function ResearchQaReplayPage() {
                 </span>
                 <span className="rounded-full border border-[var(--border)] px-2 py-1">
                   metadata ready {qualityGateSummary.shelfMetadataReady}
+                </span>
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  export ready {qualityGateSummary.shelfExportReady}
+                </span>
+                <span className="rounded-full border border-[var(--border)] px-2 py-1">
+                  summary export {qualityGateSummary.shelfSummaryExportReady}
                 </span>
                 <span className="rounded-full border border-[var(--border)] px-2 py-1">
                   DOI {qualityGateSummary.shelfDoi}

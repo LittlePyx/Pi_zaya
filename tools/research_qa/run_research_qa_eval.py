@@ -942,6 +942,8 @@ def _build_report(rows: list[dict[str, Any]], *, fixture_path: Path, base_url: s
             f"items={int(shelf_quality.get('count') or 0)}, "
             f"ok_items={int(shelf_quality.get('ok_count') or 0)}, "
             f"metadata_ready={int(shelf_quality.get('metadata_ready_count') or 0)}, "
+            f"export_ready={int(shelf_quality.get('export_ready_count') or 0)}, "
+            f"summary_export_ready={int(shelf_quality.get('summary_export_ready_count') or 0)}, "
             f"doi={int(shelf_quality.get('doi_count') or 0)}, "
             f"source_clickable={int(shelf_quality.get('source_clickable_count') or 0)}, "
             f"failures={len(failures)}, warnings={len(warnings)}, "
