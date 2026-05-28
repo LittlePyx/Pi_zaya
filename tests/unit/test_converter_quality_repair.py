@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from kb.converter.quality_acceptance import summarize_conversion_quality
-from kb.converter.quality_repair import conversion_repair_strategy_for_issue, repair_markdown_quality
+from kb.converter.quality_repair import conversion_repair_strategy_for_issue, repair_markdown_quality, repair_markdown_text
 
 
 def test_repair_markdown_quality_fixes_safe_source_level_issues(tmp_path: Path):
@@ -88,3 +88,34 @@ def test_conversion_repair_strategy_marks_safe_known_issue():
 
     assert strategy["safe"] is True
     assert "figure_metadata_captions" in strategy["strategies"]
+
+
+def test_repair_markdown_text_fixes_safe_issues_without_writing(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    original = "\n".join(
+        [
+            "# Demo Paper",
+            "",
+            "## Abstract",
+            "",
+            "This converted paper has an abstract.",
+            "",
+            "$$",
+            "x = y",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["missing_page_markers", "unclosed_display_math"],
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    assert result["changed"] is True
+    assert "ensure_page_anchor" in result["applied"]
+    assert "balance_display_math" in result["applied"]
+    assert repaired.lstrip().startswith("<!-- kb_page: 1 -->")
+    assert repaired.rstrip().endswith("$$")
+    assert md_path.read_text(encoding="utf-8") == original

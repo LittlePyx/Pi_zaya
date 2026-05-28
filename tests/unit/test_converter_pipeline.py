@@ -382,3 +382,53 @@ def test_merge_adjacent_math_fragments_does_not_swallow_long_prose_with_math_tok
     assert len(merged) == 3
     assert merged[0].text == "L ="
     assert merged[1].text.startswith("where R denotes the set of sampled rays")
+
+
+def test_auto_repair_final_markdown_applies_safe_quality_repairs(tmp_path):
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "page_1_fig_1.png").write_bytes(b"png")
+    (assets_dir / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "figures": [
+                    {
+                        "asset_name": "page_1_fig_1.png",
+                        "caption": "Figure 1. Optical layout with the detector and modulation mask.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+    md = "\n".join(
+        [
+            "# Demo Paper",
+            "",
+            "## Abstract",
+            "",
+            "This converted paper contains a readable abstract for retrieval.",
+            "",
+            "![Figure 1](./assets/page_1_fig_1.png)",
+            "",
+            "$$",
+            "x = y",
+        ]
+    )
+
+    out = converter._auto_repair_final_markdown(md, out_file=tmp_path / "output.md")
+
+    assert out.lstrip().startswith("<!-- kb_page: 1 -->")
+    assert "**Figure 1.** Optical layout with the detector and modulation mask." in out
+    assert out.rstrip().endswith("$$")

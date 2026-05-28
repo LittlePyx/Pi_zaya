@@ -108,6 +108,7 @@ from .tables import _is_markdown_table_sane, table_text_to_markdown
 from .block_classifier import _looks_like_math_block, _looks_like_code_block
 from .llm_worker import LLMWorker
 from .post_processing import postprocess_markdown
+from .quality_repair import repair_markdown_text
 from .md_analyzer import MarkdownAnalyzer
 from .pipeline_vision_direct import process_batch_vision_direct
 from .pipeline_render_markdown import render_blocks_to_markdown
@@ -332,8 +333,13 @@ class PDFConverter:
         except Exception as e:
             print(f"[WARN] figure metadata reconciliation skipped: {e}", flush=True)
         
-        # Write output
         out_file = save_dir / "output.md"
+        try:
+            final_md = self._auto_repair_final_markdown(final_md, out_file=out_file)
+        except Exception as e:
+            print(f"[WARN] conversion quality auto-repair skipped: {e}", flush=True)
+
+        # Write output
         out_file.write_text(final_md, encoding="utf-8")
         try:
             rebuild_structured_indices_for_markdown(out_file, md_text=final_md, assets_dir=assets_dir)
@@ -812,6 +818,30 @@ class PDFConverter:
         except Exception:
             raw = "0"
         return raw in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _quality_auto_repair_enabled() -> bool:
+        try:
+            raw = str(os.environ.get("KB_PDF_CONVERSION_QUALITY_AUTO_REPAIR", "1") or "1").strip().lower()
+        except Exception:
+            raw = "1"
+        return raw in {"1", "true", "yes", "y", "on"}
+
+    def _auto_repair_final_markdown(self, md: str, *, out_file: Path) -> str:
+        if not self._quality_auto_repair_enabled():
+            return md
+        result = repair_markdown_text(out_file, md)
+        if bool(result.get("changed")):
+            applied = ", ".join(str(x) for x in list(result.get("applied") or []) if str(x or "").strip())
+            print(f"[OK] conversion quality auto-repair applied: {applied or 'safe repairs'}", flush=True)
+            remaining = [str(x) for x in list(result.get("remaining_issue_codes") or []) if str(x or "").strip()]
+            if remaining:
+                print(f"[WARN] conversion quality still needs review: {', '.join(remaining[:6])}", flush=True)
+            return str(result.get("repaired_text") or md)
+        if bool(result.get("unsafe")):
+            reasons = [str(x) for x in list(result.get("regression_reasons") or []) if str(x or "").strip()]
+            print(f"[WARN] conversion quality auto-repair rejected: {', '.join(reasons[:6])}", flush=True)
+        return md
 
     def _vision_fragment_fallback_enabled(self) -> bool:
         try:

@@ -267,14 +267,15 @@ def _regression_reasons(base_text: str, candidate_text: str) -> list[str]:
     return reasons
 
 
-def repair_markdown_quality(
+def repair_markdown_text(
     md_path: Path | str,
+    md_text: str,
     *,
     issue_codes: list[str] | None = None,
-    create_backup: bool = True,
+    default_to_postprocess: bool = False,
 ) -> dict[str, Any]:
     path = Path(md_path).expanduser()
-    before_text = path.read_text(encoding="utf-8", errors="replace")
+    before_text = str(md_text or "")
     before_metrics = _metric_view(path, before_text)
     requested_codes = [str(code or "").strip().lower() for code in list(issue_codes or []) if str(code or "").strip()]
     before_issue_codes = _issue_codes_from_metrics(before_metrics)
@@ -283,44 +284,80 @@ def repair_markdown_quality(
     for code in active_codes:
         for name in conversion_repair_strategy_for_issue(code).get("strategies") or []:
             active_strategy_names.add(str(name))
-    if not active_strategy_names:
+    if not active_strategy_names and default_to_postprocess:
         active_strategy_names.update({"postprocess_markdown"})
 
     text = before_text
     applied: list[str] = []
 
-    if "ensure_page_anchor" in active_strategy_names:
+    if active_strategy_names:
+        if "ensure_page_anchor" in active_strategy_names:
+            text, changed = _ensure_page_anchor(text)
+            if changed:
+                applied.append("ensure_page_anchor")
+
+        if "balance_display_math" in active_strategy_names:
+            text, changed = _balance_display_math(text)
+            if changed:
+                applied.append("balance_display_math")
+
+        if "figure_metadata_captions" in active_strategy_names:
+            text, changed = _inject_figure_metadata_captions(path, text)
+            if changed:
+                applied.append("figure_metadata_captions")
+
+        if "postprocess_markdown" in active_strategy_names:
+            postprocessed = postprocess_markdown(text)
+            if postprocessed != text:
+                text = postprocessed
+                applied.append("postprocess_markdown")
+
+        # Post-processing can remove leading comments when legacy files are oddly shaped;
+        # preserve at least one stable reader anchor for quality-center repair.
         text, changed = _ensure_page_anchor(text)
         if changed:
             applied.append("ensure_page_anchor")
-
-    if "balance_display_math" in active_strategy_names:
-        text, changed = _balance_display_math(text)
-        if changed:
-            applied.append("balance_display_math")
-
-    if "figure_metadata_captions" in active_strategy_names:
-        text, changed = _inject_figure_metadata_captions(path, text)
-        if changed:
-            applied.append("figure_metadata_captions")
-
-    if "postprocess_markdown" in active_strategy_names:
-        postprocessed = postprocess_markdown(text)
-        if postprocessed != text:
-            text = postprocessed
-            applied.append("postprocess_markdown")
-
-    # Post-processing can remove leading comments when legacy files are oddly shaped;
-    # preserve at least one stable reader anchor for quality-center repair.
-    text, changed = _ensure_page_anchor(text)
-    if changed:
-        applied.append("ensure_page_anchor")
 
     after_metrics = _metric_view(path, text)
     after_issue_codes = _issue_codes_from_metrics(after_metrics)
     changed_text = text != before_text
     regression_reasons = _regression_reasons(before_text, text) if changed_text else []
-    safe_to_write = changed_text and not regression_reasons
+    safe_to_use = changed_text and not regression_reasons
+    final_text = text if safe_to_use or not changed_text else before_text
+
+    return {
+        "ok": bool(safe_to_use or not changed_text),
+        "changed": bool(safe_to_use),
+        "unsafe": bool(changed_text and regression_reasons),
+        "path": str(path),
+        "backup_path": "",
+        "applied": applied,
+        "issue_codes_before": before_issue_codes,
+        "issue_codes_after": after_issue_codes if safe_to_use or not changed_text else before_issue_codes,
+        "remaining_issue_codes": after_issue_codes if safe_to_use or not changed_text else before_issue_codes,
+        "regression_reasons": regression_reasons,
+        "before": before_metrics,
+        "after": after_metrics if safe_to_use or not changed_text else before_metrics,
+        "repaired_text": final_text,
+    }
+
+
+def repair_markdown_quality(
+    md_path: Path | str,
+    *,
+    issue_codes: list[str] | None = None,
+    create_backup: bool = True,
+) -> dict[str, Any]:
+    path = Path(md_path).expanduser()
+    before_text = path.read_text(encoding="utf-8", errors="replace")
+    result = repair_markdown_text(
+        path,
+        before_text,
+        issue_codes=issue_codes,
+        default_to_postprocess=True,
+    )
+    text = str(result.get("repaired_text") or before_text)
+    safe_to_write = bool(result.get("changed"))
 
     backup_path = ""
     if safe_to_write:
@@ -333,17 +370,7 @@ def repair_markdown_quality(
                 backup_path = ""
         path.write_text(text, encoding="utf-8")
 
-    return {
-        "ok": bool(safe_to_write or not changed_text),
-        "changed": bool(safe_to_write),
-        "unsafe": bool(changed_text and regression_reasons),
-        "path": str(path),
-        "backup_path": backup_path,
-        "applied": applied,
-        "issue_codes_before": before_issue_codes,
-        "issue_codes_after": after_issue_codes if safe_to_write or not changed_text else before_issue_codes,
-        "remaining_issue_codes": after_issue_codes if safe_to_write or not changed_text else before_issue_codes,
-        "regression_reasons": regression_reasons,
-        "before": before_metrics,
-        "after": after_metrics if safe_to_write or not changed_text else before_metrics,
-    }
+    out = dict(result)
+    out["backup_path"] = backup_path
+    out.pop("repaired_text", None)
+    return out
