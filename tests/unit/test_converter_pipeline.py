@@ -427,8 +427,9 @@ def test_auto_repair_final_markdown_applies_safe_quality_repairs(tmp_path):
         ]
     )
 
-    out = converter._auto_repair_final_markdown(md, out_file=tmp_path / "output.md")
+    out, repair_result = converter._auto_repair_final_markdown(md, out_file=tmp_path / "output.md")
 
     assert out.lstrip().startswith("<!-- kb_page: 1 -->")
     assert "**Figure 1.** Optical layout with the detector and modulation mask." in out
     assert out.rstrip().endswith("$$")
+    assert repair_result["changed"] is True

@@ -143,6 +143,7 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
 
 def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
+    from kb.converter.quality_repair import write_conversion_quality_result
 
     pdf_dir = tmp_path / "pdfs"
     md_dir = tmp_path / "md_output"
@@ -158,7 +159,8 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
     good_assets = md_dir / "good" / "assets"
     good_assets.mkdir(parents=True, exist_ok=True)
     (good_assets / "fig.png").write_bytes(b"png")
-    (md_dir / "good" / "good.en.md").write_text(
+    good_md = md_dir / "good" / "good.en.md"
+    good_md.write_text(
         "\n".join(
             [
                 "<!-- kb_page: 1 -->",
@@ -177,6 +179,16 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
             ]
         ),
         encoding="utf-8",
+    )
+    write_conversion_quality_result(
+        good_md,
+        auto_repair_result={
+            "changed": True,
+            "applied": ["ensure_page_anchor"],
+            "issue_codes_before": ["missing_page_markers"],
+            "issue_codes_after": [],
+            "remaining_issue_codes": [],
+        },
     )
 
     broken_folder = md_dir / "broken"
@@ -214,6 +226,9 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
     assert good_quality["score"] >= 90
     assert good_quality["metrics"]["references"] == 2
     assert good_quality["metrics"]["missing_images"] == 0
+    assert good_quality["conversion_report"]["auto_repair_changed"] is True
+    assert good_quality["conversion_report"]["auto_repair_applied"] == ["ensure_page_anchor"]
+    assert good_quality["conversion_report"]["recommended_action"] == "none"
 
     broken_quality = by_name["broken.pdf"]["conversion_quality"]
     assert broken_quality["status"] == "error"

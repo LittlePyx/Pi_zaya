@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -20,6 +21,7 @@ CAPTION_LINE_RE = re.compile(
     r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table|algorithm)\s*(?:\d+|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
     re.IGNORECASE,
 )
+CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
 
 
 CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
@@ -80,6 +82,83 @@ def conversion_repair_strategy_for_issue(code: str) -> dict[str, Any]:
         "safe": bool(strategy.get("safe")),
         "strategies": [str(item) for item in list(strategy.get("strategies") or []) if str(item or "").strip()],
     }
+
+
+def conversion_quality_result_path(md_path: Path | str) -> Path:
+    return Path(md_path).expanduser().parent / CONVERSION_QUALITY_RESULT_FILENAME
+
+
+def _recommended_action_for_issues(issue_codes: list[str]) -> str:
+    codes = [str(code or "").strip().lower() for code in list(issue_codes or []) if str(code or "").strip()]
+    if not codes:
+        return "none"
+    if all(bool(conversion_repair_strategy_for_issue(code).get("safe")) for code in codes):
+        return "autofix_available"
+    if any(not bool(conversion_repair_strategy_for_issue(code).get("safe")) for code in codes):
+        return "reconvert"
+    return "review"
+
+
+def _current_markdown_stat(path: Path) -> dict[str, int]:
+    try:
+        stat = path.stat()
+        return {"mtime_ns": int(stat.st_mtime_ns), "size": int(stat.st_size)}
+    except Exception:
+        return {"mtime_ns": 0, "size": 0}
+
+
+def load_conversion_quality_result(md_path: Path | str) -> dict[str, Any]:
+    report_path = conversion_quality_result_path(md_path)
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def write_conversion_quality_result(
+    md_path: Path | str,
+    *,
+    auto_repair_result: dict[str, Any] | None = None,
+    auto_repair_enabled: bool = True,
+) -> dict[str, Any]:
+    path = Path(md_path).expanduser()
+    report_path = conversion_quality_result_path(path)
+    metrics = _metric_view(path, path.read_text(encoding="utf-8", errors="replace"))
+    repair = dict(auto_repair_result or {})
+    repair.pop("repaired_text", None)
+    remaining = [
+        str(code or "").strip().lower()
+        for code in list(repair.get("remaining_issue_codes") or _issue_codes_from_metrics(metrics))
+        if str(code or "").strip()
+    ]
+    recommended_action = _recommended_action_for_issues(remaining)
+    md_stat = _current_markdown_stat(path)
+    payload = {
+        "schema_version": 1,
+        "kind": "conversion_quality_result",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "md_path": str(path),
+        "md_mtime_ns": md_stat["mtime_ns"],
+        "md_size": md_stat["size"],
+        "auto_repair_enabled": bool(auto_repair_enabled),
+        "auto_repair": {
+            "changed": bool(repair.get("changed")),
+            "unsafe": bool(repair.get("unsafe")),
+            "applied": [str(item) for item in list(repair.get("applied") or []) if str(item or "").strip()][:20],
+            "issue_codes_before": [str(item) for item in list(repair.get("issue_codes_before") or []) if str(item or "").strip()][:30],
+            "issue_codes_after": [str(item) for item in list(repair.get("issue_codes_after") or []) if str(item or "").strip()][:30],
+            "remaining_issue_codes": remaining[:30],
+            "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
+        },
+        "recommended_action": recommended_action,
+        "needs_reconvert": recommended_action == "reconvert",
+        "metrics": metrics,
+    }
+    report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
 
 
 def _metric_view(md_path: Path, text: str) -> dict[str, Any]:

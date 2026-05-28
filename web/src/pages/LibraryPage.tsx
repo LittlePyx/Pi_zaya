@@ -3166,6 +3166,10 @@ export default function LibraryPage() {
       : 0
     const quality = item.conversion_quality
     const qualityIssues = Array.isArray(quality?.issues) ? quality.issues.slice(0, 3) : []
+    const qualityReport = quality?.conversion_report || null
+    const qualityAutoRepairApplied = Array.isArray(qualityReport?.auto_repair_applied)
+      ? qualityReport?.auto_repair_applied || []
+      : []
     const mathCount = conversionMetric(quality, 'display_math') + conversionMetric(quality, 'inline_math')
     const qualityNeedsRepair = hasConversionQualityIssue(item)
     const qualityRepairing = Boolean(qualityRepairingNames[item.name])
@@ -3261,6 +3265,19 @@ export default function LibraryPage() {
                   {issue.label}
                 </span>
               ))}
+              {qualityReport?.auto_repair_changed ? (
+                <span
+                  className="kb-lib-quality-issue is-success"
+                  title={qualityAutoRepairApplied.join(' / ') || 'Conversion auto-repair applied'}
+                >
+                  auto fixed {qualityAutoRepairApplied.length || 1}
+                </span>
+              ) : null}
+              {qualityReport?.needs_reconvert ? (
+                <span className="kb-lib-quality-issue is-error" title="Conversion report recommends re-conversion">
+                  reconvert
+                </span>
+              ) : null}
               {qualityNeedsRepair ? (
                 <Button
                   size="small"

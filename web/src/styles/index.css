@@ -6389,6 +6389,12 @@ textarea.kb-chat-textarea:focus {
   color: color-mix(in srgb, #b91c1c 84%, var(--text-main));
 }
 
+.kb-lib-quality-issue.is-success {
+  border-color: color-mix(in srgb, #16a34a 28%, var(--border));
+  background: color-mix(in srgb, #16a34a 9%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #15803d 84%, var(--text-main));
+}
+
 .kb-lib-quality-repair-btn.ant-btn {
   min-height: 22px;
   height: 22px;

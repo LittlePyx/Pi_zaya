@@ -59,6 +59,22 @@ export interface ConversionQualityIssue {
   repair_steps?: string[]
 }
 
+export interface ConversionQualityReport {
+  available: boolean
+  stale: boolean
+  path: string
+  generated_at: string
+  auto_repair_enabled: boolean
+  auto_repair_changed: boolean
+  auto_repair_unsafe: boolean
+  auto_repair_applied: string[]
+  issue_codes_before: string[]
+  remaining_issue_codes: string[]
+  regression_reasons: string[]
+  recommended_action: string
+  needs_reconvert: boolean
+}
+
 export interface ConversionQualitySummary {
   status: 'good' | 'warning' | 'error' | string
   label: string
@@ -85,6 +101,7 @@ export interface ConversionQualitySummary {
     analyzer_errors?: number
     analyzer_warnings?: number
   }
+  conversion_report?: ConversionQualityReport | null
 }
 
 export interface LibraryMetaUpdateBody {

@@ -8,7 +8,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional, List, Dict, Set, Tuple
+from typing import Any, Optional, List, Dict, Set, Tuple
 
 try:
     import fitz
@@ -108,7 +108,7 @@ from .tables import _is_markdown_table_sane, table_text_to_markdown
 from .block_classifier import _looks_like_math_block, _looks_like_code_block
 from .llm_worker import LLMWorker
 from .post_processing import postprocess_markdown
-from .quality_repair import repair_markdown_text
+from .quality_repair import repair_markdown_text, write_conversion_quality_result
 from .md_analyzer import MarkdownAnalyzer
 from .pipeline_vision_direct import process_batch_vision_direct
 from .pipeline_render_markdown import render_blocks_to_markdown
@@ -334,13 +334,23 @@ class PDFConverter:
             print(f"[WARN] figure metadata reconciliation skipped: {e}", flush=True)
         
         out_file = save_dir / "output.md"
+        auto_repair_result: dict[str, Any] = {}
         try:
-            final_md = self._auto_repair_final_markdown(final_md, out_file=out_file)
+            final_md, auto_repair_result = self._auto_repair_final_markdown(final_md, out_file=out_file)
         except Exception as e:
             print(f"[WARN] conversion quality auto-repair skipped: {e}", flush=True)
 
         # Write output
         out_file.write_text(final_md, encoding="utf-8")
+        try:
+            sidecar = write_conversion_quality_result(
+                out_file,
+                auto_repair_result=auto_repair_result,
+                auto_repair_enabled=self._quality_auto_repair_enabled(),
+            )
+            print(f"[OK] conversion quality result saved to {Path(sidecar.get('md_path') or out_file).parent / 'conversion_quality_result.json'}", flush=True)
+        except Exception as e:
+            print(f"[WARN] conversion quality result sidecar skipped: {e}", flush=True)
         try:
             rebuild_structured_indices_for_markdown(out_file, md_text=final_md, assets_dir=assets_dir)
         except Exception as e:
@@ -827,9 +837,9 @@ class PDFConverter:
             raw = "1"
         return raw in {"1", "true", "yes", "y", "on"}
 
-    def _auto_repair_final_markdown(self, md: str, *, out_file: Path) -> str:
+    def _auto_repair_final_markdown(self, md: str, *, out_file: Path) -> tuple[str, dict[str, Any]]:
         if not self._quality_auto_repair_enabled():
-            return md
+            return md, {}
         result = repair_markdown_text(out_file, md)
         if bool(result.get("changed")):
             applied = ", ".join(str(x) for x in list(result.get("applied") or []) if str(x or "").strip())
@@ -837,11 +847,11 @@ class PDFConverter:
             remaining = [str(x) for x in list(result.get("remaining_issue_codes") or []) if str(x or "").strip()]
             if remaining:
                 print(f"[WARN] conversion quality still needs review: {', '.join(remaining[:6])}", flush=True)
-            return str(result.get("repaired_text") or md)
+            return str(result.get("repaired_text") or md), result
         if bool(result.get("unsafe")):
             reasons = [str(x) for x in list(result.get("regression_reasons") or []) if str(x or "").strip()]
             print(f"[WARN] conversion quality auto-repair rejected: {', '.join(reasons[:6])}", flush=True)
-        return md
+        return md, result
 
     def _vision_fragment_fallback_enabled(self) -> bool:
         try:

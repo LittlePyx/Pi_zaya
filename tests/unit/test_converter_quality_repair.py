@@ -4,7 +4,14 @@ import json
 from pathlib import Path
 
 from kb.converter.quality_acceptance import summarize_conversion_quality
-from kb.converter.quality_repair import conversion_repair_strategy_for_issue, repair_markdown_quality, repair_markdown_text
+from kb.converter.quality_repair import (
+    conversion_quality_result_path,
+    conversion_repair_strategy_for_issue,
+    load_conversion_quality_result,
+    repair_markdown_quality,
+    repair_markdown_text,
+    write_conversion_quality_result,
+)
 
 
 def test_repair_markdown_quality_fixes_safe_source_level_issues(tmp_path: Path):
@@ -119,3 +126,44 @@ def test_repair_markdown_text_fixes_safe_issues_without_writing(tmp_path: Path):
     assert repaired.lstrip().startswith("<!-- kb_page: 1 -->")
     assert repaired.rstrip().endswith("$$")
     assert md_path.read_text(encoding="utf-8") == original
+
+
+def test_write_conversion_quality_result_records_repair_trace(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "",
+                "# Demo Paper",
+                "",
+                "## Abstract",
+                "",
+                "This paper cites prior work [1].",
+                "",
+                "## References",
+                "",
+                "[1] Ada Lovelace. Example reference. Journal.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(
+        md_path,
+        auto_repair_result={
+            "changed": True,
+            "applied": ["ensure_page_anchor"],
+            "issue_codes_before": ["missing_page_markers"],
+            "issue_codes_after": [],
+            "remaining_issue_codes": [],
+        },
+    )
+
+    report_path = conversion_quality_result_path(md_path)
+    loaded = load_conversion_quality_result(md_path)
+    assert report_path.exists()
+    assert payload["auto_repair"]["changed"] is True
+    assert payload["auto_repair"]["applied"] == ["ensure_page_anchor"]
+    assert payload["recommended_action"] == "none"
+    assert loaded["md_size"] == md_path.stat().st_size

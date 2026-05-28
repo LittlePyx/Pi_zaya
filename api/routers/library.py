@@ -47,7 +47,12 @@ from kb.file_ops import (
     _to_os_path,
 )
 from kb.converter.quality_acceptance import summarize_conversion_quality
-from kb.converter.quality_repair import conversion_repair_strategy_for_issue, repair_markdown_quality
+from kb.converter.quality_repair import (
+    conversion_quality_result_path,
+    conversion_repair_strategy_for_issue,
+    load_conversion_quality_result,
+    repair_markdown_quality,
+)
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.library_store import LibraryStore
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
@@ -55,7 +60,7 @@ from kb.reference_sync import start_reference_sync
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 _RENAME_SUGGEST_CACHE: dict[str, dict] = {}
-_CONVERSION_QUALITY_CACHE: dict[str, tuple[int, int, dict]] = {}
+_CONVERSION_QUALITY_CACHE: dict[str, tuple[int, int, int, int, dict]] = {}
 _RESEARCH_QA_EVAL_ROOT = Path("test_results") / "research_qa_eval"
 
 
@@ -228,6 +233,35 @@ def _conversion_quality_issue(code: str, label: str, *, severity: str = "warning
     }
 
 
+def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | None:
+    if not isinstance(report, dict) or not report:
+        return None
+    repair = report.get("auto_repair") if isinstance(report.get("auto_repair"), dict) else {}
+    try:
+        stat = md_path.stat()
+        stale = (
+            int(report.get("md_mtime_ns") or 0) != int(stat.st_mtime_ns)
+            or int(report.get("md_size") or 0) != int(stat.st_size)
+        )
+    except Exception:
+        stale = True
+    return {
+        "available": True,
+        "stale": bool(stale),
+        "path": str(conversion_quality_result_path(md_path)),
+        "generated_at": str(report.get("generated_at") or ""),
+        "auto_repair_enabled": bool(report.get("auto_repair_enabled")),
+        "auto_repair_changed": bool(repair.get("changed")),
+        "auto_repair_unsafe": bool(repair.get("unsafe")),
+        "auto_repair_applied": [str(item) for item in list(repair.get("applied") or []) if str(item or "").strip()][:20],
+        "issue_codes_before": [str(item) for item in list(repair.get("issue_codes_before") or []) if str(item or "").strip()][:30],
+        "remaining_issue_codes": [str(item) for item in list(repair.get("remaining_issue_codes") or []) if str(item or "").strip()][:30],
+        "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
+        "recommended_action": str(report.get("recommended_action") or ""),
+        "needs_reconvert": bool(report.get("needs_reconvert")),
+    }
+
+
 def _conversion_quality_summary(md_path: str | Path) -> dict | None:
     path = Path(md_path)
     try:
@@ -240,11 +274,26 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
     try:
         stat = path.stat()
         cache_key = str(path.expanduser().resolve())
+        try:
+            report_stat = conversion_quality_result_path(path).stat()
+            report_mtime_ns = int(report_stat.st_mtime_ns)
+            report_size = int(report_stat.st_size)
+        except Exception:
+            report_mtime_ns = 0
+            report_size = 0
         cached = _CONVERSION_QUALITY_CACHE.get(cache_key)
-        if cached and cached[0] == int(stat.st_mtime_ns) and cached[1] == int(stat.st_size):
-            return dict(cached[2])
+        if (
+            cached
+            and len(cached) >= 5
+            and cached[0] == int(stat.st_mtime_ns)
+            and cached[1] == int(stat.st_size)
+            and cached[2] == report_mtime_ns
+            and cached[3] == report_size
+        ):
+            return dict(cached[4])
 
         metrics = summarize_conversion_quality(path)
+        conversion_report = _conversion_quality_report_summary(path, load_conversion_quality_result(path))
         metric_view = {
             "chars": int(metrics.chars),
             "headings": int(metrics.heading_count),
@@ -317,8 +366,15 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
             "has_review_issue": bool(issues),
             "issues": issues[:8],
             "metrics": metric_view,
+            "conversion_report": conversion_report,
         }
-        _CONVERSION_QUALITY_CACHE[cache_key] = (int(stat.st_mtime_ns), int(stat.st_size), dict(result))
+        _CONVERSION_QUALITY_CACHE[cache_key] = (
+            int(stat.st_mtime_ns),
+            int(stat.st_size),
+            report_mtime_ns,
+            report_size,
+            dict(result),
+        )
         return result
     except Exception as exc:
         return {
