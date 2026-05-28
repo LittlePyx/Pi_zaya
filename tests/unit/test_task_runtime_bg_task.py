@@ -9,6 +9,7 @@ from kb.task_runtime import (
     _augment_paper_guide_retrieval_prompt,
     _augment_prompt_with_source_hint,
     _await_stored_doc_list_contract,
+    _bg_ingest_py_path,
     _build_bg_task,
     _build_doc_list_contract_from_rendered_payload,
     _build_doc_list_refs_render_payload,
@@ -90,6 +91,29 @@ def test_no_llm_mode_respects_flag():
     )
     assert task["speed_mode"] == "no_llm"
     assert task["no_llm"] is True
+
+
+def test_bg_task_carries_quality_repair_context_and_resolves_ingest_script():
+    task = _build_bg_task(
+        pdf_path=Path("a.pdf"),
+        out_root=Path("out"),
+        db_dir=Path("db"),
+        no_llm=False,
+        replace=True,
+        speed_mode="normal",
+        repair_context={
+            "action": "reconvert",
+            "scope": "document",
+            "reason": "weak conversion",
+            "source": "test",
+            "issue_codes": ["weak_structure"],
+        },
+    )
+
+    assert task["repair_context"]["action"] == "reconvert"
+    assert task["repair_context"]["issue_codes"] == ["weak_structure"]
+    assert _bg_ingest_py_path().name == "ingest.py"
+    assert _bg_ingest_py_path().exists()
 
 
 def test_conversational_source_hint_detection_and_augmentation():

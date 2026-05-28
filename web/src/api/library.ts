@@ -77,6 +77,21 @@ export interface ConversionRepairPlan {
   issue_actions: Array<Record<string, unknown>>
 }
 
+export interface ConversionRepairAttempt {
+  event: string
+  status: string
+  action?: string
+  scope?: string
+  speed_mode?: string
+  issue_codes?: string[]
+  task_id?: string
+  source?: string
+  reason?: string
+  detail?: string
+  created_at?: string
+  extra?: Record<string, unknown>
+}
+
 export interface ConversionQualityReport {
   available: boolean
   stale: boolean
@@ -90,6 +105,9 @@ export interface ConversionQualityReport {
   remaining_issue_codes: string[]
   regression_reasons: string[]
   repair_plan?: ConversionRepairPlan | null
+  repair_attempt_count?: number
+  latest_repair_attempt?: ConversionRepairAttempt | null
+  repair_attempts?: ConversionRepairAttempt[]
   recommended_action: string
   needs_reconvert: boolean
 }
@@ -715,6 +733,7 @@ export interface LibraryQualityRepairItem {
   planned_scope?: string
   planned_speed_mode?: string
   planned_no_llm?: boolean
+  repair_attempt?: ConversionRepairAttempt
   repair_error?: string
   skipped_busy: boolean
   error: string

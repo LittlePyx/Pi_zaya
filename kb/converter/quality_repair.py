@@ -22,6 +22,7 @@ CAPTION_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
+MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 
 
 CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
@@ -276,6 +277,72 @@ def load_conversion_quality_result(md_path: Path | str) -> dict[str, Any]:
     return payload
 
 
+def append_conversion_repair_attempt(
+    md_path: Path | str,
+    *,
+    event: str,
+    status: str,
+    action: str = "",
+    scope: str = "",
+    speed_mode: str = "",
+    issue_codes: list[str] | None = None,
+    task_id: str = "",
+    source: str = "",
+    reason: str = "",
+    detail: str = "",
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    path = Path(md_path).expanduser()
+    report_path = conversion_quality_result_path(path)
+    report = load_conversion_quality_result(path)
+    if not report and path.exists():
+        try:
+            report = write_conversion_quality_result(path)
+        except Exception:
+            report = {}
+    if not isinstance(report, dict):
+        report = {}
+
+    row = {
+        "event": str(event or "").strip() or "repair",
+        "status": str(status or "").strip() or "info",
+        "action": str(action or "").strip(),
+        "scope": str(scope or "").strip(),
+        "speed_mode": str(speed_mode or "").strip(),
+        "issue_codes": [str(item or "").strip() for item in list(issue_codes or []) if str(item or "").strip()][:30],
+        "task_id": str(task_id or "").strip(),
+        "source": str(source or "").strip(),
+        "reason": str(reason or "").strip()[:500],
+        "detail": str(detail or "").strip()[:800],
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    if isinstance(extra, dict) and extra:
+        row["extra"] = {
+            str(k): v
+            for k, v in extra.items()
+            if isinstance(k, str) and k and isinstance(v, (str, int, float, bool, type(None), list, dict))
+        }
+
+    attempts = report.get("repair_attempts") if isinstance(report.get("repair_attempts"), list) else []
+    attempts = [item for item in attempts if isinstance(item, dict)]
+    attempts.append(row)
+    report["repair_attempts"] = attempts[-MAX_CONVERSION_REPAIR_ATTEMPTS:]
+    report["latest_repair_attempt"] = row
+    report.setdefault("schema_version", 1)
+    report.setdefault("kind", "conversion_quality_result")
+    report["md_path"] = str(path)
+    try:
+        stat = path.stat()
+        report["md_mtime_ns"] = int(stat.st_mtime_ns)
+        report["md_size"] = int(stat.st_size)
+    except Exception:
+        report.setdefault("md_mtime_ns", 0)
+        report.setdefault("md_size", 0)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return row
+
+
 def write_conversion_quality_result(
     md_path: Path | str,
     *,
@@ -295,6 +362,10 @@ def write_conversion_quality_result(
     repair_plan = plan_conversion_quality_repair(remaining, metrics=metrics)
     recommended_action = str(repair_plan.get("action") or "review")
     md_stat = _current_markdown_stat(path)
+    prev = load_conversion_quality_result(path)
+    prev_attempts = prev.get("repair_attempts") if isinstance(prev.get("repair_attempts"), list) else []
+    prev_attempts = [item for item in prev_attempts if isinstance(item, dict)][-MAX_CONVERSION_REPAIR_ATTEMPTS:]
+    latest_attempt = prev.get("latest_repair_attempt") if isinstance(prev.get("latest_repair_attempt"), dict) else (prev_attempts[-1] if prev_attempts else {})
     payload = {
         "schema_version": 1,
         "kind": "conversion_quality_result",
@@ -313,6 +384,8 @@ def write_conversion_quality_result(
             "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
         },
         "repair_plan": repair_plan,
+        "repair_attempts": prev_attempts,
+        "latest_repair_attempt": latest_attempt,
         "recommended_action": recommended_action,
         "needs_reconvert": recommended_action == "reconvert",
         "metrics": metrics,

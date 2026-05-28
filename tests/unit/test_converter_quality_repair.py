@@ -5,6 +5,7 @@ from pathlib import Path
 
 from kb.converter.quality_acceptance import summarize_conversion_quality
 from kb.converter.quality_repair import (
+    append_conversion_repair_attempt,
     conversion_quality_result_path,
     conversion_repair_strategy_for_issue,
     load_conversion_quality_result,
@@ -188,3 +189,44 @@ def test_write_conversion_quality_result_records_repair_trace(tmp_path: Path):
     assert payload["repair_plan"]["action"] == "none"
     assert payload["recommended_action"] == "none"
     assert loaded["md_size"] == md_path.stat().st_size
+
+
+def test_conversion_quality_result_preserves_repair_attempt_history(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "",
+                "# Demo Paper",
+                "",
+                "## Abstract",
+                "",
+                "This paper cites prior work [1].",
+                "",
+                "## References",
+                "",
+                "[1] Ada Lovelace. Example reference. Journal.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    write_conversion_quality_result(md_path)
+    row = append_conversion_repair_attempt(
+        md_path,
+        event="reconvert_queued",
+        status="queued",
+        action="reconvert",
+        scope="document",
+        speed_mode="normal",
+        issue_codes=["weak_structure"],
+        task_id="task-1",
+        source="test",
+        reason="Need source repair.",
+    )
+    payload = write_conversion_quality_result(md_path)
+
+    assert row["task_id"] == "task-1"
+    assert payload["latest_repair_attempt"]["task_id"] == "task-1"
+    assert payload["repair_attempts"][-1]["event"] == "reconvert_queued"

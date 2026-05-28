@@ -48,6 +48,7 @@ from kb.file_ops import (
 )
 from kb.converter.quality_acceptance import summarize_conversion_quality
 from kb.converter.quality_repair import (
+    append_conversion_repair_attempt,
     conversion_quality_result_path,
     conversion_repair_strategy_for_issue,
     load_conversion_quality_result,
@@ -242,6 +243,8 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
     if not isinstance(report, dict) or not report:
         return None
     repair = report.get("auto_repair") if isinstance(report.get("auto_repair"), dict) else {}
+    repair_attempts = [item for item in list(report.get("repair_attempts") or []) if isinstance(item, dict)]
+    latest_attempt = report.get("latest_repair_attempt") if isinstance(report.get("latest_repair_attempt"), dict) else (repair_attempts[-1] if repair_attempts else {})
     try:
         stat = md_path.stat()
         stale = (
@@ -263,6 +266,9 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
         "remaining_issue_codes": [str(item) for item in list(repair.get("remaining_issue_codes") or []) if str(item or "").strip()][:30],
         "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
         "repair_plan": report.get("repair_plan") if isinstance(report.get("repair_plan"), dict) else {},
+        "repair_attempt_count": len(repair_attempts),
+        "latest_repair_attempt": latest_attempt,
+        "repair_attempts": repair_attempts[-5:],
         "recommended_action": str(report.get("recommended_action") or ""),
         "needs_reconvert": bool(report.get("needs_reconvert")),
     }
@@ -4212,6 +4218,7 @@ def repair_library_quality(body: QualityRepairBody):
             "planned_scope": "",
             "planned_speed_mode": "",
             "planned_no_llm": False,
+            "repair_attempt": {},
             "md_path": "",
             "skipped_busy": False,
             "error": "",
@@ -4291,6 +4298,31 @@ def repair_library_quality(body: QualityRepairBody):
                     "repair_unsafe": bool(repair_result.get("unsafe")),
                     "repair_regression_reasons": list(repair_result.get("regression_reasons") or [])[:8],
                 }
+                try:
+                    repair_payload["repair_attempt"] = append_conversion_repair_attempt(
+                        md_path,
+                        event="markdown_autofix",
+                        status="partial" if str(active_plan.get("action") or "").lower() == "reconvert" else "success",
+                        action=str(active_plan.get("action") or "autofix"),
+                        scope=str(active_plan.get("scope") or "markdown"),
+                        speed_mode=str(active_plan.get("speed_mode") or ""),
+                        issue_codes=before_issue_codes,
+                        source="library_quality_repair",
+                        reason=str(active_plan.get("reason") or ""),
+                        detail=(
+                            "Markdown auto-repair applied before source reconversion."
+                            if str(active_plan.get("action") or "").lower() == "reconvert"
+                            else "Markdown auto-repair resolved conversion-quality issues."
+                        ),
+                        extra={
+                            "changed": repair_changed,
+                            "applied": list(repair_result.get("applied") or [])[:12],
+                            "fixed_issue_codes": fixed_issue_codes[:12],
+                            "remaining_issue_codes": after_issue_codes[:12],
+                        },
+                    )
+                except Exception:
+                    pass
             except Exception as exc:
                 active_plan = plan_conversion_quality_repair(["quality_scan_failed"])
                 repair_payload = {
@@ -4329,6 +4361,22 @@ def repair_library_quality(body: QualityRepairBody):
 
         plan_action = str(active_plan.get("action") or "").strip().lower()
         if md_exists and plan_action != "reconvert":
+            if md_exists and _path_is_within(md_path, [md_d]):
+                try:
+                    repair_payload["repair_attempt"] = append_conversion_repair_attempt(
+                        md_path,
+                        event="repair_closed",
+                        status="success" if plan_action in {"", "none"} else str(plan_action or "success"),
+                        action=str(active_plan.get("action") or "none"),
+                        scope=str(active_plan.get("scope") or ""),
+                        speed_mode=str(active_plan.get("speed_mode") or ""),
+                        issue_codes=list(active_plan.get("issue_codes") or []),
+                        source="library_quality_repair",
+                        reason=str(active_plan.get("reason") or ""),
+                        detail="No source reconversion required after quality repair planning.",
+                    )
+                except Exception:
+                    pass
             items.append({**base_item, **repair_payload, "ok": True, "enqueued": False})
             continue
 
@@ -4336,6 +4384,13 @@ def repair_library_quality(body: QualityRepairBody):
             queue_speed_mode, queue_no_llm, queue_replace = _planned_queue_settings(active_plan)
             repair_payload["planned_speed_mode"] = queue_speed_mode
             repair_payload["planned_no_llm"] = bool(queue_no_llm)
+            repair_context = {
+                "action": str(active_plan.get("action") or "reconvert"),
+                "scope": str(active_plan.get("scope") or ""),
+                "reason": str(active_plan.get("reason") or ""),
+                "source": "library_quality_repair",
+                "issue_codes": list(active_plan.get("issue_codes") or []),
+            }
             task = _build_bg_task(
                 pdf_path=pdf_path,
                 out_root=md_d,
@@ -4343,9 +4398,28 @@ def repair_library_quality(body: QualityRepairBody):
                 no_llm=queue_no_llm,
                 replace=queue_replace,
                 speed_mode=queue_speed_mode,
+                repair_context=repair_context,
             )
             _bg_enqueue(task)
             task_id = str(task.get("_tid") or "")
+            if md_exists and _path_is_within(md_path, [md_d]):
+                try:
+                    repair_payload["repair_attempt"] = append_conversion_repair_attempt(
+                        md_path,
+                        event="reconvert_queued",
+                        status="queued",
+                        action=str(active_plan.get("action") or "reconvert"),
+                        scope=str(active_plan.get("scope") or ""),
+                        speed_mode=queue_speed_mode,
+                        issue_codes=list(active_plan.get("issue_codes") or []),
+                        task_id=task_id,
+                        source="library_quality_repair",
+                        reason=str(active_plan.get("reason") or ""),
+                        detail="Source reconversion was queued from conversion-quality repair planning.",
+                        extra={"replace": queue_replace, "no_llm": queue_no_llm},
+                    )
+                except Exception:
+                    pass
             items.append({**base_item, **repair_payload, "ok": True, "enqueued": True, "task_id": task_id})
             enqueued += 1
         except Exception as exc:

@@ -3168,6 +3168,14 @@ export default function LibraryPage() {
     const qualityIssues = Array.isArray(quality?.issues) ? quality.issues.slice(0, 3) : []
     const qualityReport = quality?.conversion_report || null
     const qualityRepairPlan = qualityReport?.repair_plan || null
+    const latestQualityRepairAttempt = qualityReport?.latest_repair_attempt || null
+    const latestQualityRepairAttemptStatus = normalizeTextValue(latestQualityRepairAttempt?.status).toLowerCase()
+    const latestQualityRepairAttemptTone =
+      ['success', 'resolved', 'ready'].includes(latestQualityRepairAttemptStatus)
+        ? 'is-success'
+        : ['error', 'failed', 'blocked'].includes(latestQualityRepairAttemptStatus)
+          ? 'is-error'
+          : 'is-warning'
     const qualityAutoRepairApplied = Array.isArray(qualityReport?.auto_repair_applied)
       ? qualityReport?.auto_repair_applied || []
       : []
@@ -3280,6 +3288,20 @@ export default function LibraryPage() {
                   title={qualityRepairPlan?.reason || 'Conversion report recommends re-conversion'}
                 >
                   {qualityRepairPlan?.scope ? `reconvert ${qualityRepairPlan.scope}` : 'reconvert'}
+                </span>
+              ) : null}
+              {latestQualityRepairAttempt ? (
+                <span
+                  className={`kb-lib-quality-issue ${latestQualityRepairAttemptTone}`}
+                  title={latestQualityRepairAttempt.detail || latestQualityRepairAttempt.reason || latestQualityRepairAttempt.event}
+                >
+                  {latestQualityRepairAttemptStatus === 'queued'
+                    ? 'source repair queued'
+                    : latestQualityRepairAttemptStatus === 'success'
+                      ? 'source repair ok'
+                      : latestQualityRepairAttemptStatus === 'partial'
+                        ? 'source repair partial'
+                        : `source repair ${latestQualityRepairAttemptStatus || 'tracked'}`}
                 </span>
               ) : null}
               {qualityNeedsRepair ? (

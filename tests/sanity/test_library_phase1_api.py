@@ -143,7 +143,7 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
 
 def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
-    from kb.converter.quality_repair import write_conversion_quality_result
+    from kb.converter.quality_repair import append_conversion_repair_attempt, write_conversion_quality_result
 
     pdf_dir = tmp_path / "pdfs"
     md_dir = tmp_path / "md_output"
@@ -190,6 +190,14 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
             "remaining_issue_codes": [],
         },
     )
+    append_conversion_repair_attempt(
+        good_md,
+        event="ingest_finished",
+        status="success",
+        action="autofix",
+        source="test",
+        detail="indexed",
+    )
 
     broken_folder = md_dir / "broken"
     broken_folder.mkdir(parents=True, exist_ok=True)
@@ -229,6 +237,8 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
     assert good_quality["conversion_report"]["auto_repair_changed"] is True
     assert good_quality["conversion_report"]["auto_repair_applied"] == ["ensure_page_anchor"]
     assert good_quality["conversion_report"]["repair_plan"]["action"] == "none"
+    assert good_quality["conversion_report"]["latest_repair_attempt"]["event"] == "ingest_finished"
+    assert good_quality["conversion_report"]["repair_attempt_count"] == 1
     assert good_quality["conversion_report"]["recommended_action"] == "none"
 
     broken_quality = by_name["broken.pdf"]["conversion_quality"]
@@ -413,6 +423,7 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
             "replace": kwargs.get("replace"),
             "speed_mode": kwargs.get("speed_mode"),
             "no_llm": kwargs.get("no_llm"),
+            "repair_context": kwargs.get("repair_context"),
         },
     )
     enqueued: list[dict] = []
@@ -452,11 +463,14 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert source_item["planned_scope"] == "document"
     assert source_item["planned_speed_mode"] == "no_llm"
     assert source_item["planned_no_llm"] is True
+    assert source_item["repair_attempt"]["event"] == "reconvert_queued"
+    assert source_item["repair_attempt"]["status"] == "queued"
     assert source_md.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
     assert len(enqueued) == 2
     assert {str(task.get("name") or "") for task in enqueued} == {"direct.pdf", "source.pdf"}
     assert {str(task.get("speed_mode") or "") for task in enqueued} == {"no_llm"}
     assert all(bool(task.get("no_llm")) for task in enqueued)
+    assert all(isinstance(task.get("repair_context"), dict) for task in enqueued)
 
 
 def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path):

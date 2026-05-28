@@ -98,6 +98,7 @@ from kb.paper_guide_answer_post_runtime import (
 )
 from kb.chat_store import ChatStore
 from kb.file_ops import _resolve_md_output_paths
+from kb.converter.quality_repair import append_conversion_repair_attempt
 from kb.llm import DeepSeekChat
 from kb.library_figure_runtime import (
     _build_doc_figure_card as _figure_build_doc_figure_card,
@@ -4421,6 +4422,19 @@ def _bg_target_worker_count() -> int:
     return 2
 
 
+def _bg_ingest_py_path() -> Path:
+    return Path(__file__).resolve().parent.parent / "ingest.py"
+
+
+def _bg_record_repair_attempt(md_path: Path | None, **payload) -> None:
+    if md_path is None:
+        return
+    try:
+        append_conversion_repair_attempt(md_path, **payload)
+    except Exception:
+        pass
+
+
 def _bg_worker_loop() -> None:
     while True:
         task = bg_begin_next_task_or_idle(_BG_STATE, _BG_LOCK)
@@ -4439,6 +4453,7 @@ def _bg_worker_loop() -> None:
         eq_image_fallback = bool(task.get("eq_image_fallback", False))
         replace = bool(task.get("replace", False))
         speed_mode = str(task.get("speed_mode", "balanced"))
+        repair_context = task.get("repair_context") if isinstance(task.get("repair_context"), dict) else {}
         if speed_mode == "ultra_fast":
             # Keep VL/LLM path in ultra_fast; converter itself handles speed/quality tradeoff.
             # Forcing no_llm here causes a dramatic quality drop that does not match UI semantics.
@@ -4497,28 +4512,81 @@ def _bg_worker_loop() -> None:
                 txt = str(out_folder or "").strip().lower()
                 msg = "CANCELLED" if txt == "cancelled" else f"FAIL: {out_folder}"
 
+            _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
+            if repair_context and md_exists:
+                _bg_record_repair_attempt(
+                    md_main,
+                    event="conversion_finished",
+                    status="success" if ok else "error",
+                    action=str(repair_context.get("action") or "reconvert"),
+                    scope=str(repair_context.get("scope") or ""),
+                    speed_mode=speed_mode,
+                    issue_codes=list(repair_context.get("issue_codes") or []),
+                    task_id=task_id,
+                    source=str(repair_context.get("source") or "background_conversion"),
+                    reason=str(repair_context.get("reason") or ""),
+                    detail=msg,
+                    extra={"replace": replace, "no_llm": no_llm},
+                )
+
             # Auto-ingest can add noticeable latency in the conversion UI.
             # Skip it in ultra_fast mode to keep end-to-end time near the 5s target.
             do_auto_ingest = ok and bool(db_dir) and (speed_mode != "ultra_fast")
             if do_auto_ingest and db_dir:
                 try:
-                    ingest_py = Path(__file__).resolve().parent / "ingest.py"
-                    _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
+                    ingest_py = _bg_ingest_py_path()
                     if ingest_py.exists() and md_exists:
                         _on_progress(
                             last_page_done,
                             last_page_total,
                             "ingesting: updating knowledge base index",
                         )
-                        subprocess.run(
+                        ingest_proc = subprocess.run(
                             [os.sys.executable, str(ingest_py), "--src", str(md_main), "--db", str(db_dir), "--incremental"],
                             check=False,
                             capture_output=True,
                             text=True,
                         )
-                        msg = f"OK+INGEST: {out_folder}"
+                        if int(getattr(ingest_proc, "returncode", 1) or 0) == 0:
+                            msg = f"OK+INGEST: {out_folder}"
+                            ingest_status = "success"
+                        else:
+                            msg = f"OK+INGEST_BLOCKED: {out_folder}"
+                            ingest_status = "blocked"
+                        if repair_context:
+                            _bg_record_repair_attempt(
+                                md_main,
+                                event="ingest_finished",
+                                status=ingest_status,
+                                action=str(repair_context.get("action") or "reconvert"),
+                                scope=str(repair_context.get("scope") or ""),
+                                speed_mode=speed_mode,
+                                issue_codes=list(repair_context.get("issue_codes") or []),
+                                task_id=task_id,
+                                source="background_ingest",
+                                reason=str(repair_context.get("reason") or ""),
+                                detail=(
+                                    str(getattr(ingest_proc, "stdout", "") or "").strip()[-500:]
+                                    or str(getattr(ingest_proc, "stderr", "") or "").strip()[-500:]
+                                    or msg
+                                ),
+                            )
                 except Exception:
                     # Not fatal; conversion still succeeded.
+                    if repair_context:
+                        _bg_record_repair_attempt(
+                            md_main if "md_main" in locals() else None,
+                            event="ingest_finished",
+                            status="error",
+                            action=str(repair_context.get("action") or "reconvert"),
+                            scope=str(repair_context.get("scope") or ""),
+                            speed_mode=speed_mode,
+                            issue_codes=list(repair_context.get("issue_codes") or []),
+                            task_id=task_id,
+                            source="background_ingest",
+                            reason=str(repair_context.get("reason") or ""),
+                            detail="background ingest failed after conversion",
+                        )
                     pass
         except Exception as e:
             msg = f"FAIL: {e}"
@@ -4560,10 +4628,11 @@ def _build_bg_task(
     no_llm: bool,
     replace: bool = False,
     speed_mode: str = "balanced",
+    repair_context: dict | None = None,
 ) -> dict:
     pdf = Path(pdf_path)
     mode = str(speed_mode)
-    return {
+    task = {
         "_tid": uuid.uuid4().hex,
         "pdf": str(pdf),
         "out_root": str(out_root),
@@ -4578,6 +4647,15 @@ def _build_bg_task(
         "speed_mode": mode,
         "name": pdf.name,
     }
+    if isinstance(repair_context, dict) and repair_context:
+        task["repair_context"] = {
+            "action": str(repair_context.get("action") or ""),
+            "scope": str(repair_context.get("scope") or ""),
+            "reason": str(repair_context.get("reason") or ""),
+            "source": str(repair_context.get("source") or ""),
+            "issue_codes": [str(item) for item in list(repair_context.get("issue_codes") or []) if str(item or "").strip()][:30],
+        }
+    return task
 
 def _group_hits_by_top_heading(hits: list[dict], top_k: int) -> list[dict]:
     seen: set[tuple[str, str]] = set()
