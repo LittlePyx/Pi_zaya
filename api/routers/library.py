@@ -1466,6 +1466,10 @@ def _quality_action_history_path() -> Path:
     return _RESEARCH_QA_EVAL_ROOT / "action_history.jsonl"
 
 
+def _quality_repair_runs_path() -> Path:
+    return _RESEARCH_QA_EVAL_ROOT / "repair_runs.jsonl"
+
+
 def _research_qa_rerun_history_rows(*, limit: int = 1000) -> list[dict]:
     rows = _read_jsonl_artifact(_research_qa_rerun_history_path(), limit=limit)
     rows.sort(key=lambda item: (_safe_int(item.get("finished_at"), 0), _safe_int(item.get("started_at"), 0)), reverse=True)
@@ -1703,6 +1707,100 @@ def _append_quality_action_history(record: dict) -> dict:
         raise
     except Exception as exc:
         raise HTTPException(500, f"failed to write quality action history: {exc}") from exc
+    return row
+
+
+def _quality_repair_run_status(*, enqueued: int, repaired: int, failed: int, needs_reindex: bool) -> tuple[str, str]:
+    if failed > 0 and repaired <= 0 and enqueued <= 0:
+        return "failed", "repair_failed"
+    if enqueued > 0:
+        return "queued", "source_reconversion_queued"
+    if needs_reindex:
+        return "reindex_pending", "reindex_pending"
+    return "completed", "repair_complete"
+
+
+def _normalize_quality_repair_run(row: dict) -> dict:
+    if not isinstance(row, dict):
+        return {}
+    run_id = _compact_text(row.get("run_id"), limit=80)
+    if not run_id:
+        return {}
+    impact = row.get("impact") if isinstance(row.get("impact"), dict) else {}
+    return {
+        "run_id": run_id,
+        "status": _compact_text(row.get("status"), limit=80) or "info",
+        "phase": _compact_text(row.get("phase"), limit=120),
+        "created_at": _safe_int(row.get("created_at"), 0),
+        "updated_at": _safe_int(row.get("updated_at"), 0),
+        "requested": _safe_int(row.get("requested"), 0),
+        "enqueued": _safe_int(row.get("enqueued"), 0),
+        "repaired": _safe_int(row.get("repaired"), 0),
+        "failed": _safe_int(row.get("failed"), 0),
+        "skipped_busy": _safe_int(row.get("skipped_busy"), 0),
+        "needs_reindex": bool(row.get("needs_reindex")),
+        "reindexed": row.get("reindexed") if isinstance(row.get("reindexed"), bool) else None,
+        "target_names": _list_strings(row.get("target_names"))[:40],
+        "target_sources": _list_strings(row.get("target_sources"))[:40],
+        "impact": _compact_json_value(impact, limit=30) if impact else {},
+        "detail": _compact_text(row.get("detail"), limit=500),
+    }
+
+
+def _quality_repair_run_rows(*, limit: int = 40) -> list[dict]:
+    rows = _read_jsonl_artifact(_quality_repair_runs_path(), limit=1000)
+    latest: dict[str, dict] = {}
+    for raw in rows:
+        row = _normalize_quality_repair_run(raw)
+        run_id = str(row.get("run_id") or "")
+        if not run_id:
+            continue
+        prev = latest.get(run_id)
+        if not prev or _safe_int(row.get("updated_at"), 0) >= _safe_int(prev.get("updated_at"), 0):
+            latest[run_id] = row
+    out = list(latest.values())
+    out.sort(key=lambda item: (_safe_int(item.get("updated_at"), 0), _safe_int(item.get("created_at"), 0)), reverse=True)
+    return out[: max(0, min(200, int(limit)))]
+
+
+def _quality_repair_run_by_id(run_id: str) -> dict:
+    target = str(run_id or "").strip()
+    if not target:
+        return {}
+    for row in _quality_repair_run_rows(limit=200):
+        if str(row.get("run_id") or "") == target:
+            return row
+    return {}
+
+
+def _append_quality_repair_run(record: dict) -> dict:
+    now = int(time.time())
+    run_id = _compact_text(record.get("run_id"), limit=80) or uuid.uuid4().hex
+    row = _normalize_quality_repair_run({
+        "run_id": run_id,
+        "status": record.get("status") or "info",
+        "phase": record.get("phase") or "",
+        "created_at": _safe_int(record.get("created_at"), now) or now,
+        "updated_at": _safe_int(record.get("updated_at"), now) or now,
+        "requested": record.get("requested"),
+        "enqueued": record.get("enqueued"),
+        "repaired": record.get("repaired"),
+        "failed": record.get("failed"),
+        "skipped_busy": record.get("skipped_busy"),
+        "needs_reindex": bool(record.get("needs_reindex")),
+        "reindexed": record.get("reindexed") if isinstance(record.get("reindexed"), bool) else None,
+        "target_names": record.get("target_names") if isinstance(record.get("target_names"), list) else [],
+        "target_sources": record.get("target_sources") if isinstance(record.get("target_sources"), list) else [],
+        "impact": record.get("impact") if isinstance(record.get("impact"), dict) else {},
+        "detail": record.get("detail") or "",
+    })
+    try:
+        path = _quality_repair_runs_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception as exc:
+        raise HTTPException(500, f"failed to write quality repair run: {exc}") from exc
     return row
 
 
@@ -2687,6 +2785,7 @@ def _quality_overview_from_listing(listing: dict) -> dict:
         "feature_health": feature_health,
         "failure_cases": failure_cases,
         "rerun_summary": rerun_summary,
+        "repair_runs": _quality_repair_run_rows(limit=8),
         "priority_actions": priority_actions,
         "queue": (listing or {}).get("queue") or {},
         "scope": str((listing or {}).get("scope") or ""),
@@ -3719,6 +3818,14 @@ class QualityActionHistoryBody(BaseModel):
     created_at: int = 0
 
 
+class QualityRepairRunUpdateBody(BaseModel):
+    status: str = ""
+    phase: str = ""
+    reindexed: bool | None = None
+    detail: str = ""
+    metrics: dict = {}
+
+
 @router.post("/file/open")
 def open_library_file(body: OpenLibraryFileBody):
     target = str(body.target or "pdf").strip().lower()
@@ -3810,6 +3917,51 @@ def quality_action_history(limit: int = 20):
 @router.post("/quality/action-history")
 def append_quality_action_history(body: QualityActionHistoryBody):
     row = _append_quality_action_history(body.model_dump())
+    return {
+        "ok": True,
+        "item": row,
+    }
+
+
+@router.get("/quality/repair-runs")
+def quality_repair_runs(limit: int = 20):
+    return {
+        "ok": True,
+        "items": _quality_repair_run_rows(limit=limit),
+    }
+
+
+@router.get("/quality/repair-runs/{run_id}")
+def quality_repair_run(run_id: str):
+    row = _quality_repair_run_by_id(run_id)
+    if not row:
+        raise HTTPException(404, "quality repair run not found")
+    return {
+        "ok": True,
+        "item": row,
+    }
+
+
+@router.post("/quality/repair-runs/{run_id}")
+def update_quality_repair_run(run_id: str, body: QualityRepairRunUpdateBody):
+    current = _quality_repair_run_by_id(run_id)
+    if not current:
+        raise HTTPException(404, "quality repair run not found")
+    patch = body.model_dump()
+    merged = {
+        **current,
+        "status": str(patch.get("status") or current.get("status") or "info"),
+        "phase": str(patch.get("phase") or current.get("phase") or ""),
+        "updated_at": int(time.time()),
+        "detail": str(patch.get("detail") or current.get("detail") or ""),
+    }
+    if isinstance(patch.get("reindexed"), bool):
+        merged["reindexed"] = bool(patch.get("reindexed"))
+    if isinstance(patch.get("metrics"), dict) and patch.get("metrics"):
+        impact = dict(merged.get("impact") or {})
+        impact["update_metrics"] = patch.get("metrics")
+        merged["impact"] = impact
+    row = _append_quality_repair_run(merged)
     return {
         "ok": True,
         "item": row,
@@ -4128,6 +4280,7 @@ def repair_library_quality(body: QualityRepairBody):
     requested = 0
     items: list[dict] = []
     targets: list[dict] = []
+    repair_run_id = uuid.uuid4().hex
 
     for raw_name in list(body.pdf_names or [])[:200]:
         pdf_name = str(raw_name or "").strip()
@@ -4486,9 +4639,44 @@ def repair_library_quality(body: QualityRepairBody):
         "fixed_issue_codes": _counter_items(fixed_counter, limit=8),
         "remaining_issue_codes": _counter_items(remaining_counter, limit=8),
     }
+    run_status, run_phase = _quality_repair_run_status(
+        enqueued=int(enqueued),
+        repaired=int(repaired),
+        failed=int(failed),
+        needs_reindex=bool(needs_reindex),
+    )
+    repair_run = _append_quality_repair_run({
+        "run_id": repair_run_id,
+        "status": run_status,
+        "phase": run_phase,
+        "requested": int(requested),
+        "enqueued": int(enqueued),
+        "repaired": int(repaired),
+        "failed": int(failed),
+        "skipped_busy": int(skipped_busy),
+        "needs_reindex": bool(needs_reindex),
+        "target_names": [
+            str(item.get("pdf_name") or item.get("source_name") or "")
+            for item in items
+            if str(item.get("pdf_name") or item.get("source_name") or "").strip()
+        ],
+        "target_sources": [
+            str(item.get("source_path") or item.get("md_path") or item.get("pdf_path") or "")
+            for item in items
+            if str(item.get("source_path") or item.get("md_path") or item.get("pdf_path") or "").strip()
+        ],
+        "impact": impact,
+        "detail": (
+            "Source reconversion queued; index refresh should run after conversion."
+            if enqueued > 0
+            else ("Markdown source repair completed; index refresh is pending." if needs_reindex else "No source repair required.")
+        ),
+    })
 
     return {
         "ok": failed == 0,
+        "repair_run_id": repair_run_id,
+        "repair_run": repair_run,
         "requested": int(requested),
         "enqueued": int(enqueued),
         "repaired": int(repaired),

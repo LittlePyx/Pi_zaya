@@ -6563,6 +6563,34 @@ button.kb-lib-quality-report-metric:disabled {
   min-width: 0;
 }
 
+.kb-lib-quality-repair-run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: color-mix(in srgb, var(--text-main) 58%, transparent);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.kb-lib-quality-repair-run span,
+.kb-lib-quality-repair-run em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-lib-quality-repair-run span {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  color: color-mix(in srgb, var(--text-main) 46%, transparent);
+}
+
+.kb-lib-quality-repair-run em {
+  flex: 1;
+  font-style: normal;
+}
+
 .kb-lib-quality-repair-impact-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

@@ -704,6 +704,7 @@ export interface LibraryQualityOverviewResponse {
     latest_status: string
     top_failures?: Array<{ name: string, count: number }>
   }
+  repair_runs?: LibraryQualityRepairRun[]
   priority_actions?: LibraryQualityPriorityAction[]
   queue: LibraryFilesResponse['queue']
   scope: string
@@ -756,8 +757,29 @@ export interface LibraryQualityRepairImpact {
   remaining_issue_codes?: Array<{ name: string, count: number }>
 }
 
+export interface LibraryQualityRepairRun {
+  run_id: string
+  status: string
+  phase: string
+  created_at: number
+  updated_at: number
+  requested: number
+  enqueued: number
+  repaired: number
+  failed: number
+  skipped_busy: number
+  needs_reindex: boolean
+  reindexed?: boolean | null
+  target_names: string[]
+  target_sources: string[]
+  impact?: LibraryQualityRepairImpact | Record<string, unknown>
+  detail: string
+}
+
 export interface LibraryQualityRepairResponse {
   ok: boolean
+  repair_run_id?: string
+  repair_run?: LibraryQualityRepairRun
   requested: number
   enqueued: number
   repaired?: number
@@ -914,6 +936,12 @@ export const libraryApi = {
     }),
   repairQuality: (body: LibraryQualityRepairBody) =>
     api.post<LibraryQualityRepairResponse>('/api/library/quality/repair', body),
+  qualityRepairRuns: (limit = 20) =>
+    api.get<{ ok: boolean; items: LibraryQualityRepairRun[] }>(`/api/library/quality/repair-runs?limit=${encodeURIComponent(String(limit))}`),
+  qualityRepairRun: (runId: string) =>
+    api.get<{ ok: boolean; item: LibraryQualityRepairRun }>(`/api/library/quality/repair-runs/${encodeURIComponent(runId)}`),
+  updateQualityRepairRun: (runId: string, body: { status?: string; phase?: string; reindexed?: boolean; detail?: string; metrics?: Record<string, unknown> }) =>
+    api.post<{ ok: boolean; item: LibraryQualityRepairRun }>(`/api/library/quality/repair-runs/${encodeURIComponent(runId)}`, body),
   rerunResearchQaCase: (body: { case_id: string, base_url?: string, timeout_s?: number, top_k?: number, max_tokens?: number, dry_run?: boolean }) =>
     api.post<LibraryResearchQaRerunResponse>('/api/library/quality/research-qa/rerun', body),
 

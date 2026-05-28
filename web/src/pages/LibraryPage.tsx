@@ -56,6 +56,7 @@ import type {
   LibraryQualityPriorityAction,
   LibraryQualityRepairAction,
   LibraryQualityRepairImpact,
+  LibraryQualityRepairRun,
   LibraryResearchQaRerunResponse,
   RenameSuggestionItem,
 } from '../api/library'
@@ -817,6 +818,27 @@ function qualityRepairImpactIndexText(impact: LibraryQualityRepairImpact) {
   return 'Index refresh pending'
 }
 
+function qualityRepairRunStatusText(run: LibraryQualityRepairRun | null) {
+  if (!run) return ''
+  const status = normalizeTextValue(run.status).toLowerCase()
+  const phase = normalizeTextValue(run.phase).toLowerCase()
+  if (status === 'completed' || phase === 'reindex_complete') return 'Run tracked: completed'
+  if (status === 'failed' || phase === 'repair_failed') return 'Run tracked: failed'
+  if (phase === 'source_reconversion_queued') return 'Run tracked: waiting for conversion'
+  if (phase === 'reindex_pending' || status === 'reindex_pending') return 'Run tracked: index refresh pending'
+  return `Run tracked: ${run.status || run.phase || 'recorded'}`
+}
+
+function qualityRepairRunTagColor(run: LibraryQualityRepairRun | null) {
+  const status = normalizeTextValue(run?.status).toLowerCase()
+  const phase = normalizeTextValue(run?.phase).toLowerCase()
+  if (status === 'completed' || phase === 'reindex_complete') return 'success'
+  if (status === 'failed' || phase === 'repair_failed') return 'error'
+  if (status === 'queued' || phase === 'source_reconversion_queued') return 'processing'
+  if (status === 'reindex_pending' || phase === 'reindex_pending') return 'warning'
+  return 'default'
+}
+
 function hasConversionQualityIssue(item: LibraryFileItem) {
   return Boolean(item.conversion_quality?.has_review_issue)
 }
@@ -879,6 +901,7 @@ export default function LibraryPage() {
   const [qualityRepairingNames, setQualityRepairingNames] = useState<Record<string, boolean>>({})
   const [qualityRepairResults, setQualityRepairResults] = useState<Record<string, string>>({})
   const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
+  const [qualityRepairRun, setQualityRepairRun] = useState<LibraryQualityRepairRun | null>(null)
   const [qualityRepairHistory, setQualityRepairHistory] = useState<Record<string, QualityRepairHistoryRecord>>(() => loadQualityRepairHistory())
   const [qualityHistoryFocusNames, setQualityHistoryFocusNames] = useState<string[]>([])
   const [qualityArtifactOpening, setQualityArtifactOpening] = useState('')
@@ -940,6 +963,11 @@ export default function LibraryPage() {
     [store.files],
   )
   const backendQualityOverview = store.qualityOverview?.ok ? store.qualityOverview : null
+  const latestBackendRepairRun = backendQualityOverview?.repair_runs?.[0] || null
+  useEffect(() => {
+    if (!latestBackendRepairRun) return
+    setQualityRepairRun((cur) => (cur?.run_id === latestBackendRepairRun.run_id ? cur : latestBackendRepairRun))
+  }, [latestBackendRepairRun])
   const fallbackQualityReportStats = useMemo(() => {
     const assessed = store.files.filter((item) => item.conversion_quality)
     const convertedWithoutQuality = store.files.filter((item) => item.category === 'converted' && !item.conversion_quality).length
@@ -2092,6 +2120,9 @@ export default function LibraryPage() {
       const impact = res.impact || null
       const needsReindex = Boolean(res.needs_reindex || impact?.needs_reindex)
       let reindexed = false
+      if (res.repair_run) {
+        setQualityRepairRun(res.repair_run)
+      }
       if (impact) {
         setQualityRepairImpact(impact)
       }
@@ -2112,6 +2143,12 @@ export default function LibraryPage() {
         reindexed = await handleReindex()
         if (impact) {
           setQualityRepairImpact({ ...impact, reindexed })
+        }
+        if (res.repair_run?.run_id) {
+          const status = reindexed ? 'completed' : 'warning'
+          const phase = reindexed ? 'reindex_complete' : 'reindex_failed'
+          setQualityRepairRun({ ...res.repair_run, status, phase, reindexed })
+          libraryApi.updateQualityRepairRun(res.repair_run.run_id, { status, phase, reindexed }).catch(() => {})
         }
         if (reindexed) await store.loadFiles(scope)
       }
@@ -2299,6 +2336,9 @@ export default function LibraryPage() {
       const impact = res.impact || null
       const needsReindex = Boolean(res.needs_reindex || impact?.needs_reindex)
       let reindexed = false
+      if (res.repair_run) {
+        setQualityRepairRun(res.repair_run)
+      }
       if (impact) {
         setQualityRepairImpact(impact)
       }
@@ -2308,6 +2348,12 @@ export default function LibraryPage() {
         if (completed && needsReindex && opts.autoReindexImmediate !== false) {
           reindexed = await handleReindex()
           if (impact) setQualityRepairImpact({ ...impact, reindexed })
+          if (res.repair_run?.run_id) {
+            const status = reindexed ? 'completed' : 'warning'
+            const phase = reindexed ? 'reindex_complete' : 'reindex_failed'
+            setQualityRepairRun({ ...res.repair_run, status, phase, reindexed })
+            libraryApi.updateQualityRepairRun(res.repair_run.run_id, { status, phase, reindexed }).catch(() => {})
+          }
           if (reindexed) await store.loadFiles(scope)
         }
         return { queued, completed, repaired, needsReindex, reindexed, impact }
@@ -2316,6 +2362,12 @@ export default function LibraryPage() {
         if (needsReindex && opts.autoReindexImmediate !== false) {
           reindexed = await handleReindex()
           if (impact) setQualityRepairImpact({ ...impact, reindexed })
+          if (res.repair_run?.run_id) {
+            const status = reindexed ? 'completed' : 'warning'
+            const phase = reindexed ? 'reindex_complete' : 'reindex_failed'
+            setQualityRepairRun({ ...res.repair_run, status, phase, reindexed })
+            libraryApi.updateQualityRepairRun(res.repair_run.run_id, { status, phase, reindexed }).catch(() => {})
+          }
           if (reindexed) await store.loadFiles(scope)
         }
         return { queued: 0, completed: true, repaired, needsReindex, reindexed, impact }
@@ -4204,6 +4256,15 @@ export default function LibraryPage() {
                   {qualityRepairImpactIndexText(qualityRepairImpact)}
                 </Tag>
               </div>
+              {qualityRepairRun ? (
+                <div className="kb-lib-quality-repair-run" data-testid="library-quality-repair-run">
+                  <Tag color={qualityRepairRunTagColor(qualityRepairRun)}>
+                    {qualityRepairRunStatusText(qualityRepairRun)}
+                  </Tag>
+                  <span>{qualityRepairRun.run_id.slice(0, 8)}</span>
+                  {qualityRepairRun.detail ? <em>{qualityRepairRun.detail}</em> : null}
+                </div>
+              ) : null}
               <div className="kb-lib-quality-repair-impact-grid">
                 <span>
                   <em>Repaired</em>

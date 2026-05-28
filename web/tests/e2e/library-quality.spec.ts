@@ -615,6 +615,65 @@ test.beforeEach(async ({ page }) => {
       }),
     })
   })
+  await page.route('**/api/library/quality/repair-runs**', async (route) => {
+    const url = route.request().url()
+    const runId = url.split('/quality/repair-runs/')[1]?.split(/[?#]/)[0] || 'run-repair-1'
+    const method = route.request().method()
+    if (method === 'POST') {
+      const payload = route.request().postDataJSON() as { status?: string, phase?: string, reindexed?: boolean }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          item: {
+            run_id: runId,
+            status: payload.status || 'completed',
+            phase: payload.phase || 'reindex_complete',
+            created_at: 1790000400,
+            updated_at: 1790000500,
+            requested: 1,
+            enqueued: 0,
+            repaired: 1,
+            failed: 0,
+            skipped_busy: 0,
+            needs_reindex: true,
+            reindexed: payload.reindexed ?? true,
+            target_names: [brokenName],
+            target_sources: ['F:\\kb\\md\\broken\\broken.en.md'],
+            detail: 'Markdown source repair completed; index refresh is pending.',
+          },
+        }),
+      })
+      return
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        items: [
+          {
+            run_id: 'run-repair-1',
+            status: 'reindex_pending',
+            phase: 'reindex_pending',
+            created_at: 1790000400,
+            updated_at: 1790000400,
+            requested: 1,
+            enqueued: 0,
+            repaired: 1,
+            failed: 0,
+            skipped_busy: 0,
+            needs_reindex: true,
+            reindexed: null,
+            target_names: [brokenName],
+            target_sources: ['F:\\kb\\md\\broken\\broken.en.md'],
+            detail: 'Markdown source repair completed; index refresh is pending.',
+          },
+        ],
+      }),
+    })
+  })
   await page.route('**/api/library/convert/status', async (route) => {
     for (const name of repairRequestedNames) repairCompletedNames.add(name)
     await route.fulfill({
@@ -802,6 +861,24 @@ test.beforeEach(async ({ page }) => {
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
+        repair_run_id: 'run-repair-1',
+        repair_run: {
+          run_id: 'run-repair-1',
+          status: requested > 0 ? 'queued' : 'completed',
+          phase: requested > 0 ? 'source_reconversion_queued' : 'repair_complete',
+          created_at: 1790000400,
+          updated_at: 1790000400,
+          requested,
+          enqueued: requested,
+          repaired,
+          failed: 0,
+          skipped_busy: 0,
+          needs_reindex: requested > 0,
+          reindexed: null,
+          target_names: names,
+          target_sources: sources.map((source) => String(source.source_path || source.source_name || '')),
+          detail: requested > 0 ? 'Source reconversion queued; index refresh should run after conversion.' : 'No source repair required.',
+        },
         requested,
         enqueued: requested,
         repaired,
@@ -1076,6 +1153,8 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(broken.getByTestId('library-quality-repair-result')).toContainText('Q94')
   await expect(broken.getByTestId('library-quality-repair-result')).toContainText('Missing image assets')
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('Repair impact')
+  await expect(page.getByTestId('library-quality-repair-run')).toContainText('Run tracked')
+  await expect(page.getByTestId('library-quality-repair-run')).toContainText('run-repa')
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('Q38')
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('missing_images')
   await expect(page.getByTestId('library-quality-report-review')).toContainText('1')

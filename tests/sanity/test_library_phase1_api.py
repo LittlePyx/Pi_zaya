@@ -442,6 +442,9 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
+    assert payload["repair_run_id"]
+    assert payload["repair_run"]["status"] == "queued"
+    assert payload["repair_run"]["phase"] == "source_reconversion_queued"
     assert payload["requested"] == 2
     assert payload["enqueued"] == 2
     assert payload["repaired"] == 1
@@ -471,6 +474,10 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert {str(task.get("speed_mode") or "") for task in enqueued} == {"no_llm"}
     assert all(bool(task.get("no_llm")) for task in enqueued)
     assert all(isinstance(task.get("repair_context"), dict) for task in enqueued)
+
+    run_response = client.get(f"/api/library/quality/repair-runs/{payload['repair_run_id']}")
+    assert run_response.status_code == 200
+    assert run_response.json()["item"]["enqueued"] == 2
 
 
 def test_library_quality_repair_route_autofixes_markdown_without_pdf(monkeypatch, tmp_path: Path):
@@ -528,6 +535,9 @@ def test_library_quality_repair_route_autofixes_markdown_without_pdf(monkeypatch
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
+    assert payload["repair_run_id"]
+    assert payload["repair_run"]["status"] == "reindex_pending"
+    assert payload["repair_run"]["phase"] == "reindex_pending"
     assert payload["requested"] == 1
     assert payload["enqueued"] == 0
     assert payload["repaired"] == 1
@@ -548,6 +558,21 @@ def test_library_quality_repair_route_autofixes_markdown_without_pdf(monkeypatch
     assert item["repair_plan"]["action"] == "none"
     assert item["repair_attempt"]["event"] == "repair_closed"
     assert md_path.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
+
+    list_response = client.get("/api/library/quality/repair-runs", params={"limit": 5})
+    assert list_response.status_code == 200
+    rows = list_response.json()["items"]
+    assert any(row["run_id"] == payload["repair_run_id"] for row in rows)
+
+    update_response = client.post(
+        f"/api/library/quality/repair-runs/{payload['repair_run_id']}",
+        json={"status": "completed", "phase": "reindex_complete", "reindexed": True},
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()["item"]
+    assert updated["status"] == "completed"
+    assert updated["phase"] == "reindex_complete"
+    assert updated["reindexed"] is True
 
 
 def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path):
