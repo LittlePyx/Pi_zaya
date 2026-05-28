@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import re
 import time
@@ -55,6 +56,139 @@ def _doi_url(doi: Any) -> str:
     return f"https://doi.org/{clean}" if clean else ""
 
 
+def _first_text_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return html.unescape(_text(value))
+    if isinstance(value, (int, float)):
+        return _text(value)
+    if isinstance(value, Mapping):
+        for key in ("name", "title", "value", "content", "text"):
+            text = _first_text_value(value.get(key))
+            if text:
+                return text
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            text = _first_text_value(item)
+            if text:
+                return text
+        return ""
+    return html.unescape(_text(value))
+
+
+def _alias_text_is_better(field: str, current: str, incoming: str) -> bool:
+    if not current:
+        return True
+    if not incoming:
+        return False
+    if field == "title":
+        return _looks_weak_title(current) and not _looks_weak_title(incoming)
+    if field == "venue":
+        return _looks_weak_venue(current) and not _looks_weak_venue(incoming)
+    if field == "year":
+        return (not _year_ok(current)) and _year_ok(incoming)
+    return False
+
+
+def _set_text_field(out: dict[str, Any], field: str, *values: Any) -> None:
+    current = _first_text_value(out.get(field))
+    if current and not isinstance(out.get(field), str):
+        out[field] = current
+    for value in values:
+        text = _first_text_value(value)
+        if text and _alias_text_is_better(field, current, text):
+            out[field] = text
+            return
+
+
+def _year_from_any(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, Mapping):
+        for key in ("date-parts", "dateParts"):
+            year = _year_from_any(value.get(key))
+            if year:
+                return year
+        for key in ("year", "published_year", "publication_year", "date", "date-time", "raw"):
+            year = _year_from_any(value.get(key))
+            if year:
+                return year
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            year = _year_from_any(item)
+            if year:
+                return year
+        return ""
+    match = re.search(r"\b(?:18|19|20)\d{2}\b", _text(value))
+    return match.group(0) if match else ""
+
+
+def _given_initials(value: Any) -> str:
+    text = _text(value).replace(".", " ")
+    parts = re.findall(r"[A-Za-z]+", text)
+    if not parts:
+        return text
+    return " ".join(part[:1].upper() for part in parts if part)
+
+
+def _author_name(value: Any) -> str:
+    if isinstance(value, Mapping):
+        literal = _first_text_value(value.get("literal") or value.get("name"))
+        if literal:
+            return literal
+        family = _first_text_value(value.get("family") or value.get("surname") or value.get("last"))
+        given = _first_text_value(value.get("given") or value.get("first"))
+        if family:
+            initials = _given_initials(given)
+            return f"{family} {initials}".strip()
+        return given
+    return _first_text_value(value)
+
+
+def _format_authors_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return _text(value)
+    if isinstance(value, Mapping):
+        for key in ("author", "authors", "creators", "creator"):
+            text = _format_authors_value(value.get(key))
+            if text:
+                return text
+        return _author_name(value)
+    if isinstance(value, (list, tuple, set)):
+        names: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            name = _author_name(item)
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(name)
+            if len(names) >= 8:
+                break
+        if not names:
+            return ""
+        if len(value) > len(names):
+            return ", ".join(names) + ", et al"
+        return ", ".join(names)
+    return _text(value)
+
+
+def _citation_count_value(value: Any) -> int:
+    try:
+        n = int(str(value or "").strip())
+    except Exception:
+        return 0
+    return n if n > 0 else 0
+
+
 def _raw_reference_text(detail: Mapping[str, Any] | None) -> str:
     data = detail or {}
     return _text(
@@ -80,9 +214,56 @@ def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
         if _text(out.get(canonical)):
             continue
         for alias in aliases:
-            if _text(out.get(alias)):
+            if _first_text_value(out.get(alias)):
                 out[canonical] = out.get(alias)
                 break
+    _set_text_field(out, "title", out.get("card_title"), out.get("cardTitle"), out.get("article-title"))
+    author_text = (
+        _format_authors_value(out.get("authors"))
+        or _format_authors_value(out.get("author"))
+        or _format_authors_value(out.get("creators"))
+        or _format_authors_value(out.get("creator"))
+    )
+    if author_text:
+        out["authors"] = author_text
+    _set_text_field(
+        out,
+        "venue",
+        out.get("container-title"),
+        out.get("container_title"),
+        out.get("journal"),
+        out.get("journal_title"),
+        out.get("journal-title"),
+        out.get("publication"),
+        out.get("booktitle"),
+        out.get("conference"),
+        out.get("conference_name"),
+        out.get("event"),
+    )
+    _set_text_field(out, "volume", out.get("volume-number"))
+    _set_text_field(out, "issue", out.get("number"))
+    _set_text_field(out, "pages", out.get("page"), out.get("first-page"), out.get("article-number"))
+    if not _text(out.get("year")):
+        year = (
+            _year_from_any(out.get("year"))
+            or _year_from_any(out.get("published-print"))
+            or _year_from_any(out.get("published-online"))
+            or _year_from_any(out.get("published"))
+            or _year_from_any(out.get("issued"))
+            or _year_from_any(out.get("created"))
+            or _year_from_any(out.get("published_year"))
+            or _year_from_any(out.get("publication_year"))
+        )
+        if year:
+            out["year"] = year
+    if not _citation_count_value(out.get("citation_count")):
+        count = (
+            _citation_count_value(out.get("citationCount"))
+            or _citation_count_value(out.get("is-referenced-by-count"))
+            or _citation_count_value(out.get("is_referenced_by_count"))
+        )
+        if count:
+            out["citation_count"] = count
     reference_entry = _text(out.get("card_reference_entry") or out.get("cardReferenceEntry"))
     if reference_entry:
         if not _text(out.get("raw")):
@@ -90,11 +271,15 @@ def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
         if not _text(out.get("cite_fmt")):
             out["cite_fmt"] = reference_entry
     if not _text(out.get("doi")):
-        raw_doi = _norm_doi(out.get("doi_url") or out.get("doiUrl") or _raw_reference_text(out))
+        raw_doi = _norm_doi(out.get("DOI") or out.get("doi_url") or out.get("doiUrl") or _raw_reference_text(out))
         if raw_doi:
             out["doi"] = raw_doi
-            if not _text(out.get("doi_url")):
-                out["doi_url"] = _doi_url(raw_doi)
+    doi = _norm_doi(out.get("doi") or out.get("doi_url") or out.get("doiUrl") or out.get("URL") or out.get("url"))
+    if doi:
+        out["doi"] = doi
+        current_url_doi = _norm_doi(out.get("doi_url") or out.get("doiUrl"))
+        if (not current_url_doi) or current_url_doi.lower() == doi.lower():
+            out["doi_url"] = _doi_url(doi)
     return out
 
 

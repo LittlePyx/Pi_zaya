@@ -559,7 +559,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   if (bibPath) {
     const bib = await readFile(bibPath, 'utf8')
     expect(bib).toContain('title={The missing cone problem and low-pass distortion in optical serial sectioning microscopy}')
-    expect(bib).toContain('author={Macias-Garza F, Bovik A C, Diller K R}')
+    expect(bib).toContain('author={Macias-Garza F and Bovik A C and Diller K R}')
     expect(bib).toContain('journal={IEEE Transactions on Acoustics, Speech, and Signal Processing}')
     expect(bib).toContain('doi={10.1109/tassp.1988.1164940}')
   }
@@ -573,6 +573,9 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   if (risPath) {
     const ris = await readFile(risPath, 'utf8')
     expect(ris).toContain('TI  - The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
+    expect(ris).toContain('AU  - Macias-Garza F')
+    expect(ris).toContain('AU  - Bovik A C')
+    expect(ris).toContain('AU  - Diller K R')
     expect(ris).toContain('JO  - IEEE Transactions on Acoustics, Speech, and Signal Processing')
     expect(ris).toContain('DO  - 10.1109/tassp.1988.1164940')
     expect(ris).toContain('UR  - https://doi.org/10.1109/TASSP.1988.1164940')

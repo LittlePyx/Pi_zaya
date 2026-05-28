@@ -208,6 +208,119 @@ def test_repair_hydrates_from_crossref_cache_without_network(tmp_path, monkeypat
     assert result["meta"]["metadata_quality"]["status"] == "ready"
 
 
+def test_repair_normalizes_crossref_style_cache_record(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    (db_dir / "crossref_cache.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doi": {
+                    "10.1364/oe.15.014013": {
+                        "DOI": "10.1364/OE.15.014013",
+                        "URL": "https://doi.org/10.1364/OE.15.014013",
+                        "title": [
+                            "Single-shot compressive spectral imaging with a dual-disperser architecture"
+                        ],
+                        "author": [
+                            {"family": "Gehm", "given": "M. E."},
+                            {"family": "Brady", "given": "D. J."},
+                        ],
+                        "container-title": ["Optics Express"],
+                        "published-print": {"date-parts": [[2007, 10, 29]]},
+                        "volume": "15",
+                        "issue": "22",
+                        "page": "14013-14027",
+                        "is-referenced-by-count": 245,
+                    }
+                },
+                "bib": {},
+                "title": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda detail: dict(detail))
+
+    result = mq.repair_citation_metadata_item(
+        {
+            "key": "crossref-style",
+            "anchor": "a24",
+            "source_path": "paper.md",
+            "title": "Reference 24",
+            "raw": "[24] Gehm M, Brady D. doi:10.1364/OE.15.014013",
+        },
+        db_dir=db_dir,
+    )
+
+    assert result["ok"] is True
+    assert "crossref_cache:doi" in result["repair_sources"]
+    assert result["after"]["status"] == "ready"
+    assert result["meta"]["doi"] == "10.1364/OE.15.014013"
+    assert result["meta"]["doi_url"] == "https://doi.org/10.1364/OE.15.014013"
+    assert result["meta"]["title"] == "Single-shot compressive spectral imaging with a dual-disperser architecture"
+    assert result["meta"]["authors"] == "Gehm M E, Brady D J"
+    assert result["meta"]["venue"] == "Optics Express"
+    assert result["meta"]["year"] == "2007"
+    assert result["meta"]["pages"] == "14013-14027"
+    assert result["meta"]["citation_count"] == 245
+
+
+def test_repair_normalizes_crossref_source_reference_index_record(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    source_path = tmp_path / "source.en.md"
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    "source": {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "24": {
+                                "num": 24,
+                                "DOI": "10.1364/OE.15.014013",
+                                "article-title": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+                                "author": "M. E. Gehm and D. J. Brady",
+                                "journal-title": "Optics Express",
+                                "year": "2007",
+                                "volume": "15",
+                                "first-page": "14013",
+                                "raw": "[24] Gehm and Brady. doi:10.1364/OE.15.014013",
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda detail: dict(detail))
+
+    result = mq.repair_citation_metadata_item(
+        {
+            "key": "source-r24",
+            "anchor": "a24",
+            "source_path": str(source_path),
+            "ref_num": 24,
+            "title": "Reference 24",
+        },
+        db_dir=db_dir,
+    )
+
+    assert result["ok"] is True
+    assert result["repair_sources"] == ["reference_index"]
+    assert result["meta"]["doi"] == "10.1364/OE.15.014013"
+    assert result["meta"]["authors"] == "M. E. Gehm and D. J. Brady"
+    assert result["meta"]["venue"] == "Optics Express"
+    assert result["meta"]["year"] == "2007"
+    assert result["meta"]["pages"] == "14013"
+
+
 def test_metadata_quality_hides_candidate_external_status_when_visible_identity_is_complete():
     quality = mq.citation_metadata_quality(
         {

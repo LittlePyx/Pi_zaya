@@ -1566,9 +1566,49 @@ export function buildCiteDetailFromMeta(
   return normalizeCiteDetail(rec)
 }
 
+function splitCitationAuthors(value: string): string[] {
+  const raw = String(value || '').trim()
+  if (!raw) return []
+
+  const cleanParts = (parts: string[]): string[] => parts
+    .map((part) => part.trim().replace(/\s+/g, ' '))
+    .filter(Boolean)
+
+  const semicolonParts = cleanParts(raw.split(/\s*[;；]\s*/g))
+  if (semicolonParts.length > 1) return semicolonParts
+
+  const andParts = cleanParts(raw.split(/\s+(?:and|&)\s+/gi))
+  if (andParts.length > 1) return andParts
+
+  const commaParts = cleanParts(raw.split(/\s*,\s*/g))
+  const looksInitials = (part: string): boolean => /^[A-Z](?:\.|\s|$)(?:\s*[A-Z]\.?)*$/i.test(part.trim())
+  if (
+    commaParts.length >= 4
+    && commaParts.length % 2 === 0
+    && commaParts.every((part, idx) => (idx % 2 === 0 ? !looksInitials(part) : looksInitials(part)))
+  ) {
+    const paired: string[] = []
+    for (let idx = 0; idx < commaParts.length; idx += 2) {
+      paired.push(`${commaParts[idx]} ${commaParts[idx + 1].replace(/\./g, '').trim()}`.trim())
+    }
+    return paired
+  }
+  if (
+    commaParts.length > 1
+    && commaParts.every((part) => (part.match(/[A-Za-z\u4e00-\u9fff]+/g) || []).length >= 2)
+    && commaParts.every((part) => (part.match(/[A-Za-z\u4e00-\u9fff]+/g) || []).length <= 5)
+  ) {
+    return commaParts
+  }
+
+  return [raw]
+}
+
 export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: string; ris: string } {
   const title = isWeakField('title', asText(detail.title)) ? citationDisplay(detail).main : asText(detail.title)
   const authors = asText(detail.authors) || '[Unknown Authors]'
+  const authorList = splitCitationAuthors(authors)
+  const bibtexAuthors = authorList.length > 0 ? authorList.join(' and ') : authors
   const venue =
     asText(detail.conferenceName) ||
     asText(detail.conferenceAcronym) ||
@@ -1594,7 +1634,7 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   const venueField = detail.venueKind === 'conference' ? 'booktitle' : 'journal'
   const bibtex = `@${entryType}{ref_${year}_${keyBase},
   title={${title}},
-  author={${authors}},
+  author={${bibtexAuthors}},
   ${venueField}={${venue}},
   year={${year}},${volume ? `\n  volume={${volume}},` : ''}${issue ? `\n  number={${issue}},` : ''}${pages ? `\n  pages={${pages}},` : ''}${doi ? `\n  doi={${doi}},` : ''}
 }`
@@ -1618,7 +1658,7 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
     `TY  - ${risType}`,
     `TI  - ${title}`,
   ]
-  for (const author of risAuthors) {
+  for (const author of (authorList.length > 0 ? authorList : risAuthors)) {
     risLines.push(`AU  - ${author}`)
   }
   risLines.push(`${detail.venueKind === 'conference' ? 'T2' : 'JO'}  - ${venue}`)
