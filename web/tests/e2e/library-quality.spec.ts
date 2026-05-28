@@ -35,6 +35,7 @@ test.beforeEach(async ({ page }) => {
   const repairRequestedNames = new Set<string>()
   const repairCompletedNames = new Set<string>()
   const isRepairing = (name: string) => repairRequestedNames.has(name) && !repairCompletedNames.has(name)
+  let latestRepairRun: Record<string, unknown> | null = null
   await page.addInitScript(() => {
     window.localStorage.removeItem('kb.library.qualityRepairHistory.v1')
   })
@@ -370,6 +371,7 @@ test.beforeEach(async ({ page }) => {
           latest_status: 'failed',
           top_failures: [{ name: 'refs_include_required_docs', count: 2 }],
         },
+        repair_runs: latestRepairRun ? [latestRepairRun] : [],
         failure_cases: [
           {
             id: 'scinerf-admm-origin',
@@ -617,60 +619,124 @@ test.beforeEach(async ({ page }) => {
   })
   await page.route('**/api/library/quality/repair-runs**', async (route) => {
     const url = route.request().url()
-    const runId = url.split('/quality/repair-runs/')[1]?.split(/[?#]/)[0] || 'run-repair-1'
+    const runId = (url.split('/quality/repair-runs/')[1]?.split('/advance')[0]?.split(/[?#]/)[0] || 'run-repair-1')
     const method = route.request().method()
-    if (method === 'POST') {
-      const payload = route.request().postDataJSON() as { status?: string, phase?: string, reindexed?: boolean }
+    if (method === 'POST' && url.includes('/advance')) {
+      const item = {
+        run_id: runId,
+        status: 'completed',
+        phase: 'verification_passed',
+        created_at: 1790000400,
+        updated_at: 1790000600,
+        requested: 1,
+        enqueued: 1,
+        repaired: 1,
+        failed: 0,
+        skipped_busy: 0,
+        needs_reindex: true,
+        reindexed: true,
+        target_names: [brokenName],
+        target_sources: ['F:\\kb\\md\\broken\\broken.en.md'],
+        impact: {
+          requested: 1,
+          repaired: 1,
+          improved: 1,
+          enqueued: 1,
+          skipped_busy: 0,
+          failed: 0,
+          needs_reindex: true,
+          reindexed: true,
+          before_avg_score: 38,
+          after_avg_score: 94,
+          score_delta: 56,
+          fixed_issue_codes: [{ name: 'missing_images', count: 1 }],
+          remaining_issue_codes: [],
+        },
+        verification: {
+          type: 'research_qa_rerun',
+          case_id: 'scinerf-admm-origin',
+          status: 'passed',
+          quality_ok: true,
+          failure_count: 0,
+        },
+        detail: 'Verification passed for Research QA case scinerf-admm-origin.',
+      }
+      latestRepairRun = item
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           ok: true,
-          item: {
-            run_id: runId,
-            status: payload.status || 'completed',
-            phase: payload.phase || 'reindex_complete',
-            created_at: 1790000400,
-            updated_at: 1790000500,
-            requested: 1,
-            enqueued: 0,
-            repaired: 1,
-            failed: 0,
-            skipped_busy: 0,
-            needs_reindex: true,
-            reindexed: payload.reindexed ?? true,
-            target_names: [brokenName],
-            target_sources: ['F:\\kb\\md\\broken\\broken.en.md'],
-            detail: 'Markdown source repair completed; index refresh is pending.',
+          advanced: true,
+          waiting: false,
+          item,
+          reindex: {
+            ok: true,
+            stdout: 'ingest ok',
+            stderr: '',
+            structured_indices: { version: 2, scanned: 1, rebuilt: 1, skipped: 0, failed: 0, citation_mention_count: 2, errors: [] },
+            structured_indices_error: '',
+            refsync: { started: true, run_id: 9 },
+            refsync_error: '',
           },
+          detail: 'index refresh completed',
         }),
       })
       return
+    }
+    if (method === 'POST') {
+      const payload = route.request().postDataJSON() as { status?: string, phase?: string, reindexed?: boolean }
+      const item = {
+        run_id: runId,
+        status: payload.status || 'completed',
+        phase: payload.phase || 'reindex_complete',
+        created_at: 1790000400,
+        updated_at: 1790000500,
+        requested: 1,
+        enqueued: 0,
+        repaired: 1,
+        failed: 0,
+        skipped_busy: 0,
+        needs_reindex: true,
+        reindexed: payload.reindexed ?? true,
+        target_names: [brokenName],
+        target_sources: ['F:\\kb\\md\\broken\\broken.en.md'],
+        detail: 'Markdown source repair completed; index refresh is pending.',
+      }
+      latestRepairRun = item
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          item,
+        }),
+      })
+      return
+    }
+    const defaultItem = {
+      run_id: 'run-repair-1',
+      status: 'reindex_pending',
+      phase: 'reindex_pending',
+      created_at: 1790000400,
+      updated_at: 1790000400,
+      requested: 1,
+      enqueued: 0,
+      repaired: 1,
+      failed: 0,
+      skipped_busy: 0,
+      needs_reindex: true,
+      reindexed: null,
+      target_names: [brokenName],
+      target_sources: ['F:\\kb\\md\\broken\\broken.en.md'],
+      detail: 'Markdown source repair completed; index refresh is pending.',
     }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
-        items: [
-          {
-            run_id: 'run-repair-1',
-            status: 'reindex_pending',
-            phase: 'reindex_pending',
-            created_at: 1790000400,
-            updated_at: 1790000400,
-            requested: 1,
-            enqueued: 0,
-            repaired: 1,
-            failed: 0,
-            skipped_busy: 0,
-            needs_reindex: true,
-            reindexed: null,
-            target_names: [brokenName],
-            target_sources: ['F:\\kb\\md\\broken\\broken.en.md'],
-            detail: 'Markdown source repair completed; index refresh is pending.',
-          },
-        ],
+        items: [latestRepairRun || defaultItem],
       }),
     })
   })
@@ -856,29 +922,31 @@ test.beforeEach(async ({ page }) => {
     const requested = names.length + sources.length
     const repaired = requested > 0 ? requested : 0
     for (const name of names) repairRequestedNames.add(name)
+    const repairRun = {
+      run_id: 'run-repair-1',
+      status: requested > 0 ? 'queued' : 'completed',
+      phase: requested > 0 ? 'source_reconversion_queued' : 'repair_complete',
+      created_at: 1790000400,
+      updated_at: 1790000400,
+      requested,
+      enqueued: requested,
+      repaired,
+      failed: 0,
+      skipped_busy: 0,
+      needs_reindex: requested > 0,
+      reindexed: null,
+      target_names: names,
+      target_sources: sources.map((source) => String(source.source_path || source.source_name || '')),
+      detail: requested > 0 ? 'Source reconversion queued; index refresh should run after conversion.' : 'No source repair required.',
+    }
+    latestRepairRun = repairRun
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
         ok: true,
         repair_run_id: 'run-repair-1',
-        repair_run: {
-          run_id: 'run-repair-1',
-          status: requested > 0 ? 'queued' : 'completed',
-          phase: requested > 0 ? 'source_reconversion_queued' : 'repair_complete',
-          created_at: 1790000400,
-          updated_at: 1790000400,
-          requested,
-          enqueued: requested,
-          repaired,
-          failed: 0,
-          skipped_busy: 0,
-          needs_reindex: requested > 0,
-          reindexed: null,
-          target_names: names,
-          target_sources: sources.map((source) => String(source.source_path || source.source_name || '')),
-          detail: requested > 0 ? 'Source reconversion queued; index refresh should run after conversion.' : 'No source repair required.',
-        },
+        repair_run: repairRun,
         requested,
         enqueued: requested,
         repaired,
@@ -1142,10 +1210,12 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-file-row')).toHaveCount(4)
 
   await expect(broken.getByTestId('library-quality-repair')).toBeVisible()
+  const repairRunAutoAdvanceRequest = page.waitForRequest('**/api/library/quality/repair-runs/**/advance')
   const repairRequest = page.waitForRequest('**/api/library/quality/repair')
   await broken.getByTestId('library-quality-repair').click()
   const repairPayload = repairRequest.then((request) => request.postDataJSON() as { pdf_names?: string[] })
   await expect.poll(async () => (await repairPayload).pdf_names?.join('\n') || '').toContain('Optica-2024-Broken conversion.pdf')
+  await repairRunAutoAdvanceRequest
   await expect(broken.getByTestId('library-file-quality-chip')).toHaveAttribute('data-quality-status', 'good')
   await expect(broken.getByTestId('library-file-quality-chip')).toContainText('Q94')
   await expect(broken.getByTestId('library-file-quality-line')).toContainText('refs 39')
@@ -1155,6 +1225,8 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('Repair impact')
   await expect(page.getByTestId('library-quality-repair-run')).toContainText('Run tracked')
   await expect(page.getByTestId('library-quality-repair-run')).toContainText('run-repa')
+  await expect(page.getByTestId('library-quality-repair-run')).toContainText('verified')
+  await expect(page.getByTestId('library-quality-repair-run')).toContainText('QA rerun passed')
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('Q38')
   await expect(page.getByTestId('library-quality-repair-impact')).toContainText('missing_images')
   await expect(page.getByTestId('library-quality-report-review')).toContainText('1')

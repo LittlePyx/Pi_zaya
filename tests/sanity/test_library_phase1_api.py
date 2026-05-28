@@ -474,6 +474,7 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert {str(task.get("speed_mode") or "") for task in enqueued} == {"no_llm"}
     assert all(bool(task.get("no_llm")) for task in enqueued)
     assert all(isinstance(task.get("repair_context"), dict) for task in enqueued)
+    assert {str((task.get("repair_context") or {}).get("repair_run_id") or "") for task in enqueued} == {payload["repair_run_id"]}
 
     run_response = client.get(f"/api/library/quality/repair-runs/{payload['repair_run_id']}")
     assert run_response.status_code == 200
@@ -573,6 +574,284 @@ def test_library_quality_repair_route_autofixes_markdown_without_pdf(monkeypatch
     assert updated["status"] == "completed"
     assert updated["phase"] == "reindex_complete"
     assert updated["reindexed"] is True
+
+
+def test_library_quality_repair_run_advance_reindexes_pending_run(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    db_dir = tmp_path / "db"
+    ingest_py = tmp_path / "ingest.py"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    ingest_py.write_text("print('ingest ok')\n", encoding="utf-8")
+
+    class FakeProc:
+        returncode = 0
+        stdout = "ingest ok\n"
+        stderr = ""
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(db_dir), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(
+        library_router,
+        "rebuild_structured_indices_for_root",
+        lambda src_root, **kwargs: {
+            "version": 2,
+            "scanned": 1,
+            "rebuilt": 1,
+            "skipped": 0,
+            "failed": 0,
+            "citation_mention_count": 2,
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(library_router, "start_reference_sync", lambda **kwargs: {"started": True, "run_id": 12})
+
+    library_router._append_quality_repair_run({
+        "run_id": "run-md-advance",
+        "status": "reindex_pending",
+        "phase": "reindex_pending",
+        "requested": 1,
+        "enqueued": 0,
+        "repaired": 1,
+        "failed": 0,
+        "skipped_busy": 0,
+        "needs_reindex": True,
+        "target_names": ["standalone.en.md"],
+        "target_sources": [str(md_dir / "standalone" / "standalone.en.md")],
+        "impact": {"requested": 1, "repaired": 1, "enqueued": 0, "needs_reindex": True},
+        "detail": "Markdown source repair completed; index refresh is pending.",
+    })
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/repair-runs/run-md-advance/advance")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["advanced"] is True
+    assert payload["waiting"] is False
+    assert payload["item"]["status"] == "completed"
+    assert payload["item"]["phase"] == "reindex_complete"
+    assert payload["item"]["reindexed"] is True
+    assert payload["item"]["impact"]["reindexed"] is True
+    assert payload["reindex"]["ok"] is True
+    assert payload["reindex"]["structured_indices"]["rebuilt"] == 1
+    assert payload["reindex"]["refsync"]["started"] is True
+
+
+def test_library_quality_repair_run_advance_waits_for_conversion_then_reindexes(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    db_dir = tmp_path / "db"
+    ingest_py = tmp_path / "ingest.py"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    ingest_py.write_text("print('ingest ok')\n", encoding="utf-8")
+    pdf_path = pdf_dir / "queued.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    snap_state = {"active": True}
+
+    class FakeProc:
+        returncode = 0
+        stdout = "ingest ok\n"
+        stderr = ""
+
+    def fake_snapshot():
+        if snap_state["active"]:
+            return {
+                "running": False,
+                "current": "",
+                "queue": [{"pdf": str(pdf_path), "name": "queued.pdf", "replace": True, "_tid": "task-1"}],
+            }
+        return {"running": False, "current": "", "queue": []}
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(db_dir), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(library_router, "_bg_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        library_router,
+        "rebuild_structured_indices_for_root",
+        lambda src_root, **kwargs: {
+            "version": 2,
+            "scanned": 1,
+            "rebuilt": 1,
+            "skipped": 0,
+            "failed": 0,
+            "citation_mention_count": 2,
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(library_router, "start_reference_sync", lambda **kwargs: {"started": True, "run_id": 13})
+
+    library_router._append_quality_repair_run({
+        "run_id": "run-queued-advance",
+        "status": "queued",
+        "phase": "source_reconversion_queued",
+        "requested": 1,
+        "enqueued": 1,
+        "repaired": 0,
+        "failed": 0,
+        "skipped_busy": 0,
+        "needs_reindex": True,
+        "target_names": ["queued.pdf"],
+        "target_sources": [str(pdf_path)],
+        "impact": {"requested": 1, "repaired": 0, "enqueued": 1, "needs_reindex": True},
+        "detail": "Source reconversion queued; index refresh should run after conversion.",
+    })
+
+    client = TestClient(app)
+    waiting_response = client.post("/api/library/quality/repair-runs/run-queued-advance/advance")
+    assert waiting_response.status_code == 200
+    waiting_payload = waiting_response.json()
+    assert waiting_payload["ok"] is True
+    assert waiting_payload["waiting"] is True
+    assert waiting_payload["advanced"] is False
+    assert waiting_payload["item"]["phase"] == "source_reconversion_queued"
+    assert waiting_payload["reindex"] is None
+
+    snap_state["active"] = False
+    resume_response = client.post("/api/library/quality/repair-runs/run-queued-advance/advance")
+    assert resume_response.status_code == 200
+    resume_payload = resume_response.json()
+    assert resume_payload["ok"] is True
+    assert resume_payload["advanced"] is True
+    assert resume_payload["waiting"] is False
+    assert resume_payload["item"]["status"] == "completed"
+    assert resume_payload["item"]["phase"] == "reindex_complete"
+    assert resume_payload["item"]["reindexed"] is True
+    assert resume_payload["reindex"]["ok"] is True
+
+
+def test_library_quality_repair_run_advance_verifies_matching_qa_case(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    db_dir = tmp_path / "db"
+    ingest_py = tmp_path / "ingest.py"
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    ingest_py.write_text("print('ingest ok')\n", encoding="utf-8")
+    md_path = md_dir / "scinerf" / "scinerf.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# SCINeRF\n", encoding="utf-8")
+
+    class FakeProc:
+        returncode = 0
+        stdout = "ingest ok\n"
+        stderr = ""
+
+    rerun_calls: list[str] = []
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(db_dir), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router.subprocess, "run", lambda *args, **kwargs: FakeProc())
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(
+        library_router,
+        "rebuild_structured_indices_for_root",
+        lambda src_root, **kwargs: {
+            "version": 2,
+            "scanned": 1,
+            "rebuilt": 1,
+            "skipped": 0,
+            "failed": 0,
+            "citation_mention_count": 2,
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(library_router, "start_reference_sync", lambda **kwargs: {"started": True, "run_id": 14})
+    monkeypatch.setattr(
+        library_router,
+        "_latest_research_qa_failure_cases",
+        lambda **kwargs: [
+            {
+                "id": "scinerf-admm-origin",
+                "source_diagnostics": [
+                    {
+                        "source_name": "SCINeRF",
+                        "md_path": str(md_path),
+                        "source_path": str(md_path),
+                    }
+                ],
+            }
+        ],
+    )
+
+    def fake_run_research_qa_case(**kwargs):
+        rerun_calls.append(str(kwargs.get("case_id") or ""))
+        return {
+            "ok": True,
+            "case_id": str(kwargs.get("case_id") or ""),
+            "status": "passed",
+            "quality_ok": True,
+            "failures": [],
+            "report_path": str(tmp_path / "report.md"),
+            "raw_path": str(tmp_path / "raw_results.jsonl"),
+            "finished_at": 1790000700,
+        }
+
+    monkeypatch.setattr(library_router, "_run_research_qa_case", fake_run_research_qa_case)
+
+    library_router._append_quality_repair_run({
+        "run_id": "run-verify-advance",
+        "status": "reindex_pending",
+        "phase": "reindex_pending",
+        "requested": 1,
+        "enqueued": 0,
+        "repaired": 1,
+        "failed": 0,
+        "skipped_busy": 0,
+        "needs_reindex": True,
+        "target_names": ["scinerf.en.md"],
+        "target_sources": [str(md_path)],
+        "impact": {"requested": 1, "repaired": 1, "enqueued": 0, "needs_reindex": True},
+        "detail": "Markdown source repair completed; index refresh is pending.",
+    })
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/repair-runs/run-verify-advance/advance")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["advanced"] is True
+    assert payload["item"]["status"] == "completed"
+    assert payload["item"]["phase"] == "verification_passed"
+    assert payload["item"]["reindexed"] is True
+    assert payload["item"]["verification"]["case_id"] == "scinerf-admm-origin"
+    assert payload["item"]["verification"]["quality_ok"] is True
+    assert rerun_calls == ["scinerf-admm-origin"]
 
 
 def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path):

@@ -57,6 +57,7 @@ interface LibraryState {
   qualityOverviewError: string
   converting: boolean
   pendingRepairReindex: boolean
+  pendingRepairRunIds: string[]
   progress: ConvertProgressState | null
   sseController: AbortController | null
   refSync: RefSyncState | null
@@ -112,6 +113,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   qualityOverviewError: '',
   converting: false,
   pendingRepairReindex: false,
+  pendingRepairRunIds: [],
   progress: null,
   sseController: null,
   refSync: null,
@@ -195,8 +197,16 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
     const autoReindexAfterQueued = options?.autoReindexAfterQueued !== false
     const shouldAutoReindex = Number(res.enqueued || 0) > 0 && needsReindex && autoReindexAfterQueued
+    const repairRunId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
     if (Number(res.enqueued || 0) > 0) {
-      set((state) => ({ converting: true, progress: null, pendingRepairReindex: state.pendingRepairReindex || shouldAutoReindex }))
+      set((state) => ({
+        converting: true,
+        progress: null,
+        pendingRepairReindex: state.pendingRepairReindex || shouldAutoReindex,
+        pendingRepairRunIds: shouldAutoReindex && repairRunId
+          ? Array.from(new Set([...state.pendingRepairRunIds, repairRunId]))
+          : state.pendingRepairRunIds,
+      }))
       await get().loadFiles(get().viewScope || '200')
       get().startProgressStream()
     } else {
@@ -333,12 +343,27 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       },
       () => {
         const shouldReindex = get().pendingRepairReindex
+        const repairRunIds = get().pendingRepairRunIds
         const scope = get().viewScope || '200'
-        set({ converting: false, progress: null, sseController: null, pendingRepairReindex: false })
+        set({ converting: false, progress: null, sseController: null, pendingRepairReindex: false, pendingRepairRunIds: [] })
         if (shouldReindex) {
           void (async () => {
             try {
-              await get().reindex()
+              if (repairRunIds.length > 0) {
+                let advanced = false
+                for (const runId of repairRunIds) {
+                  try {
+                    const res = await libraryApi.advanceQualityRepairRun(runId)
+                    advanced = true
+                    if (res.reindex?.ok) get().startRefSyncStream()
+                  } catch {
+                    // Fall back to a plain index refresh below if no repair run could advance.
+                  }
+                }
+                if (!advanced) await get().reindex()
+              } else {
+                await get().reindex()
+              }
             } catch {
               // A failed automatic refresh should not leave the conversion stream stuck.
             }

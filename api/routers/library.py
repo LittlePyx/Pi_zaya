@@ -1743,6 +1743,7 @@ def _normalize_quality_repair_run(row: dict) -> dict:
         "target_names": _list_strings(row.get("target_names"))[:40],
         "target_sources": _list_strings(row.get("target_sources"))[:40],
         "impact": _compact_json_value(impact, limit=30) if impact else {},
+        "verification": _compact_json_value(row.get("verification") if isinstance(row.get("verification"), dict) else {}, limit=30),
         "detail": _compact_text(row.get("detail"), limit=500),
     }
 
@@ -1792,6 +1793,7 @@ def _append_quality_repair_run(record: dict) -> dict:
         "target_names": record.get("target_names") if isinstance(record.get("target_names"), list) else [],
         "target_sources": record.get("target_sources") if isinstance(record.get("target_sources"), list) else [],
         "impact": record.get("impact") if isinstance(record.get("impact"), dict) else {},
+        "verification": record.get("verification") if isinstance(record.get("verification"), dict) else {},
         "detail": record.get("detail") or "",
     })
     try:
@@ -1802,6 +1804,207 @@ def _append_quality_repair_run(record: dict) -> dict:
     except Exception as exc:
         raise HTTPException(500, f"failed to write quality repair run: {exc}") from exc
     return row
+
+
+def _quality_repair_run_has_active_sources(run: dict) -> bool:
+    snap = _bg_snapshot()
+    task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
+    target_names = {name.strip() for name in _list_strings((run or {}).get("target_names")) if name.strip()}
+    target_sources = {source.strip() for source in _list_strings((run or {}).get("target_sources")) if source.strip()}
+
+    def _task_active(info: dict | None) -> bool:
+        return isinstance(info, dict) and (bool(info.get("queued")) or bool(info.get("running")))
+
+    for name in target_names:
+        if _task_active(task_by_name.get(name)):
+            return True
+        base = Path(name.replace("\\", "/")).name
+        if base and _task_active(task_by_name.get(base)):
+            return True
+    for raw in target_sources:
+        key = _normalized_path_key(raw)
+        if key and _task_active(task_by_path.get(key)):
+            return True
+        base = Path(raw.replace("\\", "/")).name
+        if base and _task_active(task_by_name.get(base)):
+            return True
+    return False
+
+
+def _quality_repair_run_update_record(current: dict, **patch) -> dict:
+    merged = dict(current or {})
+    merged.update({key: value for key, value in patch.items() if value is not None})
+    merged["updated_at"] = int(time.time())
+    if isinstance(merged.get("reindexed"), bool):
+        impact = dict(merged.get("impact") or {})
+        impact["reindexed"] = bool(merged.get("reindexed"))
+        merged["impact"] = impact
+    return _append_quality_repair_run(merged)
+
+
+def _quality_repair_run_match_tokens(run: dict) -> set[str]:
+    tokens: set[str] = set()
+    for raw in [*_list_strings((run or {}).get("target_names")), *_list_strings((run or {}).get("target_sources"))]:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        folded = text.replace("\\", "/").lower()
+        tokens.add(folded)
+        base = Path(folded).name
+        if base:
+            tokens.add(base)
+            stem = Path(base).stem
+            if stem:
+                tokens.add(stem)
+        key = _normalized_path_key(text).lower()
+        if key:
+            tokens.add(key.replace("\\", "/"))
+    return {token for token in tokens if token}
+
+
+def _quality_repair_case_match_tokens(case: dict) -> set[str]:
+    tokens: set[str] = set()
+    for source in list((case or {}).get("source_diagnostics") or []):
+        if not isinstance(source, dict):
+            continue
+        for field in ("source_path", "md_path", "pdf_path", "source_name", "title"):
+            text = str(source.get(field) or "").strip()
+            if not text:
+                continue
+            folded = text.replace("\\", "/").lower()
+            tokens.add(folded)
+            base = Path(folded).name
+            if base:
+                tokens.add(base)
+                stem = Path(base).stem
+                if stem:
+                    tokens.add(stem)
+            key = _normalized_path_key(text).lower()
+            if key:
+                tokens.add(key.replace("\\", "/"))
+    for doc_id in _list_strings((case or {}).get("doc_ids")):
+        if doc_id:
+            tokens.add(str(doc_id).strip().lower())
+    return {token for token in tokens if token}
+
+
+def _quality_repair_run_candidate_cases(run: dict, *, limit: int = 3) -> list[dict]:
+    run_tokens = _quality_repair_run_match_tokens(run)
+    if not run_tokens:
+        return []
+    matched: list[tuple[int, dict]] = []
+    for case in _latest_research_qa_failure_cases(limit=40):
+        case_tokens = _quality_repair_case_match_tokens(case)
+        if not case_tokens:
+            continue
+        overlap = run_tokens.intersection(case_tokens)
+        if overlap:
+            matched.append((len(overlap), case))
+    matched.sort(key=lambda item: (-item[0], str((item[1] or {}).get("id") or "")))
+    out: list[dict] = []
+    seen: set[str] = set()
+    for _score, case in matched:
+        case_id = str(case.get("id") or "").strip()
+        if not case_id or case_id in seen:
+            continue
+        seen.add(case_id)
+        out.append(case)
+        if len(out) >= int(limit):
+            break
+    return out
+
+
+def _quality_repair_run_verification_from_rerun(result: dict) -> dict:
+    failures = [
+        str(item.get("name") or "").strip()
+        for item in list((result or {}).get("failures") or [])
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    return {
+        "type": "research_qa_rerun",
+        "case_id": str((result or {}).get("case_id") or "").strip(),
+        "status": str((result or {}).get("status") or "").strip(),
+        "quality_ok": bool((result or {}).get("quality_ok")),
+        "failure_count": len(failures),
+        "failures": failures[:8],
+        "error_kind": str((result or {}).get("error_kind") or "").strip(),
+        "error_detail": _compact_text((result or {}).get("error_detail"), limit=240),
+        "report_path": str((result or {}).get("report_path") or "").strip(),
+        "raw_path": str((result or {}).get("raw_path") or "").strip(),
+        "finished_at": _safe_int((result or {}).get("finished_at"), 0),
+    }
+
+
+def _quality_repair_run_verification_patch(run: dict, *, body) -> dict:
+    if body is not None and not bool(getattr(body, "verify", True)):
+        return {}
+    case_id = str(getattr(body, "case_id", "") or "").strip() if body is not None else ""
+    candidate_cases = _quality_repair_run_candidate_cases(run, limit=3)
+    if not case_id and candidate_cases:
+        case_id = str(candidate_cases[0].get("id") or "").strip()
+    if not case_id:
+        return {
+            "verification": {
+                "type": "research_qa_rerun",
+                "status": "skipped",
+                "quality_ok": False,
+                "candidate_count": 0,
+                "detail": "No matching failed Research QA case was linked to this source repair.",
+            },
+        }
+    try:
+        result = _run_research_qa_case(
+            case_id=case_id,
+            base_url=str(getattr(body, "base_url", "") or ""),
+            timeout_s=float(getattr(body, "timeout_s", 180.0) or 180.0),
+            top_k=int(getattr(body, "top_k", 6) or 6),
+            max_tokens=int(getattr(body, "max_tokens", 1800) or 1800),
+            dry_run=bool(getattr(body, "dry_run", False)),
+            record_history=not bool(getattr(body, "dry_run", False)),
+        )
+    except HTTPException as exc:
+        result = {
+            "case_id": case_id,
+            "status": "error",
+            "quality_ok": False,
+            "failures": [],
+            "error_kind": "research_qa_runner_unavailable",
+            "error_detail": str(exc.detail or exc.status_code)[:240],
+            "finished_at": int(time.time()),
+        }
+    except Exception as exc:
+        result = {
+            "case_id": case_id,
+            "status": "error",
+            "quality_ok": False,
+            "failures": [],
+            "error_kind": "exception",
+            "error_detail": str(exc)[:240],
+            "finished_at": int(time.time()),
+        }
+    verification = _quality_repair_run_verification_from_rerun(result)
+    status = str(verification.get("status") or "").lower()
+    failures = _list_strings(verification.get("failures"))
+    if bool(verification.get("quality_ok")) or status == "passed":
+        return {
+            "status": "completed",
+            "phase": "verification_passed",
+            "verification": verification,
+            "detail": f"Verification passed for Research QA case {case_id}.",
+        }
+    if status == "error" and str(verification.get("error_kind") or "").strip():
+        return {
+            "status": "warning",
+            "phase": "verification_blocked",
+            "verification": verification,
+            "detail": f"Research QA verification could not complete: {verification.get('error_kind')}.",
+        }
+    return {
+        "status": "warning",
+        "phase": "verification_failed",
+        "verification": verification,
+        "detail": "Research QA verification still failing: " + (" / ".join(failures[:4]) if failures else status or "unknown"),
+    }
 
 
 def _counter_items(counter: Counter, *, limit: int = 6) -> list[dict]:
@@ -3826,6 +4029,16 @@ class QualityRepairRunUpdateBody(BaseModel):
     metrics: dict = {}
 
 
+class QualityRepairRunAdvanceBody(BaseModel):
+    verify: bool = True
+    case_id: str = ""
+    base_url: str = ""
+    timeout_s: float = 180.0
+    top_k: int = 6
+    max_tokens: int = 1800
+    dry_run: bool = False
+
+
 @router.post("/file/open")
 def open_library_file(body: OpenLibraryFileBody):
     target = str(body.target or "pdf").strip().lower()
@@ -3948,23 +4161,150 @@ def update_quality_repair_run(run_id: str, body: QualityRepairRunUpdateBody):
     if not current:
         raise HTTPException(404, "quality repair run not found")
     patch = body.model_dump()
-    merged = {
-        **current,
+    update = {
         "status": str(patch.get("status") or current.get("status") or "info"),
         "phase": str(patch.get("phase") or current.get("phase") or ""),
-        "updated_at": int(time.time()),
         "detail": str(patch.get("detail") or current.get("detail") or ""),
     }
     if isinstance(patch.get("reindexed"), bool):
-        merged["reindexed"] = bool(patch.get("reindexed"))
+        update["reindexed"] = bool(patch.get("reindexed"))
     if isinstance(patch.get("metrics"), dict) and patch.get("metrics"):
-        impact = dict(merged.get("impact") or {})
+        impact = dict(current.get("impact") or {})
         impact["update_metrics"] = patch.get("metrics")
-        merged["impact"] = impact
-    row = _append_quality_repair_run(merged)
+        update["impact"] = impact
+    row = _quality_repair_run_update_record(current, **update)
     return {
         "ok": True,
         "item": row,
+    }
+
+
+@router.post("/quality/repair-runs/{run_id}/advance")
+def advance_quality_repair_run(run_id: str, body: QualityRepairRunAdvanceBody = QualityRepairRunAdvanceBody()):
+    current = _quality_repair_run_by_id(run_id)
+    if not current:
+        raise HTTPException(404, "quality repair run not found")
+
+    status = str(current.get("status") or "").strip().lower()
+    phase = str(current.get("phase") or "").strip().lower()
+    has_verification = isinstance(current.get("verification"), dict) and bool(current.get("verification"))
+    if status == "completed" and (phase in {"repair_complete", "verification_passed"} or (phase == "reindex_complete" and has_verification)):
+        return {
+            "ok": True,
+            "advanced": False,
+            "waiting": False,
+            "item": current,
+            "reindex": None,
+            "detail": "quality repair run is already complete",
+        }
+
+    advanced = False
+    if status == "queued" or phase == "source_reconversion_queued":
+        if _quality_repair_run_has_active_sources(current):
+            row = _quality_repair_run_update_record(
+                current,
+                status="queued",
+                phase="source_reconversion_queued",
+                detail="Source reconversion is still running; continue after conversion finishes.",
+            )
+            return {
+                "ok": True,
+                "advanced": False,
+                "waiting": True,
+                "item": row,
+                "reindex": None,
+                "detail": "source reconversion is still active",
+            }
+        if bool(current.get("needs_reindex")):
+            current = _quality_repair_run_update_record(
+                current,
+                status="reindex_pending",
+                phase="reindex_pending",
+                detail="Source reconversion is no longer active; index refresh is pending.",
+            )
+            status = "reindex_pending"
+            phase = "reindex_pending"
+            advanced = True
+        else:
+            row = _quality_repair_run_update_record(
+                current,
+                status="completed",
+                phase="repair_complete",
+                reindexed=False,
+                detail="Source repair completed; index refresh was not required.",
+            )
+            return {
+                "ok": True,
+                "advanced": True,
+                "waiting": False,
+                "item": row,
+                "reindex": None,
+                "detail": "quality repair run completed",
+            }
+
+    needs_reindex = bool(current.get("needs_reindex")) and current.get("reindexed") is not True
+    should_reindex = needs_reindex and (
+        status in {"reindex_pending", "warning"}
+        or phase in {"reindex_pending", "reindex_failed", "source_reconversion_queued"}
+    )
+    if should_reindex:
+        result = _run_library_reindex()
+        ok = bool(result.get("ok"))
+        verification_patch = _quality_repair_run_verification_patch(current, body=body) if ok else {}
+        row = _quality_repair_run_update_record(
+            current,
+            status=verification_patch.get("status") or ("completed" if ok else "warning"),
+            phase=verification_patch.get("phase") or ("reindex_complete" if ok else "reindex_failed"),
+            reindexed=ok,
+            verification=verification_patch.get("verification"),
+            detail=(
+                verification_patch.get("detail")
+                if verification_patch.get("detail")
+                else "Index refresh completed after source repair."
+                if ok
+                else str(result.get("error") or result.get("stderr") or "Index refresh failed after source repair.")[:240]
+            ),
+        )
+        return {
+            "ok": bool(ok),
+            "advanced": True,
+            "waiting": False,
+            "item": row,
+            "reindex": result,
+            "detail": "index refresh completed" if ok else "index refresh failed",
+        }
+
+    if (
+        bool(getattr(body, "verify", True))
+        and status == "completed"
+        and phase == "reindex_complete"
+        and not (isinstance(current.get("verification"), dict) and current.get("verification"))
+    ):
+        verification_patch = _quality_repair_run_verification_patch(current, body=body)
+        if verification_patch.get("verification"):
+            row = _quality_repair_run_update_record(
+                current,
+                status=verification_patch.get("status") or current.get("status") or "completed",
+                phase=verification_patch.get("phase") or current.get("phase") or "reindex_complete",
+                verification=verification_patch.get("verification"),
+                detail=verification_patch.get("detail") or current.get("detail") or "",
+            )
+            return {
+                "ok": str(row.get("status") or "").lower() == "completed",
+                "advanced": True,
+                "waiting": False,
+                "item": row,
+                "reindex": None,
+                "detail": str(row.get("detail") or "verification completed"),
+            }
+
+    return {
+        "ok": True,
+        "advanced": advanced,
+        "waiting": False,
+        "item": current,
+        "reindex": None,
+        "detail": "quality repair run has no pending automatic step",
     }
 
 
@@ -4073,9 +4413,17 @@ def _research_qa_rerun_result(*, case_id: str, output_dir: Path | None, returnco
     }
 
 
-@router.post("/quality/research-qa/rerun")
-def rerun_research_qa_case(body: QualityResearchQaRerunBody):
-    case_id = str(body.case_id or "").strip()
+def _run_research_qa_case(
+    *,
+    case_id: str,
+    base_url: str = "",
+    timeout_s: float = 180.0,
+    top_k: int = 6,
+    max_tokens: int = 1800,
+    dry_run: bool = False,
+    record_history: bool = True,
+) -> dict:
+    case_id = str(case_id or "").strip()
     if not case_id:
         raise HTTPException(400, "case_id is required")
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", case_id):
@@ -4086,8 +4434,8 @@ def rerun_research_qa_case(body: QualityResearchQaRerunBody):
     if not _path_is_file(runner):
         raise HTTPException(404, "research QA runner not found")
 
-    timeout_s = max(10.0, min(900.0, float(body.timeout_s or 180.0)))
-    base_url = str(body.base_url or os.environ.get("KB_RESEARCH_QA_BASE_URL") or "http://127.0.0.1:8000").strip().rstrip("/")
+    timeout_s = max(10.0, min(900.0, float(timeout_s or 180.0)))
+    base_url = str(base_url or os.environ.get("KB_RESEARCH_QA_BASE_URL") or "http://127.0.0.1:8000").strip().rstrip("/")
     cmd = [
         sys.executable,
         str(runner),
@@ -4098,13 +4446,13 @@ def rerun_research_qa_case(body: QualityResearchQaRerunBody):
         "--timeout-s",
         str(timeout_s),
         "--top-k",
-        str(max(1, min(20, int(body.top_k or 6)))),
+        str(max(1, min(20, int(top_k or 6)))),
         "--max-tokens",
-        str(max(256, min(8192, int(body.max_tokens or 1800)))),
+        str(max(256, min(8192, int(max_tokens or 1800)))),
         "--base-url",
         base_url,
     ]
-    if bool(body.dry_run):
+    if bool(dry_run):
         cmd.append("--dry-run")
 
     started_at = time.time()
@@ -4129,12 +4477,12 @@ def rerun_research_qa_case(body: QualityResearchQaRerunBody):
             started_at=started_at,
             finished_at=finished_at,
         )
-        if not bool(body.dry_run):
+        if bool(record_history) and not bool(dry_run):
             _append_research_qa_rerun_history(result)
         return result
 
     finished_at = time.time()
-    output_dir = None if bool(body.dry_run) else _extract_research_qa_output_dir(proc.stdout, fallback_after=started_at)
+    output_dir = None if bool(dry_run) else _extract_research_qa_output_dir(proc.stdout, fallback_after=started_at)
     result = _research_qa_rerun_result(
         case_id=case_id,
         output_dir=output_dir,
@@ -4144,9 +4492,22 @@ def rerun_research_qa_case(body: QualityResearchQaRerunBody):
         started_at=started_at,
         finished_at=finished_at,
     )
-    if not bool(body.dry_run):
+    if bool(record_history) and not bool(dry_run):
         _append_research_qa_rerun_history(result)
     return result
+
+
+@router.post("/quality/research-qa/rerun")
+def rerun_research_qa_case(body: QualityResearchQaRerunBody):
+    return _run_research_qa_case(
+        case_id=body.case_id,
+        base_url=body.base_url,
+        timeout_s=body.timeout_s,
+        top_k=body.top_k,
+        max_tokens=body.max_tokens,
+        dry_run=body.dry_run,
+        record_history=not bool(body.dry_run),
+    )
 
 
 @router.post("/quality/sources")
@@ -4566,6 +4927,7 @@ def repair_library_quality(body: QualityRepairBody):
                 "scope": str(active_plan.get("scope") or ""),
                 "reason": str(active_plan.get("reason") or ""),
                 "source": "library_quality_repair",
+                "repair_run_id": repair_run_id,
                 "issue_codes": list(active_plan.get("issue_codes") or []),
             }
             task = _build_bg_task(
@@ -4948,8 +5310,7 @@ def resolve_library_guide_source(body: GuideSourceBody):
     }
 
 
-@router.post("/reindex")
-def reindex():
+def _run_library_reindex() -> dict:
     s = get_settings()
     md_d = _md_dir()
     pdf_d = _pdf_dir()
@@ -5007,3 +5368,8 @@ def reindex():
         "refsync": refsync,
         "refsync_error": refsync_error,
     }
+
+
+@router.post("/reindex")
+def reindex():
+    return _run_library_reindex()

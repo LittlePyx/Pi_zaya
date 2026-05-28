@@ -773,6 +773,7 @@ export interface LibraryQualityRepairRun {
   target_names: string[]
   target_sources: string[]
   impact?: LibraryQualityRepairImpact | Record<string, unknown>
+  verification?: Record<string, string | number | boolean | string[] | null | undefined>
   detail: string
 }
 
@@ -788,6 +789,15 @@ export interface LibraryQualityRepairResponse {
   skipped_busy: number
   failed: number
   items: LibraryQualityRepairItem[]
+}
+
+export interface LibraryQualityRepairRunAdvanceResponse {
+  ok: boolean
+  advanced: boolean
+  waiting: boolean
+  item: LibraryQualityRepairRun
+  reindex: LibraryReindexResponse | null
+  detail: string
 }
 
 export interface LibraryQualityRepairBody {
@@ -942,6 +952,8 @@ export const libraryApi = {
     api.get<{ ok: boolean; item: LibraryQualityRepairRun }>(`/api/library/quality/repair-runs/${encodeURIComponent(runId)}`),
   updateQualityRepairRun: (runId: string, body: { status?: string; phase?: string; reindexed?: boolean; detail?: string; metrics?: Record<string, unknown> }) =>
     api.post<{ ok: boolean; item: LibraryQualityRepairRun }>(`/api/library/quality/repair-runs/${encodeURIComponent(runId)}`, body),
+  advanceQualityRepairRun: (runId: string, body: { verify?: boolean; case_id?: string; base_url?: string; timeout_s?: number; top_k?: number; max_tokens?: number; dry_run?: boolean } = {}) =>
+    api.post<LibraryQualityRepairRunAdvanceResponse>(`/api/library/quality/repair-runs/${encodeURIComponent(runId)}/advance`, body),
   rerunResearchQaCase: (body: { case_id: string, base_url?: string, timeout_s?: number, top_k?: number, max_tokens?: number, dry_run?: boolean }) =>
     api.post<LibraryResearchQaRerunResponse>('/api/library/quality/research-qa/rerun', body),
 

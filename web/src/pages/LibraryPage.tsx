@@ -494,7 +494,7 @@ function qualityVerificationFromRerun(rerun: LibraryResearchQaRerunResponse | nu
   }
 }
 
-function qualityVerificationText(verification: Record<string, string | number | boolean | null | undefined> | undefined) {
+function qualityVerificationText(verification: Record<string, unknown> | undefined) {
   if (!verification || !Object.keys(verification).length) return ''
   const type = normalizeTextValue(verification.type)
   if (type === 'research_qa_rerun') {
@@ -502,6 +502,7 @@ function qualityVerificationText(verification: Record<string, string | number | 
     const status = normalizeTextValue(verification.status).toLowerCase()
     const errorKind = normalizeTextValue(verification.error_kind)
     if (verification.quality_ok === true || status === 'passed') return caseId ? `QA rerun passed: ${caseId}` : 'QA rerun passed'
+    if (status === 'skipped') return 'No linked QA case'
     if (errorKind) return `QA rerun needs service: ${errorKind}`
     if (status) return caseId ? `QA rerun ${status}: ${caseId}` : `QA rerun ${status}`
   }
@@ -822,6 +823,9 @@ function qualityRepairRunStatusText(run: LibraryQualityRepairRun | null) {
   if (!run) return ''
   const status = normalizeTextValue(run.status).toLowerCase()
   const phase = normalizeTextValue(run.phase).toLowerCase()
+  if (phase === 'verification_passed') return 'Run tracked: verified'
+  if (phase === 'verification_failed') return 'Run tracked: verification failed'
+  if (phase === 'verification_blocked') return 'Run tracked: verification blocked'
   if (status === 'completed' || phase === 'reindex_complete') return 'Run tracked: completed'
   if (status === 'failed' || phase === 'repair_failed') return 'Run tracked: failed'
   if (phase === 'source_reconversion_queued') return 'Run tracked: waiting for conversion'
@@ -832,11 +836,22 @@ function qualityRepairRunStatusText(run: LibraryQualityRepairRun | null) {
 function qualityRepairRunTagColor(run: LibraryQualityRepairRun | null) {
   const status = normalizeTextValue(run?.status).toLowerCase()
   const phase = normalizeTextValue(run?.phase).toLowerCase()
+  if (phase === 'verification_passed') return 'success'
+  if (phase === 'verification_failed' || phase === 'verification_blocked') return 'warning'
   if (status === 'completed' || phase === 'reindex_complete') return 'success'
   if (status === 'failed' || phase === 'repair_failed') return 'error'
   if (status === 'queued' || phase === 'source_reconversion_queued') return 'processing'
   if (status === 'reindex_pending' || phase === 'reindex_pending') return 'warning'
   return 'default'
+}
+
+function qualityRepairRunCanAdvance(run: LibraryQualityRepairRun | null) {
+  if (!run) return false
+  const status = normalizeTextValue(run.status).toLowerCase()
+  const phase = normalizeTextValue(run.phase).toLowerCase()
+  if (phase === 'verification_failed' || phase === 'verification_blocked') return true
+  if (status === 'completed' || phase === 'reindex_complete' || phase === 'repair_complete' || phase === 'verification_passed') return false
+  return Boolean(run.needs_reindex || status === 'queued' || status === 'reindex_pending' || phase === 'source_reconversion_queued' || phase === 'reindex_pending' || phase === 'reindex_failed')
 }
 
 function hasConversionQualityIssue(item: LibraryFileItem) {
@@ -902,6 +917,7 @@ export default function LibraryPage() {
   const [qualityRepairResults, setQualityRepairResults] = useState<Record<string, string>>({})
   const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
   const [qualityRepairRun, setQualityRepairRun] = useState<LibraryQualityRepairRun | null>(null)
+  const [qualityRepairAdvancing, setQualityRepairAdvancing] = useState(false)
   const [qualityRepairHistory, setQualityRepairHistory] = useState<Record<string, QualityRepairHistoryRecord>>(() => loadQualityRepairHistory())
   const [qualityHistoryFocusNames, setQualityHistoryFocusNames] = useState<string[]>([])
   const [qualityArtifactOpening, setQualityArtifactOpening] = useState('')
@@ -966,7 +982,15 @@ export default function LibraryPage() {
   const latestBackendRepairRun = backendQualityOverview?.repair_runs?.[0] || null
   useEffect(() => {
     if (!latestBackendRepairRun) return
-    setQualityRepairRun((cur) => (cur?.run_id === latestBackendRepairRun.run_id ? cur : latestBackendRepairRun))
+    setQualityRepairRun((cur) => {
+      if (!cur || cur.run_id !== latestBackendRepairRun.run_id) return latestBackendRepairRun
+      const curUpdated = Number(cur.updated_at || 0)
+      const nextUpdated = Number(latestBackendRepairRun.updated_at || 0)
+      if (nextUpdated > curUpdated) return latestBackendRepairRun
+      const curState = `${normalizeTextValue(cur.status)}:${normalizeTextValue(cur.phase)}:${String(cur.reindexed)}`
+      const nextState = `${normalizeTextValue(latestBackendRepairRun.status)}:${normalizeTextValue(latestBackendRepairRun.phase)}:${String(latestBackendRepairRun.reindexed)}`
+      return curState === nextState ? cur : latestBackendRepairRun
+    })
   }, [latestBackendRepairRun])
   const fallbackQualityReportStats = useMemo(() => {
     const assessed = store.files.filter((item) => item.conversion_quality)
@@ -2912,6 +2936,43 @@ export default function LibraryPage() {
     }
   }
 
+  const handleAdvanceQualityRepairRun = async () => {
+    const runId = normalizeTextValue(qualityRepairRun?.run_id)
+    if (!runId) return
+    const hide = message.loading('Continuing repair run...', 0)
+    setQualityRepairAdvancing(true)
+    try {
+      const res = await libraryApi.advanceQualityRepairRun(runId)
+      hide()
+      if (res.item) {
+        setQualityRepairRun(res.item)
+        const impact = res.item.impact
+        if (impact && typeof impact === 'object' && typeof (impact as LibraryQualityRepairImpact).needs_reindex === 'boolean') {
+          setQualityRepairImpact(impact as LibraryQualityRepairImpact)
+        }
+      }
+      if (res.waiting) {
+        message.info('Conversion is still running; continue again after it finishes.')
+      } else if (res.ok) {
+        message.success(res.advanced ? 'Repair run advanced' : 'Repair run is already up to date')
+      } else {
+        message.error(res.detail || S.lib_msg_exec_fail)
+      }
+      if (res.reindex?.refsync_error) {
+        message.warning(S.lib_msg_refsync_fail_detail.replace('{error}', String(res.reindex.refsync_error)))
+      } else if (res.reindex?.refsync?.started) {
+        message.info(S.lib_msg_refsync_started_bg)
+      }
+      await store.loadFiles(scope)
+      await store.loadQualityOverview('all')
+    } catch (err) {
+      hide()
+      message.error(err instanceof Error ? err.message : S.lib_msg_exec_fail)
+    } finally {
+      setQualityRepairAdvancing(false)
+    }
+  }
+
   const handleStartRefSync = async () => {
     const hide = message.loading(S.lib_msg_starting_refsync, 0)
     try {
@@ -4263,6 +4324,22 @@ export default function LibraryPage() {
                   </Tag>
                   <span>{qualityRepairRun.run_id.slice(0, 8)}</span>
                   {qualityRepairRun.detail ? <em>{qualityRepairRun.detail}</em> : null}
+                  {qualityVerificationText(qualityRepairRun.verification as Record<string, unknown> | undefined) ? (
+                    <em className="kb-lib-quality-repair-run-verification">
+                      {qualityVerificationText(qualityRepairRun.verification as Record<string, unknown> | undefined)}
+                    </em>
+                  ) : null}
+                  {qualityRepairRunCanAdvance(qualityRepairRun) ? (
+                    <Button
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      loading={qualityRepairAdvancing}
+                      data-testid="library-quality-repair-run-advance"
+                      onClick={() => { void handleAdvanceQualityRepairRun() }}
+                    >
+                      Continue
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
               <div className="kb-lib-quality-repair-impact-grid">
