@@ -57,6 +57,24 @@ export interface ConversionQualityIssue {
   repairable?: boolean
   repair_strategy?: string
   repair_steps?: string[]
+  repair_action?: string
+  repair_scope?: string
+  repair_speed_mode?: string
+}
+
+export interface ConversionRepairPlan {
+  action: 'none' | 'autofix' | 'reconvert' | 'review' | string
+  scope: string
+  speed_mode: string
+  no_llm: boolean
+  replace: boolean
+  md_autofix_first: boolean
+  reason: string
+  issue_codes: string[]
+  reconvert_issue_codes: string[]
+  autofix_issue_codes: string[]
+  review_issue_codes: string[]
+  issue_actions: Array<Record<string, unknown>>
 }
 
 export interface ConversionQualityReport {
@@ -71,6 +89,7 @@ export interface ConversionQualityReport {
   issue_codes_before: string[]
   remaining_issue_codes: string[]
   regression_reasons: string[]
+  repair_plan?: ConversionRepairPlan | null
   recommended_action: string
   needs_reconvert: boolean
 }
@@ -691,6 +710,11 @@ export interface LibraryQualityRepairItem {
   before_issue_codes?: string[]
   fixed_issue_codes?: string[]
   remaining_issue_codes?: string[]
+  repair_plan?: ConversionRepairPlan
+  planned_action?: string
+  planned_scope?: string
+  planned_speed_mode?: string
+  planned_no_llm?: boolean
   repair_error?: string
   skipped_busy: boolean
   error: string

@@ -3167,6 +3167,7 @@ export default function LibraryPage() {
     const quality = item.conversion_quality
     const qualityIssues = Array.isArray(quality?.issues) ? quality.issues.slice(0, 3) : []
     const qualityReport = quality?.conversion_report || null
+    const qualityRepairPlan = qualityReport?.repair_plan || null
     const qualityAutoRepairApplied = Array.isArray(qualityReport?.auto_repair_applied)
       ? qualityReport?.auto_repair_applied || []
       : []
@@ -3274,8 +3275,11 @@ export default function LibraryPage() {
                 </span>
               ) : null}
               {qualityReport?.needs_reconvert ? (
-                <span className="kb-lib-quality-issue is-error" title="Conversion report recommends re-conversion">
-                  reconvert
+                <span
+                  className="kb-lib-quality-issue is-error"
+                  title={qualityRepairPlan?.reason || 'Conversion report recommends re-conversion'}
+                >
+                  {qualityRepairPlan?.scope ? `reconvert ${qualityRepairPlan.scope}` : 'reconvert'}
                 </span>
               ) : null}
               {qualityNeedsRepair ? (

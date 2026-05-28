@@ -51,7 +51,9 @@ from kb.converter.quality_repair import (
     conversion_quality_result_path,
     conversion_repair_strategy_for_issue,
     load_conversion_quality_result,
+    plan_conversion_quality_repair,
     repair_markdown_quality,
+    write_conversion_quality_result,
 )
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.library_store import LibraryStore
@@ -230,6 +232,9 @@ def _conversion_quality_issue(code: str, label: str, *, severity: str = "warning
         "repairable": bool(strategy.get("safe")),
         "repair_strategy": str(strategy.get("label") or ""),
         "repair_steps": list(strategy.get("strategies") or []),
+        "repair_action": str(strategy.get("action") or ""),
+        "repair_scope": str(strategy.get("scope") or ""),
+        "repair_speed_mode": str(strategy.get("speed_mode") or ""),
     }
 
 
@@ -257,6 +262,7 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
         "issue_codes_before": [str(item) for item in list(repair.get("issue_codes_before") or []) if str(item or "").strip()][:30],
         "remaining_issue_codes": [str(item) for item in list(repair.get("remaining_issue_codes") or []) if str(item or "").strip()][:30],
         "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
+        "repair_plan": report.get("repair_plan") if isinstance(report.get("repair_plan"), dict) else {},
         "recommended_action": str(report.get("recommended_action") or ""),
         "needs_reconvert": bool(report.get("needs_reconvert")),
     }
@@ -4096,10 +4102,22 @@ def repair_library_quality(body: QualityRepairBody):
     md_d.mkdir(parents=True, exist_ok=True)
 
     speed_mode = str(body.speed_mode or "balanced").strip() or "balanced"
-    no_llm = bool(body.no_llm) or (speed_mode.lower() == "no_llm")
+    requested_no_llm = bool(body.no_llm) or (speed_mode.lower() == "no_llm")
     replace = bool(body.replace)
     snap = _bg_snapshot()
     task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
+
+    def _planned_queue_settings(plan: dict) -> tuple[str, bool, bool]:
+        plan_speed = str((plan or {}).get("speed_mode") or "").strip()
+        queue_speed = plan_speed or speed_mode
+        queue_no_llm = bool((plan or {}).get("no_llm"))
+        if requested_no_llm:
+            queue_speed = speed_mode
+            queue_no_llm = True
+        if queue_speed.lower() == "no_llm":
+            queue_no_llm = True
+        queue_replace = bool((plan or {}).get("replace")) or replace
+        return queue_speed, queue_no_llm, queue_replace
 
     requested = 0
     items: list[dict] = []
@@ -4189,6 +4207,11 @@ def repair_library_quality(body: QualityRepairBody):
             "repair_before_score": 0,
             "repair_after_score": 0,
             "remaining_issue_codes": [],
+            "repair_plan": {},
+            "planned_action": "",
+            "planned_scope": "",
+            "planned_speed_mode": "",
+            "planned_no_llm": False,
             "md_path": "",
             "skipped_busy": False,
             "error": "",
@@ -4213,7 +4236,7 @@ def repair_library_quality(body: QualityRepairBody):
         else:
             _md_folder, md_path, md_exists = _resolve_md_output_paths(md_d, pdf_path)
         repair_payload: dict = {}
-        skip_enqueue_after_repair = False
+        active_plan: dict = {}
         if bool(body.md_autofix) and md_exists and _path_is_within(md_path, [md_d]):
             try:
                 before_quality = _conversion_quality_summary(md_path) or {}
@@ -4223,6 +4246,10 @@ def repair_library_quality(body: QualityRepairBody):
                     if isinstance(issue, dict) and str(issue.get("code") or "").strip()
                 ]
                 repair_result = repair_markdown_quality(md_path, issue_codes=before_issues)
+                try:
+                    write_conversion_quality_result(md_path, auto_repair_result=repair_result)
+                except Exception:
+                    pass
                 _clear_conversion_quality_cache(md_path)
                 after_quality = _conversion_quality_summary(md_path) or {}
                 repair_changed = bool(repair_result.get("changed"))
@@ -4239,6 +4266,11 @@ def repair_library_quality(body: QualityRepairBody):
                     for issue in list(after_quality.get("issues") or [])
                     if isinstance(issue, dict) and str(issue.get("code") or "").strip()
                 ]
+                after_plan = plan_conversion_quality_repair(
+                    after_issue_codes,
+                    metrics=after_quality.get("metrics") if isinstance(after_quality.get("metrics"), dict) else {},
+                )
+                active_plan = after_plan
                 after_issue_set = set(after_issue_codes)
                 fixed_issue_codes = [code for code in before_issue_codes if code and code not in after_issue_set]
                 repair_payload = {
@@ -4252,30 +4284,65 @@ def repair_library_quality(body: QualityRepairBody):
                     "before_issue_codes": before_issue_codes[:12],
                     "fixed_issue_codes": fixed_issue_codes[:12],
                     "remaining_issue_codes": after_issue_codes[:12],
+                    "repair_plan": active_plan,
+                    "planned_action": str(active_plan.get("action") or ""),
+                    "planned_scope": str(active_plan.get("scope") or ""),
                     "md_path": str(md_path),
                     "repair_unsafe": bool(repair_result.get("unsafe")),
                     "repair_regression_reasons": list(repair_result.get("regression_reasons") or [])[:8],
                 }
             except Exception as exc:
+                active_plan = plan_conversion_quality_repair(["quality_scan_failed"])
                 repair_payload = {
                     "md_path": str(md_path),
+                    "repair_plan": active_plan,
+                    "planned_action": str(active_plan.get("action") or ""),
+                    "planned_scope": str(active_plan.get("scope") or ""),
                     "repair_error": str(exc)[:240] or "markdown autofix failed",
                 }
         elif md_exists:
-            repair_payload = {"md_path": str(md_path)}
+            before_quality = _conversion_quality_summary(md_path) or {}
+            before_issue_codes = [
+                str(issue.get("code") or "")
+                for issue in list(before_quality.get("issues") or [])
+                if isinstance(issue, dict) and str(issue.get("code") or "").strip()
+            ]
+            active_plan = plan_conversion_quality_repair(
+                before_issue_codes,
+                metrics=before_quality.get("metrics") if isinstance(before_quality.get("metrics"), dict) else {},
+            )
+            repair_payload = {
+                "md_path": str(md_path),
+                "quality_before": before_quality,
+                "remaining_issue_codes": before_issue_codes[:12],
+                "repair_plan": active_plan,
+                "planned_action": str(active_plan.get("action") or ""),
+                "planned_scope": str(active_plan.get("scope") or ""),
+            }
+        else:
+            active_plan = plan_conversion_quality_repair(["missing_markdown"])
+            repair_payload = {
+                "repair_plan": active_plan,
+                "planned_action": str(active_plan.get("action") or ""),
+                "planned_scope": str(active_plan.get("scope") or ""),
+            }
 
-        if skip_enqueue_after_repair:
+        plan_action = str(active_plan.get("action") or "").strip().lower()
+        if md_exists and plan_action != "reconvert":
             items.append({**base_item, **repair_payload, "ok": True, "enqueued": False})
             continue
 
         try:
+            queue_speed_mode, queue_no_llm, queue_replace = _planned_queue_settings(active_plan)
+            repair_payload["planned_speed_mode"] = queue_speed_mode
+            repair_payload["planned_no_llm"] = bool(queue_no_llm)
             task = _build_bg_task(
                 pdf_path=pdf_path,
                 out_root=md_d,
                 db_dir=Path(settings.db_dir).expanduser(),
-                no_llm=no_llm,
-                replace=replace,
-                speed_mode=speed_mode,
+                no_llm=queue_no_llm,
+                replace=queue_replace,
+                speed_mode=queue_speed_mode,
             )
             _bg_enqueue(task)
             task_id = str(task.get("_tid") or "")

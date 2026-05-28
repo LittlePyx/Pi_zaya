@@ -25,44 +25,105 @@ CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
 
 
 CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
+    "missing_markdown": {
+        "label": "Convert the PDF because no Markdown output exists",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "No converted Markdown exists, so the source PDF must be converted.",
+        "strategies": [],
+    },
+    "missing_images": {
+        "label": "Reconvert the paper to rebuild missing image assets",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "assets",
+        "speed_mode": "normal",
+        "reason": "Markdown references image assets that are missing on disk.",
+        "strategies": [],
+    },
+    "mojibake": {
+        "label": "Reconvert with vision mode to avoid encoding artifacts",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "Encoding artifacts usually originate in extraction and should not be indexed.",
+        "strategies": [],
+    },
+    "weak_structure": {
+        "label": "Reconvert with higher-quality structure extraction",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "document",
+        "speed_mode": "normal",
+        "reason": "The output has too little heading structure for reliable retrieval and location.",
+        "strategies": [],
+    },
+    "missing_references": {
+        "label": "Reconvert to recover the reference section",
+        "safe": False,
+        "action": "reconvert",
+        "scope": "references",
+        "speed_mode": "normal",
+        "reason": "The bibliography is missing, which breaks upstream citations and metadata repair.",
+        "strategies": [],
+    },
     "analyzer_errors": {
         "label": "Run deterministic Markdown post-processing",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["postprocess_markdown", "balance_display_math", "figure_metadata_captions"],
     },
     "analyzer_warnings": {
         "label": "Normalize headings, captions, tables, and layout noise",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["postprocess_markdown", "figure_metadata_captions"],
     },
     "missing_abstract": {
         "label": "Infer and insert Abstract heading from front matter",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["postprocess_markdown"],
     },
     "missing_page_markers": {
         "label": "Insert a fallback page anchor at the Markdown start",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["ensure_page_anchor"],
     },
     "page_marker_gaps": {
         "label": "Normalize duplicate and out-of-place page anchors",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["postprocess_markdown"],
     },
     "missing_captions": {
         "label": "Recover visible captions from alt text and figure metadata sidecars",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["postprocess_markdown", "figure_metadata_captions"],
     },
     "unclosed_display_math": {
         "label": "Close a trailing display-math block when the delimiter is unbalanced",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["balance_display_math"],
     },
     "heading_level_jumps": {
         "label": "Rebalance heading levels using the established heading policy",
         "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
         "strategies": ["postprocess_markdown"],
     },
 }
@@ -80,6 +141,10 @@ def conversion_repair_strategy_for_issue(code: str) -> dict[str, Any]:
     return {
         "label": str(strategy.get("label") or ""),
         "safe": bool(strategy.get("safe")),
+        "action": str(strategy.get("action") or ("autofix" if bool(strategy.get("safe")) else "")),
+        "scope": str(strategy.get("scope") or ""),
+        "speed_mode": str(strategy.get("speed_mode") or ""),
+        "reason": str(strategy.get("reason") or ""),
         "strategies": [str(item) for item in list(strategy.get("strategies") or []) if str(item or "").strip()],
     }
 
@@ -88,15 +153,108 @@ def conversion_quality_result_path(md_path: Path | str) -> Path:
     return Path(md_path).expanduser().parent / CONVERSION_QUALITY_RESULT_FILENAME
 
 
-def _recommended_action_for_issues(issue_codes: list[str]) -> str:
-    codes = [str(code or "").strip().lower() for code in list(issue_codes or []) if str(code or "").strip()]
-    if not codes:
-        return "none"
-    if all(bool(conversion_repair_strategy_for_issue(code).get("safe")) for code in codes):
-        return "autofix_available"
-    if any(not bool(conversion_repair_strategy_for_issue(code).get("safe")) for code in codes):
-        return "reconvert"
-    return "review"
+def plan_conversion_quality_repair(issue_codes: list[str] | None, metrics: dict[str, Any] | None = None) -> dict[str, Any]:
+    codes = []
+    seen: set[str] = set()
+    for raw in list(issue_codes or []):
+        code = str(raw or "").strip().lower()
+        if code and code not in seen:
+            seen.add(code)
+            codes.append(code)
+    issue_actions: list[dict[str, Any]] = []
+    reconvert_actions: list[dict[str, Any]] = []
+    autofix_actions: list[dict[str, Any]] = []
+    review_actions: list[dict[str, Any]] = []
+    for code in codes:
+        strategy = conversion_repair_strategy_for_issue(code)
+        action = str(strategy.get("action") or "").strip() or ("autofix" if bool(strategy.get("safe")) else "review")
+        row = {
+            "code": code,
+            "action": action,
+            "safe": bool(strategy.get("safe")),
+            "scope": str(strategy.get("scope") or ""),
+            "label": str(strategy.get("label") or code),
+            "reason": str(strategy.get("reason") or ""),
+            "speed_mode": str(strategy.get("speed_mode") or ""),
+            "strategies": list(strategy.get("strategies") or []),
+        }
+        issue_actions.append(row)
+        if action == "reconvert":
+            reconvert_actions.append(row)
+        elif action == "autofix":
+            autofix_actions.append(row)
+        else:
+            review_actions.append(row)
+
+    if reconvert_actions:
+        scope_priority = {"document": 4, "assets": 3, "references": 2, "markdown": 1}
+        primary = sorted(
+            reconvert_actions,
+            key=lambda item: scope_priority.get(str(item.get("scope") or ""), 0),
+            reverse=True,
+        )[0]
+        return {
+            "action": "reconvert",
+            "scope": str(primary.get("scope") or "document"),
+            "speed_mode": str(primary.get("speed_mode") or "normal") or "normal",
+            "no_llm": False,
+            "replace": True,
+            "md_autofix_first": bool(autofix_actions),
+            "reason": str(primary.get("reason") or primary.get("label") or "Source conversion needs repair."),
+            "issue_codes": codes,
+            "reconvert_issue_codes": [str(item.get("code") or "") for item in reconvert_actions],
+            "autofix_issue_codes": [str(item.get("code") or "") for item in autofix_actions],
+            "review_issue_codes": [str(item.get("code") or "") for item in review_actions],
+            "issue_actions": issue_actions,
+            "metrics": dict(metrics or {}),
+        }
+    if autofix_actions:
+        return {
+            "action": "autofix",
+            "scope": "markdown",
+            "speed_mode": "",
+            "no_llm": False,
+            "replace": False,
+            "md_autofix_first": True,
+            "reason": "Remaining issues are covered by deterministic Markdown repair.",
+            "issue_codes": codes,
+            "reconvert_issue_codes": [],
+            "autofix_issue_codes": [str(item.get("code") or "") for item in autofix_actions],
+            "review_issue_codes": [str(item.get("code") or "") for item in review_actions],
+            "issue_actions": issue_actions,
+            "metrics": dict(metrics or {}),
+        }
+    if review_actions:
+        return {
+            "action": "review",
+            "scope": "manual",
+            "speed_mode": "",
+            "no_llm": False,
+            "replace": False,
+            "md_autofix_first": False,
+            "reason": "The remaining issues do not have a safe automated repair yet.",
+            "issue_codes": codes,
+            "reconvert_issue_codes": [],
+            "autofix_issue_codes": [],
+            "review_issue_codes": [str(item.get("code") or "") for item in review_actions],
+            "issue_actions": issue_actions,
+            "metrics": dict(metrics or {}),
+        }
+    return {
+        "action": "none",
+        "scope": "",
+        "speed_mode": "",
+        "no_llm": False,
+        "replace": False,
+        "md_autofix_first": False,
+        "reason": "No conversion quality issues detected.",
+        "issue_codes": [],
+        "reconvert_issue_codes": [],
+        "autofix_issue_codes": [],
+        "review_issue_codes": [],
+        "issue_actions": [],
+        "metrics": dict(metrics or {}),
+    }
 
 
 def _current_markdown_stat(path: Path) -> dict[str, int]:
@@ -134,7 +292,8 @@ def write_conversion_quality_result(
         for code in list(repair.get("remaining_issue_codes") or _issue_codes_from_metrics(metrics))
         if str(code or "").strip()
     ]
-    recommended_action = _recommended_action_for_issues(remaining)
+    repair_plan = plan_conversion_quality_repair(remaining, metrics=metrics)
+    recommended_action = str(repair_plan.get("action") or "review")
     md_stat = _current_markdown_stat(path)
     payload = {
         "schema_version": 1,
@@ -153,6 +312,7 @@ def write_conversion_quality_result(
             "remaining_issue_codes": remaining[:30],
             "regression_reasons": [str(item) for item in list(repair.get("regression_reasons") or []) if str(item or "").strip()][:20],
         },
+        "repair_plan": repair_plan,
         "recommended_action": recommended_action,
         "needs_reconvert": recommended_action == "reconvert",
         "metrics": metrics,

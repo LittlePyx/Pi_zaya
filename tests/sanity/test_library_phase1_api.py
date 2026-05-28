@@ -228,6 +228,7 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
     assert good_quality["metrics"]["missing_images"] == 0
     assert good_quality["conversion_report"]["auto_repair_changed"] is True
     assert good_quality["conversion_report"]["auto_repair_applied"] == ["ensure_page_anchor"]
+    assert good_quality["conversion_report"]["repair_plan"]["action"] == "none"
     assert good_quality["conversion_report"]["recommended_action"] == "none"
 
     broken_quality = by_name["broken.pdf"]["conversion_quality"]
@@ -447,6 +448,10 @@ def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp
     assert source_item["quality_before"]["status"] == "warning"
     assert source_item["quality_after"]["status"] == "warning"
     assert source_item["remaining_issue_codes"]
+    assert source_item["repair_plan"]["action"] == "reconvert"
+    assert source_item["planned_scope"] == "document"
+    assert source_item["planned_speed_mode"] == "no_llm"
+    assert source_item["planned_no_llm"] is True
     assert source_md.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
     assert len(enqueued) == 2
     assert {str(task.get("name") or "") for task in enqueued} == {"direct.pdf", "source.pdf"}

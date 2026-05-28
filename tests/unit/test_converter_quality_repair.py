@@ -8,6 +8,7 @@ from kb.converter.quality_repair import (
     conversion_quality_result_path,
     conversion_repair_strategy_for_issue,
     load_conversion_quality_result,
+    plan_conversion_quality_repair,
     repair_markdown_quality,
     repair_markdown_text,
     write_conversion_quality_result,
@@ -97,6 +98,25 @@ def test_conversion_repair_strategy_marks_safe_known_issue():
     assert "figure_metadata_captions" in strategy["strategies"]
 
 
+def test_plan_conversion_quality_repair_routes_source_issues_to_reconvert():
+    plan = plan_conversion_quality_repair(["unclosed_display_math", "missing_references", "weak_structure"])
+
+    assert plan["action"] == "reconvert"
+    assert plan["scope"] == "document"
+    assert plan["speed_mode"] == "normal"
+    assert plan["md_autofix_first"] is True
+    assert "missing_references" in plan["reconvert_issue_codes"]
+    assert "unclosed_display_math" in plan["autofix_issue_codes"]
+
+
+def test_plan_conversion_quality_repair_keeps_safe_issues_local():
+    plan = plan_conversion_quality_repair(["missing_page_markers", "missing_captions"])
+
+    assert plan["action"] == "autofix"
+    assert plan["scope"] == "markdown"
+    assert plan["replace"] is False
+
+
 def test_repair_markdown_text_fixes_safe_issues_without_writing(tmp_path: Path):
     md_path = tmp_path / "paper.en.md"
     original = "\n".join(
@@ -165,5 +185,6 @@ def test_write_conversion_quality_result_records_repair_trace(tmp_path: Path):
     assert report_path.exists()
     assert payload["auto_repair"]["changed"] is True
     assert payload["auto_repair"]["applied"] == ["ensure_page_anchor"]
+    assert payload["repair_plan"]["action"] == "none"
     assert payload["recommended_action"] == "none"
     assert loaded["md_size"] == md_path.stat().st_size
