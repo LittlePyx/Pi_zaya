@@ -1430,6 +1430,8 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
                             "title": "Paper A upstream",
                             "heading_path": "Related work",
                             "citation_context": "Paper A is discussed by Paper B.",
+                            "raw": "Author A. Paper A upstream. Journal A, 2024. doi:10.1234/paper-a",
+                            "summary_line": "Paper A is the upstream reference discussed by Paper B for this answer.",
                         },
                     ],
                 },
@@ -1579,6 +1581,8 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
     assert case["diagnostic_summary"]["shelf_doi_count"] == 1
     assert case["diagnostic_summary"]["shelf_source_clickable_count"] == 2
     assert case["diagnostic_summary"]["shelf_review_count"] == 1
+    assert case["diagnostic_summary"]["shelf_metadata_repair_target_count"] == 1
+    assert case["diagnostic_summary"]["shelf_missing_export_fields"] == [{"name": "doi", "count": 1}]
     assert case["diagnostic_summary"]["ref_card_failure_count"] == 1
     assert case["diagnostic_summary"]["system_b_needs_review_count"] == 1
     assert payload["domains"]["citation_cards"]["summary"]["shelf_item_count"] == 2
@@ -1590,6 +1594,12 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
     assert case["citation_diagnostics"][1]["route"] == "system_b"
     assert case["citation_diagnostics"][1]["quality_issues"][0]["name"] == "system_b_missing_citing_context"
     assert case["citation_diagnostics"][1]["shelf_quality_issues"][0]["name"] == "shelf_missing_doi"
+    assert case["citation_diagnostics"][1]["metadata_missing_fields"] == ["doi"]
+    assert case["citation_diagnostics"][1]["metadata_repairable"] is True
+    assert "10.1234/paper-a" in case["citation_diagnostics"][1]["raw"]
+    assert case["shelf_metadata_missing_fields"] == [{"name": "doi", "count": 1}]
+    assert case["shelf_metadata_repair_targets"][0]["repair_target_kind"] == "system_b_citation"
+    assert case["shelf_metadata_repair_targets"][0]["metadata_missing_fields"] == ["doi"]
     assert case["ref_diagnostics"][0]["title"] == "Paper C"
     assert case["ref_diagnostics"][0]["summary_line"] == "Paper C summary."
     assert case["ref_diagnostics"][0]["quality_issues"][0]["name"] == "ref_card_summary_too_short"
@@ -1617,12 +1627,16 @@ def test_quality_overview_includes_research_qa_failure_cases(monkeypatch, tmp_pa
     root_codes = {str(item.get("code") or "") for item in case.get("root_causes") or []}
     assert "retrieval_missing_expected_docs" in root_codes
     assert "citation_card_quality" in root_codes
+    assert "shelf_metadata_export_fields" in root_codes
     action_kinds = {str(item.get("kind") or "") for item in case.get("repair_actions") or []}
     assert {"apply_repair_plan", "open_replay", "rebuild_index", "open_artifact"}.issubset(action_kinds)
     repair_plan = next(item for item in case.get("repair_actions") or [] if item.get("kind") == "apply_repair_plan")
     repair_step_kinds = [str(item.get("kind") or "") for item in repair_plan.get("steps") or []]
     assert repair_step_kinds == ["repair_shelf_metadata", "rebuild_index", "rerun_case"]
+    assert repair_plan["steps"][0]["target_count"] == 1
+    assert repair_plan["steps"][0]["missing_fields"] == [{"name": "doi", "count": 1}]
     assert "Rerun QA acceptance" in str(repair_plan.get("detail") or "")
+    assert "metadata fields doi x1" in str(repair_plan.get("detail") or "")
     failures = list(case.get("failures") or [])
     assert failures[0]["name"] == "citation_card_quality"
     assert failures[0]["domain"] == "citation_cards"

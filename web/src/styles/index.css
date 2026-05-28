@@ -7675,6 +7675,7 @@ button.kb-lib-quality-report-metric:disabled {
 
 .kb-lib-quality-root-causes,
 .kb-lib-quality-source-diag,
+.kb-lib-quality-shelf-fields,
 .kb-lib-quality-failure-actions {
   min-width: 0;
   display: flex;
@@ -7683,7 +7684,8 @@ button.kb-lib-quality-report-metric:disabled {
 }
 
 .kb-lib-quality-root-causes em,
-.kb-lib-quality-source-diag em {
+.kb-lib-quality-source-diag em,
+.kb-lib-quality-shelf-fields em {
   max-width: 100%;
   display: inline-flex;
   min-height: 19px;
@@ -7711,6 +7713,12 @@ button.kb-lib-quality-report-metric:disabled {
 
 .kb-lib-quality-root-causes em.is-warning,
 .kb-lib-quality-source-diag em.is-warning {
+  border-color: color-mix(in srgb, #d97706 26%, var(--border));
+  background: color-mix(in srgb, #f59e0b 8%, var(--panel));
+  color: color-mix(in srgb, #a16207 76%, var(--text-main));
+}
+
+.kb-lib-quality-shelf-fields em {
   border-color: color-mix(in srgb, #d97706 26%, var(--border));
   background: color-mix(in srgb, #f59e0b 8%, var(--panel));
   color: color-mix(in srgb, #a16207 76%, var(--text-main));

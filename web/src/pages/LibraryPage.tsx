@@ -613,6 +613,8 @@ function qualityFailureCaseMatchesStage(item: LibraryQualityFailureCase, stageKe
     return names.has('citation_shelf_quality')
       || names.has('citation_card_quality')
       || rootCodes.has('citation_card_quality')
+      || rootCodes.has('shelf_metadata_export_fields')
+      || actions.has('repair_shelf_metadata')
       || actions.has('inspect_cards')
   }
   return false
@@ -2598,23 +2600,25 @@ export default function LibraryPage() {
   }
 
   const repairQualityCaseShelfMetadata = async (item: LibraryQualityFailureCase) => {
-    const rawItems = [
+    const backendTargets = Array.isArray(item.shelf_metadata_repair_targets) ? item.shelf_metadata_repair_targets : []
+    const fallbackItems = [
       ...(Array.isArray(item.citation_diagnostics) ? item.citation_diagnostics : []),
       ...(Array.isArray(item.ref_diagnostics) ? item.ref_diagnostics : []),
     ]
-    const candidates = rawItems
+    const sourceItems = backendTargets.length > 0 ? backendTargets : fallbackItems
+    const candidates = sourceItems
       .map((entry, index) => ({
         record: entry as unknown as Record<string, unknown>,
         index,
       }))
       .map(({ record, index }) => ({
         ...record,
-        key: `${item.id}:meta:${index}`,
-        anchor: normalizeTextValue(record.anchor) || `${item.id}-meta-${index}`,
+        key: normalizeTextValue(record.key) || `${item.id}:${backendTargets.length > 0 ? 'shelf-meta' : 'meta'}:${index}`,
+        anchor: normalizeTextValue(record.anchor) || `${item.id}-${backendTargets.length > 0 ? 'shelf-meta' : 'meta'}-${index}`,
         title: normalizeTextValue(record.title),
         source_path: normalizeTextValue(record.source_path),
         source_name: normalizeTextValue(record.source_name || record.title),
-        raw: normalizeTextValue(record.raw || record.evidence_quote),
+        raw: normalizeTextValue(record.raw || record.cite_fmt || record.evidence_quote),
       }))
       .filter((entry) => entry.source_path || entry.source_name || entry.title || entry.raw)
       .slice(0, 12)
@@ -4885,6 +4889,7 @@ export default function LibraryPage() {
                         action: 'inspect_replay',
                       }))
                     const sourceDiagnostics = Array.isArray(item.source_diagnostics) ? item.source_diagnostics : []
+                    const shelfMissingFields = Array.isArray(item.shelf_metadata_missing_fields) ? item.shelf_metadata_missing_fields : []
                     const repairActions = Array.isArray(item.repair_actions) && item.repair_actions.length > 0
                       ? item.repair_actions
                       : [
@@ -4943,6 +4948,15 @@ export default function LibraryPage() {
                           <em>A {routeSummary.system_a || 0} / B {routeSummary.system_b || 0}</em>
                           {sourceDiagnostics.length > 0 ? <em>Sources {sourceDiagnostics.length}</em> : null}
                         </span>
+                        {shelfMissingFields.length > 0 ? (
+                          <span className="kb-lib-quality-shelf-fields" data-testid="library-quality-shelf-metadata-fields">
+                            {shelfMissingFields.slice(0, 4).map((field) => (
+                              <em key={`${item.id}-shelf-field-${field.name}`}>
+                                {field.name} x{field.count}
+                              </em>
+                            ))}
+                          </span>
+                        ) : null}
                         <span className="kb-lib-quality-root-causes" data-testid="library-quality-root-causes">
                           {rootCauses.slice(0, 3).map((cause) => {
                             const severity = normalizeTextValue(cause.severity).toLowerCase() || 'warning'

@@ -587,6 +587,11 @@ export interface LibraryQualityDiagnosticIssue {
   severity?: 'warning' | 'error' | string
 }
 
+export interface LibraryQualityFieldCount {
+  name: string
+  count: number
+}
+
 export interface LibraryQualityCitationDiagnostic {
   route: 'system_a' | 'system_b' | string
   num: number
@@ -594,6 +599,15 @@ export interface LibraryQualityCitationDiagnostic {
   title: string
   source_name: string
   source_path: string
+  authors?: string
+  venue?: string
+  year?: string
+  doi?: string
+  doi_url?: string
+  raw?: string
+  cite_fmt?: string
+  summary_line?: string
+  summary_quality?: Record<string, unknown>
   heading_path: string
   evidence_quote: string
   answer_claim?: string
@@ -601,6 +615,8 @@ export interface LibraryQualityCitationDiagnostic {
   trace?: string
   quality_issues?: LibraryQualityDiagnosticIssue[]
   shelf_quality_issues?: LibraryQualityDiagnosticIssue[]
+  metadata_missing_fields?: string[]
+  metadata_repairable?: boolean
   quality_issue_count?: number
 }
 
@@ -615,6 +631,14 @@ export interface LibraryQualityRefDiagnostic {
   polish_status: string
   ref_pack_state: string
   evidence_quote: string
+  authors?: string
+  venue?: string
+  year?: string
+  doi?: string
+  doi_url?: string
+  raw?: string
+  cite_fmt?: string
+  summary_quality?: Record<string, unknown>
   quality_issues?: LibraryQualityDiagnosticIssue[]
   quality_issue_count?: number
 }
@@ -657,6 +681,8 @@ export interface LibraryQualityRepairAction {
     label?: string
     target?: string
     source_count?: number
+    target_count?: number
+    missing_fields?: LibraryQualityFieldCount[]
   }>
   acceptance?: string
 }
@@ -712,6 +738,8 @@ export interface LibraryQualityFailureCase {
     shelf_doi_count?: number
     shelf_source_clickable_count?: number
     shelf_review_count?: number
+    shelf_missing_export_fields?: LibraryQualityFieldCount[]
+    shelf_metadata_repair_target_count?: number
     ref_card_failure_count?: number
     ref_card_warning_count?: number
     system_b_needs_review_count?: number
@@ -720,6 +748,8 @@ export interface LibraryQualityFailureCase {
   }
   citation_diagnostics?: LibraryQualityCitationDiagnostic[]
   ref_diagnostics?: LibraryQualityRefDiagnostic[]
+  shelf_metadata_repair_targets?: Array<Record<string, unknown>>
+  shelf_metadata_missing_fields?: LibraryQualityFieldCount[]
   source_diagnostics?: LibraryQualitySourceDiagnostic[]
   root_causes?: LibraryQualityRootCause[]
   repair_actions?: LibraryQualityRepairAction[]

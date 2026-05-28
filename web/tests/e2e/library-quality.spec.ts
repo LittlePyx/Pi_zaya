@@ -440,6 +440,8 @@ test.beforeEach(async ({ page }) => {
               missing_expected_doc_count: 1,
               citation_diagnostic_count: 1,
               ref_diagnostic_count: 1,
+              shelf_metadata_repair_target_count: 1,
+              shelf_missing_export_fields: [{ name: 'doi', count: 1 }],
             },
             citation_diagnostics: [
               {
@@ -451,6 +453,9 @@ test.beforeEach(async ({ page }) => {
                 source_path: 'db/scinerf/scinerf.en.md',
                 heading_path: 'Method / ADMM',
                 evidence_quote: 'The reconstruction uses ADMM as an optimization component.',
+                raw: 'Author A. SCINeRF upstream optimization reference. Journal A, 2024. doi:10.1234/scinerf-ref',
+                metadata_missing_fields: ['doi'],
+                metadata_repairable: true,
               },
             ],
             ref_diagnostics: [
@@ -488,6 +493,19 @@ test.beforeEach(async ({ page }) => {
               { code: 'source_conversion_quality', label: 'Source conversion needs repair', severity: 'warning', detail: '1 related source needs repair.', action: 'repair_sources' },
               { code: 'retrieval_missing_expected_docs', label: 'Retrieval missed required documents', severity: 'error', detail: 'Missing expected docs: scigs', action: 'rebuild_index' },
               { code: 'citation_card_quality', label: 'Citation card or basket copy is weak', severity: 'error', detail: 'Card copy failed.', action: 'inspect_cards' },
+              { code: 'shelf_metadata_export_fields', label: 'Literature basket metadata is not export-ready', severity: 'error', detail: 'Missing structured fields: doi x1.', action: 'repair_shelf_metadata' },
+            ],
+            shelf_metadata_missing_fields: [{ name: 'doi', count: 1 }],
+            shelf_metadata_repair_targets: [
+              {
+                key: 'scinerf-admm-origin:shelf-meta:0',
+                source_path: 'db/scinerf/scinerf.en.md',
+                source_name: 'SCINeRF',
+                title: 'SCINeRF citation',
+                raw: 'Author A. SCINeRF upstream optimization reference. Journal A, 2024. doi:10.1234/scinerf-ref',
+                metadata_missing_fields: ['doi'],
+                repair_target_kind: 'system_b_citation',
+              },
             ],
             repair_actions: [
               {
@@ -500,7 +518,7 @@ test.beforeEach(async ({ page }) => {
                 detail: 'Repair source conversions -> Repair citation and shelf metadata -> Rebuild retrieval index -> Rerun QA acceptance',
                 steps: [
                   { kind: 'repair_sources', label: 'Repair source conversions', source_count: 1 },
-                  { kind: 'repair_shelf_metadata', label: 'Repair citation and shelf metadata' },
+                  { kind: 'repair_shelf_metadata', label: 'Repair citation and shelf metadata', target_count: 1, missing_fields: [{ name: 'doi', count: 1 }] },
                   { kind: 'rebuild_index', label: 'Rebuild retrieval index' },
                   { kind: 'rerun_case', label: 'Rerun QA acceptance' },
                 ],
@@ -1226,6 +1244,7 @@ test('library page surfaces conversion quality and filters review items', async 
   const failedQaCase = page.getByTestId('library-quality-failure-case').filter({ hasText: 'scinerf-admm-origin' })
   await expect(failedQaCase.getByTestId('library-quality-root-causes')).toContainText('Retrieval missed required documents')
   await expect(failedQaCase.getByTestId('library-quality-root-causes')).toContainText('Citation card or basket copy is weak')
+  await expect(failedQaCase.getByTestId('library-quality-shelf-metadata-fields')).toContainText('doi x1')
   await expect(failedQaCase.getByTestId('library-quality-source-diagnostics')).toContainText('Q74')
   await expect(failedQaCase.getByTestId('library-quality-rerun-result')).toContainText('Rerun passed')
   await expect(failedQaCase.getByRole('button', { name: 'Fix from source' })).toBeVisible()
@@ -1242,6 +1261,11 @@ test('library page surfaces conversion quality and filters review items', async 
     const payload = (await planMetadataRequest).postDataJSON() as { items?: Array<Record<string, unknown>> }
     return payload.items?.length || 0
   }).toBeGreaterThan(0)
+  await expect.poll(async () => {
+    const payload = (await planMetadataRequest).postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const first = payload.items?.[0] || {}
+    return Array.isArray(first.metadata_missing_fields) ? first.metadata_missing_fields.join(',') : ''
+  }).toContain('doi')
   await planReindexRequest
   await expect.poll(async () => {
     const payload = (await planRerunRequest).postDataJSON() as { case_id?: string }

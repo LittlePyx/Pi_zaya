@@ -942,12 +942,82 @@ def _research_qa_quality_issue_rows(summary: dict, key: str = "failures") -> dic
     return rows
 
 
+_SHELF_EXPORT_FIELD_ALIASES = {
+    "author": "authors",
+    "authors": "authors",
+    "venue": "venue",
+    "journal": "venue",
+    "conference": "venue",
+    "year": "year",
+    "doi": "doi",
+    "title": "title",
+    "source": "source",
+    "source_path": "source",
+    "source_name": "source",
+}
+
+
+def _research_qa_shelf_issue_field(issue: dict) -> str:
+    name = str((issue or {}).get("name") or "").strip().lower()
+    field = str((issue or {}).get("field") or "").strip().lower()
+    if name.startswith("shelf_export_missing_"):
+        field = name.removeprefix("shelf_export_missing_")
+    elif name == "shelf_missing_author_hint":
+        field = "authors"
+    elif name == "shelf_missing_venue_hint":
+        field = "venue"
+    elif name == "shelf_missing_year_hint":
+        field = "year"
+    elif name in {"shelf_missing_doi", "shelf_doi_not_promoted"}:
+        field = "doi"
+    elif name in {"shelf_missing_source_identity", "shelf_source_not_clickable", "shelf_system_a_missing_source"}:
+        field = "source"
+    elif name in {"shelf_title_too_short", "shelf_weak_generic_title"}:
+        field = "title"
+    return _SHELF_EXPORT_FIELD_ALIASES.get(field, "")
+
+
+def _research_qa_shelf_missing_fields(issues: list[dict]) -> list[str]:
+    fields: list[str] = []
+    seen: set[str] = set()
+    for issue in list(issues or []):
+        if not isinstance(issue, dict):
+            continue
+        field = _research_qa_shelf_issue_field(issue)
+        if not field or field in seen:
+            continue
+        seen.add(field)
+        fields.append(field)
+    return fields
+
+
+def _research_qa_shelf_missing_field_counts(citations: list[dict]) -> list[dict]:
+    counter: Counter = Counter()
+    for item in list(citations or []):
+        if not isinstance(item, dict):
+            continue
+        for field in _list_strings(item.get("metadata_missing_fields")):
+            counter[field] += 1
+    return _counter_items(counter, limit=8)
+
+
+def _research_qa_shelf_missing_field_counts_from_quality(shelf_quality: dict) -> list[dict]:
+    counter: Counter = Counter()
+    source = shelf_quality if isinstance(shelf_quality, dict) else {}
+    for issue in [*_list_dict_items(source.get("failures")), *_list_dict_items(source.get("warnings"))]:
+        field = _research_qa_shelf_issue_field(issue)
+        if field:
+            counter[field] += 1
+    return _counter_items(counter, limit=8)
+
+
 def _research_qa_quality_gate_summary(quality: dict) -> dict:
     source = quality if isinstance(quality, dict) else {}
     citation_quality = source.get("citation_quality") if isinstance(source.get("citation_quality"), dict) else {}
     shelf_quality = source.get("citation_shelf_quality") if isinstance(source.get("citation_shelf_quality"), dict) else {}
     ref_card_quality = source.get("ref_card_quality") if isinstance(source.get("ref_card_quality"), dict) else {}
     system_b_audit = source.get("system_b_audit") if isinstance(source.get("system_b_audit"), dict) else {}
+    missing_fields = _research_qa_shelf_missing_field_counts_from_quality(shelf_quality)
     return {
         "citation_card_failure_count": len(_list_dict_items(citation_quality.get("failures"))),
         "citation_card_warning_count": len(_list_dict_items(citation_quality.get("warnings"))),
@@ -959,6 +1029,7 @@ def _research_qa_quality_gate_summary(quality: dict) -> dict:
         "shelf_doi_count": _safe_int(shelf_quality.get("doi_count"), 0),
         "shelf_source_clickable_count": _safe_int(shelf_quality.get("source_clickable_count"), 0),
         "shelf_review_count": _safe_int(shelf_quality.get("review_count"), 0),
+        "shelf_missing_export_fields": missing_fields,
         "ref_card_failure_count": len(_list_dict_items(ref_card_quality.get("failures"))),
         "ref_card_warning_count": len(_list_dict_items(ref_card_quality.get("warnings"))),
         "system_b_needs_review_count": _safe_int(system_b_audit.get("needs_review_count"), 0),
@@ -1061,6 +1132,11 @@ def _research_qa_citation_diagnostics(row: dict, *, limit: int = 8) -> list[dict
             *shelf_failures.get(index, []),
             *shelf_warnings.get(index, []),
         ]
+        metadata_missing_fields = _research_qa_shelf_missing_fields(shelf_quality_issues)
+        raw_text = _compact_text(item.get("raw"), item.get("cite_fmt"), item.get("citeFmt"), item.get("card_reference_entry"), item.get("cardReferenceEntry"), limit=420)
+        summary_quality = item.get("summary_quality") if isinstance(item.get("summary_quality"), dict) else (
+            item.get("summaryQuality") if isinstance(item.get("summaryQuality"), dict) else {}
+        )
         out.append(
             {
                 "route": "system_b" if is_system_b else "system_a",
@@ -1069,6 +1145,15 @@ def _research_qa_citation_diagnostics(row: dict, *, limit: int = 8) -> list[dict
                 "title": _compact_text(item.get("title"), item.get("source_name"), limit=180),
                 "source_name": _compact_text(item.get("source_name"), limit=180),
                 "source_path": _compact_text(item.get("source_path"), limit=260),
+                "authors": _compact_text(item.get("authors"), item.get("external_authors"), item.get("externalAuthors"), limit=220),
+                "venue": _compact_text(item.get("venue"), item.get("external_venue"), item.get("externalVenue"), limit=180),
+                "year": _compact_text(item.get("year"), item.get("published_year"), item.get("publishedYear"), limit=24),
+                "doi": _compact_text(item.get("doi"), item.get("external_doi"), item.get("externalDoi"), limit=160),
+                "doi_url": _compact_text(item.get("doi_url"), item.get("doiUrl"), item.get("external_doi_url"), item.get("externalDoiUrl"), limit=220),
+                "raw": raw_text,
+                "cite_fmt": _compact_text(item.get("cite_fmt"), item.get("citeFmt"), limit=420),
+                "summary_line": _compact_text(item.get("summary_line"), item.get("summaryLine"), item.get("card_takeaway"), item.get("upstream_work_role"), item.get("user_question_relation"), limit=260),
+                "summary_quality": dict(summary_quality),
                 "heading_path": _compact_text(item.get("heading_path"), item.get("location_label"), limit=180),
                 "evidence_quote": _compact_text(item.get("evidence_quote"), item.get("citation_context"), limit=260),
                 "answer_claim": _compact_text(item.get("answer_claim"), limit=220),
@@ -1076,6 +1161,8 @@ def _research_qa_citation_diagnostics(row: dict, *, limit: int = 8) -> list[dict
                 "trace": _compact_text(item.get("citation_context_source"), item.get("mapping_source"), item.get("anchor_kind"), limit=120),
                 "quality_issues": quality_issues,
                 "shelf_quality_issues": shelf_quality_issues,
+                "metadata_missing_fields": metadata_missing_fields,
+                "metadata_repairable": bool(is_system_b and metadata_missing_fields),
                 "quality_issue_count": len(quality_issues) + len(shelf_quality_issues),
             }
         )
@@ -1092,6 +1179,7 @@ def _research_qa_ref_diagnostics(row: dict, *, limit: int = 8) -> list[dict]:
         meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
         ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
         citation_meta = (ui_meta or {}).get("citation_meta") if isinstance((ui_meta or {}).get("citation_meta"), dict) else {}
+        summary_quality = (ui_meta or {}).get("summary_quality") if isinstance((ui_meta or {}).get("summary_quality"), dict) else {}
         score = (ui_meta or {}).get("score")
         if score in (None, ""):
             score = hit.get("score")
@@ -1104,9 +1192,17 @@ def _research_qa_ref_diagnostics(row: dict, *, limit: int = 8) -> list[dict]:
                 "title": _compact_text((ui_meta or {}).get("display_name"), (citation_meta or {}).get("title"), (meta or {}).get("source_name"), limit=180),
                 "source_name": _compact_text((ui_meta or {}).get("source_name"), (meta or {}).get("source_name"), limit=180),
                 "source_path": _compact_text((ui_meta or {}).get("source_path"), (citation_meta or {}).get("source_path"), (meta or {}).get("source_path"), limit=260),
+                "authors": _compact_text((citation_meta or {}).get("authors"), (ui_meta or {}).get("authors"), limit=220),
+                "venue": _compact_text((citation_meta or {}).get("venue"), (ui_meta or {}).get("venue"), limit=180),
+                "year": _compact_text((citation_meta or {}).get("year"), (ui_meta or {}).get("year"), limit=24),
+                "doi": _compact_text((citation_meta or {}).get("doi"), (ui_meta or {}).get("doi"), limit=160),
+                "doi_url": _compact_text((citation_meta or {}).get("doi_url"), (citation_meta or {}).get("doiUrl"), (ui_meta or {}).get("doi_url"), (ui_meta or {}).get("doiUrl"), limit=220),
+                "raw": _compact_text((citation_meta or {}).get("raw"), (citation_meta or {}).get("cite_fmt"), (ui_meta or {}).get("raw"), hit.get("text"), limit=420),
+                "cite_fmt": _compact_text((citation_meta or {}).get("cite_fmt"), (citation_meta or {}).get("citeFmt"), limit=420),
                 "heading_path": _compact_text((ui_meta or {}).get("heading_path"), (meta or {}).get("heading_path"), limit=180),
                 "score": round(_safe_float(score, 0.0), 3),
                 "summary_line": _compact_text((ui_meta or {}).get("summary_line"), limit=220),
+                "summary_quality": dict(summary_quality),
                 "why_line": _compact_text((ui_meta or {}).get("why_line"), limit=220),
                 "polish_status": _compact_text((ui_meta or {}).get("polish_status"), limit=80),
                 "ref_pack_state": _compact_text((meta or {}).get("ref_pack_state"), limit=80),
@@ -1116,6 +1212,65 @@ def _research_qa_ref_diagnostics(row: dict, *, limit: int = 8) -> list[dict]:
             }
         )
     return out
+
+
+def _research_qa_shelf_metadata_repair_targets(citations: list[dict], refs: list[dict], *, limit: int = 12) -> list[dict]:
+    targets: list[dict] = []
+    seen: set[str] = set()
+
+    def add(item: dict, *, kind: str) -> None:
+        source_path = _compact_text(item.get("source_path"), limit=260)
+        source_name = _compact_text(item.get("source_name"), item.get("title"), limit=180)
+        title = _compact_text(item.get("title"), item.get("source_name"), limit=180)
+        raw = _compact_text(item.get("raw"), item.get("cite_fmt"), item.get("evidence_quote"), limit=420)
+        key = "|".join([source_path, source_name, title, raw[:120]]).lower()
+        if not key.strip("|") or key in seen:
+            return
+        seen.add(key)
+        target = {
+            "key": _compact_text(item.get("key"), item.get("anchor"), f"{kind}:{len(targets) + 1}", limit=160),
+            "source_path": source_path,
+            "source_name": source_name,
+            "title": title,
+            "authors": _compact_text(item.get("authors"), limit=220),
+            "venue": _compact_text(item.get("venue"), limit=180),
+            "year": _compact_text(item.get("year"), limit=24),
+            "doi": _compact_text(item.get("doi"), limit=160),
+            "doi_url": _compact_text(item.get("doi_url"), limit=220),
+            "raw": raw,
+            "cite_fmt": _compact_text(item.get("cite_fmt"), limit=420),
+            "summary_line": _compact_text(item.get("summary_line"), item.get("why_line"), limit=260),
+            "summary_quality": dict(item.get("summary_quality") or {}) if isinstance(item.get("summary_quality"), dict) else {},
+            "metadata_missing_fields": _list_strings(item.get("metadata_missing_fields")),
+            "repair_target_kind": kind,
+        }
+        targets.append(target)
+
+    for item in list(citations or []):
+        if not isinstance(item, dict):
+            continue
+        route = str(item.get("route") or "").strip().lower()
+        missing_fields = _list_strings(item.get("metadata_missing_fields"))
+        has_shelf_issue = any(
+            str(issue.get("name") or "").startswith("shelf_")
+            for issue in _list_dict_items(item.get("shelf_quality_issues"))
+        )
+        if route == "system_b" and (missing_fields or has_shelf_issue):
+            add(item, kind="system_b_citation")
+        if len(targets) >= int(limit):
+            return targets[:limit]
+
+    if targets:
+        return targets[:limit]
+
+    for item in list(refs or []):
+        if not isinstance(item, dict):
+            continue
+        if _list_dict_items(item.get("quality_issues")):
+            add(item, kind="reference_card")
+        if len(targets) >= int(limit):
+            break
+    return targets[:limit]
 
 
 def _research_qa_source_diagnostics(citations: list[dict], refs: list[dict], *, limit: int = 8) -> list[dict]:
@@ -1194,6 +1349,7 @@ def _research_qa_root_causes(
     system_b_count: int,
     ref_hit_count: int,
     source_diagnostics: list[dict],
+    citation_diagnostics: list[dict] | None = None,
     rerun_status: dict | None = None,
 ) -> list[dict]:
     names = {str(item.get("name") or "").strip().lower() for item in failures}
@@ -1253,6 +1409,17 @@ def _research_qa_root_causes(
             severity="error",
             detail="Card title, source, summary, why-line, or shelf rendering failed acceptance.",
             action="inspect_cards",
+        )
+
+    shelf_missing_fields = _research_qa_shelf_missing_field_counts(list(citation_diagnostics or []))
+    if shelf_missing_fields:
+        field_detail = ", ".join(f"{item.get('name')} x{item.get('count')}" for item in shelf_missing_fields[:5])
+        add(
+            "shelf_metadata_export_fields",
+            "Literature basket metadata is not export-ready",
+            severity="error",
+            detail=f"Missing structured fields: {field_detail}.",
+            action="repair_shelf_metadata",
         )
 
     if any(name == "system_b_audit" or name.startswith("system_b_") for name in names):
@@ -1321,6 +1488,8 @@ def _research_qa_repair_plan_steps(
     cause_actions: set[str],
     needs_repair_sources: list[dict],
     missing_expected_doc_ids: list[str],
+    shelf_metadata_targets: list[dict] | None = None,
+    shelf_missing_fields: list[dict] | None = None,
 ) -> list[dict]:
     steps: list[dict] = []
     if needs_repair_sources:
@@ -1331,11 +1500,13 @@ def _research_qa_repair_plan_steps(
                 "source_count": len(needs_repair_sources),
             }
         )
-    if "citation_card_quality" in cause_codes or "system_b_mapping" in cause_codes:
+    if "citation_card_quality" in cause_codes or "system_b_mapping" in cause_codes or "shelf_metadata_export_fields" in cause_codes:
         steps.append(
             {
                 "kind": "repair_shelf_metadata",
                 "label": "Repair citation and shelf metadata",
+                "target_count": len(list(shelf_metadata_targets or [])),
+                "missing_fields": list(shelf_missing_fields or [])[:8],
             }
         )
     if "rebuild_index" in cause_actions or "retrieval_missing_expected_docs" in cause_codes or "empty_reference_basket" in cause_codes or missing_expected_doc_ids:
@@ -1360,6 +1531,8 @@ def _research_qa_repair_actions(
     root_causes: list[dict],
     source_diagnostics: list[dict],
     missing_expected_doc_ids: list[str],
+    shelf_metadata_targets: list[dict] | None = None,
+    shelf_missing_fields: list[dict] | None = None,
 ) -> list[dict]:
     cause_codes = {str(item.get("code") or "") for item in root_causes}
     cause_actions = {str(item.get("action") or "") for item in root_causes}
@@ -1370,6 +1543,8 @@ def _research_qa_repair_actions(
         cause_actions=cause_actions,
         needs_repair_sources=needs_repair_sources,
         missing_expected_doc_ids=missing_expected_doc_ids,
+        shelf_metadata_targets=shelf_metadata_targets,
+        shelf_missing_fields=shelf_missing_fields,
     )
     actions: list[dict] = []
     if plan_steps:
@@ -1382,7 +1557,14 @@ def _research_qa_repair_actions(
                 "severity": "error" if any(str(item.get("severity") or "").lower() == "error" for item in root_causes) else "warning",
                 "enabled": True,
                 "source_count": len(needs_repair_sources),
-                "detail": "Run the diagnostic repair plan: " + " -> ".join([item for item in step_labels if item]),
+                "detail": (
+                    "Run the diagnostic repair plan: " + " -> ".join([item for item in step_labels if item])
+                    + (
+                        "; metadata fields "
+                        + ", ".join(f"{field.get('name')} x{field.get('count')}" for field in list(shelf_missing_fields or [])[:5])
+                        if shelf_missing_fields else ""
+                    )
+                ),
                 "steps": plan_steps,
                 "acceptance": "The case is rerun after repairs so the quality center can verify the fix.",
             }
@@ -1433,7 +1615,7 @@ def _research_qa_repair_actions(
             }
         )
 
-    if "citation_card_quality" in cause_codes or "system_b_mapping" in cause_codes:
+    if "citation_card_quality" in cause_codes or "system_b_mapping" in cause_codes or "shelf_metadata_export_fields" in cause_codes:
         actions.append(
             {
                 "id": "open_raw",
@@ -2709,6 +2891,8 @@ def _latest_research_qa_failure_cases(*, limit: int = 12, rerun_history: list[di
         system_b_count = _safe_int(quality.get("system_b_count"), 0)
         ref_hit_count = _safe_int(quality.get("ref_hit_count"), 0)
         source_diagnostics = _research_qa_source_diagnostics(citation_diagnostics, ref_diagnostics)
+        shelf_metadata_repair_targets = _research_qa_shelf_metadata_repair_targets(citation_diagnostics, ref_diagnostics)
+        shelf_metadata_missing_fields = _research_qa_shelf_missing_field_counts(citation_diagnostics)
         rerun_status = _research_qa_rerun_case_status(str(row.get("id") or "").strip(), rerun_rows)
         root_causes = _research_qa_root_causes(
             failures=failures,
@@ -2717,12 +2901,15 @@ def _latest_research_qa_failure_cases(*, limit: int = 12, rerun_history: list[di
             system_b_count=system_b_count,
             ref_hit_count=ref_hit_count,
             source_diagnostics=source_diagnostics,
+            citation_diagnostics=citation_diagnostics,
             rerun_status=rerun_status,
         )
         repair_actions = _research_qa_repair_actions(
             root_causes=root_causes,
             source_diagnostics=source_diagnostics,
             missing_expected_doc_ids=missing_expected_doc_ids,
+            shelf_metadata_targets=shelf_metadata_repair_targets,
+            shelf_missing_fields=shelf_metadata_missing_fields,
         )
         doc_ids = []
         seen_doc_ids: set[str] = set()
@@ -2756,10 +2943,13 @@ def _latest_research_qa_failure_cases(*, limit: int = 12, rerun_history: list[di
                     "missing_expected_doc_count": len(missing_expected_doc_ids),
                     "citation_diagnostic_count": len(citation_diagnostics),
                     "ref_diagnostic_count": len(ref_diagnostics),
+                    "shelf_metadata_repair_target_count": len(shelf_metadata_repair_targets),
                     **_research_qa_quality_gate_summary(quality),
                 },
                 "citation_diagnostics": citation_diagnostics,
                 "ref_diagnostics": ref_diagnostics,
+                "shelf_metadata_repair_targets": shelf_metadata_repair_targets,
+                "shelf_metadata_missing_fields": shelf_metadata_missing_fields,
                 "source_diagnostics": source_diagnostics,
                 "root_causes": root_causes,
                 "repair_actions": repair_actions,
