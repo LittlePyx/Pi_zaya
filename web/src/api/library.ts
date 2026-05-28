@@ -381,6 +381,67 @@ export interface LibrarySourceQualityResponse {
   review_count: number
 }
 
+export interface LibraryReaderLocateQualityPayload {
+  source_path: string
+  source_name?: string
+  locate_feedback_key?: string
+  locate_request_id?: number
+  status: 'exact' | 'block' | 'fuzzy' | 'section' | 'source_only' | 'failed' | string
+  precision: 'exact_anchor' | 'block' | 'phrase' | 'fuzzy' | 'section' | 'source_only' | 'failed' | string
+  ok: boolean
+  repairable: boolean
+  strict_locate: boolean
+  hint?: string
+  reason?: string
+  active_alt_index?: number
+  block_id?: string
+  anchor_id?: string
+  anchor_kind?: string
+  heading_path?: string
+}
+
+export interface LibraryReaderLocateSourceRecommendation {
+  source_path: string
+  source_name: string
+  pdf_path: string
+  md_path: string
+  md_exists: boolean
+  total: number
+  failed: number
+  degraded: number
+  repairable: number
+  strict_miss: number
+  latest_status: string
+  latest_precision: string
+  latest_reason: string
+  latest_at: number
+  recommended_action: string
+}
+
+export interface LibraryReaderLocateQualitySummary {
+  available: boolean
+  status: 'good' | 'warning' | 'error' | 'unknown' | string
+  summary: {
+    total: number
+    exact: number
+    block: number
+    degraded: number
+    failed: number
+    repairable: number
+    strict_miss: number
+    affected_sources: number
+  }
+  top_failures: Array<{ name: string, count: number }>
+  recommended_sources: LibraryReaderLocateSourceRecommendation[]
+  latest?: Array<Record<string, unknown>>
+}
+
+export interface LibraryReaderLocateQualityResponse {
+  ok: boolean
+  item: Record<string, unknown>
+  summary: LibraryReaderLocateQualitySummary
+}
+
 export interface LibraryQualityOverviewIssue {
   code: string
   label: string
@@ -692,6 +753,7 @@ export interface LibraryQualityOverviewResponse {
   domains?: Record<string, LibraryQualityDomain>
   full_chain?: LibraryQualityFullChain
   feature_health?: LibraryQualityFeatureHealth
+  reader_locate?: LibraryReaderLocateQualitySummary
   failure_cases?: LibraryQualityFailureCase[]
   rerun_summary?: {
     available: boolean
@@ -939,6 +1001,8 @@ export const libraryApi = {
     api.post<{ ok: boolean; item: LibraryQualityActionHistoryItem }>('/api/library/quality/action-history', body),
   sourceQuality: (sources: Array<{ source_path: string; source_name?: string }>) =>
     api.post<LibrarySourceQualityResponse>('/api/library/quality/sources', { sources }),
+  recordReaderLocateQuality: (body: LibraryReaderLocateQualityPayload) =>
+    api.post<LibraryReaderLocateQualityResponse>('/api/library/quality/reader-locate', body),
   openQualityArtifact: (domain: 'research_qa' | 'citation_cards' | string, target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook' | string = 'report') =>
     api.post<LibraryQualityArtifactOpenResponse>('/api/library/quality/artifact/open', {
       domain,

@@ -1470,6 +1470,268 @@ def _quality_repair_runs_path() -> Path:
     return _RESEARCH_QA_EVAL_ROOT / "repair_runs.jsonl"
 
 
+def _reader_locate_events_path() -> Path:
+    return _RESEARCH_QA_EVAL_ROOT / "reader_locate_events.jsonl"
+
+
+_READER_LOCATE_GOOD_STATUSES = {"exact", "block"}
+_READER_LOCATE_DEGRADED_STATUSES = {"fuzzy", "section", "source_only"}
+_READER_LOCATE_STATUSES = _READER_LOCATE_GOOD_STATUSES | _READER_LOCATE_DEGRADED_STATUSES | {"failed"}
+_READER_LOCATE_PRECISIONS = {"exact_anchor", "block", "phrase", "fuzzy", "section", "source_only", "failed"}
+
+
+def _reader_locate_source_key(row: dict) -> str:
+    for field in ("pdf_path", "md_path", "source_path"):
+        value = str((row or {}).get(field) or "").strip()
+        key = _normalized_path_key(value)
+        if key:
+            return key.lower()
+    name = str((row or {}).get("source_name") or "").strip().lower()
+    return name
+
+
+def _reader_locate_identity(row: dict) -> str:
+    feedback_key = str((row or {}).get("locate_feedback_key") or "").strip()
+    if feedback_key:
+        return f"feedback:{feedback_key}"
+    parts = [
+        _reader_locate_source_key(row),
+        str((row or {}).get("locate_request_id") or "").strip(),
+        str((row or {}).get("block_id") or "").strip(),
+        str((row or {}).get("anchor_id") or "").strip(),
+        str((row or {}).get("heading_path") or "").strip(),
+    ]
+    clean = "|".join(part for part in parts if part)
+    return clean or str((row or {}).get("id") or "")
+
+
+def _reader_locate_recommended_action(row: dict) -> str:
+    status = str((row or {}).get("status") or "").strip().lower()
+    precision = str((row or {}).get("precision") or "").strip().lower()
+    md_exists = bool((row or {}).get("md_exists"))
+    strict = bool((row or {}).get("strict_locate"))
+    if not md_exists:
+        return "reconvert_source"
+    if status == "failed" or precision == "failed":
+        return "repair_conversion_and_reindex"
+    if status == "source_only" or precision == "source_only":
+        return "rebuild_source_anchors"
+    if status in {"fuzzy", "section"} or precision in {"fuzzy", "section"} or (strict and status not in _READER_LOCATE_GOOD_STATUSES):
+        return "repair_anchors_and_evidence"
+    return "review_reader_locate"
+
+
+def _normalize_reader_locate_event(row: dict) -> dict:
+    if not isinstance(row, dict):
+        return {}
+    source_path = _compact_text(row.get("source_path"), limit=500)
+    source_name = _compact_text(row.get("source_name"), limit=240)
+    resolved = _resolve_quality_source(source_path=source_path, source_name=source_name)
+    status = _compact_text(row.get("status"), limit=40).lower()
+    precision = _compact_text(row.get("precision"), limit=40).lower()
+    if status not in _READER_LOCATE_STATUSES:
+        status = "exact" if bool(row.get("ok")) else "failed"
+    if precision not in _READER_LOCATE_PRECISIONS:
+        precision = "phrase" if status == "exact" else status
+    ok = bool(row.get("ok")) if "ok" in row else status in _READER_LOCATE_GOOD_STATUSES | _READER_LOCATE_DEGRADED_STATUSES
+    repairable = bool(row.get("repairable")) or status == "failed" or (
+        bool(row.get("strict_locate")) and status not in _READER_LOCATE_GOOD_STATUSES
+    )
+    created_at = _safe_int(row.get("created_at"), 0) or int(time.time())
+    out = {
+        "id": _compact_text(row.get("id"), limit=80) or uuid.uuid4().hex,
+        "created_at": created_at,
+        "source_path": source_path,
+        "source_name": source_name or str(resolved.get("source_name") or ""),
+        "pdf_path": str(resolved.get("pdf_path") or ""),
+        "md_path": str(resolved.get("md_path") or ""),
+        "md_exists": bool(resolved.get("md_exists")),
+        "locate_feedback_key": _compact_text(row.get("locate_feedback_key"), limit=160),
+        "locate_request_id": _safe_int(row.get("locate_request_id"), 0),
+        "status": status,
+        "precision": precision,
+        "ok": bool(ok),
+        "repairable": bool(repairable),
+        "strict_locate": bool(row.get("strict_locate")),
+        "hint": _compact_text(row.get("hint"), limit=300),
+        "reason": _compact_text(row.get("reason"), limit=500),
+        "active_alt_index": _safe_int(row.get("active_alt_index"), 0),
+        "block_id": _compact_text(row.get("block_id"), limit=160),
+        "anchor_id": _compact_text(row.get("anchor_id"), limit=160),
+        "anchor_kind": _compact_text(row.get("anchor_kind"), limit=80),
+        "heading_path": _compact_text(row.get("heading_path"), limit=300),
+    }
+    if not out["source_path"] and not out["source_name"] and not out["locate_feedback_key"]:
+        return {}
+    out["source_key"] = _reader_locate_source_key(out)
+    out["recommended_action"] = _reader_locate_recommended_action(out)
+    return out
+
+
+def _reader_locate_event_rows(*, limit: int = 1000) -> list[dict]:
+    rows = _read_jsonl_artifact(_reader_locate_events_path(), limit=max(1000, min(10000, int(limit or 1000) * 4)))
+    latest_by_identity: dict[str, dict] = {}
+    for raw in rows:
+        row = _normalize_reader_locate_event(raw)
+        identity = _reader_locate_identity(row)
+        if not identity:
+            continue
+        prev = latest_by_identity.get(identity)
+        if not prev or _safe_int(row.get("created_at"), 0) >= _safe_int(prev.get("created_at"), 0):
+            latest_by_identity[identity] = row
+    out = list(latest_by_identity.values())
+    out.sort(key=lambda item: (_safe_int(item.get("created_at"), 0), str(item.get("id") or "")), reverse=True)
+    return out[: max(0, min(2000, int(limit or 1000)))]
+
+
+def _append_reader_locate_event(record: dict) -> dict:
+    row = _normalize_reader_locate_event(record)
+    if not row:
+        raise HTTPException(400, "source_path, source_name, or locate_feedback_key is required")
+    try:
+        path = _reader_locate_events_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, f"failed to write reader locate event: {exc}") from exc
+    return row
+
+
+def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
+    items = list(rows or _reader_locate_event_rows(limit=1000))
+    if not items:
+        return {
+            "available": False,
+            "status": "unknown",
+            "summary": {
+                "total": 0,
+                "exact": 0,
+                "block": 0,
+                "degraded": 0,
+                "failed": 0,
+                "repairable": 0,
+                "strict_miss": 0,
+                "affected_sources": 0,
+            },
+            "top_failures": [],
+            "recommended_sources": [],
+            "latest": [],
+        }
+
+    total = len(items)
+    exact = sum(1 for item in items if str(item.get("status") or "") == "exact")
+    block = sum(1 for item in items if str(item.get("status") or "") == "block")
+    degraded = sum(1 for item in items if str(item.get("status") or "") in _READER_LOCATE_DEGRADED_STATUSES)
+    failed = sum(1 for item in items if str(item.get("status") or "") == "failed" or str(item.get("precision") or "") == "failed")
+    strict_miss = sum(
+        1
+        for item in items
+        if bool(item.get("strict_locate")) and str(item.get("status") or "") not in _READER_LOCATE_GOOD_STATUSES
+    )
+    repairable = sum(
+        1
+        for item in items
+        if bool(item.get("repairable")) or str(item.get("status") or "") == "failed" or bool(item.get("strict_locate")) and str(item.get("status") or "") not in _READER_LOCATE_GOOD_STATUSES
+    )
+
+    reason_counter: Counter = Counter()
+    source_stats: dict[str, dict] = {}
+    for item in items:
+        status = str(item.get("status") or "")
+        if status in _READER_LOCATE_DEGRADED_STATUSES or status == "failed":
+            reason = str(item.get("reason") or item.get("hint") or status).strip() or status
+            reason_counter[reason] += 1
+        source_key = _reader_locate_source_key(item)
+        if not source_key:
+            continue
+        cur = source_stats.get(source_key) or {
+            "source_path": str(item.get("source_path") or ""),
+            "source_name": str(item.get("source_name") or ""),
+            "pdf_path": str(item.get("pdf_path") or ""),
+            "md_path": str(item.get("md_path") or ""),
+            "md_exists": bool(item.get("md_exists")),
+            "total": 0,
+            "failed": 0,
+            "degraded": 0,
+            "repairable": 0,
+            "strict_miss": 0,
+            "latest_status": "",
+            "latest_precision": "",
+            "latest_reason": "",
+            "latest_at": 0,
+            "recommended_action": "",
+        }
+        cur["total"] = _safe_int(cur.get("total"), 0) + 1
+        if status == "failed":
+            cur["failed"] = _safe_int(cur.get("failed"), 0) + 1
+        if status in _READER_LOCATE_DEGRADED_STATUSES:
+            cur["degraded"] = _safe_int(cur.get("degraded"), 0) + 1
+        if bool(item.get("repairable")) or status == "failed":
+            cur["repairable"] = _safe_int(cur.get("repairable"), 0) + 1
+        if bool(item.get("strict_locate")) and status not in _READER_LOCATE_GOOD_STATUSES:
+            cur["strict_miss"] = _safe_int(cur.get("strict_miss"), 0) + 1
+        created_at = _safe_int(item.get("created_at"), 0)
+        problem = (
+            status == "failed"
+            or status in _READER_LOCATE_DEGRADED_STATUSES
+            or bool(item.get("repairable"))
+            or (bool(item.get("strict_locate")) and status not in _READER_LOCATE_GOOD_STATUSES)
+        )
+        if problem:
+            cur["recommended_action"] = str(item.get("recommended_action") or _reader_locate_recommended_action(item))
+            if not str(cur.get("latest_reason") or "").strip():
+                cur["latest_reason"] = str(item.get("reason") or item.get("hint") or "")
+        if created_at >= _safe_int(cur.get("latest_at"), 0):
+            cur["latest_status"] = status
+            cur["latest_precision"] = str(item.get("precision") or "")
+            if problem or not str(cur.get("latest_reason") or "").strip():
+                cur["latest_reason"] = str(item.get("reason") or item.get("hint") or "")
+            cur["latest_at"] = created_at
+            if not str(cur.get("recommended_action") or "").strip():
+                cur["recommended_action"] = str(item.get("recommended_action") or _reader_locate_recommended_action(item))
+        source_stats[source_key] = cur
+
+    recommended_sources = [
+        item
+        for item in source_stats.values()
+        if _safe_int(item.get("failed"), 0) > 0
+        or _safe_int(item.get("degraded"), 0) > 0
+        or _safe_int(item.get("repairable"), 0) > 0
+        or _safe_int(item.get("strict_miss"), 0) > 0
+    ]
+    recommended_sources.sort(
+        key=lambda item: (
+            -_safe_int(item.get("failed"), 0),
+            -_safe_int(item.get("strict_miss"), 0),
+            -_safe_int(item.get("degraded"), 0),
+            -_safe_int(item.get("repairable"), 0),
+            -_safe_int(item.get("latest_at"), 0),
+            str(item.get("source_name") or "").lower(),
+        )
+    )
+    status = "error" if failed > 0 or strict_miss > 0 else ("warning" if degraded > 0 or repairable > 0 else "good")
+    return {
+        "available": True,
+        "status": status,
+        "summary": {
+            "total": int(total),
+            "exact": int(exact),
+            "block": int(block),
+            "degraded": int(degraded),
+            "failed": int(failed),
+            "repairable": int(repairable),
+            "strict_miss": int(strict_miss),
+            "affected_sources": len(source_stats),
+        },
+        "top_failures": [{"name": name, "count": count} for name, count in reason_counter.most_common(6)],
+        "recommended_sources": recommended_sources[:8],
+        "latest": items[:10],
+    }
+
+
 def _research_qa_rerun_history_rows(*, limit: int = 1000) -> list[dict]:
     rows = _read_jsonl_artifact(_research_qa_rerun_history_path(), limit=limit)
     rows.sort(key=lambda item: (_safe_int(item.get("finished_at"), 0), _safe_int(item.get("started_at"), 0)), reverse=True)
@@ -2243,6 +2505,7 @@ def _quality_priority_actions(
     recommended: list[dict],
     research_qa: dict,
     citation_cards: dict,
+    reader_locate: dict | None = None,
 ) -> list[dict]:
     actions: list[dict] = []
     if recommended:
@@ -2289,6 +2552,25 @@ def _quality_priority_actions(
                 "label": "Fix citation and card quality",
                 "count": card_failed,
                 "detail": str((citation_cards.get("top_failures") or [{}])[0].get("name") or ""),
+            }
+        )
+
+    reader = reader_locate if isinstance(reader_locate, dict) else {}
+    reader_summary = reader.get("summary") if isinstance(reader.get("summary"), dict) else {}
+    reader_failed = _safe_int(reader_summary.get("failed"), 0)
+    reader_degraded = _safe_int(reader_summary.get("degraded"), 0)
+    reader_strict_miss = _safe_int(reader_summary.get("strict_miss"), 0)
+    reader_problem_count = reader_failed + reader_degraded + reader_strict_miss
+    if bool(reader.get("available")) and reader_problem_count > 0:
+        recommended_sources = list(reader.get("recommended_sources") or [])
+        first_source = recommended_sources[0] if recommended_sources and isinstance(recommended_sources[0], dict) else {}
+        actions.append(
+            {
+                "domain": "reader_locate",
+                "severity": "error" if reader_failed > 0 or reader_strict_miss > 0 else "warning",
+                "label": "Repair reader locate sources",
+                "count": len(recommended_sources) or reader_problem_count,
+                "detail": str(first_source.get("latest_reason") or first_source.get("recommended_action") or "Reader locate degraded"),
             }
         )
 
@@ -2620,6 +2902,7 @@ def _quality_feature_health(
     failure_cases: list[dict],
     rerun_summary: dict,
     full_chain: dict,
+    reader_locate: dict | None = None,
 ) -> dict:
     stages = {
         str(stage.get("key") or ""): stage
@@ -2679,14 +2962,25 @@ def _quality_feature_health(
         paper_guide_status = "warning"
     paper_guide_count = conversion_review + retrieval_failed + card_failed
 
-    reader_status = "good"
-    reader_count = 0
-    if citation_missing_cases > 0 or card_failed > 0:
-        reader_status = "error"
-        reader_count = citation_missing_cases + card_failed
-    elif conversion_review > 0 or conversion_unknown > 0 or not card_available:
-        reader_status = "warning"
-        reader_count = conversion_review + conversion_unknown
+    reader_quality = reader_locate if isinstance(reader_locate, dict) else {}
+    reader_summary = reader_quality.get("summary") if isinstance(reader_quality.get("summary"), dict) else {}
+    reader_available = bool(reader_quality.get("available"))
+    reader_failed = _safe_int(reader_summary.get("failed"), 0)
+    reader_degraded = _safe_int(reader_summary.get("degraded"), 0)
+    reader_strict_miss = _safe_int(reader_summary.get("strict_miss"), 0)
+    reader_repairable = _safe_int(reader_summary.get("repairable"), 0)
+    reader_count = reader_failed + reader_degraded + reader_strict_miss
+    if reader_available:
+        reader_status = str(reader_quality.get("status") or "unknown").strip().lower() or "unknown"
+    else:
+        reader_status = "good"
+        reader_count = 0
+        if citation_missing_cases > 0 or card_failed > 0:
+            reader_status = "error"
+            reader_count = citation_missing_cases + card_failed
+        elif conversion_review > 0 or conversion_unknown > 0 or not card_available:
+            reader_status = "warning"
+            reader_count = conversion_review + conversion_unknown
 
     rerun_failed = _safe_int((rerun_summary or {}).get("failed"), 0) + _safe_int((rerun_summary or {}).get("error"), 0)
     repair_status = str((stages.get("repair_loop") or {}).get("status") or "unknown").lower()
@@ -2762,13 +3056,33 @@ def _quality_feature_health(
             "Reader locate",
             reader_status,
             score=_feature_score_from_status(reader_status, good=94, warning=72, error=43),
-            summary="Reader jumps have grounded evidence" if reader_status == "good" else "Reader locate may be affected by weak citations or source conversion",
-            detail="Covers citation click-through, source opening, anchors, page markers, and evidence snippets.",
-            action="inspect_reader_locate" if reader_status != "good" else "review_reader_locate",
-            target_stage="citations" if card_failed > 0 or citation_missing_cases > 0 else "conversion",
+            summary=(
+                "Reader jumps have grounded evidence"
+                if reader_status == "good"
+                else (
+                    f"{reader_count} real reader jumps need source repair"
+                    if reader_available
+                    else "Reader locate may be affected by weak citations or source conversion"
+                )
+            ),
+            detail=(
+                f"Observed {reader_failed} failed, {reader_degraded} degraded, {reader_repairable} repairable locate results."
+                if reader_available
+                else "Covers citation click-through, source opening, anchors, page markers, and evidence snippets."
+            ),
+            action="repair_reader_locate" if reader_available and reader_status != "good" else ("inspect_reader_locate" if reader_status != "good" else "review_reader_locate"),
+            target_stage="reader_locate" if reader_available else ("citations" if card_failed > 0 or citation_missing_cases > 0 else "conversion"),
             count=reader_count,
             blocking=reader_status == "error",
-            metrics={"citation_missing_cases": citation_missing_cases, "conversion_review": conversion_review, "conversion_unknown": conversion_unknown},
+            metrics={
+                "citation_missing_cases": citation_missing_cases,
+                "conversion_review": conversion_review,
+                "conversion_unknown": conversion_unknown,
+                "failed": reader_failed,
+                "degraded": reader_degraded,
+                "repairable": reader_repairable,
+                "strict_miss": reader_strict_miss,
+            },
         ),
         _quality_feature_health_item(
             "repair_loop",
@@ -2932,12 +3246,20 @@ def _quality_overview_from_listing(listing: dict) -> dict:
     }
     research_qa = _latest_research_qa_quality_summary()
     citation_cards = _latest_citation_card_quality_summary()
+    reader_locate = _reader_locate_quality_summary()
     rerun_history = _research_qa_rerun_history_rows()
     failure_cases = _latest_research_qa_failure_cases(rerun_history=rerun_history)
+    reader_locate_summary = reader_locate.get("summary") if isinstance(reader_locate.get("summary"), dict) else {}
     domains = {
         "conversion": conversion_domain,
         "research_qa": research_qa,
         "citation_cards": citation_cards,
+        "reader_locate": {
+            "available": bool(reader_locate.get("available")),
+            "status": str(reader_locate.get("status") or "unknown"),
+            "summary": reader_locate_summary,
+            "top_failures": list(reader_locate.get("top_failures") or [])[:6],
+        },
     }
     rerun_summary = _research_qa_rerun_history_summary(rerun_history)
     priority_actions = _quality_priority_actions(
@@ -2945,6 +3267,7 @@ def _quality_overview_from_listing(listing: dict) -> dict:
         recommended=recommended,
         research_qa=research_qa,
         citation_cards=citation_cards,
+        reader_locate=reader_locate,
     )
     full_chain = _quality_full_chain_check(
         conversion_domain=conversion_domain,
@@ -2964,6 +3287,7 @@ def _quality_overview_from_listing(listing: dict) -> dict:
         failure_cases=failure_cases,
         rerun_summary=rerun_summary,
         full_chain=full_chain,
+        reader_locate=reader_locate,
     )
 
     return {
@@ -2984,6 +3308,7 @@ def _quality_overview_from_listing(listing: dict) -> dict:
         "top_issues": top_issues,
         "recommended": recommended,
         "domains": domains,
+        "reader_locate": reader_locate,
         "full_chain": full_chain,
         "feature_health": feature_health,
         "failure_cases": failure_cases,
@@ -4021,6 +4346,25 @@ class QualityActionHistoryBody(BaseModel):
     created_at: int = 0
 
 
+class ReaderLocateQualityBody(BaseModel):
+    source_path: str = ""
+    source_name: str = ""
+    locate_feedback_key: str = ""
+    locate_request_id: int = 0
+    status: str = ""
+    precision: str = ""
+    ok: bool = False
+    repairable: bool = False
+    strict_locate: bool = False
+    hint: str = ""
+    reason: str = ""
+    active_alt_index: int = 0
+    block_id: str = ""
+    anchor_id: str = ""
+    anchor_kind: str = ""
+    heading_path: str = ""
+
+
 class QualityRepairRunUpdateBody(BaseModel):
     status: str = ""
     phase: str = ""
@@ -4129,10 +4473,30 @@ def quality_action_history(limit: int = 20):
 
 @router.post("/quality/action-history")
 def append_quality_action_history(body: QualityActionHistoryBody):
-    row = _append_quality_action_history(body.model_dump())
+    row = _append_quality_action_history(body.model_dump() if hasattr(body, "model_dump") else body.dict())
     return {
         "ok": True,
         "item": row,
+    }
+
+
+@router.get("/quality/reader-locate")
+def quality_reader_locate_events(limit: int = 40):
+    rows = _reader_locate_event_rows(limit=max(1, min(200, int(limit or 40))))
+    return {
+        "ok": True,
+        "items": rows,
+        "summary": _reader_locate_quality_summary(rows),
+    }
+
+
+@router.post("/quality/reader-locate")
+def record_quality_reader_locate(body: ReaderLocateQualityBody):
+    row = _append_reader_locate_event(body.model_dump() if hasattr(body, "model_dump") else body.dict())
+    return {
+        "ok": True,
+        "item": row,
+        "summary": _reader_locate_quality_summary(),
     }
 
 

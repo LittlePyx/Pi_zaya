@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { MessageList } from '../components/chat/MessageList'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type { Message } from '../api/chat'
+import { libraryApi } from '../api/library'
 import type { ReaderLocateResult, ReaderOpenPayload } from '../components/chat/reader/readerTypes'
 import {
   READER_REGRESSION_SOURCE_NAME,
@@ -1140,12 +1141,35 @@ export default function MessageListRegressionPage() {
     : READER_REGRESSION_SOURCE_NAME
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
+  const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
   const readerEnabled = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('reader') === '1'
     : false
   const recordLocateResult = useCallback((result: ReaderLocateResult) => {
     const key = String(result.locateFeedbackKey || '').trim()
     if (!key) return
+    const submitKey = [key, result.locateRequestId, result.status, result.precision, result.hint, result.reason].join('|')
+    if (!readerLocateQualitySubmittedRef.current.has(submitKey)) {
+      readerLocateQualitySubmittedRef.current.add(submitKey)
+      libraryApi.recordReaderLocateQuality({
+        source_path: String(result.sourcePath || ''),
+        source_name: result.sourceName,
+        locate_feedback_key: key,
+        locate_request_id: result.locateRequestId,
+        status: result.status,
+        precision: result.precision,
+        ok: result.ok,
+        repairable: result.repairable,
+        strict_locate: result.strictLocate,
+        hint: result.hint,
+        reason: result.reason,
+        active_alt_index: result.activeAltIndex,
+        block_id: result.blockId,
+        anchor_id: result.anchorId,
+        anchor_kind: result.anchorKind,
+        heading_path: result.headingPath,
+      }).catch(() => {})
+    }
     setReaderLocateResults((current) => {
       const prev = current[key]
       if (

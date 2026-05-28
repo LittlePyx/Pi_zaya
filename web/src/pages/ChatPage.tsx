@@ -10,6 +10,7 @@ import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawe
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
 import type { ReaderLocateResult, ReaderOpenPayload, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
 import type { ChatUploadItem, Message } from '../api/chat'
+import { libraryApi } from '../api/library'
 import { useT } from '../i18n'
 
 const { Text } = Typography
@@ -134,6 +135,7 @@ export default function ChatPage() {
   const dismissTimerRef = useRef<Record<string, number>>({})
   const timelineJumpTokenRef = useRef(1)
   const readerLocateRequestRef = useRef(1)
+  const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
   const splitLayoutRef = useRef<HTMLDivElement | null>(null)
   const readerResizeGuideRef = useRef<HTMLDivElement | null>(null)
   const readerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -585,6 +587,35 @@ export default function ChatPage() {
   const handleReaderLocateResult = useCallback((result: ReaderLocateResult) => {
     const feedbackKey = String(result.locateFeedbackKey || '').trim()
     if (!feedbackKey) return
+    const submitKey = [
+      feedbackKey,
+      result.locateRequestId,
+      result.status,
+      result.precision,
+      result.hint,
+      result.reason,
+    ].join('|')
+    if (!readerLocateQualitySubmittedRef.current.has(submitKey)) {
+      readerLocateQualitySubmittedRef.current.add(submitKey)
+      libraryApi.recordReaderLocateQuality({
+        source_path: String(result.sourcePath || ''),
+        source_name: result.sourceName,
+        locate_feedback_key: feedbackKey,
+        locate_request_id: result.locateRequestId,
+        status: result.status,
+        precision: result.precision,
+        ok: result.ok,
+        repairable: result.repairable,
+        strict_locate: result.strictLocate,
+        hint: result.hint,
+        reason: result.reason,
+        active_alt_index: result.activeAltIndex,
+        block_id: result.blockId,
+        anchor_id: result.anchorId,
+        anchor_kind: result.anchorKind,
+        heading_path: result.headingPath,
+      }).catch(() => {})
+    }
     setReaderLocateResults((current) => {
       const prev = current[feedbackKey]
       if (

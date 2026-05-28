@@ -348,6 +348,23 @@ test('system A citation popover shows source location, evidence quote, and opens
 
 test('citation shelf reflects actual reader locate result after opening source', async ({ page }) => {
   await mockReaderDoc(page)
+  await page.route('**/api/library/quality/reader-locate', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        item: {},
+        summary: {
+          available: true,
+          status: 'good',
+          summary: { total: 1, exact: 1, block: 0, degraded: 0, failed: 0, repairable: 0, strict_miss: 0, affected_sources: 1 },
+          top_failures: [],
+          recommended_sources: [],
+        },
+      }),
+    })
+  })
   await page.route('**/api/library/source-quality', async (route) => {
     const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
     await route.fulfill({
@@ -380,8 +397,14 @@ test('citation shelf reflects actual reader locate result after opening source',
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-ready/)
   await popover.locator('.kb-cite-pop-close').click()
 
+  const locateQualityRequest = page.waitForRequest('**/api/library/quality/reader-locate')
   await page.getByTestId('citation-shelf-open-source').click()
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText(/Exact target|Bound block/)
+  const locateQualityPayload = (await locateQualityRequest).postDataJSON() as Record<string, unknown>
+  expect(locateQualityPayload.source_path).toBe(READER_REGRESSION_SOURCE_PATH)
+  expect(locateQualityPayload.status).toBe('exact')
+  expect(locateQualityPayload.precision).toBe('phrase')
+  expect(locateQualityPayload.locate_feedback_key).toBeTruthy()
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-ready/)
 
   await page.getByTestId('citation-shelf-add-visible').click()

@@ -54,6 +54,7 @@ import type {
   LibraryQualityFullChainStage,
   LibraryQualityOverviewResponse,
   LibraryQualityPriorityAction,
+  LibraryReaderLocateSourceRecommendation,
   LibraryQualityRepairAction,
   LibraryQualityRepairImpact,
   LibraryQualityRepairRun,
@@ -181,7 +182,7 @@ type QualityReportRecommendationView = {
 }
 
 type QualityDomainView = {
-  key: 'conversion' | 'research_qa' | 'citation_cards'
+  key: 'conversion' | 'research_qa' | 'citation_cards' | 'reader_locate'
   label: string
   available: boolean
   status: string
@@ -524,6 +525,7 @@ function qualityActionText(action: LibraryQualityPriorityAction, S: Record<strin
   if (domain === 'research_qa' && label.toLowerCase().includes('run')) return S.lib_quality_action_research_qa_run
   if (domain === 'research_qa') return S.lib_quality_action_research_qa
   if (domain === 'citation_cards') return S.lib_quality_action_citation_cards
+  if (domain === 'reader_locate') return 'Repair reader locate'
   return label || domain
 }
 
@@ -1130,6 +1132,7 @@ export default function LibraryPage() {
     const conversion = domains.conversion
     const researchQa = domains.research_qa
     const citationCards = domains.citation_cards
+    const readerLocate = domains.reader_locate
 
     const conversionStatus = qualityDomainStatus(conversion, backendQualityOverview?.status || 'unknown')
     const conversionReview = conversion ? qualityDomainNumber(conversion, 'review') : qualityReportStats.review
@@ -1147,6 +1150,12 @@ export default function LibraryPage() {
     const cardsAvailable = citationCards?.available !== false && Boolean(citationCards)
     const trackedChecks = qualityDomainNumber(citationCards, 'tracked_checks')
     const failedChecks = qualityDomainNumber(citationCards, 'failed_checks')
+    const readerStatus = qualityDomainStatus(readerLocate)
+    const readerAvailable = readerLocate?.available !== false && Boolean(readerLocate)
+    const readerTotal = qualityDomainNumber(readerLocate, 'total')
+    const readerFailed = qualityDomainNumber(readerLocate, 'failed')
+    const readerDegraded = qualityDomainNumber(readerLocate, 'degraded')
+    const readerRepairable = qualityDomainNumber(readerLocate, 'repairable')
 
     return [
       {
@@ -1184,6 +1193,18 @@ export default function LibraryPage() {
           : S.lib_quality_domain_unavailable,
         detailText: cardsAvailable ? S.lib_quality_domain_checks.replace('{n}', String(trackedChecks)) : '',
         failureText: qualityTopFailureText(citationCards),
+      },
+      {
+        key: 'reader_locate',
+        label: 'Reader locate',
+        available: readerAvailable,
+        status: readerAvailable ? readerStatus : 'unknown',
+        statusLabel: readerAvailable ? qualityStatusText(readerStatus, S) : S.lib_quality_domain_unavailable,
+        countText: readerAvailable
+          ? (readerFailed > 0 || readerDegraded > 0 ? `${readerFailed + readerDegraded} need repair` : `${readerTotal} verified`)
+          : S.lib_quality_domain_unavailable,
+        detailText: readerAvailable ? `${readerRepairable} repairable source signals` : '',
+        failureText: qualityTopFailureText(readerLocate),
       },
     ]
   }, [backendQualityOverview, qualityReportStats, S])
@@ -1234,6 +1255,13 @@ export default function LibraryPage() {
     }
     return out
   }, [qualityFullChainActionHistory])
+  const qualityReaderLocateRecommendedSources = useMemo<LibraryReaderLocateSourceRecommendation[]>(() => {
+    const sources = backendQualityOverview?.reader_locate?.recommended_sources
+    if (!Array.isArray(sources)) return []
+    return sources
+      .filter((item) => item && (normalizeTextValue(item.source_path) || normalizeTextValue(item.source_name)))
+      .slice(0, 12)
+  }, [backendQualityOverview])
   const qualityFeatureHealth = useMemo<LibraryQualityFeatureHealth | null>(() => {
     const featureHealth = backendQualityOverview?.feature_health
     if (!featureHealth || featureHealth.available === false) return null
@@ -2270,10 +2298,64 @@ export default function LibraryPage() {
     }
   }
 
+  const repairReaderLocateSources = async () => {
+    const sources = qualityReaderLocateRecommendedSources
+      .map((source) => ({
+        source_path: normalizeTextValue(source.source_path || source.md_path || source.pdf_path),
+        source_name: normalizeTextValue(source.source_name),
+      }))
+      .filter((source) => source.source_path || source.source_name)
+    if (!sources.length) {
+      message.info('Reader locate has no source repair targets yet')
+      return
+    }
+    try {
+      const res = await store.repairQuality({
+        sources,
+        speed_mode: CONVERT_MODE,
+        replace: true,
+        md_autofix: true,
+      }, {
+        autoReindexAfterQueued: true,
+      })
+      if (res.repair_run) setQualityRepairRun(res.repair_run)
+      if (res.impact) setQualityRepairImpact(res.impact)
+      const enqueued = Number(res.enqueued || 0)
+      const repaired = Number(res.repaired || 0)
+      const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
+      if (enqueued > 0) {
+        message.success(S.lib_msg_quality_repair_enqueued.replace('{n}', String(enqueued)))
+      } else if (repaired > 0) {
+        message.success(`Reader locate source repair applied: ${repaired}`)
+      } else if (Number(res.failed || 0) > 0) {
+        message.warning('Reader locate source repair needs another pass')
+      } else {
+        message.info(S.lib_msg_quality_repair_none)
+      }
+      if (needsReindex && enqueued <= 0) {
+        const reindexed = await handleReindex()
+        if (res.impact) setQualityRepairImpact({ ...res.impact, reindexed })
+        if (res.repair_run?.run_id) {
+          const status = reindexed ? 'completed' : 'warning'
+          const phase = reindexed ? 'reindex_complete' : 'reindex_failed'
+          setQualityRepairRun({ ...res.repair_run, status, phase, reindexed })
+          libraryApi.updateQualityRepairRun(res.repair_run.run_id, { status, phase, reindexed }).catch(() => {})
+        }
+      }
+      await store.loadQualityOverview('all')
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Reader locate repair failed')
+    }
+  }
+
   const handleQualityPriorityAction = async (action: LibraryQualityPriorityAction) => {
     const domain = normalizeTextValue(action.domain)
     if (domain === 'conversion') {
       handleFocusQualityReview()
+      return
+    }
+    if (domain === 'reader_locate') {
+      await repairReaderLocateSources()
       return
     }
     if (domain === 'research_qa' || domain === 'citation_cards') {
@@ -2847,6 +2929,10 @@ export default function LibraryPage() {
     const featureKey = normalizeTextValue(item.key).toLowerCase()
     if (featureKey === 'pdf_conversion') {
       handleFocusQualityReview()
+      return
+    }
+    if (featureKey === 'reader_locate') {
+      await repairReaderLocateSources()
       return
     }
     if (featureKey === 'citation_cards' || featureKey === 'literature_basket') {
@@ -4401,6 +4487,15 @@ export default function LibraryPage() {
                           onClick={handleFocusQualityReview}
                         >
                           {S.lib_quality_report_focus_review}
+                        </Button>
+                      ) : domain.key === 'reader_locate' ? (
+                        <Button
+                          size="small"
+                          className="kb-lib-quality-domain-action"
+                          disabled={qualityReaderLocateRecommendedSources.length <= 0}
+                          onClick={() => { void repairReaderLocateSources() }}
+                        >
+                          {domain.status === 'good' ? 'Verified' : 'Repair sources'}
                         </Button>
                       ) : (
                         <>

@@ -388,6 +388,140 @@ def test_library_source_quality_route_resolves_pdf_and_md_sources(monkeypatch, t
     assert int(payload.get("review_count") or 0) == 1
 
 
+def test_library_reader_locate_quality_events_feed_overview(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf = pdf_dir / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    md = md_dir / "source" / "source.en.md"
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Source",
+                "## Abstract",
+                "This source contains the exact evidence [1].",
+                "## Method",
+                "The method has a stable anchor.",
+                "## References",
+                "[1] Reference.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_reader_locate_events_path", lambda: tmp_path / "reader_locate_events.jsonl")
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(
+        library_router,
+        "_latest_research_qa_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "good",
+            "summary": {"total": 1, "passed": 1, "failed": 0},
+            "top_failures": [],
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_latest_citation_card_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "good",
+            "summary": {
+                "tracked_checks": 2,
+                "failed_checks": 0,
+                "citation_card_failed": 0,
+                "shelf_failed": 0,
+                "ref_card_failed": 0,
+                "system_b_failed": 0,
+            },
+            "top_failures": [],
+        },
+    )
+    monkeypatch.setattr(library_router, "_research_qa_rerun_history_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(library_router, "_latest_research_qa_failure_cases", lambda *args, **kwargs: [])
+
+    client = TestClient(app)
+    exact_response = client.post(
+        "/api/library/quality/reader-locate",
+        json={
+            "source_path": str(pdf),
+            "source_name": "source.pdf",
+            "locate_feedback_key": "cite-1",
+            "locate_request_id": 1,
+            "status": "exact",
+            "precision": "phrase",
+            "ok": True,
+            "repairable": False,
+            "strict_locate": True,
+            "block_id": "p-1",
+            "anchor_id": "a-p-1",
+            "heading_path": "Method",
+        },
+    )
+    assert exact_response.status_code == 200
+    assert exact_response.json()["item"]["md_exists"] is True
+
+    failed_response = client.post(
+        "/api/library/quality/reader-locate",
+        json={
+            "source_path": str(md),
+            "source_name": "source.en.md",
+            "locate_feedback_key": "cite-2",
+            "locate_request_id": 2,
+            "status": "failed",
+            "precision": "failed",
+            "ok": False,
+            "repairable": True,
+            "strict_locate": True,
+            "reason": "anchor not found",
+            "heading_path": "Method",
+        },
+    )
+    assert failed_response.status_code == 200
+    failed_item = failed_response.json()["item"]
+    assert failed_item["recommended_action"] == "repair_conversion_and_reindex"
+    assert failed_item["pdf_path"] == str(pdf)
+
+    overview_response = client.get("/api/library/quality/overview", params={"scope": "all"})
+    assert overview_response.status_code == 200
+    overview = overview_response.json()
+    reader_locate = overview["reader_locate"]
+    assert reader_locate["available"] is True
+    assert reader_locate["status"] == "error"
+    assert reader_locate["summary"]["total"] == 2
+    assert reader_locate["summary"]["exact"] == 1
+    assert reader_locate["summary"]["failed"] == 1
+    assert reader_locate["summary"]["repairable"] == 1
+    assert reader_locate["recommended_sources"][0]["failed"] == 1
+    assert reader_locate["recommended_sources"][0]["recommended_action"] == "repair_conversion_and_reindex"
+    assert overview["domains"]["reader_locate"]["summary"]["failed"] == 1
+    priority_domains = {str(item.get("domain") or "") for item in list(overview.get("priority_actions") or [])}
+    assert "reader_locate" in priority_domains
+    feature_reader = next(
+        item for item in list(overview["feature_health"]["items"] or [])
+        if str(item.get("key") or "") == "reader_locate"
+    )
+    assert feature_reader["status"] == "error"
+    assert feature_reader["target_stage"] == "reader_locate"
+    assert feature_reader["metrics"]["failed"] == 1
+
+    rows_response = client.get("/api/library/quality/reader-locate", params={"limit": 5})
+    assert rows_response.status_code == 200
+    rows_payload = rows_response.json()
+    assert len(rows_payload["items"]) == 2
+    assert rows_payload["summary"]["summary"]["failed"] == 1
+
+
 def test_library_quality_repair_route_enqueues_resolved_sources(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
