@@ -48,6 +48,10 @@ _STRUCTURED_CITE_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 _BRACKET_REFERENCE_MARKER_RE = re.compile(r"\[\s*\d{1,4}(?:\s*[-,;]\s*\d{1,4})*\s*\]")
+_WRAPPED_SOURCE_EXCERPT_RE = re.compile(
+    r"^\s*(?:\u539f\u6587\u7247\u6bb5\u5199\u5230|\u539f\u6587\u5199\u5230|source\s+excerpt\s+says)\s*[:\uff1a]\s*[\u201c\"']?(?P<body>.+?)[\u201d\"']?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
 _CONTENT_VERB_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|"
     r"shown|presents?|presented|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|"
@@ -319,6 +323,9 @@ def strip_evidence_metadata_prefix(
     text = clean_display_text(_strip_leading_markdown_heading_lines(value), max_len=1600)
     if not text:
         return ""
+    wrapped = _WRAPPED_SOURCE_EXCERPT_RE.match(text)
+    if wrapped:
+        text = str(wrapped.group("body") or "").strip()
 
     for raw_candidate in (source, title):
         candidate = source_title_candidate(raw_candidate)

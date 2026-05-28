@@ -18,6 +18,7 @@ from api.message_render_contract import (
     render_payload_is_degraded_for_citations,
     strip_legacy_render_fields,
 )
+from api.reference_card_quality import attach_refs_pack_polish_contract
 from kb import task_runtime
 from kb.paper_guide_contracts import (
     _build_paper_guide_render_packet_model,
@@ -79,7 +80,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 17
+_RENDER_CACHE_SCHEMA_VERSION = 18
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -497,7 +498,7 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
     pack = dict(raw_pack)
     rendered_payload = dict(raw_pack.get("rendered_payload") or {}) if isinstance(raw_pack.get("rendered_payload"), dict) else {}
     if not rendered_payload:
-        return pack
+        return attach_refs_pack_polish_contract(pack)
     merged = dict(rendered_payload)
     # Always prefer original hits/scores (they reflect the full retrieval result
     # the LLM actually saw).  rendered_payload may hold a stale or partial subset.
@@ -528,7 +529,7 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
             value = pack.get(key)
             if value not in (None, "", [], {}):
                 merged[key] = value
-    return merged
+    return attach_refs_pack_polish_contract(merged)
 
 
 @lru_cache(maxsize=1)
@@ -725,6 +726,10 @@ _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] =
         re.compile(r"\b(?:single[-\s]?pixel|spi|compressive|sampling|reconstruction)\b", re.IGNORECASE),
         ("单像素", "单像素成像", "压缩", "采样", "重建", "spi"),
     ),
+    (
+        re.compile(r"\b(?:dual[-\s]?disperser|spectral\s+imaging|cassi|coded\s+aperture|single[-\s]?shot)\b", re.IGNORECASE),
+        ("dual-disperser", "single-shot", "spectral", "spectral imaging", "光谱", "光谱成像", "双色散", "2007"),
+    ),
 )
 
 
@@ -798,12 +803,97 @@ def _append_numeric_citation_to_paragraph(paragraph: str, num: int) -> str:
     return f"{text.rstrip()} {marker}"
 
 
+def _reading_slot_source_key(value: object) -> str:
+    return str(value or "").strip().replace("\\", "/").lower()
+
+
+def _reading_slot_hit_nums(slot: dict, hits: list[dict], canonical_paths: list[str] | None = None) -> list[int]:
+    nums: list[int] = []
+    wanted_path = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+    wanted_name = _reading_slot_source_key(slot.get("source_name") or slot.get("sourceName"))
+    hit_paths: set[str] = set()
+    for hit in list(hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        hit_path = _reading_slot_source_key(
+            (meta or {}).get("source_path")
+            or (ui_meta or {}).get("source_path")
+            or (ui_meta or {}).get("sourcePath")
+        )
+        if hit_path:
+            hit_paths.add(hit_path)
+    if wanted_path and isinstance(canonical_paths, list):
+        for idx, raw_path in enumerate(canonical_paths, start=1):
+            canon_path = _reading_slot_source_key(raw_path)
+            if canon_path and canon_path == wanted_path and canon_path in hit_paths:
+                return [int(idx)]
+    if wanted_path or wanted_name:
+        for idx, hit in enumerate(list(hits or []), start=1):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            hit_path = _reading_slot_source_key(
+                (meta or {}).get("source_path")
+                or (ui_meta or {}).get("source_path")
+                or (ui_meta or {}).get("sourcePath")
+            )
+            hit_name = _reading_slot_source_key(
+                (ui_meta or {}).get("display_name")
+                or (ui_meta or {}).get("source_name")
+                or (ui_meta or {}).get("sourceName")
+                or (meta or {}).get("source_name")
+                or Path(hit_path).name
+            )
+            if wanted_path and hit_path == wanted_path:
+                nums.append(int(idx))
+                break
+            if wanted_name and hit_name and (wanted_name in hit_name or hit_name in wanted_name):
+                nums.append(int(idx))
+                break
+        if wanted_path and not nums:
+            return []
+    for raw in list(slot.get("candidate_hits") or []):
+        try:
+            num = int(raw)
+        except Exception:
+            continue
+        if 1 <= num <= len(hits) and num not in nums:
+            nums.append(num)
+    return nums
+
+
+def _reading_hit_for_slot(slot: dict, hits: list[dict], num: int) -> dict | None:
+    wanted_path = _reading_slot_source_key(slot.get("source_path") or slot.get("sourcePath"))
+    if wanted_path:
+        for hit in list(hits or []):
+            if not isinstance(hit, dict):
+                continue
+            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+            ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+            hit_path = _reading_slot_source_key(
+                (meta or {}).get("source_path")
+                or (ui_meta or {}).get("source_path")
+                or (ui_meta or {}).get("sourcePath")
+            )
+            if hit_path == wanted_path:
+                return hit
+    idx = int(num) - 1
+    if 0 <= idx < len(hits):
+        hit = hits[idx]
+        return hit if isinstance(hit, dict) else None
+    return None
+
+
 def _reading_guide_repair_missing_system_a_citations(
     md: str,
     hits: list[dict],
     citation_plan: dict | None,
     *,
     output_mode: str,
+    canonical_paths: list[str] | None = None,
 ) -> str:
     if "reading" not in str(output_mode or ""):
         return str(md or "")
@@ -818,14 +908,7 @@ def _reading_guide_repair_missing_system_a_citations(
             continue
         if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
             continue
-        nums = []
-        for raw in list(slot.get("candidate_hits") or []):
-            try:
-                num = int(raw)
-            except Exception:
-                continue
-            if 1 <= num <= len(hits):
-                nums.append(num)
+        nums = _reading_slot_hit_nums(slot, hits, canonical_paths=canonical_paths)
         for num in nums[:1]:
             candidates.append((num, slot))
     if not candidates:
@@ -834,7 +917,7 @@ def _reading_guide_repair_missing_system_a_citations(
     parts = re.split(r"(\n{2,})", text)
     used_part_indices: set[int] = set()
     for num, slot in candidates[:6]:
-        surface = _reading_source_surface(hits[num - 1], slot)
+        surface = _reading_source_surface(_reading_hit_for_slot(slot, hits, num), slot)
         terms = _reading_coverage_terms(surface)
         best_idx = -1
         best_score = 0.0
@@ -1110,12 +1193,12 @@ def _merge_render_packet_contract_meta(
                     contracts_changed = True
     existing_packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
     existing_cite_details = [
-        dict(item)
+        compose_citation_card(item)
         for item in list(existing_packet.get("cite_details") or [])
         if isinstance(item, dict)
     ]
     current_cite_details = [
-        dict(item)
+        compose_citation_card(item)
         for item in list(rec.get("cite_details") or [])
         if isinstance(item, dict)
     ]
@@ -1741,6 +1824,8 @@ def enrich_messages_with_reference_render(
 
         raw_ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
         ref_pack = _effective_reference_render_pack(raw_ref_pack if isinstance(raw_ref_pack, dict) else None)
+        if isinstance(raw_ref_pack, dict) and isinstance(ref_pack, dict) and ref_pack:
+            raw_ref_pack.update(ref_pack)
         hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
         provenance_raw = rec.get("provenance") if isinstance(rec.get("provenance"), dict) else None
         render_cache_key = _build_message_render_cache_key(
@@ -1800,6 +1885,7 @@ def enrich_messages_with_reference_render(
                         hits,
                         citation_plan,
                         output_mode=_message_answer_output_mode(rec),
+                        canonical_paths=_canon_paths or None,
                     )
                     rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
                         rendered_body,

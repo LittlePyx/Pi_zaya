@@ -246,6 +246,132 @@ def test_numeric_router_keeps_good_system_a_for_generic_reference_word(monkeypat
     assert details[0]["card_kind"] == "answer_evidence"
 
 
+def test_system_a_keeps_contrastive_source_identity_citation(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        refs_renderer,
+        "_display_source_name",
+        lambda _sp: "Nature-2025-Electrically driven lasing from a dual-cavity perovskite device.pdf",
+    )
+
+    md = (
+        "The Nature 2025 perovskite laser paper is not a single-pixel imaging paper; "
+        "its core contribution is an electrically driven perovskite laser [1]."
+    )
+    hits = [
+        {
+            "text": "The device is constructed by integrating a low-threshold single-crystal perovskite microcavity with a high-power microcavity PeLED.",
+            "meta": {
+                "source_path": "perovskite.en.md",
+                "source_sha1": "abc",
+                "heading_path": "Conclusion",
+            },
+            "ui_meta": {
+                "primary_evidence": {
+                    "heading_path": "Conclusion",
+                    "snippet": "The device is constructed by integrating a low-threshold single-crystal perovskite microcavity with a high-power microcavity PeLED.",
+                    "block_id": "b1",
+                    "anchor_id": "p1",
+                    "anchor_kind": "paragraph",
+                }
+            },
+        }
+    ]
+
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[1](#kb-cite-" in out
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+    assert details[0]["binding_status"] == "grounded"
+
+
+def test_system_a_still_suppresses_unmatched_user_topic(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        refs_renderer,
+        "_display_source_name",
+        lambda _sp: "Nature-2025-Electrically driven lasing from a dual-cavity perovskite device.pdf",
+    )
+
+    md = "Single-pixel imaging relies on DMD measurement patterns and compressed sensing [1]."
+    hits = [
+        {
+            "text": "The device is constructed by integrating a low-threshold single-crystal perovskite microcavity with a high-power microcavity PeLED.",
+            "meta": {
+                "source_path": "perovskite.en.md",
+                "source_sha1": "abc",
+                "heading_path": "Conclusion",
+            },
+        }
+    ]
+
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[1](#kb-cite-" not in out
+    assert details == []
+
+
+def test_system_a_treats_compressive_sensing_as_compressed_sensing_alias(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        refs_renderer,
+        "_display_source_name",
+        lambda _sp: "OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture.pdf",
+    )
+
+    md = "早期 SCI 工作用压缩感知重建光谱数据立方体 [1]。"
+    hits = [
+        {
+            "text": "The manuscript describes a new single-shot spectral imager based on compressive sensing ideas.",
+            "meta": {
+                "source_path": "cassi.en.md",
+                "source_sha1": "abc",
+                "heading_path": "5. Conclusions",
+                "evidence_quote": "The manuscript describes a new single-shot spectral imager based on compressive sensing ideas.",
+            },
+        }
+    ]
+
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[1](#kb-cite-" in out
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+
+
+def test_system_a_links_single_photon_detector_review_terms(monkeypatch):
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        refs_renderer,
+        "_display_source_name",
+        lambda _sp: "Frontiers of Physics-2024-Emerging single-photon detection technique for high-performance photodetector.pdf",
+    )
+
+    md = "探测器综述能帮你建立对 SPAD 和单光子探测器物理特性的系统认知 [1]。"
+    hits = [
+        {
+            "text": "Single-photon detections represent a highly sensitive light detection technique capable of detecting individual photons.",
+            "meta": {
+                "source_path": "spd-review.en.md",
+                "source_sha1": "abc",
+                "heading_path": "3 Single photon detection parameter",
+                "evidence_quote": "Single-photon detections represent a highly sensitive light detection technique capable of detecting individual photons.",
+            },
+        }
+    ]
+
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(md, hits, anchor_ns="t")
+
+    assert "[1](#kb-cite-" in out
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+
+
 def test_citation_plan_does_not_steal_bare_numeric_system_a_citation(monkeypatch):
     source_path = "scinerf.en.md"
 

@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from kb.citation_audit import summarize_system_b_citation_audit
-from kb.evidence_text import source_title_candidate
+from kb.evidence_text import source_title_candidate, strip_evidence_metadata_prefix
 
 REF_CARD_POLISH_CONTRACT_VERSION = 1
 REF_CARD_VIEW_CONTRACT_VERSION = 1
@@ -34,11 +34,11 @@ _GENERIC_LOCATOR_PHRASES = (
     "无法定位",
 )
 _BROKEN_EVIDENCE_PHRASES = (
-    "has attrac",
     "rson can be",
     "$^{",
     "\\begin{",
 )
+_BROKEN_EVIDENCE_FRAGMENT_RE = re.compile(r"\bhas\s+attrac(?:\.{3}|\u2026|$)", re.IGNORECASE)
 _MARKDOWN_HEADING_RE = re.compile(r"(^|\n)\s{0,3}#{1,6}\s+\S")
 _MARKDOWN_TABLE_RULE_RE = re.compile(r"(^|\n)\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*(\n|$)")
 _NARRATIVE_METADATA_RE = re.compile(
@@ -118,6 +118,17 @@ def _clean_ref_card_text(value: Any, *, max_len: int = 520) -> str:
     if len(text) > max_len:
         text = text[: max(0, max_len - 1)].rstrip(" ,，;；:：") + "..."
     return text
+
+
+def _clean_ref_card_copy_field(value: Any, ui: Mapping[str, Any], *, max_len: int = 620) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    citation_meta = _as_dict(ui.get("citation_meta"))
+    source = _first_text(ui, ("display_name", "source_path", "source_name"))
+    title = _first_text(citation_meta, ("title",)) or source
+    unwrapped = strip_evidence_metadata_prefix(text, source=source, title=title)
+    return _clean_ref_card_text(unwrapped or text, max_len=max_len)
 
 
 def _ref_card_page_label(ui: Mapping[str, Any]) -> str:
@@ -285,6 +296,8 @@ def _looks_broken_evidence(text: str) -> bool:
     lowered = _norm(stripped)
     if not stripped:
         return False
+    if _BROKEN_EVIDENCE_FRAGMENT_RE.search(stripped):
+        return True
     if any(phrase in lowered for phrase in _BROKEN_EVIDENCE_PHRASES):
         return True
     if stripped.startswith("...") or stripped.startswith("…"):
@@ -1069,6 +1082,10 @@ def attach_ref_card_polish_contract(
     ui = _as_dict(ui_meta)
     if not ui:
         return {}
+    for key in ("summary_line", "why_line"):
+        cleaned = _clean_ref_card_copy_field(ui.get(key), ui)
+        if cleaned:
+            ui[key] = cleaned
     ui.update(
         ref_card_polish_status(
             ui,
@@ -1087,6 +1104,9 @@ def attach_refs_pack_polish_contract(pack: Mapping[str, Any] | None) -> dict[str
     hits = [dict(hit) for hit in list(out.get("hits") or []) if isinstance(hit, Mapping)]
     render_status = _norm(out.get("render_status"))
     display_state = _norm(out.get("display_state"))
+    if hits and display_state in {"", "empty"} and not bool(out.get("pending")):
+        display_state = "ready"
+        out["display_state"] = "ready"
     counts = {status: 0 for status in sorted(POLISH_STATUSES)}
     next_hits: list[dict[str, Any]] = []
     for hit in hits:

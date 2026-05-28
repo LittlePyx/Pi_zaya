@@ -179,6 +179,57 @@ def test_render_packet_contract_is_backfilled_from_rendered_message():
     assert packet["visible_segment_ids"] == ["seg-1"]
 
 
+def test_existing_render_packet_citation_cards_are_refreshed() -> None:
+    messages = [
+        {"id": 1, "role": "user", "content": "How should I read these papers?"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": "A reading route is available.",
+            "meta": {
+                "answer_quality": {"output_mode": "citation"},
+                "paper_guide_contracts": {
+                    "version": 1,
+                    "render_packet": {
+                        "answer_markdown": "A reading route is available.",
+                        "rendered_body": "A reading route is available.",
+                        "copy_markdown": "A reading route is available.",
+                        "copy_text": "A reading route is available.",
+                        "cite_details": [
+                            {
+                                "num": 1,
+                                "anchor": "roadmap-a1",
+                                "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging",
+                                "source_path": "hsi-fsi.en.md",
+                                "heading_path": "Experiment design / Coding choice",
+                                "answer_claim": (
+                                    "\u518d\u8bfb\u65b9\u6cd5\u5bf9\u6bd4\uff1a"
+                                    "\u300aHadamard single-pixel imaging versus Fourier single-pixel imaging\u300b "
+                                    "(Optics Express, 2017)"
+                                ),
+                                "evidence_quote": (
+                                    "Hadamard basis patterns are binary, which makes HSI naturally suitable "
+                                    "for single-pixel imaging systems based on digital micromirror devices."
+                                ),
+                                "location_label": "Experiment design / Coding choice",
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+    ]
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user={}, conv_id="conv-refresh-card")
+    packet = (((rendered[-1].get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    detail = packet["cite_details"][0]
+
+    assert detail["answer_claim"] == ""
+    assert detail["card_claim"] == ""
+    assert detail["evidence_quote"] == detail["card_evidence"]
+    assert "low_value_answer_claim" in detail["card_quality_flags"]
+
+
 def test_non_paper_guide_message_preserves_minimal_primary_evidence_contract():
     messages = [
         {"id": 1, "role": "user", "content": "Which paper compares Hadamard and Fourier single-pixel imaging?"},
@@ -2884,6 +2935,78 @@ def test_reading_guide_repair_adds_missing_system_a_source_to_matching_paragraph
 
     assert "死时间 [2]。" in repaired
     assert "噪声模型 [1]" in repaired
+
+
+def test_reading_guide_repair_resolves_stale_candidate_hit_by_source_path():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    answer = (
+        "Overview: SCI moves from spectral data cubes toward 3D scene reconstruction.\n\n"
+        "Stage 1: early SCI dual-disperser spectral imaging compresses a spectral data cube [1].\n\n"
+        "Stage 2: SCINeRF and SCIGS extend SCI to 3D scene reconstruction [2]."
+    )
+    hits = [
+        {"text": "SCINeRF uses snapshot compressive imaging for 3D scene representation.", "meta": {"source_path": "scinerf.md"}},
+        {"text": "SCIGS reconstructs dynamic 3D scenes from snapshot compressive images.", "meta": {"source_path": "scigs.md"}},
+        {"text": "Single-shot compressive spectral imaging uses a dual-disperser architecture.", "meta": {"source_path": "cassi.md"}},
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "cassi.md",
+                "source_name": "Single-shot compressive spectral imaging with a dual-disperser architecture",
+                "evidence_quote": "Single-shot compressive spectral imaging uses a dual-disperser architecture.",
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+    )
+
+    assert "spectral data cube [1] [3]." in repaired
+    assert "Overview: SCI moves from spectral data cubes toward 3D scene reconstruction. [3]" not in repaired
+
+
+def test_reading_guide_repair_prefers_canonical_number_for_source_path():
+    from api.chat_render import _reading_guide_repair_missing_system_a_citations
+
+    answer = (
+        "1. Detector review covers single-photon detectors, SPAD hardware, and photodetector applications.\n\n"
+        "2. Physics-informed deep learning models SPAD noise [1]."
+    )
+    hits = [
+        {"text": "Physics-informed deep learning models SPAD noise.", "meta": {"source_path": "pidl.md"}},
+        {"text": "A denoising review mentions physics-informed methods.", "meta": {"source_path": "denoise.md"}},
+        {"text": "Single-photon detector review covers SPAD devices and applications.", "meta": {"source_path": "spd-review.md"}},
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": "spd-review.md",
+                "source_name": "Emerging single-photon detection technique for high-performance photodetector",
+                "evidence_quote": "Single-photon detector review covers SPAD devices and applications.",
+            }
+        ]
+    }
+
+    repaired = _reading_guide_repair_missing_system_a_citations(
+        answer,
+        hits,
+        plan,
+        output_mode="reading_guide",
+        canonical_paths=["pidl.md", "spd-review.md", "piln.md"],
+    )
+
+    assert "photodetector applications [2]." in repaired
+    assert "photodetector applications [3]." not in repaired
 
 
 def test_merge_render_packet_contract_meta_allows_refs_pack_to_replace_coarse_cross_paper_seed():

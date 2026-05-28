@@ -673,6 +673,57 @@ def test_system_a_card_view_contract_exposes_renderable_sections() -> None:
     assert all("##" not in section["text"] for section in view["sections"])
 
 
+def test_system_a_card_unwraps_chinese_source_excerpt_prefix() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "SPD-review.pdf",
+            "heading_path": "3 Single photon detection parameter",
+            "answer_claim": "Detector review builds SPAD and single-photon detector background.",
+            "evidence_quote": (
+                "\u539f\u6587\u7247\u6bb5\u5199\u5230\uff1a\u201c"
+                "Single-photon detections represent a highly sensitive light detection technique."
+                "\u201d"
+            ),
+            "location_label": "3 Single photon detection parameter",
+            "binding_status": "grounded",
+            "binding_confidence": 0.8,
+        }
+    )
+
+    assert "missing_evidence_quote" not in detail["card_quality_flags"]
+    assert detail["card_evidence"].startswith("Single-photon detections")
+    assert "\u539f\u6587\u7247\u6bb5\u5199\u5230" not in detail["card_evidence"]
+
+
+def test_system_a_card_suppresses_reading_roadmap_bibliographic_claim() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "Experiment design / Coding choice",
+            "answer_claim": (
+                "\u518d\u8bfb\u65b9\u6cd5\u5bf9\u6bd4\uff1a"
+                "\u300aHadamard single-pixel imaging versus Fourier single-pixel imaging\u300b "
+                "(Optics Express, 2017)"
+            ),
+            "evidence_quote": (
+                "Hadamard basis patterns are binary, which makes HSI naturally suitable "
+                "for single-pixel imaging systems based on digital micromirror devices."
+            ),
+            "location_label": "Experiment design / Coding choice",
+            "binding_status": "grounded",
+            "binding_confidence": 0.82,
+        }
+    )
+
+    assert detail["answer_claim"] == ""
+    assert detail["card_claim"] == ""
+    assert detail["evidence_quote"] == detail["card_evidence"]
+    assert "low_value_answer_claim" in detail["card_quality_flags"]
+    assert "claim" not in {section["id"] for section in detail["card_view"]["sections"]}
+
+
 def test_system_b_card_view_contract_separates_context_from_reference_entry() -> None:
     detail = compose_citation_card(
         {

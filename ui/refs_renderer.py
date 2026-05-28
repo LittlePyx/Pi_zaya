@@ -3399,6 +3399,7 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("iscat", re.compile(r"(?i)\biscat\b|干涉散射")),
     ("interferometric", re.compile(r"(?i)\binterferometric\b|干涉检测|干涉散射")),
     ("structured detection", re.compile(r"(?i)\bstructured\s+detection\b|结构检测|结构探测")),
+    ("single-photon detection", re.compile(r"(?i)\bsingle[-\s]?photon\s+(?:detection|detections|detectors?|photodetectors?)\b|\bSPADs?\b|单光子.{0,8}探测|光子探测器")),
     ("image scanning microscopy", re.compile(r"(?i)\bimage\s+scanning\s+microscopy\b|\bISM\b|共聚焦|扫描显微")),
     ("light field", re.compile(r"(?i)\blight[-\s]?field\b|光场")),
     ("single-pixel imaging", re.compile(r"(?i)\bsingle[-\s]?pixel\b|\bspi\b|单像素")),
@@ -3408,7 +3409,7 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("sampling ratio", re.compile(r"(?i)\bsampling\s+ratio\b|\blow[-\s]?sampling\b|\bfewer\s+measurements?\b|采样率|低采样|更少测量")),
     ("hadamard", re.compile(r"(?i)\bhadamard\b|哈达玛|哈达马")),
     ("fourier", re.compile(r"(?i)\bfourier\b|傅里叶")),
-    ("compressed sensing", re.compile(r"(?i)\bcompressed\s+sensing\b|压缩感知")),
+    ("compressed sensing", re.compile(r"(?i)\bcompress(?:ed|ive)\s+sensing\b|压缩感知")),
     ("photometric stereo", re.compile(r"(?i)\bphotometric\s+stereo\b|光度立体")),
     ("dmd", re.compile(r"(?i)\bdmd\b|digital\s+micromirror|数字微镜")),
     ("optical sectioning", re.compile(r"(?i)\boptical\s+sectioning\b|光学切片")),
@@ -3422,6 +3423,7 @@ _SYSTEM_A_STRONG_BINDING_TERMS = {
     "iscat",
     "interferometric",
     "structured detection",
+    "single-photon detection",
     "image scanning microscopy",
     "light field",
     "foveated",
@@ -3517,6 +3519,24 @@ def _system_a_keyword_terms(text: str, *, limit: int = 18) -> set[str]:
         if len(out) >= max(1, int(limit)):
             break
     return out
+
+
+def _system_a_has_source_identity_overlap(claim: str, evidence_surface: str, source_name: str) -> bool:
+    claim_terms = _system_a_keyword_terms(claim, limit=32)
+    if not claim_terms:
+        return False
+    source_terms = _system_a_keyword_terms(source_name, limit=32)
+    if not source_terms:
+        return False
+    evidence_terms = _system_a_keyword_terms(evidence_surface, limit=48)
+    shared_source_terms = claim_terms & source_terms
+    if not shared_source_terms:
+        return False
+    if evidence_terms and not (shared_source_terms & evidence_terms):
+        return False
+    if any(len(term) >= 7 for term in shared_source_terms):
+        return True
+    return len(shared_source_terms) >= 2
 
 
 def _system_a_term_label(terms: set[str] | list[str] | tuple[str, ...], *, max_terms: int = 4) -> str:
@@ -3978,7 +3998,8 @@ def _assess_system_a_hit_binding(
     strong_claim_terms = claim_domains & _SYSTEM_A_STRONG_BINDING_TERMS
     missing_strong_terms = strong_claim_terms - evidence_domains
     matched_strong_terms = strong_claim_terms & evidence_domains
-    if strong_claim_terms and not matched_strong_terms:
+    source_identity_overlap = _system_a_has_source_identity_overlap(claim, evidence_surface, source_name)
+    if strong_claim_terms and not matched_strong_terms and not source_identity_overlap:
         missing = _system_a_term_label(missing_strong_terms)
         evidence_label = _system_a_term_label(evidence_domains) or "retrieved passage"
         reason = (
@@ -4006,6 +4027,23 @@ def _assess_system_a_hit_binding(
         return {
             "status": "grounded",
             "confidence": 0.85,
+            "suppress_link": False,
+            "reason": reason,
+            "overlap_terms": terms,
+            "missing_terms": [],
+        }
+
+    if source_identity_overlap and keyword_overlap:
+        terms = sorted(keyword_overlap)
+        term_label = _system_a_term_label(terms)
+        reason = (
+            f"答案句明确指向该来源论文，并与命中证据共享“{term_label}”等来源身份词；可打开原文核对这句话。"
+            if prefer_zh
+            else f'The answer sentence explicitly points to this source and shares source-identity terms such as "{term_label}" with the retrieved evidence.'
+        )
+        return {
+            "status": "grounded",
+            "confidence": 0.62,
             "suppress_link": False,
             "reason": reason,
             "overlap_terms": terms,

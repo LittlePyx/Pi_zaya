@@ -132,6 +132,29 @@ def test_ref_card_payload_builder_attaches_polish_contract():
     assert sections["why"]["text"] == "A concise LLM-grounded relevance note."
 
 
+def test_ref_card_polish_contract_unwraps_source_excerpt_summary():
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+            "source_path": "dl-spi-review.en.md",
+            "summary_line": (
+                "\u539f\u6587\u7247\u6bb5\u5199\u5230\uff1a\u201c"
+                "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning: "
+                "However, the limited image quality still hinders practical application."
+                "\u201d"
+            ),
+            "why_line": "This card explains a concrete limitation of deep-learning single-pixel imaging.",
+            "summary_generation": "deterministic_grounded",
+            "why_generation": "deterministic_grounded",
+        }
+    )
+
+    assert ui["summary_line"].startswith("However, the limited image quality")
+    assert "\u539f\u6587\u7247\u6bb5\u5199\u5230" not in ui["summary_line"]
+    assert "Advances and Challenges" not in ui["summary_line"]
+    assert ui["card_view"]["summary"].startswith("However, the limited image quality")
+
+
 def test_ref_card_hit_quality_accepts_grounded_openable_card():
     quality = ref_card_hit_quality(
         {
@@ -158,6 +181,26 @@ def test_ref_card_hit_quality_accepts_grounded_openable_card():
 
     assert quality["ok"] is True
     assert quality["score"] == 1.0
+
+
+def test_citation_detail_quality_accepts_complete_has_attracted_evidence():
+    quality = citation_detail_quality(
+        {
+            "num": 2,
+            "anchor": "dl-a2",
+            "source_name": "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning",
+            "source_path": "dl-spi-review.en.md",
+            "heading_path": "Abstract",
+            "card_evidence": (
+                "Single-pixel imaging technology can capture images outside conventional focal plane arrays. "
+                "Recently, single-pixel imaging based on deep learning has attracted a lot of attention "
+                "due to its exceptional reconstruction quality and fast reconstruction speed."
+            ),
+            "card_claim": "The answer uses this review as the deep-learning SPI overview.",
+        }
+    )
+
+    assert quality["ok"] is True
 
 
 def test_ref_card_hit_quality_rejects_template_duplicate_and_broken_copy():

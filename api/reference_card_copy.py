@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from kb.evidence_text import strip_evidence_metadata_prefix
+
 
 GENERIC_REF_WHY_PATTERNS: tuple[str, ...] = (
     "this hit is directly relevant",
@@ -32,7 +34,7 @@ GENERIC_REF_WHY_PATTERNS: tuple[str, ...] = (
 
 
 def normalize_ref_card_copy(text: str) -> str:
-    s = str(text or "").strip()
+    s = strip_evidence_metadata_prefix(str(text or ""))
     if not s:
         return ""
     s = re.sub(r"\s+", " ", s)

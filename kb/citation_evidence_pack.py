@@ -18,6 +18,14 @@ _LOW_VALUE_LABEL_RE = re.compile(
     r"(?:deep learning|review|method|baseline|principles?|introduction)\s*\d{0,3})$",
     re.IGNORECASE,
 )
+_READING_ROADMAP_BIBLIO_LABEL_RE = re.compile(
+    r"^(?:(?:\u5148|\u518d|\u540e)(?:\u8bfb|\u770b|\u9605\u8bfb)|"
+    r"\u6700\u540e(?:\u8bfb|\u770b|\u9605\u8bfb)|"
+    r"first\s+read|next\s+read|then\s+read|read\s+next|finally\s+read)"
+    r".{0,44}(?:\u300a[^\u300b]{8,}\u300b|[\"“][^\"”]{8,}[\"”])"
+    r"(?:\s*[\(\uff08][^\)\uff09]{2,80}[\)\uff09])?\s*$",
+    re.IGNORECASE,
+)
 _REFERENCE_MARKER_RE = re.compile(r"\[\s*[Rr]?\d{1,4}(?:\s*[-,;]\s*[Rr]?\d{1,4})*\s*\]")
 _DOC_FRONT_RE = re.compile(r"^\s{0,3}#\s+.+?\n.{0,420}?\b(?:abstract|single[-\s]?pixel|deep learning|this paper|in this review)\b", re.IGNORECASE | re.DOTALL)
 
@@ -92,6 +100,8 @@ def _is_low_value_answer_claim(value: str) -> bool:
     if not stripped:
         return True
     if _LOW_VALUE_LABEL_RE.fullmatch(stripped):
+        return True
+    if _READING_ROADMAP_BIBLIO_LABEL_RE.match(stripped):
         return True
     tokens = _tokens(stripped)
     if _has_cjk(stripped):
