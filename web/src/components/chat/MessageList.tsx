@@ -123,6 +123,7 @@ interface Props {
   onTrackedMessageActive?: (messageId: number | null) => void
   onOpenReader?: (payload: ReaderOpenPayload) => void
   readerLocateResults?: Record<string, ReaderLocateResult>
+  sourceQualityRefreshToken?: number
   paperGuideSourcePath?: string
   paperGuideSourceName?: string
 }
@@ -4291,6 +4292,7 @@ export function MessageList({
   onTrackedMessageActive,
   onOpenReader,
   readerLocateResults = {},
+  sourceQualityRefreshToken = 0,
   paperGuideSourcePath,
   paperGuideSourceName,
 }: Props) {
@@ -6810,6 +6812,7 @@ export function MessageList({
         open={shelfOpen}
         items={shelfItems}
         readerLocateResults={readerLocateResults}
+        sourceQualityRefreshToken={sourceQualityRefreshToken}
         focusedKey={focusedShelfKey}
         summaryLoadingKey={shelfSummaryLoadingKey}
         repairLoadingKey={shelfRepairLoadingKey}

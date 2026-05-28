@@ -525,6 +525,209 @@ test('citation shelf reflects actual reader locate result after opening source',
   }
 })
 
+test('citation shelf advances source repair run and refreshes repaired locate state', async ({ page }) => {
+  await page.route('**/api/references/citation-meta', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    })
+  })
+  await page.route('**/api/references/reader/doc', async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'reader source block index is stale' }),
+    })
+  })
+  await page.route('**/api/library/quality/reader-locate', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        item: {},
+        summary: {
+          available: true,
+          status: 'warning',
+          summary: { total: 1, exact: 0, block: 0, degraded: 0, failed: 1, repairable: 1, strict_miss: 1, affected_sources: 1 },
+          top_failures: [],
+          recommended_sources: [],
+        },
+      }),
+    })
+  })
+
+  let repaired = false
+  let repairCalls = 0
+  let advanceCalls = 0
+  await page.route('**/api/library/quality/sources', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          pdf_path: '',
+          md_path: source.source_path || '',
+          md_exists: true,
+          conversion_quality: {
+            status: 'good',
+            label: 'Ready',
+            score: 98,
+            summary: 'Ready',
+            has_review_issue: false,
+            issues: [],
+            metrics: {},
+            conversion_report: repaired
+              ? {
+                  available: true,
+                  latest_repair_attempt: {
+                    event: 'reader_locate_reindex_required',
+                    status: 'reindex_pending',
+                    action: 'reindex',
+                    source: 'reader_locate_quality',
+                    extra: { reader_locate_problem_count: 1 },
+                  },
+                }
+              : { available: true, latest_repair_attempt: null },
+          },
+        })),
+      }),
+    })
+  })
+  await page.route('**/api/library/quality/repair', async (route) => {
+    repairCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        repair_run_id: 'reader-locate-run-1',
+        repair_run: {
+          run_id: 'reader-locate-run-1',
+          status: 'reindex_pending',
+          phase: 'reindex_pending',
+          created_at: 1,
+          updated_at: 1,
+          requested: 1,
+          enqueued: 0,
+          repaired: 0,
+          failed: 0,
+          skipped_busy: 0,
+          needs_reindex: true,
+          target_names: ['Fixture Paper'],
+          target_sources: [READER_REGRESSION_SOURCE_PATH],
+          detail: 'Reader locate source anchors need index refresh.',
+        },
+        requested: 1,
+        enqueued: 0,
+        repaired: 0,
+        needs_reindex: true,
+        skipped_busy: 0,
+        failed: 0,
+        impact: {
+          requested: 1,
+          repaired: 0,
+          improved: 0,
+          enqueued: 0,
+          skipped_busy: 0,
+          failed: 0,
+          needs_reindex: true,
+          reader_locate_reindex: 1,
+          before_avg_score: 98,
+          after_avg_score: 98,
+          score_delta: 0,
+        },
+        items: [{
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          source_name: 'Fixture Paper',
+          pdf_name: '',
+          pdf_path: '',
+          md_path: READER_REGRESSION_SOURCE_PATH,
+          ok: true,
+          enqueued: false,
+          skipped_busy: false,
+          error: '',
+          task_id: '',
+          reader_locate_reindex_required: true,
+        }],
+      }),
+    })
+  })
+  await page.route('**/api/library/quality/repair-runs/*/advance', async (route) => {
+    advanceCalls += 1
+    repaired = true
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        advanced: true,
+        waiting: false,
+        item: {
+          run_id: 'reader-locate-run-1',
+          status: 'completed',
+          phase: 'verification_passed',
+          created_at: 1,
+          updated_at: 2,
+          requested: 1,
+          enqueued: 0,
+          repaired: 0,
+          failed: 0,
+          skipped_busy: 0,
+          needs_reindex: true,
+          reindexed: true,
+          target_names: ['Fixture Paper'],
+          target_sources: [READER_REGRESSION_SOURCE_PATH],
+          verification: { type: 'reader_locate_repair', status: 'passed', quality_ok: true },
+          detail: 'Reader locate verification passed.',
+        },
+        reindex: { ok: true },
+        detail: 'quality repair run advanced',
+      }),
+    })
+  })
+  await page.route('**/api/library/reindex', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true }),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
+
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').last().click()
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+  await popover.locator('.kb-cite-pop-close').click()
+
+  await page.getByTestId('citation-shelf-open-source').click()
+  await expect.poll(() => repairCalls).toBeGreaterThan(0)
+  await expect.poll(() => advanceCalls).toBeGreaterThan(0)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toContainText('已修复，重新校验')
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-partial/)
+})
+
 test('citation shelf hydrates persisted quality-center metadata on open', async ({ page }) => {
   await page.route('**/api/references/citation-meta', async (route) => {
     await route.fulfill({

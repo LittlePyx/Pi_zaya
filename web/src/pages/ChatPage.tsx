@@ -127,6 +127,7 @@ export default function ChatPage() {
   const [readerWidth, setReaderWidth] = useState(loadStoredReaderWidth)
   const [readerSessionHighlights, setReaderSessionHighlights] = useState<Record<string, ReaderSessionHighlight[]>>({})
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
+  const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
   const [desktopReaderEligible, setDesktopReaderEligible] = useState(
     () => (typeof window !== 'undefined' ? window.innerWidth >= DESKTOP_READER_BREAKPOINT : false),
   )
@@ -138,6 +139,10 @@ export default function ChatPage() {
   const readerLocateRequestRef = useRef(1)
   const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
   const readerLocateSourceRepairAtRef = useRef<Record<string, number>>({})
+  const readerPayloadRef = useRef<ReaderOpenPayload | null>(null)
+  const readerOpenRef = useRef(readerOpen)
+  const readerPayloadByFeedbackKeyRef = useRef<Record<string, ReaderOpenPayload>>({})
+  const readerLocateSourceRepairStreamRef = useRef<AbortController | null>(null)
   const splitLayoutRef = useRef<HTMLDivElement | null>(null)
   const readerResizeGuideRef = useRef<HTMLDivElement | null>(null)
   const readerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
@@ -152,10 +157,10 @@ export default function ChatPage() {
     return timelineJumpTokenRef.current
   }
 
-  const nextReaderLocateRequestId = () => {
+  const nextReaderLocateRequestId = useCallback(() => {
     readerLocateRequestRef.current += 1
     return readerLocateRequestRef.current
-  }
+  }, [])
 
   const clearTimelineSelection = () => {
     setTimelineJump(null)
@@ -178,6 +183,10 @@ export default function ChatPage() {
     clearTimelineSelection()
     setReaderOpen(false)
     setReaderPayload(null)
+    readerPayloadRef.current = null
+    readerPayloadByFeedbackKeyRef.current = {}
+    readerLocateSourceRepairStreamRef.current?.abort()
+    readerLocateSourceRepairStreamRef.current = null
     setReaderCollapsed(false)
     setAppendSignal(null)
   }, [activeConvId])
@@ -185,7 +194,17 @@ export default function ChatPage() {
   useEffect(() => () => {
     Object.values(dismissTimerRef.current).forEach((timer) => window.clearTimeout(timer))
     dismissTimerRef.current = {}
+    readerLocateSourceRepairStreamRef.current?.abort()
+    readerLocateSourceRepairStreamRef.current = null
   }, [])
+
+  useEffect(() => {
+    readerOpenRef.current = readerOpen
+  }, [readerOpen])
+
+  useEffect(() => {
+    readerPayloadRef.current = readerPayload
+  }, [readerPayload])
 
   useEffect(() => {
     const syncLayout = () => {
@@ -518,7 +537,7 @@ export default function ChatPage() {
           : undefined,
       }
       : undefined
-    setReaderPayload({
+    const nextPayload: ReaderOpenPayload = {
       sourcePath,
       sourceName: String(payload.sourceName || '').trim(),
       headingPath: String(payload.headingPath || '').trim(),
@@ -581,10 +600,63 @@ export default function ChatPage() {
         ? Number(payload.initialAltIndex)
         : undefined,
       locateFeedbackKey: String(payload.locateFeedbackKey || '').trim() || undefined,
-    })
+    }
+    const feedbackKey = String(nextPayload.locateFeedbackKey || '').trim()
+    if (feedbackKey) {
+      readerPayloadByFeedbackKeyRef.current[feedbackKey] = nextPayload
+    }
+    readerPayloadRef.current = nextPayload
+    setReaderPayload(nextPayload)
     setReaderCollapsed(false)
     setReaderOpen(true)
   }
+
+  const refreshShelfSourceQuality = useCallback(() => {
+    setSourceQualityRefreshToken((value) => value + 1)
+  }, [])
+
+  const retryReaderLocateAfterRepair = useCallback((feedbackKey: string, sourcePath: string) => {
+    const key = String(feedbackKey || '').trim()
+    const path = String(sourcePath || '').trim()
+    if (!key || !readerOpenRef.current) return
+    const currentPayload = readerPayloadRef.current
+    if (!currentPayload) return
+    if (String(currentPayload.locateFeedbackKey || '').trim() !== key) return
+    if (path && String(currentPayload.sourcePath || '').trim() !== path) return
+    const nextPayload: ReaderOpenPayload = {
+      ...currentPayload,
+      locateRequestId: nextReaderLocateRequestId(),
+    }
+    readerPayloadByFeedbackKeyRef.current[key] = nextPayload
+    readerPayloadRef.current = nextPayload
+    setReaderPayload(nextPayload)
+    setReaderCollapsed(false)
+    setReaderOpen(true)
+  }, [nextReaderLocateRequestId])
+
+  const completeReaderLocateSourceRepair = useCallback(async (
+    runId: string,
+    options: {
+      needsReindex: boolean
+      shouldRetryLocate: boolean
+      feedbackKey: string
+      sourcePath: string
+    },
+  ) => {
+    let waiting = false
+    if (runId && options.needsReindex) {
+      try {
+        const advanced = await libraryApi.advanceQualityRepairRun(runId)
+        waiting = Boolean(advanced.waiting)
+      } catch {
+        waiting = false
+      }
+    }
+    refreshShelfSourceQuality()
+    if (!waiting && options.shouldRetryLocate) {
+      retryReaderLocateAfterRepair(options.feedbackKey, options.sourcePath)
+    }
+  }, [refreshShelfSourceQuality, retryReaderLocateAfterRepair])
 
   const handleReaderLocateResult = useCallback((result: ReaderLocateResult) => {
     const feedbackKey = String(result.locateFeedbackKey || '').trim()
@@ -644,10 +716,46 @@ export default function ChatPage() {
           .then((res) => {
             const runId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
             const queued = Number(res.enqueued || 0)
-            if (runId && queued <= 0 && Boolean(res.needs_reindex || res.impact?.needs_reindex)) {
-              return libraryApi.advanceQualityRepairRun(runId).catch(() => undefined)
+            const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
+            const repaired = Number(res.repaired || res.impact?.repaired || 0)
+            const readerLocateReindex = Number(res.impact?.reader_locate_reindex || 0)
+            const shouldRetryLocate = Boolean(
+              needsReindex
+              || repaired > 0
+              || readerLocateReindex > 0
+              || (res.items || []).some((item) => Boolean(item.reader_locate_reindex_required)),
+            )
+            if (!runId) {
+              refreshShelfSourceQuality()
+              if (shouldRetryLocate) retryReaderLocateAfterRepair(feedbackKey, sourcePath)
+              return undefined
             }
-            return undefined
+            if (queued > 0) {
+              readerLocateSourceRepairStreamRef.current?.abort()
+              readerLocateSourceRepairStreamRef.current = libraryApi.streamConvertStatus(
+                () => {},
+                () => {
+                  readerLocateSourceRepairStreamRef.current = null
+                  void completeReaderLocateSourceRepair(runId, {
+                    needsReindex,
+                    shouldRetryLocate,
+                    feedbackKey,
+                    sourcePath,
+                  })
+                },
+                () => {
+                  readerLocateSourceRepairStreamRef.current = null
+                  refreshShelfSourceQuality()
+                },
+              )
+              return undefined
+            }
+            return completeReaderLocateSourceRepair(runId, {
+              needsReindex,
+              shouldRetryLocate,
+              feedbackKey,
+              sourcePath,
+            })
           })
           .catch(() => {
             delete readerLocateSourceRepairAtRef.current[repairKey]
@@ -667,7 +775,7 @@ export default function ChatPage() {
       }
       return { ...current, [feedbackKey]: result }
     })
-  }, [])
+  }, [completeReaderLocateSourceRepair, refreshShelfSourceQuality, retryReaderLocateAfterRepair])
 
   const appendReaderSelection = (text: string) => {
     const raw = String(text || '')
@@ -997,6 +1105,7 @@ export default function ChatPage() {
                     }}
                     onOpenReader={openReader}
                     readerLocateResults={readerLocateResults}
+                    sourceQualityRefreshToken={sourceQualityRefreshToken}
                     paperGuideSourcePath={effectiveGuide.sourcePath}
                     paperGuideSourceName={effectiveGuide.sourceName}
                   />

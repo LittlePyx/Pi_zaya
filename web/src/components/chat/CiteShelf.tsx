@@ -25,6 +25,7 @@ interface Props {
   open: boolean
   items: CiteShelfItem[]
   readerLocateResults?: Record<string, ReaderLocateResult>
+  sourceQualityRefreshToken?: number
   snapshots: Array<{ id: string; name: string; createdAt: number }>
   selectedSnapshotId: string
   snapshotDiff: string
@@ -436,6 +437,7 @@ export function CiteShelf({
   open,
   items,
   readerLocateResults = {},
+  sourceQualityRefreshToken = 0,
   snapshots,
   selectedSnapshotId,
   snapshotDiff,
@@ -616,7 +618,7 @@ export function CiteShelf({
     return () => {
       cancelled = true
     }
-  }, [open, sourceQualityKey, sourceQualitySources])
+  }, [open, sourceQualityKey, sourceQualityRefreshToken, sourceQualitySources])
 
   useEffect(() => () => {
     sourceRepairStreamRef.current?.abort()
@@ -913,10 +915,19 @@ export function CiteShelf({
       }
       setSourceQualityByPath((prev) => ({ ...prev, ...next }))
     }
-    const refreshIndexAndRepairSources = async (needsReindex: boolean) => {
+    const refreshRepairRunAndSources = async (runId: string, needsReindex: boolean) => {
       if (needsReindex) {
+        let advanced = false
+        if (runId) {
+          try {
+            await libraryApi.advanceQualityRepairRun(runId)
+            advanced = true
+          } catch {
+            advanced = false
+          }
+        }
         try {
-          await libraryApi.reindex()
+          if (!advanced) await libraryApi.reindex()
         } catch {
           // Source quality will still be refreshed so the UI can show the latest diagnostics.
         }
@@ -934,6 +945,7 @@ export function CiteShelf({
         speed_mode: 'balanced',
         replace: true,
       })
+      const runId = String(res.repair_run_id || res.repair_run?.run_id || '').trim()
       const queued = Number(res.enqueued || 0)
       const repaired = Number(res.repaired || 0)
       const needsReindex = Boolean(res.needs_reindex || res.impact?.needs_reindex)
@@ -945,16 +957,18 @@ export function CiteShelf({
           () => {},
           () => {
             sourceRepairStreamRef.current = null
-            void refreshIndexAndRepairSources(needsReindex).finally(clearRepairing)
+            void refreshRepairRunAndSources(runId, needsReindex).finally(clearRepairing)
           },
           () => {
             sourceRepairStreamRef.current = null
-            void refreshIndexAndRepairSources(needsReindex).finally(clearRepairing)
+            void refreshRepairRunAndSources(runId, needsReindex).finally(clearRepairing)
           },
         )
       } else if (repaired > 0) {
         if (!silent) message.success(`Markdown repaired: ${repaired}`)
-        await refreshIndexAndRepairSources(needsReindex)
+        await refreshRepairRunAndSources(runId, needsReindex)
+      } else if (needsReindex) {
+        await refreshRepairRunAndSources(runId, needsReindex)
       } else {
         if (!silent) message.info(S.shelf_source_quality_repair_none)
         await refreshRepairSources()
