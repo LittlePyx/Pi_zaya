@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import {
   READER_REGRESSION_SOURCE_PATH,
@@ -543,6 +544,54 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await expect(page.getByTestId('citation-shelf-repair-impact')).toContainText('doi')
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
+
+  await popover.locator('.kb-cite-pop-close').click()
+  await page.getByTestId('citation-shelf-add-visible').click()
+  await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
+  await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
+
+  const bibDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-bib').click()
+  const bibDownload = await bibDownloadPromise
+  expect(bibDownload.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.bib$/)
+  const bibPath = await bibDownload.path()
+  expect(bibPath, 'BibTeX export should produce a downloadable file').not.toBeNull()
+  if (bibPath) {
+    const bib = await readFile(bibPath, 'utf8')
+    expect(bib).toContain('title={The missing cone problem and low-pass distortion in optical serial sectioning microscopy}')
+    expect(bib).toContain('author={Macias-Garza F, Bovik A C, Diller K R}')
+    expect(bib).toContain('journal={IEEE Transactions on Acoustics, Speech, and Signal Processing}')
+    expect(bib).toContain('doi={10.1109/tassp.1988.1164940}')
+  }
+
+  const risDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-ris').click()
+  const risDownload = await risDownloadPromise
+  expect(risDownload.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.ris$/)
+  const risPath = await risDownload.path()
+  expect(risPath, 'RIS export should produce a downloadable file').not.toBeNull()
+  if (risPath) {
+    const ris = await readFile(risPath, 'utf8')
+    expect(ris).toContain('TI  - The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
+    expect(ris).toContain('JO  - IEEE Transactions on Acoustics, Speech, and Signal Processing')
+    expect(ris).toContain('DO  - 10.1109/tassp.1988.1164940')
+    expect(ris).toContain('UR  - https://doi.org/10.1109/TASSP.1988.1164940')
+  }
+
+  const csvDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-csv').click()
+  const csvDownload = await csvDownloadPromise
+  expect(csvDownload.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.csv$/)
+  const csvPath = await csvDownload.path()
+  expect(csvPath, 'CSV export should produce a downloadable file').not.toBeNull()
+  if (csvPath) {
+    const csv = await readFile(csvPath, 'utf8')
+    expect(csv).toContain('title,authors,year,venue,doi,source,source_quality_status,source_quality_issues')
+    expect(csv).toContain('The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
+    expect(csv).toContain('Macias-Garza F, Bovik A C, Diller K R')
+    expect(csv).toContain('IEEE Transactions on Acoustics, Speech, and Signal Processing')
+    expect(csv).toContain('10.1109/tassp.1988.1164940')
+  }
 })
 
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {

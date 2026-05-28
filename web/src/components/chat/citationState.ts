@@ -1578,8 +1578,9 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   const volume = asText(detail.volume)
   const issue = asText(detail.issue)
   const pages = asText(detail.pages)
-  const doi = asText(detail.doi)
   const doiUrl = asText(detail.doiUrl)
+  const doi = extractDoiLike(detail.doi) || extractDoiLike(doiUrl)
+  const canonicalDoiUrl = doiUrl || (doi ? `https://doi.org/${doi}` : '')
   const entryType = detail.venueKind === 'conference' ? 'inproceedings' : 'article'
   const gbtKind = detail.venueKind === 'conference' ? '[C]' : '[J]'
 
@@ -1636,7 +1637,7 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
     }
   }
   if (doi) risLines.push(`DO  - ${doi}`)
-  if (doiUrl || doi) risLines.push(`UR  - ${doiUrl || `https://doi.org/${doi}`}`)
+  if (canonicalDoiUrl || doi) risLines.push(`UR  - ${canonicalDoiUrl || `https://doi.org/${doi}`}`)
   risLines.push('ER  -')
   const ris = risLines.join('\n')
 

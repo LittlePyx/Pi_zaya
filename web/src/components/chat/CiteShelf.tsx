@@ -119,6 +119,34 @@ const paperIdentity = (item: CiteShelfItem): string => {
   return `key:${item.key}`
 }
 
+const doiExportValue = (item: CiteShelfItem): string =>
+  normalizeDoiLike(item.doi || item.doiUrl) || String(item.doi || item.doiUrl || '').trim()
+
+const hasCompleteCitationIdentity = (
+  item: CiteShelfItem,
+  display = citationDisplay(item),
+): boolean => {
+  const title = String(item.title || display.main || item.main || '').trim()
+  const hasTitle = Boolean(title) && !isLikelyWeakCitationTitle(title)
+  const hasDoi = Boolean(normalizeDoiLike(item.doi || item.doiUrl))
+  const hasAuthors = Boolean(String(item.authors || '').trim())
+  const hasVenue = Boolean(String(item.venue || '').trim())
+  return hasTitle && hasDoi && hasAuthors && hasVenue
+}
+
+const externalMetadataNeedsVisibleReview = (
+  item: CiteShelfItem,
+  display = citationDisplay(item),
+): boolean => {
+  const status = String(item.externalMetadataStatus || '').trim().toLowerCase()
+  if (!['candidate', 'conflict'].includes(status)) return false
+  const itemDoi = normalizeDoiLike(item.doi || item.doiUrl)
+  const externalDoi = normalizeDoiLike(item.externalDoi || item.externalDoiUrl)
+  if (itemDoi && externalDoi && itemDoi !== externalDoi) return true
+  if (status === 'candidate') return false
+  return !hasCompleteCitationIdentity(item, display)
+}
+
 const impactScore = (item: CiteShelfItem): number => {
   const ifValue = Number.parseFloat(String(item.journalIf || '').replace(/[^\d.]/g, ''))
   const ifScore = Number.isFinite(ifValue) ? ifValue : 0
@@ -306,8 +334,7 @@ export function CiteShelf({
     const hasAuthors = Boolean(String(item.authors || '').trim())
     const hasVenue = Boolean(String(item.venue || '').trim())
     const hasMetaConflict = hasConflictingVenueSignals(item)
-    const externalStatus = String(item.externalMetadataStatus || '').trim().toLowerCase()
-    const externalNeedsReview = externalStatus === 'candidate' || externalStatus === 'conflict'
+    const externalNeedsReview = externalMetadataNeedsVisibleReview(item, display)
     const unresolved = !item.bibliometricsChecked
     const bibliographicEntry = Boolean(item.isInpaper || item.raw || item.citeFmt || hasDoi || item.externalDoi || item.externalDoiUrl)
     const needsRepair = shouldAutoRepairItem(item, display)
@@ -760,7 +787,7 @@ export function CiteShelf({
         item.authors,
         item.year,
         item.venue,
-        item.doi || item.doiUrl,
+        doiExportValue(item),
         item.sourceName || item.sourcePath,
         sourceQuality?.status || '',
         (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
