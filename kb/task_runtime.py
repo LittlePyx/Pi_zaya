@@ -98,7 +98,9 @@ from kb.paper_guide_answer_post_runtime import (
 )
 from kb.chat_store import ChatStore
 from kb.file_ops import _resolve_md_output_paths
+from kb.converter.quality_gate import prepare_markdown_for_index
 from kb.converter.quality_repair import append_conversion_repair_attempt
+from kb.converter.structured_indices import rebuild_structured_indices_for_markdown
 from kb.llm import DeepSeekChat
 from kb.library_figure_runtime import (
     _build_doc_figure_card as _figure_build_doc_figure_card,
@@ -4435,6 +4437,105 @@ def _bg_record_repair_attempt(md_path: Path | None, **payload) -> None:
         pass
 
 
+def _post_convert_quality_gate_enabled() -> bool:
+    raw = str(os.environ.get("KB_POST_CONVERT_QUALITY_GATE", "1") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _quality_gate_auto_repair(assessment: dict) -> dict:
+    value = (assessment or {}).get("auto_repair") if isinstance(assessment, dict) else {}
+    return value if isinstance(value, dict) else {}
+
+
+def _bg_post_convert_quality_gate(
+    md_path: Path,
+    *,
+    task_id: str = "",
+    speed_mode: str = "",
+) -> dict:
+    if not _post_convert_quality_gate_enabled():
+        return {
+            "enabled": False,
+            "indexable": True,
+            "status": "skipped",
+            "action": "none",
+            "auto_repair": {"attempted": False, "changed": False, "unsafe": False, "applied": []},
+        }
+    try:
+        assessment = prepare_markdown_for_index(md_path, auto_repair=True, allow_blocked=False)
+    except Exception as exc:
+        assessment = {
+            "enabled": True,
+            "indexable": False,
+            "status": "blocked",
+            "action": "review",
+            "reason": f"Post-convert quality gate failed: {exc}",
+            "issue_codes": ["quality_scan_failed"],
+            "blocking_issue_codes": ["quality_scan_failed"],
+            "auto_repair": {"attempted": False, "changed": False, "unsafe": False, "applied": []},
+        }
+    else:
+        assessment = {**assessment, "enabled": True}
+
+    auto_repair = _quality_gate_auto_repair(assessment)
+    if bool(assessment.get("indexable")) and bool(auto_repair.get("changed")):
+        try:
+            rebuild_structured_indices_for_markdown(
+                md_path,
+                md_text=md_path.read_text(encoding="utf-8", errors="replace"),
+                assets_dir=md_path.parent / "assets",
+            )
+            assessment["structured_indices_rebuilt"] = True
+        except Exception as exc:
+            assessment["structured_indices_rebuilt"] = False
+            assessment["structured_indices_error"] = str(exc)[:300]
+
+    action = str(assessment.get("action") or "review").strip().lower() or "review"
+    status = (
+        "blocked"
+        if not bool(assessment.get("indexable"))
+        else ("autofixed" if bool(auto_repair.get("changed")) else ("ready" if action == "none" else "degraded"))
+    )
+    plan = assessment.get("repair_plan") if isinstance(assessment.get("repair_plan"), dict) else {}
+    detail = (
+        "Conversion output was blocked before indexing."
+        if status == "blocked"
+        else (
+            "Conversion output was auto-repaired and accepted before indexing."
+            if status == "autofixed"
+            else "Conversion output passed post-convert quality gate."
+        )
+    )
+    _bg_record_repair_attempt(
+        md_path,
+        event="post_convert_quality_gate",
+        status=status,
+        action=action,
+        scope=str(plan.get("scope") or ""),
+        speed_mode=speed_mode,
+        issue_codes=list(assessment.get("issue_codes") or []),
+        task_id=task_id,
+        source="post_convert_quality_gate",
+        reason=str(assessment.get("reason") or ""),
+        detail=detail,
+        extra={
+            "indexable": bool(assessment.get("indexable")),
+            "quality_status": str(assessment.get("status") or ""),
+            "blocking_issue_codes": [
+                str(item) for item in list(assessment.get("blocking_issue_codes") or []) if str(item or "").strip()
+            ][:30],
+            "auto_repair": {
+                "attempted": bool(auto_repair.get("attempted")),
+                "changed": bool(auto_repair.get("changed")),
+                "unsafe": bool(auto_repair.get("unsafe")),
+                "applied": [str(item) for item in list(auto_repair.get("applied") or []) if str(item or "").strip()][:20],
+            },
+            "structured_indices_rebuilt": bool(assessment.get("structured_indices_rebuilt")),
+        },
+    )
+    return assessment
+
+
 def _bg_worker_loop() -> None:
     while True:
         task = bg_begin_next_task_or_idle(_BG_STATE, _BG_LOCK)
@@ -4529,6 +4630,26 @@ def _bg_worker_loop() -> None:
                     extra={"replace": replace, "no_llm": no_llm},
                 )
 
+            post_convert_quality: dict = {}
+            if ok and md_exists:
+                try:
+                    _on_progress(
+                        last_page_done,
+                        last_page_total,
+                        "quality gate: validating converted Markdown",
+                    )
+                    post_convert_quality = _bg_post_convert_quality_gate(
+                        md_main,
+                        task_id=task_id,
+                        speed_mode=speed_mode,
+                    )
+                    if not bool(post_convert_quality.get("indexable")):
+                        msg = f"OK+QUALITY_BLOCKED: {out_folder}"
+                    elif bool(_quality_gate_auto_repair(post_convert_quality).get("changed")):
+                        msg = f"OK+QUALITY_REPAIRED: {out_folder}"
+                except Exception:
+                    post_convert_quality = {}
+
             # Auto-ingest can add noticeable latency in the conversion UI.
             # Skip it in ultra_fast mode to keep end-to-end time near the 5s target.
             do_auto_ingest = ok and bool(db_dir) and (speed_mode != "ultra_fast")
@@ -4542,14 +4663,30 @@ def _bg_worker_loop() -> None:
                             "ingesting: updating knowledge base index",
                         )
                         ingest_proc = subprocess.run(
-                            [os.sys.executable, str(ingest_py), "--src", str(md_main), "--db", str(db_dir), "--incremental"],
+                            [
+                                os.sys.executable,
+                                str(ingest_py),
+                                "--src",
+                                str(md_main),
+                                "--db",
+                                str(db_dir),
+                                "--incremental",
+                                "--rebuild-structured-indices",
+                            ],
                             check=False,
                             capture_output=True,
                             text=True,
                         )
                         if int(getattr(ingest_proc, "returncode", 1) or 0) == 0:
-                            msg = f"OK+INGEST: {out_folder}"
-                            ingest_status = "success"
+                            if post_convert_quality and not bool(post_convert_quality.get("indexable")):
+                                msg = f"OK+QUALITY_BLOCKED: {out_folder}"
+                                ingest_status = "blocked"
+                            elif bool(_quality_gate_auto_repair(post_convert_quality).get("changed")):
+                                msg = f"OK+QUALITY_REPAIRED+INGEST: {out_folder}"
+                                ingest_status = "success"
+                            else:
+                                msg = f"OK+INGEST: {out_folder}"
+                                ingest_status = "success"
                         else:
                             msg = f"OK+INGEST_BLOCKED: {out_folder}"
                             ingest_status = "blocked"
@@ -4594,7 +4731,7 @@ def _bg_worker_loop() -> None:
         bg_finish_task(_BG_STATE, _BG_LOCK, msg, task_id=task_id)
 
 def _bg_ensure_started() -> None:
-    worker_ver = "2026-03-19.bg.v5"
+    worker_ver = "2026-03-19.bg.v6"
     desired_workers = _bg_target_worker_count()
     threads = list(getattr(RUNTIME, "BG_THREADS", []) or [])
     running_ver = str(getattr(RUNTIME, "BG_WORKER_VERSION", "") or "")

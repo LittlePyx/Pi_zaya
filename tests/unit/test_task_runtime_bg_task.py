@@ -10,6 +10,7 @@ from kb.task_runtime import (
     _augment_prompt_with_source_hint,
     _await_stored_doc_list_contract,
     _bg_ingest_py_path,
+    _bg_post_convert_quality_gate,
     _build_bg_task,
     _build_doc_list_contract_from_rendered_payload,
     _build_doc_list_refs_render_payload,
@@ -64,6 +65,7 @@ from kb.task_runtime import (
     _should_sync_deep_seed_for_display,
     _stabilize_paper_guide_output_mode,
 )
+from kb.converter.quality_repair import load_conversion_quality_result
 from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
 
 
@@ -114,6 +116,99 @@ def test_bg_task_carries_quality_repair_context_and_resolves_ingest_script():
     assert task["repair_context"]["issue_codes"] == ["weak_structure"]
     assert _bg_ingest_py_path().name == "ingest.py"
     assert _bg_ingest_py_path().exists()
+
+
+def _post_convert_good_markdown() -> str:
+    return "\n".join(
+        [
+            "# Demo Paper",
+            "",
+            "## Abstract",
+            "",
+            "This paper has enough readable text for retrieval and cites prior work [1].",
+            "",
+            "## Method",
+            "",
+            "The method section contains a usable paragraph for reader location.",
+            "",
+            "## References",
+            "",
+            "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+        ]
+    )
+
+
+def test_post_convert_quality_gate_autofixes_and_records_attempt(monkeypatch, tmp_path: Path):
+    from kb import task_runtime
+
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(_post_convert_good_markdown(), encoding="utf-8")
+    rebuilt: list[Path] = []
+
+    def fake_rebuild(md_path_arg, **kwargs):
+        rebuilt.append(Path(md_path_arg))
+        return {"source_blocks": {"count": 1}}
+
+    monkeypatch.setattr(task_runtime, "rebuild_structured_indices_for_markdown", fake_rebuild)
+
+    result = _bg_post_convert_quality_gate(md_path, task_id="task-1", speed_mode="balanced")
+
+    assert result["indexable"] is True
+    assert result["status"] == "ready"
+    assert result["auto_repair"]["changed"] is True
+    assert rebuilt == [md_path]
+    assert md_path.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
+
+    report = load_conversion_quality_result(md_path)
+    attempt = report["latest_repair_attempt"]
+    assert attempt["event"] == "post_convert_quality_gate"
+    assert attempt["status"] == "autofixed"
+    assert attempt["action"] == "none"
+    assert attempt["task_id"] == "task-1"
+    assert attempt["extra"]["auto_repair"]["changed"] is True
+    assert attempt["extra"]["structured_indices_rebuilt"] is True
+
+
+def test_post_convert_quality_gate_blocks_damaged_markdown_before_indexing(monkeypatch, tmp_path: Path):
+    from kb import task_runtime
+
+    md_path = tmp_path / "broken.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Broken Paper",
+                "",
+                "## Abstract",
+                "",
+                "![missing](assets/missing.png)",
+                "",
+                "锛",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    rebuilt: list[Path] = []
+    monkeypatch.setattr(
+        task_runtime,
+        "rebuild_structured_indices_for_markdown",
+        lambda md_path_arg, **kwargs: rebuilt.append(Path(md_path_arg)),
+    )
+
+    result = _bg_post_convert_quality_gate(md_path, task_id="task-2", speed_mode="normal")
+
+    assert result["indexable"] is False
+    assert result["status"] == "blocked"
+    assert result["action"] == "reconvert"
+    assert "missing_images" in result["blocking_issue_codes"]
+    assert rebuilt == []
+
+    report = load_conversion_quality_result(md_path)
+    attempt = report["latest_repair_attempt"]
+    assert attempt["event"] == "post_convert_quality_gate"
+    assert attempt["status"] == "blocked"
+    assert attempt["action"] == "reconvert"
+    assert attempt["extra"]["indexable"] is False
+    assert "missing_images" in attempt["extra"]["blocking_issue_codes"]
 
 
 def test_conversational_source_hint_detection_and_augmentation():
