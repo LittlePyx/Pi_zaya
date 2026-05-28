@@ -413,6 +413,178 @@ def test_repair_normalizes_crossref_source_reference_index_record(tmp_path, monk
     assert result["meta"]["pages"] == "14013"
 
 
+def test_scan_reference_metadata_backfill_targets_reads_full_reference_index(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    source_path = tmp_path / "paper.en.md"
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    "paper": {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "1": {
+                                "num": 1,
+                                "raw": "[1] Boyd et al. Alternating direction method of multipliers. 2011. doi:10.1561/2200000016",
+                                "title": "Reference 1",
+                            },
+                            "2": {
+                                "num": 2,
+                                "raw": "[2] Gehm M, Brady D. Single-shot compressive spectral imaging. Optics Express, 2007. doi:10.1364/OE.15.014013",
+                                "title": "Single-shot compressive spectral imaging",
+                                "authors": "Gehm M, Brady D",
+                                "venue": "Optics Express",
+                                "year": "2007",
+                                "doi": "10.1364/OE.15.014013",
+                            },
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda detail: dict(detail))
+
+    scan = mq.scan_reference_metadata_backfill_targets(db_dir=db_dir, limit=20)
+
+    assert scan["scanned"] == 2
+    assert scan["export_ready"] == 1
+    assert scan["needs_repair"] == 1
+    assert scan["target_count"] == 1
+    assert scan["targets"][0]["ref_num"] == "1"
+    assert scan["targets"][0]["source_path"] == str(source_path)
+    assert {item["name"] for item in scan["missing_fields"]} >= {"authors", "venue", "year"}
+
+
+def test_backfill_reference_metadata_updates_reference_index_from_scan(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    source_path = tmp_path / "paper.en.md"
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    "paper": {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "1": {
+                                "num": 1,
+                                "raw": "[1] Boyd et al. Alternating direction method of multipliers. 2011. doi:10.1561/2200000016",
+                                "title": "Reference 1",
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_enrich(detail):
+        return {
+            **dict(detail),
+            "title": "Alternating direction method of multipliers",
+            "authors": "Boyd S, Parikh N, Chu E",
+            "venue": "Foundations and Trends in Machine Learning",
+            "year": "2011",
+            "doi": "10.1561/2200000016",
+            "doi_url": "https://doi.org/10.1561/2200000016",
+        }
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
+
+    result = mq.backfill_reference_metadata(db_dir=db_dir, limit=10, scan_limit=20)
+
+    assert result["requested"] == 1
+    assert result["changed"] == 1
+    assert result["export_ready"] == 1
+    assert result["scan"]["needs_repair"] == 1
+    assert result["after_scan"]["needs_repair"] == 0
+    index_data = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    ref = index_data["docs"]["paper"]["refs"]["1"]
+    assert ref["title"] == "Alternating direction method of multipliers"
+    assert ref["authors"] == "Boyd S, Parikh N, Chu E"
+    assert ref["venue"] == "Foundations and Trends in Machine Learning"
+    assert ref["doi"] == "10.1561/2200000016"
+
+
+def test_backfill_reference_metadata_persists_ready_crossref_cache_to_index(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    source_path = tmp_path / "paper.en.md"
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    "paper": {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "1": {
+                                "num": 1,
+                                "raw": "[1] Boyd et al. Alternating direction method of multipliers. 2011. doi:10.1561/2200000016",
+                                "title": "Reference 1",
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (db_dir / "crossref_cache.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doi": {
+                    "10.1561/2200000016": {
+                        "title": "Alternating direction method of multipliers",
+                        "authors": "Boyd S, Parikh N, Chu E",
+                        "venue": "Foundations and Trends in Machine Learning",
+                        "year": "2011",
+                        "doi": "10.1561/2200000016",
+                        "doi_url": "https://doi.org/10.1561/2200000016",
+                    }
+                },
+                "bib": {},
+                "title": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_enrich(detail):
+        raise AssertionError("ready cache should be persisted without network enrichment")
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fail_enrich)
+
+    result = mq.backfill_reference_metadata(db_dir=db_dir, limit=10, scan_limit=20)
+
+    assert result["requested"] == 1
+    assert result["persisted"] == 1
+    assert result["preheated"] == 1
+    assert result["after_scan"]["needs_repair"] == 0
+    item = result["items"][0]
+    assert "crossref_cache:doi" in item["repair_sources"]
+    assert "reference_index" in item["persisted_targets"]
+    index_data = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    ref = index_data["docs"]["paper"]["refs"]["1"]
+    assert ref["authors"] == "Boyd S, Parikh N, Chu E"
+    assert ref["venue"] == "Foundations and Trends in Machine Learning"
+    assert ref["doi"] == "10.1561/2200000016"
+
+
 def test_metadata_quality_hides_candidate_external_status_when_visible_identity_is_complete():
     quality = mq.citation_metadata_quality(
         {

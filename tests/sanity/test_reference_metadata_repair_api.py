@@ -184,3 +184,67 @@ def test_bibliometrics_route_reuses_persisted_repair_cache(tmp_path, monkeypatch
     assert payload["metadata_quality"]["status"] == "ready"
     assert payload["metadata_export_acceptance"]["export_ready"] is True
     assert payload["summary_source"] == "abstract"
+
+
+def test_shelf_metadata_backfill_route_scans_and_repairs_reference_index(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    source_path = tmp_path / "md" / "source.en.md"
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    "source": {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "1": {
+                                "num": 1,
+                                "raw": "[1] Boyd et al. Alternating direction method of multipliers. 2011. doi:10.1561/2200000016",
+                                "title": "Reference 1",
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_enrich(detail):
+        return {
+            **dict(detail),
+            "title": "Alternating direction method of multipliers",
+            "authors": "Boyd S, Parikh N, Chu E",
+            "venue": "Foundations and Trends in Machine Learning",
+            "year": "2011",
+            "doi": "10.1561/2200000016",
+            "doi_url": "https://doi.org/10.1561/2200000016",
+        }
+
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", fake_enrich)
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_quality_repair_runs_path", lambda: tmp_path / "repair_runs.jsonl")
+
+    client = TestClient(app)
+    scan_response = client.get("/api/references/shelf/metadata/backfill/scan?limit=20")
+    assert scan_response.status_code == 200
+    scan_payload = scan_response.json()
+    assert scan_payload["needs_repair"] == 1
+    assert scan_payload["target_count"] == 1
+
+    response = client.post(
+        "/api/references/shelf/metadata/backfill",
+        json={"limit": 10, "scan_limit": 20},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["requested"] == 1
+    assert payload["changed"] == 1
+    assert payload["export_ready"] == 1
+    assert payload["verification"]["quality_ok"] is True
+    assert payload["repair_run"]["phase"] == "shelf_metadata_verified"
+    assert payload["after_scan"]["needs_repair"] == 0

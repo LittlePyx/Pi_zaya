@@ -28,7 +28,12 @@ from api.reference_ui import (
     open_reference_source,
 )
 from api.reference_card_quality import refs_pack_has_full_llm_copy
-from api.reference_metadata_quality import hydrate_repaired_citation_metadata, repair_citation_metadata_batch
+from api.reference_metadata_quality import (
+    backfill_reference_metadata,
+    hydrate_repaired_citation_metadata,
+    repair_citation_metadata_batch,
+    scan_reference_metadata_backfill_targets,
+)
 from api.reference_card_copy import (
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
@@ -1657,6 +1662,11 @@ class ShelfMetadataRepairBody(BaseModel):
     limit: int | None = None
 
 
+class ShelfMetadataBackfillBody(BaseModel):
+    limit: int | None = None
+    scan_limit: int | None = None
+
+
 class CitationCardPolishBody(BaseModel):
     meta: dict
     wait_s: float | None = None
@@ -1844,6 +1854,31 @@ def repair_shelf_metadata(body: ShelfMetadataRepairBody):
     verification = _shelf_metadata_repair_verification(result)
     result["verification"] = verification
     repair_run = _record_shelf_metadata_quality_run(result=result, items=items[:limit])
+    if repair_run:
+        result["repair_run_id"] = str(repair_run.get("run_id") or "")
+        result["repair_run"] = repair_run
+    return result
+
+
+@router.get("/shelf/metadata/backfill/scan")
+def scan_shelf_metadata_backfill(limit: int = 120):
+    scan_limit = max(1, min(500, int(limit or 120)))
+    return scan_reference_metadata_backfill_targets(db_dir=get_settings().db_dir, limit=scan_limit)
+
+
+@router.post("/shelf/metadata/backfill")
+def backfill_shelf_metadata(body: ShelfMetadataBackfillBody):
+    limit = 40 if body.limit is None else max(1, min(80, int(body.limit)))
+    scan_limit = 240 if body.scan_limit is None else max(limit, min(1000, int(body.scan_limit)))
+    result = backfill_reference_metadata(db_dir=get_settings().db_dir, limit=limit, scan_limit=scan_limit)
+    items = [
+        dict(item)
+        for item in list((result.get("scan") or {}).get("targets") or [])[:limit]
+        if isinstance(item, dict)
+    ]
+    verification = _shelf_metadata_repair_verification(result)
+    result["verification"] = verification
+    repair_run = _record_shelf_metadata_quality_run(result=result, items=items)
     if repair_run:
         result["repair_run_id"] = str(repair_run.get("run_id") or "")
         result["repair_run"] = repair_run

@@ -1302,5 +1302,162 @@ def repair_citation_metadata_batch(
     }
 
 
+def _reference_index_docs(db_dir: str | Path | None) -> dict[str, Any]:
+    if not db_dir:
+        return {}
+    data = _json_load_dict(Path(db_dir) / INDEX_FILE_NAME)
+    docs = data.get("docs")
+    return docs if isinstance(docs, dict) else {}
+
+
+def _reference_index_scan_payload(doc_key: str, doc: Mapping[str, Any], ref_key: str, ref: Mapping[str, Any]) -> dict[str, Any]:
+    source_path = _text(doc.get("path") or doc_key)
+    source_name = _text(doc.get("name") or _path_name(source_path) or _path_name(doc_key))
+    payload = _reference_entry_payload(
+        ref,
+        {
+            "source_path": source_path,
+            "source_name": source_name,
+            "ref_num": ref_key,
+            "num": ref_key,
+        },
+    )
+    payload.setdefault("key", "|".join([source_path, str(ref_key)]))
+    payload.setdefault("source_path", source_path)
+    payload.setdefault("source_name", source_name)
+    payload.setdefault("ref_num", str(ref_key))
+    payload.setdefault("num", str(ref_key))
+    payload.setdefault("repair_target_kind", "reference_index")
+    return payload
+
+
+def scan_reference_metadata_backfill_targets(
+    *,
+    db_dir: str | Path | None,
+    limit: int = 120,
+) -> dict[str, Any]:
+    """Find reference-index rows whose durable metadata is not export-ready."""
+    docs = _reference_index_docs(db_dir)
+    target_limit = max(0, int(limit or 0))
+    total_refs = 0
+    ready = 0
+    export_ready = 0
+    needs_repair = 0
+    repairable = 0
+    retryable = 0
+    missing_counter: dict[str, int] = {}
+    issue_counter: dict[str, int] = {}
+    source_counter: dict[str, int] = {}
+    targets: list[dict[str, Any]] = []
+
+    for doc_key, raw_doc in docs.items():
+        if not isinstance(raw_doc, Mapping):
+            continue
+        refs = raw_doc.get("refs")
+        if not isinstance(refs, Mapping):
+            continue
+        for ref_key, raw_ref in refs.items():
+            if not isinstance(raw_ref, Mapping):
+                continue
+            total_refs += 1
+            base = _reference_index_scan_payload(str(doc_key), raw_doc, str(ref_key), raw_ref)
+            base_quality = citation_metadata_quality(base)
+            base_acceptance = citation_metadata_export_acceptance({**base, "metadata_quality": base_quality})
+            hydrated = hydrate_repaired_citation_metadata(base, db_dir=db_dir, include_quality=True)
+            quality = hydrated.get("metadata_quality") if isinstance(hydrated.get("metadata_quality"), Mapping) else citation_metadata_quality(hydrated)
+            acceptance = (
+                hydrated.get("metadata_export_acceptance")
+                if isinstance(hydrated.get("metadata_export_acceptance"), Mapping)
+                else citation_metadata_export_acceptance({**hydrated, "metadata_quality": quality})
+            )
+            is_ready = bool(quality.get("ok")) or _text(quality.get("status")).lower() == "ready"
+            is_export_ready = bool(acceptance.get("export_ready"))
+            is_index_export_ready = bool(base_acceptance.get("export_ready"))
+            if is_ready:
+                ready += 1
+            if is_export_ready:
+                export_ready += 1
+            if not is_index_export_ready:
+                needs_repair += 1
+                is_repairable = bool(
+                    base_quality.get("repairable")
+                    or base_quality.get("retryable")
+                    or is_export_ready
+                )
+                if is_repairable:
+                    repairable += 1
+                if bool(base_quality.get("retryable")):
+                    retryable += 1
+                for field in list(base_quality.get("missing_fields") or []):
+                    text = _text(field)
+                    if text:
+                        missing_counter[text] = missing_counter.get(text, 0) + 1
+                for issue in list(base_quality.get("issues") or []):
+                    if not isinstance(issue, Mapping):
+                        continue
+                    code = _text(issue.get("code"))
+                    if code:
+                        issue_counter[code] = issue_counter.get(code, 0) + 1
+                source_path = _text(hydrated.get("source_path") or base.get("source_path"))
+                if source_path:
+                    source_counter[source_path] = source_counter.get(source_path, 0) + 1
+                if len(targets) < target_limit and is_repairable:
+                    targets.append(
+                        {
+                            **hydrated,
+                            "metadata_quality": dict(quality),
+                            "metadata_export_acceptance": dict(acceptance),
+                            "metadata_index_quality": dict(base_quality),
+                            "metadata_index_export_acceptance": dict(base_acceptance),
+                            "key": _text(hydrated.get("key") or base.get("key") or f"{doc_key}|{ref_key}"),
+                            "repair_target_kind": "reference_index",
+                        }
+                    )
+
+    def _counter_items(counter: Mapping[str, int], count_limit: int = 12) -> list[dict[str, Any]]:
+        rows = sorted(counter.items(), key=lambda pair: (-int(pair[1]), str(pair[0])))
+        return [{"name": str(name), "count": int(count)} for name, count in rows[:count_limit]]
+
+    return {
+        "ok": True,
+        "docs": len(docs),
+        "scanned": int(total_refs),
+        "ready": int(ready),
+        "export_ready": int(export_ready),
+        "needs_repair": int(needs_repair),
+        "repairable": int(repairable),
+        "retryable": int(retryable),
+        "target_count": int(repairable),
+        "returned_count": int(len(targets)),
+        "target_limit": int(target_limit),
+        "truncated": bool(repairable > len(targets)),
+        "missing_fields": _counter_items(missing_counter),
+        "issue_codes": _counter_items(issue_counter),
+        "sources": _counter_items(source_counter, 8),
+        "targets": targets,
+    }
+
+
+def backfill_reference_metadata(
+    *,
+    db_dir: str | Path | None,
+    limit: int = 40,
+    scan_limit: int = 240,
+) -> dict[str, Any]:
+    """Repair missing durable reference metadata discovered from the reference index."""
+    repair_limit = max(0, int(limit or 0))
+    before = scan_reference_metadata_backfill_targets(db_dir=db_dir, limit=max(repair_limit, int(scan_limit or 0)))
+    targets = [item for item in list(before.get("targets") or []) if isinstance(item, Mapping)][:repair_limit]
+    repair = repair_citation_metadata_batch(targets, limit=repair_limit, db_dir=db_dir)
+    after = scan_reference_metadata_backfill_targets(db_dir=db_dir, limit=max(repair_limit, int(scan_limit or 0)))
+    return {
+        **repair,
+        "scan": before,
+        "after_scan": after,
+        "preheated": max(int(repair.get("changed") or 0), int(repair.get("persisted") or 0)),
+        "remaining_targets": int(after.get("needs_repair") or 0),
+    }
+
+
 def metadata_identity_similarity(left: Mapping[str, Any], right: Mapping[str, Any]) -> float:
     return title_similarity(_text(left.get("title") or left.get("raw")), _text(right.get("title") or right.get("raw")))

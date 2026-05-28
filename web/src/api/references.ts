@@ -148,6 +148,32 @@ export interface ShelfMetadataRepairResponse {
   items: ShelfMetadataRepairItem[]
 }
 
+export interface ShelfMetadataBackfillScanResponse {
+  ok: boolean
+  docs: number
+  scanned: number
+  ready: number
+  export_ready: number
+  needs_repair: number
+  repairable: number
+  retryable: number
+  target_count: number
+  returned_count?: number
+  target_limit: number
+  truncated: boolean
+  missing_fields?: Array<{ name: string, count: number }>
+  issue_codes?: Array<{ name: string, count: number }>
+  sources?: Array<{ name: string, count: number }>
+  targets: Array<Record<string, unknown>>
+}
+
+export interface ShelfMetadataBackfillResponse extends ShelfMetadataRepairResponse {
+  scan?: ShelfMetadataBackfillScanResponse
+  after_scan?: ShelfMetadataBackfillScanResponse
+  preheated?: number
+  remaining_targets?: number
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value !== 'object') return JSON.stringify(value)
@@ -245,6 +271,13 @@ export const referencesApi = {
     api.post<ShelfMetadataRepairResponse>('/api/references/shelf/metadata/repair', {
       items,
       limit: limit ?? items.length,
+    }),
+  scanShelfMetadataBackfill: (limit = 120) =>
+    api.get<ShelfMetadataBackfillScanResponse>(`/api/references/shelf/metadata/backfill/scan?limit=${encodeURIComponent(String(limit))}`),
+  backfillShelfMetadata: (limit = 40, scanLimit = 240) =>
+    api.post<ShelfMetadataBackfillResponse>('/api/references/shelf/metadata/backfill', {
+      limit,
+      scan_limit: scanLimit,
     }),
   citationCardPolishCached: (meta: Record<string, unknown>, waitSeconds = 4) => {
     const key = stableStringify({

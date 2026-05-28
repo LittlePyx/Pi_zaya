@@ -576,6 +576,7 @@ function qualityFullChainActionText(stage: LibraryQualityFullChainStage) {
   if (action === 'rebuild_index') return 'Rebuild'
   if (action === 'repair_citation_cards') return 'Repair cards'
   if (action === 'repair_shelf_metadata') return 'Repair metadata'
+  if (action === 'monitor_literature_basket') return status === 'good' ? 'Verified' : 'Preflight'
   if (action === 'rerun_failed_cases') return 'Rerun'
   if (action.startsWith('monitor_')) return 'Review'
   return normalizeTextValue(stage.action).replace(/_/g, ' ') || 'Review'
@@ -2726,8 +2727,28 @@ export default function LibraryPage() {
   const repairQualityStageShelfMetadata = async (stageKey: string) => {
     const targets = qualityFailureCases.filter((item) => qualityFailureCaseMatchesStage(item, stageKey)).slice(0, 3)
     if (!targets.length) {
-      await openQualityArtifact('citation_cards', 'report')
-      return { targetCount: 0, targetIds: [] as string[], ready: 0, exportReady: 0, changed: 0, retryable: 0, unresolved: 0, verification: {} as Record<string, unknown> }
+      const res = await referencesApi.backfillShelfMetadata(40, 240)
+      const ready = Number(res.ready || 0)
+      const exportReady = Number(res.acceptance?.export_ready_after || res.export_ready || ready)
+      const changed = Number(res.changed || res.preheated || 0)
+      const retryable = Number(res.retryable || 0)
+      const unresolved = Number(res.acceptance?.unresolved_after || res.unresolved || res.remaining_targets || 0)
+      const targetCount = Number(res.requested || res.scan?.target_count || 0)
+      const verification = (res.verification || res.repair_run?.verification || {}) as Record<string, unknown>
+      if (res.repair_run) {
+        setQualityRepairRun(res.repair_run as unknown as LibraryQualityRepairRun)
+      }
+      if (changed > 0) {
+        message.success(`Library metadata backfilled: ${changed}`)
+      } else if (retryable > 0) {
+        message.warning(`Library metadata can retry: ${retryable}`)
+      } else if (targetCount > 0 && exportReady > 0) {
+        message.success(`Library metadata export-ready: ${exportReady}`)
+      } else {
+        message.info('No repairable library metadata found.')
+      }
+      await store.loadQualityOverview('all')
+      return { targetCount, targetIds: [] as string[], ready, exportReady, changed, retryable, unresolved, verification }
     }
     let changed = 0
     let ready = 0
