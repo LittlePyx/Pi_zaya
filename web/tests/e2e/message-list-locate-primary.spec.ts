@@ -49,6 +49,108 @@ async function mockReaderDoc(page: Page) {
   })
 }
 
+function shelfMetadataRepairFixture(items: Array<Record<string, unknown>>, ready: boolean) {
+  const readyQuality = {
+    contract_version: 1,
+    ok: true,
+    status: 'ready',
+    score: 100,
+    missing_fields: [],
+    issues: [],
+    repairable: true,
+    retryable: false,
+    doi: '10.1109/TASSP.1988.1164940',
+  }
+  const unresolvedQuality = {
+    contract_version: 1,
+    ok: false,
+    status: 'error',
+    score: 44,
+    missing_fields: ['doi', 'authors', 'venue'],
+    issues: [
+      { code: 'missing_doi', label: 'Missing DOI', field: 'doi', severity: 'warning' },
+      { code: 'missing_authors', label: 'Missing authors', field: 'authors', severity: 'warning' },
+      { code: 'missing_venue', label: 'Missing venue', field: 'venue', severity: 'warning' },
+    ],
+    repairable: true,
+    retryable: true,
+  }
+  const quality = ready ? readyQuality : unresolvedQuality
+  return {
+    ok: true,
+    requested: items.length,
+    ready: ready ? items.length : 0,
+    partial: ready ? 0 : items.length,
+    retryable: ready ? 0 : items.length,
+    failed: 0,
+    changed: ready ? items.length : 0,
+    persisted: ready ? 1 : 0,
+    export_ready: ready ? items.length : 0,
+    unresolved: ready ? 0 : items.length,
+    impact: {
+      requested: items.length,
+      ready_before: 0,
+      ready_after: ready ? items.length : 0,
+      ready_delta: ready ? items.length : 0,
+      export_ready_before: 0,
+      export_ready_after: ready ? items.length : 0,
+      export_ready_delta: ready ? items.length : 0,
+      unresolved_after: ready ? 0 : items.length,
+      summary_export_ready_after: ready ? items.length : 0,
+      changed: ready ? items.length : 0,
+      persisted: ready ? 1 : 0,
+      before_avg_score: 44,
+      after_avg_score: ready ? 100 : 44,
+      score_delta: ready ? 56 : 0,
+      fixed_issue_codes: ready ? [{ name: 'missing_doi', count: 1 }] : [],
+      remaining_issue_codes: ready ? [] : [{ name: 'missing_doi', count: 1 }],
+      changed_fields: ready ? [{ name: 'doi', count: 1 }] : [],
+      repair_sources: ready ? [{ name: 'reference_index', count: 1 }] : [],
+    },
+    items: items.map((item, idx) => ({
+      key: String(item.key || item.anchor || `repair-${idx}`),
+      ok: ready,
+      changed: ready,
+      changed_fields: ready ? ['title', 'authors', 'venue', 'year', 'doi', 'doi_url'] : [],
+      repair_status: ready ? 'repaired' : 'retryable',
+      retryable: !ready,
+      fixed_issue_codes: ready ? ['missing_doi', 'missing_authors', 'missing_venue'] : [],
+      remaining_issue_codes: ready ? [] : ['missing_doi', 'missing_authors', 'missing_venue'],
+      repair_sources: ready ? ['reference_index'] : [],
+      before: unresolvedQuality,
+      after: quality,
+      meta: ready
+        ? {
+            ...item,
+            title: 'The missing cone problem and low-pass distortion in optical serial sectioning microscopy',
+            authors: 'Macias-Garza F, Bovik A C, Diller K R',
+            venue: 'IEEE Transactions on Acoustics, Speech, and Signal Processing',
+            year: '1988',
+            doi: '10.1109/TASSP.1988.1164940',
+            doi_url: 'https://doi.org/10.1109/TASSP.1988.1164940',
+            summary_line: 'The abstract explains how missing spatial frequencies create low-pass distortion in optical serial sectioning microscopy.',
+            summary_source: 'abstract',
+            summary_provider: 'crossref',
+            summary_quality: { contract_version: 1, ok: true, status: 'grounded', score: 94, source: 'abstract', provider: 'crossref', issues: [], export_ready: true },
+            bibliometrics_checked: true,
+            metadata_quality: readyQuality,
+            metadata_repair_status: 'repaired',
+            metadata_changed_fields: ['title', 'authors', 'venue', 'year', 'doi', 'doi_url'],
+            metadata_repair_sources: ['reference_index'],
+          }
+        : {
+            ...item,
+            metadata_quality: unresolvedQuality,
+            metadata_repair_status: 'retryable',
+            metadata_changed_fields: [],
+            metadata_repair_sources: [],
+          },
+      persisted: ready && idx === 0,
+      persisted_targets: ready && idx === 0 ? ['reference_index'] : [],
+    })),
+  }
+}
+
 test('structured locate chip prefers the best evidence block over a wrong raw primary block', async ({ page }) => {
   await mockReaderDoc(page)
   await page.goto('/__message_list_test__')
@@ -506,6 +608,82 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
   await page.locator('.kb-shelf-item').first().click()
   await expect(page.locator('.kb-shelf-summary')).toContainText('证据卡片')
   await expect(page.locator('.kb-shelf-summary')).toContainText('Polished card-view takeaway')
+})
+
+test('citation shelf export auto-completes metadata before download', async ({ page }) => {
+  await mockReaderDoc(page)
+  await page.route('**/api/library/source-quality', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          conversion_quality: { status: 'good', has_review_issue: false, score: 96, issues: [] },
+        })),
+      }),
+    })
+  })
+
+  let repairCalls = 0
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    repairCalls += 1
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const items = Array.isArray(payload.items) ? payload.items : []
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(shelfMetadataRepairFixture(items, repairCalls >= 2)),
+    })
+  })
+
+  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
+
+  const citeChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+
+  const firstRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  await firstRepairRequest
+
+  const shelf = page.getByTestId('citation-shelf')
+  await expect(shelf).toHaveClass(/translate-x-0/)
+  await expect(shelf.getByTestId('citation-shelf-repair')).toBeVisible()
+  await popover.locator('.kb-cite-pop-close').click()
+  await expect(popover).toBeHidden()
+
+  await page.getByTestId('citation-shelf-add-visible').click()
+  await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
+  await page.getByTestId('citation-shelf-export-bib').click()
+  await expect(page.getByTestId('citation-shelf-export-preflight')).toBeVisible()
+
+  const exportRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  const bibDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-preflight-continue').click()
+  const exportRepairPayload = (await exportRepairRequest).postDataJSON() as { items?: Array<Record<string, unknown>> }
+  expect(exportRepairPayload.items?.length || 0).toBeGreaterThan(0)
+  const bibDownload = await bibDownloadPromise
+  const bibPath = await bibDownload.path()
+  expect(bibPath, 'BibTeX export should produce a downloadable file').not.toBeNull()
+  if (bibPath) {
+    const bib = await readFile(bibPath, 'utf8')
+    expect(bib).toContain('title={The missing cone problem and low-pass distortion in optical serial sectioning microscopy}')
+    expect(bib).toContain('author={Macias-Garza F and Bovik A C and Diller K R}')
+    expect(bib).toContain('journal={IEEE Transactions on Acoustics, Speech, and Signal Processing}')
+    expect(bib).toContain('doi={10.1109/tassp.1988.1164940}')
+  }
+  await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
+  await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
 })
 
 test('citation shelf consumes metadata repair quality and clears review chips', async ({ page }) => {

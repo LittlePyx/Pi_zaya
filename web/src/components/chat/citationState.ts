@@ -1424,6 +1424,83 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
   return normalizeCiteDetail(merged) || detail
 }
 
+function normalizeTextLite(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function firstAuthorToken(value: string): string {
+  const firstChunk = String(value || '')
+    .split(/[;,\uFF0C\uFF1B]/)[0]
+    ?.trim()
+    || ''
+  const tokens = firstChunk.match(/[A-Za-z\u4e00-\u9fff]+/g) || []
+  if (tokens.length <= 0) return ''
+  const first = tokens.at(0)
+  return first ? first.toLowerCase() : ''
+}
+
+function year4(value: string): string {
+  const match = String(value || '').match(/\b(19|20)\d{2}\b/)
+  return match ? match[0] : ''
+}
+
+function jaccardTokens(a: string, b: string): number {
+  const aSet = new Set(normalizeTextLite(a).split(' ').filter(Boolean))
+  const bSet = new Set(normalizeTextLite(b).split(' ').filter(Boolean))
+  if (aSet.size <= 0 || bSet.size <= 0) return 0
+  let inter = 0
+  for (const t of aSet) {
+    if (bSet.has(t)) inter += 1
+  }
+  const union = aSet.size + bSet.size - inter
+  return union > 0 ? inter / union : 0
+}
+
+export function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<string, unknown>): CiteShelfItem | null {
+  if (!candidateMeta || Object.keys(candidateMeta).length <= 0) return null
+  const merged = mergeCiteMeta(base, candidateMeta)
+  const mergedItem = {
+    ...toShelfItem(merged),
+    key: base.key,
+    tags: normalizeShelfTags(base.tags),
+    note: normalizeShelfNote(base.note),
+  }
+
+  const baseDoi = normalizeDoiLike(base.doi || base.doiUrl)
+  const baseRawDoi = extractDoiLike(base.raw || base.citeFmt)
+  const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
+  const trustedRepair = metadataRepairMetaTrusted(candidateMeta)
+  if (baseDoi && mergedDoi && baseDoi !== mergedDoi) {
+    if (!(trustedRepair && base.isInpaper && !baseRawDoi)) return null
+  }
+  if (baseRawDoi && mergedDoi && baseRawDoi === mergedDoi) return mergedItem
+  if (baseRawDoi && mergedDoi && baseRawDoi !== mergedDoi) return null
+  if (trustedRepair) return mergedItem
+
+  const titleSignal = jaccardTokens(base.title || base.main, mergedItem.title || mergedItem.main) >= 0.55
+  const authorSignal = (
+    Boolean(firstAuthorToken(base.authors))
+    && firstAuthorToken(base.authors) === firstAuthorToken(mergedItem.authors)
+  )
+  const yearSignal = Boolean(year4(base.year) && year4(base.year) === year4(mergedItem.year))
+  const venueSignal = jaccardTokens(base.venue, mergedItem.venue) >= 0.5
+  const newDoiSignal = !baseDoi && Boolean(mergedDoi)
+
+  let signalCount = 0
+  if (titleSignal) signalCount += 1
+  if (authorSignal) signalCount += 1
+  if (yearSignal) signalCount += 1
+  if (venueSignal) signalCount += 1
+
+  const accepted = newDoiSignal ? signalCount >= 1 : signalCount >= 2
+  if (!accepted) return null
+  return mergedItem
+}
+
 export function citeMetricSummary(detail: CiteDetail): string[] {
   const items: string[] = []
   if (detail.citationCount > 0) {

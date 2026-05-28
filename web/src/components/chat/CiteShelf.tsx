@@ -4,7 +4,7 @@ import { FileSearchOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ConversionQualitySummary, LibrarySourceQualityItem } from '../../api/library'
-import type { ShelfMetadataQuality, ShelfMetadataRepairImpact } from '../../api/references'
+import type { ShelfMetadataQuality, ShelfMetadataRepairImpact, ShelfMetadataRepairItem } from '../../api/references'
 import { libraryApi } from '../../api/library'
 import {
   citationCardView,
@@ -13,9 +13,11 @@ import {
   citeMetricSummary,
   isLikelyWeakCitationTitle,
   normalizeShelfTags,
+  strictRepairMerge,
   summarySourceLabel,
 } from './citationState'
 import { useT } from '../../i18n'
+import { referencesApi } from '../../api/references'
 
 interface Props {
   open: boolean
@@ -36,6 +38,7 @@ interface Props {
   onUpdateTags: (key: string, tags: string[]) => void
   onUpdateNote: (key: string, note: string) => void
   onRepair: (item: CiteShelfItem, options?: { silent?: boolean }) => void
+  onApplyRepairCandidates?: (updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>) => boolean
   onSelectSnapshot: (id: string) => void
   onSaveSnapshot: () => void
   onLoadSnapshot: () => void
@@ -47,6 +50,7 @@ const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
 type GroupMode = 'none' | 'tag' | 'source'
 type SourceQualityByPath = Record<string, LibrarySourceQualityItem>
 type ShelfExportKind = 'bib' | 'csv' | 'ris'
+type ShelfExportOptions = { skipPreflight?: boolean; onlyMetadataReady?: boolean; autoRepair?: boolean }
 type SourceOpenQualityTone = 'ready' | 'partial' | 'review' | 'missing'
 
 interface SourceOpenQualityView {
@@ -455,6 +459,7 @@ export function CiteShelf({
   onUpdateTags,
   onUpdateNote,
   onRepair,
+  onApplyRepairCandidates,
   onSelectSnapshot,
   onSaveSnapshot,
   onLoadSnapshot,
@@ -469,6 +474,7 @@ export function CiteShelf({
   const [tagFilter, setTagFilter] = useState<string>('all')
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
   const [preflightExportKind, setPreflightExportKind] = useState<ShelfExportKind | ''>('')
+  const [exportRepairingKind, setExportRepairingKind] = useState<ShelfExportKind | ''>('')
   const [batchTagInput, setBatchTagInput] = useState('')
   const [editingNoteKeys, setEditingNoteKeys] = useState<Record<string, boolean>>({})
   const [copyState, setCopyState] = useState<'idle' | 'gbt' | 'bibtex' | 'error'>('idle')
@@ -1036,18 +1042,118 @@ export function CiteShelf({
     return `"${text.replace(/"/g, '""')}"`
   }
 
-  const exportSelectedAs = (kind: ShelfExportKind, options: { skipPreflight?: boolean; onlyMetadataReady?: boolean } = {}) => {
+  const repairPayloadsForExport = (item: CiteShelfItem): Array<Record<string, unknown>> => {
+    const basePayload = item as unknown as Record<string, unknown>
+    return [
+      basePayload,
+      {
+        ...basePayload,
+        raw: '',
+        cite_fmt: '',
+        citeFmt: '',
+      },
+    ]
+  }
+
+  const repairMetaFromEntry = (entry: ShelfMetadataRepairItem): Record<string, unknown> => ({
+    ...(entry.meta || {}),
+    metadata_quality: entry.after || (entry.meta || {}).metadata_quality,
+    metadata_repair_status: entry.repair_status,
+    metadata_changed_fields: entry.changed_fields || [],
+    metadata_repair_sources: entry.repair_sources || [],
+  })
+
+  const repairMetadataBeforeExport = async (kind: ShelfExportKind, exportItems: CiteShelfItem[]): Promise<CiteShelfItem[]> => {
+    const candidates = exportItems.filter((item) => shouldAutoRepairItem(item, citationDisplay(item)))
+    if (candidates.length <= 0) return exportItems
+
+    const payloads = candidates.flatMap((item) => repairPayloadsForExport(item))
+    const noticeKey = `cite-shelf-export-repair-${kind}`
+    setExportRepairingKind(kind)
+    message.loading({
+      key: noticeKey,
+      content: S.shelf_export_repairing.replace('{n}', String(candidates.length)),
+      duration: 0,
+    })
+    try {
+      const res = await referencesApi.repairShelfMetadata(payloads, payloads.length)
+      const metasByKey = new Map<string, Array<Record<string, unknown>>>()
+      for (const entry of Array.isArray(res.items) ? res.items : []) {
+        const meta = repairMetaFromEntry(entry)
+        if (!meta || Object.keys(meta).length <= 0) continue
+        const key = String(entry.key || meta.key || '').trim()
+        if (!key) continue
+        metasByKey.set(key, [...(metasByKey.get(key) || []), meta])
+      }
+      const updates = Array.from(metasByKey.entries()).map(([key, metas]) => ({ key, metas }))
+      onApplyRepairCandidates?.(updates)
+
+      let repairedReadyCount = 0
+      let unresolvedCount = 0
+      const repairedItems = exportItems.map((item) => {
+        const wasReady = !shouldAutoRepairItem(item, citationDisplay(item))
+        const metas = metasByKey.get(item.key) || []
+        let next = item
+        for (const meta of metas) {
+          const accepted = strictRepairMerge(next, meta)
+          if (accepted) next = accepted
+        }
+        const isReady = !shouldAutoRepairItem(next, citationDisplay(next))
+        if (!wasReady && isReady) repairedReadyCount += 1
+        if (!isReady) unresolvedCount += 1
+        return next
+      })
+
+      if (repairedReadyCount > 0 && unresolvedCount <= 0) {
+        message.success({
+          key: noticeKey,
+          content: S.shelf_export_repaired.replace('{n}', String(repairedReadyCount)),
+          duration: 2,
+        })
+      } else if (repairedReadyCount > 0) {
+        message.warning({
+          key: noticeKey,
+          content: S.shelf_export_repaired_partial
+            .replace('{n}', String(repairedReadyCount))
+            .replace('{m}', String(unresolvedCount)),
+          duration: 3,
+        })
+      } else {
+        message.warning({
+          key: noticeKey,
+          content: S.shelf_export_repair_no_change,
+          duration: 3,
+        })
+      }
+      return repairedItems
+    } catch {
+      message.warning({
+        key: noticeKey,
+        content: S.shelf_export_repair_failed,
+        duration: 3,
+      })
+      return exportItems
+    } finally {
+      setExportRepairingKind((current) => (current === kind ? '' : current))
+    }
+  }
+
+  const exportSelectedAs = async (kind: ShelfExportKind, options: ShelfExportOptions = {}) => {
     if (selectedItems.length <= 0) return
+    if (exportRepairingKind) return
     if (selectedMetadataReviewCount > 0 && !options.skipPreflight) {
       setPreflightExportKind(kind)
       return
     }
-    const exportItems = options.onlyMetadataReady
+    let exportItems = options.onlyMetadataReady
       ? selectedItems.filter((item) => !selectedMetadataReviewKeySet.has(item.key))
       : selectedItems
     if (exportItems.length <= 0) {
       message.warning(S.shelf_export_preflight_no_healthy)
       return
+    }
+    if (options.autoRepair) {
+      exportItems = await repairMetadataBeforeExport(kind, exportItems)
     }
     try {
       const base = `cite_shelf_selected_${nowStamp()}`
@@ -1373,13 +1479,31 @@ export function CiteShelf({
                   <Button size="small" onClick={() => void copySelectedAs('bibtex')} data-testid="citation-shelf-copy-bibtex">
                     {copyState === 'bibtex' ? S.shelf_copied_bibtex : S.shelf_copy_bibtex}
                   </Button>
-                  <Button size="small" onClick={() => exportSelectedAs('bib')} data-testid="citation-shelf-export-bib">
+                  <Button
+                    size="small"
+                    onClick={() => void exportSelectedAs('bib')}
+                    loading={exportRepairingKind === 'bib'}
+                    disabled={Boolean(exportRepairingKind && exportRepairingKind !== 'bib')}
+                    data-testid="citation-shelf-export-bib"
+                  >
                     {S.shelf_export_bib_btn}
                   </Button>
-                  <Button size="small" onClick={() => exportSelectedAs('ris')} data-testid="citation-shelf-export-ris">
+                  <Button
+                    size="small"
+                    onClick={() => void exportSelectedAs('ris')}
+                    loading={exportRepairingKind === 'ris'}
+                    disabled={Boolean(exportRepairingKind && exportRepairingKind !== 'ris')}
+                    data-testid="citation-shelf-export-ris"
+                  >
                     {S.shelf_export_ris_btn}
                   </Button>
-                  <Button size="small" onClick={() => exportSelectedAs('csv')} data-testid="citation-shelf-export-csv">
+                  <Button
+                    size="small"
+                    onClick={() => void exportSelectedAs('csv')}
+                    loading={exportRepairingKind === 'csv'}
+                    disabled={Boolean(exportRepairingKind && exportRepairingKind !== 'csv')}
+                    data-testid="citation-shelf-export-csv"
+                  >
                     {S.shelf_export_csv_btn}
                   </Button>
                   <div className="flex min-w-[170px] items-center gap-1" onClick={(event) => event.stopPropagation()}>
@@ -1422,22 +1546,24 @@ export function CiteShelf({
                       <Button
                         size="small"
                         onClick={() => {
-                          exportSelectedAs(preflightExportKind, { skipPreflight: true, onlyMetadataReady: true })
+                          void exportSelectedAs(preflightExportKind, { skipPreflight: true, onlyMetadataReady: true })
                           setPreflightExportKind('')
                         }}
+                        disabled={Boolean(exportRepairingKind)}
                         data-testid="citation-shelf-export-preflight-healthy"
                       >
                         {S.shelf_export_preflight_healthy}
                       </Button>
                       <Button
                         size="small"
-                        onClick={() => {
-                          exportSelectedAs(preflightExportKind, { skipPreflight: true })
+                        onClick={async () => {
+                          await exportSelectedAs(preflightExportKind, { skipPreflight: true, autoRepair: true })
                           setPreflightExportKind('')
                         }}
+                        loading={Boolean(exportRepairingKind)}
                         data-testid="citation-shelf-export-preflight-continue"
                       >
-                        {S.shelf_export_preflight_continue}
+                        {S.shelf_export_preflight_autofill}
                       </Button>
                     </div>
                   </div>

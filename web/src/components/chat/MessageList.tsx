@@ -20,6 +20,7 @@ import {
   normalizeShelfNote,
   normalizeShelfTags,
   shelfStorageKey,
+  strictRepairMerge,
   toShelfItem,
   type CiteDetail,
   type CiteShelfItem,
@@ -3718,14 +3719,6 @@ function normalizeDoiLike(value: string): string {
     .trim()
 }
 
-function extractDoiLike(value: string): string {
-  const text = String(value || '').trim()
-  const direct = normalizeDoiLike(text)
-  if (/^10\.\d{4,9}\//i.test(direct)) return direct
-  const match = text.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i)
-  return match ? normalizeDoiLike(match[0]) : ''
-}
-
 function normalizeTitleLike(value: string): string {
   return String(value || '')
     .toLowerCase()
@@ -4145,100 +4138,6 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     tags: normalizeShelfTags(item.tags),
     note: normalizeShelfNote(item.note),
   }
-}
-
-function normalizeTextLite(value: string): string {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function firstAuthorToken(value: string): string {
-  const firstChunk = String(value || '')
-    .split(/[;,\uFF0C\uFF1B]/)[0]
-    ?.trim()
-    || ''
-  const tokens = firstChunk.match(/[A-Za-z\u4e00-\u9fff]+/g) || []
-  if (tokens.length <= 0) return ''
-  const first = tokens.at(0)
-  return first ? first.toLowerCase() : ''
-}
-
-function year4(value: string): string {
-  const match = String(value || '').match(/\b(19|20)\d{2}\b/)
-  return match ? match[0] : ''
-}
-
-function metadataQualityOk(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false
-  const rec = value as Record<string, unknown>
-  const status = String(rec.status || '').trim().toLowerCase()
-  return rec.ok === true || status === 'ready'
-}
-
-function metadataRepairTrusted(candidateMeta: Record<string, unknown>): boolean {
-  const qualityOk = metadataQualityOk(candidateMeta.metadata_quality || candidateMeta.metadataQuality)
-  const repairStatus = String(candidateMeta.metadata_repair_status || candidateMeta.metadataRepairStatus || '').trim().toLowerCase()
-  const changedFields = Array.isArray(candidateMeta.metadata_changed_fields)
-    ? candidateMeta.metadata_changed_fields
-    : candidateMeta.metadataChangedFields
-  const changedCount = Array.isArray(changedFields) ? changedFields.length : 0
-  return qualityOk && (changedCount > 0 || ['ready', 'repaired'].includes(repairStatus))
-}
-
-function jaccardTokens(a: string, b: string): number {
-  const aSet = new Set(normalizeTextLite(a).split(' ').filter(Boolean))
-  const bSet = new Set(normalizeTextLite(b).split(' ').filter(Boolean))
-  if (aSet.size <= 0 || bSet.size <= 0) return 0
-  let inter = 0
-  for (const t of aSet) {
-    if (bSet.has(t)) inter += 1
-  }
-  const union = aSet.size + bSet.size - inter
-  return union > 0 ? inter / union : 0
-}
-
-function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<string, unknown>): CiteShelfItem | null {
-  if (!candidateMeta || Object.keys(candidateMeta).length <= 0) return null
-  const merged = mergeCiteMeta(base, candidateMeta)
-  const mergedItem = {
-    ...toShelfItem(merged),
-    key: base.key,
-    tags: normalizeShelfTags(base.tags),
-    note: normalizeShelfNote(base.note),
-  }
-
-  const baseDoi = normalizeDoiLike(base.doi || base.doiUrl)
-  const baseRawDoi = extractDoiLike(base.raw || base.citeFmt)
-  const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
-  const trustedRepair = metadataRepairTrusted(candidateMeta)
-  if (baseDoi && mergedDoi && baseDoi !== mergedDoi) {
-    if (!(trustedRepair && base.isInpaper && !baseRawDoi)) return null
-  }
-  if (baseRawDoi && mergedDoi && baseRawDoi === mergedDoi) return mergedItem
-  if (baseRawDoi && mergedDoi && baseRawDoi !== mergedDoi) return null
-  if (trustedRepair) return mergedItem
-
-  const titleSignal = jaccardTokens(base.title || base.main, mergedItem.title || mergedItem.main) >= 0.55
-  const authorSignal = (
-    Boolean(firstAuthorToken(base.authors))
-    && firstAuthorToken(base.authors) === firstAuthorToken(mergedItem.authors)
-  )
-  const yearSignal = Boolean(year4(base.year) && year4(base.year) === year4(mergedItem.year))
-  const venueSignal = jaccardTokens(base.venue, mergedItem.venue) >= 0.5
-  const newDoiSignal = !baseDoi && Boolean(mergedDoi)
-
-  let signalCount = 0
-  if (titleSignal) signalCount += 1
-  if (authorSignal) signalCount += 1
-  if (yearSignal) signalCount += 1
-  if (venueSignal) signalCount += 1
-
-  const accepted = newDoiSignal ? signalCount >= 1 : signalCount >= 2
-  if (!accepted) return null
-  return mergedItem
 }
 
 function snapshotDiffCounts(currentItems: CiteShelfItem[], baselineItems: CiteShelfItem[]): { added: number; removed: number } {
@@ -4845,6 +4744,36 @@ export function MessageList({
       })
   }
 
+  const applyShelfMetadataRepairCandidates = (
+    updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>,
+  ): boolean => {
+    if (updates.length <= 0) return false
+    const byKey = new Map<string, Array<Record<string, unknown>>>()
+    for (const update of updates) {
+      const key = String(update.key || '').trim()
+      const metas = (update.metas || []).filter((meta) => meta && Object.keys(meta).length > 0)
+      if (!key || metas.length <= 0) continue
+      byKey.set(key, [...(byKey.get(key) || []), ...metas])
+    }
+    if (byKey.size <= 0) return false
+    let didUpdate = false
+    setShelfItems((current) => current.map((entry) => {
+      const candidates = byKey.get(entry.key)
+      if (!candidates || candidates.length <= 0) return entry
+      for (const meta of candidates) {
+        const accepted = strictRepairMerge(entry, meta)
+        if (!accepted) continue
+        if (!sameShelfItem(accepted, entry)) {
+          didUpdate = true
+          return accepted
+        }
+        return entry
+      }
+      return entry
+    }))
+    return didUpdate
+  }
+
   const repairShelfItemMeta = (item: CiteShelfItem, options?: { silent?: boolean }) => {
     if (shelfRepairLoadingKey === item.key) return
     const silent = Boolean(options?.silent)
@@ -4878,20 +4807,7 @@ export function MessageList({
     loadRepairCandidates
       .then((metas) => {
         const candidates = metas.filter((meta) => meta && Object.keys(meta).length > 0)
-        let didUpdate = false
-        setShelfItems((current) => current.map((entry) => {
-          if (entry.key !== item.key) return entry
-          for (const meta of candidates) {
-            const accepted = strictRepairMerge(entry, meta)
-            if (!accepted) continue
-            if (!sameShelfItem(accepted, entry)) {
-              didUpdate = true
-              return accepted
-            }
-            return entry
-          }
-          return entry
-        }))
+        const didUpdate = applyShelfMetadataRepairCandidates([{ key: item.key, metas: candidates }])
         if (!silent) {
           if (didUpdate) message.success('Metadata repaired with strict rules')
           else message.info('Strict match did not pass; original metadata kept')
@@ -6666,6 +6582,7 @@ export function MessageList({
         onRepair={(item, options) => {
           repairShelfItemMeta(item, options)
         }}
+        onApplyRepairCandidates={applyShelfMetadataRepairCandidates}
         onSelectSnapshot={setSelectedSavedSnapshotId}
         onSaveSnapshot={saveShelfSnapshot}
         onLoadSnapshot={loadShelfSnapshot}
