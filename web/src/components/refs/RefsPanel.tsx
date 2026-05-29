@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Collapse, Modal, Tabs, Typography, message } from 'antd'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../../i18n'
@@ -412,7 +412,7 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
     }
   }
 
-  const fetchCitationMeta = async (index: number, ui: RefUiMeta, options?: { silent?: boolean }) => {
+  const fetchCitationMeta = useCallback(async (index: number, ui: RefUiMeta, options?: { silent?: boolean }) => {
     const sourcePath = String(ui.source_path || '').trim()
     if (!sourcePath) return
     const silent = Boolean(options?.silent)
@@ -431,7 +431,7 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
         setLoadingIndex((current) => (current === index ? null : current))
       }
     }
-  }
+  }, [S.refs_fetch_meta_failed])
 
   useEffect(() => {
     if (hasPending || visibleHits.length <= 0) return
@@ -446,7 +446,7 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
       autoFetchedCitationMetaRef.current.add(fetchKey)
       void fetchCitationMeta(index, ui, { silent: true })
     }
-  }, [hasPending, msgId, remoteMeta, visibleHits])
+  }, [fetchCitationMeta, hasPending, msgId, remoteMeta, visibleHits])
 
   const citeDetail = useMemo<CiteDetail | null>(() => {
     if (citeIndex === null || !visibleHits[citeIndex]) return null

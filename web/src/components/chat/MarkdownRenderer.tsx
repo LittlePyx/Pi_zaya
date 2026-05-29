@@ -758,7 +758,7 @@ function collectInlineLocateTokens(
     const prefix = src.slice(Math.max(0, start - 90), start).toLowerCase()
     const suffix = src.slice(start + String(text0 || '').length, start + String(text0 || '').length + 100).toLowerCase()
     const titleContextBefore = /(?:论文|文献|工作|研究|参考|来源|线索|综述|作者|引用|提出|发表|paper|work|study|source|reference|title|titled|entitled|called|cited|proposed|introduced|reported|reviewed)\s*[:：]?\s*$/i
-    const titleContextAfter = /^\s*(?:(?:中|里|这篇|这个|提出|发表|总结|综述|系统总结|作为|是)(?=$|[\s，,。；;：:]|[^\x00-\x7F])|(?:which|that|paper|work|study|source|reference|proposed|introduced|summarized|reviewed|reported|cited)\b)/i
+    const titleContextAfter = /^\s*(?:(?:中|里|这篇|这个|提出|发表|总结|综述|系统总结|作为|是)(?=$|[\s，,。；;：:]|\p{Script=Han})|(?:which|that|paper|work|study|source|reference|proposed|introduced|summarized|reviewed|reported|cited)\b)/iu
     if (titleContextBefore.test(prefix) || titleContextAfter.test(suffix)) return true
     return false
   }

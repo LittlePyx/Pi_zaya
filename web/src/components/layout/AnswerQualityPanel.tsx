@@ -30,7 +30,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
     } finally {
       setQualityLoading(false)
     }
-  }, [depthFilter, intentFilter, onlyFailed])
+  }, [S.quality_loading_failed, depthFilter, intentFilter, onlyFailed])
 
   useEffect(() => {
     if (!open) return

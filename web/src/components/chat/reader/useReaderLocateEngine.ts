@@ -848,6 +848,7 @@ export function useReaderLocateEngine({
     activeAnchorKind,
     activeAnchorNumber,
     activeHitLevel,
+    sourcePath,
     readerBlocks,
     alternatives,
     relatedBlockIds,

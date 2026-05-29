@@ -4586,7 +4586,7 @@ export default function LibraryPage() {
 
       <div className="kb-lib-summary-strip">
         {workbenchStats.map((item) => (
-          <div key={item.key} className="kb-lib-summary-chip">
+          <div key={item.key} className={`kb-lib-summary-chip is-${item.key}`} data-stat-key={item.key}>
             <Text type="secondary" className="kb-lib-summary-label">{item.label}</Text>
             <div className="kb-lib-summary-value">{item.value}</div>
           </div>

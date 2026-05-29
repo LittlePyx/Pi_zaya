@@ -356,7 +356,7 @@ export default function ChatPage() {
         delete dismissTimerRef.current[key]
       }
     }
-  }, [dismissUploadItem, uploadItems])
+  }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
 
   const onSend = (text: string) => {
     sendMessage(text, {
@@ -460,7 +460,7 @@ export default function ChatPage() {
       })
     }
     return out
-  }, [deferredTimelineMessages])
+  }, [S, deferredTimelineMessages])
   const timelineTrackedMessageIds = useMemo(
     () => timelineItems.map((item) => item.targetMsgId),
     [timelineItems],

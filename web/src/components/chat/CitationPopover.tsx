@@ -13,6 +13,8 @@ import {
 
 import { useT } from '../../i18n'
 
+const SYSTEM_B_TRACE_ENABLED = false
+
 interface Props {
   detail: CiteDetail | null
   position: { x: number; y: number } | null
@@ -79,7 +81,7 @@ function isOnlyPaperLabel(value: string, candidates: string[]): boolean {
 }
 
 function stripLocationIdentityPrefix(value: string, candidates: string[]): string {
-  let text = compact(value)
+  const text = compact(value)
   if (!text) return ''
   const identities = candidates.map(comparablePaperLabel).filter(Boolean)
   if (!identities.length) return text
@@ -361,7 +363,7 @@ export function CitationPopover({
   const systemBTraceReason = isSystemB ? cleanCitationDisplayText(detail.systemBTraceReason) : ''
   const systemBTraceScore = Number(detail.systemBTraceScore || 0)
   const showSystemBTrace = Boolean(
-    false
+    SYSTEM_B_TRACE_ENABLED
     && isSystemB
     && (systemBTraceSteps.length > 0 || systemBTraceReason || systemBTraceScore > 0),
   )

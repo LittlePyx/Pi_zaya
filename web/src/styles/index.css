@@ -4923,31 +4923,53 @@ textarea.kb-chat-textarea:focus {
 
 .kb-lib-summary-strip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
 }
 
 .kb-lib-summary-chip {
   display: grid;
-  gap: 4px;
-  border: none;
-  border-radius: 18px;
-  background: var(--kb-lib-surface);
-  box-shadow: var(--kb-lib-shadow-soft);
-  padding: 14px 16px;
+  gap: 5px;
+  min-height: 64px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--kb-lib-surface) 92%, var(--panel));
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  padding: 10px 12px;
+}
+
+.kb-lib-summary-chip.is-source_ready {
+  border-color: color-mix(in srgb, #16a34a 22%, var(--border));
+  border-left-color: color-mix(in srgb, #16a34a 76%, var(--accent));
+  background: color-mix(in srgb, #16a34a 7%, var(--kb-lib-surface));
+}
+
+.kb-lib-summary-chip.is-source_blocked {
+  border-color: color-mix(in srgb, #ef4444 24%, var(--border));
+  border-left-color: color-mix(in srgb, #ef4444 78%, var(--accent));
+  background: color-mix(in srgb, #ef4444 7%, var(--kb-lib-surface));
+}
+
+.kb-lib-summary-chip.is-running,
+.kb-lib-summary-chip.is-queued {
+  border-left-color: color-mix(in srgb, #2563eb 72%, var(--accent));
 }
 
 .kb-lib-summary-label.ant-typography {
   margin: 0;
-  font-size: 12px;
+  color: color-mix(in srgb, var(--muted-text) 88%, transparent);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.25;
 }
 
 .kb-lib-summary-value {
   color: var(--text-main);
-  font-size: 24px;
-  font-weight: 680;
+  font-size: 22px;
+  font-weight: 760;
   line-height: 1.05;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .kb-lib-workbench-card .ant-card-body {
@@ -6582,7 +6604,7 @@ textarea.kb-chat-textarea:focus {
 
 .kb-lib-quality-report .ant-card-body {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 
 .kb-lib-quality-report-head {
@@ -6620,17 +6642,17 @@ textarea.kb-chat-textarea:focus {
 }
 
 .kb-lib-quality-report-actions .ant-btn {
-  min-height: 27px;
+  min-height: 30px;
   border-radius: 8px;
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 1.2;
   white-space: normal;
 }
 
 .kb-lib-quality-report-metrics {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
-  gap: 7px;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
 }
 
 .kb-lib-quality-report-metric {
@@ -6638,13 +6660,13 @@ textarea.kb-chat-textarea:focus {
   align-items: center;
   justify-content: space-between;
   min-width: 0;
-  min-height: 34px;
+  min-height: 42px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--kb-lib-surface) 86%, var(--panel));
   color: color-mix(in srgb, var(--text-main) 70%, transparent);
-  padding: 6px 8px;
-  font-size: 11px;
+  padding: 8px 10px;
+  font-size: 11.5px;
   line-height: 1.25;
 }
 
@@ -6669,8 +6691,8 @@ button.kb-lib-quality-report-metric:disabled {
   border-radius: 999px;
   background: color-mix(in srgb, var(--panel) 86%, var(--bg));
   color: var(--text-main);
-  padding: 2px 7px;
-  font-size: 11.5px;
+  padding: 3px 8px;
+  font-size: 12px;
   line-height: 1.2;
 }
 

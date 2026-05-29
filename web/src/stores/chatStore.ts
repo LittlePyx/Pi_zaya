@@ -366,7 +366,7 @@ function needsRefsEnrichment(refs: Record<string, unknown>) {
       enrichment_pending?: boolean
       payload_mode?: string
     }
-    if (Boolean(rec?.enrichment_pending)) {
+    if (rec?.enrichment_pending) {
       return true
     }
     const payloadMode = String(rec?.payload_mode || '').trim().toLowerCase()
