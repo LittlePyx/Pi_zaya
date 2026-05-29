@@ -41,6 +41,7 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons'
 import type {
+  ConversionRepairAttempt,
   ConversionQualitySummary,
   LibraryFileItem,
   LibraryQualityActionDelta,
@@ -722,6 +723,134 @@ function conversionQualityNeedsReview(quality?: ConversionQualitySummary | null)
   return Boolean(quality?.has_review_issue) || status === 'warning' || status === 'error'
 }
 
+type SourceReadinessKind = 'ready' | 'autofixed' | 'blocked' | 'review' | 'processing' | 'pending' | 'unknown'
+
+interface SourceReadinessView {
+  kind: SourceReadinessKind
+  tone: 'ready' | 'autofixed' | 'blocked' | 'review' | 'processing' | 'pending' | 'unknown'
+  label: string
+  detail: string
+  action: 'repair' | 'reconvert' | ''
+  qaReady: boolean
+  blocked: boolean
+}
+
+function conversionRepairAttemptLabel(
+  attempt: ConversionRepairAttempt | null | undefined,
+  S: Record<string, string>,
+) {
+  const status = normalizeTextValue(attempt?.status).toLowerCase()
+  if (status === 'queued' || status === 'running') return S.lib_quality_gate_queued
+  if (status === 'autofixed' || status === 'fixed') return S.lib_quality_gate_autofixed
+  if (status === 'success' || status === 'resolved' || status === 'ready') return S.lib_quality_gate_ready
+  if (status === 'partial') return S.lib_quality_gate_partial
+  if (status === 'blocked' || status === 'failed' || status === 'error') return S.lib_quality_gate_blocked
+  return S.lib_quality_gate_tracked.replace('{status}', status || 'tracked')
+}
+
+function conversionSourceReadiness(item: LibraryFileItem, S: Record<string, string>): SourceReadinessView {
+  const quality = item.conversion_quality
+  const report = quality?.conversion_report || null
+  const repairPlan = report?.repair_plan || null
+  const latestAttempt = report?.latest_repair_attempt || null
+  const latestStatus = normalizeTextValue(latestAttempt?.status).toLowerCase()
+  const planAction = normalizeTextValue(repairPlan?.action).toLowerCase()
+  const qualityStatus = conversionQualityStatus(quality)
+  const needsReview = conversionQualityNeedsReview(quality)
+  const remainingCodes = Array.isArray(report?.remaining_issue_codes) ? report?.remaining_issue_codes || [] : []
+  const isBlocked = Boolean(report?.needs_reconvert)
+    || planAction === 'reconvert'
+    || ['blocked', 'failed', 'error'].includes(latestStatus)
+  const wasAutofixed = Boolean(report?.auto_repair_changed) || ['autofixed', 'fixed'].includes(latestStatus)
+
+  if (item.task_state === 'running' || item.task_state === 'queued') {
+    return {
+      kind: 'processing',
+      tone: 'processing',
+      label: S.lib_source_status_processing,
+      detail: S.lib_source_status_processing_detail,
+      action: '',
+      qaReady: false,
+      blocked: false,
+    }
+  }
+  if (!item.md_exists) {
+    return {
+      kind: 'pending',
+      tone: 'pending',
+      label: S.lib_source_status_pending,
+      detail: S.lib_source_status_pending_detail,
+      action: '',
+      qaReady: false,
+      blocked: false,
+    }
+  }
+  if (isBlocked) {
+    return {
+      kind: 'blocked',
+      tone: 'blocked',
+      label: S.lib_source_status_blocked,
+      detail: repairPlan?.reason || latestAttempt?.detail || latestAttempt?.reason || S.lib_source_status_blocked_detail,
+      action: 'reconvert',
+      qaReady: false,
+      blocked: true,
+    }
+  }
+  if (latestStatus === 'queued' || latestStatus === 'running') {
+    return {
+      kind: 'processing',
+      tone: 'processing',
+      label: S.lib_source_status_processing,
+      detail: latestAttempt?.detail || latestAttempt?.reason || S.lib_source_status_processing_detail,
+      action: '',
+      qaReady: false,
+      blocked: false,
+    }
+  }
+  if (wasAutofixed && !needsReview && remainingCodes.length === 0) {
+    return {
+      kind: 'autofixed',
+      tone: 'autofixed',
+      label: S.lib_source_status_autofixed,
+      detail: S.lib_source_status_autofixed_detail,
+      action: '',
+      qaReady: true,
+      blocked: false,
+    }
+  }
+  if ((qualityStatus === 'good' || latestStatus === 'ready' || latestStatus === 'success' || latestStatus === 'resolved') && !needsReview) {
+    return {
+      kind: 'ready',
+      tone: 'ready',
+      label: S.lib_source_status_ready,
+      detail: S.lib_source_status_ready_detail,
+      action: '',
+      qaReady: true,
+      blocked: false,
+    }
+  }
+  if (needsReview || remainingCodes.length > 0 || ['review', 'autofix'].includes(planAction)) {
+    return {
+      kind: 'review',
+      tone: 'review',
+      label: S.lib_source_status_review,
+      detail: repairPlan?.reason || S.lib_source_status_review_detail,
+      action: 'repair',
+      qaReady: false,
+      blocked: false,
+    }
+  }
+  return {
+    kind: 'unknown',
+    tone: 'unknown',
+    label: S.lib_source_status_unknown,
+    detail: S.lib_source_status_unknown_detail,
+    action: '',
+    qaReady: false,
+    blocked: false,
+  }
+}
+
 function conversionQualityScore(quality?: ConversionQualitySummary | null) {
   const value = Number(quality?.score || 0)
   return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0
@@ -903,7 +1032,23 @@ function qualityRepairRunCanAdvance(run: LibraryQualityRepairRun | null) {
 }
 
 function hasConversionQualityIssue(item: LibraryFileItem) {
-  return Boolean(item.conversion_quality?.has_review_issue)
+  const quality = item.conversion_quality
+  const report = quality?.conversion_report || null
+  const latestStatus = normalizeTextValue(report?.latest_repair_attempt?.status).toLowerCase()
+  const planAction = normalizeTextValue(report?.repair_plan?.action).toLowerCase()
+  const remainingCodes = Array.isArray(report?.remaining_issue_codes) ? report?.remaining_issue_codes || [] : []
+  const gateReady = ['ready', 'success', 'resolved', 'autofixed', 'fixed'].includes(latestStatus)
+    && !conversionQualityNeedsReview(quality)
+    && remainingCodes.length === 0
+    && !report?.needs_reconvert
+    && !report?.auto_repair_unsafe
+  if (gateReady) return false
+  return Boolean(quality?.has_review_issue)
+    || Boolean(report?.needs_reconvert)
+    || Boolean(report?.auto_repair_unsafe)
+    || remainingCodes.length > 0
+    || ['reconvert', 'review', 'autofix'].includes(planAction)
+    || ['blocked', 'failed', 'error', 'partial'].includes(latestStatus)
 }
 
 function toTextOptions(values: string[]) {
@@ -1028,6 +1173,28 @@ export default function LibraryPage() {
     () => store.files.filter((x) => conversionQualityStatus(x.conversion_quality) === 'good').length,
     [store.files],
   )
+  const qualitySourceReadinessStats = useMemo(() => {
+    const stats = {
+      ready: 0,
+      autofixed: 0,
+      blocked: 0,
+      review: 0,
+      processing: 0,
+      pending: 0,
+      unknown: 0,
+    }
+    for (const item of store.files) {
+      const readiness = conversionSourceReadiness(item, S)
+      if (readiness.qaReady) stats.ready += 1
+      if (readiness.kind === 'autofixed') stats.autofixed += 1
+      if (readiness.blocked) stats.blocked += 1
+      if (readiness.kind === 'review') stats.review += 1
+      if (readiness.kind === 'processing') stats.processing += 1
+      if (readiness.kind === 'pending') stats.pending += 1
+      if (readiness.kind === 'unknown') stats.unknown += 1
+    }
+    return stats
+  }, [S, store.files])
   const backendQualityOverview = store.qualityOverview?.ok ? store.qualityOverview : null
   const latestBackendRepairRun = backendQualityOverview?.repair_runs?.[0] || null
   const refreshShelfMetadataBackfillState = useCallback(async (silent = true) => {
@@ -3557,8 +3724,9 @@ export default function LibraryPage() {
     const qualityRepairPlan = qualityReport?.repair_plan || null
     const latestQualityRepairAttempt = qualityReport?.latest_repair_attempt || null
     const latestQualityRepairAttemptStatus = normalizeTextValue(latestQualityRepairAttempt?.status).toLowerCase()
+    const latestQualityRepairAttemptLabel = conversionRepairAttemptLabel(latestQualityRepairAttempt, S)
     const latestQualityRepairAttemptTone =
-      ['success', 'resolved', 'ready'].includes(latestQualityRepairAttemptStatus)
+      ['success', 'resolved', 'ready', 'autofixed', 'fixed'].includes(latestQualityRepairAttemptStatus)
         ? 'is-success'
         : ['error', 'failed', 'blocked'].includes(latestQualityRepairAttemptStatus)
           ? 'is-error'
@@ -3569,6 +3737,10 @@ export default function LibraryPage() {
     const mathCount = conversionMetric(quality, 'display_math') + conversionMetric(quality, 'inline_math')
     const qualityNeedsRepair = hasConversionQualityIssue(item)
     const qualityRepairing = Boolean(qualityRepairingNames[item.name])
+    const sourceReadiness = conversionSourceReadiness(item, S)
+    const qualityRepairButtonLabel = sourceReadiness.action === 'reconvert'
+      ? S.lib_btn_reconvert_quality
+      : S.lib_btn_repair_quality
     const qualityRepairRecord = qualityRepairHistory[item.name]
     const qualityRepairResult = String(
       qualityRepairResults[item.name] || (qualityRepairRecord ? formatQualityRepairRecordSummary(qualityRepairRecord, S) : ''),
@@ -3604,6 +3776,14 @@ export default function LibraryPage() {
                   {conversionQualityLabel(quality)}
                 </span>
               ) : null}
+              <span
+                className={`kb-lib-source-readiness-chip is-${sourceReadiness.tone}`}
+                data-testid="library-file-source-readiness"
+                data-source-readiness={sourceReadiness.kind}
+                title={sourceReadiness.detail}
+              >
+                {sourceReadiness.label}
+              </span>
               {!item.md_exists ? <span className="kb-lib-file-meta-muted">{S.lib_file_no_md}</span> : null}
               {suggestionCount > 0 ? (
                 <span className="kb-lib-file-submeta-chip is-suggestion">
@@ -3664,17 +3844,19 @@ export default function LibraryPage() {
               {qualityReport?.auto_repair_changed ? (
                 <span
                   className="kb-lib-quality-issue is-success"
-                  title={qualityAutoRepairApplied.join(' / ') || 'Conversion auto-repair applied'}
+                  title={qualityAutoRepairApplied.join(' / ') || S.lib_quality_gate_autofixed}
                 >
-                  auto fixed {qualityAutoRepairApplied.length || 1}
+                  {S.lib_quality_auto_fixed_count.replace('{n}', String(qualityAutoRepairApplied.length || 1))}
                 </span>
               ) : null}
               {qualityReport?.needs_reconvert ? (
                 <span
                   className="kb-lib-quality-issue is-error"
-                  title={qualityRepairPlan?.reason || 'Conversion report recommends re-conversion'}
+                  title={qualityRepairPlan?.reason || S.lib_source_status_blocked_detail}
                 >
-                  {qualityRepairPlan?.scope ? `reconvert ${qualityRepairPlan.scope}` : 'reconvert'}
+                  {qualityRepairPlan?.scope
+                    ? S.lib_quality_reconvert_scope.replace('{scope}', qualityRepairPlan.scope)
+                    : S.lib_quality_gate_blocked}
                 </span>
               ) : null}
               {latestQualityRepairAttempt ? (
@@ -3682,13 +3864,7 @@ export default function LibraryPage() {
                   className={`kb-lib-quality-issue ${latestQualityRepairAttemptTone}`}
                   title={latestQualityRepairAttempt.detail || latestQualityRepairAttempt.reason || latestQualityRepairAttempt.event}
                 >
-                  {latestQualityRepairAttemptStatus === 'queued'
-                    ? 'source repair queued'
-                    : latestQualityRepairAttemptStatus === 'success'
-                      ? 'source repair ok'
-                      : latestQualityRepairAttemptStatus === 'partial'
-                        ? 'source repair partial'
-                        : `source repair ${latestQualityRepairAttemptStatus || 'tracked'}`}
+                  {latestQualityRepairAttemptLabel}
                 </span>
               ) : null}
               {qualityNeedsRepair ? (
@@ -3701,7 +3877,7 @@ export default function LibraryPage() {
                   disabled={item.task_state !== 'idle'}
                   onClick={() => { void handleRepairQualityOne(item) }}
                 >
-                  {S.lib_btn_repair_quality}
+                  {qualityRepairButtonLabel}
                 </Button>
               ) : null}
             </div>
@@ -3974,7 +4150,9 @@ export default function LibraryPage() {
     { key: 'converted', label: S.lib_stats_converted, value: counts.converted },
     { key: 'queued', label: S.lib_stats_queued, value: counts.queued },
     { key: 'running', label: S.lib_stats_running, value: counts.running },
-    { key: 'quality', label: 'Quality review', value: counts.quality_review },
+    { key: 'source_ready', label: S.lib_stats_source_ready, value: qualitySourceReadinessStats.ready },
+    { key: 'source_blocked', label: S.lib_stats_quality_blocked, value: qualitySourceReadinessStats.blocked },
+    { key: 'quality', label: S.lib_quality_report_review, value: counts.quality_review },
   ]
 
   const renameHasResults = renameItems.length > 0
@@ -4561,6 +4739,24 @@ export default function LibraryPage() {
             </div>
           </div>
           <div className="kb-lib-quality-report-metrics">
+            <span className="kb-lib-quality-report-metric is-source-ready" data-testid="library-quality-report-source-ready">
+              <span>{S.lib_quality_report_source_ready}</span>
+              <strong>{qualitySourceReadinessStats.ready}</strong>
+            </span>
+            <span className="kb-lib-quality-report-metric is-autofixed" data-testid="library-quality-report-autofixed">
+              <span>{S.lib_quality_report_autofixed}</span>
+              <strong>{qualitySourceReadinessStats.autofixed}</strong>
+            </span>
+            <button
+              type="button"
+              className="kb-lib-quality-report-metric is-blocked"
+              disabled={qualitySourceReadinessStats.blocked <= 0}
+              data-testid="library-quality-report-blocked"
+              onClick={handleFocusQualityReview}
+            >
+              <span>{S.lib_quality_report_blocked}</span>
+              <strong>{qualitySourceReadinessStats.blocked}</strong>
+            </button>
             <span className="kb-lib-quality-report-metric is-good" data-testid="library-quality-report-good">
               <span>{S.lib_quality_report_good}</span>
               <strong>{qualityReportStats.good}</strong>

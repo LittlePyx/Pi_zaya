@@ -6348,6 +6348,59 @@ textarea.kb-chat-textarea:focus {
   color: color-mix(in srgb, var(--muted-text) 82%, transparent);
 }
 
+.kb-lib-source-readiness-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--kb-lib-surface) 88%, var(--panel));
+  padding: 0 8px;
+  color: color-mix(in srgb, var(--text-main) 70%, transparent);
+  font-size: 10.5px;
+  font-weight: 760;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.kb-lib-source-readiness-chip.is-ready {
+  border-color: color-mix(in srgb, #22c55e 26%, var(--border));
+  background: color-mix(in srgb, #22c55e 7%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #15803d 86%, var(--text-main));
+}
+
+.kb-lib-source-readiness-chip.is-autofixed {
+  border-color: color-mix(in srgb, #0ea5e9 28%, var(--border));
+  background: color-mix(in srgb, #0ea5e9 8%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #0369a1 86%, var(--text-main));
+}
+
+.kb-lib-source-readiness-chip.is-blocked {
+  border-color: color-mix(in srgb, #ef4444 32%, var(--border));
+  background: color-mix(in srgb, #ef4444 9%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #b91c1c 86%, var(--text-main));
+}
+
+.kb-lib-source-readiness-chip.is-review {
+  border-color: color-mix(in srgb, #f59e0b 30%, var(--border));
+  background: color-mix(in srgb, #f59e0b 9%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #b45309 86%, var(--text-main));
+}
+
+.kb-lib-source-readiness-chip.is-processing {
+  border-color: color-mix(in srgb, #2563eb 28%, var(--border));
+  background: color-mix(in srgb, #2563eb 8%, var(--kb-lib-surface));
+  color: color-mix(in srgb, #1d4ed8 86%, var(--text-main));
+}
+
+.kb-lib-source-readiness-chip.is-pending,
+.kb-lib-source-readiness-chip.is-unknown {
+  color: color-mix(in srgb, var(--muted-text) 84%, transparent);
+}
+
 .kb-lib-file-status-chip:hover {
   background: var(--kb-lib-hover);
   box-shadow: 0 1px 2px rgba(37, 99, 235, 0.08);
@@ -6570,7 +6623,7 @@ textarea.kb-chat-textarea:focus {
 
 .kb-lib-quality-report-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 7px;
 }
 
@@ -6620,9 +6673,24 @@ button.kb-lib-quality-report-metric:disabled {
   background: color-mix(in srgb, #22c55e 7%, var(--kb-lib-surface));
 }
 
+.kb-lib-quality-report-metric.is-source-ready {
+  border-color: color-mix(in srgb, #16a34a 28%, var(--border));
+  background: color-mix(in srgb, #16a34a 8%, var(--kb-lib-surface));
+}
+
+.kb-lib-quality-report-metric.is-autofixed {
+  border-color: color-mix(in srgb, #0ea5e9 28%, var(--border));
+  background: color-mix(in srgb, #0ea5e9 8%, var(--kb-lib-surface));
+}
+
 .kb-lib-quality-report-metric.is-review {
   border-color: color-mix(in srgb, #f59e0b 30%, var(--border));
   background: color-mix(in srgb, #f59e0b 8%, var(--kb-lib-surface));
+}
+
+.kb-lib-quality-report-metric.is-blocked {
+  border-color: color-mix(in srgb, #ef4444 30%, var(--border));
+  background: color-mix(in srgb, #ef4444 9%, var(--kb-lib-surface));
 }
 
 .kb-lib-quality-report-metric.is-unknown {

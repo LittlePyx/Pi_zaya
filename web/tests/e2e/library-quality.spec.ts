@@ -919,6 +919,24 @@ test.beforeEach(async ({ page }) => {
         missing_images: 0,
         unclosed_display_math: 0,
       },
+      conversion_report: {
+        available: true,
+        stale: false,
+        path: 'F:\\kb\\md\\broken\\conversion_quality.json',
+        generated_at: '2026-05-29T10:00:00Z',
+        auto_repair_enabled: true,
+        auto_repair_changed: false,
+        auto_repair_unsafe: false,
+        auto_repair_applied: [],
+        issue_codes_before: ['missing_images', 'missing_references'],
+        remaining_issue_codes: [],
+        regression_reasons: [],
+        repair_plan: { action: 'none', scope: '', speed_mode: '', no_llm: false, replace: true, md_autofix_first: true, reason: '', issue_codes: [], reconvert_issue_codes: [], autofix_issue_codes: [], review_issue_codes: [], issue_actions: [] },
+        repair_attempt_count: 1,
+        latest_repair_attempt: { event: 'post_convert_quality_gate', status: 'ready', detail: 'Quality gate passed after repair' },
+        recommended_action: 'none',
+        needs_reconvert: false,
+      },
     }
     const brokenQuality = {
       status: 'error',
@@ -941,6 +959,43 @@ test.beforeEach(async ({ page }) => {
         missing_images: 1,
         unclosed_display_math: 1,
       },
+      conversion_report: {
+        available: true,
+        stale: false,
+        path: 'F:\\kb\\md\\broken\\conversion_quality.json',
+        generated_at: '2026-05-29T09:00:00Z',
+        auto_repair_enabled: true,
+        auto_repair_changed: false,
+        auto_repair_unsafe: false,
+        auto_repair_applied: [],
+        issue_codes_before: ['missing_images', 'unclosed_display_math', 'missing_references'],
+        remaining_issue_codes: ['missing_images', 'missing_references'],
+        regression_reasons: ['missing_references'],
+        repair_plan: {
+          action: 'reconvert',
+          scope: 'full',
+          speed_mode: 'ultra_fast',
+          no_llm: false,
+          replace: true,
+          md_autofix_first: true,
+          reason: 'Missing images and references block indexing',
+          issue_codes: ['missing_images', 'missing_references'],
+          reconvert_issue_codes: ['missing_images', 'missing_references'],
+          autofix_issue_codes: [],
+          review_issue_codes: [],
+          issue_actions: [],
+        },
+        repair_attempt_count: 1,
+        latest_repair_attempt: {
+          event: 'post_convert_quality_gate',
+          status: 'blocked',
+          action: 'reconvert',
+          reason: 'Missing references block indexing',
+          detail: 'Quality gate blocked ingest until reconversion',
+        },
+        recommended_action: 'reconvert',
+        needs_reconvert: true,
+      },
     }
     const weakQuality = {
       status: 'warning',
@@ -959,6 +1014,37 @@ test.beforeEach(async ({ page }) => {
         display_math: 2,
         inline_math: 1,
         missing_images: 0,
+      },
+      conversion_report: {
+        available: true,
+        stale: false,
+        path: 'F:\\kb\\md\\weak\\conversion_quality.json',
+        generated_at: '2026-05-29T09:10:00Z',
+        auto_repair_enabled: true,
+        auto_repair_changed: false,
+        auto_repair_unsafe: false,
+        auto_repair_applied: [],
+        issue_codes_before: ['missing_page_markers'],
+        remaining_issue_codes: ['missing_page_markers'],
+        regression_reasons: [],
+        repair_plan: {
+          action: 'autofix',
+          scope: 'markdown',
+          speed_mode: '',
+          no_llm: true,
+          replace: true,
+          md_autofix_first: true,
+          reason: 'Page anchors need normalization',
+          issue_codes: ['missing_page_markers'],
+          reconvert_issue_codes: [],
+          autofix_issue_codes: ['missing_page_markers'],
+          review_issue_codes: [],
+          issue_actions: [],
+        },
+        repair_attempt_count: 1,
+        latest_repair_attempt: { event: 'post_convert_quality_gate', status: 'partial', detail: 'Anchors still need repair' },
+        recommended_action: 'autofix',
+        needs_reconvert: false,
       },
     }
     const items = [
@@ -985,6 +1071,24 @@ test.beforeEach(async ({ page }) => {
             display_math: 10,
             inline_math: 4,
             missing_images: 0,
+          },
+          conversion_report: {
+            available: true,
+            stale: false,
+            path: 'F:\\kb\\md\\healthy\\conversion_quality.json',
+            generated_at: '2026-05-29T09:20:00Z',
+            auto_repair_enabled: true,
+            auto_repair_changed: true,
+            auto_repair_unsafe: false,
+            auto_repair_applied: ['normalize_page_anchors'],
+            issue_codes_before: ['weak_page_anchors'],
+            remaining_issue_codes: [],
+            regression_reasons: [],
+            repair_plan: { action: 'none', scope: '', speed_mode: '', no_llm: false, replace: true, md_autofix_first: true, reason: '', issue_codes: [], reconvert_issue_codes: [], autofix_issue_codes: [], review_issue_codes: [], issue_actions: [] },
+            repair_attempt_count: 1,
+            latest_repair_attempt: { event: 'post_convert_quality_gate', status: 'autofixed', detail: 'Quality gate auto-fixed page anchors' },
+            recommended_action: 'none',
+            needs_reconvert: false,
           },
         },
       },
@@ -1275,6 +1379,9 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-quality-report-review')).toContainText('2')
   await expect(page.getByTestId('library-quality-report-good')).toContainText('1')
   await expect(page.getByTestId('library-quality-report-avg')).toContainText('Q70')
+  await expect(page.getByTestId('library-quality-report-source-ready')).toContainText('1')
+  await expect(page.getByTestId('library-quality-report-autofixed')).toContainText('1')
+  await expect(page.getByTestId('library-quality-report-blocked')).toContainText('1')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="research_qa"]')).toContainText('refs_include_required_docs x1')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="citation_cards"]')).toContainText('citation_card_quality x1')
   await expect(page.getByTestId('library-quality-domains').locator('[data-quality-domain="citation_cards"]')).toContainText('shelf export 1/2')
@@ -1391,13 +1498,18 @@ test('library page surfaces conversion quality and filters review items', async 
 
   const healthy = page.getByTestId('library-file-row').filter({ hasText: 'Healthy conversion' })
   await expect(healthy.getByTestId('library-file-quality-chip')).toHaveAttribute('data-quality-status', 'good')
+  await expect(healthy.getByTestId('library-file-source-readiness')).toHaveAttribute('data-source-readiness', 'autofixed')
+  await expect(healthy.getByTestId('library-file-source-readiness')).toContainText('已自动修复')
   await expect(healthy.getByTestId('library-file-quality-line')).toContainText('refs 42')
 
   const broken = page.getByTestId('library-file-row').filter({ hasText: 'Broken conversion' })
   await expect(broken.getByTestId('library-file-quality-chip')).toHaveAttribute('data-quality-status', 'error')
   await expect(broken.getByTestId('library-file-quality-chip')).toContainText('Repair Q38')
+  await expect(broken.getByTestId('library-file-source-readiness')).toHaveAttribute('data-source-readiness', 'blocked')
+  await expect(broken.getByTestId('library-file-source-readiness')).toContainText('未入库')
   await expect(broken.getByTestId('library-file-quality-line')).toContainText('Missing image assets')
   await expect(broken.getByTestId('library-file-quality-line')).toContainText('refs 0')
+  await expect(broken.getByTestId('library-quality-repair')).toContainText('重转入库')
 
   await page.getByTestId('library-quality-issues-filter').click()
   await expect(page.getByTestId('library-file-row')).toHaveCount(2)
@@ -1415,6 +1527,7 @@ test('library page surfaces conversion quality and filters review items', async 
   await repairRunAutoAdvanceRequest
   await expect(broken.getByTestId('library-file-quality-chip')).toHaveAttribute('data-quality-status', 'good')
   await expect(broken.getByTestId('library-file-quality-chip')).toContainText('Q94')
+  await expect(broken.getByTestId('library-file-source-readiness')).toHaveAttribute('data-source-readiness', 'ready')
   await expect(broken.getByTestId('library-file-quality-line')).toContainText('refs 39')
   await expect(broken.getByTestId('library-quality-repair-result')).toContainText('Q38')
   await expect(broken.getByTestId('library-quality-repair-result')).toContainText('Q94')
