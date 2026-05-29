@@ -723,14 +723,14 @@ function conversionQualityNeedsReview(quality?: ConversionQualitySummary | null)
   return Boolean(quality?.has_review_issue) || status === 'warning' || status === 'error'
 }
 
-type SourceReadinessKind = 'ready' | 'autofixed' | 'blocked' | 'review' | 'processing' | 'pending' | 'unknown'
+type SourceReadinessKind = 'ready' | 'autofixed' | 'blocked' | 'review' | 'processing' | 'pending' | 'index_stale' | 'unknown'
 
 interface SourceReadinessView {
   kind: SourceReadinessKind
-  tone: 'ready' | 'autofixed' | 'blocked' | 'review' | 'processing' | 'pending' | 'unknown'
+  tone: 'ready' | 'autofixed' | 'blocked' | 'review' | 'processing' | 'pending' | 'index_stale' | 'unknown'
   label: string
   detail: string
-  action: 'repair' | 'reconvert' | ''
+  action: 'repair' | 'reconvert' | 'reindex' | ''
   qaReady: boolean
   blocked: boolean
 }
@@ -758,9 +758,12 @@ function conversionSourceReadiness(item: LibraryFileItem, S: Record<string, stri
   const qualityStatus = conversionQualityStatus(quality)
   const needsReview = conversionQualityNeedsReview(quality)
   const remainingCodes = Array.isArray(report?.remaining_issue_codes) ? report?.remaining_issue_codes || [] : []
+  const indexState = normalizeTextValue(item.index_state).toLowerCase()
+  const hasAuthoritativeIndexState = Boolean(indexState)
   const isBlocked = Boolean(report?.needs_reconvert)
     || planAction === 'reconvert'
     || ['blocked', 'failed', 'error'].includes(latestStatus)
+    || indexState === 'quality_blocked'
   const wasAutofixed = Boolean(report?.auto_repair_changed) || ['autofixed', 'fixed'].includes(latestStatus)
 
   if (item.task_state === 'running' || item.task_state === 'queued') {
@@ -781,6 +784,17 @@ function conversionSourceReadiness(item: LibraryFileItem, S: Record<string, stri
       label: S.lib_source_status_pending,
       detail: S.lib_source_status_pending_detail,
       action: '',
+      qaReady: false,
+      blocked: false,
+    }
+  }
+  if (!isBlocked && ['not_indexed', 'index_stale', 'not_ready'].includes(indexState)) {
+    return {
+      kind: 'index_stale',
+      tone: 'index_stale',
+      label: S.lib_source_status_index_stale,
+      detail: S.lib_source_status_index_stale_detail,
+      action: 'reindex',
       qaReady: false,
       blocked: false,
     }
@@ -818,7 +832,13 @@ function conversionSourceReadiness(item: LibraryFileItem, S: Record<string, stri
       blocked: false,
     }
   }
-  if ((qualityStatus === 'good' || latestStatus === 'ready' || latestStatus === 'success' || latestStatus === 'resolved') && !needsReview) {
+  if (
+    (
+      indexState === 'ready'
+      || (!hasAuthoritativeIndexState && (qualityStatus === 'good' || latestStatus === 'ready' || latestStatus === 'success' || latestStatus === 'resolved'))
+    )
+    && !needsReview
+  ) {
     return {
       kind: 'ready',
       tone: 'ready',
@@ -1036,12 +1056,14 @@ function hasConversionQualityIssue(item: LibraryFileItem) {
   const report = quality?.conversion_report || null
   const latestStatus = normalizeTextValue(report?.latest_repair_attempt?.status).toLowerCase()
   const planAction = normalizeTextValue(report?.repair_plan?.action).toLowerCase()
+  const indexState = normalizeTextValue(item.index_state).toLowerCase()
   const remainingCodes = Array.isArray(report?.remaining_issue_codes) ? report?.remaining_issue_codes || [] : []
   const gateReady = ['ready', 'success', 'resolved', 'autofixed', 'fixed'].includes(latestStatus)
     && !conversionQualityNeedsReview(quality)
     && remainingCodes.length === 0
     && !report?.needs_reconvert
     && !report?.auto_repair_unsafe
+    && (!indexState || indexState === 'ready')
   if (gateReady) return false
   return Boolean(quality?.has_review_issue)
     || Boolean(report?.needs_reconvert)
@@ -1049,6 +1071,7 @@ function hasConversionQualityIssue(item: LibraryFileItem) {
     || remainingCodes.length > 0
     || ['reconvert', 'review', 'autofix'].includes(planAction)
     || ['blocked', 'failed', 'error', 'partial'].includes(latestStatus)
+    || indexState === 'quality_blocked'
 }
 
 function toTextOptions(values: string[]) {
@@ -1181,6 +1204,7 @@ export default function LibraryPage() {
       review: 0,
       processing: 0,
       pending: 0,
+      indexStale: 0,
       unknown: 0,
     }
     for (const item of store.files) {
@@ -1191,6 +1215,7 @@ export default function LibraryPage() {
       if (readiness.kind === 'review') stats.review += 1
       if (readiness.kind === 'processing') stats.processing += 1
       if (readiness.kind === 'pending') stats.pending += 1
+      if (readiness.kind === 'index_stale') stats.indexStale += 1
       if (readiness.kind === 'unknown') stats.unknown += 1
     }
     return stats
@@ -1780,6 +1805,8 @@ export default function LibraryPage() {
           item.reading_status,
           item.note,
           item.suggested_category,
+          item.index_state,
+          item.index_status,
           item.conversion_quality?.label,
           item.conversion_quality?.summary,
           ...(item.conversion_quality?.issues || []).flatMap((issue) => [issue.code, issue.label]),
@@ -3740,7 +3767,10 @@ export default function LibraryPage() {
     const sourceReadiness = conversionSourceReadiness(item, S)
     const qualityRepairButtonLabel = sourceReadiness.action === 'reconvert'
       ? S.lib_btn_reconvert_quality
+      : sourceReadiness.action === 'reindex'
+        ? S.lib_btn_refresh_index
       : S.lib_btn_repair_quality
+    const sourceReadinessActionAvailable = qualityNeedsRepair || sourceReadiness.action === 'reindex'
     const qualityRepairRecord = qualityRepairHistory[item.name]
     const qualityRepairResult = String(
       qualityRepairResults[item.name] || (qualityRepairRecord ? formatQualityRepairRecordSummary(qualityRepairRecord, S) : ''),
@@ -3867,7 +3897,7 @@ export default function LibraryPage() {
                   {latestQualityRepairAttemptLabel}
                 </span>
               ) : null}
-              {qualityNeedsRepair ? (
+              {sourceReadinessActionAvailable ? (
                 <Button
                   size="small"
                   icon={<ReloadOutlined />}
@@ -3875,7 +3905,13 @@ export default function LibraryPage() {
                   data-testid="library-quality-repair"
                   loading={qualityRepairing}
                   disabled={item.task_state !== 'idle'}
-                  onClick={() => { void handleRepairQualityOne(item) }}
+                  onClick={() => {
+                    if (sourceReadiness.action === 'reindex') {
+                      void handleReindex()
+                      return
+                    }
+                    void handleRepairQualityOne(item)
+                  }}
                 >
                   {qualityRepairButtonLabel}
                 </Button>
@@ -4140,6 +4176,9 @@ export default function LibraryPage() {
     reconverting: 0,
     quality_review: qualityReviewCount,
     quality_ready: qualityReadyCount,
+    index_ready: qualitySourceReadinessStats.ready,
+    index_quality_blocked: qualitySourceReadinessStats.blocked,
+    index_stale: qualitySourceReadinessStats.indexStale,
   }
 
   const directoriesConfigured = Boolean(pdfDirDraft.trim() && mdDirDraft.trim())

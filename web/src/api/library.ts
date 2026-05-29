@@ -32,6 +32,14 @@ export interface LibraryFileItem {
   md_path: string
   md_folder: string
   conversion_quality: ConversionQualitySummary | null
+  index_state?: 'ready' | 'quality_blocked' | 'index_stale' | 'not_indexed' | 'not_ready' | 'not_converted' | string
+  index_status?: string
+  index_ready?: boolean
+  index_doc_id?: string
+  index_path?: string
+  index_num_chunks?: number
+  index_chunk_exists?: boolean
+  quality_gate?: Record<string, unknown> | null
   category: 'pending' | 'converted'
   task_state: 'idle' | 'queued' | 'running'
   status: string
@@ -252,6 +260,9 @@ export interface LibraryFilesResponse {
     reconverting: number
     quality_review: number
     quality_ready: number
+    index_ready?: number
+    index_quality_blocked?: number
+    index_stale?: number
   }
   truncated: boolean
   scope: string

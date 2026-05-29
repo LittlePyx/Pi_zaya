@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from kb.library_store import LibraryStore
+from kb.store import compute_doc_id, save_docs_index, write_doc_chunks
 
 
 def test_library_files_route_classifies_queue_and_reconvert(monkeypatch, tmp_path: Path):
@@ -326,6 +327,97 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
     assert feature_health["status"] == "error"
     feature_keys = {str(item.get("key") or "") for item in list(feature_health.get("items") or [])}
     assert {"pdf_conversion", "general_qa", "paper_guide", "citation_cards", "literature_basket", "reader_locate", "repair_loop"}.issubset(feature_keys)
+
+
+def test_library_files_route_exposes_authoritative_index_state(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    ready_pdf = pdf_dir / "ready.pdf"
+    blocked_pdf = pdf_dir / "blocked.pdf"
+    stale_pdf = pdf_dir / "stale.pdf"
+    for p in (ready_pdf, blocked_pdf, stale_pdf):
+        p.write_bytes(b"%PDF-1.4 test")
+
+    ready_md = md_dir / "ready" / "ready.en.md"
+    blocked_md = md_dir / "blocked" / "blocked.en.md"
+    stale_md = md_dir / "stale" / "stale.en.md"
+    for md in (ready_md, blocked_md, stale_md):
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("# Paper\n\n## Abstract\n\ncontent\n\n## References\n\n[1] Ref.", encoding="utf-8")
+
+    ready_id = compute_doc_id(ready_md)
+    blocked_id = compute_doc_id(blocked_md)
+    stale_id = compute_doc_id(stale_md)
+    save_docs_index(
+        db_dir,
+        {
+            ready_id: {
+                "doc_id": ready_id,
+                "path": str(ready_md),
+                "sha1": "ready-sha",
+                "num_chunks": 1,
+                "index_status": "ready",
+                "quality_gate": {"status": "ready", "action": "none"},
+            },
+            blocked_id: {
+                "doc_id": blocked_id,
+                "path": str(blocked_md),
+                "sha1": "blocked-sha",
+                "num_chunks": 0,
+                "index_status": "quality_blocked",
+                "quality_gate": {"status": "blocked", "action": "reconvert", "issue_codes": ["missing_references"]},
+            },
+            stale_id: {
+                "doc_id": stale_id,
+                "path": str(stale_md),
+                "sha1": "stale-sha",
+                "num_chunks": 2,
+                "index_status": "ready",
+                "quality_gate": {"status": "ready", "action": "none"},
+            },
+        },
+    )
+    write_doc_chunks(db_dir, ready_id, [{"text": "ready chunk", "meta": {"source_path": str(ready_md)}}])
+
+    class FakeStore:
+        def list_records_by_paths(self, paths):
+            return {}
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(db_dir), library_db_path=str(tmp_path / "library.db")),
+    )
+
+    client = TestClient(app)
+    response = client.get("/api/library/files", params={"scope": "all"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    by_name = {str(item.get("name") or ""): item for item in list(payload.get("items") or [])}
+    assert by_name["ready.pdf"]["index_state"] == "ready"
+    assert by_name["ready.pdf"]["index_ready"] is True
+    assert by_name["ready.pdf"]["index_chunk_exists"] is True
+    assert by_name["blocked.pdf"]["index_state"] == "quality_blocked"
+    assert by_name["blocked.pdf"]["index_ready"] is False
+    assert by_name["blocked.pdf"]["quality_gate"]["action"] == "reconvert"
+    assert by_name["stale.pdf"]["index_state"] == "index_stale"
+    assert by_name["stale.pdf"]["index_ready"] is False
+    counts = payload.get("counts") or {}
+    assert counts["index_ready"] == 1
+    assert counts["index_quality_blocked"] == 1
+    assert counts["index_stale"] == 1
 
 
 def test_library_source_quality_route_resolves_pdf_and_md_sources(monkeypatch, tmp_path: Path):

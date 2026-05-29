@@ -51,6 +51,9 @@ interface LibraryState {
     reconverting: number
     quality_review: number
     quality_ready: number
+    index_ready?: number
+    index_quality_blocked?: number
+    index_stale?: number
   } | null
   qualityOverview: LibraryQualityOverviewResponse | null
   qualityOverviewLoading: boolean

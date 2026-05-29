@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kb.store import compute_doc_id, doc_chunks_path, load_docs_index
+from kb.store import compute_doc_id, doc_chunks_path, load_all_chunks, load_docs_index, write_doc_chunks
 
 
 def _good_markdown() -> str:
@@ -61,4 +61,8 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     assert not doc_chunks_path(db_dir, bad_id).exists()
     first_chunk = json.loads(doc_chunks_path(db_dir, good_id).read_text(encoding="utf-8").splitlines()[0])
     assert first_chunk["meta"]["conversion_quality_status"] == "ready"
+    write_doc_chunks(db_dir, bad_id, [{"text": "stale blocked chunk", "meta": {"source_path": str(bad_md)}}])
+    loaded = load_all_chunks(db_dir)
+    assert all(chunk["meta"]["source_path"] != str(bad_md) for chunk in loaded)
+    assert any(chunk["meta"]["source_path"] == str(good_md) for chunk in loaded)
     assert "quality_blocked: 1" in proc.stdout

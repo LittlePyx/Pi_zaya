@@ -62,12 +62,32 @@ def delete_doc_chunks(db_dir: Path, doc_id: str) -> bool:
     return True
 
 
-def load_all_chunks(db_dir: Path) -> list[dict]:
+def _doc_index_is_ready(rec: dict | None) -> bool:
+    if not isinstance(rec, dict):
+        return False
+    status = str(rec.get("index_status") or "").strip().lower()
+    if status and status != "ready":
+        return False
+    if not status and int(rec.get("num_chunks") or 0) <= 0:
+        return False
+    if status == "ready" and int(rec.get("num_chunks") or 0) <= 0:
+        return False
+    return True
+
+
+def load_all_chunks(db_dir: Path, *, include_non_ready: bool = False) -> list[dict]:
     chunks: list[dict] = []
     d = _chunks_dir(db_dir)
     if not d.exists():
         return chunks
+    docs_index = load_docs_index(db_dir)
+    enforce_index = bool(docs_index) and not bool(include_non_ready)
     for p in sorted(d.glob("*.jsonl")):
+        if enforce_index:
+            doc_id = p.stem
+            rec = docs_index.get(doc_id)
+            if not _doc_index_is_ready(rec):
+                continue
         with p.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()

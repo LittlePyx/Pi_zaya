@@ -60,6 +60,7 @@ from kb.converter.structured_index_batch import rebuild_structured_indices_for_r
 from kb.library_store import LibraryStore
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
 from kb.reference_sync import start_reference_sync
+from kb.store import compute_doc_id, doc_chunks_path, load_docs_index
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 _RENAME_SUGGEST_CACHE: dict[str, dict] = {}
@@ -407,6 +408,105 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
         }
 
 
+def _load_docs_index_state() -> dict:
+    db_dir: Path | None = None
+    try:
+        raw_db_dir = str(get_settings().db_dir or "").strip()
+        if raw_db_dir:
+            db_dir = Path(raw_db_dir).expanduser().resolve()
+    except Exception:
+        db_dir = None
+    docs: dict = {}
+    if db_dir is not None:
+        try:
+            docs = load_docs_index(db_dir)
+        except Exception:
+            docs = {}
+    by_path: dict[str, tuple[str, dict]] = {}
+    for doc_id, rec in (docs or {}).items():
+        if not isinstance(rec, dict):
+            continue
+        key = _normalized_path_key(rec.get("path") or "")
+        if key:
+            by_path[key] = (str(rec.get("doc_id") or doc_id), rec)
+    return {
+        "db_dir": db_dir,
+        "docs": docs if isinstance(docs, dict) else {},
+        "by_path": by_path,
+    }
+
+
+def _library_markdown_index_state(md_path: Path | None, index_state: dict | None) -> dict:
+    if not md_path:
+        return {
+            "index_state": "not_converted",
+            "index_status": "",
+            "index_ready": False,
+            "index_doc_id": "",
+            "index_path": "",
+            "index_num_chunks": 0,
+            "index_chunk_exists": False,
+            "quality_gate": None,
+        }
+    state = index_state if isinstance(index_state, dict) else {}
+    db_dir = state.get("db_dir") if isinstance(state.get("db_dir"), Path) else None
+    docs = state.get("docs") if isinstance(state.get("docs"), dict) else {}
+    by_path = state.get("by_path") if isinstance(state.get("by_path"), dict) else {}
+    doc_id = compute_doc_id(md_path)
+    rec = docs.get(doc_id) if isinstance(docs.get(doc_id), dict) else None
+    record_doc_id = doc_id
+    if not isinstance(rec, dict):
+        key = _normalized_path_key(md_path)
+        matched = by_path.get(key) if key else None
+        if isinstance(matched, tuple) and len(matched) >= 2 and isinstance(matched[1], dict):
+            record_doc_id = str(matched[0] or doc_id)
+            rec = matched[1]
+
+    if not isinstance(rec, dict):
+        return {
+            "index_state": "not_indexed",
+            "index_status": "missing",
+            "index_ready": False,
+            "index_doc_id": doc_id,
+            "index_path": "",
+            "index_num_chunks": 0,
+            "index_chunk_exists": False,
+            "quality_gate": None,
+        }
+
+    status = str(rec.get("index_status") or "").strip().lower()
+    num_chunks = int(rec.get("num_chunks") or 0)
+    if not status:
+        status = "ready" if num_chunks > 0 else "unknown"
+    chunk_exists = False
+    if db_dir is not None:
+        try:
+            chunk_exists = doc_chunks_path(db_dir, record_doc_id).exists()
+        except Exception:
+            chunk_exists = False
+    quality_gate = rec.get("quality_gate") if isinstance(rec.get("quality_gate"), dict) else None
+    if status == "ready" and chunk_exists and num_chunks > 0:
+        normalized = "ready"
+    elif status.startswith("quality_") or status in {"blocked", "not_indexable"}:
+        normalized = "quality_blocked"
+    elif status == "ready":
+        normalized = "index_stale"
+    elif num_chunks <= 0 or not chunk_exists:
+        normalized = "not_indexed"
+    else:
+        normalized = "not_ready"
+    return {
+        "index_state": normalized,
+        "index_status": status,
+        "index_ready": normalized == "ready",
+        "index_doc_id": record_doc_id,
+        "index_path": str(rec.get("path") or ""),
+        "index_num_chunks": num_chunks,
+        "index_chunk_exists": bool(chunk_exists),
+        "quality_gate": quality_gate,
+    }
+
+
 def _clear_conversion_quality_cache(md_path: str | Path) -> None:
     try:
         cache_key = str(Path(md_path).expanduser().resolve())
@@ -646,6 +746,7 @@ def _library_file_item(
     md_root: Path,
     task_by_path: dict[str, dict],
     task_by_name: dict[str, dict],
+    docs_index_state: dict | None = None,
     meta_rec: dict | None = None,
 ) -> dict:
     md_folder, md_main, md_exists = _resolve_md_output_paths(md_root, pdf)
@@ -665,6 +766,7 @@ def _library_file_item(
     reconverting = bool(replace_task and queued_or_running)
     category = "converted" if (md_exists and (not reconverting) and (not queued_or_running)) else "pending"
     conversion_quality = _conversion_quality_summary(md_main) if md_exists else None
+    md_index = _library_markdown_index_state(md_main if md_exists else None, docs_index_state)
     if task_state == "running":
         status = "running_reconvert" if replace_task else "running"
     elif task_state == "queued":
@@ -679,6 +781,7 @@ def _library_file_item(
         "md_path": str(md_main) if md_exists else "",
         "md_folder": str(md_folder),
         "conversion_quality": conversion_quality,
+        **md_index,
         "category": category,
         "task_state": task_state,
         "status": status,
@@ -715,12 +818,14 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
     snap = _bg_snapshot()
     task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
     meta_by_path = _library_store().list_records_by_paths(view)
+    docs_index_state = _load_docs_index_state()
     items = [
         _library_file_item(
             pdf,
             md_root=md_dir,
             task_by_path=task_by_path,
             task_by_name=task_by_name,
+            docs_index_state=docs_index_state,
             meta_rec=meta_by_path.get(str(pdf)),
         )
         for pdf in view
@@ -733,6 +838,9 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
     reconverting = sum(1 for item in items if bool(item.get("replace_task")) and str(item.get("task_state") or "") in {"queued", "running"})
     quality_review = sum(1 for item in items if bool(((item.get("conversion_quality") or {}) if isinstance(item.get("conversion_quality"), dict) else {}).get("has_review_issue")))
     quality_ready = sum(1 for item in items if str(((item.get("conversion_quality") or {}) if isinstance(item.get("conversion_quality"), dict) else {}).get("status") or "") == "good")
+    index_ready = sum(1 for item in items if str(item.get("index_state") or "") == "ready")
+    index_quality_blocked = sum(1 for item in items if str(item.get("index_state") or "") == "quality_blocked")
+    index_stale = sum(1 for item in items if str(item.get("index_state") or "") in {"index_stale", "not_indexed", "not_ready"})
 
     return {
         "items": items,
@@ -746,6 +854,9 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
             "reconverting": int(reconverting),
             "quality_review": int(quality_review),
             "quality_ready": int(quality_ready),
+            "index_ready": int(index_ready),
+            "index_quality_blocked": int(index_quality_blocked),
+            "index_stale": int(index_stale),
         },
         "truncated": bool(limit > 0 and len(pdfs_all) > len(view)),
         "scope": "all" if limit <= 0 else str(limit),
