@@ -269,10 +269,20 @@ export function CitationPopover({
   const supportSection = viewSection('support')
   const warningSection = viewSection('warning')
   const kindLabel = compact(view.header.kicker) || (isSystemB ? '上游引用' : '答案依据')
-  const displayNums = Array.from(new Set([
-    ...(Array.isArray(detail.linkedNums) ? detail.linkedNums : []),
-    detail.num,
-  ].map((num) => Number(num || 0)).filter((num) => Number.isFinite(num) && num > 0))).sort((a, b) => a - b)
+  const systemADisplayNumSeeds = [
+    ...(Array.isArray(detail.displayNums) ? detail.displayNums : []),
+    detail.displayNum,
+  ].map((num) => Number(num || 0)).filter((num) => Number.isFinite(num) && num > 0)
+  const displayNums = Array.from(new Set(
+    (isSystemB
+      ? [
+          ...(Array.isArray(detail.linkedNums) ? detail.linkedNums : []),
+          detail.num,
+        ]
+      : (systemADisplayNumSeeds.length > 0 ? systemADisplayNumSeeds : [detail.num]))
+      .map((num) => Number(num || 0))
+      .filter((num) => Number.isFinite(num) && num > 0),
+  )).sort((a, b) => a - b)
   const badgeNumText = displayNums.length > 1 ? displayNums.join('/') : String(displayNums[0] || '')
   const badgeLabel = badgeNumText ? (isSystemB ? `[R${badgeNumText}]` : `#${badgeNumText}`) : inlineLabel
   const headingPath = compact(detail.headingPath) || (!isSystemB ? compact(detail.title) : '')
@@ -492,8 +502,8 @@ export function CitationPopover({
     systemAMetaSource ? { label: '来源', value: systemAMetaSource } : null,
     display.venueYear ? { label: '发表', value: display.venueYear } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>
-  const showMetaGrid = Boolean(!isSystemB && (metaRows.length > 0 || doiLabel))
-  const showMetrics = Boolean(metrics.length > 0 || (isSystemB && doiLabel))
+  const showMetaGrid = false
+  const showMetrics = Boolean(isSystemB && (metrics.length > 0 || doiLabel))
   const showCardQuality = Boolean(
     cardQualityLabel
     && (cardWarning || systemAHasReviewRisk || cardQualityScore < 0.62),
@@ -505,11 +515,47 @@ export function CitationPopover({
   const externalMetadataTitleHint = externalTitle && !substantiallySame(externalTitle, displayMain)
     ? `候选外部标题：${externalTitle}`
     : ''
+  const systemACompactMetaItems = !isSystemB
+    ? ([
+        systemALocationText ? {
+          key: 'location',
+          label: cardLocatorLabel || '位置',
+          value: systemALocationText,
+          tone: 'location',
+        } : null,
+        systemAAnchorText ? {
+          key: 'anchor',
+          label: '锚点',
+          value: systemAAnchorText,
+          tone: 'muted',
+        } : null,
+        ...metaRows.map((item) => ({
+          key: `meta-${item.label}`,
+          label: item.label,
+          value: item.value,
+          tone: 'muted',
+        })),
+        doiLabel ? {
+          key: 'doi',
+          label: 'DOI',
+          value: doiLabel,
+          href: doiHref,
+          tone: 'doi',
+        } : null,
+        ...metrics.map((item) => ({
+          key: `metric-${item}`,
+          label: '',
+          value: item,
+          tone: 'metric',
+        })),
+      ].filter(Boolean) as Array<{ key: string; label: string; value: string; href?: string; tone: string }>)
+    : []
+  const showSystemACompactMeta = systemACompactMetaItems.length > 0
 
   return (
     <div
       ref={ref}
-      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b' : 'kb-cite-pop-system-a'} fixed z-50 w-[520px] max-w-[calc(100vw-20px)]`}
+      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b' : 'kb-cite-pop-system-a'} fixed z-50 w-[500px] max-w-[calc(100vw-20px)]`}
       data-testid="citation-popover"
       style={style ?? { left: position.x + 10, top: position.y + 10, visibility: 'hidden' }}
       onMouseEnter={onMouseEnter}
@@ -523,6 +569,34 @@ export function CitationPopover({
           </div>
           <div className="kb-cite-pop-title">{isSystemB ? systemBTitle : systemATitle}</div>
           {headerSubtitle ? <div className="kb-cite-pop-title-sub">{headerSubtitle}</div> : null}
+          {showSystemACompactMeta ? (
+            <div className="kb-cite-pop-compact-meta" data-testid="citation-popover-system-a-compact-meta">
+              {systemACompactMetaItems.map((item) => (
+                item.href ? (
+                  <a
+                    className={`kb-cite-pop-compact-pill kb-cite-pop-compact-${item.tone} kb-cite-pop-link`}
+                    href={item.href}
+                    key={item.key}
+                    rel="noreferrer"
+                    target="_blank"
+                    title={item.value}
+                  >
+                    {item.label ? <span className="kb-cite-pop-compact-label">{item.label}</span> : null}
+                    <span className="kb-cite-pop-compact-value">{item.value}</span>
+                  </a>
+                ) : (
+                  <span
+                    className={`kb-cite-pop-compact-pill kb-cite-pop-compact-${item.tone}`}
+                    key={item.key}
+                    title={item.value}
+                  >
+                    {item.label ? <span className="kb-cite-pop-compact-label">{item.label}</span> : null}
+                    <span className="kb-cite-pop-compact-value">{item.value}</span>
+                  </span>
+                )
+              ))}
+            </div>
+          ) : null}
         </div>
         <button className="kb-cite-pop-close" onClick={onClose} type="button" aria-label="Close">
           ×
@@ -594,11 +668,6 @@ export function CitationPopover({
               <blockquote>{systemAEvidencePreview}</blockquote>
             </div>
           ) : null}
-          <div className="kb-cite-pop-locator" data-testid="citation-popover-system-a-location">
-            <span className="kb-cite-pop-section-title">{cardLocatorLabel || '位置'}</span>
-            <span className="kb-cite-pop-locator-text">{systemALocationText}</span>
-            {systemAAnchorText ? <span className="kb-cite-pop-anchor-meta">{systemAAnchorText}</span> : null}
-          </div>
           {showSystemASupport ? (
             <div className="kb-cite-pop-why" data-testid="citation-popover-system-a-support">
               <span className="kb-cite-pop-section-title">{cardSupportLabel || '可靠度'}</span>

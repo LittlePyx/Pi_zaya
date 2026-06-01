@@ -56,6 +56,12 @@ from kb.converter.quality_repair import (
     repair_markdown_quality,
     write_conversion_quality_result,
 )
+from kb.converter.quality_center import (
+    discover_quality_markdown_files,
+    quality_center_summary,
+    repair_quality_targets,
+    scan_quality_targets,
+)
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.library_store import LibraryStore
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
@@ -246,6 +252,8 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
     repair = report.get("auto_repair") if isinstance(report.get("auto_repair"), dict) else {}
     repair_attempts = [item for item in list(report.get("repair_attempts") or []) if isinstance(item, dict)]
     latest_attempt = report.get("latest_repair_attempt") if isinstance(report.get("latest_repair_attempt"), dict) else (repair_attempts[-1] if repair_attempts else {})
+    source_quality = report.get("source_quality") if isinstance(report.get("source_quality"), dict) else {}
+    center_summary = quality_center_summary(report)
     try:
         stat = md_path.stat()
         stale = (
@@ -272,6 +280,10 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
         "repair_attempts": repair_attempts[-5:],
         "recommended_action": str(report.get("recommended_action") or ""),
         "needs_reconvert": bool(report.get("needs_reconvert")),
+        "source_quality": source_quality,
+        "quality_center": center_summary,
+        "source_quality_status": str(center_summary.get("status") or ""),
+        "source_quality_message": str(center_summary.get("message") or ""),
     }
 
 
@@ -306,7 +318,16 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
             return dict(cached[4])
 
         metrics = summarize_conversion_quality(path)
-        conversion_report = _conversion_quality_report_summary(path, load_conversion_quality_result(path))
+        report_payload = load_conversion_quality_result(path)
+        conversion_report = _conversion_quality_report_summary(path, report_payload)
+        report_plan = report_payload.get("repair_plan") if isinstance(report_payload.get("repair_plan"), dict) else {}
+        report_issue_codes = [
+            str(code or "").strip().lower()
+            for code in list((report_plan or {}).get("issue_codes") or [])
+            if str(code or "").strip()
+        ]
+        report_action = str((report_plan or {}).get("action") or report_payload.get("recommended_action") or "").strip().lower()
+        report_stale = bool((conversion_report or {}).get("stale")) if isinstance(conversion_report, dict) else True
         metric_view = {
             "chars": int(metrics.chars),
             "headings": int(metrics.heading_count),
@@ -335,30 +356,74 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
             issues.append(_conversion_quality_issue(code, label, severity=severity, count=count))
             score -= min(36, max(0, int(penalty)) * min(n, 4))
 
-        if metrics.missing_image_count > 0:
-            add_issue("missing_images", "Missing image assets", severity="error", count=metrics.missing_image_count, penalty=10)
-        if metrics.unclosed_display_math_block_count > 0:
-            add_issue("unclosed_display_math", "Unclosed display math", severity="error", count=metrics.unclosed_display_math_block_count, penalty=18)
-        if metrics.mojibake_count > 0:
-            add_issue("mojibake", "Encoding artifacts", severity="error", count=metrics.mojibake_count, penalty=12)
-        if metrics.analyzer_error_count > 0:
-            add_issue("analyzer_errors", "Markdown analyzer errors", severity="error", count=metrics.analyzer_error_count, penalty=12)
-        if metrics.heading_count <= 1:
-            add_issue("weak_structure", "Weak heading structure", count=metrics.heading_count, penalty=8)
-        if not metrics.has_abstract_heading:
-            add_issue("missing_abstract", "Missing abstract heading", penalty=5)
-        if metrics.page_marker_count <= 0:
-            add_issue("missing_page_markers", "Missing page anchors", penalty=8)
-        if metrics.page_marker_gap_count > 0:
-            add_issue("page_marker_gaps", "Page anchor gaps", count=metrics.page_marker_gap_count, penalty=6)
-        if metrics.extracted_reference_count <= 0 and metrics.reference_line_count <= 0:
-            add_issue("missing_references", "Missing reference list", penalty=12)
-        if metrics.image_count > 0 and metrics.caption_count <= 0:
-            add_issue("missing_captions", "Figures lack captions", count=metrics.image_count, penalty=5)
-        if metrics.analyzer_warning_count > 3:
-            add_issue("analyzer_warnings", "Markdown analyzer warnings", count=metrics.analyzer_warning_count, penalty=3)
-        if metrics.heading_level_jump_count > 0:
-            add_issue("heading_level_jumps", "Heading level jumps", count=metrics.heading_level_jump_count, penalty=4)
+        def issue_count_for_code(code: str) -> int:
+            if code == "missing_images":
+                return int(metrics.missing_image_count)
+            if code == "unclosed_display_math":
+                return int(metrics.unclosed_display_math_block_count)
+            if code == "mojibake":
+                return int(metrics.mojibake_count)
+            if code == "analyzer_errors":
+                return int(metrics.analyzer_error_count)
+            if code == "weak_structure":
+                return int(metrics.heading_count)
+            if code == "missing_page_markers":
+                return int(metrics.page_marker_count)
+            if code == "page_marker_gaps":
+                return int(metrics.page_marker_gap_count)
+            if code == "missing_references":
+                return int(metrics.extracted_reference_count or metrics.reference_line_count)
+            if code == "missing_captions":
+                return int(metrics.image_count)
+            if code == "analyzer_warnings":
+                return int(metrics.analyzer_warning_count)
+            if code == "heading_level_jumps":
+                return int(metrics.heading_level_jump_count)
+            return 1
+
+        def issue_label_for_code(code: str) -> str:
+            strategy = conversion_repair_strategy_for_issue(code)
+            return str(strategy.get("label") or code.replace("_", " ")).strip()
+
+        def issue_severity_for_code(code: str) -> str:
+            if code in {"source_text_loss", "missing_images", "mojibake", "analyzer_errors", "quality_scan_failed"}:
+                return "error"
+            return "warning"
+
+        if conversion_report and not report_stale and (report_issue_codes or report_action == "none"):
+            for code in report_issue_codes:
+                add_issue(
+                    code,
+                    issue_label_for_code(code),
+                    severity=issue_severity_for_code(code),
+                    count=issue_count_for_code(code),
+                    penalty=12 if issue_severity_for_code(code) == "error" else 6,
+                )
+        else:
+            if metrics.missing_image_count > 0:
+                add_issue("missing_images", "Missing image assets", severity="error", count=metrics.missing_image_count, penalty=10)
+            if metrics.unclosed_display_math_block_count > 0:
+                add_issue("unclosed_display_math", "Unclosed display math", severity="error", count=metrics.unclosed_display_math_block_count, penalty=18)
+            if metrics.mojibake_count > 0:
+                add_issue("mojibake", "Encoding artifacts", severity="error", count=metrics.mojibake_count, penalty=12)
+            if metrics.analyzer_error_count > 0:
+                add_issue("analyzer_errors", "Markdown analyzer errors", severity="error", count=metrics.analyzer_error_count, penalty=12)
+            if metrics.heading_count <= 1:
+                add_issue("weak_structure", "Weak heading structure", count=metrics.heading_count, penalty=8)
+            if not metrics.has_abstract_heading:
+                add_issue("missing_abstract", "Missing abstract heading", penalty=5)
+            if metrics.page_marker_count <= 0:
+                add_issue("missing_page_markers", "Missing page anchors", penalty=8)
+            if metrics.page_marker_gap_count > 0:
+                add_issue("page_marker_gaps", "Page anchor gaps", count=metrics.page_marker_gap_count, penalty=6)
+            if metrics.extracted_reference_count <= 0 and metrics.reference_line_count <= 0:
+                add_issue("missing_references", "Missing reference list", penalty=12)
+            if metrics.image_count > 0 and metrics.caption_count <= 0:
+                add_issue("missing_captions", "Figures lack captions", count=metrics.image_count, penalty=5)
+            if metrics.analyzer_warning_count > 3:
+                add_issue("analyzer_warnings", "Markdown analyzer warnings", count=metrics.analyzer_warning_count, penalty=3)
+            if metrics.heading_level_jump_count > 0:
+                add_issue("heading_level_jumps", "Heading level jumps", count=metrics.heading_level_jump_count, penalty=4)
 
         hard_issue = any(str(item.get("severity") or "") == "error" for item in issues)
         status = "error" if hard_issue else ("warning" if issues else "good")
@@ -2797,6 +2862,135 @@ def _quality_repair_run_candidate_cases(run: dict, *, limit: int = 3) -> list[di
     return out
 
 
+def _quality_repair_run_source_inputs(run: dict) -> list[tuple[str, str]]:
+    values: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw in [*_list_strings((run or {}).get("target_sources")), *_list_strings((run or {}).get("target_names"))]:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        name = Path(text.replace("\\", "/")).name or text
+        key = f"{text}\n{name}".lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append((text, name))
+    return values
+
+
+def _quality_repair_run_source_verification(run: dict) -> dict:
+    if _safe_int((run or {}).get("enqueued"), 0) <= 0 and str((run or {}).get("phase") or "").strip().lower() != "source_reconversion_queued":
+        return {}
+
+    items: list[dict] = []
+    issue_counter: Counter = Counter()
+    seen_targets: set[str] = set()
+    for source_path, source_name in _quality_repair_run_source_inputs(run):
+        resolved = _resolve_quality_source(source_path=source_path, source_name=source_name)
+        pdf_path_raw = str(resolved.get("pdf_path") or "").strip()
+        md_path_raw = str(resolved.get("md_path") or "").strip()
+        md_exists = bool(resolved.get("md_exists")) and bool(md_path_raw)
+        pdf_exists = bool(pdf_path_raw and _path_is_file(Path(pdf_path_raw).expanduser()))
+        if not md_exists and not pdf_exists:
+            continue
+
+        target_key = _normalized_path_key(md_path_raw or pdf_path_raw).lower()
+        if not target_key or target_key in seen_targets:
+            continue
+        seen_targets.add(target_key)
+
+        if not md_exists:
+            issue_counter["missing_markdown"] += 1
+            items.append({
+                "source_path": source_path,
+                "source_name": source_name,
+                "pdf_path": pdf_path_raw,
+                "md_path": md_path_raw,
+                "status": "missing_markdown",
+                "score": 0,
+                "issue_codes": ["missing_markdown"],
+                "action": "reconvert",
+            })
+            continue
+
+        md_path = Path(md_path_raw).expanduser()
+        pdf_path = Path(pdf_path_raw).expanduser() if pdf_exists else None
+        try:
+            write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+            _clear_conversion_quality_cache(md_path)
+            quality = _conversion_quality_summary(md_path) or {}
+            report = quality.get("conversion_report") if isinstance(quality.get("conversion_report"), dict) else {}
+            plan = report.get("repair_plan") if isinstance(report.get("repair_plan"), dict) else {}
+            issue_codes = [
+                str(issue.get("code") or "").strip().lower()
+                for issue in list(quality.get("issues") or [])
+                if isinstance(issue, dict) and str(issue.get("code") or "").strip()
+            ]
+            if not issue_codes:
+                issue_codes = [
+                    str(code or "").strip().lower()
+                    for code in list((plan or {}).get("issue_codes") or [])
+                    if str(code or "").strip()
+                ]
+            for code in issue_codes:
+                issue_counter[code] += 1
+            action = str((plan or {}).get("action") or report.get("recommended_action") or "").strip().lower()
+            if not action:
+                action = "none" if not issue_codes else "review"
+            status = "ready" if not issue_codes and str(quality.get("status") or "") == "good" else (action if action != "none" else str(quality.get("status") or "ready"))
+            items.append({
+                "source_path": source_path,
+                "source_name": source_name,
+                "pdf_path": pdf_path_raw,
+                "md_path": str(md_path),
+                "status": status,
+                "score": _safe_int(quality.get("score"), 0),
+                "issue_codes": issue_codes[:12],
+                "action": action,
+                "summary": str(quality.get("summary") or ""),
+            })
+        except Exception as exc:
+            issue_counter["quality_scan_failed"] += 1
+            items.append({
+                "source_path": source_path,
+                "source_name": source_name,
+                "pdf_path": pdf_path_raw,
+                "md_path": md_path_raw,
+                "status": "quality_scan_failed",
+                "score": 0,
+                "issue_codes": ["quality_scan_failed"],
+                "action": "review",
+                "error": str(exc)[:240],
+            })
+
+    target_count = len(items)
+    if target_count <= 0:
+        return {}
+    ready = sum(1 for item in items if str(item.get("status") or "").lower() == "ready")
+    autofix = sum(1 for item in items if str(item.get("action") or "").lower() == "autofix")
+    reconvert = sum(1 for item in items if str(item.get("action") or "").lower() == "reconvert")
+    review = sum(1 for item in items if str(item.get("action") or "").lower() == "review")
+    quality_ok = ready == target_count and reconvert == 0 and review == 0 and autofix == 0
+    status = "passed" if quality_ok else ("failed" if reconvert > 0 or review > 0 else "retryable")
+    return {
+        "type": "conversion_source_quality",
+        "status": status,
+        "quality_ok": bool(quality_ok),
+        "target_count": int(target_count),
+        "ready": int(ready),
+        "autofix": int(autofix),
+        "reconvert": int(reconvert),
+        "review": int(review),
+        "issue_codes": _counter_items(issue_counter, limit=12),
+        "items": items[:20],
+        "detail": (
+            f"Conversion source quality passed for {ready}/{target_count} target(s)."
+            if quality_ok
+            else f"Conversion source quality still has {target_count - ready}/{target_count} target(s) needing action."
+        ),
+    }
+
+
 def _quality_repair_run_verification_from_rerun(result: dict) -> dict:
     failures = [
         str(item.get("name") or "").strip()
@@ -2824,30 +3018,93 @@ def _quality_repair_run_verification_patch(run: dict, *, body) -> dict:
     reader_verification = _reader_locate_repair_verification(run)
     reader_has_targets = _safe_int(reader_verification.get("target_count"), 0) > 0
     reader_status = str(reader_verification.get("status") or "").strip().lower()
+    source_verification = _quality_repair_run_source_verification(run)
+    source_has_targets = _safe_int(source_verification.get("target_count"), 0) > 0
+    source_ok = (not source_has_targets) or bool(source_verification.get("quality_ok"))
     case_id = str(getattr(body, "case_id", "") or "").strip() if body is not None else ""
     candidate_cases = _quality_repair_run_candidate_cases(run, limit=3)
     if not case_id and candidate_cases:
         case_id = str(candidate_cases[0].get("id") or "").strip()
     if not case_id:
-        if reader_has_targets:
-            if bool(reader_verification.get("quality_ok")) or reader_status == "passed":
+        if source_has_targets and not reader_has_targets:
+            if bool(source_verification.get("quality_ok")):
                 return {
                     "status": "completed",
-                    "phase": "verification_passed",
-                    "verification": reader_verification,
-                    "detail": str(reader_verification.get("detail") or "Reader locate verification passed."),
-                }
-            if reader_status == "needs_reader_reopen":
-                return {
-                    "status": "warning",
-                    "phase": "verification_needs_reader_reopen",
-                    "verification": reader_verification,
-                    "detail": str(reader_verification.get("detail") or "Reader locate needs a user reopen to confirm exact positioning."),
+                    "verification": source_verification,
+                    "detail": str(source_verification.get("detail") or "Conversion source quality verification passed."),
                 }
             return {
                 "status": "warning",
+                "phase": "source_quality_failed",
+                "verification": source_verification,
+                "detail": str(source_verification.get("detail") or "Conversion source quality still needs attention."),
+            }
+        if reader_has_targets:
+            if source_has_targets and not source_ok:
+                combined = {
+                    "type": "combined_repair_verification",
+                    "status": "failed",
+                    "quality_ok": False,
+                    "source_quality": source_verification,
+                    "reader_locate": reader_verification,
+                }
+                return {
+                    "status": "warning",
+                    "phase": "source_quality_failed",
+                    "verification": combined,
+                    "detail": str(source_verification.get("detail") or "Conversion source quality still needs attention."),
+                }
+            if bool(reader_verification.get("quality_ok")) or reader_status == "passed":
+                verification = (
+                    {
+                        "type": "combined_repair_verification",
+                        "status": "passed",
+                        "quality_ok": True,
+                        "source_quality": source_verification,
+                        "reader_locate": reader_verification,
+                    }
+                    if source_has_targets
+                    else reader_verification
+                )
+                return {
+                    "status": "completed",
+                    "phase": "verification_passed",
+                    "verification": verification,
+                    "detail": str(reader_verification.get("detail") or "Reader locate verification passed."),
+                }
+            if reader_status == "needs_reader_reopen":
+                verification = (
+                    {
+                        "type": "combined_repair_verification",
+                        "status": "needs_reader_reopen",
+                        "quality_ok": False,
+                        "source_quality": source_verification,
+                        "reader_locate": reader_verification,
+                    }
+                    if source_has_targets
+                    else reader_verification
+                )
+                return {
+                    "status": "warning",
+                    "phase": "verification_needs_reader_reopen",
+                    "verification": verification,
+                    "detail": str(reader_verification.get("detail") or "Reader locate needs a user reopen to confirm exact positioning."),
+                }
+            verification = (
+                {
+                    "type": "combined_repair_verification",
+                    "status": "failed",
+                    "quality_ok": False,
+                    "source_quality": source_verification,
+                    "reader_locate": reader_verification,
+                }
+                if source_has_targets
+                else reader_verification
+            )
+            return {
+                "status": "warning",
                 "phase": "verification_failed",
-                "verification": reader_verification,
+                "verification": verification,
                 "detail": str(reader_verification.get("detail") or "Reader locate verification still failing."),
             }
         return {
@@ -2893,19 +3150,28 @@ def _quality_repair_run_verification_patch(run: dict, *, body) -> dict:
     if reader_has_targets:
         qa_ok = bool(verification.get("quality_ok")) or str(verification.get("status") or "").lower() == "passed"
         reader_ok = bool(reader_verification.get("quality_ok")) or reader_status == "passed"
+        combined_ok = bool(qa_ok and reader_ok and source_ok)
         combined = {
             "type": "combined_repair_verification",
-            "status": "passed" if qa_ok and reader_ok else ("blocked" if str(verification.get("status") or "").lower() == "error" else "failed"),
-            "quality_ok": bool(qa_ok and reader_ok),
+            "status": "passed" if combined_ok else ("blocked" if str(verification.get("status") or "").lower() == "error" else "failed"),
+            "quality_ok": bool(combined_ok),
+            "source_quality": source_verification if source_has_targets else {},
             "research_qa": verification,
             "reader_locate": reader_verification,
         }
-        if qa_ok and reader_ok:
+        if combined_ok:
             return {
                 "status": "completed",
                 "phase": "verification_passed",
                 "verification": combined,
                 "detail": f"Research QA and Reader locate verification passed for {case_id}.",
+            }
+        if source_has_targets and not source_ok:
+            return {
+                "status": "warning",
+                "phase": "source_quality_failed",
+                "verification": combined,
+                "detail": str(source_verification.get("detail") or "Conversion source quality still needs attention."),
             }
         if qa_ok and reader_status == "needs_reader_reopen":
             return {
@@ -2921,27 +3187,59 @@ def _quality_repair_run_verification_patch(run: dict, *, body) -> dict:
                 "verification": combined,
                 "detail": str(reader_verification.get("detail") or "Reader locate verification still failing."),
             }
-    status = str(verification.get("status") or "").lower()
-    failures = _list_strings(verification.get("failures"))
-    if bool(verification.get("quality_ok")) or status == "passed":
+    research_status = str(verification.get("status") or "").lower()
+    research_error_kind = str(verification.get("error_kind") or "").strip()
+    research_failures = _list_strings(verification.get("failures"))
+    if bool(verification.get("quality_ok")) or research_status == "passed":
+        if source_has_targets and not source_ok:
+            return {
+                "status": "warning",
+                "phase": "source_quality_failed",
+                "verification": {
+                    "type": "combined_repair_verification",
+                    "status": "failed",
+                    "quality_ok": False,
+                    "source_quality": source_verification,
+                    "research_qa": verification,
+                },
+                "detail": str(source_verification.get("detail") or "Conversion source quality still needs attention."),
+            }
         return {
             "status": "completed",
             "phase": "verification_passed",
-            "verification": verification,
+            "verification": (
+                {
+                    "type": "combined_repair_verification",
+                    "status": "passed",
+                    "quality_ok": True,
+                    "source_quality": source_verification,
+                    "research_qa": verification,
+                }
+                if source_has_targets
+                else verification
+            ),
             "detail": f"Verification passed for Research QA case {case_id}.",
         }
-    if status == "error" and str(verification.get("error_kind") or "").strip():
+    if source_has_targets:
+        verification = {
+            "type": "combined_repair_verification",
+            "status": "blocked" if research_status == "error" else "failed",
+            "quality_ok": False,
+            "source_quality": source_verification,
+            "research_qa": verification,
+        }
+    if research_status == "error" and research_error_kind:
         return {
             "status": "warning",
             "phase": "verification_blocked",
             "verification": verification,
-            "detail": f"Research QA verification could not complete: {verification.get('error_kind')}.",
+            "detail": f"Research QA verification could not complete: {research_error_kind}.",
         }
     return {
         "status": "warning",
         "phase": "verification_failed",
         "verification": verification,
-        "detail": "Research QA verification still failing: " + (" / ".join(failures[:4]) if failures else status or "unknown"),
+        "detail": "Research QA verification still failing: " + (" / ".join(research_failures[:4]) if research_failures else research_status or "unknown"),
     }
 
 
@@ -5666,6 +5964,12 @@ class QualitySourcesBody(BaseModel):
     sources: list[QualitySourceItem] = []
 
 
+class QualityConversionBatchBody(BaseModel):
+    repair: bool = False
+    rebuild_indices: bool = True
+    limit: int = 1000
+
+
 class QualityRepairBody(BaseModel):
     pdf_names: list[str] = []
     sources: list[QualitySourceItem] = []
@@ -5719,6 +6023,42 @@ class LibrarySuggestionActionBody(BaseModel):
     dismiss_tags: list[str] = []
     accept_all_tags: bool = False
     dismiss_all_tags: bool = False
+
+
+@router.post("/quality/conversion/batch")
+def conversion_quality_batch(body: QualityConversionBatchBody):
+    pdf_d = _pdf_dir()
+    md_d = _md_dir()
+    try:
+        limit = int(body.limit or 1000)
+    except Exception:
+        limit = 1000
+    limit = max(1, min(limit, 5000))
+    targets = discover_quality_markdown_files(md_d, limit=limit)
+    if bool(body.repair):
+        stats = repair_quality_targets(
+            targets,
+            pdf_root=pdf_d,
+            rebuild_indices=bool(body.rebuild_indices),
+        )
+        mode = "repair"
+    else:
+        stats = scan_quality_targets(targets, pdf_root=pdf_d)
+        mode = "scan"
+    needs_reindex = bool(int(stats.get("changed", 0) or 0) > 0 or int(stats.get("rebuilt", 0) or 0) > 0)
+    try:
+        for target in targets:
+            _clear_conversion_quality_cache(target)
+    except Exception:
+        pass
+    return {
+        "ok": True,
+        "mode": mode,
+        "target_count": len(targets),
+        "limit": limit,
+        "needs_reindex": needs_reindex,
+        **stats,
+    }
 
 
 @router.post("/quality/repair")
@@ -5903,9 +6243,18 @@ def repair_library_quality(body: QualityRepairBody):
                     for issue in list(before_quality.get("issues") or [])
                     if isinstance(issue, dict) and str(issue.get("code") or "").strip()
                 ]
-                repair_result = repair_markdown_quality(md_path, issue_codes=before_issues)
+                source_pdf_for_quality = pdf_path if (pdf_available and pdf_path is not None) else None
+                repair_result = repair_markdown_quality(
+                    md_path,
+                    issue_codes=before_issues,
+                    source_pdf_path=source_pdf_for_quality,
+                )
                 try:
-                    write_conversion_quality_result(md_path, auto_repair_result=repair_result)
+                    write_conversion_quality_result(
+                        md_path,
+                        auto_repair_result=repair_result,
+                        source_pdf_path=source_pdf_for_quality,
+                    )
                 except Exception:
                     pass
                 _clear_conversion_quality_cache(md_path)
@@ -6496,15 +6845,16 @@ def _run_library_reindex() -> dict:
         }
     structured_indices: dict | None = None
     structured_indices_error = ""
-    try:
-        structured_indices = rebuild_structured_indices_for_root(md_d, force=False)
-    except Exception as exc:
-        structured_indices_error = str(exc)
     result = subprocess.run(
         [os.sys.executable, str(ingest_py), "--src", str(md_d), "--db", str(s.db_dir), "--incremental", "--prune"],
         capture_output=True, text=True, timeout=300,
     )
     ok = result.returncode == 0
+    if ok:
+        try:
+            structured_indices = rebuild_structured_indices_for_root(md_d, force=False)
+        except Exception as exc:
+            structured_indices_error = str(exc)
     refsync: dict | None = None
     refsync_error = ""
     if ok:

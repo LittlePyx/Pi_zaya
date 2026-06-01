@@ -347,6 +347,13 @@ _DISCUSS_HEAD_RE_UI = re.compile(
     r"\b(discussion|conclusion|limitations?|future\s+work)\b|(讨论|结论|局限|未来工作)",
     flags=re.I,
 )
+_SYSTEM_A_SYNTHETIC_LOCATION_DISCUSSION_RE = re.compile(
+    r"^\s*(?:(?:该文|本文|这篇(?:文献|论文|文章)|the\s+paper)\s*)?"
+    r"(?:在|于|in\s+)?[“\"']?[^“”\"']{8,220}[”\"']\s*"
+    r"(?:讨论了|比较了|定义或解释了|给出了与|directly\s+discusses|discusses|compares|defines|explains)"
+    r"[“\"']?[^“”\"']{1,140}[”\"']?\s*[。.]?\s*$",
+    flags=re.IGNORECASE,
+)
 _PDF_SHELL_HEADING_TOKENS_UI = {
     "article",
     "article info",
@@ -1690,6 +1697,10 @@ def _infer_title_from_source_text(source_path: str, fallback_title: str, *, md_r
     for raw_line in txt.splitlines()[:120]:
         line = (raw_line or "").strip()
         if not line:
+            continue
+        if line.startswith("<!--") or re.fullmatch(r"<!--\s*kb_page\s*:\s*\d+\s*-->", line, flags=re.I):
+            continue
+        if re.match(r"^!\[[^\]]{0,120}\]\([^)]+\)\s*$", line):
             continue
         line = re.sub(r"^#{1,6}\s*", "", line).strip()
         if len(line) < 12:
@@ -3235,6 +3246,32 @@ def _fallback_fill_reference_meta_from_raw(ref_rec: dict) -> dict:
     return best
 
 
+def _authors_from_raw_reference(raw: str, *, title: str = "") -> str:
+    raw_text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    title_text = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not raw_text or not title_text or len(title_text) < 8:
+        return ""
+    pos = raw_text.lower().find(title_text.lower())
+    if pos <= 0:
+        return ""
+    prefix = raw_text[:pos].strip(" \t\r\n.;,:")
+    prefix = re.sub(r"^\s*\[?\d{1,4}\]?\s*", "", prefix).strip(" \t\r\n.;,:")
+    if len(prefix) < 3 or len(prefix) > 180:
+        return ""
+    low = prefix.lower()
+    if re.search(r"\b(?:abstract|introduction|fig|figure|table|retrieved|unknown|reference)\b", low):
+        return ""
+    if re.search(r"\bet\s+al\.?\b", low):
+        return prefix
+    if ("," in prefix or " & " in prefix or re.search(r"\band\b", prefix, flags=re.I)) and re.search(r"[A-Z]", prefix):
+        return prefix
+    if re.fullmatch(r"[A-Z]{1,4}\.?\s+[A-Z][A-Za-z'’-]{2,}(?:\s+[A-Z][A-Za-z'’-]{2,})?", prefix):
+        return prefix
+    if re.fullmatch(r"[A-Z][A-Za-z'’-]{2,}\s+[A-Z]{1,4}\.?", prefix):
+        return prefix
+    return ""
+
+
 def _format_reference_cite_line(ref_rec: dict) -> str:
     if not isinstance(ref_rec, dict):
         return ""
@@ -3312,6 +3349,10 @@ def _normalize_reference_for_popup(ref_rec: dict) -> dict:
             authors_p = _strip_reference_lead_label(str((parsed or {}).get("authors") or "").strip())
             if authors_p:
                 authors = authors_p
+        if not authors:
+            authors_p = _authors_from_raw_reference(raw, title=title or str((parsed or {}).get("title") or ""))
+            if authors_p:
+                authors = _strip_reference_lead_label(authors_p)
         if not venue:
             venue_p = _strip_reference_lead_label(str((parsed or {}).get("venue") or "").strip())
             if venue_p:
@@ -3402,6 +3443,10 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("single-photon detection", re.compile(r"(?i)\bsingle[-\s]?photon\s+(?:detection|detections|detectors?|photodetectors?)\b|\bSPADs?\b|单光子.{0,8}探测|光子探测器")),
     ("image scanning microscopy", re.compile(r"(?i)\bimage\s+scanning\s+microscopy\b|\bISM\b|共聚焦|扫描显微")),
     ("light field", re.compile(r"(?i)\blight[-\s]?field\b|光场")),
+    ("digital refocusing", re.compile(r"(?i)\bdigital\s+refocus(?:ing)?\b|\brefocus(?:ing)?\b|重聚焦|重新对焦")),
+    ("ray tracing", re.compile(r"(?i)\bray\s+trac(?:e|ing)\b|\bray\s+optics\b|射线追踪|几何光学")),
+    ("wave propagation", re.compile(r"(?i)\bwave\s+propagation\b|\bwave\s+optics\b|\bdiffraction\b|波动光学|波传播|衍射")),
+    ("quantum correlation", re.compile(r"(?i)\bquantum\s+correlation\b|\btime[-\s]?correlation\b|量子关联|时间关联|光子对")),
     ("single-pixel imaging", re.compile(r"(?i)\bsingle[-\s]?pixel\b|\bspi\b|单像素")),
     ("deep learning", re.compile(r"(?i)\bdeep\s+learning\b|\bneural\s+network\b|深度学习|神经网络")),
     ("foveated", re.compile(r"(?i)\bfoveated\b|中央凹|自适应采样")),
@@ -3418,6 +3463,7 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
     ("snapshot compressive imaging", re.compile(r"(?i)\bsci\b|snapshot\s+compressive|压缩快照")),
     ("cassi", re.compile(r"(?i)\bcassi\b|coded\s+aperture\s+snapshot|编码孔径")),
     ("admm", re.compile(r"(?i)\badmm\b|交替方向乘子")),
+    ("perovskite", re.compile(r"(?i)\bperovskite\b|钙钛矿")),
 )
 _SYSTEM_A_STRONG_BINDING_TERMS = {
     "iscat",
@@ -3426,6 +3472,10 @@ _SYSTEM_A_STRONG_BINDING_TERMS = {
     "single-photon detection",
     "image scanning microscopy",
     "light field",
+    "digital refocusing",
+    "ray tracing",
+    "wave propagation",
+    "quantum correlation",
     "foveated",
     "dynamic supersampling",
     "deep learning",
@@ -3611,6 +3661,8 @@ def _system_a_candidate_text(raw: dict) -> str:
 def _system_a_is_low_value_evidence_text(value: str) -> bool:
     text = _clean_evidence_display_text(value, max_len=900)
     if not text:
+        return True
+    if _SYSTEM_A_SYNTHETIC_LOCATION_DISCUSSION_RE.match(text):
         return True
     if _SYSTEM_A_LOW_VALUE_EVIDENCE_RE.search(text):
         return True

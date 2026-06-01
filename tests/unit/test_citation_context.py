@@ -208,3 +208,54 @@ def test_extract_inpaper_reference_context_prefers_structured_reference_index(tm
     assert out["heading_path"].endswith("Methods")
     assert out["page_start"] == 3
     assert out["block_id"] == "blk_demo_00042"
+
+
+def test_extract_inpaper_reference_context_ignores_marker_only_structured_context(tmp_path) -> None:
+    md = tmp_path / "paper.en.md"
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    md.write_text(
+        "\n".join(
+            [
+                "# Example Paper",
+                "## Super-resolution",
+                (
+                    "Compared to traditional reconstruction methods, the network achieved large advancements "
+                    "in both image quality and reconstruction speed [66]."
+                ),
+                "",
+                "## References",
+                "[66] Example upstream work.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (assets_dir / "reference_index.json").write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "ref_num": 66,
+                        "citation_mentions": [
+                            {
+                                "citation_context": "...[66]",
+                                "heading_path": "Example Paper / Figure caption",
+                                "page_start": 5,
+                            }
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    out = extract_inpaper_reference_context(
+        str(md),
+        66,
+        answer_context="reconstruction speed and image quality",
+    )
+
+    assert out["citation_context_source"] == "source_markdown"
+    assert "network achieved large advancements" in out["citation_context"]

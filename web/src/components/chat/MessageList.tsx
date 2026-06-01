@@ -15,6 +15,7 @@ import type {
 import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
   isLikelyWeakCitationTitle,
+  cleanCitationDisplayText,
   mergeCiteMeta,
   normalizeCiteDetail,
   normalizeShelfNote,
@@ -2008,6 +2009,88 @@ function buildFallbackCiteDetailsFromRefHits(opts: {
     })
   }
   return out
+}
+
+function refDisplaySourceKey(value: string): string {
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase()
+}
+
+function refDisplayNameKey(value: string): string {
+  return cleanCitationDisplayText(String(value || ''))
+    .replace(/\.(?:en\.)?md$/i, '')
+    .replace(/\.pdf$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function uiTextMostlySame(left: string, right: string): boolean {
+  const a = cleanCitationDisplayText(left).replace(/\s+/g, ' ').toLowerCase()
+  const b = cleanCitationDisplayText(right).replace(/\s+/g, ' ').toLowerCase()
+  if (!a || !b) return false
+  if (a === b) return true
+  if (a.length >= 36 && b.includes(a)) return true
+  if (b.length >= 36 && a.includes(b)) return true
+  const at = new Set(a.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
+  const bt = new Set(b.match(/[a-z0-9\u4e00-\u9fff]{2,}/g) || [])
+  if (at.size < 5 || bt.size < 5) return false
+  let overlap = 0
+  for (const token of at) {
+    if (bt.has(token)) overlap += 1
+  }
+  return overlap / Math.min(at.size, bt.size) >= 0.82
+}
+
+function enrichCiteDetailsWithVisibleRefContext(details: CiteDetail[], refEntry: RefEntryLite | undefined): CiteDetail[] {
+  const hits = Array.isArray(refEntry?.hits) ? refEntry.hits : []
+  if (details.length <= 0 || hits.length <= 0) return details
+  const bySourcePath = new Map<string, { displayNum: number; summaryLine: string }>()
+  const bySourceName = new Map<string, { displayNum: number; summaryLine: string }>()
+  for (const [index, hit] of hits.entries()) {
+    const ui = hit?.ui_meta || {}
+    const meta = hit?.meta || {}
+    const displayNum = index + 1
+    const summaryLine = cleanCitationDisplayText(String(ui.summary_line || ''))
+    const sourcePath = String(ui.source_path || meta.source_path || '').trim()
+    const sourceName = String(ui.display_name || sourcePath.split(/[\\/]/).pop() || '').trim()
+    const row = { displayNum, summaryLine }
+    const pathKey = refDisplaySourceKey(sourcePath)
+    if (pathKey && !bySourcePath.has(pathKey)) bySourcePath.set(pathKey, row)
+    const nameKey = refDisplayNameKey(sourceName)
+    if (nameKey && !bySourceName.has(nameKey)) bySourceName.set(nameKey, row)
+  }
+  if (bySourcePath.size <= 0 && bySourceName.size <= 0) return details
+
+  return details.map((detail) => {
+    if (detail.isInpaper) return detail
+    const row = bySourcePath.get(refDisplaySourceKey(detail.sourcePath))
+      || bySourceName.get(refDisplayNameKey(detail.sourceName))
+    if (!row) return detail
+    const next: CiteDetail = {
+      ...detail,
+      displayNum: row.displayNum,
+      displayNums: [row.displayNum],
+    }
+    const currentTakeaway = cleanCitationDisplayText(detail.cardTakeaway)
+    const answerClaim = cleanCitationDisplayText(detail.cardClaim || detail.answerClaim)
+    const evidenceText = cleanCitationDisplayText(detail.cardEvidence || detail.evidenceQuote || detail.summaryLine)
+    const summary = row.summaryLine
+    const shouldReplaceTakeaway = Boolean(
+      summary
+      && (
+        !currentTakeaway
+        || uiTextMostlySame(currentTakeaway, answerClaim)
+        || uiTextMostlySame(currentTakeaway, evidenceText)
+      )
+      && !uiTextMostlySame(summary, answerClaim)
+      && !uiTextMostlySame(summary, evidenceText)
+    )
+    if (shouldReplaceTakeaway) {
+      next.cardTakeaway = summary
+      next.cardTakeawayLabel = detail.cardTakeawayLabel || '证据重点'
+    }
+    return next
+  })
 }
 
 function isPreferredStrictFigureRefSnippet(input: string): boolean {
@@ -5779,7 +5862,10 @@ export function MessageList({
                 traceUserMsgId: Number(trace?.userMsgId || refsUserMsgIdForCitations || 0),
               })
               : []
-            const effectiveCiteDetails = citeDetails.length > 0 ? citeDetails : fallbackCiteDetails
+            const effectiveCiteDetails = enrichCiteDetailsWithVisibleRefContext(
+              citeDetails.length > 0 ? citeDetails : fallbackCiteDetails,
+              refEntryForCitations,
+            )
             const guideSourcePath = String(paperGuideSourcePath || '').trim()
             const locateSourceName = prep?.locateSourceName || String(paperGuideSourceName || '').trim()
             const messageProvenance = prep?.messageProvenance || (

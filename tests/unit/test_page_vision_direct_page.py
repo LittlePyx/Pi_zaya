@@ -230,7 +230,7 @@ def test_process_vision_direct_page_prefers_local_references_pipeline_before_vl(
 
         def _process_page(self, page, *, page_index, pdf_path, assets_dir):
             called["local"] += 1
-            return "# References\n\n[1] Local ref."
+            return "# References\n\n[1] Local ref. Journal, 2024.\n[2] Another local ref. Journal, 2025."
 
         def _convert_references_page_with_column_vl(self, **kwargs):
             called["refs_vl"] += 1
@@ -252,9 +252,53 @@ def test_process_vision_direct_page_prefers_local_references_pipeline_before_vl(
         mat=(1, 1),
     )
 
-    assert out == "# References\n\n[1] Local ref."
+    assert out == "# References\n\n[1] Local ref. Journal, 2024.\n[2] Another local ref. Journal, 2025."
     assert called["local"] == 1
     assert called["refs_vl"] == 0
+    assert page.render_calls == []
+
+
+def test_process_vision_direct_page_falls_back_when_local_references_pipeline_is_sparse(tmp_path, monkeypatch):
+    page = _DummyPage()
+    called = {"local": 0, "refs_vl": 0}
+
+    class _SparseRefsConverter(_DummyConverter):
+        def _vision_references_prefer_local_enabled(self):
+            return True
+
+        def _vision_references_column_mode_enabled(self):
+            return True
+
+        def _process_page(self, page, *, page_index, pdf_path, assets_dir):
+            called["local"] += 1
+            return "# References\n\n[1] Too short."
+
+        def _convert_references_page_with_column_vl(self, **kwargs):
+            called["refs_vl"] += 1
+            return "# References\n\n[1] VL ref. Journal, 2024.\n[2] Another VL ref. Journal, 2025."
+
+    monkeypatch.setattr(page_module, "_detect_references_page", lambda page: True)
+    monkeypatch.setattr(page_module, "_collect_metadata_rects", lambda converter, *, page, page_index, is_references_page: [])
+    monkeypatch.setattr(page_module, "_compress_png_bytes", lambda png_bytes, *, speed_config: png_bytes)
+    monkeypatch.setattr(page_module, "_apply_formula_overlay", lambda converter, **kwargs: (kwargs["png_bytes"], kwargs["page_hint"], {}))
+
+    out = page_module.process_vision_direct_page(
+        _SparseRefsConverter(),
+        page=page,
+        page_index=2,
+        total_pages=4,
+        pdf_path=Path("dummy.pdf"),
+        assets_dir=tmp_path,
+        speed_mode="normal",
+        speed_config={"compress": 3},
+        dpi=220,
+        mat=(1, 1),
+    )
+
+    assert out.startswith("# References")
+    assert "VL ref" in out
+    assert called["local"] == 1
+    assert called["refs_vl"] == 1
     assert page.render_calls == []
 
 

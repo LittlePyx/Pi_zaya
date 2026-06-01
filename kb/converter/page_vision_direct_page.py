@@ -14,7 +14,9 @@ except ImportError:
 
 from .geometry_utils import _bbox_width, _overlap_1d, _rect_area
 from .heuristics import _page_has_references_heading, _page_looks_like_references_content
-from .layout_analysis import _collect_visual_rects, _detect_column_split_x
+from .layout_analysis import _collect_visual_rects, _detect_column_split_x, page_has_full_page_image_layer
+from .page_figure_metadata import infer_visual_rects_from_caption_candidates
+from .reference_page_vl import reference_markdown_entry_count, reference_markdown_is_usable
 
 
 def _stage_timing_enabled() -> bool:
@@ -66,10 +68,11 @@ def _extract_page_visual_assets(
     try:
         page_w = float(page.rect.width)
         page_h = float(page.rect.height)
+        scan_backed_page = page_has_full_page_image_layer(page)
         visual_rects = _collect_visual_rects(page)
         if not visual_rects:
             visual_rects = []
-        if visual_rects:
+        if visual_rects or scan_backed_page:
             cap_candidates = converter._extract_page_figure_caption_candidates(page)
         W = page_w
         H = page_h
@@ -111,6 +114,8 @@ def _extract_page_visual_assets(
             visual_rects=filtered_visual_rects,
             caption_candidates=cap_candidates,
         )
+        if (not visual_rects) and scan_backed_page and cap_candidates:
+            visual_rects = infer_visual_rects_from_caption_candidates(page, cap_candidates)
         if not visual_rects:
             visual_rects = []
         if visual_rects:
@@ -617,7 +622,7 @@ def process_vision_direct_page(
                 flush=True,
             )
             md_local_refs = None
-        if md_local_refs:
+        if md_local_refs and reference_markdown_is_usable(md_local_refs):
             _log_stage(4, "page render", time.perf_counter(), "skipped=refs-local-fastpath")
             _log_stage(5, "hints/overlay", time.perf_counter(), "formula=0 hint=0 refs_local=1")
             _log_stage(6, "convert", step_start, f"refs_local=1 chars={len(md_local_refs)}")
@@ -630,6 +635,16 @@ def process_vision_direct_page(
                 flush=True,
             )
             return md_local_refs
+        if md_local_refs:
+            try:
+                entry_count = reference_markdown_entry_count(md_local_refs)
+                print(
+                    f"[VISION_DIRECT][REFS] local references output too sparse on page {page_index+1} "
+                    f"({entry_count} entries); falling back to VL column OCR",
+                    flush=True,
+                )
+            except Exception:
+                pass
 
     references_column_enabled = False
     if is_references_page:

@@ -4447,6 +4447,59 @@ def _quality_gate_auto_repair(assessment: dict) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+_SOURCE_CONVERSION_RETRY_ISSUES = {
+    "missing_images",
+    "missing_references",
+    "mojibake",
+    "weak_structure",
+    "missing_markdown",
+    "source_text_loss",
+}
+
+
+def _post_convert_source_retry_enabled() -> bool:
+    raw = str(os.environ.get("KB_POST_CONVERT_SOURCE_RETRY", "1") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _quality_assessment_issue_codes(assessment: dict) -> list[str]:
+    out: list[str] = []
+    for raw in list((assessment or {}).get("blocking_issue_codes") or []) + list((assessment or {}).get("issue_codes") or []):
+        code = str(raw or "").strip().lower()
+        if code and code not in out:
+            out.append(code)
+    plan = (assessment or {}).get("repair_plan") if isinstance((assessment or {}).get("repair_plan"), dict) else {}
+    for key in ("reconvert_issue_codes", "review_issue_codes", "issue_codes"):
+        for raw in list((plan or {}).get(key) or []):
+            code = str(raw or "").strip().lower()
+            if code and code not in out:
+                out.append(code)
+    return out
+
+
+def _post_convert_source_retry_needed(assessment: dict, *, already_retried: bool = False) -> bool:
+    if already_retried or not _post_convert_source_retry_enabled():
+        return False
+    if bool((assessment or {}).get("indexable")):
+        return False
+    action = str((assessment or {}).get("action") or "").strip().lower()
+    if action != "reconvert":
+        return False
+    codes = set(_quality_assessment_issue_codes(assessment))
+    return bool(codes & _SOURCE_CONVERSION_RETRY_ISSUES)
+
+
+def _post_convert_source_retry_speed_mode(assessment: dict, requested_speed_mode: str) -> str:
+    plan = (assessment or {}).get("repair_plan") if isinstance((assessment or {}).get("repair_plan"), dict) else {}
+    planned = str((plan or {}).get("speed_mode") or "").strip().lower()
+    if planned and planned != "no_llm":
+        return planned
+    requested = str(requested_speed_mode or "").strip().lower()
+    if requested in {"normal", "full_llm"}:
+        return "normal"
+    return "normal"
+
+
 def _bg_post_convert_quality_gate(
     md_path: Path,
     *,
@@ -4596,6 +4649,19 @@ def _bg_worker_loop() -> None:
             def _should_cancel() -> bool:
                 return bg_should_cancel(_BG_STATE, _BG_LOCK)
 
+            def _clear_md_folder_for_retry() -> None:
+                try:
+                    md_root = out_root.resolve()
+                    target = md_folder.resolve()
+                    if str(target).lower().startswith(str(md_root).lower()):
+                        import shutil
+
+                        shutil.rmtree(md_folder, ignore_errors=True)
+                except Exception:
+                    pass
+
+            effective_speed_mode = speed_mode
+            source_retry_done = False
             ok, out_folder = run_pdf_to_md(
                 pdf_path=pdf,
                 out_root=out_root,
@@ -4650,9 +4716,96 @@ def _bg_worker_loop() -> None:
                 except Exception:
                     post_convert_quality = {}
 
+            if ok and md_exists and _post_convert_source_retry_needed(post_convert_quality, already_retried=source_retry_done):
+                source_retry_done = True
+                retry_speed_mode = _post_convert_source_retry_speed_mode(post_convert_quality, speed_mode)
+                retry_issue_codes = _quality_assessment_issue_codes(post_convert_quality)
+                retry_plan = post_convert_quality.get("repair_plan") if isinstance(post_convert_quality.get("repair_plan"), dict) else {}
+                retry_scope = str((retry_plan or {}).get("scope") or "")
+                retry_reason = str(post_convert_quality.get("reason") or "")
+                try:
+                    _bg_record_repair_attempt(
+                        md_main,
+                        event="source_quality_retry_queued",
+                        status="queued",
+                        action="reconvert",
+                        scope=retry_scope,
+                        speed_mode=retry_speed_mode,
+                        issue_codes=retry_issue_codes,
+                        task_id=task_id,
+                        source="post_convert_quality_gate",
+                        reason=retry_reason,
+                        detail="Quality gate requested an automatic source-level reconversion.",
+                        extra={"requested_speed_mode": speed_mode, "retry_speed_mode": retry_speed_mode},
+                    )
+                except Exception:
+                    pass
+                _on_progress(
+                    last_page_done,
+                    last_page_total,
+                    f"quality gate: retrying conversion with {retry_speed_mode} profile",
+                )
+                _clear_md_folder_for_retry()
+                retry_ok, retry_out_folder = run_pdf_to_md(
+                    pdf_path=pdf,
+                    out_root=out_root,
+                    no_llm=False,
+                    keep_debug=False,
+                    eq_image_fallback=False,
+                    progress_cb=_on_progress,
+                    cancel_cb=_should_cancel,
+                    speed_mode=retry_speed_mode,
+                    max_active_conversions=_bg_target_worker_count(),
+                )
+                ok = bool(retry_ok)
+                out_folder = retry_out_folder
+                effective_speed_mode = retry_speed_mode
+                if ok:
+                    msg = f"OK+SOURCE_RETRY: {out_folder}"
+                else:
+                    txt = str(out_folder or "").strip().lower()
+                    msg = "CANCELLED" if txt == "cancelled" else f"FAIL+SOURCE_RETRY: {out_folder}"
+                _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
+                if md_exists:
+                    _bg_record_repair_attempt(
+                        md_main,
+                        event="source_quality_retry_finished",
+                        status="success" if ok else "error",
+                        action="reconvert",
+                        scope=retry_scope,
+                        speed_mode=retry_speed_mode,
+                        issue_codes=retry_issue_codes,
+                        task_id=task_id,
+                        source="post_convert_quality_gate",
+                        reason=retry_reason,
+                        detail=msg,
+                        extra={"requested_speed_mode": speed_mode, "retry_speed_mode": retry_speed_mode},
+                    )
+                post_convert_quality = {}
+                if ok and md_exists:
+                    try:
+                        _on_progress(
+                            last_page_done,
+                            last_page_total,
+                            "quality gate: validating retried Markdown",
+                        )
+                        post_convert_quality = _bg_post_convert_quality_gate(
+                            md_main,
+                            task_id=task_id,
+                            speed_mode=effective_speed_mode,
+                        )
+                        if not bool(post_convert_quality.get("indexable")):
+                            msg = f"OK+SOURCE_RETRY_QUALITY_BLOCKED: {out_folder}"
+                        elif bool(_quality_gate_auto_repair(post_convert_quality).get("changed")):
+                            msg = f"OK+SOURCE_RETRY_REPAIRED: {out_folder}"
+                        else:
+                            msg = f"OK+SOURCE_RETRY_READY: {out_folder}"
+                    except Exception:
+                        post_convert_quality = {}
+
             # Auto-ingest can add noticeable latency in the conversion UI.
             # Skip it in ultra_fast mode to keep end-to-end time near the 5s target.
-            do_auto_ingest = ok and bool(db_dir) and (speed_mode != "ultra_fast")
+            do_auto_ingest = ok and bool(db_dir) and (effective_speed_mode != "ultra_fast")
             if do_auto_ingest and db_dir:
                 try:
                     ingest_py = _bg_ingest_py_path()
@@ -4697,7 +4850,7 @@ def _bg_worker_loop() -> None:
                                 status=ingest_status,
                                 action=str(repair_context.get("action") or "reconvert"),
                                 scope=str(repair_context.get("scope") or ""),
-                                speed_mode=speed_mode,
+                                speed_mode=effective_speed_mode,
                                 issue_codes=list(repair_context.get("issue_codes") or []),
                                 task_id=task_id,
                                 source="background_ingest",
@@ -4717,7 +4870,7 @@ def _bg_worker_loop() -> None:
                             status="error",
                             action=str(repair_context.get("action") or "reconvert"),
                             scope=str(repair_context.get("scope") or ""),
-                            speed_mode=speed_mode,
+                            speed_mode=effective_speed_mode if "effective_speed_mode" in locals() else speed_mode,
                             issue_codes=list(repair_context.get("issue_codes") or []),
                             task_id=task_id,
                             source="background_ingest",
@@ -4731,7 +4884,7 @@ def _bg_worker_loop() -> None:
         bg_finish_task(_BG_STATE, _BG_LOCK, msg, task_id=task_id)
 
 def _bg_ensure_started() -> None:
-    worker_ver = "2026-03-19.bg.v6"
+    worker_ver = "2026-05-29.bg.source-retry.v1"
     desired_workers = _bg_target_worker_count()
     threads = list(getattr(RUNTIME, "BG_THREADS", []) or [])
     running_ver = str(getattr(RUNTIME, "BG_WORKER_VERSION", "") or "")

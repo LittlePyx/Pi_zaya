@@ -118,6 +118,46 @@ export interface ConversionQualityReport {
   repair_attempts?: ConversionRepairAttempt[]
   recommended_action: string
   needs_reconvert: boolean
+  source_quality?: ConversionSourceQuality | null
+  quality_center?: ConversionQualityCenterSummary | null
+  source_quality_status?: string
+  source_quality_message?: string
+}
+
+export interface ConversionSourceQuality {
+  document_type?: 'research_article' | 'review' | 'supplementary' | string
+  abstract_required?: boolean
+  abstract_not_applicable?: boolean
+  source_pdf_path?: string
+  source_pdf_available?: boolean
+  pdf_page_count?: number
+  pdf_text_chars?: number
+  pdf_pages?: number
+  page_marker_count?: number
+  matched_page_ratio?: number
+  page_alignment_confidence?: 'high' | 'medium' | 'low' | 'missing' | 'unknown' | string
+  references_line?: number
+  references_char?: number
+  references_char_ratio?: number
+  body_heading_after_references_line?: number
+  reference_line_count_before_body?: number
+  references_before_body?: boolean
+  abstract_autofix_likely?: boolean
+  source_text_loss?: boolean
+}
+
+export interface ConversionQualityCenterSummary {
+  available?: boolean
+  status?: 'ready' | 'autofix' | 'reconvert' | 'review' | 'unknown' | string
+  severity?: 'ok' | 'warning' | 'error' | string
+  action?: string
+  action_label?: string
+  message?: string
+  badges?: string[]
+  issue_labels?: string[]
+  issue_codes?: string[]
+  source_quality?: ConversionSourceQuality | null
+  report_path?: string
 }
 
 export interface ConversionQualitySummary {
@@ -390,6 +430,34 @@ export interface LibrarySourceQualityResponse {
   ok: boolean
   items: LibrarySourceQualityItem[]
   review_count: number
+}
+
+export interface LibraryConversionQualityBatchBody {
+  repair?: boolean
+  rebuild_indices?: boolean
+  limit?: number
+}
+
+export interface LibraryConversionQualityBatchResponse {
+  ok: boolean
+  mode: 'scan' | 'repair' | string
+  target_count: number
+  limit: number
+  needs_reindex: boolean
+  scanned: number
+  repaired: number
+  changed: number
+  rebuilt: number
+  ready: number
+  autofix: number
+  reconvert: number
+  review: number
+  unknown: number
+  failed: number
+  errors: Array<{ path: string; error: string }>
+  changed_paths: string[]
+  reconvert_paths: string[]
+  review_paths: string[]
 }
 
 export interface LibraryReaderLocateQualityPayload {
@@ -1049,6 +1117,8 @@ export const libraryApi = {
     api.post<{ ok: boolean; item: LibraryQualityActionHistoryItem }>('/api/library/quality/action-history', body),
   sourceQuality: (sources: Array<{ source_path: string; source_name?: string }>) =>
     api.post<LibrarySourceQualityResponse>('/api/library/quality/sources', { sources }),
+  conversionQualityBatch: (body: LibraryConversionQualityBatchBody = {}) =>
+    api.post<LibraryConversionQualityBatchResponse>('/api/library/quality/conversion/batch', body),
   recordReaderLocateQuality: (body: LibraryReaderLocateQualityPayload) =>
     api.post<LibraryReaderLocateQualityResponse>('/api/library/quality/reader-locate', body),
   openQualityArtifact: (domain: 'research_qa' | 'citation_cards' | string, target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook' | string = 'report') =>

@@ -6,9 +6,189 @@ try:
 except Exception:  # pragma: no cover
     fitz = None
 
-from kb.converter.layout_analysis import _merge_nearby_visual_rects, sort_blocks_reading_order
+from kb.converter.layout_analysis import (
+    _collect_image_rects,
+    _merge_nearby_visual_rects,
+    _looks_like_running_header_image_rect,
+    page_has_full_page_image_layer,
+    sort_blocks_reading_order,
+)
+from kb.converter.page_figure_metadata import (
+    extract_page_figure_caption_candidates,
+    infer_visual_rects_from_caption_candidates,
+)
 from kb.converter.pipeline import PDFConverter
 from kb.converter.models import TextBlock
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_collect_image_rects_filters_full_page_scan_background_with_ocr_text():
+    class _Page:
+        rect = fitz.Rect(0, 0, 400, 600)
+
+        def get_image_info(self):
+            return [
+                {"bbox": (0, -1, 401, 600), "width": 1600, "height": 2400},
+                {"bbox": (90, 140, 260, 280), "width": 600, "height": 500},
+            ]
+
+        def get_text(self, mode):
+            assert mode == "text"
+            return "OCR text layer " * 30
+
+    page = _Page()
+
+    assert page_has_full_page_image_layer(page) is True
+    rects = _collect_image_rects(page)
+    assert len(rects) == 1
+    assert tuple(round(float(v), 1) for v in rects[0]) == (90.0, 140.0, 260.0, 280.0)
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_collect_image_rects_keeps_full_page_image_without_text_layer():
+    class _Page:
+        rect = fitz.Rect(0, 0, 400, 600)
+
+        def get_image_info(self):
+            return [{"bbox": (0, 0, 400, 600), "width": 1600, "height": 2400}]
+
+        def get_text(self, mode):
+            assert mode == "text"
+            return ""
+
+    page = _Page()
+
+    assert page_has_full_page_image_layer(page) is False
+    rects = _collect_image_rects(page)
+    assert len(rects) == 1
+    assert tuple(round(float(v), 1) for v in rects[0]) == (0.0, 0.0, 400.0, 600.0)
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_collect_image_rects_filters_top_journal_masthead_banner():
+    class _Page:
+        rect = fitz.Rect(0, 0, 612, 792)
+
+        def get_image_info(self):
+            return [
+                {"bbox": (117.0, 69.8, 495.0, 90.2), "width": 1590, "height": 86},
+                {"bbox": (192.6, 392.5, 419.4, 566.1), "width": 3216, "height": 2462},
+            ]
+
+        def get_text(self, mode):
+            assert mode == "text"
+            return "Optics Express article text " * 40
+
+    rects = _collect_image_rects(_Page())
+
+    assert len(rects) == 1
+    assert tuple(round(float(v), 1) for v in rects[0]) == (192.6, 392.5, 419.4, 566.1)
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_running_header_filter_keeps_taller_top_figure():
+    rect = fitz.Rect(90, 62, 520, 155)
+
+    assert _looks_like_running_header_image_rect(rect, page_w=612.0, page_h=792.0) is False
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_infer_visual_rects_from_caption_candidates_crops_above_caption_in_same_column():
+    class _Page:
+        rect = fitz.Rect(0, 0, 410, 625)
+
+        def get_text(self, mode):
+            assert mode == "dict"
+            return {
+                "blocks": [
+                    {
+                        "bbox": (205, 398, 370, 438),
+                        "lines": [
+                            {
+                                "bbox": (205, 424, 370, 438),
+                                "spans": [{"text": "which Shannon has studied the"}],
+                            }
+                        ],
+                    },
+                    {
+                        "bbox": (211, 566, 355, 578),
+                        "lines": [
+                            {
+                                "bbox": (211, 566, 355, 578),
+                                "spans": [{"text": "FIG. 1. Illustration of redundant visual stimulation"}],
+                            }
+                        ],
+                    },
+                ]
+            }
+
+    cap = {
+        "fig_no": 1,
+        "fig_ident": "1",
+        "caption": "FIG. 1. Illustration of redundant visual stimulation",
+        "bbox": [211, 566, 355, 578],
+    }
+
+    out = infer_visual_rects_from_caption_candidates(_Page(), [cap])
+
+    assert len(out) == 1
+    rect = out[0]
+    assert rect.x0 >= 190
+    assert rect.x1 <= 410
+    assert 438 < rect.y0 < 470
+    assert rect.y1 < 566
+    assert (rect.width * rect.height) < (410 * 625 * 0.25)
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_extract_caption_candidates_accepts_old_ocr_fie_prefix():
+    class _Page:
+        def get_text(self, mode):
+            assert mode == "dict"
+            return {
+                "blocks": [
+                    {
+                        "bbox": (20, 210, 187, 258),
+                        "lines": [
+                            {
+                                "bbox": (20, 210, 187, 222),
+                                "spans": [{"text": "Fie. 2. Subjects attempted to approximate"}],
+                            },
+                            {
+                                "bbox": (20, 224, 187, 236),
+                                "spans": [{"text": "the closed figure shown above."}],
+                            },
+                        ],
+                    }
+                ]
+            }
+
+    captions = extract_page_figure_caption_candidates(_Page())
+
+    assert len(captions) == 1
+    assert captions[0]["fig_no"] == 2
+    assert captions[0]["caption"].startswith("Fie. 2.")
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_caption_inferred_visual_rect_tightens_to_rendered_ink_bounds():
+    doc = fitz.open()
+    page = doc.new_page(width=410, height=625)
+    page.insert_text((210, 430), "The paragraph ends before the figure.", fontsize=10)
+    page.draw_rect(fitz.Rect(246, 472, 338, 526), color=(0, 0, 0), width=2)
+    page.draw_line(fitz.Point(246, 526), fitz.Point(338, 472), color=(0, 0, 0), width=2)
+    page.insert_text((216, 566), "FIG. 1. A compact test figure.", fontsize=9)
+
+    captions = extract_page_figure_caption_candidates(page)
+    out = infer_visual_rects_from_caption_candidates(page, captions)
+    doc.close()
+
+    assert len(out) == 1
+    rect = out[0]
+    assert 230 <= rect.x0 <= 250
+    assert 335 <= rect.x1 <= 355
+    assert 455 <= rect.y0 <= 475
+    assert 525 <= rect.y1 <= 545
 
 
 @pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")

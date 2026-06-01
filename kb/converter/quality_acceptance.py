@@ -104,10 +104,9 @@ def _page_marker_stats(md_text: str) -> tuple[int, int, int, int]:
     if not pages:
         return 0, 0, 0, 0
     unique = sorted(set(pages))
-    expected = set(range(unique[0], unique[-1] + 1))
-    gaps = len(expected - set(unique))
     duplicates = len(pages) - len(unique)
-    return len(pages), unique[0], unique[-1], gaps + duplicates
+    backwards = sum(1 for prev, cur in zip(pages, pages[1:]) if cur < prev)
+    return len(pages), unique[0], unique[-1], duplicates + backwards
 
 
 def _display_math_unclosed_count(md_text: str) -> int:

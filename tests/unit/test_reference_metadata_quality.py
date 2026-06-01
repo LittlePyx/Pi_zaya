@@ -5,6 +5,104 @@ import json
 from api import reference_metadata_quality as mq
 
 
+def test_metadata_accepts_initial_surname_author() -> None:
+    quality = mq.citation_metadata_quality(
+        {
+            "source_path": "paper.en.md",
+            "title": "Quantized Fourier ptychography with binary images from SPAD cameras",
+            "authors": "X Yang",
+            "venue": "Photon. Res.",
+            "year": "2021",
+            "doi": "10.1364/PRJ.427699",
+        }
+    )
+
+    assert quality["status"] == "ready"
+    acceptance = mq.citation_metadata_export_acceptance({"metadata_quality": quality, **{
+        "source_path": "paper.en.md",
+        "title": "Quantized Fourier ptychography with binary images from SPAD cameras",
+        "authors": "X Yang",
+        "venue": "Photon. Res.",
+        "year": "2021",
+        "doi": "10.1364/PRJ.427699",
+    }})
+    assert acceptance["field_ready"]["authors"] is True
+    assert acceptance["export_ready"] is True
+
+
+def test_metadata_accepts_single_word_journal_venue() -> None:
+    detail = {
+        "source_path": "spd_review.en.md",
+        "title": (
+            "High-performance waveguide coupled Germanium-on-silicon single-photon avalanche diode "
+            "with independently controllable absorption and multiplication"
+        ),
+        "authors": "H Wang",
+        "venue": "Nanophotonics",
+        "year": "2023",
+        "volume": "12",
+        "issue": "4",
+        "pages": "705",
+        "doi": "10.1515/nanoph-2022-0663",
+        "raw": (
+            "H. Wang, Y. Shi, Y. Zuo, Y. Yu, L. Lei, X. Zhang, and Z. Qian, "
+            "High-performance waveguide coupled Germanium-on-silicon single-photon avalanche diode "
+            "with independently controllable absorption and multiplication, "
+            "Nanophotonics 12(4), 705 (2023)."
+        ),
+        "cite_fmt": (
+            "H Wang. High-performance waveguide coupled Germanium-on-silicon single-photon avalanche diode "
+            "with independently controllable absorption and multiplication. Nanophotonics, 12(4):705 (2023)."
+        ),
+    }
+
+    quality = mq.citation_metadata_quality(detail)
+    acceptance = mq.citation_metadata_export_acceptance({"metadata_quality": quality, **detail})
+
+    assert "venue" not in quality["missing_fields"]
+    assert acceptance["field_ready"]["venue"] is True
+    assert "venue" not in acceptance["missing_fields"]
+    assert acceptance["export_ready"] is True
+
+
+def test_metadata_parses_authors_from_raw_reference_prefix() -> None:
+    raw = (
+        "Benjamin Sussman and Erik M. Gauger. Pattern Analysis and Plenoptic Imaging: "
+        "a mini review of light-field and ultra-slim light field microscopy that combines "
+        "computation and light-field illumination. Wave Optics, Oct 2013."
+    )
+
+    quality = mq.citation_metadata_quality(
+        {
+            "source_path": "qclfm.en.md",
+            "title": (
+                "Pattern Analysis and Plenoptic Imaging: a mini review of light-field and "
+                "ultra-slim light field microscopy that combines computation and light-field illumination"
+            ),
+            "venue": "Wave Optics, Oct",
+            "year": "2013",
+            "raw": raw,
+        }
+    )
+
+    assert "authors" not in quality["missing_fields"]
+    acceptance = mq.citation_metadata_export_acceptance(
+        {
+            "source_path": "qclfm.en.md",
+            "title": (
+                "Pattern Analysis and Plenoptic Imaging: a mini review of light-field and "
+                "ultra-slim light field microscopy that combines computation and light-field illumination"
+            ),
+            "venue": "Wave Optics, Oct",
+            "year": "2013",
+            "raw": raw,
+            "metadata_quality": quality,
+        }
+    )
+    assert acceptance["field_ready"]["authors"] is True
+    assert acceptance["field_ready"]["doi"] is False
+
+
 def test_repair_promotes_doi_from_reference_text(monkeypatch):
     raw = (
         "[24] Gehm M, Brady D. Single-shot compressive spectral imaging with a "

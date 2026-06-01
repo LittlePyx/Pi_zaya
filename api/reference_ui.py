@@ -45,6 +45,7 @@ from kb.citation_meta import (
     title_similarity,
 )
 from kb.evidence_text import clean_display_text as _clean_evidence_display_text
+from kb.evidence_text import finish_evidence_text as _finish_evidence_text
 from kb.evidence_text import pick_readable_evidence_text as _pick_readable_evidence_text
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.library_store import LibraryStore
@@ -1649,6 +1650,8 @@ def _looks_why_like_ref_summary(text: str) -> bool:
     s = _clean_summary_line(text)
     if not s:
         return False
+    if _looks_synthetic_location_discussion_summary(s):
+        return True
     lower = s.lower()
     if re.search(
         r"\b(this hit|good entry point|directly relevant|aligns with the core concept|strong match for the comparison request)\b",
@@ -1673,6 +1676,8 @@ def _looks_location_only_ref_summary(text: str) -> bool:
     s = _clean_summary_line(text)
     if not s:
         return False
+    if _looks_synthetic_location_discussion_summary(s):
+        return True
     lower = s.lower()
     if re.search(
         r"\b(the\s+)?relevant discussion appears\b|\bthis hit (?:falls under|lands in)\b",
@@ -1723,6 +1728,8 @@ def _prompt_aligned_ref_summary_candidate_copy_score(
         score += 0.4
     if _looks_natural_language_ref_summary(summary):
         score += 0.5
+    if _looks_synthetic_location_discussion_summary(summary):
+        score -= 5.0
     score += _summary_candidate_heading_role_score(
         prompt=prompt,
         heading_path=heading_path,
@@ -1932,6 +1939,28 @@ _GENERIC_REF_WHY_PATTERNS = (
     "直接讨论",
     "直接相关",
 )
+
+_SYNTHETIC_LOCATION_DISCUSSION_RE = re.compile(
+    r"^\s*(?:(?:该文|本文|这篇(?:文献|论文|文章)|the\s+paper)\s*)?"
+    r"(?:在|于|in\s+)?[“\"']?[^“”\"']{8,220}[”\"']\s*"
+    r"(?:讨论了|比较了|定义或解释了|给出了与|directly\s+discusses|discusses|compares|defines|explains)"
+    r"[“\"']?[^“”\"']{1,140}[”\"']?\s*[。.]?\s*$",
+    flags=re.IGNORECASE,
+)
+
+
+def _looks_synthetic_location_discussion_summary(text: str) -> bool:
+    s = _clean_summary_line(text)
+    if not s:
+        return False
+    if _SYNTHETIC_LOCATION_DISCUSSION_RE.match(s):
+        return True
+    return bool(
+        re.match(
+            r"^\s*[^“”\"']{4,180}[”\"'](?:讨论了|比较了|定义或解释了)[“\"'][^“”\"']{1,120}[”\"']\s*[。.]?\s*$",
+            s,
+        )
+    )
 
 
 def _looks_formula_heavy_ref_text(text: str) -> bool:
@@ -2532,7 +2561,7 @@ def _has_ref_summary_explainer_signal(text: str) -> bool:
         return False
     return bool(
         re.search(
-            r"\b(compare|comparative|analy[sz]e|analysis|evaluat|study|explore|review|survey|introduce|present|propose|design|develop|use)\b",
+            r"\b(compare|comparative|analy[sz]e|analysis|evaluat|study|explore|review|survey|introduce|present|propose|design|develop|use|suitable|benefit)\b",
             s,
             flags=re.I,
         )
@@ -2546,7 +2575,7 @@ def _has_ref_summary_value_signal(text: str) -> bool:
         return False
     return bool(
         re.search(
-            r"\b(result|show|demonstrat|improv|outperform|achiev|difference|trade-?off|advantage|limitation|quality|efficiency|robustness|fidelity|performance)\b",
+            r"\b(result|show|demonstrat|improv|outperform|achiev|difference|trade-?off|advantage|limitation|quality|efficiency|robustness|fidelity|performance|binary|dmd|quantization|gamma|grayscale|oblique|periodical|noise|sampling)\b",
             s,
             flags=re.I,
         )
@@ -2643,6 +2672,10 @@ def _ref_card_summary_candidate_score(*, prompt: str, title: str, text: str) -> 
     cand = _clean_summary_line(text)
     if not cand:
         return -1000.0
+    if _looks_synthetic_location_discussion_summary(cand):
+        return -1000.0
+    if _looks_generic_ref_why_line(cand):
+        return -1000.0
     if _looks_like_front_matter_ref_summary(cand):
         return -1000.0
     if _looks_location_only_ref_summary(cand):
@@ -2665,6 +2698,8 @@ def _ref_card_summary_candidate_score(*, prompt: str, title: str, text: str) -> 
         score += 0.7
     if _looks_surface_like_ref_summary(cand):
         score -= 2.5
+    if "..." in cand or "…" in cand:
+        score -= 2.0
     if _looks_prefixed_heading_shell_ref_summary(cand):
         score -= 3.0
     if _looks_fragmentary_ref_summary(cand):
@@ -2772,6 +2807,9 @@ def _pick_ref_card_summary_fallback(*, prompt: str, title: str, candidates: list
             variants.append(cand)
         for idx, sent in enumerate(sentences[:2]):
             next_sentence = sentences[idx + 1] if (idx + 1) < len(sentences) else ""
+            variants.append(sent)
+            if heading:
+                variants.append(f"{heading}: {sent}")
             variants.extend(
                 _definition_prompt_summary_rewrites(
                     prompt=prompt,
@@ -2780,6 +2818,10 @@ def _pick_ref_card_summary_fallback(*, prompt: str, title: str, candidates: list
                     next_sentence=next_sentence,
                 )
             )
+        for idx in range(max(0, len(sentences) - 1)):
+            window = f"{sentences[idx]} {sentences[idx + 1]}".strip()
+            if len(window) <= 360:
+                variants.append(window)
 
         seen: set[str] = set()
         for variant in variants:
@@ -2907,26 +2949,46 @@ def _collect_ref_card_polish_candidates(hit: dict, *, ui_meta: dict, max_items: 
         seen.add(key)
         out.append(cand)
 
+    def _push_sentence_variants(raw: str) -> None:
+        text = str(raw or "").strip()
+        if not text:
+            return
+        heading, body = _split_ref_summary_heading_and_body(text)
+        sentences = _split_ref_summary_sentences(body or text, max_sentences=8)
+        for sent in sentences[:6]:
+            _push(sent)
+        for idx in range(max(0, min(len(sentences) - 1, 5))):
+            window = f"{sentences[idx]} {sentences[idx + 1]}".strip()
+            if len(window) <= 360:
+                _push(window)
+        if heading and sentences:
+            _push(f"{heading}: {sentences[0]}")
+
     if isinstance(meta, dict):
         for key, limit in (("ref_show_snippets", 2), ("ref_snippets", 2), ("ref_overview_snippets", 1)):
             raw_arr = meta.get(key)
             if not isinstance(raw_arr, list):
                 continue
             for item in raw_arr[:limit]:
-                _push(str(item or ""))
+                raw_item = str(item or "")
+                _push(raw_item)
+                _push_sentence_variants(raw_item)
         raw_locs = meta.get("ref_locs")
         if isinstance(raw_locs, list):
             for loc in raw_locs[:2]:
                 if not isinstance(loc, dict):
                     continue
                 for key in ("snippet", "text", "quote", "summary"):
-                    _push(str(loc.get(key) or ""))
+                    raw_loc = str(loc.get(key) or "")
+                    _push(raw_loc)
+                    _push_sentence_variants(raw_loc)
     for raw in (
         str((ui_meta or {}).get("summary_line") or ""),
         str((ui_meta or {}).get("why_line") or ""),
         str((hit or {}).get("text") or ""),
     ):
         _push(raw)
+        _push_sentence_variants(raw)
     return out[: max(1, int(max_items or 4))]
 
 
@@ -3748,6 +3810,75 @@ def _batch_polish_doc_list_ref_hit_cards(
     return polished
 
 
+def _apply_deterministic_ref_card_copy_fallback(
+    *,
+    prompt: str,
+    ui_meta: dict,
+    candidates: list[str],
+) -> dict:
+    ui = dict(ui_meta or {})
+    title = str(ui.get("display_name") or "").strip()
+    heading_path = str(ui.get("heading_path") or ui.get("section_label") or "").strip()
+    summary_kind = str(ui.get("summary_kind") or "").strip().lower() or "guide"
+    summary_line = _normalize_ref_copy_text(str(ui.get("summary_line") or "").strip())
+    why_line = _normalize_ref_copy_text(str(ui.get("why_line") or "").strip())
+
+    if _summary_line_needs_polish(prompt=prompt, title=title, summary_line=summary_line):
+        fallback_summary = _normalize_ref_copy_text(
+            _pick_ref_card_summary_fallback(
+                prompt=prompt,
+                title=title,
+                candidates=[str(item or "").strip() for item in list(candidates or []) if str(item or "").strip()],
+            )
+        )
+        if fallback_summary and not _summary_line_needs_polish(
+            prompt=prompt,
+            title=title,
+            summary_line=fallback_summary,
+        ):
+            ui["summary_line"] = fallback_summary
+            summary_line = fallback_summary
+            if summary_kind in ("guide", "section_grounded"):
+                summary_generation = "deterministic_grounded"
+                ui["summary_generation"] = summary_generation
+                basis_meta = _build_ref_summary_basis_meta(
+                    prompt=prompt,
+                    summary_kind=summary_kind,
+                    summary_generation=summary_generation,
+                    summary_line=fallback_summary,
+                )
+                ui["summary_basis"] = str(basis_meta.get("summary_basis") or "")
+
+    if _why_line_needs_polish(
+        prompt=prompt,
+        display_name=title,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        why_line=why_line,
+    ):
+        deterministic_why = _normalize_ref_copy_text(
+            _build_prompt_aligned_ref_why_line_v3(
+                prompt=prompt,
+                display_name=title,
+                heading_path=heading_path,
+                summary_line=summary_line,
+                why_line=why_line,
+            )
+        )
+        if deterministic_why and not _looks_generic_ref_why_line(deterministic_why):
+            ui["why_line"] = deterministic_why
+            why_generation = "deterministic_grounded"
+            why_basis_meta = _build_ref_why_basis_meta(
+                prompt=prompt,
+                why_generation=why_generation,
+                why_line=deterministic_why,
+            )
+            ui["why_generation"] = str(why_basis_meta.get("why_generation") or why_generation)
+            ui["why_basis"] = str(why_basis_meta.get("why_basis") or "")
+
+    return ui
+
+
 def _force_llm_ground_ref_hit_card_copy(
     *,
     prompt: str,
@@ -3802,6 +3933,12 @@ def _force_llm_ground_ref_hit_card_copy(
             prepared=prepared,
             polished_summary=retry_summary,
             polished_why=retry_why,
+        )
+    if not _is_llm_ref_summary_generation(str((result or {}).get("summary_generation") or "")):
+        result = _apply_deterministic_ref_card_copy_fallback(
+            prompt=prompt,
+            ui_meta=result,
+            candidates=candidates,
         )
     return result
 
@@ -5197,14 +5334,19 @@ def _build_primary_ref_evidence_payload(
 def _normalize_primary_ref_evidence_payload(primary_evidence: dict | None) -> dict:
     if not isinstance(primary_evidence, dict):
         return {}
+    snippet = _finish_evidence_text(str(primary_evidence.get("snippet") or "").strip(), max_len=460)
+    highlight_snippet = _finish_evidence_text(
+        str(primary_evidence.get("highlight_snippet") or primary_evidence.get("highlightSnippet") or "").strip(),
+        max_len=460,
+    )
     out = {
         "source_path": str(primary_evidence.get("source_path") or primary_evidence.get("sourcePath") or "").strip() or None,
         "source_name": str(primary_evidence.get("source_name") or primary_evidence.get("sourceName") or "").strip() or None,
         "block_id": str(primary_evidence.get("block_id") or primary_evidence.get("blockId") or "").strip() or None,
         "anchor_id": str(primary_evidence.get("anchor_id") or primary_evidence.get("anchorId") or "").strip() or None,
         "heading_path": str(primary_evidence.get("heading_path") or primary_evidence.get("headingPath") or "").strip() or None,
-        "snippet": str(primary_evidence.get("snippet") or "").strip() or None,
-        "highlight_snippet": str(primary_evidence.get("highlight_snippet") or primary_evidence.get("highlightSnippet") or "").strip() or None,
+        "snippet": snippet or None,
+        "highlight_snippet": highlight_snippet or snippet or None,
         "anchor_kind": str(primary_evidence.get("anchor_kind") or primary_evidence.get("anchorKind") or "").strip().lower() or None,
         "anchor_number": _positive_int(primary_evidence.get("anchor_number") or primary_evidence.get("anchorNumber")) or None,
         "selection_reason": str(primary_evidence.get("selection_reason") or primary_evidence.get("selectionReason") or "").strip() or None,
@@ -6056,7 +6198,68 @@ def _doc_list_authoritative_primary_is_upgradeable(primary_evidence: dict | None
     if str(primary.get("anchor_id") or "").strip():
         return False
     reason = str(primary.get("selection_reason") or "").strip().lower()
-    return reason in {"", "answer_hit_top", "pending_section_seed"}
+    return reason in {"", "answer_hit_top", "pending_section_seed", "section_intent_rescue", "alternative_rescue"}
+
+
+def _primary_ref_evidence_summary_is_usable(
+    primary_evidence: dict | None,
+    *,
+    prompt: str,
+    display_name: str,
+) -> bool:
+    summary_seed = _primary_ref_evidence_summary_seed(primary_evidence)
+    return bool(
+        summary_seed
+        and (not _looks_bibliographic_source_block_text(summary_seed))
+        and (not _summary_line_needs_polish(
+            prompt=prompt,
+            title=display_name,
+            summary_line=summary_seed,
+        ))
+    )
+
+
+def _upgrade_primary_ref_evidence_from_alternatives(
+    primary_evidence: dict | None,
+    *,
+    prompt: str,
+    display_name: str,
+) -> dict:
+    primary = _normalize_primary_ref_evidence_payload(primary_evidence if isinstance(primary_evidence, dict) else {})
+    if not primary:
+        return {}
+    if _primary_ref_evidence_summary_is_usable(primary, prompt=prompt, display_name=display_name):
+        return primary
+    alternatives = [item for item in list(primary.get("alternatives") or []) if isinstance(item, dict)]
+    best: dict = {}
+    best_score: tuple[int, int, int, int, int, int, int] | None = None
+    for raw_alt in alternatives[:8]:
+        alt_raw = {
+            "source_path": primary.get("source_path"),
+            "source_name": primary.get("source_name"),
+            **raw_alt,
+        }
+        alt = _normalize_primary_ref_evidence_payload(alt_raw)
+        if not alt or not _primary_ref_evidence_summary_is_usable(alt, prompt=prompt, display_name=display_name):
+            continue
+        score = _primary_ref_evidence_precision_score(
+            primary_evidence=alt,
+            prompt=prompt,
+            display_name=display_name,
+        )
+        if best_score is None or score > best_score:
+            best = alt
+            best_score = score
+    if not best:
+        return primary
+    upgraded = dict(primary)
+    for key, value in best.items():
+        if value not in (None, "", [], {}):
+            upgraded[key] = value
+    upgraded["selection_reason"] = "alternative_rescue"
+    upgraded["strict_locate"] = bool(best.get("strict_locate"))
+    upgraded["alternatives"] = alternatives
+    return upgraded
 
 
 def _primary_ref_evidence_precision_score(
@@ -6073,10 +6276,12 @@ def _primary_ref_evidence_precision_score(
         "prompt_aligned_block": 8,
         "prompt_aligned": 7,
         "navigation": 6,
+        "alternative_rescue": 5,
         "fallback": 4,
         "reader_open": 4,
         "strict_locate": 4,
         "shared_refs_pack": 4,
+        "section_intent_rescue": 1,
         "answer_hit_top": 0,
         "pending_section_seed": 0,
     }.get(reason, 3 if reason else 0)
@@ -6086,14 +6291,10 @@ def _primary_ref_evidence_precision_score(
         source_path=str(primary.get("source_path") or "").strip(),
     )
     summary_seed = _primary_ref_evidence_summary_seed(primary)
-    summary_seed_usable = bool(
-        summary_seed
-        and (not _looks_bibliographic_source_block_text(summary_seed))
-        and (not _summary_line_needs_polish(
-            prompt=prompt,
-            title=display_name,
-            summary_line=summary_seed,
-        ))
+    summary_seed_usable = _primary_ref_evidence_summary_is_usable(
+        primary,
+        prompt=prompt,
+        display_name=display_name,
     )
     return (
         reason_rank,
@@ -6118,6 +6319,16 @@ def _select_doc_list_effective_primary_evidence(
     )
     synthesized = _normalize_primary_ref_evidence_payload(
         synthesized_primary_evidence if isinstance(synthesized_primary_evidence, dict) else {}
+    )
+    authoritative = _upgrade_primary_ref_evidence_from_alternatives(
+        authoritative,
+        prompt=prompt,
+        display_name=display_name,
+    )
+    synthesized = _upgrade_primary_ref_evidence_from_alternatives(
+        synthesized,
+        prompt=prompt,
+        display_name=display_name,
     )
     if not authoritative:
         return synthesized, "synthesized"

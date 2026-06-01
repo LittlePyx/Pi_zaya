@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from kb.source_filters import is_excluded_source_path
+
 try:
     import tkinter as tk
     from tkinter import filedialog
@@ -127,17 +129,12 @@ def _resolve_md_output_paths(out_root: Path, pdf_path: Path) -> tuple[Path, Path
     def _mtime(p: Path) -> float:
         return _path_mtime(p)
 
-    # Prefer the newest main markdown among canonical/output when both exist.
-    if _path_exists(canonical) and _path_exists(out_md):
-        md_main = out_md if _mtime(out_md) >= _mtime(canonical) else canonical
-        return md_folder, md_main, True
-
-    # Prefer output.md when present (converter may keep it when Windows rename fails).
-    if _path_exists(out_md):
-        return md_folder, out_md, True
-
     if _path_exists(canonical):
         return md_folder, canonical, True
+
+    # Use output.md only as a legacy fallback when the canonical paper markdown is missing.
+    if _path_exists(out_md):
+        return md_folder, out_md, True
 
     # Fallback: pick newest *.md in the folder.
     if _path_exists(md_folder):
@@ -145,7 +142,9 @@ def _resolve_md_output_paths(out_root: Path, pdf_path: Path) -> tuple[Path, Path
             cands = [
                 x
                 for x in md_folder.glob("*.md")
-                if _path_is_file(x) and x.name.lower() not in {"assets_manifest.md"}
+                if _path_is_file(x)
+                and x.name.lower() not in {"assets_manifest.md"}
+                and not is_excluded_source_path(str(x))
             ]
             if cands:
                 cands.sort(key=_mtime, reverse=True)

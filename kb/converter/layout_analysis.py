@@ -81,11 +81,100 @@ def _is_frontmatter_noise_line(text: str) -> bool:
     return any(re.match(p, t, flags=re.IGNORECASE) for p in front_pat)
 
 
+def _page_text_char_count(page) -> int:
+    try:
+        return len(str(page.get_text("text") or "").strip())
+    except Exception:
+        return 0
+
+
+def _looks_like_full_page_scan_image_rect(
+    rect: "fitz.Rect",
+    *,
+    page_w: float,
+    page_h: float,
+    text_chars: int,
+) -> bool:
+    page_area = max(1.0, float(page_w) * float(page_h))
+    area = max(0.0, float(rect.width) * float(rect.height))
+    if int(text_chars or 0) < 80:
+        return False
+    if area / page_area < 0.86:
+        return False
+    if float(rect.width) < float(page_w) * 0.88 or float(rect.height) < float(page_h) * 0.88:
+        return False
+    edge_tol_x = max(4.0, float(page_w) * 0.035)
+    edge_tol_y = max(4.0, float(page_h) * 0.035)
+    touches_x = float(rect.x0) <= edge_tol_x and float(rect.x1) >= float(page_w) - edge_tol_x
+    touches_y = float(rect.y0) <= edge_tol_y and float(rect.y1) >= float(page_h) - edge_tol_y
+    return bool(touches_x and touches_y)
+
+
+def _looks_like_running_header_image_rect(
+    rect: "fitz.Rect",
+    *,
+    page_w: float,
+    page_h: float,
+) -> bool:
+    """Detect journal mastheads/top brand strips that are embedded as images."""
+    if page_w <= 0.0 or page_h <= 0.0:
+        return False
+    width = float(rect.width)
+    height = float(rect.height)
+    if width <= 0.0 or height <= 0.0:
+        return False
+    aspect = width / max(1.0, height)
+    if float(rect.y0) > page_h * 0.13:
+        return False
+    if height > page_h * 0.05:
+        return False
+    if width < page_w * 0.48:
+        return False
+    if aspect < 8.0:
+        return False
+    return True
+
+
+def page_has_full_page_image_layer(page) -> bool:
+    if fitz is None or page is None:
+        return False
+    try:
+        page_w = float(page.rect.width)
+        page_h = float(page.rect.height)
+    except Exception:
+        return False
+    text_chars = _page_text_char_count(page)
+    try:
+        image_info = page.get_image_info() or []
+    except Exception:
+        return False
+    for info in image_info:
+        if "bbox" not in info:
+            continue
+        try:
+            rect = fitz.Rect(info["bbox"])
+        except Exception:
+            continue
+        if _looks_like_full_page_scan_image_rect(rect, page_w=page_w, page_h=page_h, text_chars=text_chars):
+            return True
+    return False
+
+
 def _collect_image_rects(page) -> list["fitz.Rect"]:
     if fitz is None:
         return []
     out: list[fitz.Rect] = []
-    for info in (page.get_image_info() or []):
+    try:
+        page_w = float(page.rect.width)
+        page_h = float(page.rect.height)
+    except Exception:
+        page_w = page_h = 0.0
+    text_chars: int | None = None
+    try:
+        image_info = page.get_image_info() or []
+    except Exception:
+        return []
+    for info in image_info:
         if "bbox" not in info:
             continue
         try:
@@ -94,6 +183,13 @@ def _collect_image_rects(page) -> list["fitz.Rect"]:
             continue
         if r.width <= 1.0 or r.height <= 1.0:
             continue
+        if page_w > 0.0 and page_h > 0.0:
+            if text_chars is None:
+                text_chars = _page_text_char_count(page)
+            if _looks_like_full_page_scan_image_rect(r, page_w=page_w, page_h=page_h, text_chars=int(text_chars or 0)):
+                continue
+            if _looks_like_running_header_image_rect(r, page_w=page_w, page_h=page_h):
+                continue
         out.append(r)
     return out
 

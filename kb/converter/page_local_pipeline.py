@@ -13,7 +13,8 @@ except ImportError:
 
 from .geometry_utils import _overlap_1d, _rect_area
 from .heuristics import _page_has_references_heading, _page_looks_like_references_content
-from .layout_analysis import _collect_visual_rects, detect_body_font_size
+from .layout_analysis import _collect_visual_rects, detect_body_font_size, page_has_full_page_image_layer
+from .page_figure_metadata import infer_visual_rects_from_caption_candidates
 from .tables import _extract_tables_by_layout, _page_maybe_has_table_from_dict
 from .reference_markdown import normalize_references_page_text
 
@@ -43,9 +44,10 @@ def prepare_page_render_input(
     H = float(page.rect.height)
     header_threshold = H * 0.12
     footer_threshold = H * 0.88
+    scan_backed_page = page_has_full_page_image_layer(page)
     visual_rects = _collect_visual_rects(page)
     try:
-        cap_candidates = converter._extract_page_figure_caption_candidates(page)
+        cap_candidates = converter._extract_page_figure_caption_candidates(page) if (visual_rects or scan_backed_page) else []
     except Exception:
         cap_candidates = []
 
@@ -87,6 +89,8 @@ def prepare_page_render_input(
         visual_rects=filtered_visual_rects,
         caption_candidates=cap_candidates,
     )
+    if (not visual_rects) and scan_backed_page and cap_candidates:
+        visual_rects = infer_visual_rects_from_caption_candidates(page, cap_candidates)
     print(f"  [Page {page_index+1}] Step 3 (visual rects): {time.time()-step_start:.2f}s, found {len(visual_rects)} rects", flush=True)
 
     # 4. Extract Tables

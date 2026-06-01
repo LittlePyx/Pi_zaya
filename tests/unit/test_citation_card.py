@@ -294,6 +294,69 @@ def test_system_a_card_composer_suppresses_low_value_answer_label() -> None:
     assert detail["card_evidence"].startswith("Deep learning models")
 
 
+def test_system_a_card_composer_suppresses_bibliographic_answer_label() -> None:
+    detail = compose_citation_card(
+        {
+            "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+            "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+            "answer_claim": "文献：Hadamard single-pixel imaging versus Fourier single-pixel imaging (Optics Express, 2017)",
+            "evidence_quote": (
+                "Hadamard basis patterns are binary, which makes HSI naturally suitable for "
+                "DMD-based implementations."
+            ),
+            "location_label": "2. Comparison of theory / 2.2 Basis patterns generation",
+        }
+    )
+
+    assert detail["card_claim"] == ""
+    assert "low_value_answer_claim" in detail["card_quality_flags"]
+    assert detail["card_evidence"].startswith("Hadamard basis patterns")
+
+
+def test_system_a_card_composer_suppresses_reading_guide_title_claims() -> None:
+    claims = (
+        (
+            "\u300aAdvances and Challenges of Single-Pixel Imaging Based on Deep Learning\u300b"
+            "\uff08Laser & Photonics Reviews, 2025\uff09"
+        ),
+        (
+            "\u91cd\u70b9\u9605\u8bfb \u201cAcquisition and image reconstruction strategies\u201d "
+            "\u90e8\u5206\uff0c\u7406\u89e3\u4e3a\u4ec0\u4e48 SPI \u80fd\u5728\u7ea2\u5916\u6ce2\u6bb5\u5de5\u4f5c\u3002"
+        ),
+        (
+            "\u82e5\u5bf9\u592a\u8d6b\u5179\u6ce2\u6bb5\u611f\u5174\u8da3\uff0c\u53ef\u770b "
+            "\u300aFrequency-division-multiplexed single-pixel imaging with metamaterials\u300b"
+            "\uff08Optica, 2016\uff09\u3002"
+        ),
+        "\u65b9\u6cd5\u5bf9\u6bd4\uff1aHadamard single-pixel imaging versus Fourier single-pixel imaging (Optics Express, 2017)",
+        "\u524d\u6cbf\u8fdb\u5c55\uff1aAdvances and Challenges of Single-Pixel Imaging Based on Deep Learning (Laser & Photonics Reviews, 2025)",
+        "\u7efc\u8ff0\u5165\u95e8\uff1aPrinciples and prospects for single-pixel imaging (Nature Photonics, 2019)",
+        (
+            "\u4e0b\u4e00\u6b65\uff1a\u5728\u8bfb\u5b8c\u4e0a\u8ff0\u4e09\u7bc7\u540e\uff0c"
+            "\u53ef\u9488\u5bf9\u4f60\u611f\u5174\u8da3\u7684\u5e94\u7528\u65b9\u5411\u67e5\u9605\u4e13\u95e8\u8bba\u6587\u3002"
+            "\u4f8b\u5982\uff0cImaging biological tissue with single-pixel compressive holography "
+            "(Nature Communications, 2021)"
+        ),
+    )
+    for claim in claims:
+        detail = compose_citation_card(
+            {
+                "source_name": "NatPhoton-2019-Principles and prospects for single-pixel imaging.pdf",
+                "heading_path": "Acquisition and image reconstruction strategies",
+                "answer_claim": claim,
+                "evidence_quote": (
+                    "Single-pixel imaging can operate at wavelengths where focal plane arrays "
+                    "are expensive or unavailable."
+                ),
+                "location_label": "Acquisition and image reconstruction strategies",
+            }
+        )
+
+        assert detail["card_claim"] == ""
+        assert "low_value_answer_claim" in detail["card_quality_flags"]
+        assert detail["card_evidence"].startswith("Single-pixel imaging can operate")
+
+
 def test_system_b_card_composer_marks_answer_context_only() -> None:
     detail = compose_citation_card(
         {

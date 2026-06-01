@@ -907,6 +907,8 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
     evidence_raw = _first_text(rec, "evidence_quote", "summary_line", "raw", "cite_fmt", max_len=1400)
     evidence_raw_for_pack = _first_raw_value(rec, "evidence_quote", "summary_line", "raw", "cite_fmt") or evidence_raw
     locator = _strip_redundant_locator_prefix(_locator(rec), source=source, title=title)
+    if not locator and source:
+        locator = f"Document-level match: {source}"
     support_hint = _first_text(rec, "support_relation", "binding_reason", "why_line", max_len=420)
     pack = build_system_a_evidence_pack(
         answer_claim=claim_raw,

@@ -56,6 +56,7 @@ _CONTENT_VERB_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being|can|could|may|might|will|would|uses?|used|shows?|"
     r"shown|presents?|presented|proposes?|proposed|demonstrates?|develops?|developed|introduces?|introduced|"
     r"improves?|improved|captures?|captured|reconstructs?|reconstructed|enables?|enabled|"
+    r"achieves?|achieved|realizes?|realized|realizing|"
     r"adopts?|adopted|adopting|offers?|offering|collects?|collecting|employs?|employed|employing|"
     r"解决|提出|说明|表明|用于|能够|可以|实现|采用|提升|降低)\b",
     re.IGNORECASE,
@@ -148,12 +149,16 @@ def _trim_incomplete_sentence_tail(value: str) -> str:
     if text.endswith(("...", "\u2026")):
         ellipsis = "\u2026" if text.endswith("\u2026") else "..."
         stem = text[: -len(ellipsis)].rstrip()
-        words = list(re.finditer(r"[A-Za-z]{2,}$", stem))
-        if words:
+        while True:
+            words = list(re.finditer(r"[A-Za-z]{2,}$", stem))
+            if not words:
+                break
             last_word = words[-1].group(0)
-            if 2 <= len(last_word) <= 5 and last_word.lower() not in {"image", "model"}:
-                stem = stem[: words[-1].start()].rstrip(" ,;:")
-                return stem + ellipsis if stem else text
+            if not (2 <= len(last_word) <= 5 and last_word.lower() not in {"image", "model"}):
+                break
+            stem = stem[: words[-1].start()].rstrip(" ,;:")
+        if stem and stem != text[: -len(ellipsis)].rstrip():
+            return stem + ellipsis
         return text
     if _TERMINAL_PUNCT_RE.search(text):
         return text
@@ -220,10 +225,19 @@ def looks_author_metadata_prefix(value: str) -> bool:
         return False
     comma_count = text.count(",") + text.count("\uff0c")
     name_pairs = len(re.findall(r"\b[A-Z][a-zA-Z'`-]+\s+[A-Z][a-zA-Z'`-]+\b", text))
+    initials = len(re.findall(r"\b[A-Z]\.?\b", text))
     tokens = loose_tokens(text)
-    if comma_count >= 2 or name_pairs >= 2:
+    starts_like_author = bool(
+        re.match(
+            r"^(?:[A-Z][A-Za-z'`-]+,\s*(?:[A-Z]\.?\s*){1,4}|[A-Z][a-zA-Z'`-]+\s+[A-Z](?:\.|\b))",
+            text,
+        )
+    )
+    if name_pairs >= 2:
         return True
-    return len(tokens) >= 8 and bool(re.search(r"[*\\]", text))
+    if comma_count >= 2 and (starts_like_author or name_pairs >= 1 or initials >= 2):
+        return True
+    return len(tokens) >= 8 and bool(re.search(r"[*\\]", text)) and (starts_like_author or name_pairs >= 1)
 
 
 def looks_broken_leading_prefix(value: str) -> bool:

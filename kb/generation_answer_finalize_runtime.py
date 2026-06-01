@@ -61,6 +61,16 @@ _STRUCT_CITE_SID_ONLY_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*\]\]",
     re.IGNORECASE,
 )
+_NEGATIVE_BOUNDARY_PROMPT_RE = re.compile(
+    r"(?i)\b(?:worth\s+(?:reading|opening)|related|relationship|relevant|fit)\b|"
+    r"(?:\u5173\u7cfb.{0,8}\u5927|\u503c\u5f97.{0,12}(?:\u8bfb|\u770b)|"
+    r"\u4e00\u8d77\u8bfb|\u76f8\u5173(?:\u6027)?|\u53c2\u8003\u4ef7\u503c)"
+)
+_NEGATIVE_BOUNDARY_ANSWER_RE = re.compile(
+    r"(?i)\b(?:not\s+worth|not\s+closely\s+related|unrelated|low\s+relevance)\b|"
+    r"(?:\u5173\u7cfb\u4e0d\u5927|\u4e0d\u5efa\u8bae|\u6ca1\u6709.{0,8}\u4ea4\u96c6|"
+    r"\u53c2\u8003\u4ef7\u503c.{0,8}\u4f4e|\u4ef7\u503c.{0,8}\u4f4e|\u4e0d\u503c\u5f97)"
+)
 _STRUCT_CITE_GARBAGE_RE = re.compile(r"\[\[?\s*CITE\s*:[^\]\n]*\]?\]", re.IGNORECASE)
 _SID_INLINE_RE = re.compile(r"\[\s*SID\s*:\s*[A-Za-z0-9_-]{4,24}\s*\]", re.IGNORECASE)
 _SID_RE = re.compile(r"^[A-Za-z0-9_-]{4,24}$")
@@ -2551,6 +2561,41 @@ def _pick_shared_primary_evidence(
     return best
 
 
+def _maybe_clarify_negative_boundary_answer(answer: str, *, prompt: str) -> str:
+    text = str(answer or "").strip()
+    prompt_text = str(prompt or "").strip()
+    if not text or not prompt_text:
+        return text
+    if "\u4e0d\u662f" in text or re.search(r"(?i)\bnot\s+(?:a|the\s+)?(?:core|central|main|relevant)\b", text):
+        return text
+    if not _NEGATIVE_BOUNDARY_PROMPT_RE.search(prompt_text):
+        return text
+    if not _NEGATIVE_BOUNDARY_ANSWER_RE.search(text):
+        return text
+
+    replacement = "\u5173\u7cfb\u4e0d\u5927\uff0c\u4e0d\u662f\u5f53\u524d\u4e3b\u7ebf\u7684\u6838\u5fc3\u6587\u732e"
+    out = re.sub(r"\u5173\u7cfb\u4e0d\u5927", replacement, text, count=1)
+    if out != text:
+        return out
+    out = re.sub(
+        r"\u4e0d\u5efa\u8bae",
+        "\u4e0d\u662f\u5f53\u524d\u4e3b\u7ebf\u7684\u6838\u5fc3\u6587\u732e\uff0c\u4e0d\u5efa\u8bae",
+        text,
+        count=1,
+    )
+    if out != text:
+        return out
+    if text.startswith("**\u7ed3\u8bba"):
+        return re.sub(
+            r"^(\*\*\u7ed3\u8bba[^\n]*?\uff1a\s*)",
+            lambda match: match.group(1)
+            + "\u4e0d\u662f\u5f53\u524d\u4e3b\u7ebf\u7684\u6838\u5fc3\u6587\u732e\uff1b",
+            text,
+            count=1,
+        )
+    return "\u4e0d\u662f\u5f53\u524d\u4e3b\u7ebf\u7684\u6838\u5fc3\u6587\u732e\uff1b" + text
+
+
 def _finalize_generation_answer(
     partial: str,
     *,
@@ -2797,6 +2842,7 @@ def _finalize_generation_answer(
         retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
         allow_paper_guide_structured_refs=bool(paper_guide_validated_structured_refs),
     )
+    answer = _maybe_clarify_negative_boundary_answer(answer, prompt=prompt_for_user or prompt)
     if multi_paper_list_prompt and multi_paper_doc_list:
         formatted_multi_paper_answer = _format_multi_paper_list_answer_v2(
             prompt=prompt_for_user or prompt,

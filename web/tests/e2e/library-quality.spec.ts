@@ -1400,6 +1400,12 @@ test('library page surfaces conversion quality and filters review items', async 
 
   await expect(page.getByTestId('library-file-row')).toHaveCount(4)
   await expect(page.getByTestId('library-quality-report')).toBeVisible()
+  await expect(page.getByTestId('library-quality-center-summary')).toContainText('Needs repair')
+  await expect(page.getByTestId('library-quality-center-summary')).toContainText('User-facing risks')
+  await expect(page.getByTestId('library-quality-center-details')).toHaveCount(0)
+  await expect(page.getByTestId('library-quality-domains')).toHaveCount(0)
+  await page.getByTestId('library-quality-center-toggle').click()
+  await expect(page.getByTestId('library-quality-center-details')).toBeVisible()
   await expect(page.getByTestId('library-quality-report-review')).toContainText('2')
   await expect(page.getByTestId('library-quality-report-good')).toContainText('1')
   await expect(page.getByTestId('library-quality-report-avg')).toContainText('Q70')

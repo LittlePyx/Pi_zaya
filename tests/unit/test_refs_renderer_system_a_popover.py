@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta
+from ui.refs_renderer import _annotate_inpaper_citations_with_hover_meta, _system_a_is_low_value_evidence_text
 
 
 def test_system_a_citation_detail_carries_reader_card_fields() -> None:
@@ -54,6 +54,47 @@ def test_system_a_citation_detail_carries_reader_card_fields() -> None:
     assert detail["card_quality_label"] in {"候选依据", "证据匹配"}
 
 
+def test_system_a_treats_synthetic_section_discussion_as_low_value_evidence() -> None:
+    assert _system_a_is_low_value_evidence_text(
+        "该文在“Hadamard single-pixel imaging versus Fourier single-pixel imaging / 3. Comparison of experiment / 3.1 Numerical simulations”讨论了“single pixel imaging”。"
+    )
+
+
+def test_system_a_links_qclfm_refocusing_claim_across_chinese_and_english() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "\u8be5\u663e\u5fae\u955c\u901a\u8fc7\u5c04\u7ebf\u8ffd\u8e2a\u548c"
+            "\u6ce2\u52a8\u5149\u5b66\u4f20\u64ad\u4e24\u6b65\u6570\u5b57"
+            "\u91cd\u805a\u7126\uff0c\u5c06\u79bb\u7126\u6837\u54c1\u91cd\u65b0\u5bf9\u7126 [1]\u3002"
+        ),
+        [
+            {
+                "text": (
+                    "The operation for digital refocusing of a sample placed out of focus "
+                    "can be achieved using two steps. First, the trajectory of the photons "
+                    "can be reconstructed through a ray tracing operation. For microscopic "
+                    "samples, diffraction effects from wave optics must also be taken into account."
+                ),
+                "meta": {
+                    "source_path": "db/demo/qclfm.en.md",
+                    "heading_path": "B. Experimental Results / Digital Refocusing Procedure",
+                    "evidence_quote": (
+                        "The second step is to reverse this diffraction by applying a wave "
+                        "propagation of distance -z to bring the sample back into focus."
+                    ),
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "[1](#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+    assert details[0]["binding_status"] == "grounded"
+    assert "digital refocusing" in details[0]["binding_overlap_terms"]
+
+
 def test_system_a_suppresses_weak_candidate_binding_instead_of_linking() -> None:
     rendered, details = _annotate_inpaper_citations_with_hover_meta(
         "For real-time or low-sampling imaging, Hadamard subsampling is worth comparing [1].",
@@ -79,6 +120,37 @@ def test_system_a_suppresses_weak_candidate_binding_instead_of_linking() -> None
     assert "#kb-cite-" not in rendered
     assert "[1]" not in rendered
     assert details == []
+
+
+def test_system_a_links_perovskite_boundary_claim_across_chinese_and_english() -> None:
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        (
+            "\u8be5\u8bba\u6587\u7684\u6838\u5fc3\u662f\u7535\u9a71\u52a8"
+            "\u9499\u949b\u77ff\u6fc0\u5149\u5668\u4ef6\u7684\u5668\u4ef6\u7269\u7406 [1]\u3002"
+        ),
+        [
+            {
+                "text": (
+                    "We have demonstrated electrically driven lasing from a dual-cavity "
+                    "perovskite device."
+                ),
+                "meta": {
+                    "source_path": "db/demo/perovskite-laser.en.md",
+                    "heading_path": "Conclusion",
+                    "evidence_quote": (
+                        "We have demonstrated electrically driven lasing from a dual-cavity "
+                        "perovskite device."
+                    ),
+                },
+            }
+        ],
+        anchor_ns="test",
+    )
+
+    assert "#kb-cite-" in rendered
+    assert len(details) == 1
+    assert details[0]["citation_route"] == "system_a"
+    assert details[0]["binding_status"] == "grounded"
 
 
 def test_system_a_requires_specific_strong_term_not_only_broad_domain_overlap() -> None:

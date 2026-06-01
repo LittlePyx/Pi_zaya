@@ -3,6 +3,22 @@ from __future__ import annotations
 import api.reference_ui as reference_ui
 
 
+def test_normalize_primary_ref_evidence_payload_trims_mid_word_snippet() -> None:
+    out = reference_ui._normalize_primary_ref_evidence_payload(
+        {
+            "source_path": "db/scigs.en.md",
+            "heading_path": "5. Conclusion",
+            "snippet": (
+                "This paper proposes a novel method for recovering dynamic 3D scene representations "
+                "from a single snapshot compressive image, which is the first to introduce an..."
+            ),
+        }
+    )
+
+    assert str(out.get("snippet") or "").endswith("introduce...")
+    assert " an..." not in str(out.get("snippet") or "")
+
+
 def test_chain_a_summary_source_navigation(monkeypatch):
     """build_hit_ui_meta — navigation path sets summary_source='navigation'."""
     monkeypatch.setattr(

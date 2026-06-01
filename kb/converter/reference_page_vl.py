@@ -93,6 +93,55 @@ def merge_reference_crop_markdowns(parts: list[str]) -> str:
     return "\n".join(out).strip()
 
 
+def reference_markdown_entry_count(md: str) -> int:
+    lines = [
+        _normalize_text(raw or "").strip()
+        for raw in str(md or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    ]
+    count = 0
+    seen_numbers: set[int] = set()
+    seen_freeform: set[str] = set()
+    for line in lines:
+        if not line or is_reference_placeholder_line(line):
+            continue
+        if re.match(r"^#{1,6}\s+", line):
+            continue
+        numbered = re.match(r"^\[?(\d{1,4})\]?[.)]?\s+(.+)$", line)
+        if numbered:
+            try:
+                n = int(numbered.group(1))
+            except Exception:
+                n = 0
+            body = str(numbered.group(2) or "").strip()
+            if n > 0 and len(body) >= 12 and n not in seen_numbers:
+                seen_numbers.add(n)
+                count += 1
+            continue
+        if len(line) < 32:
+            continue
+        if not re.search(r"\b(?:18|19|20)\d{2}\b", line):
+            continue
+        if not re.search(r"\b(?:doi|arxiv|journal|proc\.?|proceedings|vol\.?|pp\.?|pages?)\b", line, flags=re.IGNORECASE):
+            continue
+        key = re.sub(r"\s+", " ", line).lower()
+        if key in seen_freeform:
+            continue
+        seen_freeform.add(key)
+        count += 1
+    return count
+
+
+def reference_markdown_is_usable(md: str, *, min_entries: int | None = None) -> bool:
+    try:
+        if min_entries is None:
+            raw = str(os.environ.get("KB_PDF_VISION_REFS_LOCAL_MIN_ENTRIES", "2") or "2").strip()
+            min_entries = int(raw)
+    except Exception:
+        min_entries = 2
+    min_entries = max(1, min(10, int(min_entries or 2)))
+    return reference_markdown_entry_count(md) >= min_entries
+
+
 def build_reference_column_crop_rects(*, page, page_w: float, page_h: float) -> list["fitz.Rect"]:
     """
     Build robust references column crops using text-driven split when possible.

@@ -25,7 +25,7 @@ def extract_page_figure_caption_candidates(page) -> list[dict]:
         return out
 
     cap_start_re = re.compile(
-        r"^\s*(?:fig(?:ure)?\.?)\s*(\d{1,4}[A-Za-z]?)\b",
+        r"^\s*(?:fig(?:ure)?\.?|fie\.?)\s*(\d{1,4}[A-Za-z]?)\b",
         flags=re.IGNORECASE,
     )
     for b in d.get("blocks", []) or []:
@@ -66,6 +66,211 @@ def extract_page_figure_caption_candidates(page) -> list[dict]:
             }
         )
     out.sort(key=lambda x: (float(x["bbox"][1]), float(x["bbox"][0])))
+    return out
+
+
+def infer_visual_rects_from_caption_candidates(page, caption_candidates: list[dict]) -> list["fitz.Rect"]:
+    if fitz is None or page is None or not caption_candidates:
+        return []
+    try:
+        page_w = float(page.rect.width)
+        page_h = float(page.rect.height)
+    except Exception:
+        return []
+    if page_w <= 0.0 or page_h <= 0.0:
+        return []
+
+    def _area(rect: fitz.Rect) -> float:
+        return max(0.0, float(rect.width)) * max(0.0, float(rect.height))
+
+    def _refine_to_dark_pixels(rect: fitz.Rect) -> fitz.Rect:
+        try:
+            zoom = 2.4
+            pix = page.get_pixmap(clip=rect, matrix=fitz.Matrix(zoom, zoom), alpha=False)
+            if int(pix.width) < 16 or int(pix.height) < 16:
+                return rect
+        except Exception:
+            return rect
+        try:
+            from PIL import Image
+
+            mode = "RGB" if int(pix.n or 0) >= 3 else "L"
+            img = Image.frombytes(mode, (int(pix.width), int(pix.height)), pix.samples)
+            gray = img.convert("L")
+            w, h = gray.size
+            data = gray.load()
+            threshold = 190
+            row_min = 1
+            col_min = 1
+
+            top = 0
+            while top < h:
+                if sum(1 for x in range(w) if int(data[x, top]) <= threshold) >= row_min:
+                    break
+                top += 1
+            bottom = h - 1
+            while bottom > top:
+                if sum(1 for x in range(w) if int(data[x, bottom]) <= threshold) >= row_min:
+                    break
+                bottom -= 1
+            left = 0
+            while left < w:
+                if sum(1 for y in range(top, bottom + 1) if int(data[left, y]) <= threshold) >= col_min:
+                    break
+                left += 1
+            right = w - 1
+            while right > left:
+                if sum(1 for y in range(top, bottom + 1) if int(data[right, y]) <= threshold) >= col_min:
+                    break
+                right -= 1
+            if right <= left or bottom <= top:
+                return rect
+
+            pad_px = max(12, int(min(w, h) * 0.035))
+            left = max(0, left - pad_px)
+            right = min(w - 1, right + pad_px)
+            top = max(0, top - pad_px)
+            bottom = min(h - 1, bottom + pad_px)
+            sx = float(rect.width) / max(1.0, float(w))
+            sy = float(rect.height) / max(1.0, float(h))
+            refined = fitz.Rect(
+                float(rect.x0) + float(left) * sx,
+                float(rect.y0) + float(top) * sy,
+                float(rect.x0) + float(right + 1) * sx,
+                float(rect.y0) + float(bottom + 1) * sy,
+            )
+            if refined.width < max(24.0, page_w * 0.06) or refined.height < max(24.0, page_h * 0.04):
+                return rect
+            if _area(refined) > _area(rect) * 0.98:
+                return rect
+            return refined
+        except Exception:
+            return rect
+
+    try:
+        d = page.get_text("dict") or {}
+    except Exception:
+        d = {}
+
+    line_rows: list[tuple[fitz.Rect, str]] = []
+    for block in d.get("blocks", []) or []:
+        if "lines" not in block:
+            continue
+        for line in block.get("lines", []) or []:
+            spans = line.get("spans", []) or []
+            if not spans:
+                continue
+            text = _normalize_text("".join(str(span.get("text", "")) for span in spans)).strip()
+            bbox = line.get("bbox") or block.get("bbox")
+            if not text or not bbox:
+                continue
+            try:
+                rect = fitz.Rect(bbox)
+            except Exception:
+                continue
+            if rect.width <= 0.0 or rect.height <= 0.0:
+                continue
+            line_rows.append((rect, text))
+
+    def _caption_rect(cap: dict) -> fitz.Rect | None:
+        try:
+            rect = fitz.Rect(cap.get("bbox"))
+        except Exception:
+            return None
+        if rect.width <= 0.0 or rect.height <= 0.0:
+            return None
+        return rect
+
+    def _is_caption_line(rect: fitz.Rect, text: str, cap_rect: fitz.Rect) -> bool:
+        try:
+            if re.match(r"^\s*(?:fig(?:ure)?\.?|fie\.?)\s*\d{1,4}[A-Za-z]?\b", text, flags=re.IGNORECASE):
+                return True
+            inter = rect & cap_rect
+            return _area(inter) >= (_area(rect) * 0.35)
+        except Exception:
+            return False
+
+    def _column_bounds_for_caption(cap_rect: fitz.Rect) -> tuple[float, float]:
+        center_x = (float(cap_rect.x0) + float(cap_rect.x1)) / 2.0
+        mid = float(page_w) / 2.0
+        spans_most_page = float(cap_rect.width) >= float(page_w) * 0.64 and (
+            float(cap_rect.x0) <= float(page_w) * 0.18 and float(cap_rect.x1) >= float(page_w) * 0.82
+        )
+        if spans_most_page:
+            return (float(page_w) * 0.045, float(page_w) * 0.955)
+        if center_x < mid:
+            left_x0 = max(float(page_w) * 0.03, float(cap_rect.x0) - float(page_w) * 0.05)
+            if float(cap_rect.x1) >= mid - float(page_w) * 0.02:
+                left_x1 = min(mid + float(page_w) * 0.04, float(cap_rect.x1) + float(page_w) * 0.035)
+            else:
+                left_x1 = min(mid - float(page_w) * 0.015, float(cap_rect.x1) + float(page_w) * 0.02)
+            return (left_x0, left_x1)
+        right_left_pad_ratio = 0.035 if float(cap_rect.x0) <= mid + float(page_w) * 0.04 else 0.015
+        right_x0 = max(mid - float(page_w) * 0.02, float(cap_rect.x0) - float(page_w) * right_left_pad_ratio)
+        right_x1 = min(float(page_w) * 0.975, float(cap_rect.x1) + float(page_w) * 0.065)
+        return (right_x0, right_x1)
+
+    out: list[fitz.Rect] = []
+    min_height = max(42.0, float(page_h) * 0.065)
+    for cap in caption_candidates:
+        cap_rect = _caption_rect(cap)
+        if cap_rect is None:
+            continue
+        x0, x1 = _column_bounds_for_caption(cap_rect)
+        cap_top = float(cap_rect.y0)
+        if cap_top <= float(page_h) * 0.12:
+            continue
+
+        nearest_above_y = float(page_h) * 0.055
+        for line_rect, text in line_rows:
+            if _is_caption_line(line_rect, text, cap_rect):
+                continue
+            norm_text = _normalize_text(text).strip()
+            if (
+                len(norm_text) <= 6
+                and not re.search(r"[A-Za-z]{4,}", norm_text)
+            ):
+                continue
+            if (
+                float(line_rect.width) <= max(18.0, (x1 - x0) * 0.18)
+                and len(norm_text) <= 16
+            ):
+                continue
+            if float(line_rect.y1) >= cap_top - 2.0:
+                continue
+            x_ov = _overlap_1d(float(line_rect.x0), float(line_rect.x1), x0, x1)
+            if x_ov < min(float(line_rect.width), x1 - x0) * 0.18:
+                continue
+            if float(line_rect.y1) > nearest_above_y:
+                nearest_above_y = float(line_rect.y1)
+
+        y0 = max(float(page_h) * 0.035, nearest_above_y + max(3.0, float(page_h) * 0.006))
+        y1 = cap_top - max(2.0, float(page_h) * 0.004)
+        if (y1 - y0) < min_height:
+            y0 = max(float(page_h) * 0.045, y1 - max(min_height, float(page_h) * 0.17))
+        if (y1 - y0) < min_height:
+            continue
+        max_height = float(page_h) * 0.50
+        if (y1 - y0) > max_height:
+            y0 = max(float(page_h) * 0.045, y1 - max_height)
+
+        pad_x = max(3.0, float(page_w) * 0.008)
+        rect = fitz.Rect(
+            max(0.0, x0 - pad_x),
+            max(0.0, y0),
+            min(float(page_w), x1 + pad_x),
+            min(float(page_h), y1),
+        )
+        rect = _refine_to_dark_pixels(rect)
+        if rect.width <= max(30.0, page_w * 0.12) or rect.height <= min_height:
+            continue
+        if (rect.width * rect.height) / max(1.0, page_w * page_h) >= 0.62:
+            continue
+        if any(_area(rect & existing) >= min(_area(rect), _area(existing)) * 0.72 for existing in out):
+            continue
+        out.append(rect)
+
+    out.sort(key=lambda r: (float(r.y0), float(r.x0), float(r.y1), float(r.x1)))
     return out
 
 

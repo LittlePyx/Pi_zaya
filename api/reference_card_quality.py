@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from kb.citation_audit import summarize_system_b_citation_audit
-from kb.evidence_text import source_title_candidate, strip_evidence_metadata_prefix
+from kb.evidence_text import finish_evidence_text, source_title_candidate, strip_evidence_metadata_prefix
 
 REF_CARD_POLISH_CONTRACT_VERSION = 1
 REF_CARD_VIEW_CONTRACT_VERSION = 1
@@ -44,7 +44,7 @@ _MARKDOWN_TABLE_RULE_RE = re.compile(r"(^|\n)\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:
 _NARRATIVE_METADATA_RE = re.compile(
     r"\b(?:doi|jcr|impact\s*factor|if\s*[:：]?\s*\d|published\s+(?:in|by)|"
     r"journal|conference|venue|citation\s+count|cited\s+by)\b|"
-    r"(?:发表于|发表在|期刊|会议|年份|被引|影响因子|分区|出处|来源论文|论文标题|标题是|作者是)",
+    r"(?:发表于|发表在|期刊|会议|年份|被引次数|被引量|被引频次|被引用次数|引用次数|影响因子|分区|出处|来源论文|论文标题|标题是|作者是)",
     re.IGNORECASE,
 )
 _DOI_RE = re.compile(r"\b10\.\d{4,9}/[^\s，。；;,)）]+", re.IGNORECASE)
@@ -431,7 +431,7 @@ def citation_detail_quality(detail: Mapping[str, Any] | None) -> dict[str, Any]:
             fail("raw_markdown_visible", field=field, detail=text[:120])
         if _has_template_phrase(text):
             fail("template_phrase_visible", field=field, detail=text[:120])
-        if field in {"card_takeaway", "card_claim", "card_context_summary"} and _looks_redundant_narrative_metadata(text, data):
+        if field in {"card_takeaway", "card_context_summary"} and _looks_redundant_narrative_metadata(text, data):
             fail("narrative_metadata_repeated", field=field, detail=text[:120])
     comparable_visible = [
         (field, text)
@@ -706,7 +706,28 @@ def _shelf_metadata_contract(
         external_status == "conflict"
         or (external_status == "candidate" and (not export_ready or external_doi_conflict))
     )
-    metadata_ready = export_ready if bibliographic else source_ready
+    missing_export_fields = list(export_acceptance.get("missing_fields") or []) if export_acceptance else []
+    soft_missing_export_fields: list[str] = []
+    hard_missing_export_fields: list[str] = []
+    if bibliographic:
+        for field in missing_export_fields:
+            field_name = str(field or "")
+            if field_name == "authors" and (has_doi or (has_venue and has_year)):
+                soft_missing_export_fields.append(field_name)
+            elif field_name == "doi" and has_venue and has_year:
+                soft_missing_export_fields.append(field_name)
+            else:
+                hard_missing_export_fields.append(field_name)
+    partial_bibliographic_ready = bool(
+        bibliographic
+        and title_ready
+        and source_identity
+        and has_summary
+        and has_year
+        and (has_doi or has_venue or has_author)
+        and not hard_missing_export_fields
+    )
+    metadata_ready = bool(export_ready or partial_bibliographic_ready) if bibliographic else source_ready
     review_needed = bool(untrusted_external or not metadata_ready)
     return {
         "title_ready": title_ready,
@@ -724,7 +745,8 @@ def _shelf_metadata_contract(
         "external_metadata_status": external_status,
         "external_review_needed": untrusted_external,
         "export_acceptance": export_acceptance,
-        "missing_export_fields": list(export_acceptance.get("missing_fields") or []) if export_acceptance else [],
+        "missing_export_fields": hard_missing_export_fields if bibliographic else missing_export_fields,
+        "soft_missing_export_fields": soft_missing_export_fields,
         "summary_export_ready": bool(export_acceptance.get("summary_export_ready")) if export_acceptance else False,
         "summary_status": str(export_acceptance.get("summary_status") or "") if export_acceptance else "",
     }
@@ -825,7 +847,7 @@ def citation_shelf_item_quality(detail: Mapping[str, Any] | None) -> dict[str, A
             warn("shelf_missing_venue_hint", field="venue")
         if not metadata["has_year"]:
             warn("shelf_missing_year_hint", field="year")
-        if not metadata["has_doi"]:
+        if not metadata["has_doi"] and "doi" not in set(metadata.get("soft_missing_export_fields") or []):
             warn("shelf_missing_doi", field="doi")
         for field in list(metadata.get("missing_export_fields") or []):
             if field in {"source"}:
@@ -973,8 +995,10 @@ def ref_card_hit_quality(
         if field in {"summary_line", "why_line", "card_view_summary", "card_view_why"}:
             if _looks_redundant_narrative_metadata(text, {**meta, **ui}):
                 fail("ref_card_narrative_metadata_repeated", field=field, detail=text[:120])
-        if field in {"primary_evidence", "reader_open_snippet"} and _looks_broken_evidence(text):
-            fail("ref_card_broken_evidence", field=field, detail=text[:160])
+        if field in {"primary_evidence", "reader_open_snippet"}:
+            evidence_text = finish_evidence_text(text, max_len=520)
+            if _looks_broken_evidence(evidence_text):
+                fail("ref_card_broken_evidence", field=field, detail=evidence_text[:160])
         lowered = _norm(text)
         for phrase in compact_forbidden:
             if _norm(phrase) and _norm(phrase) in lowered:

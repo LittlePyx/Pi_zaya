@@ -2548,6 +2548,81 @@ def test_maybe_polish_single_ref_hit_card_strict_mode_uses_llm_output_without_ru
     assert str(out.get("why_generation") or "") == "llm_grounded"
 
 
+def test_maybe_polish_single_ref_hit_card_falls_back_to_real_snippet_when_llm_empty(monkeypatch):
+    hit = {
+        "text": "Table 1. Quantitative comparison results for USAF 1951 test chart",
+        "meta": {
+            "source_path": r"db\OE-2017-Hadamard\OE-2017-Hadamard.en.md",
+            "ref_show_snippets": [
+                (
+                    "### 2.2 Basis patterns generation\n"
+                    "The core of single-pixel imaging is to employ active illumination to acquire the spatial information of a target object. "
+                    "Figure 1 shows the comparison between the Hadamard and Fourier basis patterns. "
+                    "Hadamard basis patterns are binary (black-and-white), which makes HSI naturally suitable for single-pixel imaging systems based on a digital micro-mirror device (DMD). "
+                    "As DMD is a binary device, HSI can benefit from the high-speed binary illumination ability given by a DMD."
+                )
+            ],
+        },
+    }
+    ui_meta = {
+        "display_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+        "summary_line": "该文在“Hadamard single-pixel imaging versus Fourier single-pixel imaging / 3. Comparison of experiment / 3.1 Numerical simulations”讨论了“single pixel imaging”。",
+        "summary_kind": "guide",
+        "summary_generation": "section_grounded",
+        "why_line": "该文在“3.1 Numerical simulations”给出了与“single pixel imaging”直接相关的定义、方法或结果信息。",
+        "why_generation": "deterministic_grounded",
+    }
+
+    monkeypatch.setattr(reference_ui, "_refs_card_polish_llm_enabled", lambda: True)
+    monkeypatch.setattr(reference_ui, "_llm_polish_ref_card_copy_v2", lambda **kwargs: ("", ""))
+    monkeypatch.setattr(reference_ui, "_llm_ground_ref_why_line", lambda **kwargs: "")
+    monkeypatch.setattr(reference_ui, "_llm_select_best_evidence_candidate", lambda **kwargs: "")
+
+    out = reference_ui._maybe_polish_single_ref_hit_card(
+        prompt="我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
+        hit=hit,
+        ui_meta=ui_meta,
+        allow_expensive_llm=True,
+    )
+
+    summary = str(out.get("summary_line") or "")
+    assert "该文在" not in summary
+    assert "DMD" in summary or "binary" in summary
+    assert str(out.get("summary_generation") or "") == "deterministic_grounded"
+
+
+def test_doc_list_primary_evidence_replaces_synthetic_section_rescue_with_alternative():
+    synthetic = {
+        "source_path": r"db\OE-2017-Hadamard\OE-2017-Hadamard.en.md",
+        "source_name": "OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        "heading_path": "3. Comparison of experiment / 3.1 Numerical simulations",
+        "snippet": "该文在“Hadamard single-pixel imaging versus Fourier single-pixel imaging / 3. Comparison of experiment / 3.1 Numerical simulations”讨论了“single pixel imaging”。",
+        "highlight_snippet": "该文在“Hadamard single-pixel imaging versus Fourier single-pixel imaging / 3. Comparison of experiment / 3.1 Numerical simulations”讨论了“single pixel imaging”。",
+        "selection_reason": "section_intent_rescue",
+        "strict_locate": False,
+        "alternatives": [
+            {
+                "heading_path": "2. Comparison of theory / 2.2 Basis patterns generation",
+                "snippet": "Hadamard basis patterns are binary (black-and-white), which makes HSI naturally suitable for single-pixel imaging systems based on a digital micro-mirror device (DMD).",
+                "highlight_snippet": "Hadamard basis patterns are binary (black-and-white), which makes HSI naturally suitable for single-pixel imaging systems based on a digital micro-mirror device (DMD).",
+            }
+        ],
+    }
+
+    primary, source = reference_ui._select_doc_list_effective_primary_evidence(
+        prompt="我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
+        display_name="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        authoritative_primary_evidence=synthetic,
+        synthesized_primary_evidence={},
+    )
+
+    assert source == "authoritative"
+    assert str(primary.get("selection_reason") or "") == "alternative_rescue"
+    assert "DMD" in str(primary.get("snippet") or "")
+    assert "该文在" not in str(primary.get("snippet") or "")
+
+
 def test_enrich_refs_payload_upgrades_generic_why_line_deterministically_without_llm(monkeypatch):
     refs = {
         40: {
@@ -5398,6 +5473,14 @@ def test_summary_line_needs_polish_for_why_like_copy():
             "This hit directly covers 'Fourier single-pixel imaging' in "
             "'3. Comparison of experiment / 3.1 Numerical simulations', so it is a good entry point."
         ),
+    )
+
+
+def test_summary_line_needs_polish_for_synthetic_location_discussion_copy():
+    assert reference_ui._summary_line_needs_polish(
+        prompt="我做单像素实验，Hadamard 和 Fourier 到底该怎么选？",
+        title="OE-2017-Hadamard single-pixel imaging versus Fourier single-pixel imaging.pdf",
+        summary_line="该文在“Hadamard single-pixel imaging versus Fourier single-pixel imaging / 3. Comparison of experiment / 3.1 Numerical simulations”讨论了“single pixel imaging”。",
     )
 
 

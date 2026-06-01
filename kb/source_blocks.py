@@ -50,7 +50,7 @@ _EQ_NUMBER_RE = re.compile(
     re.IGNORECASE,
 )
 _EQ_TAG_RE = re.compile(r"\\tag\{\s*(\d{1,4})\s*\}", re.IGNORECASE)
-_FIG_NUMBER_RE = re.compile(r"(?:\bfig(?:ure)?\.?\s*#?\s*|图\s*|第\s*)(\d{1,4})(?:\s*张图)?", re.IGNORECASE)
+_FIG_NUMBER_RE = re.compile(r"(?:\bfig(?:ure)?\.?\s*#?\s*S?\s*|图\s*|第\s*)(\d{1,4})(?:\s*张图)?", re.IGNORECASE)
 _TABLE_NUMBER_RE = re.compile(r"(?:\btable\.?\s*#?\s*|表\s*|第\s*)(\d{1,4})(?:\s*张表)?", re.IGNORECASE)
 _ANCHOR_HEADING_TAIL_RE = re.compile(r"\s*/\s*(?:Figure|Table|Equation|图|表|公式)\s*\d+\s*$", re.IGNORECASE)
 _INLINE_EQ_RE = re.compile(r"\$[^$]{1,280}\$")
@@ -462,24 +462,40 @@ def build_source_blocks(
         if pending_figure_context:
             pending_number = int(pending_figure_context.get("paper_figure_number") or pending_figure_context.get("number") or 0)
             caption_number = extract_figure_number(raw)
-            if pending_number > 0 and caption_number == pending_number:
-                figure_heading = _join_heading_path(heading_path(), f"Figure {pending_number}")
+            effective_number = pending_number if pending_number > 0 else caption_number
+            if effective_number > 0 and (pending_number <= 0 or caption_number == pending_number):
+                linked_figure_block_id = str(pending_figure_context.get("figure_block_id") or "").strip()
+                figure_heading = _join_heading_path(heading_path(), f"Figure {effective_number}")
+                if linked_figure_block_id:
+                    for block in reversed(blocks):
+                        if str(block.get("block_id") or "").strip() != linked_figure_block_id:
+                            continue
+                        block["number"] = int(effective_number)
+                        block["paper_figure_number"] = int(effective_number)
+                        if str(block.get("text") or "").strip().lower() in {"figure", "fig", "fig."}:
+                            block["text"] = f"Figure {effective_number}"
+                        if str(block.get("raw_text") or "").strip().lower() in {"figure", "fig", "fig."}:
+                            block["raw_text"] = f"Figure {effective_number}"
+                        block["heading_path"] = figure_heading or heading_path()
+                        if not str(block.get("caption_text") or "").strip():
+                            block["caption_text"] = normalize_inline_markdown(raw)[:1200]
+                        break
                 extras = {
                     "figure_id": str(pending_figure_context.get("figure_id") or "").strip(),
                     "figure_ident": str(pending_figure_context.get("figure_ident") or "").strip(),
-                    "paper_figure_number": pending_number,
+                    "paper_figure_number": effective_number,
                     "figure_role": "caption",
-                    "linked_figure_block_id": str(pending_figure_context.get("figure_block_id") or "").strip(),
+                    "linked_figure_block_id": linked_figure_block_id,
                     "asset_name": str(pending_figure_context.get("asset_name") or "").strip(),
                     "asset_name_alias": str(pending_figure_context.get("asset_name_alias") or "").strip(),
                     "caption_text": normalize_inline_markdown(raw)[:1200],
                     "heading_path": figure_heading or heading_path(),
                 }
                 next_caption_follow_context = {
-                    "figure_block_id": str(pending_figure_context.get("figure_block_id") or "").strip(),
+                    "figure_block_id": linked_figure_block_id,
                     "figure_id": str(pending_figure_context.get("figure_id") or "").strip(),
                     "figure_ident": str(pending_figure_context.get("figure_ident") or "").strip(),
-                    "paper_figure_number": pending_number,
+                    "paper_figure_number": effective_number,
                     "asset_name": str(pending_figure_context.get("asset_name") or "").strip(),
                     "asset_name_alias": str(pending_figure_context.get("asset_name_alias") or "").strip(),
                     "heading_path": figure_heading or heading_path(),

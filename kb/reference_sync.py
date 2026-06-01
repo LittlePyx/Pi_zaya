@@ -51,9 +51,11 @@ def _fmt_done_message(stats: dict[str, Any]) -> str:
     doi = int(stats.get("refs_with_doi", 0) or 0)
     src = int(stats.get("refs_source_map_ok", 0) or 0)
     cross = int(stats.get("refs_crossref_ok", 0) or 0)
+    attempts = int(stats.get("crossref_network_attempts", 0) or 0)
+    skipped = int(stats.get("crossref_negative_hits", 0) or 0) + int(stats.get("docs_retry_suppressed", 0) or 0)
     return (
-        f"参考文献索引已更新: 文档 {docs}, 条目 {refs}, "
-        f"含 DOI {doi}, 源文献映射 {src}, Crossref 匹配 {cross}."
+        f"参考文献索引已更新：文档 {docs}，条目 {refs}，含 DOI {doi}，"
+        f"源文献映射 {src}，Crossref 匹配 {cross}，联网查询 {attempts}，跳过重试 {skipped}。"
     )
 
 
@@ -148,6 +150,7 @@ def _worker(
             refs_with_doi=int(payload.get("refs_with_doi", 0) or 0),
             refs_crossref_ok=int(payload.get("refs_crossref_ok", 0) or 0),
             refs_source_map_ok=int(payload.get("refs_source_map_ok", 0) or 0),
+            stats=dict(payload.get("stats") or {}),
         )
 
     try:

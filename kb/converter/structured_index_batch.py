@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from kb.converter.structured_indices import STRUCTURED_INDEX_VERSION, rebuild_structured_indices_for_markdown
+from kb.source_filters import is_excluded_source_path
 
 _DEFAULT_EXCLUDE_DIRS = {"temp", "__pycache__"}
-_DEFAULT_EXCLUDE_NAMES = {"assets_manifest.md"}
+_DEFAULT_EXCLUDE_NAMES = {"assets_manifest.md", "quality_report.md", "output.md"}
 _STRUCTURED_INDEX_FILES = (
     "anchor_index.json",
     "equation_index.json",
@@ -50,6 +51,8 @@ def iter_markdown_files(
         if not path.is_file():
             continue
         if path.name in excluded_names:
+            continue
+        if is_excluded_source_path(str(path)):
             continue
         if any(part in excluded_dirs for part in path.parts):
             continue

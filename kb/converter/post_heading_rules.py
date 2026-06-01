@@ -184,6 +184,7 @@ def _enforce_heading_policy(md: str) -> str:
     seen_h1 = False
     seen_numbered = False
     seen_structural_keys: set[str] = set()
+    previous_heading_level = 0
     for line in lines:
         if _is_journal_metadata_heading(line.strip()):
             continue
@@ -284,6 +285,9 @@ def _enforce_heading_policy(md: str) -> str:
                 lvl = 2
             else:
                 seen_h1 = True
+        if previous_heading_level >= 2 and lvl > previous_heading_level + 1:
+            lvl = previous_heading_level + 1
 
         out.append("#" * lvl + " " + title)
+        previous_heading_level = lvl
     return "\n".join(out)

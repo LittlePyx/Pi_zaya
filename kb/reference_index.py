@@ -269,6 +269,8 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
         for s in _split_embedded_ref_segments(raw):
             if not s:
                 continue
+            if re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", s, re.IGNORECASE):
+                continue
 
             if re.match(r"^#{1,6}\s+\S+", s) and (not _REF_HEAD_RE.match(s)):
                 if out:
@@ -795,6 +797,28 @@ def _doc_crossref_enriched(refs: dict[str, dict] | None) -> bool:
     return bool((int(unresolved_promising) <= 0) and (int(sparse_promising) <= 0))
 
 
+def _reference_sync_retry_ttl_s() -> float:
+    raw = str(os.environ.get("KB_REF_SYNC_RETRY_TTL_S") or "").strip()
+    try:
+        value = float(raw) if raw else 24.0 * 60.0 * 60.0
+    except Exception:
+        value = 24.0 * 60.0 * 60.0
+    return float(max(300.0, value))
+
+
+def _doc_crossref_retry_due(prev_doc: dict[str, Any] | None, *, now_ts: float | None = None) -> bool:
+    if not isinstance(prev_doc, dict):
+        return True
+    try:
+        last_attempt = float(prev_doc.get("crossref_last_attempt_at") or 0.0)
+    except Exception:
+        last_attempt = 0.0
+    if last_attempt <= 0.0:
+        return True
+    now = float(time.time() if now_ts is None else now_ts)
+    return bool((now - last_attempt) >= _reference_sync_retry_ttl_s())
+
+
 def _doc_ref_quality_tuple(refs: dict[str, dict] | None) -> tuple[int, int, int, int, int]:
     if not isinstance(refs, dict):
         return (-10**9, -10**9, -10**9, -10**9, -10**9)
@@ -912,7 +936,12 @@ def _load_library_citation_meta_map(library_db_path: Path | None) -> dict[str, d
     return out
 
 
-def _best_source_doi_from_citation_meta(cm: dict[str, Any], *, crossref_enabled: bool) -> str:
+def _best_source_doi_from_citation_meta(
+    cm: dict[str, Any],
+    *,
+    crossref_enabled: bool,
+    stats: dict[str, int] | None = None,
+) -> str:
     if not isinstance(cm, dict):
         return ""
     for k in ("doi", "DOI"):
@@ -932,6 +961,8 @@ def _best_source_doi_from_citation_meta(cm: dict[str, Any], *, crossref_enabled:
     venue = str(cm.get("venue") or cm.get("journal") or cm.get("container-title") or "").strip()
 
     try:
+        _stat_inc(stats, "crossref_network_attempts")
+        _stat_inc(stats, "source_work_network_attempts")
         meta = fetch_best_crossref_meta(
             query_title=title,
             expected_year=year,
@@ -1013,6 +1044,7 @@ def _infer_source_doi_from_doc_hints(
     cache: dict,
     *,
     crossref_enabled: bool,
+    stats: dict[str, int] | None = None,
 ) -> str:
     if not crossref_enabled:
         return ""
@@ -1046,12 +1078,21 @@ def _infer_source_doi_from_doc_hints(
         source_work_cache = {}
         cache["source_work"] = source_work_cache
     if key in source_work_cache:
-        cached_doi = _clean_doi_for_url(str(source_work_cache.get(key) or ""))
+        cached_value = source_work_cache.get(key)
+        if _is_fresh_crossref_cache_miss(cached_value):
+            _stat_inc(stats, "crossref_negative_hits")
+            _stat_inc(stats, "source_work_negative_hits")
+            return ""
+        cached_doi = _clean_doi_for_url(str(cached_value or ""))
         if cached_doi:
+            _stat_inc(stats, "crossref_cache_hits")
+            _stat_inc(stats, "source_work_cache_hits")
             return cached_doi
 
     doi = ""
     try:
+        _stat_inc(stats, "crossref_network_attempts")
+        _stat_inc(stats, "source_work_network_attempts")
         meta = fetch_best_crossref_meta(
             query_title=title_h,
             expected_year=year_h,
@@ -1067,6 +1108,8 @@ def _infer_source_doi_from_doc_hints(
 
     if (not doi) and year_h:
         try:
+            _stat_inc(stats, "crossref_network_attempts")
+            _stat_inc(stats, "source_work_network_attempts")
             meta2 = fetch_best_crossref_meta(
                 query_title=title_h,
                 expected_year=year_h,
@@ -1082,6 +1125,8 @@ def _infer_source_doi_from_doc_hints(
 
     if (not doi) and (not year_h):
         try:
+            _stat_inc(stats, "crossref_network_attempts")
+            _stat_inc(stats, "source_work_network_attempts")
             meta3 = fetch_best_crossref_meta(
                 query_title=title_h,
                 expected_year="",
@@ -1097,6 +1142,10 @@ def _infer_source_doi_from_doc_hints(
 
     if doi:
         source_work_cache[key] = doi
+    else:
+        source_work_cache[key] = _crossref_cache_miss("source_work_not_found")
+        _stat_inc(stats, "crossref_negative_writes")
+        _stat_inc(stats, "source_work_negative_writes")
     return doi
 
 
@@ -1180,6 +1229,7 @@ def _load_source_reference_rows(
     cache: dict,
     *,
     crossref_enabled: bool,
+    stats: dict[str, int] | None = None,
 ) -> list[dict[str, str]]:
     d = _clean_doi_for_url(source_doi).lower()
     if not d:
@@ -1193,22 +1243,31 @@ def _load_source_reference_rows(
 
     if key in src_cache:
         v = src_cache.get(key)
+        if _is_fresh_crossref_cache_miss(v):
+            _stat_inc(stats, "crossref_negative_hits")
+            _stat_inc(stats, "source_refs_negative_hits")
+            _stat_inc(stats, "source_refs_cached_miss")
+            return []
         if isinstance(v, list):
             out: list[dict[str, str]] = []
             for r in v:
                 if isinstance(r, dict):
                     out.append({k: str(v2 or "") for k, v2 in r.items()})
             if out:
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "source_refs_cache_hits")
                 return out
             # Stale empty cache should retry when Crossref is available.
             if not crossref_enabled:
                 return []
-        else:
+        elif not (_is_crossref_cache_miss(v) and crossref_enabled):
             return []
 
     if not crossref_enabled:
         return []
 
+    _stat_inc(stats, "crossref_network_attempts")
+    _stat_inc(stats, "source_refs_network_attempts")
     rows_raw = fetch_crossref_references_by_doi(source_doi)
     out_rows: list[dict[str, str]] = []
     for r in rows_raw:
@@ -1217,6 +1276,10 @@ def _load_source_reference_rows(
         out_rows.append(_normalize_source_ref_row(r))
     if out_rows:
         src_cache[key] = out_rows
+    else:
+        src_cache[key] = _crossref_cache_miss("source_refs_empty")
+        _stat_inc(stats, "crossref_negative_writes")
+        _stat_inc(stats, "source_refs_negative_writes")
     return out_rows
 
 
@@ -1461,6 +1524,57 @@ def _save_json(path: Path, obj: dict) -> None:
     p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _crossref_negative_cache_ttl_s() -> float:
+    raw = str(os.environ.get("KB_CROSSREF_NEGATIVE_TTL_S") or "").strip()
+    try:
+        value = float(raw) if raw else 7.0 * 24.0 * 60.0 * 60.0
+    except Exception:
+        value = 7.0 * 24.0 * 60.0 * 60.0
+    return float(max(300.0, value))
+
+
+def _crossref_cache_miss(reason: str = "not_found") -> dict[str, Any]:
+    return {
+        "_kb_cache": "miss",
+        "reason": str(reason or "not_found"),
+        "ts": float(time.time()),
+    }
+
+
+def _is_crossref_cache_miss(value: Any) -> bool:
+    return bool(isinstance(value, dict) and str(value.get("_kb_cache") or "") == "miss")
+
+
+def _is_fresh_crossref_cache_miss(value: Any, *, now_ts: float | None = None) -> bool:
+    if not _is_crossref_cache_miss(value):
+        return False
+    try:
+        ts = float(value.get("ts") or 0.0)
+    except Exception:
+        ts = 0.0
+    if ts <= 0.0:
+        return False
+    now = float(time.time() if now_ts is None else now_ts)
+    return bool((now - ts) < _crossref_negative_cache_ttl_s())
+
+
+def _is_crossref_meta_cache_hit(value: Any) -> bool:
+    return bool(isinstance(value, dict) and value and (not _is_crossref_cache_miss(value)))
+
+
+def _crossref_cache_value_is_fresh(value: Any) -> bool:
+    return bool(_is_crossref_meta_cache_hit(value) or _is_fresh_crossref_cache_miss(value))
+
+
+def _stat_inc(stats: dict[str, int] | None, key: str, amount: int = 1) -> None:
+    if not isinstance(stats, dict):
+        return
+    try:
+        stats[key] = int(stats.get(key, 0) or 0) + int(amount)
+    except Exception:
+        stats[key] = int(amount)
+
+
 def load_reference_index(db_dir: Path) -> dict:
     p = Path(db_dir) / INDEX_FILE_NAME
     data = _load_json(p)
@@ -1528,6 +1642,7 @@ def _lookup_crossref_meta_for_entry(
     *,
     crossref_enabled: bool,
     enable_title_lookup: bool,
+    stats: dict[str, int] | None = None,
 ) -> tuple[dict | None, str]:
     raw = (entry or "").strip()
     doi_hint = extract_first_doi(raw)
@@ -1550,9 +1665,17 @@ def _lookup_crossref_meta_for_entry(
     if crossref_enabled and doi_key:
         if doi_key in doi_cache:
             cached = doi_cache.get(doi_key)
-            if isinstance(cached, dict):
+            if _is_crossref_meta_cache_hit(cached):
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "doi_cache_hits")
                 meta = cached
+            elif _is_fresh_crossref_cache_miss(cached):
+                _stat_inc(stats, "crossref_negative_hits")
+                _stat_inc(stats, "doi_negative_hits")
+                meta = None
             elif cached is None:
+                _stat_inc(stats, "crossref_network_attempts")
+                _stat_inc(stats, "doi_network_attempts")
                 found = fetch_best_crossref_meta(
                     query_title="",
                     doi_hint=doi_hint,
@@ -1562,9 +1685,29 @@ def _lookup_crossref_meta_for_entry(
                 meta = found if isinstance(found, dict) else None
                 if isinstance(meta, dict):
                     doi_cache[doi_key] = meta
+                else:
+                    doi_cache[doi_key] = _crossref_cache_miss("doi_not_found")
+                    _stat_inc(stats, "crossref_negative_writes")
+                    _stat_inc(stats, "doi_negative_writes")
+            elif _is_crossref_cache_miss(cached):
+                _stat_inc(stats, "crossref_network_attempts")
+                _stat_inc(stats, "doi_network_attempts")
+                found = fetch_best_crossref_meta(
+                    query_title="",
+                    doi_hint=doi_hint,
+                    allow_title_only=False,
+                    min_score=0.90,
+                )
+                meta = found if isinstance(found, dict) else None
+                doi_cache[doi_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("doi_not_found")
+                if not isinstance(meta, dict):
+                    _stat_inc(stats, "crossref_negative_writes")
+                    _stat_inc(stats, "doi_negative_writes")
             else:
                 meta = None
         else:
+            _stat_inc(stats, "crossref_network_attempts")
+            _stat_inc(stats, "doi_network_attempts")
             found = fetch_best_crossref_meta(
                 query_title="",
                 doi_hint=doi_hint,
@@ -1572,7 +1715,10 @@ def _lookup_crossref_meta_for_entry(
                 min_score=0.90,
             )
             meta = found if isinstance(found, dict) else None
-            doi_cache[doi_key] = meta
+            doi_cache[doi_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("doi_not_found")
+            if not isinstance(meta, dict):
+                _stat_inc(stats, "crossref_negative_writes")
+                _stat_inc(stats, "doi_negative_writes")
         if isinstance(meta, dict):
             return meta, doi_hint
 
@@ -1581,19 +1727,45 @@ def _lookup_crossref_meta_for_entry(
     if crossref_enabled and ref_key:
         if ref_key in bib_cache:
             cached = bib_cache.get(ref_key)
-            if isinstance(cached, dict):
+            if _is_crossref_meta_cache_hit(cached):
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "bib_cache_hits")
                 meta = cached
+            elif _is_fresh_crossref_cache_miss(cached):
+                _stat_inc(stats, "crossref_negative_hits")
+                _stat_inc(stats, "bib_negative_hits")
+                meta = None
             elif cached is None:
+                _stat_inc(stats, "crossref_network_attempts")
+                _stat_inc(stats, "bib_network_attempts")
                 found = fetch_best_crossref_for_reference(reference_text=raw, min_score=0.62)
                 meta = found if isinstance(found, dict) else None
                 if isinstance(meta, dict):
                     bib_cache[ref_key] = meta
+                else:
+                    bib_cache[ref_key] = _crossref_cache_miss("bib_not_found")
+                    _stat_inc(stats, "crossref_negative_writes")
+                    _stat_inc(stats, "bib_negative_writes")
+            elif _is_crossref_cache_miss(cached):
+                _stat_inc(stats, "crossref_network_attempts")
+                _stat_inc(stats, "bib_network_attempts")
+                found = fetch_best_crossref_for_reference(reference_text=raw, min_score=0.62)
+                meta = found if isinstance(found, dict) else None
+                bib_cache[ref_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("bib_not_found")
+                if not isinstance(meta, dict):
+                    _stat_inc(stats, "crossref_negative_writes")
+                    _stat_inc(stats, "bib_negative_writes")
             else:
                 meta = None
         else:
+            _stat_inc(stats, "crossref_network_attempts")
+            _stat_inc(stats, "bib_network_attempts")
             found = fetch_best_crossref_for_reference(reference_text=raw, min_score=0.62)
             meta = found if isinstance(found, dict) else None
-            bib_cache[ref_key] = meta
+            bib_cache[ref_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("bib_not_found")
+            if not isinstance(meta, dict):
+                _stat_inc(stats, "crossref_negative_writes")
+                _stat_inc(stats, "bib_negative_writes")
         if isinstance(meta, dict):
             return meta, doi_hint
 
@@ -1609,14 +1781,22 @@ def _lookup_crossref_meta_for_entry(
 
     if title_key in title_cache:
         cached = title_cache.get(title_key)
-        if isinstance(cached, dict):
+        if _is_crossref_meta_cache_hit(cached):
+            _stat_inc(stats, "crossref_cache_hits")
+            _stat_inc(stats, "title_cache_hits")
             meta = cached
+        elif _is_fresh_crossref_cache_miss(cached):
+            _stat_inc(stats, "crossref_negative_hits")
+            _stat_inc(stats, "title_negative_hits")
+            meta = None
         elif cached is None:
             year_hint = extract_year_hint(raw)
             has_quoted_title = bool(_QUOTED_TITLE_RE.search(raw))
             min_score = 0.95
             if has_quoted_title:
                 min_score = 0.90
+            _stat_inc(stats, "crossref_network_attempts")
+            _stat_inc(stats, "title_network_attempts")
             found = fetch_best_crossref_meta(
                 query_title=title_hint,
                 expected_year=year_hint,
@@ -1625,7 +1805,30 @@ def _lookup_crossref_meta_for_entry(
                 min_score=float(min_score),
             )
             meta = found if isinstance(found, dict) else None
-            title_cache[title_key] = meta
+            title_cache[title_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("title_not_found")
+            if not isinstance(meta, dict):
+                _stat_inc(stats, "crossref_negative_writes")
+                _stat_inc(stats, "title_negative_writes")
+        elif _is_crossref_cache_miss(cached):
+            year_hint = extract_year_hint(raw)
+            has_quoted_title = bool(_QUOTED_TITLE_RE.search(raw))
+            min_score = 0.95
+            if has_quoted_title:
+                min_score = 0.90
+            _stat_inc(stats, "crossref_network_attempts")
+            _stat_inc(stats, "title_network_attempts")
+            found = fetch_best_crossref_meta(
+                query_title=title_hint,
+                expected_year=year_hint,
+                doi_hint="",
+                allow_title_only=True,
+                min_score=float(min_score),
+            )
+            meta = found if isinstance(found, dict) else None
+            title_cache[title_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("title_not_found")
+            if not isinstance(meta, dict):
+                _stat_inc(stats, "crossref_negative_writes")
+                _stat_inc(stats, "title_negative_writes")
         else:
             meta = None
     else:
@@ -1634,6 +1837,8 @@ def _lookup_crossref_meta_for_entry(
         min_score = 0.95
         if has_quoted_title:
             min_score = 0.90
+        _stat_inc(stats, "crossref_network_attempts")
+        _stat_inc(stats, "title_network_attempts")
         found = fetch_best_crossref_meta(
             query_title=title_hint,
             expected_year=year_hint,
@@ -1642,7 +1847,10 @@ def _lookup_crossref_meta_for_entry(
             min_score=float(min_score),
         )
         meta = found if isinstance(found, dict) else None
-        title_cache[title_key] = meta
+        title_cache[title_key] = meta if isinstance(meta, dict) else _crossref_cache_miss("title_not_found")
+        if not isinstance(meta, dict):
+            _stat_inc(stats, "crossref_negative_writes")
+            _stat_inc(stats, "title_negative_writes")
 
     return meta, doi_hint
 
@@ -1654,6 +1862,7 @@ def _prefetch_doi_meta_parallel(
     crossref_enabled: bool,
     max_workers: int,
     max_prefetch: int,
+    stats: dict[str, int] | None = None,
 ) -> int:
     if (not crossref_enabled) or (int(max_workers) <= 1) or (not isinstance(ref_map, dict)):
         return 0
@@ -1676,7 +1885,15 @@ def _prefetch_doi_meta_parallel(
         if not d:
             continue
         k = d.lower()
-        if (k in seen) or (k in doi_cache):
+        if k in seen:
+            continue
+        if k in doi_cache and _crossref_cache_value_is_fresh(doi_cache.get(k)):
+            if _is_crossref_meta_cache_hit(doi_cache.get(k)):
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "doi_cache_hits")
+            elif _is_fresh_crossref_cache_miss(doi_cache.get(k)):
+                _stat_inc(stats, "crossref_negative_hits")
+                _stat_inc(stats, "doi_negative_hits")
             continue
         seen.add(k)
         want.append(d)
@@ -1685,6 +1902,8 @@ def _prefetch_doi_meta_parallel(
 
     if len(want) < 2:
         return 0
+    _stat_inc(stats, "crossref_network_attempts", len(want))
+    _stat_inc(stats, "doi_network_attempts", len(want))
 
     def _job(doi: str) -> tuple[str, dict | None]:
         key = _clean_doi_for_url(doi).lower()
@@ -1710,6 +1929,10 @@ def _prefetch_doi_meta_parallel(
             if isinstance(meta, dict):
                 doi_cache[key] = meta
                 done += 1
+            elif key:
+                doi_cache[key] = _crossref_cache_miss("doi_not_found")
+                _stat_inc(stats, "crossref_negative_writes")
+                _stat_inc(stats, "doi_negative_writes")
     return int(done)
 
 
@@ -1721,6 +1944,7 @@ def _prefetch_reference_meta_parallel(
     enable_title_lookup: bool,
     max_workers: int,
     max_prefetch: int,
+    stats: dict[str, int] | None = None,
 ) -> int:
     if (not crossref_enabled) or (int(max_workers) <= 1) or (not isinstance(ref_map, dict)):
         return 0
@@ -1750,7 +1974,15 @@ def _prefetch_reference_meta_parallel(
         if not is_promising_reference_text(raw):
             continue
         ref_key = normalize_title_for_match(raw)[:260]
-        if (not ref_key) or (ref_key in seen_bib) or (ref_key in bib_cache):
+        if (not ref_key) or (ref_key in seen_bib):
+            continue
+        if ref_key in bib_cache and _crossref_cache_value_is_fresh(bib_cache.get(ref_key)):
+            if _is_crossref_meta_cache_hit(bib_cache.get(ref_key)):
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "bib_cache_hits")
+            elif _is_fresh_crossref_cache_miss(bib_cache.get(ref_key)):
+                _stat_inc(stats, "crossref_negative_hits")
+                _stat_inc(stats, "bib_negative_hits")
             continue
         seen_bib.add(ref_key)
         bib_jobs.append((ref_key, raw))
@@ -1759,6 +1991,8 @@ def _prefetch_reference_meta_parallel(
 
     if len(bib_jobs) < 2:
         return 0
+    _stat_inc(stats, "crossref_network_attempts", len(bib_jobs))
+    _stat_inc(stats, "bib_network_attempts", len(bib_jobs))
 
     def _bib_job(ref_key: str, raw: str) -> tuple[str, str, dict | None]:
         try:
@@ -1780,6 +2014,10 @@ def _prefetch_reference_meta_parallel(
                 bib_cache[ref_key] = meta
                 done += 1
                 continue
+            if ref_key:
+                bib_cache[ref_key] = _crossref_cache_miss("bib_not_found")
+                _stat_inc(stats, "crossref_negative_writes")
+                _stat_inc(stats, "bib_negative_writes")
             if not enable_title_lookup:
                 continue
             title_need.append(raw)
@@ -1798,9 +2036,14 @@ def _prefetch_reference_meta_parallel(
             continue
         if title_key in seen_title:
             continue
-        # Keep retrying stale null entries; skip only when already cached with a concrete dict.
         cached = title_cache.get(title_key)
-        if isinstance(cached, dict):
+        if _crossref_cache_value_is_fresh(cached):
+            if _is_crossref_meta_cache_hit(cached):
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "title_cache_hits")
+            elif _is_fresh_crossref_cache_miss(cached):
+                _stat_inc(stats, "crossref_negative_hits")
+                _stat_inc(stats, "title_negative_hits")
             continue
         seen_title.add(title_key)
         min_score = 0.90 if bool(_QUOTED_TITLE_RE.search(raw)) else 0.95
@@ -1810,6 +2053,8 @@ def _prefetch_reference_meta_parallel(
 
     if len(title_jobs) < 2:
         return int(done)
+    _stat_inc(stats, "crossref_network_attempts", len(title_jobs))
+    _stat_inc(stats, "title_network_attempts", len(title_jobs))
 
     def _title_job(title_key: str, title_hint: str, year_hint: str, min_score: float) -> tuple[str, dict | None]:
         try:
@@ -1834,6 +2079,10 @@ def _prefetch_reference_meta_parallel(
             if isinstance(meta, dict):
                 title_cache[title_key] = meta
                 done += 1
+            elif title_key:
+                title_cache[title_key] = _crossref_cache_miss("title_not_found")
+                _stat_inc(stats, "crossref_negative_writes")
+                _stat_inc(stats, "title_negative_writes")
     return int(done)
 
 
@@ -2040,7 +2289,8 @@ def build_reference_index(
     pdf_root: Path | None = None,
     library_db_path: Path | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
+    run_started_ts = time.time()
     src = Path(src_root).expanduser().resolve()
     out_dir = Path(db_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -2081,8 +2331,21 @@ def build_reference_index(
     docs_quality_blocked = 0
     refs_total = 0
     refs_with_doi = 0
+    refs_with_title = 0
+    refs_with_authors = 0
+    refs_with_venue = 0
+    refs_metadata_ready = 0
+    refs_unresolved = 0
     refs_crossref_ok = 0
     refs_source_map_ok = 0
+    crossref_stats: dict[str, int] = {
+        "crossref_cache_hits": 0,
+        "crossref_negative_hits": 0,
+        "crossref_negative_writes": 0,
+        "crossref_network_attempts": 0,
+        "docs_retry_suppressed": 0,
+        "source_refs_cached_miss": 0,
+    }
     total_docs = len(md_files)
     prep_futures: dict[str, Any] = {}
     prep_results: dict[str, dict[str, Any]] = {}
@@ -2102,10 +2365,43 @@ def build_reference_index(
                     "refs_with_doi": int(max(0, refs_with_doi)),
                     "refs_crossref_ok": int(max(0, refs_crossref_ok)),
                     "refs_source_map_ok": int(max(0, refs_source_map_ok)),
+                    "stats": dict(crossref_stats),
                 }
             )
         except Exception:
             return
+
+    def _record_ref_stats(refs: Any) -> None:
+        nonlocal refs_total, refs_with_doi, refs_with_title, refs_with_authors, refs_with_venue
+        nonlocal refs_metadata_ready, refs_unresolved, refs_crossref_ok, refs_source_map_ok
+        if not isinstance(refs, dict):
+            return
+        refs_total += len(refs)
+        for rv in refs.values():
+            if not isinstance(rv, dict):
+                continue
+            doi = str(rv.get("doi") or "").strip()
+            title = str(rv.get("title") or "").strip()
+            authors = str(rv.get("authors") or "").strip()
+            venue = str(rv.get("venue") or "").strip()
+            crossref_ok = bool(rv.get("crossref_ok"))
+            if doi:
+                refs_with_doi += 1
+            if title:
+                refs_with_title += 1
+            if authors:
+                refs_with_authors += 1
+            if venue:
+                refs_with_venue += 1
+            if doi and title and authors and venue:
+                refs_metadata_ready += 1
+            if (not doi) and (not crossref_ok):
+                refs_unresolved += 1
+            if crossref_ok:
+                refs_crossref_ok += 1
+            mm = str(rv.get("match_method") or "").strip()
+            if mm.startswith("source_work_reference"):
+                refs_source_map_ok += 1
 
     _emit_progress("prepare", docs_done=0, current="")
     if (not bool(quality_gate)) and int(doc_prepare_workers) > 1 and total_docs > 1:
@@ -2131,6 +2427,45 @@ def build_reference_index(
                 continue
             _emit_progress("doc_start", docs_done=max(0, doc_i - 1), current=p.name)
 
+            try:
+                sha1 = compute_file_sha1(p)
+            except Exception:
+                sha1 = ""
+
+            prev_doc = prev_docs.get(src_key) if isinstance(prev_docs, dict) else None
+            prev_refs_obj = prev_doc.get("refs") if isinstance(prev_doc, dict) else None
+            prev_needs_rebuild_for_enrich = False
+            if need_crossref_enrich and isinstance(prev_refs_obj, dict):
+                prev_unresolved, _prev_sparse = _assess_doc_crossref_enrichment(prev_refs_obj)
+                # Rebuild only when promising references remain unresolved.
+                # Sparse-but-resolved docs are often already good enough and re-running can regress quality.
+                prev_needs_rebuild_for_enrich = bool(int(prev_unresolved) > 0)
+            prev_crossref_retry_due = _doc_crossref_retry_due(prev_doc, now_ts=time.time())
+            prev_has_quality_gate = bool(
+                isinstance(prev_doc, dict)
+                and isinstance(prev_doc.get("quality_gate"), dict)
+                and str(prev_doc.get("index_status") or "").strip()
+            )
+            if (
+                incremental
+                and isinstance(prev_doc, dict)
+                and str(prev_doc.get("sha1") or "") == str(sha1 or "")
+                and isinstance(prev_refs_obj, dict)
+                and ((not bool(quality_gate)) or prev_has_quality_gate)
+                and (
+                    (not need_crossref_enrich)
+                    or (not prev_needs_rebuild_for_enrich)
+                    or (not prev_crossref_retry_due)
+                )
+            ):
+                docs_out[src_key] = prev_doc
+                docs_reused += 1
+                if prev_needs_rebuild_for_enrich and (not prev_crossref_retry_due):
+                    _stat_inc(crossref_stats, "docs_retry_suppressed")
+                _record_ref_stats(prev_refs_obj)
+                _emit_progress("doc_done", docs_done=doc_i, current=p.name)
+                continue
+
             quality_fields: dict[str, Any] = {}
             if bool(quality_gate):
                 try:
@@ -2151,10 +2486,10 @@ def build_reference_index(
                     _emit_progress("doc_done", docs_done=doc_i, current=p.name)
                     continue
 
-            try:
-                sha1 = compute_file_sha1(p)
-            except Exception:
-                sha1 = ""
+                try:
+                    sha1 = compute_file_sha1(p)
+                except Exception:
+                    sha1 = ""
 
             prepped: dict[str, Any] = {}
             if src_key in prep_results:
@@ -2176,47 +2511,6 @@ def build_reference_index(
             source_ref_rows_prepped = prepped.get("source_ref_rows")
             if not isinstance(source_ref_rows_prepped, list):
                 source_ref_rows_prepped = []
-
-            prev_doc = prev_docs.get(src_key) if isinstance(prev_docs, dict) else None
-            prev_needs_rebuild_for_enrich = False
-            if need_crossref_enrich and isinstance(prev_doc, dict):
-                prev_refs_obj = prev_doc.get("refs")
-                prev_unresolved, _prev_sparse = _assess_doc_crossref_enrichment(prev_refs_obj if isinstance(prev_refs_obj, dict) else None)
-                # Rebuild only when promising references remain unresolved.
-                # Sparse-but-resolved docs are often already good enough and re-running can regress quality.
-                prev_needs_rebuild_for_enrich = bool(int(prev_unresolved) > 0)
-            if (
-                incremental
-                and isinstance(prev_doc, dict)
-                and str(prev_doc.get("sha1") or "") == str(sha1 or "")
-                and isinstance(prev_doc.get("refs"), dict)
-                and (
-                    (not need_crossref_enrich)
-                    or (not prev_needs_rebuild_for_enrich)
-                )
-            ):
-                if quality_fields:
-                    merged_prev_doc = dict(prev_doc)
-                    merged_prev_doc.update(quality_fields)
-                    docs_out[src_key] = merged_prev_doc
-                else:
-                    docs_out[src_key] = prev_doc
-                docs_reused += 1
-                refs = prev_doc.get("refs")
-                if isinstance(refs, dict):
-                    refs_total += len(refs)
-                    for rv in refs.values():
-                        if not isinstance(rv, dict):
-                            continue
-                        if str(rv.get("doi") or "").strip():
-                            refs_with_doi += 1
-                        if bool(rv.get("crossref_ok")):
-                            refs_crossref_ok += 1
-                        mm = str(rv.get("match_method") or "").strip()
-                        if mm.startswith("source_work_reference"):
-                            refs_source_map_ok += 1
-                _emit_progress("doc_done", docs_done=doc_i, current=p.name)
-                continue
 
             if not md_head:
                 md_head = _read_text_head(p, max_bytes=220_000)
@@ -2252,6 +2546,8 @@ def build_reference_index(
             unresolved_promising = 0
             sparse_promising = 0
             crossref_active_source = bool(crossref_enabled)
+            doc_crossref_attempted = False
+            doc_crossref_attempt_ts = 0.0
 
             source_doi = _clean_doi_for_url(source_doi_prepped)
             source_ref_rows = list(source_ref_rows_prepped or [])
@@ -2260,7 +2556,11 @@ def build_reference_index(
                 if pdf_candidate is not None:
                     cm = lib_citation_meta_map.get(_norm_path_key(pdf_candidate))
                     if isinstance(cm, dict):
-                        source_doi = _best_source_doi_from_citation_meta(cm, crossref_enabled=crossref_active_source)
+                        source_doi = _best_source_doi_from_citation_meta(
+                            cm,
+                            crossref_enabled=crossref_active_source,
+                            stats=crossref_stats,
+                        )
             if not source_doi:
                 source_doi = _extract_source_doi_from_md_head(md_head)
             if not source_doi:
@@ -2269,6 +2569,7 @@ def build_reference_index(
                     md_head,
                     cache,
                     crossref_enabled=crossref_active_source,
+                    stats=crossref_stats,
                 )
             if source_doi and source_ref_rows:
                 src_cache = cache.get("source_refs")
@@ -2279,21 +2580,29 @@ def build_reference_index(
                 if src_key_rows and (src_key_rows not in src_cache):
                     src_cache[src_key_rows] = source_ref_rows
             if (not source_ref_rows) and source_doi:
+                if crossref_active_source:
+                    doc_crossref_attempted = True
+                    doc_crossref_attempt_ts = doc_crossref_attempt_ts or time.time()
                 source_ref_rows = _load_source_reference_rows(
                     source_doi,
                     cache,
                     crossref_enabled=crossref_active_source,
+                    stats=crossref_stats,
                 )
             if int(doi_prefetch_workers) > 1:
                 crossref_active_prefetch = bool(
                     crossref_enabled and ((time.monotonic() - crossref_start_ts) <= float(max(5.0, crossref_time_budget_s)))
                 )
+                if crossref_active_prefetch:
+                    doc_crossref_attempted = True
+                    doc_crossref_attempt_ts = doc_crossref_attempt_ts or time.time()
                 _prefetch_doi_meta_parallel(
                     ref_map,
                     cache,
                     crossref_enabled=crossref_active_prefetch,
                     max_workers=int(max(1, doi_prefetch_workers)),
                     max_prefetch=int(max(10, int(doi_prefetch_workers) * 40)),
+                    stats=crossref_stats,
                 )
                 if crossref_enabled and (not crossref_budget_exhausted):
                     if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
@@ -2304,6 +2613,9 @@ def build_reference_index(
                 crossref_active_prefetch = bool(
                     crossref_enabled and ((time.monotonic() - crossref_start_ts) <= float(max(5.0, crossref_time_budget_s)))
                 )
+                if crossref_active_prefetch:
+                    doc_crossref_attempted = True
+                    doc_crossref_attempt_ts = doc_crossref_attempt_ts or time.time()
                 _prefetch_reference_meta_parallel(
                     ref_map,
                     cache,
@@ -2311,6 +2623,7 @@ def build_reference_index(
                     enable_title_lookup=bool(enable_title_lookup),
                     max_workers=int(max(1, doi_prefetch_workers)),
                     max_prefetch=int(max(10, int(doi_prefetch_workers) * 50)),
+                    stats=crossref_stats,
                 )
                 if crossref_enabled and (not crossref_budget_exhausted):
                     if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
@@ -2403,17 +2716,20 @@ def build_reference_index(
                             ),
                             "match_score": 0.98,
                         }
-                        refs_source_map_ok += 1
     
                 if not isinstance(meta, dict):
                     crossref_active_now = bool(
                         crossref_enabled and ((time.monotonic() - crossref_start_ts) <= float(max(5.0, crossref_time_budget_s)))
                     )
+                    if crossref_active_now:
+                        doc_crossref_attempted = True
+                        doc_crossref_attempt_ts = doc_crossref_attempt_ts or time.time()
                     meta, doi_hint = _lookup_crossref_meta_for_entry(
                         raw,
                         cache,
                         crossref_enabled=crossref_active_now,
                         enable_title_lookup=bool(enable_title_lookup),
+                        stats=crossref_stats,
                     )
                     if crossref_enabled and (not crossref_budget_exhausted):
                         if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
@@ -2424,11 +2740,14 @@ def build_reference_index(
                 )
                 if isinstance(meta, dict) and str(meta.get("match_method") or "").startswith("source_work_reference"):
                     if crossref_active_now and _reference_meta_is_sparse(meta):
+                        doc_crossref_attempted = True
+                        doc_crossref_attempt_ts = doc_crossref_attempt_ts or time.time()
                         supplemental_meta, doi_hint2 = _lookup_crossref_meta_for_entry(
                             raw,
                             cache,
                             crossref_enabled=True,
                             enable_title_lookup=bool(enable_title_lookup),
+                            stats=crossref_stats,
                         )
                         if str(doi_hint2 or "").strip() and (not str(doi_hint or "").strip()):
                             doi_hint = doi_hint2
@@ -2464,11 +2783,22 @@ def build_reference_index(
                             doi_cache = {}
                             cache["doi"] = doi_cache
                         by_doi = None
+                        doi_backfill_skip_miss = False
                         if needs_backfill and doi_key:
                             cached_doi = doi_cache.get(doi_key)
-                            if isinstance(cached_doi, dict) and cached_doi:
+                            if _is_crossref_meta_cache_hit(cached_doi):
+                                _stat_inc(crossref_stats, "crossref_cache_hits")
+                                _stat_inc(crossref_stats, "doi_cache_hits")
                                 by_doi = cached_doi
-                        if (not isinstance(by_doi, dict)) and needs_backfill and crossref_enabled:
+                            elif _is_fresh_crossref_cache_miss(cached_doi):
+                                _stat_inc(crossref_stats, "crossref_negative_hits")
+                                _stat_inc(crossref_stats, "doi_negative_hits")
+                                doi_backfill_skip_miss = True
+                        if (not isinstance(by_doi, dict)) and needs_backfill and crossref_enabled and (not doi_backfill_skip_miss):
+                            _stat_inc(crossref_stats, "crossref_network_attempts")
+                            _stat_inc(crossref_stats, "doi_network_attempts")
+                            doc_crossref_attempted = True
+                            doc_crossref_attempt_ts = doc_crossref_attempt_ts or time.time()
                             by_doi = fetch_best_crossref_meta(
                                 query_title=("" if noisy_title else title0),
                                 doi_hint=doi,
@@ -2477,6 +2807,10 @@ def build_reference_index(
                             )
                             if isinstance(by_doi, dict) and by_doi and doi_key:
                                 doi_cache[doi_key] = by_doi
+                            elif doi_key:
+                                doi_cache[doi_key] = _crossref_cache_miss("doi_backfill_not_found")
+                                _stat_inc(crossref_stats, "crossref_negative_writes")
+                                _stat_inc(crossref_stats, "doi_negative_writes")
                             if isinstance(by_doi, dict) and by_doi:
                                 merged = dict(meta) if isinstance(meta, dict) else {}
                                 if noisy_title or (not str(merged.get("title") or "").strip()):
@@ -2573,6 +2907,14 @@ def build_reference_index(
             if need_crossref_enrich:
                 unresolved_promising, sparse_promising = _assess_doc_crossref_enrichment(refs_obj)
             crossref_enriched_doc = (not need_crossref_enrich) or _doc_crossref_enriched(refs_obj)
+            crossref_last_attempt_at = 0.0
+            if need_crossref_enrich and doc_crossref_attempted:
+                crossref_last_attempt_at = float(doc_crossref_attempt_ts or time.time())
+            elif isinstance(prev_doc, dict):
+                try:
+                    crossref_last_attempt_at = float(prev_doc.get("crossref_last_attempt_at") or 0.0)
+                except Exception:
+                    crossref_last_attempt_at = 0.0
     
             built_doc = {
                 "path": src_path,
@@ -2581,6 +2923,10 @@ def build_reference_index(
                 "sha1": sha1,
                 "source_doi": source_doi,
                 "crossref_enriched": bool(crossref_enriched_doc),
+                "crossref_last_attempt_at": float(crossref_last_attempt_at),
+                "crossref_unresolved_promising": int(unresolved_promising),
+                "crossref_sparse_promising": int(sparse_promising),
+                "crossref_retry_ttl_s": int(_reference_sync_retry_ttl_s()) if need_crossref_enrich else 0,
                 "reference_catalog_status": str(reference_catalog.get("tail_continuity_status") or "").strip(),
                 "reference_catalog_ref_count": int(reference_catalog.get("ref_count") or 0),
                 "reference_catalog_missing_numbers": list(reference_catalog.get("missing_numbers") or []),
@@ -2595,33 +2941,27 @@ def build_reference_index(
                 and isinstance(prev_doc.get("refs"), dict)
                 and _prefer_previous_doc_refs(prev_doc.get("refs"), refs_obj)
             ):
-                docs_out[src_key] = prev_doc
+                kept_doc = dict(prev_doc)
+                if quality_fields:
+                    kept_doc.update(quality_fields)
+                if need_crossref_enrich and doc_crossref_attempted:
+                    prev_unresolved, prev_sparse = _assess_doc_crossref_enrichment(
+                        prev_doc.get("refs") if isinstance(prev_doc.get("refs"), dict) else None
+                    )
+                    kept_doc["crossref_last_attempt_at"] = float(doc_crossref_attempt_ts or time.time())
+                    kept_doc["crossref_unresolved_promising"] = int(prev_unresolved)
+                    kept_doc["crossref_sparse_promising"] = int(prev_sparse)
+                    kept_doc["crossref_retry_ttl_s"] = int(_reference_sync_retry_ttl_s())
+                docs_out[src_key] = kept_doc
                 docs_reused += 1
-                prev_refs = prev_doc.get("refs")
-                if isinstance(prev_refs, dict):
-                    refs_total += len(prev_refs)
-                    for rv in prev_refs.values():
-                        if not isinstance(rv, dict):
-                            continue
-                        if str(rv.get("doi") or "").strip():
-                            refs_with_doi += 1
-                        if bool(rv.get("crossref_ok")):
-                            refs_crossref_ok += 1
-                        mm = str(rv.get("match_method") or "").strip()
-                        if mm.startswith("source_work_reference"):
-                            refs_source_map_ok += 1
+                _record_ref_stats(prev_doc.get("refs"))
                 _emit_progress("doc_done", docs_done=doc_i, current=p.name)
                 continue
     
             docs_out[src_key] = built_doc
             docs_updated += 1
-            refs_total += len(refs_obj)
-            for rv in refs_obj.values():
-                if str(rv.get("doi") or "").strip():
-                    refs_with_doi += 1
-                if bool(rv.get("crossref_ok")):
-                    refs_crossref_ok += 1
-                _emit_progress("doc_done", docs_done=doc_i, current=p.name)
+            _record_ref_stats(refs_obj)
+            _emit_progress("doc_done", docs_done=doc_i, current=p.name)
     finally:
         if prep_executor is not None:
             try:
@@ -2641,7 +2981,12 @@ def build_reference_index(
     _crossref_cache_save(out_dir, cache)
     _emit_progress("done", docs_done=total_docs, current="")
 
-    return {
+    elapsed_s = max(0.0, time.time() - run_started_ts)
+    metadata_missing_doi = max(0, refs_total - refs_with_doi)
+    metadata_missing_title = max(0, refs_total - refs_with_title)
+    metadata_missing_authors = max(0, refs_total - refs_with_authors)
+    metadata_missing_venue = max(0, refs_total - refs_with_venue)
+    out_stats: dict[str, Any] = {
         "docs_total": len(md_files),
         "docs_indexed": len(docs_out),
         "docs_updated": int(docs_updated),
@@ -2649,9 +2994,21 @@ def build_reference_index(
         "docs_quality_blocked": int(docs_quality_blocked),
         "refs_total": int(refs_total),
         "refs_with_doi": int(refs_with_doi),
+        "refs_with_title": int(refs_with_title),
+        "refs_with_authors": int(refs_with_authors),
+        "refs_with_venue": int(refs_with_venue),
+        "refs_metadata_ready": int(refs_metadata_ready),
+        "refs_missing_doi": int(metadata_missing_doi),
+        "refs_missing_title": int(metadata_missing_title),
+        "refs_missing_authors": int(metadata_missing_authors),
+        "refs_missing_venue": int(metadata_missing_venue),
+        "refs_unresolved": int(refs_unresolved),
         "refs_crossref_ok": int(refs_crossref_ok),
         "refs_source_map_ok": int(refs_source_map_ok),
         "crossref_enabled": 1 if bool(crossref_enabled) else 0,
         "crossref_budget_exhausted": 1 if bool(crossref_budget_exhausted) else 0,
+        "elapsed_s": round(float(elapsed_s), 3),
     }
+    out_stats.update({k: int(v) for k, v in crossref_stats.items()})
+    return out_stats
 

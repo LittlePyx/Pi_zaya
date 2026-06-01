@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from kb.store import compute_doc_id, doc_chunks_path, load_all_chunks, load_docs_index, write_doc_chunks
+from kb.store import compute_doc_id, doc_chunks_path, load_all_chunks, load_docs_index, save_docs_index, write_doc_chunks
 
 
 def _good_markdown() -> str:
@@ -40,8 +40,12 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     bad_dir.mkdir(parents=True)
     good_md = good_dir / "good.en.md"
     bad_md = bad_dir / "bad.en.md"
+    quality_report = good_dir / "quality_report.md"
+    legacy_output = good_dir / "output.md"
     good_md.write_text(_good_markdown(), encoding="utf-8")
     bad_md.write_text("# Bad Paper\n\n![missing](assets/missing.png)\n\n\\u951b\n", encoding="utf-8")
+    quality_report.write_text("# Markdown Quality Analysis Report\n\nThis is not a paper.", encoding="utf-8")
+    legacy_output.write_text("# Legacy output\n\nThis duplicate should not be indexed.", encoding="utf-8")
 
     proc = subprocess.run(
         [sys.executable, "ingest.py", "--src", str(src), "--db", str(db_dir)],
@@ -55,8 +59,12 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     docs = load_docs_index(db_dir)
     good_id = compute_doc_id(good_md)
     bad_id = compute_doc_id(bad_md)
+    quality_report_id = compute_doc_id(quality_report)
+    legacy_output_id = compute_doc_id(legacy_output)
     assert docs[good_id]["index_status"] == "ready"
     assert docs[bad_id]["index_status"] == "quality_blocked"
+    assert quality_report_id not in docs
+    assert legacy_output_id not in docs
     assert doc_chunks_path(db_dir, good_id).exists()
     assert not doc_chunks_path(db_dir, bad_id).exists()
     first_chunk = json.loads(doc_chunks_path(db_dir, good_id).read_text(encoding="utf-8").splitlines()[0])
@@ -66,3 +74,57 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     assert all(chunk["meta"]["source_path"] != str(bad_md) for chunk in loaded)
     assert any(chunk["meta"]["source_path"] == str(good_md) for chunk in loaded)
     assert "quality_blocked: 1" in proc.stdout
+
+
+def test_ingest_prune_removes_existing_nonpaper_artifact_docs(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[2]
+    src = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    paper_dir = src / "paper"
+    paper_dir.mkdir(parents=True)
+    db_dir.mkdir(parents=True)
+    good_md = paper_dir / "paper.en.md"
+    quality_report = paper_dir / "quality_report.md"
+    legacy_output = paper_dir / "output.md"
+    good_md.write_text(_good_markdown(), encoding="utf-8")
+    quality_report.write_text("# Markdown Quality Analysis Report\n\nThis is not a paper.", encoding="utf-8")
+    legacy_output.write_text("# Legacy output\n\nThis duplicate should not be indexed.", encoding="utf-8")
+
+    quality_report_id = compute_doc_id(quality_report)
+    legacy_output_id = compute_doc_id(legacy_output)
+    save_docs_index(
+        db_dir,
+        {
+            quality_report_id: {
+                "doc_id": quality_report_id,
+                "path": str(quality_report),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+            legacy_output_id: {
+                "doc_id": legacy_output_id,
+                "path": str(legacy_output),
+                "num_chunks": 1,
+                "index_status": "ready",
+            },
+        },
+    )
+    write_doc_chunks(db_dir, quality_report_id, [{"text": "stale quality report", "meta": {"source_path": str(quality_report)}}])
+    write_doc_chunks(db_dir, legacy_output_id, [{"text": "stale output", "meta": {"source_path": str(legacy_output)}}])
+
+    proc = subprocess.run(
+        [sys.executable, "ingest.py", "--src", str(src), "--db", str(db_dir), "--prune"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    docs = load_docs_index(db_dir)
+    assert compute_doc_id(good_md) in docs
+    assert quality_report_id not in docs
+    assert legacy_output_id not in docs
+    assert not doc_chunks_path(db_dir, quality_report_id).exists()
+    assert not doc_chunks_path(db_dir, legacy_output_id).exists()
+    assert "removed: 2" in proc.stdout

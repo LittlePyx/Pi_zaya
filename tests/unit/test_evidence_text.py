@@ -41,3 +41,33 @@ def test_pick_readable_evidence_text_keeps_complete_supporting_sentence_over_cap
     assert picked.startswith("Deep learning models improve")
     assert "Figure 1" not in picked
     assert "details are discussed later" not in picked
+
+
+def test_pick_readable_evidence_text_keeps_cited_sentence_with_commas() -> None:
+    raw = (
+        "[184] Compared to traditional reconstruction methods, the network achieved large advancements "
+        "in both the image quality and reconstruction speed, successfully realizing hyperspectral SPI."
+    )
+
+    picked = pick_readable_evidence_text(
+        raw,
+        claim="PILN has a speed trade-off compared with hardware-accelerated SPI.",
+        heading="Color Single-Pixel Imaging",
+        title="Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination",
+    )
+
+    assert picked.startswith("[184] Compared to traditional reconstruction methods")
+    assert "hyperspectral SPI" in picked
+
+
+def test_pick_readable_evidence_text_trims_short_tail_phrase_before_ellipsis() -> None:
+    raw = (
+        "This paper proposes a novel method for recovering dynamic 3D scene representations "
+        "from a single snapshot compressive image, which is the first to introduce an dynamic "
+        "explicit representation in this..."
+    )
+
+    picked = pick_readable_evidence_text(raw, claim="dynamic 3D scene representation")
+
+    assert picked.endswith("explicit representation...")
+    assert "in this..." not in picked

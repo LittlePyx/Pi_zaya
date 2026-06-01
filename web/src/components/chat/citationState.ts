@@ -28,6 +28,8 @@ export interface CitationCardView {
 
 export interface CiteDetail {
   num: number
+  displayNum?: number
+  displayNums?: number[]
   anchor: string
   sourceName: string
   sourcePath: string
@@ -195,6 +197,23 @@ export function cleanCitationDisplayText(value: string): string {
 
 function looseTokens(value: string): string[] {
   return Array.from(String(value || '').matchAll(/[A-Za-z0-9]+|[\u4e00-\u9fff]+/g)).map((match) => match[0].toLowerCase())
+}
+
+function substantiallySameText(left: string, right: string): boolean {
+  const a = cleanCitationDisplayText(left).replace(/\s+/g, ' ').toLowerCase()
+  const b = cleanCitationDisplayText(right).replace(/\s+/g, ' ').toLowerCase()
+  if (!a || !b) return false
+  if (a === b) return true
+  if (a.length >= 36 && b.includes(a)) return true
+  if (b.length >= 36 && a.includes(b)) return true
+  const at = new Set(looseTokens(a).filter((token) => token.length >= 2))
+  const bt = new Set(looseTokens(b).filter((token) => token.length >= 2))
+  if (at.size < 5 || bt.size < 5) return false
+  let overlap = 0
+  for (const token of at) {
+    if (bt.has(token)) overlap += 1
+  }
+  return overlap / Math.min(at.size, bt.size) >= 0.82
 }
 
 function sourceTitleCandidate(value: string): string {
@@ -469,18 +488,23 @@ function takeawayFromEnglishEvidence(evidence: string): string {
 function deriveSystemATakeaway(
   detail: Pick<CiteDetail, 'answerClaim' | 'cardClaim' | 'cardEvidence' | 'evidenceQuote' | 'summaryLine' | 'headingPath'>,
 ): string {
-  const claim = trimTakeaway(detail.cardClaim || detail.answerClaim || '')
-  if (claim && hasCjkText(claim) && !looksLowValueTakeaway(claim)) return claim
-
   const evidence = detail.cardEvidence || detail.evidenceQuote || detail.summaryLine || ''
   const evidenceTakeaway = trimTakeaway(takeawayFromEnglishEvidence(evidence))
-  if (evidenceTakeaway && !looksLowValueTakeaway(evidenceTakeaway)) return evidenceTakeaway
+  const claim = trimTakeaway(detail.cardClaim || detail.answerClaim || '')
+  if (
+    evidenceTakeaway
+    && !looksLowValueTakeaway(evidenceTakeaway)
+    && !substantiallySameText(evidenceTakeaway, claim)
+  ) {
+    return evidenceTakeaway
+  }
 
   const heading = trimTakeaway(detail.headingPath || '', 70)
   if (heading && hasCjkText(heading) && evidence) {
     const candidate = `这条证据对应“${heading.replace(/[。！？?]$/g, '')}”这一部分的关键表述。`
     if (!looksLowValueTakeaway(candidate)) return candidate
   }
+  if (claim && hasCjkText(claim) && !looksLowValueTakeaway(claim)) return claim
   return ''
 }
 
@@ -853,6 +877,8 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
   if (!anchor) return null
   const detail: CiteDetail = {
     num: pickNumber(rec, 'num'),
+    displayNum: pickNumber(rec, 'display_num', 'displayNum', 'visible_num', 'visibleNum'),
+    displayNums: pickNumberArray(rec, 'display_nums', 'displayNums', 'visible_nums', 'visibleNums'),
     anchor,
     sourceName: pickText(rec, 'source_name', 'sourceName'),
     sourcePath: pickText(rec, 'source_path', 'sourcePath'),
@@ -1030,6 +1056,9 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
   }
   if (!detail.doiUrl && detail.doi) {
     detail.doiUrl = doiUrlFrom(detail.doi)
+  }
+  if (Number(detail.displayNum || 0) > 0 && (detail.displayNums || []).length <= 0) {
+    detail.displayNums = [Number(detail.displayNum || 0)]
   }
   if (!detail.externalDoiUrl && detail.externalDoi) {
     detail.externalDoiUrl = doiUrlFrom(detail.externalDoi)
@@ -1674,7 +1703,8 @@ function compactSourceChipLabel(
 
 export function citationInlineLabel(detail: CiteDetail, options?: InlineCitationLabelOptions): string {
   const includeSource = options?.includeSource ?? true
-  const n = detail.num > 0 ? String(detail.num) : '?'
+  const visibleNum = !detail.isInpaper && Number(detail.displayNum || 0) > 0 ? Number(detail.displayNum || 0) : detail.num
+  const n = visibleNum > 0 ? String(visibleNum) : '?'
   if (!includeSource) return detail.isInpaper ? `[R${n}]` : n
   const sourceTag = compactSourceChipLabel(detail.sourceName, detail.sourcePath, options)
   if (!sourceTag) return n

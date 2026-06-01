@@ -8,18 +8,14 @@
 
 - `server.py` + `web/`（FastAPI + React）
 
-兼容保留入口（旧版）：
-
-- `app.py`（Streamlit）
-
 Windows 下可直接用脚本：
 
 ```powershell
-# 新版前后端（推荐）
+# 前后端开发模式（推荐）
 .\run_new.ps1 -StopExisting
 
-# 旧版兼容入口
-.\run_old.ps1
+# run.ps1 现在也会转发到 run_new.ps1
+.\run.ps1 -StopExisting
 ```
 
 说明：
@@ -27,6 +23,7 @@ Windows 下可直接用脚本：
 - `run_new.ps1` 默认不会自动安装依赖，需要时加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
 - `run_new.ps1` 默认开启后端 `uvicorn --reload`；若你想用单进程模式，可加 `-NoBackendReload`。
 - `run_new.ps1` 默认端口：后端 `8000`，前端 `5173`。
+- 旧版 Streamlit 入口已移除，开发和验收都以 FastAPI + React 为准。
 
 ## 2. 你能做什么
 

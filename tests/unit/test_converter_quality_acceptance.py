@@ -71,6 +71,51 @@ def test_summarize_conversion_quality_counts_research_paper_surfaces(tmp_path):
     assert metrics.body_citation_expanded_index_count == 2
 
 
+def test_page_marker_quality_allows_textless_pdf_page_skips(tmp_path):
+    md_path = tmp_path / "paper.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Paper",
+                "<!-- kb_page: 2 -->",
+                "Text before an image-only source page.",
+                "<!-- kb_page: 5 -->",
+                "Text resumes after skipped source pages.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.page_marker_count == 3
+    assert metrics.page_marker_gap_count == 0
+
+
+def test_page_marker_quality_flags_duplicate_or_out_of_order_markers(tmp_path):
+    md_path = tmp_path / "paper.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Paper",
+                "<!-- kb_page: 3 -->",
+                "Later text.",
+                "<!-- kb_page: 3 -->",
+                "Duplicate marker.",
+                "<!-- kb_page: 2 -->",
+                "Out of order marker.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.page_marker_gap_count == 2
+
+
 def test_evaluate_conversion_quality_accepts_good_markdown(tmp_path):
     assets = tmp_path / "assets"
     assets.mkdir()

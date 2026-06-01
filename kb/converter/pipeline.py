@@ -103,6 +103,8 @@ from .heuristics import (
     _suggest_heading_level,
     _is_non_body_metadata_text,
     _looks_like_author_name_line,
+    _page_has_references_heading,
+    _page_looks_like_references_content,
 )
 from .tables import _is_markdown_table_sane, table_text_to_markdown
 from .block_classifier import _looks_like_math_block, _looks_like_code_block
@@ -151,6 +153,7 @@ from .reference_page_vl import (
     merge_reference_crop_markdowns,
     build_reference_column_crop_rects,
     convert_references_page_with_column_vl,
+    reference_markdown_entry_count,
 )
 from .formula_markdown import (
     merge_split_formulas,
@@ -166,7 +169,9 @@ from .reference_markdown import (
     fix_references_format,
     format_references_block,
     format_single_reference,
+    normalize_references_page_text,
 )
+from kb.reference_index import extract_references_map_from_md
 from .heading_markdown import fix_heading_structure
 from .llm_math_cleanup import llm_fix_inline_formulas, llm_fix_display_math
 from .llm_reference_table_cleanup import (
@@ -317,6 +322,11 @@ class PDFConverter:
                 final_md = self._llm_polish_references(final_md)
             except Exception as e:
                 print(f"[WARN] _llm_polish_references failed, keep previous markdown: {e}", flush=True)
+        source_repair_result: dict[str, Any] = {}
+        try:
+            final_md, source_repair_result = self._recover_references_from_pdf_if_needed(final_md, doc)
+        except Exception as e:
+            print(f"[WARN] PDF reference recovery skipped: {e}", flush=True)
         try:
             # Run one final text-level normalization after image/caption/title repairs.
             # Several repair stages can legitimately reinsert blank lines or raw caption
@@ -339,6 +349,7 @@ class PDFConverter:
             final_md, auto_repair_result = self._auto_repair_final_markdown(final_md, out_file=out_file)
         except Exception as e:
             print(f"[WARN] conversion quality auto-repair skipped: {e}", flush=True)
+        auto_repair_result = self._merge_auto_repair_results(source_repair_result, auto_repair_result)
 
         # Write output
         out_file.write_text(final_md, encoding="utf-8")
@@ -347,6 +358,7 @@ class PDFConverter:
                 out_file,
                 auto_repair_result=auto_repair_result,
                 auto_repair_enabled=self._quality_auto_repair_enabled(),
+                source_pdf_path=self.cfg.pdf_path,
             )
             print(f"[OK] conversion quality result saved to {Path(sidecar.get('md_path') or out_file).parent / 'conversion_quality_result.json'}", flush=True)
         except Exception as e:
@@ -837,10 +849,189 @@ class PDFConverter:
             raw = "1"
         return raw in {"1", "true", "yes", "y", "on"}
 
+    @staticmethod
+    def _reference_recovery_min_entries() -> int:
+        try:
+            raw = str(os.environ.get("KB_PDF_REFERENCE_RECOVERY_MIN_ENTRIES", "2") or "2").strip()
+            value = int(raw)
+        except Exception:
+            value = 2
+        return max(1, min(10, value))
+
+    @staticmethod
+    def _references_recovery_enabled() -> bool:
+        try:
+            raw = str(os.environ.get("KB_PDF_REFERENCE_RECOVERY_FROM_PDF", "1") or "1").strip().lower()
+        except Exception:
+            raw = "1"
+        return raw in {"1", "true", "yes", "y", "on"}
+
+    @staticmethod
+    def _references_heading_level(line: str) -> int:
+        stripped = str(line or "").strip()
+        match = re.match(r"^(#{1,6})\s+(?:references|bibliography)\b", stripped, flags=re.IGNORECASE)
+        if match:
+            return len(match.group(1))
+        if re.match(r"^(?:references|bibliography)\s*$", stripped, flags=re.IGNORECASE):
+            return 1
+        return 0
+
+    @classmethod
+    def _replace_or_append_references_section(
+        cls,
+        md: str,
+        references_md: str,
+        *,
+        force_replace: bool = False,
+    ) -> str:
+        text = str(md or "").rstrip()
+        refs = str(references_md or "").strip()
+        if not refs:
+            return text
+        lines = text.splitlines()
+        for idx, line in enumerate(lines):
+            level = cls._references_heading_level(line)
+            if level <= 0:
+                continue
+            end = len(lines)
+            for j in range(idx + 1, len(lines)):
+                stripped = str(lines[j] or "").strip()
+                if not stripped.startswith("#"):
+                    continue
+                heading_match = re.match(r"^(#{1,6})\s+", stripped)
+                if heading_match and len(heading_match.group(1)) <= level:
+                    end = j
+                    break
+            current_refs = "\n".join(lines[idx:end])
+            if (
+                not force_replace
+                and reference_markdown_entry_count(current_refs) >= cls._reference_recovery_min_entries()
+            ):
+                return text
+            return "\n".join([*lines[:idx], *refs.splitlines(), *lines[end:]]).strip()
+        return (text + "\n\n" + refs).strip() if text else refs
+
+    def _extract_pdf_reference_markdown(self, doc) -> tuple[str, int]:
+        if doc is None:
+            return "", 0
+        page_texts: list[tuple[int, str]] = []
+        try:
+            total_pages = int(len(doc))
+        except Exception:
+            total_pages = 0
+        for page_index in range(max(0, total_pages)):
+            try:
+                page = doc.load_page(page_index)
+            except Exception:
+                try:
+                    page = doc[page_index]
+                except Exception:
+                    continue
+            try:
+                is_references_page = bool(
+                    _page_has_references_heading(page) or _page_looks_like_references_content(page)
+                )
+            except Exception:
+                is_references_page = False
+            if not is_references_page:
+                continue
+            try:
+                page_text = str(page.get_text("text") or "").strip()
+            except Exception:
+                page_text = ""
+            if page_text:
+                page_texts.append((page_index + 1, page_text))
+        if not page_texts:
+            return "", 0
+        out_lines: list[str] = ["## References"]
+        for page_no, page_text in page_texts:
+            normalized = normalize_references_page_text(page_text)
+            if not self._references_heading_level(normalized.splitlines()[0] if normalized.splitlines() else ""):
+                normalized = "## References\n\n" + normalized.lstrip()
+            normalized = re.sub(r"(?im)^#{1,6}\s+References\b.*$", "## References", normalized.strip(), count=1)
+            page_formatted = fix_references_format(normalized).strip()
+            body_lines = page_formatted.splitlines()
+            if body_lines and self._references_heading_level(body_lines[0]):
+                body_lines = body_lines[1:]
+            body_lines = [line for line in body_lines if str(line or "").strip()]
+            if not body_lines:
+                continue
+            out_lines.extend(["", f"<!-- kb_page: {int(page_no)} -->", *body_lines])
+        formatted = "\n".join(out_lines)
+        entry_count = reference_markdown_entry_count(formatted)
+        if entry_count < self._reference_recovery_min_entries():
+            return "", entry_count
+        return formatted.strip(), entry_count
+
+    def _recover_references_from_pdf_if_needed(self, md: str, doc) -> tuple[str, dict[str, Any]]:
+        if not self._references_recovery_enabled():
+            return md, {}
+        before_count = reference_markdown_entry_count(md)
+        before_extracted = len(extract_references_map_from_md(md))
+        min_entries = self._reference_recovery_min_entries()
+        truncated = before_count >= min_entries and before_extracted < max(min_entries, int(before_count * 0.55))
+        if before_count >= min_entries and not truncated:
+            return md, {}
+        references_md, recovered_count = self._extract_pdf_reference_markdown(doc)
+        if not references_md or recovered_count < min_entries:
+            return md, {}
+        if recovered_count <= before_extracted:
+            return md, {}
+        if truncated and recovered_count < before_count:
+            return md, {}
+        fixed = self._replace_or_append_references_section(md, references_md, force_replace=truncated)
+        changed = fixed != str(md or "")
+        if changed:
+            print(
+                f"[OK] recovered References from PDF text layer "
+                f"({before_count} -> {recovered_count} entries)",
+                flush=True,
+            )
+        return fixed, {
+            "changed": bool(changed),
+            "unsafe": False,
+            "applied": ["pdf_reference_backfill"] if changed else [],
+            "issue_codes_before": ["missing_references"] if before_count <= 0 else (["reference_index_truncated"] if before_extracted < before_count else []),
+            "issue_codes_after": [],
+            "remaining_issue_codes": [],
+        }
+
+    @staticmethod
+    def _merge_auto_repair_results(*items: dict[str, Any]) -> dict[str, Any]:
+        clean_items = [dict(item or {}) for item in items if isinstance(item, dict) and item]
+        if not clean_items:
+            return {}
+        applied: list[str] = []
+        before: list[str] = []
+        after: list[str] = []
+        remaining: list[str] = []
+        regressions: list[str] = []
+        for item in clean_items:
+            for target, key in [
+                (applied, "applied"),
+                (before, "issue_codes_before"),
+                (after, "issue_codes_after"),
+                (remaining, "remaining_issue_codes"),
+                (regressions, "regression_reasons"),
+            ]:
+                for raw in list(item.get(key) or []):
+                    value = str(raw or "").strip()
+                    if value and value not in target:
+                        target.append(value)
+        return {
+            "changed": any(bool(item.get("changed")) for item in clean_items),
+            "unsafe": any(bool(item.get("unsafe")) for item in clean_items),
+            "applied": applied,
+            "issue_codes_before": before,
+            "issue_codes_after": after,
+            "remaining_issue_codes": remaining,
+            "regression_reasons": regressions,
+        }
+
     def _auto_repair_final_markdown(self, md: str, *, out_file: Path) -> tuple[str, dict[str, Any]]:
         if not self._quality_auto_repair_enabled():
             return md, {}
-        result = repair_markdown_text(out_file, md)
+        result = repair_markdown_text(out_file, md, source_pdf_path=self.cfg.pdf_path)
         if bool(result.get("changed")):
             applied = ", ".join(str(x) for x in list(result.get("applied") or []) if str(x or "").strip())
             print(f"[OK] conversion quality auto-repair applied: {applied or 'safe repairs'}", flush=True)

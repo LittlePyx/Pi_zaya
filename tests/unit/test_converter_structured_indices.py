@@ -59,6 +59,29 @@ def test_rebuild_structured_indices_emits_figure_index_without_preexisting_figur
     assert isinstance(figures, list) and len(figures) >= 1
 
 
+def test_rebuild_structured_indices_binds_generic_image_to_supplement_caption(tmp_path: Path):
+    md = """# Demo Supplement
+
+<!-- kb_page: 2 -->
+
+![Figure](./assets/page_2_fig_1.png)
+
+Fig. S1. Reflectances of the Ag and Cr coatings.
+"""
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+
+    figures = ((out.get("figure_index") or {}).get("figures") or [])
+    assert len(figures) == 1
+    fig = figures[0]
+    assert fig["paper_figure_number"] == 1
+    assert fig["asset_name"] == "page_2_fig_1.png"
+    assert fig["page"] == 2
+    assert "Reflectances of the Ag and Cr coatings" in fig["caption"]
+
+
 def test_rebuild_structured_indices_writes_empty_figure_index_when_no_figures(tmp_path: Path):
     md = """# Demo
 

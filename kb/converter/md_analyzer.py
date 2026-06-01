@@ -11,6 +11,41 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+_IMAGE_MD_RE = re.compile(r'!\[([^\]]*)\]\(([^)]*)\)')
+_CAPTION_PREFIX_RE = re.compile(
+    r'^\s*(?:#{1,6}\s+)?(?:\*{1,2}\s*)?'
+    r'(?:(?:Extended|Supplementary)\s+Data\s+)?'
+    r'(?:Fig\.?|Figure|Table|Algorithm)\s*'
+    r'(?:S?\d+[A-Za-z]?|[A-Z](?:\.\d+)?|[IVXLC]+)\b',
+    re.IGNORECASE,
+)
+
+
+def _strip_caption_markup(text: str) -> str:
+    out = str(text or "").strip()
+    out = re.sub(r'^\s*#{1,6}\s+', '', out)
+    out = out.strip()
+    out = re.sub(r'^\*{1,2}\s*', '', out)
+    out = re.sub(r'\s*\*{1,2}\s*$', '', out)
+    return out.strip()
+
+
+def _looks_like_caption_line(text: str) -> bool:
+    return bool(_CAPTION_PREFIX_RE.match(_strip_caption_markup(text)))
+
+
+def _image_alt_has_descriptive_caption(text: str) -> bool:
+    clean = _strip_caption_markup(text)
+    match = _CAPTION_PREFIX_RE.match(clean)
+    if not match:
+        return False
+    tail = clean[match.end() :].strip(" .:|-")
+    if len(re.findall(r"[A-Za-z]{3,}", tail)) >= 3:
+        return True
+    # Scientific figure alt text often uses panel labels plus a concise noun phrase.
+    return bool(len(tail) >= 28 and re.search(r"[A-Za-z]{3,}", tail))
+
+
 @dataclass
 class QualityIssue:
     """Represents a quality issue found in the markdown."""
@@ -307,17 +342,21 @@ class MarkdownAnalyzer:
         """Analyze figure and table captions."""
         captions_found = []
         images_found = []
+        images_with_caption_alt = set()
         
         for i, line in enumerate(lines, 1):
             # Check for images
-            if re.search(r'!\[.*?\]\(.*?\)', line):
+            image_matches = list(_IMAGE_MD_RE.finditer(line))
+            if image_matches:
                 images_found.append(i)
+                if any(_image_alt_has_descriptive_caption(match.group(1) or "") for match in image_matches):
+                    images_with_caption_alt.add(i)
             
-            # Check for captions (italicized text starting with Fig./Table)
-            if re.match(r'^\s*\*.*?(?:Fig\.|Figure|Table|Algorithm)\s*(?:\d+|[IVXLC]+)', line, re.IGNORECASE):
+            # Check for captions (bold/italic/plain, including Extended Data figures).
+            if _looks_like_caption_line(line) and re.match(r'^\s*\*', line):
                 captions_found.append(i)
             # Also check non-italicized captions
-            elif re.match(r'^\s*(?:Fig\.|Figure|Table|Algorithm)\s*(?:\d+|[IVXLC]+)', line, re.IGNORECASE):
+            elif _looks_like_caption_line(line):
                 # Check if it's not a heading
                 if not re.match(r'^#+\s+', line):
                     captions_found.append(i)
@@ -328,12 +367,19 @@ class MarkdownAnalyzer:
                         line_number=i,
                         suggestion='Captions should be italicized (*text*)'
                     ))
+                else:
+                    captions_found.append(i)
         
         # Check if images have nearby captions
         for img_line in images_found:
-            # Look for caption within 3 lines after image
+            if img_line in images_with_caption_alt:
+                continue
             has_caption = False
-            for j in range(img_line, min(img_line + 4, len(lines) + 1)):
+            # Captions in converted papers can appear above the image, or below it
+            # after blank lines/page anchors/asset sidecar comments.
+            start = max(1, img_line - 6)
+            end = min(len(lines), img_line + 8)
+            for j in range(start, end + 1):
                 if j in captions_found:
                     has_caption = True
                     break
@@ -346,7 +392,7 @@ class MarkdownAnalyzer:
                     suggestion='Consider adding a caption for the figure'
                 ))
         
-        if len(images_found) > 0 and len(captions_found) == 0:
+        if len(images_found) > 0 and len(captions_found) == 0 and len(images_with_caption_alt) == 0:
             self.issues.append(QualityIssue(
                 category='caption',
                 severity='warning',

@@ -564,6 +564,8 @@ def _build_figure_index_payload(
             caption_block_id = str((caption_block or {}).get("block_id") or "").strip()
             caption_anchor_id = str((caption_block or {}).get("anchor_id") or "").strip()
             caption_text = _clean_text((caption_block or {}).get("raw_text") or (caption_block or {}).get("text") or "", limit=1200)
+            asset_name = str(fig.get("asset_name") or "").strip()
+            asset_name_alias = str(fig.get("asset_name_alias") or "").strip()
             caption_continuation = _collect_caption_continuation(
                 blocks=blocks,
                 figure_block=fig,
@@ -582,8 +584,12 @@ def _build_figure_index_payload(
                 "caption": caption_text,
                 "locate_anchor": locate_anchor,
             }
+            if asset_name:
+                rec["asset_name"] = asset_name
+            if asset_name_alias:
+                rec["asset_name_alias"] = asset_name_alias
             page = (
-                _extract_page_from_asset_name(fig.get("asset_name"), fig.get("asset_name_alias"))
+                _extract_page_from_asset_name(asset_name, asset_name_alias)
                 or _block_page(caption_block)
                 or _block_page(fig)
             )

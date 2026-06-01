@@ -118,6 +118,8 @@ def _format_references(md: str) -> str:
         t = (s or "").strip()
         if not t:
             return False
+        if _looks_bare_numbered_reference_payload_line(t):
+            return True
         if re.match(r"^\[\d{1,4}\]\s+[A-Z]", t):
             return True
         marker_n = len(re.findall(r"\[\d{1,4}\]", t))
@@ -126,6 +128,45 @@ def _format_references(md: str) -> str:
         if marker_n >= 10:
             return True
         return False
+
+    def _looks_bare_numbered_reference_payload_line(s: str) -> bool:
+        t = (s or "").strip()
+        if not t:
+            return False
+        m = re.match(r"^(\d{1,4})\.\s+(.+)$", t)
+        if not m:
+            return False
+        if _is_year_backref_continuation_line(t):
+            return False
+        body = (m.group(2) or "").strip()
+        if len(body) < 24:
+            return False
+        if re.match(
+            r"^(?:introduction|background|related\s+work|method(?:s|ology)?|"
+            r"experiment(?:s|al)?|results?|discussion|conclusion|appendix|"
+            r"acknowledg(?:e)?ments?|supplementary|supplemental)\b",
+            body,
+            re.IGNORECASE,
+        ):
+            return False
+        has_year_or_id = bool(
+            re.search(r"\b(?:18|19|20)\d{2}\b", body)
+            or re.search(r"\b(?:doi\s*:|10\.\d{4,9}/|arxiv\s*:)", body, re.IGNORECASE)
+        )
+        if not has_year_or_id:
+            return False
+        has_reference_shape = bool(
+            re.search(r"(?:[A-Z]\.\s*){1,5}[A-Z][A-Za-z'\-]+", body)
+            or re.search(
+                r"\b(?:journal|proceedings?|proc\.?|opt\.|phys\.|nat\.|nature|science|"
+                r"ieee|acm|appl\.|express|letters?|review|commun\.|photonics|"
+                r"arxiv|doi)\b",
+                body,
+                re.IGNORECASE,
+            )
+            or ("," in body and len(re.findall(r"[A-Za-z]{2,}", body)) >= 5)
+        )
+        return has_reference_shape
 
     heading_any_re = re.compile(r"^#{1,6}\s+")
     plain_section_re = re.compile(
@@ -154,16 +195,17 @@ def _format_references(md: str) -> str:
         # We only trigger when there are many reference-like leading markers,
         # and they are concentrated in the latter part of the document.
         cand_idx: list[int] = []
-        ref_start_re = re.compile(r"^\[\d{1,4}\]\s+[A-Z]")
         for i, ln in enumerate(lines):
             s = ln.strip()
-            if ref_start_re.match(s):
+            if _looks_reference_payload_line(s):
                 cand_idx.append(i)
         if len(cand_idx) >= 3:
             tail_threshold = int(len(lines) * 0.45)
             tail_cands = [i for i in cand_idx if i >= tail_threshold]
             if len(tail_cands) >= 3:
-                ref_i = max(0, tail_cands[0] - 1)
+                ref_i = tail_cands[0]
+                if ref_i > 0 and not lines[ref_i - 1].strip():
+                    ref_i -= 1
                 inferred_heading = True
 
         # Some VL outputs collapse many references into dense marker runs like:
@@ -183,7 +225,9 @@ def _format_references(md: str) -> str:
                 tail_gate = int(len(lines) * 0.45)
                 tail_dense = [i for i in dense_idx if i >= tail_gate]
                 if tail_dense:
-                    ref_i = max(0, tail_dense[0] - 1)
+                    ref_i = tail_dense[0]
+                    if ref_i > 0 and not lines[ref_i - 1].strip():
+                        ref_i -= 1
                     inferred_heading = True
 
         if ref_i is None:

@@ -1,4 +1,5 @@
 import json
+import time
 
 from kb import reference_index as ref_index
 from kb import citation_meta
@@ -360,6 +361,52 @@ def test_lookup_crossref_meta_for_entry_retries_stale_none_bib_cache(monkeypatch
     assert isinstance((cache.get("bib") or {}).get(key), dict)
 
 
+def test_lookup_crossref_meta_for_entry_respects_fresh_negative_cache(monkeypatch):
+    raw = '[8] A. Demo, B. Demo. "Robust demo imaging." IEEE Transactions on Demo, 2021.'
+    ref_key = ref_index.normalize_title_for_match(raw)[:260]
+    title_hint = ref_index._extract_query_title(raw)
+    title_key = ref_index.normalize_title_for_match(title_hint)[:260]
+    cache = {
+        "doi": {},
+        "bib": {ref_key: ref_index._crossref_cache_miss("bib_not_found")},
+        "title": {title_key: ref_index._crossref_cache_miss("title_not_found")},
+    }
+
+    def fail_fetch(**kwargs):
+        raise AssertionError("fresh negative cache should skip Crossref retry")
+
+    monkeypatch.setattr(ref_index, "fetch_best_crossref_meta", fail_fetch)
+    monkeypatch.setattr(ref_index, "fetch_best_crossref_for_reference", fail_fetch)
+
+    meta, _ = ref_index._lookup_crossref_meta_for_entry(
+        raw,
+        cache,
+        crossref_enabled=True,
+        enable_title_lookup=True,
+    )
+
+    assert meta is None
+
+
+def test_lookup_crossref_meta_for_entry_writes_negative_cache_on_miss(monkeypatch):
+    raw = "[5] Demo entry. doi:10.1000/demo-miss"
+    monkeypatch.setattr(ref_index, "fetch_best_crossref_meta", lambda **kwargs: None)
+    monkeypatch.setattr(ref_index, "fetch_best_crossref_for_reference", lambda **kwargs: None)
+    cache = {"doi": {}, "bib": {}, "title": {}}
+
+    meta, doi_hint = ref_index._lookup_crossref_meta_for_entry(
+        raw,
+        cache,
+        crossref_enabled=True,
+        enable_title_lookup=False,
+    )
+
+    assert meta is None
+    assert doi_hint == "10.1000/demo-miss"
+    assert ref_index._is_fresh_crossref_cache_miss((cache.get("doi") or {}).get("10.1000/demo-miss"))
+    assert any(ref_index._is_fresh_crossref_cache_miss(v) for v in (cache.get("bib") or {}).values())
+
+
 def test_infer_source_doi_from_doc_hints_retries_stale_empty_cache(monkeypatch, tmp_path):
     md_path = tmp_path / "DemoVenue-2024-Demo Paper.en.md"
     md_path.write_text("# Demo Paper\n", encoding="utf-8")
@@ -381,6 +428,28 @@ def test_infer_source_doi_from_doc_hints_retries_stale_empty_cache(monkeypatch, 
 
     assert doi == "10.1000/demo-source"
     assert str((cache.get("source_work") or {}).get(k) or "") == "10.1000/demo-source"
+
+
+def test_infer_source_doi_from_doc_hints_respects_fresh_negative_cache(monkeypatch, tmp_path):
+    md_path = tmp_path / "DemoVenue-2024-Demo Paper.en.md"
+    md_path.write_text("# Demo Paper\n", encoding="utf-8")
+    k = f"{ref_index.normalize_title_for_match('Demo Paper')[:220]}|2024|{ref_index.normalize_title_for_match('DemoVenue')[:120]}"
+    cache = {"source_work": {k: ref_index._crossref_cache_miss("source_work_not_found")}}
+
+    monkeypatch.setattr(
+        ref_index,
+        "fetch_best_crossref_meta",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("fresh negative cache should skip source DOI lookup")),
+    )
+
+    doi = ref_index._infer_source_doi_from_doc_hints(
+        md_path,
+        "# Demo Paper\n",
+        cache,
+        crossref_enabled=True,
+    )
+
+    assert doi == ""
 
 
 def test_load_source_reference_rows_retries_stale_empty_cache(monkeypatch):
@@ -409,6 +478,23 @@ def test_load_source_reference_rows_retries_stale_empty_cache(monkeypatch):
     cached = (cache.get("source_refs") or {}).get("doi:10.1000/demo")
     assert isinstance(cached, list)
     assert len(cached) == 1
+
+
+def test_load_source_reference_rows_respects_fresh_negative_cache(monkeypatch):
+    cache = {"source_refs": {"doi:10.1000/demo": ref_index._crossref_cache_miss("source_refs_empty")}}
+    monkeypatch.setattr(
+        ref_index,
+        "fetch_crossref_references_by_doi",
+        lambda doi: (_ for _ in ()).throw(AssertionError("fresh negative cache should skip source refs lookup")),
+    )
+
+    rows = ref_index._load_source_reference_rows(
+        "10.1000/demo",
+        cache,
+        crossref_enabled=True,
+    )
+
+    assert rows == []
 
 
 def test_infer_source_doi_from_doc_hints_prefers_heading_title_when_filename_is_truncated(monkeypatch, tmp_path):
@@ -655,6 +741,82 @@ def test_build_reference_index_incremental_rebuilds_stale_crossref_enriched_doc(
     assert str(ref.get("doi") or "") == "10.1109/cvpr.2016.445"
     assert str(ref.get("title") or "") == "Structure-from-Motion Revisited"
     assert str(ref.get("match_method") or "") == "title"
+
+
+def test_build_reference_index_incremental_reuses_recent_unresolved_crossref_attempt(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    raw_ref = (
+        "[1] Johannes L Schonberger and Jan-Michael Frahm. Structure-from-motion revisited. "
+        "In Proceedings of the IEEE conference on computer vision and pattern recognition, pages 4104-4113, 2016."
+    )
+    md_path.write_text("# Demo\n\n## References\n" + raw_ref + "\n", encoding="utf-8")
+
+    src_key = ref_index._norm_source_key(md_path.resolve())
+    prev = {
+        "version": 1,
+        "updated_at": 0,
+        "doc_count": 1,
+        "next_cursor": 0,
+        "docs": {
+            src_key: {
+                "path": str(md_path.resolve()),
+                "name": md_path.name,
+                "stem": md_path.stem.lower(),
+                "sha1": ref_index.compute_file_sha1(md_path),
+                "source_doi": "",
+                "crossref_enriched": False,
+                "crossref_last_attempt_at": time.time(),
+                "crossref_unresolved_promising": 1,
+                "crossref_sparse_promising": 0,
+                "crossref_retry_ttl_s": 24 * 60 * 60,
+                "index_status": "ready",
+                "quality_gate": {"status": "ready", "indexable": True, "action": "none"},
+                "refs": {
+                    "1": {
+                        "num": 1,
+                        "raw": raw_ref,
+                        "doi": "",
+                        "doi_url": "",
+                        "title": "",
+                        "authors": "",
+                        "venue": "",
+                        "year": "",
+                        "volume": "",
+                        "issue": "",
+                        "pages": "",
+                        "crossref_ok": False,
+                        "match_method": "",
+                    }
+                },
+            }
+        },
+    }
+    (db_dir / "references_index.json").write_text(json.dumps(prev, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def fail_lookup(*args, **kwargs):
+        raise AssertionError("recent unresolved references should be reused until retry cooldown expires")
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: True)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+    monkeypatch.setattr(ref_index, "_lookup_crossref_meta_for_entry", fail_lookup)
+
+    out = ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=True,
+        enable_title_lookup=True,
+        quality_gate=True,
+    )
+
+    assert int(out.get("docs_reused") or 0) == 1
+    assert int(out.get("docs_updated") or 0) == 0
+    assert int(out.get("docs_retry_suppressed") or 0) == 1
+    assert int(out.get("crossref_network_attempts") or 0) == 0
+    assert int(out.get("refs_missing_doi") or 0) == 1
 
 
 def test_build_reference_index_incremental_reuses_sparse_but_resolved_doc(tmp_path, monkeypatch):
@@ -1039,11 +1201,13 @@ def test_prefetch_reference_meta_parallel_populates_bib_and_title_cache(monkeypa
     assert int(done) >= 3
     assert len(bib_calls) == 3
     assert len(title_calls) >= 2
-    assert len(cache.get("bib") or {}) == 1
-    assert any(isinstance(v, dict) for v in (cache.get("title") or {}).values())
+    bib_values = list((cache.get("bib") or {}).values())
+    assert sum(1 for v in bib_values if ref_index._is_crossref_meta_cache_hit(v)) == 1
+    assert sum(1 for v in bib_values if ref_index._is_fresh_crossref_cache_miss(v)) == 2
+    assert any(ref_index._is_crossref_meta_cache_hit(v) for v in (cache.get("title") or {}).values())
 
 
-def test_prefetch_reference_meta_parallel_does_not_cache_none_results(monkeypatch):
+def test_prefetch_reference_meta_parallel_caches_negative_results(monkeypatch):
     cache = {"doi": {}, "bib": {}, "title": {}, "source_refs": {}, "source_work": {}}
     ref_map = {
         1: '[1] A. Author, B. Author. "Title A". IEEE Trans. Demo, 2020.',
@@ -1062,8 +1226,28 @@ def test_prefetch_reference_meta_parallel_does_not_cache_none_results(monkeypatc
     )
 
     assert int(done) == 0
-    assert (cache.get("bib") or {}) == {}
-    assert (cache.get("title") or {}) == {}
+    assert all(ref_index._is_fresh_crossref_cache_miss(v) for v in (cache.get("bib") or {}).values())
+    assert all(ref_index._is_fresh_crossref_cache_miss(v) for v in (cache.get("title") or {}).values())
+
+    monkeypatch.setattr(
+        ref_index,
+        "fetch_best_crossref_for_reference",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("fresh bib miss should skip retry")),
+    )
+    monkeypatch.setattr(
+        ref_index,
+        "fetch_best_crossref_meta",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("fresh title miss should skip retry")),
+    )
+    done_again = ref_index._prefetch_reference_meta_parallel(
+        ref_map,
+        cache,
+        crossref_enabled=True,
+        enable_title_lookup=True,
+        max_workers=4,
+        max_prefetch=10,
+    )
+    assert int(done_again) == 0
 
 
 def test_build_reference_index_skips_order_mapping_when_source_rows_conflict(tmp_path, monkeypatch):

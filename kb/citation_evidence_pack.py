@@ -26,6 +26,46 @@ _READING_ROADMAP_BIBLIO_LABEL_RE = re.compile(
     r"(?:\s*[\(\uff08][^\)\uff09]{2,80}[\)\uff09])?\s*$",
     re.IGNORECASE,
 )
+_BIBLIO_LABEL_ONLY_RE = re.compile(
+    r"^(?:\u6587\u732e|\u8bba\u6587|\u6587\u7ae0|\u53c2\u8003\u6587\u732e|paper|source|reference)\s*[:\uff1a]\s*"
+    r".{8,240}(?:[\(\uff08][^\)\uff09]*(?:18|19|20)\d{2}[^\)\uff09]*[\)\uff09])?\s*$",
+    re.IGNORECASE,
+)
+_BIBLIO_TITLE_ONLY_RE = re.compile(
+    r"^(?:[*_`]{0,2})?(?:\u300a[^\u300b]{8,220}\u300b|[\"'\u201c\u201d][^\"'\u201c\u201d]{8,220}[\"'\u201c\u201d])"
+    r"(?:[*_`]{0,2})?(?:\s*[\(\uff08][^\)\uff09]{2,120}(?:(?:18|19|20)\d{2}|review|express|"
+    r"photonics|optica|nature|science)[^\)\uff09]*[\)\uff09])?\s*$",
+    re.IGNORECASE,
+)
+_BIBLIO_ROLE_TITLE_RE = re.compile(
+    r"^(?:[\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9\s_-]{1,28})[:\uff1a]\s*"
+    r"(?:\u300a)?[A-Za-z][^\n]{10,220}(?:\u300b)?\s*"
+    r"[\(\uff08][^\)\uff09]*(?:18|19|20)\d{2}[^\)\uff09]*[\)\uff09]\s*$",
+    re.IGNORECASE,
+)
+_BIBLIO_NARRATIVE_TITLE_RE = re.compile(
+    r"^(?:.{0,140})(?:"
+    r"\u4e0b\u4e00\u6b65|\u4f8b\u5982|\u67e5\u9605|\u8bfb\u5b8c|\u5e94\u7528\u65b9\u5411|"
+    r"next\s+step|for\s+example|e\.g\.|consult|read\s+after"
+    r").{0,260}[\(\uff08][^\)\uff09]*(?:18|19|20)\d{2}[^\)\uff09]*[\)\uff09].*$",
+    re.IGNORECASE,
+)
+_READING_INSTRUCTION_CLAIM_RE = re.compile(
+    r"^(?:.{0,28})?(?:"
+    r"\u91cd\u70b9(?:\u9605\u8bfb|\u770b)|"
+    r"\u5173\u952e(?:\u9605\u8bfb|\u770b)|"
+    r"\u5efa\u8bae(?:\u9605\u8bfb|\u770b)|"
+    r"\u53ef(?:\u8fdb\u4e00\u6b65)?(?:\u9605\u8bfb|\u770b)|"
+    r"\u82e5.{0,40}\u611f\u5174\u8da3.{0,16}\u53ef(?:\u770b|\u9605\u8bfb)|"
+    r"read\s+(?:the\s+)?(?:section|part|chapter|paper|review)|"
+    r"focus\s+on|look\s+at"
+    r").{0,320}(?:"
+    r"\u300a[^\u300b]{4,}\u300b|"
+    r"[\"'\u201c\u201d][^\"'\u201c\u201d]{4,}[\"'\u201c\u201d]|"
+    r"\u90e8\u5206|\u8282|section|chapter"
+    r").*$",
+    re.IGNORECASE,
+)
 _REFERENCE_MARKER_RE = re.compile(r"\[\s*[Rr]?\d{1,4}(?:\s*[-,;]\s*[Rr]?\d{1,4})*\s*\]")
 _DOC_FRONT_RE = re.compile(r"^\s{0,3}#\s+.+?\n.{0,420}?\b(?:abstract|single[-\s]?pixel|deep learning|this paper|in this review)\b", re.IGNORECASE | re.DOTALL)
 
@@ -102,6 +142,16 @@ def _is_low_value_answer_claim(value: str) -> bool:
     if _LOW_VALUE_LABEL_RE.fullmatch(stripped):
         return True
     if _READING_ROADMAP_BIBLIO_LABEL_RE.match(stripped):
+        return True
+    if _BIBLIO_LABEL_ONLY_RE.match(stripped):
+        return True
+    if _BIBLIO_TITLE_ONLY_RE.match(stripped):
+        return True
+    if _BIBLIO_ROLE_TITLE_RE.match(stripped):
+        return True
+    if _BIBLIO_NARRATIVE_TITLE_RE.match(stripped):
+        return True
+    if _READING_INSTRUCTION_CLAIM_RE.match(stripped):
         return True
     tokens = _tokens(stripped)
     if _has_cjk(stripped):

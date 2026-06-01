@@ -35,6 +35,56 @@ _PERSIST_FIELDS = (
     "summary_provider",
 )
 _EXPORT_IDENTITY_FIELDS = ("source", "title", "authors", "venue", "year", "doi")
+_WEAK_VENUE_SINGLE_TOKENS = {
+    "abstract",
+    "appendix",
+    "article",
+    "chapter",
+    "conference",
+    "citation",
+    "doi",
+    "editorial",
+    "fig",
+    "figure",
+    "journal",
+    "paper",
+    "preprint",
+    "proceeding",
+    "proceedings",
+    "reference",
+    "references",
+    "section",
+    "source",
+    "supplement",
+    "table",
+    "unknown",
+}
+_VENUE_MONTH_TOKENS = {
+    "jan",
+    "january",
+    "feb",
+    "february",
+    "mar",
+    "march",
+    "apr",
+    "april",
+    "may",
+    "jun",
+    "june",
+    "jul",
+    "july",
+    "aug",
+    "august",
+    "sep",
+    "sept",
+    "september",
+    "oct",
+    "october",
+    "nov",
+    "november",
+    "dec",
+    "december",
+}
 
 
 def _text(value: Any) -> str:
@@ -203,6 +253,43 @@ def _raw_reference_text(detail: Mapping[str, Any] | None) -> str:
     )
 
 
+def _looks_raw_author_prefix(text: str) -> bool:
+    value = _text(text).strip(" .;,:")
+    if len(value) < 3 or len(value) > 180:
+        return False
+    low = value.lower()
+    if re.search(r"\b(?:abstract|introduction|fig|figure|table|retrieved|unknown|reference)\b", low):
+        return False
+    if re.search(r"\b(?:using|via|through|for|from|into|onto|under|over|between|within)\b", low) and len(value) > 80:
+        return False
+    if re.search(r"\bet\s+al\.?\b", low):
+        return True
+    if ("," in value or " & " in value or re.search(r"\band\b", value, flags=re.I)) and re.search(r"[A-Z]", value):
+        return True
+    if re.fullmatch(r"[A-Z]{1,4}\.?\s+[A-Z][A-Za-z'’-]{2,}(?:\s+[A-Z][A-Za-z'’-]{2,})?", value):
+        return True
+    if re.fullmatch(r"[A-Z][A-Za-z'’-]{2,}\s+[A-Z]{1,4}\.?", value):
+        return True
+    return False
+
+
+def _authors_from_raw_reference(raw: str, *, title: str = "") -> str:
+    raw_text = re.sub(r"\s+", " ", _text(raw)).strip()
+    title_text = re.sub(r"\s+", " ", _text(title)).strip()
+    if not raw_text or not title_text or len(title_text) < 8:
+        return ""
+    raw_low = raw_text.lower()
+    title_low = title_text.lower()
+    pos = raw_low.find(title_low)
+    if pos <= 0:
+        return ""
+    prefix = raw_text[:pos].strip(" \t\r\n.;,:")
+    prefix = re.sub(r"^\s*\[?\d{1,4}\]?\s*", "", prefix).strip(" \t\r\n.;,:")
+    if _looks_raw_author_prefix(prefix):
+        return prefix
+    return ""
+
+
 def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
     out = dict(detail or {})
     for canonical, aliases in {
@@ -273,6 +360,10 @@ def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
             out["raw"] = reference_entry
         if not _text(out.get("cite_fmt")):
             out["cite_fmt"] = reference_entry
+    if not _text(out.get("authors")):
+        raw_authors = _authors_from_raw_reference(_raw_reference_text(out), title=_text(out.get("title")))
+        if raw_authors:
+            out["authors"] = raw_authors
     if not _text(out.get("doi")):
         raw_doi = _norm_doi(out.get("DOI") or out.get("doi_url") or out.get("doiUrl") or _raw_reference_text(out))
         if raw_doi:
@@ -315,6 +406,8 @@ def _looks_weak_authors(authors: str) -> bool:
         return True
     if text.lower() in {"unknown", "[unknown authors]", "anonymous"}:
         return True
+    if _looks_raw_author_prefix(text):
+        return False
     tokens = re.findall(r"[A-Za-z\u4e00-\u9fff]{2,}", text)
     return len(tokens) <= 1
 
@@ -323,10 +416,27 @@ def _looks_weak_venue(venue: str) -> bool:
     text = _text(venue)
     if not text:
         return True
-    if text.lower() in {"unknown", "journal", "conference", "proceedings"}:
+    low = text.lower().strip(" \t\r\n.,;:()[]{}<>")
+    if low in {"unknown", "journal", "conference", "proceedings"}:
         return True
     tokens = re.findall(r"[A-Za-z0-9\u4e00-\u9fff]+", text)
-    return len(tokens) <= 1
+    if not tokens:
+        return True
+    if len(tokens) == 1:
+        token = tokens[0].lower()
+        if token in _WEAK_VENUE_SINGLE_TOKENS or token in _VENUE_MONTH_TOKENS:
+            return True
+        if re.fullmatch(r"(?:18|19|20)\d{2}", token) or token.isdigit():
+            return True
+        if len(token) <= 3 and token not in {"pnas"}:
+            return True
+        return False
+    meaningful = [
+        token
+        for token in tokens
+        if token.lower() not in _VENUE_MONTH_TOKENS and not re.fullmatch(r"(?:18|19|20)\d{2}", token)
+    ]
+    return not meaningful
 
 
 def _has_repair_seed(detail: Mapping[str, Any]) -> bool:
@@ -486,7 +596,17 @@ def citation_metadata_export_acceptance(detail: Mapping[str, Any] | None) -> dic
     }
     summary = _summary_export_state(data)
     metadata_ready = bool(quality.get("ok")) or _text(quality.get("status")).lower() == "ready"
-    export_ready = bool(metadata_ready and all(field_ready.get(field) for field in _EXPORT_IDENTITY_FIELDS))
+    strict_export_ready = all(field_ready.get(field) for field in _EXPORT_IDENTITY_FIELDS)
+    doi_export_ready = bool(
+        field_ready.get("source")
+        and field_ready.get("title")
+        and field_ready.get("year")
+        and field_ready.get("doi")
+        and (field_ready.get("venue") or field_ready.get("authors"))
+    )
+    identity_ready = bool(strict_export_ready or doi_export_ready)
+    metadata_ready = bool(metadata_ready or identity_ready)
+    export_ready = bool(metadata_ready and identity_ready)
     return {
         "contract_version": 1,
         "quality_ok": bool(metadata_ready),

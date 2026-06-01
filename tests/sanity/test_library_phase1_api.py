@@ -489,6 +489,52 @@ def test_library_source_quality_route_resolves_pdf_and_md_sources(monkeypatch, t
     assert int(payload.get("review_count") or 0) == 1
 
 
+def test_library_conversion_quality_batch_route_scans_markdown(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf = pdf_dir / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    md = md_dir / "source" / "source.en.md"
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Source",
+                "## Abstract",
+                "A clean source with citation [1].",
+                "## Method",
+                "The method section has enough text for a stable quality scan.",
+                "## References",
+                "[1] Reference.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/conversion/batch",
+        json={"repair": False, "limit": 5},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["mode"] == "scan"
+    assert payload["target_count"] == 1
+    assert payload["scanned"] == 1
+    assert payload["failed"] == 0
+    assert sum(int(payload.get(key) or 0) for key in ("ready", "autofix", "reconvert", "review", "unknown")) == 1
+
+
 def test_library_reader_locate_quality_events_feed_overview(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -1286,6 +1332,29 @@ def test_library_quality_repair_run_advance_waits_for_conversion_then_reindexes(
     assert waiting_payload["item"]["phase"] == "source_reconversion_queued"
     assert waiting_payload["reindex"] is None
 
+    md_path = md_dir / "queued" / "queued.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Queued Paper",
+                "",
+                "## Abstract",
+                "",
+                "This converted paper has a usable abstract and cites prior work [1].",
+                "",
+                "## Method",
+                "",
+                "The method section remains indexable after reconversion.",
+                "",
+                "## References",
+                "",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
     snap_state["active"] = False
     resume_response = client.post("/api/library/quality/repair-runs/run-queued-advance/advance")
     assert resume_response.status_code == 200
@@ -1296,6 +1365,9 @@ def test_library_quality_repair_run_advance_waits_for_conversion_then_reindexes(
     assert resume_payload["item"]["status"] == "completed"
     assert resume_payload["item"]["phase"] == "reindex_complete"
     assert resume_payload["item"]["reindexed"] is True
+    assert resume_payload["item"]["verification"]["type"] == "conversion_source_quality"
+    assert resume_payload["item"]["verification"]["quality_ok"] is True
+    assert resume_payload["item"]["verification"]["ready"] == 1
     assert resume_payload["reindex"]["ok"] is True
 
 

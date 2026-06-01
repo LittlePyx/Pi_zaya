@@ -171,7 +171,14 @@ def _looks_like_inline_reference_marker(text: str, match: re.Match[str]) -> bool
 
 
 def _looks_invalid_source_context(context: str) -> bool:
-    return looks_author_list_context(context) or looks_bibliography_entry_context(context)
+    text = re.sub(r"\s+", " ", str(context or "")).strip()
+    if not text:
+        return True
+    without_markers = _INLINE_REF_RE.sub(" ", text)
+    without_markers = re.sub(r"^[.\s]+|[.\s]+$", "", without_markers)
+    if len(tokenize_match_text(without_markers)) < 4:
+        return True
+    return looks_author_list_context(text) or looks_bibliography_entry_context(text)
 
 
 def _trim_window(text: str, start: int, end: int, *, max_chars: int) -> str:

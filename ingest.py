@@ -7,6 +7,7 @@ from kb.chunking import chunk_markdown
 from kb.converter.quality_gate import index_quality_document_fields, prepare_markdown_for_index
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root, structured_indices_need_rebuild
 from kb.converter.structured_indices import STRUCTURED_INDEX_VERSION, rebuild_structured_indices_for_markdown
+from kb.source_filters import is_excluded_source_path
 from kb.store import (
     compute_doc_id,
     compute_file_sha1,
@@ -27,6 +28,8 @@ def _iter_md_files(src: Path, glob: str, exclude_dirs: set[str], exclude_names: 
         if not p.is_file():
             continue
         if p.name in exclude_names:
+            continue
+        if is_excluded_source_path(str(p)):
             continue
         # Skip any path that contains excluded directory names (e.g. temp page dumps)
         if any(part in exclude_dirs for part in p.parts):
@@ -51,6 +54,23 @@ def _annotate_chunks_with_quality(chunks: list[dict], assessment: dict) -> list[
         row["meta"] = meta
         out.append(row)
     return out
+
+
+def _prune_excluded_docs(db_dir: Path, docs_index: dict) -> int:
+    removed = 0
+    to_delete: list[str] = []
+    for doc_id, rec in list(docs_index.items()):
+        if not isinstance(rec, dict):
+            continue
+        path = str(rec.get("path") or "")
+        if path and is_excluded_source_path(path):
+            to_delete.append(str(doc_id))
+
+    for doc_id in to_delete:
+        docs_index.pop(doc_id, None)
+        delete_doc_chunks(db_dir, doc_id)
+        removed += 1
+    return removed
 
 
 def _empty_structured_stats() -> dict:
@@ -244,6 +264,7 @@ def main() -> None:
 
     if args.prune:
         removed = prune_missing_docs(db_dir, docs_index)
+        removed += _prune_excluded_docs(db_dir, docs_index)
     else:
         removed = 0
 

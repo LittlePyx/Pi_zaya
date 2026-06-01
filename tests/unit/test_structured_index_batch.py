@@ -86,3 +86,17 @@ def test_structured_index_batch_skips_current_assets_until_markdown_changes(tmp_
     time.sleep(0.01)
     md_path.write_text("# Paper\n\nNow changed.\n", encoding="utf-8")
     assert structured_indices_need_rebuild(md_path) is True
+
+
+def test_structured_index_batch_skips_nonpaper_markdown_artifacts(tmp_path: Path) -> None:
+    paper_dir = tmp_path / "Paper"
+    paper_dir.mkdir()
+    md_path = paper_dir / "Paper.en.md"
+    md_path.write_text("# Paper\n\nA valid paper source.\n", encoding="utf-8")
+    (paper_dir / "quality_report.md").write_text("# Markdown Quality Analysis Report\n", encoding="utf-8")
+    (paper_dir / "output.md").write_text("# Legacy duplicate\n", encoding="utf-8")
+
+    stats = rebuild_structured_indices_for_root(tmp_path, force=True)
+
+    assert stats["scanned"] == 1
+    assert stats["rebuilt"] == 1

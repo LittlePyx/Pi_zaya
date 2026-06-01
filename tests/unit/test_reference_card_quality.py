@@ -374,6 +374,68 @@ def test_citation_detail_quality_accepts_system_b_support_relation_language():
     assert "narrative_metadata_repeated" not in names
 
 
+def test_citation_detail_quality_allows_answer_claim_to_name_reading_pair_title():
+    quality = citation_detail_quality(
+        {
+            "num": 2,
+            "anchor": "r2",
+            "source_name": "NatCommun-2023-High-resolution single-photon imaging with physics-informed deep learning.pdf",
+            "title": "High-resolution single-photon imaging with physics-informed deep learning",
+            "heading_path": "Abstract",
+            "answer_claim": (
+                "结论：建议先读 Emerging single-photon detection technique for high-performance "
+                "photodetector，再读 High-resolution single-photon imaging with physics-informed deep learning。"
+            ),
+            "evidence_quote": "The method incorporates physical noise models into deep learning reconstruction.",
+            "card_claim": (
+                "结论：建议先读 Emerging single-photon detection technique for high-performance "
+                "photodetector，再读 High-resolution single-photon imaging with physics-informed deep learning。"
+            ),
+            "card_takeaway": "This evidence supports the second paper as an applied follow-up after detector background.",
+            "card_support_explanation": "It grounds the reading order by connecting detector noise physics to reconstruction.",
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is True
+    assert "narrative_metadata_repeated" not in names
+
+
+def test_ref_card_hit_quality_accepts_being_cited_as_prior_work_language():
+    quality = ref_card_hit_quality(
+        {
+            "text": "Most existing SCI methods employ ADMM-based optimization.",
+            "meta": {
+                "source_path": "SCINeRF Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+                "title": "SCINeRF: Neural Radiance Fields from a Snapshot Compressive Image",
+            },
+            "ui_meta": {
+                "display_name": "SCINeRF Neural Radiance Fields from a Snapshot Compressive Image.pdf",
+                "heading_path": "5. Conclusion",
+                "summary_line": "结论部分说明 ADMM 在文中属于已有优化工具，而不是作者新提出的方法。",
+                "why_line": "结论部分提及 ADMM，可验证该算法在文中是作为现有优化工具被引用，而非作者原创方法。",
+                "card_view": {
+                    "sections": [
+                        {
+                            "id": "summary",
+                            "text": "结论部分说明 ADMM 在文中属于已有优化工具，而不是作者新提出的方法。",
+                        },
+                        {
+                            "id": "why",
+                            "text": "结论部分提及 ADMM，可验证该算法在文中是作为现有优化工具被引用，而非作者原创方法。",
+                        },
+                    ]
+                },
+                "reader_open": {"sourcePath": "SCINeRF.en.md", "headingPath": "5. Conclusion"},
+            },
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is True
+    assert "ref_card_narrative_metadata_repeated" not in names
+
+
 def test_citation_detail_quality_accepts_grounded_system_b_card():
     quality = citation_detail_quality(
         {
@@ -551,7 +613,7 @@ def test_citation_shelf_item_quality_requires_structured_export_fields_for_syste
         "source_path": "refs/scigs.en.md",
         "source_name": "SCIGS references",
         "title": "Single-shot compressive spectral imaging",
-        "raw": "Gehm et al. Single-shot compressive spectral imaging.",
+        "raw": "Single-shot compressive spectral imaging.",
         "summary_line": "This upstream paper defines a single-shot compressive spectral imaging baseline used by later SCI systems.",
         "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
     }
@@ -569,6 +631,158 @@ def test_citation_shelf_item_quality_requires_structured_export_fields_for_syste
     assert summary["export_ready_count"] == 0
     assert summary["summary_export_ready_count"] == 1
     assert summary["doi_count"] == 0
+
+
+def test_citation_shelf_item_quality_allows_partial_legacy_reference_without_review():
+    detail = {
+        "num": 15,
+        "anchor": "r15",
+        "is_inpaper": True,
+        "source_path": "refs/qclfm.en.md",
+        "source_name": "Quantum correlation light-field microscope.pdf",
+        "title": "Pattern Analysis and Plenoptic Imaging",
+        "venue": "Wave Optics",
+        "year": "2013",
+        "raw": "Pattern Analysis and Plenoptic Imaging: a mini review. Wave Optics, 2013.",
+        "summary_line": "This upstream work is cited for light-field and plenoptic imaging background in microscopy.",
+        "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
+    }
+
+    quality = citation_shelf_item_quality(detail)
+    names = {item["name"] for item in quality["failures"]}
+    summary = summarize_citation_shelf_quality([detail])
+
+    assert quality["ok"] is True
+    assert quality["metadata"]["metadata_ready"] is True
+    assert quality["metadata"]["export_ready"] is False
+    assert quality["metadata"]["review_needed"] is False
+    assert "shelf_export_missing_authors" not in names
+    assert "shelf_export_missing_doi" not in names
+    assert summary["review_count"] == 0
+    assert summary["metadata_ready_count"] == 1
+
+
+def test_citation_shelf_item_quality_uses_raw_authors_and_softens_missing_doi():
+    detail = {
+        "num": 15,
+        "anchor": "r15",
+        "is_inpaper": True,
+        "source_path": "refs/qclfm.en.md",
+        "source_name": "Quantum correlation light-field microscope.pdf",
+        "title": (
+            "Pattern Analysis and Plenoptic Imaging: a mini review of light-field and "
+            "ultra-slim light field microscopy that combines computation and light-field illumination"
+        ),
+        "venue": "Wave Optics, Oct",
+        "year": "2013",
+        "raw": (
+            "Benjamin Sussman and Erik M. Gauger. Pattern Analysis and Plenoptic Imaging: "
+            "a mini review of light-field and ultra-slim light field microscopy that combines "
+            "computation and light-field illumination. Wave Optics, Oct 2013."
+        ),
+        "summary_line": "This upstream work is cited for light-field and plenoptic imaging background in microscopy.",
+        "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
+    }
+
+    quality = citation_shelf_item_quality(detail)
+    warning_names = {item["name"] for item in quality["warnings"]}
+
+    assert quality["ok"] is True
+    assert quality["metadata"]["has_author"] is True
+    assert "shelf_missing_author_hint" not in warning_names
+    assert "shelf_missing_doi" not in warning_names
+
+
+def test_citation_shelf_item_quality_accepts_initial_surname_author():
+    quality = citation_shelf_item_quality(
+        {
+            "num": 40,
+            "anchor": "r40",
+            "is_inpaper": True,
+            "source_path": "refs/pidl.en.md",
+            "source_name": "High-resolution single-photon imaging.pdf",
+            "title": "Quantized Fourier ptychography with binary images from SPAD cameras",
+            "authors": "X Yang",
+            "venue": "Photon. Res.",
+            "year": "2021",
+            "doi": "10.1364/PRJ.427699",
+            "raw": "Yang, X., Konda, P. C., Xu, S., Bian, L. & Horstmeyer, R. Quantized Fourier ptychography with binary images from SPAD cameras. Photon. Res. 9, 1958-1969 (2021).",
+            "summary_line": "This upstream work demonstrates Fourier ptychography with binary SPAD camera images.",
+            "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
+        }
+    )
+    warning_names = {item["name"] for item in quality["warnings"]}
+
+    assert quality["ok"] is True
+    assert quality["metadata"]["export_ready"] is True
+    assert "shelf_missing_author_hint" not in warning_names
+
+
+def test_citation_shelf_item_quality_accepts_doi_export_without_authors():
+    quality = citation_shelf_item_quality(
+        {
+            "num": 3,
+            "anchor": "r3",
+            "is_inpaper": True,
+            "source_path": "refs/detector.en.md",
+            "source_name": "Single photon detector review.pdf",
+            "title": "Emerging single-photon detection technique for high-performance photodetector",
+            "venue": "Frontiers of Physics",
+            "year": "2024",
+            "doi": "10.1007/s11467-024-1400-0",
+            "raw": "Emerging single-photon detection technique for high-performance photodetector. Frontiers of Physics, 2024.",
+            "summary_line": "This review builds detector background for single-photon imaging and photodetector choices.",
+            "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is True
+    assert quality["metadata"]["export_ready"] is True
+    assert quality["metadata"]["review_needed"] is False
+    assert "shelf_export_missing_authors" not in names
+
+
+def test_citation_shelf_item_quality_accepts_single_word_journal_venue():
+    quality = citation_shelf_item_quality(
+        {
+            "num": 124,
+            "anchor": "ref-124",
+            "is_inpaper": True,
+            "citation_route": "system_b",
+            "source_path": "refs/spd_review.en.md",
+            "source_name": "Emerging single-photon detection technique for high-performance photodetector.pdf",
+            "title": (
+                "High-performance waveguide coupled Germanium-on-silicon single-photon avalanche diode "
+                "with independently controllable absorption and multiplication"
+            ),
+            "authors": "H Wang",
+            "venue": "Nanophotonics",
+            "year": "2023",
+            "volume": "12",
+            "issue": "4",
+            "pages": "705",
+            "doi": "10.1515/nanoph-2022-0663",
+            "raw": (
+                "H. Wang, Y. Shi, Y. Zuo, Y. Yu, L. Lei, X. Zhang, and Z. Qian, "
+                "High-performance waveguide coupled Germanium-on-silicon single-photon avalanche diode "
+                "with independently controllable absorption and multiplication, "
+                "Nanophotonics 12(4), 705 (2023)"
+            ),
+            "cite_fmt": (
+                "H Wang. High-performance waveguide coupled Germanium-on-silicon single-photon avalanche diode "
+                "with independently controllable absorption and multiplication. Nanophotonics, 12(4):705 (2023)."
+            ),
+            "summary_line": "This upstream detector paper provides a Ge-on-Si SPAD example relevant to single-photon imaging hardware choices.",
+            "summary_quality": {"ok": True, "status": "grounded", "export_ready": True},
+        }
+    )
+
+    names = {item["name"] for item in quality["failures"]}
+    assert quality["ok"] is True
+    assert quality["metadata"]["export_ready"] is True
+    assert quality["metadata"]["export_acceptance"]["field_ready"]["venue"] is True
+    assert "shelf_export_missing_venue" not in names
 
 
 def test_citation_shelf_item_quality_does_not_show_candidate_review_when_identity_is_complete():

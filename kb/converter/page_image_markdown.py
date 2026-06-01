@@ -403,6 +403,7 @@ def repair_broken_image_links(md: str, *, save_dir: Path, assets_dir: Path) -> s
         return md
 
     page_fig_re = re.compile(r"page_(\d+)_fig_(\d+)", flags=re.IGNORECASE)
+    page_marker_re = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", flags=re.IGNORECASE)
 
     def _asset_key(p: Path) -> tuple[int, int, str]:
         m = page_fig_re.search(p.stem)
@@ -412,6 +413,59 @@ def repair_broken_image_links(md: str, *, save_dir: Path, assets_dir: Path) -> s
             return (int(m.group(1)), int(m.group(2)), p.name.lower())
         except Exception:
             return (10**9, 10**9, p.name.lower())
+
+    def _page_of_asset(p: Path) -> int | None:
+        m = page_fig_re.search(p.stem)
+        if not m:
+            return None
+        try:
+            return int(m.group(1))
+        except Exception:
+            return None
+
+    def _fig_of_asset(p: Path) -> int | None:
+        m = page_fig_re.search(p.stem)
+        if not m:
+            return None
+        try:
+            return int(m.group(2))
+        except Exception:
+            return None
+
+    def _first_unused(paths: list[Path]) -> Path | None:
+        for p in paths:
+            if p.name not in used_names:
+                return p
+        return paths[0] if paths else None
+
+    def _page_hint_from_raw(raw_path: str, alt: str, pos: int) -> int | None:
+        text = f"{Path(raw_path or '').name} {alt or ''}"
+        for pat in [
+            r"(?:^|[_\-\s])p(?:age|g)?[_\-\s]*0*(\d{1,4})(?=[_\-\.\s]|$)",
+            r"(?:^|[_\-\s])page[_\-\s]*0*(\d{1,4})(?=[_\-\.\s]|$)",
+        ]:
+            m = re.search(pat, text, flags=re.IGNORECASE)
+            if m:
+                try:
+                    n = int(m.group(1))
+                    if n > 0:
+                        return n
+                except Exception:
+                    pass
+        last_marker = None
+        try:
+            for m in page_marker_re.finditer(md, 0, max(0, int(pos))):
+                last_marker = m
+        except Exception:
+            last_marker = None
+        if last_marker:
+            try:
+                n = int(last_marker.group(1))
+                if n > 0:
+                    return n
+            except Exception:
+                pass
+        return None
 
     cand_files = sorted(cand_files, key=_asset_key)
 
@@ -438,6 +492,7 @@ def repair_broken_image_links(md: str, *, save_dir: Path, assets_dir: Path) -> s
                 "alt": alt,
                 "raw_path": raw_path,
                 "resolved_name": resolved_name,
+                "page_hint": _page_hint_from_raw(raw_path, alt, m.start()),
             }
         )
 
@@ -453,29 +508,27 @@ def repair_broken_image_links(md: str, *, save_dir: Path, assets_dir: Path) -> s
             except Exception:
                 fig_no = None
         chosen = None
-        if fig_no is not None:
+        page_hint = r.get("page_hint")
+        if isinstance(page_hint, int) and page_hint > 0:
+            page_matches = [p for p in cand_files if _page_of_asset(p) == page_hint]
+            if fig_no is not None:
+                exact_page = [p for p in page_matches if _fig_of_asset(p) == fig_no]
+                chosen = _first_unused(exact_page)
+            if chosen is None:
+                chosen = _first_unused(page_matches)
+        if chosen is None and fig_no is not None:
             exact = [
                 p
                 for p in cand_files
                 if re.search(rf"(?:^|_)fig_{fig_no}(?:_|$|\.)", p.name, flags=re.IGNORECASE)
             ]
             if exact:
-                for p in exact:
-                    if p.name not in used_names:
-                        chosen = p
-                        break
-                if chosen is None:
-                    chosen = exact[0]
+                chosen = _first_unused(exact)
         if chosen is None:
             low = b.lower()
             sim = [p for p in cand_files if (low and low in p.name.lower())]
             if sim:
-                for p in sim:
-                    if p.name not in used_names:
-                        chosen = p
-                        break
-                if chosen is None:
-                    chosen = sim[0]
+                chosen = _first_unused(sim)
         if chosen is not None:
             r["resolved_name"] = chosen.name
             used_names.add(chosen.name)

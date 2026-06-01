@@ -66,16 +66,27 @@ def _should_keep_reference_open_on_blank(
 
 def normalize_references_page_text(page_text: str) -> str:
     lines_out: list[str] = []
-    saw_heading = False
-    for raw in str(page_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    raw_lines = str(page_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    normalized_lines = [_normalize_text(raw or "").strip() for raw in raw_lines]
+    heading_indices = [idx for idx, line in enumerate(normalized_lines) if _REF_HEADING_RE.match(line)]
+    saw_heading = bool(heading_indices)
+    if heading_indices:
+        raw_lines = raw_lines[int(heading_indices[0]) + 1 :]
+
+    for raw in raw_lines:
         line = _normalize_text(raw or "").strip()
         if not line:
             lines_out.append("")
             continue
         if _REF_HEADING_RE.match(line):
-            saw_heading = True
             continue
         if re.fullmatch(r"\d{1,4}", line):
+            continue
+        if (
+            re.fullmatch(r"[A-Z][A-Z\s&,\-]{6,80}", line)
+            and not _is_reference_start_line(line)
+            and not re.search(r"\b(?:18|19|20)\d{2}\b", line)
+        ):
             continue
         if re.search(r"\bpage\s+\d+\s+of\s+\d+\b", line, flags=re.IGNORECASE):
             continue
@@ -144,6 +155,18 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
 
     for idx, (_, line) in enumerate(ref_lines):
         stripped = line.strip()
+
+        if re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", stripped, re.IGNORECASE):
+            if current_ref:
+                ref_text = _join_reference_fragments(current_ref)
+                if ref_text:
+                    out_num = int(current_ref_number or ref_num)
+                    formatted.append(format_single_reference(ref_text, out_num))
+                    ref_num = out_num + 1
+                current_ref = []
+                current_ref_number = None
+            formatted.append(stripped)
+            continue
 
         if not stripped:
             next_nonempty = ""

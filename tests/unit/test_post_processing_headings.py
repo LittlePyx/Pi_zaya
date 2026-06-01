@@ -50,6 +50,23 @@ def test_numbered_sections_are_demoted_under_document_title():
     assert "### 2.1. Structures of Single-Pixel Imaging" in out
 
 
+def test_numbered_heading_policy_caps_missing_parent_level_jump():
+    src = """
+# Emerging single-photon detection technique for high-performance photodetector
+
+## 1 Introduction
+
+Body text.
+
+#### 2.1.2 SPAD based on conventional bulk semiconductors
+
+More body text.
+"""
+    out = postprocess_markdown(src)
+    assert "### 2.1.2 SPAD based on conventional bulk semiconductors" in out
+    assert "#### 2.1.2 SPAD based on conventional bulk semiconductors" not in out
+
+
 def test_promote_bare_numbered_headings_and_demote_caption_headings():
     src = """
 # Paper Title

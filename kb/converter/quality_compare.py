@@ -14,7 +14,10 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", flags=re.MULTILINE)
 _IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
 _REF_HEADING_RE = re.compile(r"^#{1,6}\s+References?\s*$", flags=re.IGNORECASE | re.MULTILINE)
 _REF_LINE_RE = re.compile(r"^\[(\d{1,4})\]\s+", flags=re.MULTILINE)
-_CAPTION_RE = re.compile(r"^\s*(?:\*\*)?(?:Figure|Fig\.|Table|Algorithm)\b", flags=re.IGNORECASE)
+_CAPTION_RE = re.compile(
+    r"^\s*(?:\*\*)?(?:Figure|Fig\.?|Table|Algorithm)\s*(?:S?\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
+    flags=re.IGNORECASE,
+)
 _INLINE_MATH_RE = re.compile(r"(?<!\$)\$([^$\n]+?)\$(?!\$)")
 _CITATION_RE = re.compile(r"\[(\d{1,4}(?:\s*-\s*\d{1,4})?(?:\s*,\s*\d{1,4}(?:\s*-\s*\d{1,4})?)*)\]")
 

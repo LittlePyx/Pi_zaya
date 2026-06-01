@@ -154,9 +154,18 @@ def prepare_markdown_for_index(
     path = Path(md_path).expanduser()
     assessment = assess_markdown_index_quality(path, allow_blocked=allow_blocked)
     repair_result: dict[str, Any] = {}
-    if bool(auto_repair) and str(assessment.get("action") or "") == "autofix":
+    action_before_repair = str(assessment.get("action") or "").strip().lower()
+    issue_codes_before_repair = [
+        str(item or "").strip().lower()
+        for item in list(assessment.get("issue_codes") or [])
+        if str(item or "").strip()
+    ]
+    should_attempt_repair = action_before_repair == "autofix" or (
+        action_before_repair == "reconvert" and "missing_images" in issue_codes_before_repair
+    )
+    if bool(auto_repair) and should_attempt_repair:
         try:
-            repair_result = repair_markdown_quality(path, issue_codes=list(assessment.get("issue_codes") or []))
+            repair_result = repair_markdown_quality(path, issue_codes=issue_codes_before_repair)
             report = write_conversion_quality_result(path, auto_repair_result=repair_result)
             assessment = assess_markdown_index_quality(
                 path,
@@ -175,7 +184,7 @@ def prepare_markdown_for_index(
                 "blocking_issue_codes": list(assessment.get("issue_codes") or []),
             }
     assessment["auto_repair"] = {
-        "attempted": bool(auto_repair and str(assessment.get("action") or "") == "autofix") or bool(repair_result),
+        "attempted": bool(auto_repair and should_attempt_repair),
         "changed": bool(repair_result.get("changed")),
         "unsafe": bool(repair_result.get("unsafe")),
         "applied": [str(item) for item in list(repair_result.get("applied") or []) if str(item or "").strip()][:20],

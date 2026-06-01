@@ -35,6 +35,7 @@ interface RefSyncState {
   docsDone: number
   docsTotal: number
   runId: number
+  stats: Record<string, unknown>
 }
 
 interface LibraryState {
@@ -405,6 +406,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             docsDone: Number(data.docs_done || 0),
             docsTotal: Number(data.docs_total || 0),
             runId: Number(data.run_id || 0),
+            stats: (data.stats && typeof data.stats === 'object' && !Array.isArray(data.stats)) ? data.stats as Record<string, unknown> : {},
           },
         })
       },

@@ -528,6 +528,31 @@ def test_reference_opportunities_inject_on_pronoun_answer_when_prompt_names_labe
     assert meta["injected_refs"] == [4]
 
 
+def test_reference_opportunities_skip_speculative_next_step_line() -> None:
+    answer, meta = inject_reference_opportunity_citations_inline(
+        (
+            "ADMM 的来源：它是成熟优化工具，并非这篇论文原创。\n"
+            "下一步建议：如果你想了解 ADMM 的原始出处，可以查阅参考文献；它很可能引用 Boyd 的综述。"
+        ),
+        prompt="ADMM 是作者自己发明的吗？",
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 4,
+                "label": "ADMM",
+                "evidence_quote": "Most existing methods employ ADMM [4].",
+                "ref_title": "Distributed Optimization and Statistical Learning via ADMM",
+            }
+        ],
+    )
+
+    lines = answer.splitlines()
+    assert "[[CITE:s1234abcd:4]]" in lines[0]
+    assert "[[CITE:s1234abcd:4]]" not in lines[1]
+    assert meta["mode"] == "inline"
+    assert meta["injected_refs"] == [4]
+
+
 def test_reference_opportunities_do_not_attach_admm_to_admm_net_line() -> None:
     answer, meta = inject_reference_opportunity_citations_inline(
         "ADMM-Net 是把这种优化思路展开成网络的前人工作。",
@@ -588,6 +613,30 @@ def test_apply_reference_opportunities_uses_tail_only_when_no_sentence_matches()
     assert meta["tail_used"] is True
     assert "citation trail" in answer
     assert "[[CITE:s1234abcd:4]]" in answer
+
+
+def test_apply_reference_opportunities_uses_tail_for_lineage_prompt() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        "\u8fd9\u6761\u6280\u672f\u8def\u7ebf\u5206\u4e3a\u538b\u7f29\u5149\u8c31\u6210\u50cf\u3001"
+        "\u65f6\u95f4\u7ef4\u5ea6\u7f16\u7801\u548c 3D \u573a\u666f\u8868\u793a\u4e09\u4e2a\u9636\u6bb5\u3002",
+        prompt=(
+            "SCI \u6216\u538b\u7f29\u5feb\u7167\u6210\u50cf\u8fd9\u6761\u7ebf\uff0c"
+            "\u662f\u600e\u4e48\u4ece\u5149\u8c31\u6210\u50cf\u8d70\u5230 3D \u573a\u666f\u91cd\u5efa\u7684\uff1f"
+        ),
+        opportunities=[
+            {
+                "sid": "s1234abcd",
+                "ref_num": 50,
+                "label": "snapshot compressive imaging",
+                "ref_title": "Snapshot compressive imaging: theory, algorithms, and applications",
+            }
+        ],
+    )
+
+    assert meta["mode"] == "tail"
+    assert meta["tail_used"] is True
+    assert meta["tail_refs"] == [50]
+    assert "[[CITE:s1234abcd:50]]" in answer
 
 
 def test_apply_reference_opportunities_suppresses_tail_for_broad_synthesis_question() -> None:

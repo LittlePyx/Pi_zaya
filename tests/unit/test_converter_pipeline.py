@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from kb.converter.pipeline import PDFConverter
 from kb.converter.config import ConvertConfig
 from kb.converter.page_figure_metadata import persist_page_figure_metadata
+from kb.converter.page_image_markdown import repair_broken_image_links
 from kb.converter.models import TextBlock
 
 @pytest.fixture
@@ -79,6 +80,150 @@ def test_ensure_page_marker_inserts_and_normalizes_marker():
     assert PDFConverter._ensure_page_marker("# Page body", 2).startswith("<!-- kb_page: 3 -->")
     assert PDFConverter._ensure_page_marker("<!-- kb_page: 99 -->\n\n# Page body", 2).startswith("<!-- kb_page: 3 -->")
     assert PDFConverter._ensure_page_marker("", 0) == "<!-- kb_page: 1 -->"
+
+
+def test_repair_broken_image_links_uses_page_marker_and_filename_hint(tmp_path):
+    assets_dir = tmp_path / "assets"
+    assets_dir.mkdir()
+    (assets_dir / "page_1_fig_1.png").write_bytes(b"page1")
+    (assets_dir / "page_2_fig_1.png").write_bytes(b"page2")
+    md = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "Text on page one.",
+            "",
+            "<!-- kb_page: 2 -->",
+            "Supplement figure:",
+            "![Figure](./assets/image_auto_01_p002_r2.png)",
+        ]
+    )
+
+    out = repair_broken_image_links(md, save_dir=tmp_path, assets_dir=assets_dir)
+
+    assert "![Figure](./assets/page_2_fig_1.png)" in out
+    assert "image_auto_01_p002_r2.png" not in out
+
+
+def test_recover_references_from_pdf_text_layer_when_markdown_missing_refs(tmp_path, monkeypatch):
+    import kb.converter.pipeline as pipeline_module
+
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+
+    class _RefPage:
+        def get_text(self, mode: str):
+            assert mode == "text"
+            return "\n".join(
+                [
+                    "References",
+                    "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+                    "[2] Alan Turing. Another reference. Proceedings of Tests, 2025.",
+                ]
+            )
+
+    class _Doc:
+        def __len__(self):
+            return 1
+
+        def load_page(self, page_index: int):
+            assert page_index == 0
+            return _RefPage()
+
+    monkeypatch.setattr(pipeline_module, "_page_has_references_heading", lambda page: True)
+    monkeypatch.setattr(pipeline_module, "_page_looks_like_references_content", lambda page: False)
+
+    fixed, repair = converter._recover_references_from_pdf_if_needed(
+        "# Demo Paper\n\n## Abstract\n\nThis paper cites prior work [1].",
+        _Doc(),
+    )
+
+    assert repair["changed"] is True
+    assert repair["applied"] == ["pdf_reference_backfill"]
+    assert "# References" in fixed
+    assert "[1] Ada Lovelace" in fixed
+    assert "[2] Alan Turing" in fixed
+
+
+def test_recover_references_replaces_truncated_index_from_pdf_text_layer(tmp_path, monkeypatch):
+    import kb.converter.pipeline as pipeline_module
+
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+
+    class _RefPage:
+        def get_text(self, mode: str):
+            assert mode == "text"
+            return "\n".join(
+                [
+                    "Final body text should not become a reference.",
+                    "REFERENCES",
+                    "1. ALPHA, A. First recovered reference. Journal, 1950, 1, 1-2.",
+                    "2. BETA, B. Second recovered reference. Journal, 1951, 2, 3-4.",
+                    "3. GAMMA, C. Third recovered reference. Journal, 1952, 3, 5-6.",
+                    "4. DELTA, D. Fourth recovered reference. Journal, 1953, 4, 7-8.",
+                    "5. EPSILON, E. Fifth recovered reference. Journal, 1954, 5, 9-10.",
+                    "6. ZETA, F. Sixth recovered reference. Journal, 1955, 6, 11-12.",
+                    "7. ETA, G. Seventh recovered reference. Journal, 1956, 7, 13-14.",
+                    "8. THETA, H. Eighth recovered reference. Journal, 1957, 8, 15-16.",
+                ]
+            )
+
+    class _Doc:
+        def __len__(self):
+            return 1
+
+        def load_page(self, page_index: int):
+            assert page_index == 0
+            return _RefPage()
+
+    monkeypatch.setattr(pipeline_module, "_page_has_references_heading", lambda page: True)
+    monkeypatch.setattr(pipeline_module, "_page_looks_like_references_content", lambda page: False)
+
+    broken = "\n".join(
+        [
+            "# Demo Paper",
+            "",
+            "## References",
+            "",
+            "[1] ALPHA, A. First broken reference. Journal, 1950, 1, 1-2.",
+            "[2] BETA, B. Second broken reference. Journal, 1951, 2, 3-4.",
+            "[3] GAMMA, C. Third broken reference. Journal, 1952, 3, 5-6.",
+            "### INFORMATIONAL ASPECTS OF VISUAL PERCEPTION",
+            "[4] This fake entry came from a running header and should be replaced.",
+            "[5] EPSILON, E. Fifth broken reference. Journal, 1954, 5, 9-10.",
+            "[6] ZETA, F. Sixth broken reference. Journal, 1955, 6, 11-12.",
+            "[7] ETA, G. Seventh broken reference. Journal, 1956, 7, 13-14.",
+            "[8] THETA, H. Eighth broken reference. Journal, 1957, 8, 15-16.",
+        ]
+    )
+
+    fixed, repair = converter._recover_references_from_pdf_if_needed(broken, _Doc())
+
+    assert repair["changed"] is True
+    assert repair["applied"] == ["pdf_reference_backfill"]
+    assert "reference_index_truncated" in repair["issue_codes_before"]
+    assert "Final body text should not become a reference" not in fixed
+    assert "INFORMATIONAL ASPECTS" not in fixed
+    assert "[8] THETA" in fixed
+
 
 def test_convert_pipeline_missing_file(output_dir):
     """Test error handling for missing file."""

@@ -1,4 +1,5 @@
 from kb.converter.post_processing import postprocess_markdown
+from kb.converter.reference_markdown import normalize_references_page_text
 
 
 def _refs_tail(md: str) -> str:
@@ -11,6 +12,22 @@ def _refs_tail(md: str) -> str:
     if ref_i < 0:
         return ""
     return "\n".join(lines[ref_i + 1 :]).strip()
+
+
+def test_normalize_references_page_text_drops_body_before_references_heading():
+    src = """
+Body text from the final article page should not become reference entry 1.
+
+REFERENCES
+
+1. ALPHA, A. A real reference. Journal, 1950, 1, 1-2.
+2. BETA, B. Another real reference. Journal, 1951, 2, 3-4.
+"""
+    out = normalize_references_page_text(src)
+    assert out.startswith("# References")
+    assert "Body text from the final article page" not in out
+    assert "1. ALPHA" in out
+    assert "2. BETA" in out
 
 
 def test_references_unwrap_math_wrappers():
@@ -62,6 +79,26 @@ Some normal paragraph.
     refs = _refs_tail(out)
     assert refs
     assert "$" not in refs
+
+
+def test_references_infer_heading_for_bare_numbered_reference_tail():
+    src = """
+# Main Body
+The final paragraph cites several works [1,2] before the list.
+
+1. A. Lovelace, Example Journal 12, 34-39 (2024).
+2. A. M. Turing and C. Shannon, Proceedings of Testing 3, 44-48 (2025).
+3. G. Hopper, IEEE Computer 1, 2-8 (2026).
+"""
+    out = postprocess_markdown(src)
+    assert "## References" in out
+    refs = _refs_tail(out)
+    assert refs
+    ref_lines = [ln.strip() for ln in refs.splitlines() if ln.strip()]
+    assert ref_lines[0].startswith("[1] A. Lovelace")
+    assert any(ln.startswith("[2] A. M. Turing") for ln in ref_lines)
+    assert any(ln.startswith("[3] G. Hopper") for ln in ref_lines)
+    assert "1. A. Lovelace" not in refs
 
 
 def test_references_trim_prose_tail_after_citation_terminus():

@@ -135,13 +135,14 @@ _RESEARCH_READING_TRACE_RE = re.compile(
 )
 _REFERENCE_TAIL_INTENT_RE = re.compile(
     r"(?i)\b(?:origin|source|upstream|citation\s+trail|reference\s+trail|reading\s+route|"
-    r"reading\s+order|lineage|where\s+did|come\s+from|came\s+from|prior\s+work|"
+    r"reading\s+order|lineage|evolution|trajectory|roadmap|from\s+.+?\s+to|where\s+did|come\s+from|came\s+from|prior\s+work|"
     r"previous\s+work|who\s+proposed|who\s+introduced|invented|borrowed|inspired\s+by)\b|"
     r"(?:\u6765\u6e90|\u51fa\u5904|\u6e90\u5934|\u4e0a\u6e38|\u5f15\u7528\u94fe|"
     r"\u53c2\u8003\u6587\u732e|\u4ece\u54ea|\u600e\u4e48\u6765|\u8c01\u63d0\u51fa|"
     r"\u8c01\u53d1\u660e|\u539f\u521b|\u501f\u9274|\u8bfb\u4e66\u8def\u7ebf|"
     r"\u9605\u8bfb\u8def\u7ebf|\u5148\u8bfb|\u600e\u4e48\u8bfb|\u642d\u914d\u8bfb|"
-    r"\u4e3b\u7ebf|\u8109\u7edc|\u524d\u4eba|\u5df2\u6709|\u5148\u524d|\u4e4b\u524d)"
+    r"\u4e3b\u7ebf|\u8109\u7edc|\u6f14\u8fdb|\u8fdb\u5c55|\u53d1\u5c55|\u8def\u7ebf|"
+    r"\u4ece.{0,60}\u5230|\u524d\u4eba|\u5df2\u6709|\u5148\u524d|\u4e4b\u524d)"
 )
 _PRIOR_WORK_CUE_RE = re.compile(
     r"(?i)("
@@ -924,6 +925,12 @@ def _line_can_take_prompt_bound_opportunity(*, line: str, prompt: str, label: st
 def _line_has_grounded_opportunity_context(*, line: str, prompt: str, opp: Mapping[str, object]) -> bool:
     plain = _compact_text(line, max_len=520)
     if not plain or _GENERIC_SYNTHESIS_LINE_RE.search(plain):
+        return False
+    if re.search(
+        r"(?i)\b(?:next\s+step|if\s+you\s+want|likely|probably|may|might)\b|"
+        r"(?:下一步|如果你想|可以查阅|很可能|可能引用|大概率|推测)",
+        plain,
+    ):
         return False
     label = str(opp.get("label") or "").strip()
     if not label or label.lower().startswith("ref "):

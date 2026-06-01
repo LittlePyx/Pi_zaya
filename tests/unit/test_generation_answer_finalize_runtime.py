@@ -5,6 +5,20 @@ import pytest
 import kb.generation_answer_finalize_runtime as finalize_runtime
 
 
+def test_negative_boundary_answer_clarifies_not_core_paper() -> None:
+    answer = finalize_runtime._maybe_clarify_negative_boundary_answer(
+        "**\u7ed3\u8bba\uff1a\u5173\u7cfb\u4e0d\u5927\uff0c\u4e0d\u5efa\u8bae\u4e00\u8d77\u8bfb\u3002** "
+        "\u8fd9\u7bc7\u8bba\u6587\u662f\u7535\u9a71\u52a8\u9499\u949b\u77ff\u6fc0\u5149\u5668\u4ef6\u7814\u7a76\u3002",
+        prompt=(
+            "\u8fd9\u7bc7 perovskite laser \u548c\u6211\u7684\u5355\u50cf\u7d20\u6210\u50cf"
+            "\u4e3b\u7ebf\u5173\u7cfb\u5927\u5417\uff1f\u503c\u5f97\u4e00\u8d77\u8bfb\u5417\uff1f"
+        ),
+    )
+
+    assert "\u4e0d\u662f\u5f53\u524d\u4e3b\u7ebf\u7684\u6838\u5fc3\u6587\u732e" in answer
+    assert "\u4e0d\u662f" in answer
+
+
 def test_prompt_requested_reference_targets_accepts_naive_source_trace():
     labels = [
         label

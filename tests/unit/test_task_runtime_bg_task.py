@@ -52,6 +52,8 @@ from kb.task_runtime import (
     _should_allow_refs_async_enrich,
     _paper_guide_targeted_source_block_hits,
     _pick_recent_source_hint,
+    _post_convert_source_retry_needed,
+    _post_convert_source_retry_speed_mode,
     _repair_paper_guide_focus_answer,
     _repair_paper_guide_focus_answer_generic,
     _inject_paper_guide_support_markers,
@@ -116,6 +118,35 @@ def test_bg_task_carries_quality_repair_context_and_resolves_ingest_script():
     assert task["repair_context"]["issue_codes"] == ["weak_structure"]
     assert _bg_ingest_py_path().name == "ingest.py"
     assert _bg_ingest_py_path().exists()
+
+
+def test_post_convert_source_retry_targets_source_level_conversion_damage(monkeypatch):
+    monkeypatch.setenv("KB_POST_CONVERT_SOURCE_RETRY", "1")
+    assessment = {
+        "indexable": False,
+        "action": "reconvert",
+        "reason": "references missing",
+        "blocking_issue_codes": ["missing_references"],
+        "repair_plan": {
+            "action": "reconvert",
+            "speed_mode": "normal",
+            "reconvert_issue_codes": ["missing_references"],
+        },
+    }
+
+    assert _post_convert_source_retry_needed(assessment) is True
+    assert _post_convert_source_retry_speed_mode(assessment, "ultra_fast") == "normal"
+
+    assessment["blocking_issue_codes"] = ["source_text_loss"]
+    assessment["repair_plan"]["reconvert_issue_codes"] = ["source_text_loss"]
+    assert _post_convert_source_retry_needed(assessment) is True
+
+    assessment["action"] = "autofix"
+    assert _post_convert_source_retry_needed(assessment) is False
+
+    assessment["action"] = "reconvert"
+    monkeypatch.setenv("KB_POST_CONVERT_SOURCE_RETRY", "0")
+    assert _post_convert_source_retry_needed(assessment) is False
 
 
 def _post_convert_good_markdown() -> str:
