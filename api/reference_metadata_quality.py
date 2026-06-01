@@ -263,7 +263,12 @@ def _looks_raw_author_prefix(text: str) -> bool:
     if re.search(r"\b(?:using|via|through|for|from|into|onto|under|over|between|within)\b", low) and len(value) > 80:
         return False
     if re.search(r"\bet\s+al\.?\b", low):
-        return True
+        prefix = re.sub(r"\bet\s+al\.?\b.*$", "", value, flags=re.IGNORECASE).strip(" .;,:&")
+        name_tokens = re.findall(r"[A-Z][A-Za-z'\-]{1,}", prefix)
+        return bool(
+            ("," in prefix or " & " in prefix or re.search(r"\band\b", prefix, flags=re.IGNORECASE))
+            or len(name_tokens) >= 2
+        )
     if ("," in value or " & " in value or re.search(r"\band\b", value, flags=re.I)) and re.search(r"[A-Z]", value):
         return True
     if re.fullmatch(r"[A-Z]{1,4}\.?\s+[A-Z][A-Za-z'’-]{2,}(?:\s+[A-Z][A-Za-z'’-]{2,})?", value):

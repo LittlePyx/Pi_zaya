@@ -103,6 +103,20 @@ def test_metadata_parses_authors_from_raw_reference_prefix() -> None:
     assert acceptance["field_ready"]["doi"] is False
 
 
+def test_metadata_does_not_treat_bare_et_al_prefix_as_export_ready_authors() -> None:
+    detail = {
+        "source_path": "demo.en.md",
+        "title": "Single-shot compressive spectral imaging",
+        "raw": "Gehm et al. Single-shot compressive spectral imaging.",
+    }
+
+    quality = mq.citation_metadata_quality(detail)
+    acceptance = mq.citation_metadata_export_acceptance({"metadata_quality": quality, **detail})
+
+    assert "authors" in quality["missing_fields"]
+    assert acceptance["field_ready"]["authors"] is False
+
+
 def test_repair_promotes_doi_from_reference_text(monkeypatch):
     raw = (
         "[24] Gehm M, Brady D. Single-shot compressive spectral imaging with a "
