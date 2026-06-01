@@ -78,6 +78,7 @@ const { Dragger } = Upload
 const FILE_VIRTUAL_THRESHOLD = 60
 const FILE_VIRTUAL_HEIGHT = 620
 const FILE_VIRTUAL_ROW_HEIGHT = 88
+const EMPTY_REF_SYNC_STATS: Record<string, unknown> = {}
 
 type FileTabKey = 'pending' | 'converted' | 'all'
 type LibraryBrowseMode = 'list' | 'categories' | 'tags'
@@ -1815,7 +1816,7 @@ export default function LibraryPage() {
       : 0),
     [store.refSync],
   )
-  const refSyncStats = store.refSync?.stats || {}
+  const refSyncStats = useMemo(() => store.refSync?.stats || EMPTY_REF_SYNC_STATS, [store.refSync?.stats])
   const refSyncMetricItems = useMemo(() => {
     const refsTotal = numericStat(refSyncStats, 'refs_total')
     const missingDoi = numericStat(refSyncStats, 'refs_missing_doi')
@@ -4068,7 +4069,7 @@ export default function LibraryPage() {
                   {badge}
                 </span>
               ))}
-              {Boolean(sourceQuality?.source_text_loss) ? (
+              {sourceQuality?.source_text_loss ? (
                 <span
                   className="kb-lib-quality-issue is-error"
                   title={qualityCenterMessage || S.lib_source_status_blocked_detail}
@@ -4077,7 +4078,7 @@ export default function LibraryPage() {
                   source text loss
                 </span>
               ) : null}
-              {Boolean(sourceQuality?.references_before_body) ? (
+              {sourceQuality?.references_before_body ? (
                 <span
                   className="kb-lib-quality-issue is-warning"
                   title={qualityCenterMessage || 'References were detected before recovered body sections.'}
