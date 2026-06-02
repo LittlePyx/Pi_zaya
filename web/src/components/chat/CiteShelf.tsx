@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
-import { FileSearchOutlined } from '@ant-design/icons'
+import { CloseOutlined, DeleteOutlined, FileSearchOutlined, SaveOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ConversionQualitySummary, LibrarySourceQualityItem } from '../../api/library'
@@ -11,7 +11,9 @@ import {
   citationDisplay,
   citationFormats,
   citeMetricSummary,
+  cleanCitationDisplayText,
   isLikelyWeakCitationTitle,
+  looksLowValueShelfSummary,
   normalizeShelfTags,
   shelfItemHasConflictingVenueSignals,
   shelfItemNeedsMetadataRepair,
@@ -420,6 +422,113 @@ const summaryQualityView = (
   }
 }
 
+type ShelfSummaryDisplay = {
+  line: string
+  sourceLabel: string
+  quality: ReturnType<typeof summaryQualityView>
+}
+
+const trustedArticleSummarySource = (source: string): boolean => [
+  'abstract',
+  'fulltext',
+  'reference_primary_evidence',
+  'navigation',
+  'exact_anchor',
+  'section_intent_rescue',
+  'doc_list_seed',
+  'doc_list_prompt_aligned',
+].includes(String(source || '').trim().toLowerCase())
+
+const compactShelfSummaryCandidate = (value: string, limit = 520): string => {
+  const text = cleanCitationDisplayText(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return ''
+  if (text.length <= limit) return text
+  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}...`
+}
+
+const looksMetadataOnlyShelfSummary = (value: string): boolean => {
+  const text = compactShelfSummaryCandidate(value, 520)
+  if (!text) return false
+  return /仅检索到|暂无可用摘要|缺少可用摘要|建议.*DOI|metadata only|no abstract/i.test(text)
+}
+
+const groundedDisplaySummaryQuality = (
+  base: ReturnType<typeof summaryQualityView>,
+  S: Record<string, string>,
+): ReturnType<typeof summaryQualityView> => {
+  const score = Math.max(Number(base.score || 0), 88)
+  return {
+    ok: true,
+    status: 'grounded',
+    score,
+    label: S.shelf_summary_quality_grounded.replace('{score}', String(score)),
+    tone: 'ready',
+  }
+}
+
+const shelfSummaryDisplay = (
+  item: CiteShelfItem,
+  cardView: ReturnType<typeof citationCardView>,
+  S: Record<string, string>,
+): ShelfSummaryDisplay => {
+  const quality = summaryQualityView(item, S)
+  const source = String(item.summarySource || '').trim().toLowerCase()
+  const existing = compactShelfSummaryCandidate(item.summaryLine)
+  if (
+    existing
+    && !item.isInpaper
+    && source === 'metadata'
+    && !looksLowValueShelfSummary(existing)
+    && !looksMetadataOnlyShelfSummary(existing)
+  ) {
+    return {
+      line: existing,
+      sourceLabel: summarySourceLabel('fulltext'),
+      quality: groundedDisplaySummaryQuality(quality, S),
+    }
+  }
+  if (
+    existing
+    && !looksLowValueShelfSummary(existing)
+    && (
+      trustedArticleSummarySource(source)
+      || (!item.isInpaper && quality.ok)
+    )
+  ) {
+    return {
+      line: existing,
+      sourceLabel: summarySourceLabel(item.summarySource, item.summaryProvider),
+      quality,
+    }
+  }
+
+  const viewSummary = compactShelfSummaryCandidate(cardView.summary)
+  if (!item.isInpaper && viewSummary && !looksLowValueShelfSummary(viewSummary)) {
+    return {
+      line: viewSummary,
+      sourceLabel: summarySourceLabel('citation_card_view'),
+      quality,
+    }
+  }
+
+  const directEvidence = compactShelfSummaryCandidate(item.evidenceQuote || item.cardEvidence, 360)
+  if (!item.isInpaper && directEvidence && !looksLowValueShelfSummary(directEvidence)) {
+    return {
+      line: directEvidence,
+      sourceLabel: summarySourceLabel('citation_card'),
+      quality,
+    }
+  }
+
+  return {
+    line: '',
+    sourceLabel: '',
+    quality,
+  }
+}
+
 const metadataIssueChip = (code: string): string => {
   const key = String(code || '').trim().toLowerCase()
   if (key === 'missing_doi') return '自动匹配 DOI'
@@ -662,8 +771,9 @@ export function CiteShelf({
       const display = citationDisplay(item)
       const needsMetadataReview = shelfItemNeedsMetadataRepair(item, display)
       const isDuplicate = (duplicateCountByIdentity[paperIdentity(item)] || 0) > 1
-      const hasSummary = Boolean(String(item.summaryLine || citationCardView(item).summary || '').trim())
-      const summaryView = summaryQualityView(item, S)
+      const summaryDisplay = shelfSummaryDisplay(item, citationCardView(item), S)
+      const hasSummary = Boolean(summaryDisplay.line)
+      const summaryView = summaryDisplay.quality
       const sourceOpenView = sourceOpenQualityView(
         item,
         sourceQualityForItem(item, sourceQualityByPath),
@@ -850,6 +960,8 @@ export function CiteShelf({
     }),
     [snapshots],
   )
+  const hasSnapshotChoices = snapshotOptions.length > 0 || Boolean(selectedSnapshotId)
+  const showSnapshotTools = hasSnapshotChoices || Boolean(snapshotDiff)
 
   const setTransientCopyState = (next: 'gbt' | 'bibtex' | 'error') => {
     setCopyState(next)
@@ -1343,7 +1455,7 @@ export function CiteShelf({
     <>
       <button
         aria-label={S.shelf_title}
-        className={`kb-shelf-toggle-btn fixed right-4 top-1/2 z-30 -translate-y-1/2 rounded-full border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs shadow-[0_10px_30px_rgba(15,23,42,0.12)] transition ${open ? 'pointer-events-none opacity-0' : ''}`}
+        className={`kb-shelf-toggle-btn fixed right-4 top-1/2 z-30 -translate-y-1/2 transition ${open ? 'pointer-events-none opacity-0' : ''}`}
         data-testid="citation-shelf-toggle"
         onClick={onToggle}
         type="button"
@@ -1351,7 +1463,7 @@ export function CiteShelf({
         {S.shelf_title}
       </button>
       <aside
-        className={`kb-shelf-panel fixed right-0 top-0 z-40 h-full w-[360px] max-w-[90vw] border-l border-[var(--border)] bg-[var(--panel)] shadow-[0_24px_64px_rgba(15,23,42,0.18)] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
+        className={`kb-shelf-panel fixed right-0 top-0 z-40 h-full w-[360px] max-w-[92vw] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
         data-testid="citation-shelf"
       >
         <div className="flex h-full flex-col">
@@ -1364,41 +1476,64 @@ export function CiteShelf({
                 </div>
               </div>
               <div className="kb-shelf-head-actions">
-                <Button size="small" onClick={onClear} disabled={items.length === 0} data-testid="citation-shelf-clear">
-                  {S.shelf_clear}
-                </Button>
-                <Button size="small" onClick={onToggle} data-testid="citation-shelf-close">
-                  {S.shelf_close}
-                </Button>
+                <Button
+                  size="small"
+                  icon={<SaveOutlined />}
+                  onClick={onSaveSnapshot}
+                  disabled={items.length === 0}
+                  aria-label={S.shelf_save_snapshot}
+                  title={S.shelf_save_snapshot}
+                  data-testid="citation-shelf-save-snapshot"
+                />
+                <Button
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  onClick={onClear}
+                  disabled={items.length === 0}
+                  aria-label={S.shelf_clear}
+                  title={S.shelf_clear}
+                  data-testid="citation-shelf-clear"
+                />
+                <Button
+                  size="small"
+                  icon={<CloseOutlined />}
+                  onClick={onToggle}
+                  aria-label={S.shelf_close}
+                  title={S.shelf_close}
+                  data-testid="citation-shelf-close"
+                />
               </div>
             </div>
-            <div className="kb-shelf-snapshot-row" onClick={(event) => event.stopPropagation()}>
-              <Button
-                size="small"
-                onClick={onSaveSnapshot}
-                disabled={items.length === 0}
-                data-testid="citation-shelf-save-snapshot"
-              >
-                {S.shelf_save_snapshot}
-              </Button>
-              <Select
-                size="small"
-                value={selectedSnapshotId || undefined}
-                placeholder={snapshotOptions.length > 0 ? S.shelf_select_snapshot : S.shelf_no_snapshot}
-                className="kb-shelf-snapshot-select"
-                data-testid="citation-shelf-snapshot-select"
-                options={snapshotOptions}
-                onChange={(value) => onSelectSnapshot(String(value || ''))}
-              />
-              <Button size="small" onClick={onLoadSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-load-snapshot">
-                {S.shelf_load}
-              </Button>
-              <Button size="small" onClick={onDeleteSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-delete-snapshot">
-                {S.shelf_delete}
-              </Button>
-            </div>
-            {snapshotDiff ? (
-              <div className="kb-shelf-snapshot-diff">{snapshotDiff}</div>
+            {showSnapshotTools ? (
+              <>
+                {hasSnapshotChoices ? (
+                  <div
+                    className="kb-shelf-snapshot-row"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <>
+                      <Select
+                        size="small"
+                        value={selectedSnapshotId || undefined}
+                        placeholder={snapshotOptions.length > 0 ? S.shelf_select_snapshot : S.shelf_no_snapshot}
+                        className="kb-shelf-snapshot-select"
+                        data-testid="citation-shelf-snapshot-select"
+                        options={snapshotOptions}
+                        onChange={(value) => onSelectSnapshot(String(value || ''))}
+                      />
+                      <Button size="small" onClick={onLoadSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-load-snapshot">
+                        {S.shelf_load}
+                      </Button>
+                      <Button size="small" onClick={onDeleteSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-delete-snapshot">
+                        {S.shelf_delete}
+                      </Button>
+                    </>
+                  </div>
+                ) : null}
+                {snapshotDiff ? (
+                  <div className="kb-shelf-snapshot-diff">{snapshotDiff}</div>
+                ) : null}
+              </>
             ) : null}
             {items.length > 0 ? (
               <div
@@ -1416,8 +1551,20 @@ export function CiteShelf({
                       .replace('{ready}', String(shelfReadiness.metadataReadyItems))
                       .replace('{total}', String(shelfReadiness.total))}
                   </span>
-                </div>
-                <div className="kb-shelf-readiness-chips">
+                  <span className={`kb-shelf-readiness-chip ${shelfReadiness.sourceOpenReview > 0 ? 'is-review' : ''}`}>
+                    {shelfReadiness.sourceOpenReview > 0
+                      ? S.shelf_readiness_source_open_review.replace('{n}', String(shelfReadiness.sourceOpenReview))
+                      : S.shelf_readiness_source_open_ready.replace('{n}', String(shelfReadiness.sourceOpenable))}
+                  </span>
+                  {shelfReadiness.summaryReview > 0 ? (
+                    <span className="kb-shelf-readiness-chip is-review">
+                      {S.shelf_readiness_summary_review.replace('{n}', String(shelfReadiness.summaryReview))}
+                    </span>
+                  ) : (
+                    <span className="kb-shelf-readiness-chip">
+                      {S.shelf_readiness_summary_grounded.replace('{n}', `${shelfReadiness.summaryRate}%`)}
+                    </span>
+                  )}
                   {shelfReadiness.metadataReview > 0 ? (
                     <span className="kb-shelf-readiness-chip is-review">
                       {S.shelf_readiness_meta.replace('{n}', String(shelfReadiness.metadataReview))}
@@ -1428,29 +1575,11 @@ export function CiteShelf({
                       {S.shelf_readiness_dups.replace('{n}', String(shelfReadiness.duplicateItems))}
                     </span>
                   ) : null}
-                  {shelfReadiness.sourceOpenReview > 0 ? (
-                    <span className="kb-shelf-readiness-chip is-review">
-                      {S.shelf_readiness_source_open_review.replace('{n}', String(shelfReadiness.sourceOpenReview))}
-                    </span>
-                  ) : (
-                    <span className="kb-shelf-readiness-chip">
-                      {S.shelf_readiness_source_open_ready.replace('{n}', String(shelfReadiness.sourceOpenable))}
-                    </span>
-                  )}
                   {shelfReadiness.sourceOpenPartial > 0 ? (
                     <span className="kb-shelf-readiness-chip is-calibrating">
                       {S.shelf_readiness_source_open_partial.replace('{n}', String(shelfReadiness.sourceOpenPartial))}
                     </span>
                   ) : null}
-                  {shelfReadiness.summaryReview > 0 ? (
-                    <span className="kb-shelf-readiness-chip is-review">
-                      {S.shelf_readiness_summary_review.replace('{n}', String(shelfReadiness.summaryReview))}
-                    </span>
-                  ) : (
-                    <span className="kb-shelf-readiness-chip">
-                      {S.shelf_readiness_summary_grounded.replace('{n}', `${shelfReadiness.summaryRate}%`)}
-                    </span>
-                  )}
                 </div>
                 {repairImpact ? (
                   <div className="kb-shelf-repair-impact" data-testid="citation-shelf-repair-impact">
@@ -1599,12 +1728,6 @@ export function CiteShelf({
                   >
                     {advancedFiltersOpen ? S.shelf_advanced_collapse : S.shelf_advanced_filter}
                   </button>
-                  <Button size="small" onClick={addVisibleToSelection} disabled={visibleItems.length <= 0} data-testid="citation-shelf-add-visible">
-                    {S.shelf_add_to_queue}
-                  </Button>
-                  <Button size="small" onClick={removeVisibleFromSelection} disabled={visibleSelectedCount <= 0} data-testid="citation-shelf-remove-visible">
-                    {S.shelf_remove_from_queue}
-                  </Button>
                   </div>
                   {advancedFiltersOpen ? (
                     <div className="kb-shelf-filters">
@@ -1626,6 +1749,12 @@ export function CiteShelf({
                     placeholder={S.shelf_tag_filter_placeholder}
                     options={allTags.map((tag) => ({ value: tag, label: tag }))}
                   />
+                  <Button size="small" onClick={addVisibleToSelection} disabled={visibleItems.length <= 0} data-testid="citation-shelf-add-visible">
+                    {S.shelf_add_to_queue}
+                  </Button>
+                  <Button size="small" onClick={removeVisibleFromSelection} disabled={visibleSelectedCount <= 0} data-testid="citation-shelf-remove-visible">
+                    {S.shelf_remove_from_queue}
+                  </Button>
                 </div>
                   ) : null}
                   {!advancedFiltersOpen && advancedFilterActive ? (
@@ -1657,7 +1786,7 @@ export function CiteShelf({
               </div>
             ) : null}
             {items.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-5 text-sm text-black/45 dark:text-white/45">
+              <div className="kb-shelf-empty">
                 {S.shelf_empty_hint}
               </div>
             ) : (
@@ -1673,19 +1802,19 @@ export function CiteShelf({
                       const display = citationDisplay(item)
                       const cardView = citationCardView(item)
                       const shelfTitle = String(cardView.header.title || display.main || item.main || '').trim()
-                      const subtitle = display.source
                       const duplicateCount = duplicateCountByIdentity[paperIdentity(item)] || 0
                       const trace = sourceTraceLabel(item)
+                      const visibleTraceLabels = trace.labels.length > 1 ? trace.labels.slice(1) : trace.labels
                       const itemTags = normalizeShelfTags(item.tags)
                       const quality = qualityHints(item, display)
                       const noteText = String(item.note || '').trim()
                       const isFocused = item.key === focusedKey
                       const metrics = citeMetricSummary(item)
-                      const shelfSummaryLine = String(item.summaryLine || cardView.summary || '').trim()
-                      const shelfSummarySource = item.summaryLine
-                        ? summarySourceLabel(item.summarySource, item.summaryProvider)
-                        : summarySourceLabel('citation_card')
-                      const shelfSummaryQuality = summaryQualityView(item, S)
+                      const visibleMetrics = isFocused ? metrics : metrics.slice(0, 2)
+                      const shelfSummary = shelfSummaryDisplay(item, cardView, S)
+                      const shelfSummaryLine = shelfSummary.line
+                      const shelfSummarySource = shelfSummary.sourceLabel
+                      const shelfSummaryQuality = shelfSummary.quality
                       const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
                       const itemSourceOpenQuality = sourceOpenQualityView(
                         item,
@@ -1694,9 +1823,8 @@ export function CiteShelf({
                         readerLocateResults[item.key],
                       )
                       const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
-                      const tagOptions = [...TAG_PRESETS, ...allTags]
-                        .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
-                        .map((tag) => ({ value: tag, label: tag }))
+                      const visibleQualityChips = isFocused ? quality.chips.slice(0, 3) : quality.chips.slice(0, 1)
+                      const showQuality = Boolean(quality.needsRepair || isFocused)
 
                       return (
                         <div
@@ -1760,17 +1888,14 @@ export function CiteShelf({
                                   onRemove(item.key)
                                 }}
                               >
-                                {S.shelf_remove_item}
+                                <CloseOutlined aria-hidden="true" />
                               </button>
                             </div>
                           </div>
-                          {subtitle ? (
-                            <div className="kb-shelf-item-source" data-testid="citation-shelf-item-source">{subtitle}</div>
-                          ) : null}
-                          {quality.chips.length > 0 ? (
+                          {showQuality ? (
                             <div className="kb-shelf-quality">
                               <div className="kb-shelf-quality-chips">
-                                {quality.chips.map((chip) => (
+                                {visibleQualityChips.map((chip) => (
                                   <span key={`${item.key}-q-${chip}`} className="kb-shelf-quality-chip">
                                     {chip}
                                   </span>
@@ -1793,12 +1918,12 @@ export function CiteShelf({
                               ) : null}
                             </div>
                           ) : null}
-                          {quality.tip ? (
+                          {quality.tip && (isFocused || quality.needsRepair) ? (
                             <div className="kb-shelf-quality-tip">{quality.tip}</div>
                           ) : null}
                           <div className="kb-shelf-meta-row">
                             <div className="kb-shelf-meta-badges">
-                              {trace.labels.map((label, idx) => (
+                              {visibleTraceLabels.map((label, idx) => (
                                 <span key={`${item.key}-trace-${idx}-${label}`} className="kb-shelf-origin" title={trace.debugTitle || undefined}>
                                   {label}
                                 </span>
@@ -1806,31 +1931,20 @@ export function CiteShelf({
                               {duplicateCount > 1 ? (
                                 <span className="kb-shelf-dup">{S.shelf_dup.replace('{n}', String(duplicateCount))}</span>
                               ) : null}
-                              <span
-                                className={`kb-shelf-source-open-quality is-${itemSourceOpenQuality.tone}`}
-                                data-testid="citation-shelf-source-open-quality"
-                                title={itemSourceOpenQuality.reason}
-                              >
-                                {itemSourceOpenQuality.label}
-                              </span>
+                              {itemSourceOpenQuality.tone !== 'ready' ? (
+                                <span
+                                  className={`kb-shelf-source-open-quality is-${itemSourceOpenQuality.tone}`}
+                                  data-testid="citation-shelf-source-open-quality"
+                                  title={itemSourceOpenQuality.reason}
+                                >
+                                  {itemSourceOpenQuality.label}
+                                </span>
+                              ) : null}
                               {itemTags.map((tag) => (
                                 <span key={`${item.key}-tag-${tag}`} className="kb-shelf-tag">
                                   #{tag}
                                 </span>
                               ))}
-                            </div>
-                            <div className="kb-shelf-tag-editor kb-shelf-tag-editor-inline" onClick={(event) => event.stopPropagation()}>
-                              <Select
-                                mode="tags"
-                                size="small"
-                                maxTagCount={1}
-                                maxTagTextLength={14}
-                                className="w-full"
-                                placeholder={S.shelf_add_tag}
-                                value={itemTags}
-                                options={tagOptions}
-                                onChange={(value) => onUpdateTags(item.key, normalizeShelfTags(value))}
-                              />
                             </div>
                           </div>
                           {(isFocused || noteText) ? (
@@ -1879,24 +1993,26 @@ export function CiteShelf({
                               )}
                             </div>
                           ) : null}
-                          {metrics.length > 0 ? (
+                          {visibleMetrics.length > 0 ? (
                             <div className="kb-shelf-metrics">
-                              {metrics.map((metric) => (
+                              {visibleMetrics.map((metric) => (
                                 <span key={metric} className="kb-shelf-metric">
                                   {metric}
                                 </span>
                               ))}
                             </div>
                           ) : null}
-                          <div className="kb-shelf-doi">
-                            {item.doiUrl ? (
-                              <a className="kb-shelf-doi-link" href={item.doiUrl} rel="noreferrer" target="_blank">
-                                {item.doi || item.doiUrl}
-                              </a>
-                            ) : (
-                              <span className="kb-shelf-doi-empty">{S.shelf_no_doi_link}</span>
-                            )}
-                          </div>
+                          {isFocused || !item.doiUrl ? (
+                            <div className="kb-shelf-doi">
+                              {item.doiUrl ? (
+                                <a className="kb-shelf-doi-link" href={item.doiUrl} rel="noreferrer" target="_blank">
+                                  {item.doi || item.doiUrl}
+                                </a>
+                              ) : (
+                                <span className="kb-shelf-doi-empty">{S.shelf_no_doi_link}</span>
+                              )}
+                            </div>
+                          ) : null}
                           {isFocused ? (
                             <div className="kb-shelf-summary" data-testid="citation-shelf-summary">
                               {summaryLoadingKey === item.key ? (
@@ -1942,7 +2058,9 @@ export function CiteShelf({
                                     )
                                   })()}
                                 </>
-                              ) : null}
+                              ) : (
+                                <div className="kb-shelf-summary-empty">{S.shelf_summary_empty}</div>
+                              )}
                             </div>
                           ) : null}
                         </div>

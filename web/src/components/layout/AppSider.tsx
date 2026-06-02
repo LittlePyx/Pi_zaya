@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Layout,
   Menu,
@@ -26,6 +26,8 @@ import {
   SearchOutlined,
   CaretRightOutlined,
   CaretDownOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useT } from '../../i18n'
@@ -36,6 +38,9 @@ import { SettingsDrawer } from './SettingsDrawer'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
+
+const SIDEBAR_WIDTH = 296
+const SIDEBAR_COLLAPSED_WIDTH = 68
 
 function formatRelativeTime(ts: number | undefined, txt: { just_now: string; minutes_ago: string; hours_ago: string; days_ago: string }) {
   if (!ts) return ''
@@ -128,6 +133,11 @@ function ConversationRow({
   moveMenuItems?: MenuProps['items']
 }) {
   const S = useT()
+  const openFromKeyboard = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    onOpen()
+  }
   const menuItems: MenuProps['items'] = [
     { key: 'rename', icon: <EditOutlined />, label: S.rename },
     ...(moveMenuItems && moveMenuItems.length > 0
@@ -143,6 +153,10 @@ function ConversationRow({
         active ? 'is-active' : ''
       }`}
       onClick={onOpen}
+      onKeyDown={openFromKeyboard}
+      role="button"
+      tabIndex={0}
+      aria-current={active ? 'page' : undefined}
     >
       <MessageOutlined className="shrink-0 opacity-60" />
       <div className="kb-conv-meta min-w-0 flex-1">
@@ -181,6 +195,7 @@ function ConversationRow({
           size="small"
           icon={<MoreOutlined />}
           className="kb-side-menu-trigger"
+          aria-label={S.conversation_actions || 'Conversation actions'}
           onClick={(e) => e.stopPropagation()}
         />
       </Dropdown>
@@ -224,16 +239,17 @@ function ProjectSection({
           size="small"
           className="!w-6 !h-6 !min-w-0"
           icon={collapsed ? <CaretRightOutlined /> : <CaretDownOutlined />}
+          aria-label={collapsed ? (S.expand_project || 'Expand project') : (S.collapse_project || 'Collapse project')}
           onClick={(e) => {
             e.stopPropagation()
             onToggleCollapsed()
           }}
         />
-        <div className="min-w-0 flex-1 cursor-pointer" onClick={onSelect}>
+        <button type="button" className="kb-project-title-btn min-w-0 flex-1" onClick={onSelect}>
           <Text ellipsis className="text-[13px] font-medium">
             {project.name}
           </Text>
-        </div>
+        </button>
         <div className="ml-auto flex items-center gap-1">
           <Text type="secondary" className="kb-count-text">{conversations.length}</Text>
           <Dropdown
@@ -266,6 +282,7 @@ function ProjectSection({
               size="small"
               icon={<MoreOutlined />}
               className="kb-side-menu-trigger"
+              aria-label={S.project_actions || 'Project actions'}
               onClick={(e) => e.stopPropagation()}
             />
           </Dropdown>
@@ -317,6 +334,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const moveConversation = useChatStore((s) => s.moveConversation)
   const theme = useSettingsStore((s) => s.theme)
   const toggleTheme = useSettingsStore((s) => s.toggleTheme)
+  const sidebarCollapsed = useSettingsStore((s) => s.sidebarCollapsed)
+  const updateSettings = useSettingsStore((s) => s.update)
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectModalOpen, setProjectModalOpen] = useState(false)
@@ -331,9 +350,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void loadSidebarData().catch((err: unknown) => {
-      message.error(err instanceof Error ? err.message : '加载历史会话失败')
+      message.error(err instanceof Error ? err.message : S.sidebar_load_failed)
     })
-  }, [loadSidebarData])
+  }, [S.sidebar_load_failed, loadSidebarData])
 
   const menuKey = loc.pathname === '/library' ? 'library' : 'chat'
   const normalizedKeyword = keyword.trim().toLowerCase()
@@ -467,9 +486,31 @@ export function AppLayout({ children }: { children: ReactNode }) {
     }
   }, [allConversationIds, nav, selectConv])
 
-  const toggleProjectCollapsed = (projectId: string) => {
+  const toggleProjectCollapsed = useCallback((projectId: string) => {
     setCollapsedProjects((cur) => ({ ...cur, [projectId]: !cur[projectId] }))
-  }
+  }, [])
+
+  const toggleSidebarCollapsed = useCallback(() => {
+    void updateSettings({ sidebarCollapsed: !sidebarCollapsed })
+  }, [sidebarCollapsed, updateSettings])
+
+  const openConversation = useCallback((conversationId: string) => {
+    nav('/')
+    void selectConv(conversationId)
+  }, [nav, selectConv])
+
+  const startNewConversation = useCallback(async () => {
+    await createConv()
+    nav('/')
+  }, [createConv, nav])
+
+  const removeConversation = useCallback(async (conversationId: string) => {
+    await deleteConv(conversationId)
+  }, [deleteConv])
+
+  const chooseProject = useCallback((projectId: string | null) => {
+    selectProject(projectId)
+  }, [selectProject])
 
   const openCreateProject = () => {
     setProjectModalMode('create')
@@ -513,23 +554,48 @@ export function AppLayout({ children }: { children: ReactNode }) {
     setConversationTitle('')
   }
 
+  const sidebarToggleLabel = sidebarCollapsed
+    ? (S.expand_sidebar || 'Expand sidebar')
+    : (S.collapse_sidebar || 'Collapse sidebar')
+
   return (
     <Layout className="h-screen min-h-0 overflow-hidden">
-      <Sider width={320} className="kb-sider flex flex-col overflow-hidden">
+      <Sider
+        width={SIDEBAR_WIDTH}
+        collapsedWidth={SIDEBAR_COLLAPSED_WIDTH}
+        collapsed={sidebarCollapsed}
+        trigger={null}
+        className={`kb-sider flex flex-col overflow-hidden ${sidebarCollapsed ? 'is-collapsed' : ''}`}
+      >
         <div className="kb-sider-brand px-2.5 pt-1.5 pb-1.5">
-          <div className="kb-sider-team-logo-wrap">
-            <img src="/team_logo.png" alt="Team logo" className="kb-sider-team-logo" />
+          <div className="kb-sider-brand-row">
+            <div className="kb-sider-team-logo-wrap">
+              <img src="/team_logo.png" alt="Team logo" className="kb-sider-team-logo" />
+            </div>
+            <Tooltip title={sidebarToggleLabel} placement={sidebarCollapsed ? 'right' : 'bottom'}>
+              <Button
+                className="kb-sider-collapse-btn"
+                size="small"
+                type="text"
+                icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                aria-label={sidebarToggleLabel}
+                onClick={toggleSidebarCollapsed}
+              />
+            </Tooltip>
           </div>
-          <Text className="block text-[14px] font-semibold leading-tight tracking-tight">
-            {S.brand_subtitle}
-          </Text>
-          <Text type="secondary" className="!text-[11px]">
-            {S.conversation_count.replace('{n}', String(normalizedKeyword ? `${visibleConversationCount}/${totalConversationCount}` : totalConversationCount))}
-          </Text>
+          <div className="kb-sider-brand-copy">
+            <Text className="block text-[14px] font-semibold leading-tight tracking-tight">
+              {S.brand_subtitle}
+            </Text>
+            <Text type="secondary" className="!text-[11px]">
+              {S.conversation_count.replace('{n}', String(normalizedKeyword ? `${visibleConversationCount}/${totalConversationCount}` : totalConversationCount))}
+            </Text>
+          </div>
         </div>
 
         <Menu
           mode="inline"
+          inlineCollapsed={sidebarCollapsed}
           selectedKeys={[menuKey]}
           className="kb-sider-menu !bg-transparent !border-none"
           items={[
@@ -540,38 +606,48 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         <div className="kb-sider-toolbar px-2 pb-1 pt-0.5">
           <div className="kb-sider-main-actions flex gap-2">
-            <Button
-              type="primary"
-              size="small"
-              icon={<PlusOutlined />}
-              className="kb-sider-main-action flex-1"
-              onClick={async () => {
-                await createConv()
-                nav('/')
-              }}
-            >
-              {S.new_chat}
-            </Button>
-            <Button
-              size="small"
-              icon={<FolderOpenOutlined />}
-              className="kb-sider-main-action flex-1"
-              onClick={openCreateProject}
-            >
-              {S.new_project}
-            </Button>
+            <Tooltip title={sidebarCollapsed ? S.new_chat : ''} placement="right">
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlusOutlined />}
+                aria-label={S.new_chat}
+                className="kb-sider-main-action flex-1"
+                onClick={() => { void startNewConversation() }}
+              >
+                {S.new_chat}
+              </Button>
+            </Tooltip>
+            <Tooltip title={sidebarCollapsed ? S.new_project : ''} placement="right">
+              <Button
+                size="small"
+                icon={<FolderOpenOutlined />}
+                aria-label={S.new_project}
+                className="kb-sider-main-action flex-1"
+                onClick={openCreateProject}
+              >
+                {S.new_project}
+              </Button>
+            </Tooltip>
           </div>
           <div className="kb-sider-tool-buttons mt-1 flex items-center gap-1">
-            <Tooltip title={theme === 'dark' ? S.switch_light_mode : S.switch_dark_mode}>
+            <Tooltip title={theme === 'dark' ? S.switch_light_mode : S.switch_dark_mode} placement={sidebarCollapsed ? 'right' : 'top'}>
               <Button
                 className="kb-sider-icon-btn"
                 size="small"
                 icon={theme === 'dark' ? <SunOutlined /> : <MoonOutlined />}
+                aria-label={theme === 'dark' ? S.switch_light_mode : S.switch_dark_mode}
                 onClick={toggleTheme}
               />
             </Tooltip>
-            <Tooltip title={S.open_settings}>
-              <Button className="kb-sider-icon-btn" size="small" icon={<SettingOutlined />} onClick={() => setDrawerOpen(true)} />
+            <Tooltip title={S.open_settings} placement={sidebarCollapsed ? 'right' : 'top'}>
+              <Button
+                className="kb-sider-icon-btn"
+                size="small"
+                icon={<SettingOutlined />}
+                aria-label={S.open_settings}
+                onClick={() => setDrawerOpen(true)}
+              />
             </Tooltip>
           </div>
           <div className="kb-sider-search-row mt-1">
@@ -581,6 +657,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
               placeholder={S.search_project_or_conversation}
+              aria-label={S.search_project_or_conversation}
               prefix={<SearchOutlined className="opacity-50" />}
             />
           </div>
@@ -597,15 +674,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 activeConvId={activeConvId}
                 collapsed={Boolean(collapsedProjects[project.id])}
                 onToggleCollapsed={() => toggleProjectCollapsed(project.id)}
-                onSelect={() => selectProject(project.id)}
-                onOpenConversation={async (id) => {
-                  nav('/')
-                  void selectConv(id)
-                }}
+                onSelect={() => chooseProject(project.id)}
+                onOpenConversation={openConversation}
                 onRenameConversation={openRenameConversation}
-                onDeleteConversation={async (id) => {
-                  await deleteConv(id)
-                }}
+                onDeleteConversation={removeConversation}
                 onRename={() => openRenameProject(project)}
                 onDelete={async () => {
                   await deleteProject(project.id)
@@ -622,7 +694,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <button
               type="button"
               className="kb-ungrouped-head w-full flex items-center justify-between gap-2 text-left"
-              onClick={() => selectProject(null)}
+              onClick={() => chooseProject(null)}
             >
               <Text className="text-[13px] font-medium">{S.ungrouped_conversations}</Text>
               <Text type="secondary" className="kb-count-text">{filteredRootConversations.length}</Text>
@@ -634,14 +706,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
                     key={conversation.id}
                     conversation={conversation}
                     active={conversation.id === activeConvId}
-                    onOpen={async () => {
-                      nav('/')
-                      void selectConv(conversation.id)
-                    }}
+                    onOpen={() => openConversation(conversation.id)}
                     onRename={() => openRenameConversation(conversation)}
-                    onDelete={async () => {
-                      await deleteConv(conversation.id)
-                    }}
+                    onDelete={() => removeConversation(conversation.id)}
                     onMove={async (targetProjectId) => {
                       await moveConversation(conversation.id, targetProjectId)
                     }}

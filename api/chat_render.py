@@ -80,7 +80,7 @@ _EQ_SOURCE_NOTE_RE = re.compile(
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 18
+_RENDER_CACHE_SCHEMA_VERSION = 19
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -935,6 +935,197 @@ def _reading_guide_repair_missing_system_a_citations(
             parts[best_idx] = _append_numeric_citation_to_paragraph(parts[best_idx], num)
             used_part_indices.add(best_idx)
     return "".join(parts)
+
+
+def _render_norm_source_key(path_like: str | Path) -> str:
+    raw = str(path_like or "").strip()
+    if not raw:
+        return ""
+    try:
+        return str(Path(raw).expanduser().resolve(strict=False)).strip().lower()
+    except Exception:
+        return str(Path(raw).expanduser()).strip().lower()
+
+
+def _reference_index_doc_for_source(index_data: dict | None, source_path: str, *, source_sha1: str = "") -> dict | None:
+    if not isinstance(index_data, dict):
+        return None
+    docs = index_data.get("docs")
+    if not isinstance(docs, dict):
+        return None
+    src_key = _render_norm_source_key(source_path)
+    if src_key and isinstance(docs.get(src_key), dict):
+        return dict(docs[src_key])
+
+    sha = str(source_sha1 or "").strip().lower()
+    if sha:
+        for raw_doc in docs.values():
+            if not isinstance(raw_doc, dict):
+                continue
+            if str(raw_doc.get("sha1") or "").strip().lower() == sha:
+                return dict(raw_doc)
+
+    want = str(source_path or "").strip()
+    if not want:
+        return None
+    want_name = Path(want).name.lower()
+    want_stem = Path(want).stem.lower()
+    for raw_doc in docs.values():
+        if not isinstance(raw_doc, dict):
+            continue
+        doc_name = str(raw_doc.get("name") or "").strip().lower()
+        doc_stem = str(raw_doc.get("stem") or "").strip().lower()
+        doc_path = str(raw_doc.get("path") or "").strip()
+        if _render_norm_source_key(doc_path) == src_key:
+            return dict(raw_doc)
+        if want_name and doc_name and want_name == doc_name:
+            return dict(raw_doc)
+        if want_stem and doc_stem and want_stem == doc_stem:
+            return dict(raw_doc)
+    return None
+
+
+def _title_tokens_for_named_system_b(title: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+", str(title or "").lower())
+
+
+def _usable_named_system_b_title(title: str) -> bool:
+    text = str(title or "").strip()
+    if len(text) < 18 or len(text) > 220:
+        return False
+    tokens = _title_tokens_for_named_system_b(text)
+    if len(tokens) < 4:
+        return False
+    low = text.lower().strip(" .;:,")
+    if low in {"references", "bibliography", "abstract", "introduction"}:
+        return False
+    if re.fullmatch(r"(?:optics express|nature|science|ieee|acm|springer|elsevier|arxiv)", low):
+        return False
+    return True
+
+
+def _named_system_b_title_pattern(title: str) -> re.Pattern[str] | None:
+    text = str(title or "").strip()
+    if not _usable_named_system_b_title(text):
+        return None
+    escaped = re.escape(text)
+    escaped = escaped.replace(r"\ ", r"[\s\u00a0]+")
+    escaped = escaped.replace(r"\-", r"[\-–—\s]+")
+    return re.compile(rf"(?<![#/\w])({escaped})(?![/\w])", re.IGNORECASE)
+
+
+def _title_match_has_nearby_cite_marker(text: str, start: int, end: int) -> bool:
+    left = str(text or "")[max(0, int(start) - 12): int(start)]
+    right = str(text or "")[int(end): min(len(str(text or "")), int(end) + 96)]
+    if left.endswith("[") and right.lstrip().startswith("]("):
+        return True
+    if re.search(r"\]\([^)]{0,160}$", left):
+        return True
+    if re.match(r"\s*(?:\[[Rr]?\d{1,4}\]|\[\[?\s*CITE\s*:)", right, re.IGNORECASE):
+        return True
+    return False
+
+
+def _repair_named_system_b_citation_markers(
+    md: str,
+    hits: list[dict],
+    citation_plan: dict | None,
+) -> tuple[str, bool]:
+    """Attach System B markers when the answer already names an indexed upstream title.
+
+    This is intentionally narrow: exact title mention from the current source
+    document's reference index only. It avoids converting broad prose like
+    "Optica 2024" into a possibly wrong bibliography link.
+    """
+
+    text = str(md or "")
+    if not text.strip() or not hits:
+        return text, False
+    if "[[CITE:" in text.upper():
+        return text, False
+
+    plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
+    try:
+        budget = int(((plan.get("budget") if isinstance(plan.get("budget"), dict) else {}) or {}).get("system_b", 2))
+    except Exception:
+        budget = 2
+    budget = max(0, min(2, budget if plan else 1))
+    if budget <= 0:
+        return text, False
+
+    index_data = _load_reference_index_cached()
+    if not isinstance(index_data, dict) or not index_data:
+        return text, False
+
+    source_rows: list[tuple[str, str, dict]] = []
+    seen_sources: set[str] = set()
+    for hit in hits[:8]:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        source_path = str((meta or {}).get("source_path") or "").strip()
+        if not source_path:
+            continue
+        source_key = _render_norm_source_key(source_path)
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        doc = _reference_index_doc_for_source(
+            index_data,
+            source_path,
+            source_sha1=str((meta or {}).get("source_sha1") or "").strip().lower(),
+        )
+        if isinstance(doc, dict):
+            source_rows.append((source_path, str((meta or {}).get("source_sha1") or "").strip().lower(), doc))
+
+    candidates: list[tuple[int, str, str, str]] = []
+    seen_titles: set[str] = set()
+    for source_path, _source_sha1, doc in source_rows:
+        refs = doc.get("refs")
+        if not isinstance(refs, dict):
+            continue
+        sid = _source_cite_id(source_path)
+        for raw_n, raw_ref in sorted(refs.items(), key=lambda item: int(item[0]) if str(item[0]).isdigit() else 10**9):
+            if not isinstance(raw_ref, dict):
+                continue
+            try:
+                ref_num = int(raw_n)
+            except Exception:
+                continue
+            title = str(raw_ref.get("title") or "").strip()
+            if not _usable_named_system_b_title(title):
+                continue
+            title_key = " ".join(_title_tokens_for_named_system_b(title))
+            if title_key in seen_titles:
+                continue
+            seen_titles.add(title_key)
+            candidates.append((ref_num, sid, title, source_path))
+
+    insertions: list[tuple[int, str]] = []
+    used_refs: set[tuple[str, int]] = set()
+    for ref_num, sid, title, source_path in candidates:
+        if len(insertions) >= budget:
+            break
+        pattern = _named_system_b_title_pattern(title)
+        if pattern is None:
+            continue
+        match = pattern.search(text)
+        if not match:
+            continue
+        if _title_match_has_nearby_cite_marker(text, int(match.start()), int(match.end())):
+            continue
+        ref_key = (source_path.lower(), int(ref_num))
+        if ref_key in used_refs:
+            continue
+        used_refs.add(ref_key)
+        insertions.append((int(match.end()), f" [[CITE:{sid}:{int(ref_num)}]]"))
+
+    if not insertions:
+        return text, False
+    out = text
+    for pos, marker in sorted(insertions, key=lambda item: item[0], reverse=True):
+        out = f"{out[:pos]}{marker}{out[pos:]}"
+    return out, True
 
 
 def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str, hits: list[dict] | None = None) -> bool:
@@ -1860,15 +2051,21 @@ def enrich_messages_with_reference_render(
             cite_details: list[dict] = []
             rendered_body = str(body or "")
             raw_body = rendered_body
+            citation_plan = _message_citation_plan(rec)
             allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
                 rec=rec,
                 content=render_source,
                 hits=hits,
             )
-            citation_plan = _message_citation_plan(rec)
             if rendered_body.strip():
                 rendered_body = _annotate_equation_tags_with_sources(rendered_body, hits)
                 rendered_body = _normalize_equation_source_notes(rendered_body)
+                rendered_body, linked_named_system_b = _repair_named_system_b_citation_markers(
+                    rendered_body,
+                    hits,
+                    citation_plan,
+                )
+                allow_inpaper_citation_linking = bool(allow_inpaper_citation_linking or linked_named_system_b)
                 if allow_inpaper_citation_linking:
                     # Pass canonical hit ordering if available, so [n] resolves to
                     # the same source the LLM referenced during generation.

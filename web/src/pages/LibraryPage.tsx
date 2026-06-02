@@ -64,7 +64,7 @@ import type {
   RenameSuggestionItem,
 } from '../api/library'
 import { libraryApi } from '../api/library'
-import { referencesApi, type ShelfMetadataBackfillJobState } from '../api/references'
+import { referencesApi, type ReferenceSyncStatKey, type ReferenceSyncStats, type ShelfMetadataBackfillJobState } from '../api/references'
 import { useChatStore } from '../stores/chatStore'
 import { settingsApi } from '../api/settings'
 import { useLibraryStore } from '../stores/libraryStore'
@@ -72,13 +72,20 @@ import { useSettingsStore } from '../stores/settingsStore'
 import VirtualList from 'rc-virtual-list'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n'
+import {
+  WorkbenchMetricStrip,
+  WorkbenchPanel,
+  WorkbenchStatusPill,
+  type WorkbenchMetricItem,
+  type WorkbenchTone,
+} from '../components/library/WorkbenchPrimitives'
 
 const { Text } = Typography
 const { Dragger } = Upload
 const FILE_VIRTUAL_THRESHOLD = 60
 const FILE_VIRTUAL_HEIGHT = 620
 const FILE_VIRTUAL_ROW_HEIGHT = 88
-const EMPTY_REF_SYNC_STATS: Record<string, unknown> = {}
+const EMPTY_REF_SYNC_STATS: ReferenceSyncStats = {}
 
 type FileTabKey = 'pending' | 'converted' | 'all'
 type LibraryBrowseMode = 'list' | 'categories' | 'tags'
@@ -250,7 +257,7 @@ function SCOPE_OPTIONS(S: Record<string, string>) {
   ]
 }
 
-function numericStat(stats: Record<string, unknown> | null | undefined, key: string): number {
+function numericStat(stats: ReferenceSyncStats | null | undefined, key: ReferenceSyncStatKey): number {
   const value = stats?.[key]
   const n = typeof value === 'number' ? value : Number(value || 0)
   return Number.isFinite(n) ? n : 0
@@ -735,6 +742,25 @@ function conversionQualityLabel(quality?: ConversionQualitySummary | null) {
 function conversionMetric(quality: ConversionQualitySummary | null | undefined, key: keyof ConversionQualitySummary['metrics']) {
   const value = Number(quality?.metrics?.[key] || 0)
   return Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0
+}
+
+function libraryDocumentTypeView(value: unknown) {
+  const docType = normalizeTextValue(value).toLowerCase()
+  if (docType === 'review') {
+    return {
+      label: 'Review paper',
+      tone: 'is-review',
+      title: 'Review paper: useful for background and broad reference trails.',
+    }
+  }
+  if (docType === 'supplementary') {
+    return {
+      label: 'Supplement',
+      tone: 'is-supplement',
+      title: 'Supplementary material: a standalone reference list may not exist.',
+    }
+  }
+  return null
 }
 
 function conversionQualityNeedsReview(quality?: ConversionQualitySummary | null) {
@@ -1817,31 +1843,84 @@ export default function LibraryPage() {
     [store.refSync],
   )
   const refSyncStats = useMemo(() => store.refSync?.stats || EMPTY_REF_SYNC_STATS, [store.refSync?.stats])
-  const refSyncMetricItems = useMemo(() => {
+  const refSyncMetricItems = useMemo<WorkbenchMetricItem[]>(() => {
     const refsTotal = numericStat(refSyncStats, 'refs_total')
-    const missingDoi = numericStat(refSyncStats, 'refs_missing_doi')
-    const missingAuthors = numericStat(refSyncStats, 'refs_missing_authors')
-    const missingVenue = numericStat(refSyncStats, 'refs_missing_venue')
+    const docsTotal = store.refSync?.docsTotal || numericStat(refSyncStats, 'docs_total')
+    const docsDone = store.refSync?.docsDone || numericStat(refSyncStats, 'docs_indexed')
+    const statusReady = numericStat(refSyncStats, 'refs_metadata_status_complete')
+      + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
+      + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
+      + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
+    const metadataReady = statusReady || numericStat(refSyncStats, 'refs_metadata_ready')
+    const network = numericStat(refSyncStats, 'crossref_network_attempts')
     const elapsed = numericStat(refSyncStats, 'elapsed_s')
     return [
-      { key: 'reused', label: '复用文档', value: numericStat(refSyncStats, 'docs_reused'), tone: 'good' },
-      { key: 'suppressed', label: '抑制重试', value: numericStat(refSyncStats, 'docs_retry_suppressed'), tone: 'good' },
-      { key: 'cache', label: '缓存命中', value: numericStat(refSyncStats, 'crossref_cache_hits'), tone: 'good' },
-      { key: 'negative', label: '负缓存拦截', value: numericStat(refSyncStats, 'crossref_negative_hits'), tone: 'good' },
-      { key: 'network', label: '联网查询', value: numericStat(refSyncStats, 'crossref_network_attempts'), tone: 'info' },
-      { key: 'ready', label: '元数据就绪', value: `${numericStat(refSyncStats, 'refs_metadata_ready')}/${refsTotal}`, tone: 'info' },
-      { key: 'missing_doi', label: '缺 DOI', value: missingDoi, tone: missingDoi > 0 ? 'warn' : 'good' },
-      { key: 'missing_authors', label: '缺作者', value: missingAuthors, tone: missingAuthors > 0 ? 'warn' : 'good' },
-      { key: 'missing_venue', label: '缺期刊', value: missingVenue, tone: missingVenue > 0 ? 'warn' : 'good' },
-      { key: 'elapsed', label: '耗时', value: formatSeconds(elapsed), tone: 'info' },
+      { key: 'docs', label: S.lib_refsync_metric_docs, value: `${docsDone}/${docsTotal || 0}`, tone: 'good' },
+      { key: 'refs', label: S.lib_refsync_metric_refs, value: refsTotal, tone: 'good' },
+      { key: 'ready', label: S.lib_refsync_metric_ready, value: `${metadataReady}/${refsTotal}`, tone: 'info' },
+      { key: 'network_elapsed', label: S.lib_refsync_metric_network_elapsed, value: `${network} / ${formatSeconds(elapsed)}`, tone: 'info' },
     ]
-  }, [refSyncStats])
+  }, [S, refSyncStats, store.refSync?.docsDone, store.refSync?.docsTotal])
+  const refSyncQueueItems = useMemo<WorkbenchMetricItem[]>(() => {
+    const autoFill = numericStat(refSyncStats, 'refs_action_auto_backfill')
+      || numericStat(refSyncStats, 'refs_missing_reason_doi_sparse_refreshable')
+    const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
+      || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
+        + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))
+    const retryRepair = numericStat(refSyncStats, 'refs_action_retry_or_source_repair')
+      || (numericStat(refSyncStats, 'refs_missing_reason_title_lookup_retryable')
+        + numericStat(refSyncStats, 'refs_missing_reason_truncated_reference')
+        + numericStat(refSyncStats, 'refs_missing_reason_low_confidence_match'))
+    return [
+      { key: 'auto_fill', label: S.lib_refsync_metric_auto_fill, value: autoFill, tone: autoFill > 0 ? 'info' : 'good' },
+      { key: 'non_article', label: S.lib_refsync_metric_non_article, value: nonArticle, tone: nonArticle > 0 ? 'good' : 'info' },
+      { key: 'retry_repair', label: S.lib_refsync_metric_retry_repair, value: retryRepair, tone: retryRepair > 0 ? 'warn' : 'good' },
+    ]
+  }, [S, refSyncStats])
+  const refSyncDisplayMessage = useMemo(() => {
+    if (!store.refSync) return S.lib_refsync_waiting
+    if (store.refSync.current) return `${store.refSync.stage || S.lib_refsync_running} | ${store.refSync.current}`
+    const refsTotal = numericStat(refSyncStats, 'refs_total')
+    if (store.refSync.status === 'done' && refsTotal > 0) {
+      const statusReady = numericStat(refSyncStats, 'refs_metadata_status_complete')
+        + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
+        + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
+        + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
+      const metadataReady = statusReady || numericStat(refSyncStats, 'refs_metadata_ready')
+      const autoFill = numericStat(refSyncStats, 'refs_action_auto_backfill')
+        || numericStat(refSyncStats, 'refs_missing_reason_doi_sparse_refreshable')
+      const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
+        || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
+          + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))
+      const retryRepair = numericStat(refSyncStats, 'refs_action_retry_or_source_repair')
+        || (numericStat(refSyncStats, 'refs_missing_reason_title_lookup_retryable')
+          + numericStat(refSyncStats, 'refs_missing_reason_truncated_reference')
+          + numericStat(refSyncStats, 'refs_missing_reason_low_confidence_match'))
+      return S.lib_refsync_done_summary
+        .replace('{ready}', String(metadataReady))
+        .replace('{refsTotal}', String(refsTotal))
+        .replace('{autoFill}', String(autoFill))
+        .replace('{nonArticle}', String(nonArticle))
+        .replace('{retryRepair}', String(retryRepair))
+    }
+    return store.refSync.message || S.lib_refsync_waiting
+  }, [S, refSyncStats, store.refSync])
   const showRefSyncCard = Boolean(store.refSync && (
     store.refSync.running
     || store.refSync.status === 'done'
     || store.refSync.status === 'error'
     || Boolean(store.refSync.error)
   ))
+  const refSyncStatusTone: WorkbenchTone = store.refSync?.running
+    ? 'processing'
+    : store.refSync?.status === 'error'
+      ? 'danger'
+      : store.refSync?.status === 'done'
+        ? 'good'
+        : 'neutral'
+  const refSyncStatusLabel = store.refSync?.running
+    ? S.lib_refsync_running
+    : (store.refSync?.status === 'idle' ? S.lib_refsync_idle : String(store.refSync?.status || ''))
   const showStickyStatus = Boolean((store.converting && store.progress) || store.refSync?.running)
 
   const paperCategoryFilterOptions = useMemo(() => {
@@ -3666,12 +3745,16 @@ export default function LibraryPage() {
   }
 
   const openMetaEditor = (item: LibraryFileItem) => {
+    const confirmedCategory = normalizeTextValue(item.paper_category)
+    const suggestedCategory = normalizeTextValue(item.suggested_category)
+    const confirmedTags = normalizeTextList(Array.isArray(item.user_tags) ? item.user_tags : [])
+    const suggestedTags = normalizeTextList(Array.isArray(item.suggested_tags) ? item.suggested_tags : [])
     setMetaItem(item)
     setMetaDraft({
-      paper_category: normalizeTextValue(item.paper_category),
+      paper_category: confirmedCategory || suggestedCategory,
       reading_status: (String(item.reading_status || '') as ReadingStatusValue),
       note: String(item.note || ''),
-      user_tags: normalizeTextList(Array.isArray(item.user_tags) ? item.user_tags : []),
+      user_tags: confirmedTags.length > 0 ? confirmedTags : normalizeTextList([...confirmedTags, ...suggestedTags]),
     })
     setMetaDrawerOpen(true)
   }
@@ -3707,7 +3790,7 @@ export default function LibraryPage() {
     }
     setSuggestionsRefreshing(true)
     try {
-      const updated = await store.regenerateSuggestions({ pdf_names: targets })
+      const updated = await store.regenerateSuggestions({ pdf_names: targets, auto_apply_empty: true })
       message.success(S.lib_msg_suggestions_refreshed_count.replace('{n}', String(updated)))
     } catch (err) {
       message.error(err instanceof Error ? err.message : S.lib_msg_refresh_suggestion_fail)
@@ -3917,6 +4000,8 @@ export default function LibraryPage() {
     const qualityReport = quality?.conversion_report || null
     const qualityCenter = qualityReport?.quality_center || null
     const sourceQuality = qualityReport?.source_quality || qualityCenter?.source_quality || null
+    const documentTypeView = libraryDocumentTypeView(sourceQuality?.document_type)
+    const sourceDocumentType = normalizeTextValue(sourceQuality?.document_type).toLowerCase()
     const qualityCenterStatus = normalizeTextValue(qualityCenter?.status || qualityReport?.source_quality_status).toLowerCase()
     const qualityCenterMessage = normalizeTextValue(qualityCenter?.message || qualityReport?.source_quality_message)
     const qualityCenterBadges = normalizeTextList(qualityCenter?.badges || []).slice(0, 4)
@@ -3935,6 +4020,10 @@ export default function LibraryPage() {
       ? qualityReport?.auto_repair_applied || []
       : []
     const mathCount = conversionMetric(quality, 'display_math') + conversionMetric(quality, 'inline_math')
+    const referenceCount = conversionMetric(quality, 'references') || conversionMetric(quality, 'reference_lines')
+    const referenceMetricLabel = sourceDocumentType === 'supplementary' && referenceCount <= 0
+      ? 'refs n/a'
+      : `refs ${referenceCount}`
     const qualityNeedsRepair = hasConversionQualityIssue(item)
     const qualityRepairing = Boolean(qualityRepairingNames[item.name])
     const sourceReadiness = conversionSourceReadiness(item, S)
@@ -4005,6 +4094,14 @@ export default function LibraryPage() {
               >
                 {sourceReadiness.label}
               </span>
+              {documentTypeView ? (
+                <span
+                  className={`kb-lib-file-submeta-chip is-doc-type ${documentTypeView.tone}`}
+                  title={documentTypeView.title}
+                >
+                  {documentTypeView.label}
+                </span>
+              ) : null}
               {!item.md_exists ? <span className="kb-lib-file-meta-muted">{S.lib_file_no_md}</span> : null}
               {suggestionCount > 0 ? (
                 <span className="kb-lib-file-submeta-chip is-suggestion">
@@ -4050,7 +4147,12 @@ export default function LibraryPage() {
           {quality ? (
             <div className="kb-lib-quality-line" data-testid="library-file-quality-line">
               <span className="kb-lib-quality-metric">pages {conversionMetric(quality, 'page_markers')}</span>
-              <span className="kb-lib-quality-metric">refs {conversionMetric(quality, 'references') || conversionMetric(quality, 'reference_lines')}</span>
+              <span
+                className="kb-lib-quality-metric"
+                title={sourceDocumentType === 'supplementary' ? 'Supplementary material may not include a standalone references section.' : undefined}
+              >
+                {referenceMetricLabel}
+              </span>
               <span className="kb-lib-quality-metric">fig {conversionMetric(quality, 'figures')}</span>
               <span className="kb-lib-quality-metric">math {mathCount}</span>
               {visibleQualityCenterBadges.map((badge) => (
@@ -4417,15 +4519,15 @@ export default function LibraryPage() {
 
   const directoriesConfigured = Boolean(pdfDirDraft.trim() && mdDirDraft.trim())
   const showDirEditor = dirEditorOpen || !directoriesConfigured
-  const workbenchStats = [
-    { key: 'view', label: S.lib_stats_view, value: counts.total_view },
-    { key: 'pending', label: S.lib_stats_pending, value: counts.pending },
-    { key: 'converted', label: S.lib_stats_converted, value: counts.converted },
-    { key: 'queued', label: S.lib_stats_queued, value: counts.queued },
-    { key: 'running', label: S.lib_stats_running, value: counts.running },
-    { key: 'source_ready', label: S.lib_stats_source_ready, value: qualitySourceReadinessStats.ready },
-    { key: 'source_blocked', label: S.lib_stats_quality_blocked, value: qualitySourceReadinessStats.blocked },
-    { key: 'quality', label: S.lib_quality_report_review, value: counts.quality_review },
+  const workbenchStats: WorkbenchMetricItem[] = [
+    { key: 'view', label: S.lib_stats_view, value: counts.total_view, tone: 'neutral' },
+    { key: 'pending', label: S.lib_stats_pending, value: counts.pending, tone: counts.pending > 0 ? 'info' : 'neutral' },
+    { key: 'converted', label: S.lib_stats_converted, value: counts.converted, tone: 'good' },
+    { key: 'queued', label: S.lib_stats_queued, value: counts.queued, tone: counts.queued > 0 ? 'processing' : 'neutral' },
+    { key: 'running', label: S.lib_stats_running, value: counts.running, tone: counts.running > 0 ? 'processing' : 'neutral' },
+    { key: 'source_ready', label: S.lib_stats_source_ready, value: qualitySourceReadinessStats.ready, tone: 'good' },
+    { key: 'source_blocked', label: S.lib_stats_quality_blocked, value: qualitySourceReadinessStats.blocked, tone: qualitySourceReadinessStats.blocked > 0 ? 'warn' : 'neutral' },
+    { key: 'quality', label: S.lib_quality_report_review, value: counts.quality_review, tone: counts.quality_review > 0 ? 'warn' : 'neutral' },
   ]
 
   const renameHasResults = renameItems.length > 0
@@ -4818,25 +4920,10 @@ export default function LibraryPage() {
         </Space>
       </div>
 
-      <div className="kb-lib-summary-strip">
-        {workbenchStats.map((item) => (
-          <div key={item.key} className={`kb-lib-summary-chip is-${item.key}`} data-stat-key={item.key}>
-            <Text type="secondary" className="kb-lib-summary-label">{item.label}</Text>
-            <div className="kb-lib-summary-value">{item.value}</div>
-          </div>
-        ))}
-      </div>
+      <WorkbenchMetricStrip items={workbenchStats} className="kb-lib-summary-strip" />
 
       {preparationWorkbench}
       {uploadWorkbenchCard}
-
-      <div className="kb-lib-stats-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_view}</Text><div className="kb-lib-stat-value">{counts.total_view}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_pending}</Text><div className="kb-lib-stat-value">{counts.pending}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_converted}</Text><div className="kb-lib-stat-value">{counts.converted}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_queued}</Text><div className="kb-lib-stat-value">{counts.queued}</div></Card>
-        <Card size="small" className="kb-lib-stat"><Text type="secondary">{S.lib_stats_running}</Text><div className="kb-lib-stat-value">{counts.running}</div></Card>
-      </div>
 
       {showStickyStatus ? (
         <Card size="small" className="kb-lib-card kb-lib-sticky-status">
@@ -4871,9 +4958,7 @@ export default function LibraryPage() {
                 <div className="kb-lib-sticky-main">
                   <Text className="kb-lib-sticky-title">{S.lib_refsync_title}</Text>
                   <Text type="secondary" className="kb-lib-sticky-sub">
-                    {store.refSync.current
-                      ? `${store.refSync.stage || S.lib_refsync_running} | ${store.refSync.current}`
-                      : (store.refSync.message || S.lib_refsync_waiting)}
+                    {refSyncDisplayMessage}
                   </Text>
                 </div>
                 <Progress className="kb-lib-sticky-progress" percent={refSyncPercent} status="active" size="small" />
@@ -4953,22 +5038,22 @@ export default function LibraryPage() {
       </Card>
 
       {showRefSyncCard && store.refSync ? (
-        <Card size="small" className="kb-lib-card kb-lib-refsync-card" title={S.lib_card_refsync}>
+        <WorkbenchPanel className="kb-lib-refsync-card">
           <div className="kb-lib-refsync-shell">
             <div className="kb-lib-refsync-head">
               <div className="kb-lib-refsync-copy">
-                <Text className="kb-lib-refsync-title">
-                  {store.refSync.current
-                    ? `${store.refSync.stage || S.lib_refsync_running} | ${store.refSync.current}`
-                    : (store.refSync.message || S.lib_refsync_waiting)}
-                </Text>
+                <Text className="kb-lib-refsync-title">{S.lib_card_refsync}</Text>
                 <Text type="secondary" className="kb-lib-refsync-hint">
-                  文档 {store.refSync.docsDone}/{store.refSync.docsTotal || numericStat(refSyncStats, 'docs_total')}，参考文献 {numericStat(refSyncStats, 'refs_total')} 条。
+                  {refSyncDisplayMessage}
+                </Text>
+                <Text type="secondary" className="kb-lib-refsync-meta">
+                  {S.lib_refsync_hint
+                    .replace('{docsDone}', String(store.refSync.docsDone))
+                    .replace('{docsTotal}', String(store.refSync.docsTotal || numericStat(refSyncStats, 'docs_total')))
+                    .replace('{refsTotal}', String(numericStat(refSyncStats, 'refs_total')))}
                 </Text>
               </div>
-              <Tag color={store.refSync.running ? 'processing' : (store.refSync.status === 'error' ? 'error' : 'success')}>
-                {store.refSync.running ? S.lib_refsync_running : (store.refSync.status === 'idle' ? S.lib_refsync_idle : store.refSync.status)}
-              </Tag>
+              <WorkbenchStatusPill tone={refSyncStatusTone}>{refSyncStatusLabel}</WorkbenchStatusPill>
             </div>
             {store.refSync.docsTotal > 0 ? (
               <Progress
@@ -4976,17 +5061,11 @@ export default function LibraryPage() {
                 status={store.refSync.running ? 'active' : (store.refSync.status === 'error' ? 'exception' : 'normal')}
               />
             ) : null}
-            <div className="kb-lib-refsync-metrics">
-              {refSyncMetricItems.map((item) => (
-                <span key={item.key} className={`kb-lib-refsync-metric is-${item.tone}`}>
-                  <em>{item.label}</em>
-                  <strong>{item.value}</strong>
-                </span>
-              ))}
-            </div>
+            <WorkbenchMetricStrip items={refSyncMetricItems} className="kb-lib-refsync-metrics" />
+            <WorkbenchMetricStrip items={refSyncQueueItems} className="kb-lib-refsync-queues" />
             {store.refSync.error ? <Text type="danger" className="text-xs">{store.refSync.error}</Text> : null}
           </div>
-        </Card>
+        </WorkbenchPanel>
       ) : null}
 
       {(qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
@@ -5952,7 +6031,7 @@ export default function LibraryPage() {
                       loading={suggestionsRefreshing}
                       onClick={() => { void regenerateSuggestionsForVisible() }}
                     >
-                      {S.lib_btn_refresh_suggestions}
+                      {S.lib_btn_auto_organize}
                     </Button>
                   ) : null}
                   {showTaxonomyClearAction ? (

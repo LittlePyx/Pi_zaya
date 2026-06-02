@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from kb.converter.quality_acceptance import summarize_conversion_quality
@@ -543,6 +544,50 @@ def test_write_conversion_quality_result_marks_supplementary_abstract_not_applic
     assert "missing_captions" not in payload["repair_plan"]["issue_codes"]
 
 
+def test_write_conversion_quality_result_does_not_treat_review_journal_name_as_review(tmp_path: Path):
+    md_path = tmp_path / "Psychological Review-1954-Some informational aspects of visual perception.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Some informational aspects of visual perception",
+                "",
+                "## Abstract",
+                "This paper studies informational aspects of visual perception.",
+                "",
+                "## References",
+                "[1] A. Author. Example reference. Journal, 1953.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path)
+
+    assert payload["source_quality"]["document_type"] == "research_article"
+
+
+def test_write_conversion_quality_result_marks_review_when_title_says_review(tmp_path: Path):
+    md_path = tmp_path / "Visual Computing-2019-Brief review of computational imaging techniques.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Brief review of computational imaging techniques",
+                "",
+                "## Abstract",
+                "This brief review summarizes computational imaging techniques.",
+                "",
+                "## References",
+                "[1] A. Author. Example reference. Journal, 2018.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path)
+
+    assert payload["source_quality"]["document_type"] == "review"
+
+
 def test_write_conversion_quality_result_flags_source_text_loss_from_pdf(tmp_path: Path):
     import fitz
 
@@ -669,6 +714,100 @@ def test_repair_markdown_text_recovers_missing_source_page_from_pdf(tmp_path: Pa
     assert "<!-- kb_page: 2 -->" in repaired
     assert "bravo00 bravo01 bravo02" in repaired
     assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("<!-- kb_page: 3 -->")
+    assert "missing_source_pages" not in result["remaining_issue_codes"]
+
+
+def test_repair_markdown_text_accepts_source_backfill_with_minor_warning(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Paged Paper.pdf"
+    doc = fitz.open()
+    page_texts = [
+        " ".join(f"alpha{i:02d}" for i in range(90)),
+        "ACM Trans. " + " ".join(f"bravo{i:02d}" for i in range(160)),
+        " ".join(f"charlie{i:02d}" for i in range(90)),
+    ]
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Paged Paper.en.md"
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Paged Paper",
+            page_texts[0],
+            "<!-- kb_page: 3 -->",
+            page_texts[2],
+            "## References",
+            "[1] Ada Lovelace. Example Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["missing_source_pages"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    assert result["changed"] is True
+    assert result["regression_reasons"] == []
+    assert "<!-- kb_page: 2 -->" in repaired
+    assert "ACM Trans. bravo00 bravo01 bravo02" in repaired
+    assert "missing_source_pages" not in result["remaining_issue_codes"]
+
+
+def test_repair_markdown_text_inserts_post_reference_pages_after_reference_markers(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Nature Layout Paper.pdf"
+    page_texts = {
+        page: f"page{page:02d} " + " ".join(f"token{page:02d}{idx:03d}" for idx in range(90))
+        for page in range(1, 14)
+    }
+    doc = fitz.open()
+    for page in range(1, 14):
+        pdf_page = doc.new_page()
+        pdf_page.insert_textbox(fitz.Rect(40, 60, 560, 760), page_texts[page], fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Nature Layout Paper.en.md"
+    original_parts = []
+    for page in range(1, 8):
+        original_parts.extend([f"<!-- kb_page: {page} -->", page_texts[page]])
+    original_parts.extend(
+        [
+            "## References",
+            f"[1] Reference line one, Journal, 2024. {page_texts[9]} <!-- kb_page: 9 -->",
+            f"[2] Reference line two, Journal, 2025. {page_texts[10]} <!-- kb_page: 10 -->",
+            "<!-- kb_page: 13 -->",
+            page_texts[13],
+        ]
+    )
+    original = "\n\n".join(original_parts)
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["missing_source_pages"],
+        source_pdf_path=pdf_path,
+    )
+    repaired = str(result.get("repaired_text") or "")
+    markers = [int(match.group(1)) for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", repaired)]
+
+    assert result["changed"] is True
+    assert markers == list(range(1, 14))
+    assert "page08 token08000" in repaired
+    assert "page11 token11000" in repaired
+    assert "page12 token12000" in repaired
+    assert "page_marker_gaps" not in result["remaining_issue_codes"]
     assert "missing_source_pages" not in result["remaining_issue_codes"]
 
 

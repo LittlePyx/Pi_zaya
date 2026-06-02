@@ -16,6 +16,7 @@ import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
   isLikelyWeakCitationTitle,
   cleanCitationDisplayText,
+  looksLowValueShelfSummary,
   mergeCiteMeta,
   normalizeCiteDetail,
   normalizeShelfNote,
@@ -55,6 +56,8 @@ const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
 const SHELF_AUTO_REPAIR_RETRY_MS = 15000
 const SHELF_METADATA_HYDRATE_BATCH_SIZE = 8
 const SHELF_METADATA_HYDRATE_RETRY_MS = 15000
+const SHELF_SUMMARY_BACKFILL_BATCH_SIZE = 4
+const SHELF_SUMMARY_BACKFILL_RETRY_MS = 60000
 const MESSAGE_LIST_PREP_PERF_LIMIT = 180
 
 interface MessageListPrepPerfEvent {
@@ -123,6 +126,8 @@ interface Props {
   trackedMessageIds?: number[]
   onTrackedMessageActive?: (messageId: number | null) => void
   onOpenReader?: (payload: ReaderOpenPayload) => void
+  onShelfOpenChange?: (open: boolean) => void
+  closeShelfSignal?: number
   readerLocateResults?: Record<string, ReaderLocateResult>
   sourceQualityRefreshToken?: number
   paperGuideSourcePath?: string
@@ -3685,7 +3690,7 @@ function ResearchTracePanel({ trace }: { trace?: Record<string, unknown> | null 
 
 function AssistantAvatar() {
   return (
-    <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-[var(--border)] bg-white/90 dark:bg-white/5">
+    <div className="kb-msg-avatar kb-msg-avatar-assistant">
       <img src="/pi_logo.png" alt="Pi assistant" className="h-5 w-5 object-contain" loading="lazy" />
     </div>
   )
@@ -4213,11 +4218,87 @@ function shelfItemNeedsPersistedMetadataHydrate(item: CiteShelfItem): boolean {
   return shelfItemNeedsMetadataRepair(item) || !item.bibliometricsChecked || !item.metadataQuality
 }
 
+function shelfItemHasDisplayableArticleSummary(item: CiteShelfItem): boolean {
+  const summaryLine = String(item.summaryLine || '').trim()
+  if (!summaryLine || looksLowValueShelfSummary(summaryLine)) return false
+  const summarySource = String(item.summarySource || '').trim().toLowerCase()
+  const quality = item.summaryQuality || {}
+  const qualityOk = quality.ok === true || String(quality.status || '').trim().toLowerCase() === 'grounded'
+  const contextOnlySource = [
+    'citation_context',
+    'citation_card',
+    'citation_card_view',
+    'metadata',
+    'references_panel_hit',
+  ].includes(summarySource)
+  if (contextOnlySource) return false
+  const articleSummarySource = [
+    'abstract',
+    'fulltext',
+    'reference_primary_evidence',
+    'navigation',
+    'exact_anchor',
+    'section_intent_rescue',
+    'doc_list_seed',
+    'doc_list_prompt_aligned',
+  ].includes(summarySource)
+  return Boolean(articleSummarySource || (!item.isInpaper && qualityOk))
+}
+
+function shelfItemNeedsSummaryBackfill(item: CiteShelfItem): boolean {
+  if (!shelfItemHasMetadataHydrationSeed(item)) return false
+  return !shelfItemHasDisplayableArticleSummary(item)
+}
+
 function shelfMetadataHydrateAttemptKey(item: CiteShelfItem): string {
   return [
     item.key,
     shelfItemRepairFingerprint(item),
   ].join('|')
+}
+
+function shelfSummaryBackfillAttemptKey(item: CiteShelfItem): string {
+  const quality = item.summaryQuality || {}
+  return [
+    item.key,
+    shelfItemRepairFingerprint(item),
+    String(item.summaryLine || '').trim(),
+    String(item.summarySource || '').trim(),
+    String(quality.status || ''),
+  ].join('|')
+}
+
+function articleSummaryPatchFromMeta(meta: Record<string, unknown>): Partial<CiteShelfItem> {
+  const line = cleanCitationDisplayText(String(meta.summary_line || meta.summaryLine || '')).trim()
+  const source = String(meta.summary_source || meta.summarySource || '').trim()
+  const provider = String(meta.summary_provider || meta.summaryProvider || '').trim()
+  const sourceKey = source.toLowerCase()
+  if (!line || looksLowValueShelfSummary(line)) return {}
+  if ([
+    'citation_context',
+    'citation_card',
+    'citation_card_view',
+    'metadata',
+    'references_panel_hit',
+  ].includes(sourceKey)) {
+    return {}
+  }
+  const rawQuality = meta.summary_quality || meta.summaryQuality
+  const summaryQuality = rawQuality && typeof rawQuality === 'object'
+    ? rawQuality as Record<string, unknown>
+    : {
+      ok: true,
+      status: 'grounded',
+      source: source || 'abstract',
+      provider,
+      export_ready: true,
+    }
+  return {
+    summaryLine: line,
+    summarySource: source || 'abstract',
+    summaryProvider: provider,
+    summaryQuality,
+  }
 }
 
 function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteShelfItem {
@@ -4374,6 +4455,8 @@ export function MessageList({
   trackedMessageIds,
   onTrackedMessageActive,
   onOpenReader,
+  onShelfOpenChange,
+  closeShelfSignal = 0,
   readerLocateResults = {},
   sourceQualityRefreshToken = 0,
   paperGuideSourcePath,
@@ -4421,10 +4504,22 @@ export function MessageList({
   const shelfMetadataHydrateTimerRef = useRef<number | null>(null)
   const shelfMetadataHydrateInFlightRef = useRef(new Set<string>())
   const shelfMetadataHydrateAttemptedAtRef = useRef<Record<string, number>>({})
+  const shelfSummaryBackfillTimerRef = useRef<number | null>(null)
+  const shelfSummaryBackfillInFlightRef = useRef(new Set<string>())
+  const shelfSummaryBackfillAttemptedAtRef = useRef<Record<string, number>>({})
   const setShelfAutoRepairingKeySet = useCallback((nextSet: Set<string>) => {
     shelfAutoRepairingKeySetRef.current = nextSet
     setShelfAutoRepairingKeys(Array.from(nextSet))
   }, [])
+
+  useEffect(() => {
+    onShelfOpenChange?.(shelfOpen)
+  }, [onShelfOpenChange, shelfOpen])
+
+  useEffect(() => {
+    if (closeShelfSignal <= 0) return
+    setShelfOpen(false)
+  }, [closeShelfSignal])
 
   useEffect(() => {
     return () => {
@@ -4442,6 +4537,9 @@ export function MessageList({
       }
       if (shelfMetadataHydrateTimerRef.current !== null) {
         window.clearTimeout(shelfMetadataHydrateTimerRef.current)
+      }
+      if (shelfSummaryBackfillTimerRef.current !== null) {
+        window.clearTimeout(shelfSummaryBackfillTimerRef.current)
       }
     }
   }, [])
@@ -4668,11 +4766,17 @@ export function MessageList({
       window.clearTimeout(shelfMetadataHydrateTimerRef.current)
       shelfMetadataHydrateTimerRef.current = null
     }
+    if (shelfSummaryBackfillTimerRef.current !== null) {
+      window.clearTimeout(shelfSummaryBackfillTimerRef.current)
+      shelfSummaryBackfillTimerRef.current = null
+    }
     setShelfAutoRepairingKeySet(new Set())
     shelfAutoRepairFingerprintsRef.current = {}
     shelfAutoRepairRetryAfterRef.current = {}
     shelfMetadataHydrateInFlightRef.current = new Set()
     shelfMetadataHydrateAttemptedAtRef.current = {}
+    shelfSummaryBackfillInFlightRef.current = new Set()
+    shelfSummaryBackfillAttemptedAtRef.current = {}
     if (prevStorageKey !== nextStorageKey) {
       const prevRevision = Number(shelfRevisionByKeyRef.current[prevStorageKey] || 0)
       const latest = latestShelfStateRef.current
@@ -4945,21 +5049,35 @@ export function MessageList({
     })
   }, [liveCiteMap])
 
-  const fetchShelfSummaryForItem = (item: CiteShelfItem) => {
+  const fetchShelfSummaryForItem = (item: CiteShelfItem, options?: { force?: boolean }) => {
     const summaryLine = String(item.summaryLine || '').trim()
-    const summarySource = String(item.summarySource || '').trim().toLowerCase()
-    const quality = item.summaryQuality || {}
-    const qualityOk = quality.ok === true || String(quality.status || '').trim().toLowerCase() === 'grounded'
-    if (summaryLine && (qualityOk || summarySource === 'abstract' || summarySource === 'fulltext')) return
+    const lowValueSummary = Boolean(summaryLine && looksLowValueShelfSummary(summaryLine))
+    if (!options?.force && shelfItemHasDisplayableArticleSummary(item)) return
+    const itemIdentity = shelfPaperIdentity(item)
+    const requestItem = (lowValueSummary || options?.force)
+      ? {
+        ...item,
+        summaryLine: '',
+        summarySource: '',
+        summaryProvider: '',
+        summaryQuality: null,
+        summary_line: '',
+        summary_source: '',
+        summary_provider: '',
+        summary_quality: null,
+      }
+      : item
     setShelfSummaryLoadingKey(item.key)
-    referencesApi.bibliometricsCached(item as unknown as Record<string, unknown>)
+    referencesApi.bibliometrics(requestItem as unknown as Record<string, unknown>)
       .then((meta) => {
         if (!meta || Object.keys(meta).length === 0) return
+        const articleSummaryPatch = articleSummaryPatchFromMeta(meta)
         setShelfItems((current) => current.map((entry) => {
-          if (entry.key !== item.key) return entry
+          if (entry.key !== item.key && shelfPaperIdentity(entry) !== itemIdentity) return entry
           const merged = mergeCiteMeta(entry, meta)
           return {
             ...toShelfItem(merged),
+            ...articleSummaryPatch,
             key: entry.key,
             tags: normalizeShelfTags(entry.tags),
             note: normalizeShelfNote(entry.note),
@@ -4970,6 +5088,82 @@ export function MessageList({
         setShelfSummaryLoadingKey((current) => (current === item.key ? '' : current))
       })
   }
+
+  useEffect(() => {
+    if (shelfSummaryBackfillTimerRef.current !== null) {
+      window.clearTimeout(shelfSummaryBackfillTimerRef.current)
+      shelfSummaryBackfillTimerRef.current = null
+    }
+    if (!shelfOpen || shelfItems.length <= 0) return
+    shelfSummaryBackfillTimerRef.current = window.setTimeout(() => {
+      shelfSummaryBackfillTimerRef.current = null
+      const now = Date.now()
+      const targets: Array<{ item: CiteShelfItem; attemptKey: string }> = []
+      for (const item of shelfItems) {
+        if (targets.length >= SHELF_SUMMARY_BACKFILL_BATCH_SIZE) break
+        if (shelfSummaryBackfillInFlightRef.current.has(item.key)) continue
+        if (!shelfItemNeedsSummaryBackfill(item)) continue
+        const attemptKey = shelfSummaryBackfillAttemptKey(item)
+        const lastAttempt = Number(shelfSummaryBackfillAttemptedAtRef.current[attemptKey] || 0)
+        if (lastAttempt > 0 && now - lastAttempt < SHELF_SUMMARY_BACKFILL_RETRY_MS) continue
+        targets.push({ item, attemptKey })
+      }
+      if (targets.length <= 0) return
+
+      const inFlight = new Set(shelfSummaryBackfillInFlightRef.current)
+      for (const target of targets) {
+        inFlight.add(target.item.key)
+        shelfSummaryBackfillAttemptedAtRef.current[target.attemptKey] = now
+      }
+      shelfSummaryBackfillInFlightRef.current = inFlight
+      setShelfSummaryLoadingKey((current) => current || targets[0]?.item.key || '')
+
+      void Promise.all(targets.map(({ item }) => (
+        referencesApi.bibliometrics({
+          ...item,
+          summaryLine: '',
+          summarySource: '',
+          summaryProvider: '',
+          summaryQuality: null,
+          summary_line: '',
+          summary_source: '',
+          summary_provider: '',
+          summary_quality: null,
+        } as unknown as Record<string, unknown>)
+          .catch(() => ({}))
+          .then((meta) => ({ key: item.key, meta }))
+      ))).then((results) => {
+        const usable = results.filter((entry) => entry.meta && Object.keys(entry.meta).length > 0)
+        if (usable.length <= 0) return
+        setShelfItems((current) => current.map((entry) => {
+          const result = usable.find((item) => item.key === entry.key)
+          if (!result) return entry
+          const merged = mergeCiteMeta(entry, result.meta)
+          const articleSummaryPatch = articleSummaryPatchFromMeta(result.meta)
+          return {
+            ...toShelfItem(merged),
+            ...articleSummaryPatch,
+            key: entry.key,
+            tags: normalizeShelfTags(entry.tags),
+            note: normalizeShelfNote(entry.note),
+          }
+        }))
+      }).finally(() => {
+        const nextInFlight = new Set(shelfSummaryBackfillInFlightRef.current)
+        for (const target of targets) nextInFlight.delete(target.item.key)
+        shelfSummaryBackfillInFlightRef.current = nextInFlight
+        setShelfSummaryLoadingKey((current) => (
+          targets.some((target) => target.item.key === current) ? '' : current
+        ))
+      })
+    }, 220)
+    return () => {
+      if (shelfSummaryBackfillTimerRef.current !== null) {
+        window.clearTimeout(shelfSummaryBackfillTimerRef.current)
+        shelfSummaryBackfillTimerRef.current = null
+      }
+    }
+  }, [shelfItems, shelfOpen])
 
   const applyShelfMetadataRepairCandidates = useCallback((
     updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>,
@@ -5253,12 +5447,13 @@ export function MessageList({
     const isInPaperReference = Boolean(detail.isInpaper)
     const shouldFetchCitationMeta = Boolean(sourcePath) && !isInPaperReference
     const hasDoi = Boolean(String(detail.doi || '').trim())
-    const shouldFetchBibliometrics = !detail.bibliometricsChecked && (
+    const itemKey = toShelfItem(detail).key
+    const needsSummaryBackfill = shelfItemNeedsSummaryBackfill(toShelfItem(detail))
+    const shouldFetchBibliometrics = (!detail.bibliometricsChecked || needsSummaryBackfill) && (
       isInPaperReference
         ? hasDoi
         : (detail.doi || detail.title || detail.venue || detail.raw || detail.citeFmt)
     )
-    const itemKey = toShelfItem(detail).key
     activePopoverRequestKeyRef.current = itemKey
     if (shouldRequestCitationCardPolish(detail)) {
       requestCitationCardPolish(detail, itemKey)
@@ -5273,7 +5468,10 @@ export function MessageList({
       reqs.push(referencesApi.citationMetaCached(sourcePath).catch(() => ({})))
     }
     if (shouldFetchBibliometrics) {
-      reqs.push(referencesApi.bibliometricsCached(detail as unknown as Record<string, unknown>).catch(() => ({})))
+      const loadBibliometrics = needsSummaryBackfill
+        ? referencesApi.bibliometrics(detail as unknown as Record<string, unknown>)
+        : referencesApi.bibliometricsCached(detail as unknown as Record<string, unknown>)
+      reqs.push(loadBibliometrics.catch(() => ({})))
     }
 
     setPopoverLoading(true)
@@ -5340,8 +5538,11 @@ export function MessageList({
 
   const addToShelf = (detail: CiteDetail) => {
     const item = toShelfItem(detail)
+    const identity = shelfPaperIdentity(item)
+    const currentItems = latestShelfStateRef.current.items
+    const existingSnapshot = currentItems.find((entry) => entry.key === item.key || shelfPaperIdentity(entry) === identity)
+    const summaryTarget = existingSnapshot ? mergeShelfItemWithLive(existingSnapshot, item) : item
     setShelfItems((current) => {
-      const identity = shelfPaperIdentity(item)
       const existing = current.find((entry) => entry.key === item.key || shelfPaperIdentity(entry) === identity)
       const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
       const next = [
@@ -5357,38 +5558,38 @@ export function MessageList({
       if (deduped.length === next.length) return deduped.slice(0, SHELF_MAX_ITEMS)
       return deduped
     })
-    setFocusedShelfKey(item.key)
+    setFocusedShelfKey(summaryTarget.key)
     setShelfOpen(true)
-    fetchShelfSummaryForItem(item)
+    fetchShelfSummaryForItem(summaryTarget, { force: true })
   }
 
   const startPaperGuideFromDetail = async (detail: CiteDetail) => {
     const isInPaperReference = Boolean(detail.isInpaper)
     if (isInPaperReference) {
-      message.info('This item is an in-answer citation. Upload the PDF in Library first, then start paper guide.')
+      message.info(S.reader_pdf_not_ready)
       return
     }
     const sourcePath = String(detail.sourcePath || '').trim()
     if (!sourcePath) {
-      message.info('Current citation has no bindable source path')
+      message.info(S.reader_missing_path)
       return
     }
-    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || 'paper'
+    const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || S.default_source_fallback
     setPopoverGuideLoading(true)
     try {
       await createPaperGuideConversation({
         sourcePath,
         sourceName,
-        title: `Paper Guide 闂?${sourceName}`,
+        title: `${S.timeline_guide_label} · ${sourceName}`,
       })
-      message.success('Entered paper guide conversation')
+      message.success(S.reader_entered_guide)
       setPopoverPinned(false)
       clearCitationHoverTimers()
       setPopoverDetail(null)
       setPopoverPos(null)
       activePopoverRequestKeyRef.current = ''
     } catch (err) {
-      message.error(err instanceof Error ? err.message : 'Failed to create paper guide conversation')
+      message.error(err instanceof Error ? err.message : S.reader_create_guide_failed)
     } finally {
       setPopoverGuideLoading(false)
     }
@@ -5398,7 +5599,7 @@ export function MessageList({
     if (!onOpenReader) return
     const sourcePath = String(detail.sourcePath || '').trim()
     if (!sourcePath) {
-      message.info('Current citation has no bindable source path')
+      message.info(S.reader_missing_path)
       return
     }
     const payload = buildBasicReaderOpenPayload({
@@ -5425,9 +5626,11 @@ export function MessageList({
   const selectedSnapshotDiff = useMemo(() => {
     if (!selectedSavedSnapshot) return ''
     const diff = snapshotDiffCounts(shelfItems, selectedSavedSnapshot.items)
-    if (diff.added <= 0 && diff.removed <= 0) return 'No diff from current shelf'
-    return `Compared with current: +${diff.added} / -${diff.removed}`
-  }, [selectedSavedSnapshot, shelfItems])
+    if (diff.added <= 0 && diff.removed <= 0) return S.shelf_snapshot_no_diff
+    return S.shelf_snapshot_diff
+      .replace('{added}', String(diff.added))
+      .replace('{removed}', String(diff.removed))
+  }, [S, selectedSavedSnapshot, shelfItems])
 
   const guideSourcePathSet = useMemo(() => {
     const out = new Set<string>()
@@ -5799,14 +6002,14 @@ export function MessageList({
 
   return (
     <>
-      <div ref={scrollRef} className="h-full min-h-0 overflow-y-auto px-4 py-6 kb-main-scroll">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4">
+      <div ref={scrollRef} className="kb-message-scroll kb-main-scroll">
+        <div className="kb-message-stack">
           {rows.map((row, index) => {
             if (row.kind === 'refs') {
               return (
-                <div key={`refs-${row.userMsgId}-${index}`} className="flex gap-3">
-                  <div className="mt-1 h-7 w-7 shrink-0" />
-                  <div className="max-w-[88%] flex-1">
+                <div key={`refs-${row.userMsgId}-${index}`} className="kb-message-row kb-message-row-refs">
+                  <div className="kb-msg-avatar-spacer" />
+                  <div className="kb-message-refs-wrap">
                     <RefsPanel
                       refs={refs}
                       msgId={row.userMsgId}
@@ -6553,22 +6756,17 @@ export function MessageList({
               onOpenReader(payload)
             }
             const bubbleClass = isUser
-              ? (isImageOnlyUserMessage ? 'w-fit max-w-[22rem]' : 'w-fit max-w-[88%]')
-              : 'w-full max-w-[88%]'
-            const bubblePadClass = isImageOnlyUserMessage ? 'px-4 py-4' : 'px-6 py-4'
+              ? `kb-msg-bubble kb-msg-bubble-user ${isImageOnlyUserMessage ? 'is-image-only' : ''}`
+              : 'kb-msg-bubble kb-msg-bubble-assistant'
 
             return (
               <div
                 key={message.id}
                 data-msg-id={message.id}
-                className={`flex gap-3 ${isUser ? 'justify-end' : ''}`}
+                className={`kb-message-row ${isUser ? 'is-user' : 'is-assistant'}`}
               >
                 {!isUser ? <AssistantAvatar /> : null}
-                <div
-                  className={`${bubbleClass} ${bubblePadClass} rounded-[28px] ${
-                    isUser ? 'bg-[var(--msg-user-bg)]' : 'border border-[var(--border)] bg-[var(--msg-ai-bg)] shadow-[0_8px_24px_rgba(15,23,42,0.03)]'
-                  }`}
-                >
+                <div className={bubbleClass}>
                   {isUser ? (
                     <>
                       {imageAttachments.length > 0 ? (
@@ -6835,7 +7033,7 @@ export function MessageList({
                   )}
                 </div>
                 {isUser ? (
-                  <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--msg-user-bg)]">
+                  <div className="kb-msg-avatar kb-msg-avatar-user">
                     <UserOutlined className="text-xs" />
                   </div>
                 ) : null}
@@ -6844,9 +7042,9 @@ export function MessageList({
           })}
 
           {generationPartial !== undefined && generationPartial !== null ? (
-            <div className="flex gap-3">
+            <div className="kb-message-row is-assistant">
               <AssistantAvatar />
-              <div className="w-full max-w-[88%] rounded-[28px] border border-[var(--border)] bg-[var(--msg-ai-bg)] px-6 py-4 shadow-[0_8px_24px_rgba(15,23,42,0.03)]">
+              <div className="kb-msg-bubble kb-msg-bubble-assistant is-streaming">
                 {generationStage ? (
                   <div className="mb-2 flex items-center gap-2">
                     <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--accent)]" />

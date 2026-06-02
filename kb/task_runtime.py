@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
@@ -354,6 +355,8 @@ from kb.source_blocks import (
 )
 from ui.chat_widgets import _normalize_math_markdown
 from ui.strings import S
+
+logger = logging.getLogger(__name__)
 
 _LIVE_ASSISTANT_PREFIX = "__KB_LIVE_TASK__:"
 _CITE_SINGLE_BRACKET_RE = re.compile(
@@ -4382,13 +4385,14 @@ def _gen_start_task(task: dict) -> bool:
     try:
         threading.Thread(target=_gen_worker, args=(sid, tid), daemon=True).start()
     except Exception:
+        logger.exception("generation_thread_start_failed", extra={"session_id": sid, "task_id": tid})
         with RUNTIME.GEN_LOCK:
             cur = RUNTIME.GEN_TASKS.get(sid)
             if isinstance(cur, dict) and str(cur.get("id") or "") == tid:
                 cur2 = dict(cur)
                 cur2["status"] = "error"
                 cur2["stage"] = "error"
-                cur2["answer"] = "绾跨▼鍚姩澶辫触"
+                cur2["answer"] = "线程启动失败"
                 cur2["finished_at"] = time.time()
                 RUNTIME.GEN_TASKS[sid] = cur2
         return False
@@ -4454,6 +4458,9 @@ _SOURCE_CONVERSION_RETRY_ISSUES = {
     "weak_structure",
     "missing_markdown",
     "source_text_loss",
+    "missing_source_pages",
+    "page_marker_gaps",
+    "reference_index_truncated",
 }
 
 
@@ -4483,7 +4490,7 @@ def _post_convert_source_retry_needed(assessment: dict, *, already_retried: bool
     if bool((assessment or {}).get("indexable")):
         return False
     action = str((assessment or {}).get("action") or "").strip().lower()
-    if action != "reconvert":
+    if action not in {"reconvert", "autofix"}:
         return False
     codes = set(_quality_assessment_issue_codes(assessment))
     return bool(codes & _SOURCE_CONVERSION_RETRY_ISSUES)
@@ -4505,6 +4512,7 @@ def _bg_post_convert_quality_gate(
     *,
     task_id: str = "",
     speed_mode: str = "",
+    source_pdf_path: Path | str | None = None,
 ) -> dict:
     if not _post_convert_quality_gate_enabled():
         return {
@@ -4515,7 +4523,12 @@ def _bg_post_convert_quality_gate(
             "auto_repair": {"attempted": False, "changed": False, "unsafe": False, "applied": []},
         }
     try:
-        assessment = prepare_markdown_for_index(md_path, auto_repair=True, allow_blocked=False)
+        assessment = prepare_markdown_for_index(
+            md_path,
+            auto_repair=True,
+            allow_blocked=False,
+            source_pdf_path=source_pdf_path,
+        )
     except Exception as exc:
         assessment = {
             "enabled": True,
@@ -4708,6 +4721,7 @@ def _bg_worker_loop() -> None:
                         md_main,
                         task_id=task_id,
                         speed_mode=speed_mode,
+                        source_pdf_path=pdf,
                     )
                     if not bool(post_convert_quality.get("indexable")):
                         msg = f"OK+QUALITY_BLOCKED: {out_folder}"
@@ -4793,6 +4807,7 @@ def _bg_worker_loop() -> None:
                             md_main,
                             task_id=task_id,
                             speed_mode=effective_speed_mode,
+                            source_pdf_path=pdf,
                         )
                         if not bool(post_convert_quality.get("indexable")):
                             msg = f"OK+SOURCE_RETRY_QUALITY_BLOCKED: {out_folder}"

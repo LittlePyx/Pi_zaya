@@ -211,6 +211,78 @@ def test_bibliometrics_route_reuses_persisted_repair_cache(tmp_path, monkeypatch
     assert payload["summary_source"] == "abstract"
 
 
+def test_bibliometrics_route_enriches_ready_metadata_when_summary_missing(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    (db_dir / "crossref_cache.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doi": {
+                    "10.1364/oe.458742": {
+                        "title": "Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination",
+                        "authors": "Jiang X, Li Z, Du G, et al",
+                        "venue": "Optics Express",
+                        "year": "2022",
+                        "doi": "10.1364/oe.458742",
+                        "doi_url": "https://doi.org/10.1364/oe.458742",
+                    }
+                },
+                "bib": {},
+                "title": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    enrich_calls = []
+
+    def fake_enrich(detail):
+        enrich_calls.append(dict(detail))
+        return {
+            **dict(detail),
+            "summary_line": "A grounded article summary from the Crossref abstract.",
+            "summary_source": "abstract",
+            "summary_provider": "crossref",
+            "summary_quality": {
+                "ok": True,
+                "status": "grounded",
+                "source": "abstract",
+                "provider": "crossref",
+                "export_ready": True,
+                "issues": [],
+            },
+        }
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "oe-summary-missing",
+                "source_path": "source.md",
+                "raw": "[184] Jiang et al. doi:10.1364/oe.458742",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert enrich_calls
+    assert enrich_calls[0]["doi"] == "10.1364/oe.458742"
+    assert payload["summary_source"] == "abstract"
+    assert payload["summary_provider"] == "crossref"
+    assert payload["metadata_export_acceptance"]["export_ready"] is True
+    assert payload["metadata_export_acceptance"]["summary_export_ready"] is True
+    cache = json.loads((db_dir / "crossref_cache.json").read_text(encoding="utf-8"))
+    cached = cache["doi"]["10.1364/oe.458742"]
+    assert cached["summary_line"] == "A grounded article summary from the Crossref abstract."
+    assert cached["summary_source"] == "abstract"
+
+
 def test_bibliometrics_route_attaches_quality_contract_to_enriched_result(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir(parents=True, exist_ok=True)

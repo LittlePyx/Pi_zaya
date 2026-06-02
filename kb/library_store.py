@@ -21,7 +21,16 @@ _CATEGORY_SUGGESTION_RULES: dict[str, tuple[str, ...]] = {
     "3DGS": ("3dgs", "gaussian splatting", "gaussian splat", "3d gaussian"),
     "SCI": ("snapshot compressive", "compressive image", "compressive sensing", "high speed imaging", "high-speed imaging"),
     "Single-Photon Imaging": ("single photon imaging", "single-photon imaging", "single photon", "photon counting"),
-    "Single-Pixel Imaging": ("single pixel imaging", "single-pixel imaging", "single pixel", "bucket detector"),
+    "Single-Pixel Imaging": (
+        "single pixel imaging",
+        "single-pixel imaging",
+        "single pixel camera",
+        "single-pixel camera",
+        "single pixel video",
+        "single-pixel video",
+        "ghost imaging",
+        "bucket detector",
+    ),
     "Inverse Imaging": ("inverse imaging", "inverse problem", "inverse problems"),
     "Diffusion": ("diffusion", "latent diffusion", "denoising diffusion", "score distillation"),
 }
@@ -38,7 +47,15 @@ _TAG_SUGGESTION_RULES: dict[str, tuple[str, ...]] = {
     "high-speed-imaging": ("high speed imaging", "high-speed imaging"),
     "physics-informed": ("physics informed", "physics-informed", "physics guided", "physics-guided", "physical prior"),
     "single-photon": ("single photon", "single-photon", "photon counting"),
-    "single-pixel": ("single pixel", "single-pixel", "bucket detector"),
+    "single-pixel": (
+        "single pixel imaging",
+        "single-pixel imaging",
+        "single pixel camera",
+        "single-pixel camera",
+        "single pixel video",
+        "single-pixel video",
+        "bucket detector",
+    ),
     "inverse-imaging": ("inverse imaging", "inverse problem", "inverse problems"),
     "image-reconstruction": ("image reconstruction", "reconstruct image", "reconstructed image"),
     "high-resolution": ("high resolution", "high-resolution", "super resolution", "super-resolution"),
@@ -69,6 +86,8 @@ _GENERIC_DOC_TYPE_CATEGORY_RULES: dict[str, tuple[str, ...]] = {
 _GENERIC_DOC_TYPE_CATEGORY_LABELS = set(_GENERIC_DOC_TYPE_CATEGORY_RULES.keys())
 _GENERIC_DOC_TYPE_TAGS = {"survey", "dataset", "benchmark"}
 _GENERIC_DOC_TYPE_SIGNAL_KINDS = {"title", "display_title", "md_title", "summary", "keywords", "md_keywords", "headings"}
+_RULE_ONLY_CATEGORY_LABELS = {"Single-Photon Imaging", "Single-Pixel Imaging"}
+_RULE_ONLY_TAG_LABELS = {"single-pixel"}
 _SYSTEM_CATEGORY_HINTS: dict[str, str] = {
     "NeRF": "radiance-field and novel-view-synthesis papers",
     "3DGS": "3D Gaussian Splatting papers",
@@ -538,16 +557,20 @@ class LibraryStore:
 
     def _category_rule_score(self, signals: list[dict[str, object]], label: str) -> float:
         label_clean = self._clean_category(label)
-        score = self._score_label_match(signals, label_clean)
         phrases = _CATEGORY_SUGGESTION_RULES.get(label_clean) or _GENERIC_DOC_TYPE_CATEGORY_RULES.get(label_clean)
+        if label_clean in _RULE_ONLY_CATEGORY_LABELS:
+            return self._score_phrase_matches(signals, phrases or ())
+        score = self._score_label_match(signals, label_clean)
         if phrases:
             score = max(score, self._score_phrase_matches(signals, phrases))
         return score
 
     def _tag_rule_score(self, signals: list[dict[str, object]], label: str) -> float:
         _norm, clean = self._normalize_tag(label)
-        score = self._score_label_match(signals, clean)
         phrases = _TAG_SUGGESTION_RULES.get(clean)
+        if clean in _RULE_ONLY_TAG_LABELS:
+            return self._score_phrase_matches(signals, phrases or ())
+        score = self._score_label_match(signals, clean)
         if phrases:
             score = max(score, self._score_phrase_matches(signals, phrases))
         return score
@@ -1227,7 +1250,7 @@ class LibraryStore:
                 continue
             if (label_clean in _GENERIC_DOC_TYPE_CATEGORY_LABELS) and (not self._generic_doc_type_allowed(signals, label_clean)):
                 continue
-            score = self._score_label_match(signals, label_clean)
+            score = self._category_rule_score(signals, label_clean)
             if score > 0:
                 category_scores[label_clean] = max(
                     category_scores.get(label_clean, 0.0),
@@ -1240,6 +1263,8 @@ class LibraryStore:
             for category_label, freq in category_hits.items():
                 label_clean = self._clean_category(str(category_label or ""))
                 if not label_clean or label_clean == current_category:
+                    continue
+                if self._category_rule_score(signals, label_clean) <= 0:
                     continue
                 category_scores[label_clean] = category_scores.get(label_clean, 0.0) + min(
                     2.4,
@@ -1269,7 +1294,7 @@ class LibraryStore:
                 continue
             if (norm in _GENERIC_DOC_TYPE_TAGS) and (not self._generic_doc_type_allowed(signals, clean)):
                 continue
-            score = self._score_label_match(signals, clean)
+            score = self._tag_rule_score(signals, clean)
             if score > 0:
                 tag_scores[clean] = max(
                     tag_scores.get(clean, 0.0),
@@ -1288,7 +1313,7 @@ class LibraryStore:
                         continue
                     if (norm in _GENERIC_DOC_TYPE_TAGS) and (not self._generic_doc_type_allowed(signals, clean)):
                         continue
-                    base_score = self._score_label_match(signals, clean)
+                    base_score = self._tag_rule_score(signals, clean)
                     if base_score <= 0:
                         continue
                     tag_scores[clean] = max(
@@ -1613,6 +1638,7 @@ class LibraryStore:
         *,
         sha1s: Iterable[str] | None = None,
         paths: Iterable[Path | str] | None = None,
+        auto_apply_empty: bool = False,
     ) -> list[dict]:
         targets: list[str] = []
         seen: set[str] = set()
@@ -1689,6 +1715,7 @@ class LibraryStore:
                     ).fetchall()
                     if str(tag_row["tag_label"] or "").strip()
                 ]
+                current_category = self._clean_category(str(row["paper_category"] or ""))
 
                 heuristic_category, heuristic_tags = self._generate_suggestions_for_row(
                     row=row,
@@ -1717,6 +1744,43 @@ class LibraryStore:
                     current_user_tags=user_tags,
                     dismissed_tags=dismissed_tags,
                 )
+                stored_suggested_category = suggested_category
+                stored_suggested_tags = list(suggested_tags)
+                if bool(auto_apply_empty):
+                    if (not current_category) and suggested_category:
+                        conn.execute(
+                            """
+                            INSERT INTO paper_meta (sha1, paper_category, suggestion_updated_at, updated_at)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(sha1) DO UPDATE SET
+                              paper_category = CASE
+                                WHEN COALESCE(paper_category, '') = '' THEN excluded.paper_category
+                                ELSE paper_category
+                              END,
+                              suggestion_updated_at = excluded.suggestion_updated_at,
+                              updated_at = excluded.updated_at
+                            """,
+                            (sha1_clean, suggested_category, now, now),
+                        )
+                        current_category = suggested_category
+                        stored_suggested_category = ""
+                    if (not user_tags) and suggested_tags:
+                        user_seen: set[str] = set()
+                        for tag in suggested_tags:
+                            norm, label = self._normalize_tag(tag)
+                            if not norm or not label or norm in user_seen:
+                                continue
+                            user_seen.add(norm)
+                            conn.execute(
+                                """
+                                INSERT INTO paper_tags (sha1, tag_norm, tag_label, source, updated_at)
+                                VALUES (?, ?, ?, 'user', ?)
+                                """,
+                                (sha1_clean, norm, label, now),
+                            )
+                        if user_seen:
+                            user_tags = list(suggested_tags)
+                            stored_suggested_tags = []
 
                 conn.execute(
                     """
@@ -1726,10 +1790,10 @@ class LibraryStore:
                       suggested_category = excluded.suggested_category,
                       suggestion_updated_at = excluded.suggestion_updated_at
                     """,
-                    (sha1_clean, suggested_category, now),
+                    (sha1_clean, stored_suggested_category, now),
                 )
                 conn.execute("DELETE FROM paper_tags WHERE sha1 = ? AND source = 'suggested'", (sha1_clean,))
-                for tag in suggested_tags:
+                for tag in stored_suggested_tags:
                     norm, label = self._normalize_tag(tag)
                     if not norm or not label:
                         continue

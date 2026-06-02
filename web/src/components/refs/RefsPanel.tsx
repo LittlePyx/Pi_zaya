@@ -466,13 +466,13 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
       message.info(S.refs_reader_missing)
       return
     }
-    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || 'Paper'
+    const sourceName = String(ui.display_name || '').trim() || sourcePath.split(/[\\/]/).pop() || S.default_source_fallback
     setGuideLoadingIndex(index)
     try {
       await createPaperGuideConversation({
         sourcePath,
         sourceName,
-        title: `阅读指导 · ${sourceName}`,
+        title: `${S.timeline_guide_label} · ${sourceName}`,
       })
       nav('/')
       message.success(S.refs_guide_started)
@@ -510,7 +510,7 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
       visibleAlternatives: Array.isArray(readerOpen.visibleAlternatives) ? readerOpen.visibleAlternatives : undefined,
       evidenceAlternatives: Array.isArray(readerOpen.evidenceAlternatives) ? readerOpen.evidenceAlternatives : undefined,
       initialAltIndex: Number.isFinite(Number(readerOpen.initialAltIndex)) ? Number(readerOpen.initialAltIndex) : undefined,
-      fallbackSourceName: '文献',
+      fallbackSourceName: S.default_source_fallback,
     })
     if (!payload) return
     onOpenReader(payload)
@@ -528,7 +528,12 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
         items={[
           {
             key: 'refs',
-            label: <span className="kb-refs-panel-title">{S.refs}</span>,
+            label: (
+              <span className="kb-refs-panel-title">
+                <span>{S.refs}</span>
+                {visibleHits.length > 0 ? <span className="kb-refs-panel-count">{visibleHits.length}</span> : null}
+              </span>
+            ),
             children: hasPending && visibleHits.length === 0 ? (
               <div className="rounded-[14px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-4 py-3 text-[13px] text-[var(--muted-text)]">
                 {S.refs_pending_filter}

@@ -2665,6 +2665,47 @@ def test_library_suggestions_regenerate_and_apply(monkeypatch, tmp_path: Path):
     assert "single-image" not in refreshed["suggested_tags"]
 
 
+def test_library_suggestions_can_auto_apply_empty_fields(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "0")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "scinerf-auto.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert(
+        "sha1-scinerf-auto",
+        pdf_path,
+        citation_meta={
+            "title": "Pose-Free Single-Image Neural Radiance Fields from Snapshot Compressive Sensing",
+            "venue": "CVPR",
+        },
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+
+    client = TestClient(app)
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["scinerf-auto.pdf"], "auto_apply_empty": True},
+    )
+    assert regen_response.status_code == 200
+    item = regen_response.json()["items"][0]
+    assert item["paper_category"] == "SCI"
+    assert "pose-free" in item["user_tags"]
+    assert "single-image" in item["user_tags"]
+    assert item["suggested_category"] == ""
+    assert item["suggested_tags"] == []
+    assert item["has_suggestions"] is False
+
+
 def test_library_suggestions_use_markdown_and_user_taxonomy(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
     monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "0")
@@ -2881,6 +2922,63 @@ def test_library_suggestions_prefer_domain_category_and_facet_tags(monkeypatch, 
     assert item["suggested_category"] == "Single-Photon Imaging"
     assert "physics-informed" in item["suggested_tags"]
     assert "single-photon" in item["suggested_tags"]
+
+
+def test_library_suggestions_do_not_overclassify_single_pixel_detector_mentions(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+    monkeypatch.setenv("KB_LIBRARY_SUGGEST_USE_LLM", "0")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_path = pdf_dir / "interferometric-ism.pdf"
+    seed_pdf = pdf_dir / "single-pixel-seed.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 ism")
+    seed_pdf.write_bytes(b"%PDF-1.4 seed")
+
+    store = LibraryStore(tmp_path / "library.db")
+    store.upsert("sha1-seed-spi", seed_pdf, citation_meta={"title": "Seed single-pixel imaging paper"})
+    store.upsert_paper_user_meta(
+        path=seed_pdf,
+        paper_category="Single-Pixel Imaging",
+        reading_status="",
+        note="",
+        user_tags=["high-resolution", "single-pixel"],
+    )
+    store.upsert(
+        "sha1-ism",
+        pdf_path,
+        citation_meta={
+            "title": "Interferometric image scanning microscopy for label-free live cell imaging",
+            "abstract": (
+                "Image scanning microscopy can replace the single pixel detector with an array detector. "
+                "This microscopy paper focuses on pixel reassignment and live-cell label-free contrast."
+            ),
+        },
+    )
+    store.upsert_paper_user_meta(
+        path=pdf_path,
+        paper_category="",
+        reading_status="",
+        note="",
+        user_tags=["high-resolution"],
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: store)
+
+    client = TestClient(app)
+    regen_response = client.post(
+        "/api/library/meta/suggestions/regenerate",
+        json={"pdf_names": ["interferometric-ism.pdf"]},
+    )
+    assert regen_response.status_code == 200
+    item = regen_response.json()["items"][0]
+    assert item["suggested_category"] != "Single-Pixel Imaging"
+    assert "single-pixel" not in item["suggested_tags"]
 
 
 def test_library_llm_suggestions_default_to_candidate_vocab(monkeypatch, tmp_path: Path):

@@ -10,7 +10,13 @@ from typing import Any
 
 from api.reference_ui import enrich_citation_detail_meta
 from kb.citation_meta import extract_first_doi, normalize_title_for_match, title_similarity
-from kb.reference_index import CROSSREF_CACHE_FILE_NAME, INDEX_FILE_NAME
+from kb.reference_index import (
+    CROSSREF_CACHE_FILE_NAME,
+    INDEX_FILE_NAME,
+    REFERENCE_METADATA_STATUS_CODES,
+    REFERENCE_MISSING_REASON_CODES,
+    classify_reference_metadata,
+)
 
 
 _DOI_URL_RE = re.compile(r"^https?://(?:dx\.)?doi\.org/", flags=re.I)
@@ -870,10 +876,39 @@ def _reference_entry_payload(ref: Mapping[str, Any], meta: Mapping[str, Any]) ->
         merged["doi"] = doi
         merged["doi_url"] = _doi_url(doi)
     payload = _metadata_payload(merged)
-    for key in ("raw", "cite_fmt", "source_path", "source_name", "ref_num", "num"):
+    for key in (
+        "raw",
+        "cite_fmt",
+        "source_path",
+        "source_name",
+        "ref_num",
+        "num",
+        "metadata_status",
+        "missing_reason",
+        "metadata_action",
+        "match_method",
+        "tail_continuity_status",
+    ):
         value = merged.get(key)
         if _text(value) and not _text(payload.get(key)):
             payload[key] = _text(value)
+    if "crossref_ok" in merged:
+        payload["crossref_ok"] = bool(merged.get("crossref_ok"))
+    for key in ("parse_confidence", "match_score"):
+        if key not in merged:
+            continue
+        try:
+            payload[key] = float(merged.get(key) or 0.0)
+        except Exception:
+            continue
+    if "metadata_ready" in merged:
+        payload["metadata_ready"] = bool(merged.get("metadata_ready"))
+    if isinstance(merged.get("metadata_missing_fields"), list):
+        payload["metadata_missing_fields"] = [
+            _text(item)
+            for item in list(merged.get("metadata_missing_fields") or [])
+            if _text(item)
+        ]
     if doi:
         payload.setdefault("doi", doi)
         payload.setdefault("doi_url", _doi_url(doi))
@@ -1084,6 +1119,7 @@ def _persist_reference_index(meta: Mapping[str, Any], db_dir: Path) -> bool:
     if incoming.get("doi") or incoming.get("title"):
         merged["crossref_ok"] = True
         merged["match_method"] = _REPAIR_SOURCE
+    merged.update(classify_reference_metadata(merged))
     refs = doc.get("refs")
     if not isinstance(refs, dict):
         return False
@@ -1473,6 +1509,9 @@ def scan_reference_metadata_backfill_targets(
     missing_counter: dict[str, int] = {}
     issue_counter: dict[str, int] = {}
     source_counter: dict[str, int] = {}
+    status_counter: dict[str, int] = {}
+    reason_counter: dict[str, int] = {}
+    action_counter: dict[str, int] = {}
     targets: list[dict[str, Any]] = []
 
     for doc_key, raw_doc in docs.items():
@@ -1498,11 +1537,28 @@ def scan_reference_metadata_backfill_targets(
             is_ready = bool(quality.get("ok")) or _text(quality.get("status")).lower() == "ready"
             is_export_ready = bool(acceptance.get("export_ready"))
             is_index_export_ready = bool(base_acceptance.get("export_ready"))
+            classification = classify_reference_metadata(hydrated)
+            metadata_status = _text(classification.get("metadata_status"))
+            missing_reason = _text(classification.get("missing_reason"))
+            metadata_action = _text(classification.get("metadata_action"))
+            if metadata_status in REFERENCE_METADATA_STATUS_CODES:
+                status_counter[metadata_status] = status_counter.get(metadata_status, 0) + 1
+            if missing_reason in REFERENCE_MISSING_REASON_CODES:
+                reason_counter[missing_reason] = reason_counter.get(missing_reason, 0) + 1
+            if metadata_action:
+                action_counter[metadata_action] = action_counter.get(metadata_action, 0) + 1
+            if metadata_action in {"retry", "source_repair"}:
+                action_counter["retry_or_source_repair"] = action_counter.get("retry_or_source_repair", 0) + 1
+            is_accepted_non_actionable = bool(
+                metadata_status in {"non_article_source_ok", "no_doi_expected"}
+                and metadata_action == "non_article_ok"
+                and not is_export_ready
+            )
             if is_ready:
                 ready += 1
             if is_export_ready:
                 export_ready += 1
-            if not is_index_export_ready:
+            if (not is_index_export_ready) and (not is_accepted_non_actionable):
                 needs_repair += 1
                 is_repairable = bool(
                     base_quality.get("repairable")
@@ -1530,6 +1586,7 @@ def scan_reference_metadata_backfill_targets(
                     targets.append(
                         {
                             **hydrated,
+                            **classification,
                             "metadata_quality": dict(quality),
                             "metadata_export_acceptance": dict(acceptance),
                             "metadata_index_quality": dict(base_quality),
@@ -1558,6 +1615,12 @@ def scan_reference_metadata_backfill_targets(
         "truncated": bool(repairable > len(targets)),
         "missing_fields": _counter_items(missing_counter),
         "issue_codes": _counter_items(issue_counter),
+        "metadata_status": _counter_items(status_counter),
+        "missing_reasons": _counter_items(reason_counter),
+        "metadata_actions": _counter_items(action_counter),
+        "auto_backfill": int(action_counter.get("auto_backfill", 0) or 0),
+        "non_article_ok": int(action_counter.get("non_article_ok", 0) or 0),
+        "retry_or_source_repair": int(action_counter.get("retry_or_source_repair", 0) or 0),
         "sources": _counter_items(source_counter, 8),
         "targets": targets,
     }

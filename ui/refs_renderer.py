@@ -12,7 +12,6 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
-import streamlit as st
 import requests
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
@@ -44,6 +43,7 @@ from kb.pdf_tools import open_in_explorer
 from kb.source_blocks import normalize_inline_markdown
 from kb.tokenize import tokenize
 from ui.strings import S
+from ui.streamlit_compat import st
 import json
 
 

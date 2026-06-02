@@ -146,6 +146,8 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
     base = summarize_markdown_quality(text)
     page_count, page_min, page_max, page_gaps = _page_marker_stats(text)
     references = extract_references_map_from_md(text)
+    detected_reference_count = max(int(base.reference_line_count), len(references))
+    max_reference_index = max(int(base.max_reference_index), max(references.keys(), default=0))
     return ConversionQualityMetrics(
         chars=base.chars,
         lines=base.lines,
@@ -167,9 +169,9 @@ def summarize_conversion_quality(md_path: Path, md_text: str | None = None) -> C
         display_math_block_count=base.display_math_block_count,
         unclosed_display_math_block_count=_display_math_unclosed_count(text),
         inline_math_count=base.inline_math_count,
-        reference_line_count=base.reference_line_count,
+        reference_line_count=detected_reference_count,
         extracted_reference_count=len(references),
-        max_reference_index=base.max_reference_index,
+        max_reference_index=max_reference_index,
         body_citation_marker_count=base.body_citation_marker_count,
         body_citation_expanded_index_count=base.body_citation_expanded_index_count,
         mojibake_count=len(_MOJIBAKE_RE.findall(text)),

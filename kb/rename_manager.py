@@ -8,8 +8,6 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-import streamlit as st
-
 from kb.file_naming import (
     build_display_pdf_filename,
     build_storage_base_name,
@@ -28,6 +26,7 @@ from kb.pdf_tools import (
     extract_pdf_meta_suggestion,
     open_in_explorer,
 )
+from ui.streamlit_compat import st
 
 _RENAME_BASE_MAX = 88
 _MD_IGNORED_MAIN_NAMES = {"assets_manifest.md", "quality_report.md"}

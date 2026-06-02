@@ -14,7 +14,7 @@ export function CopyBar({ text, markdown }: Props) {
   }
 
   return (
-    <div className="mt-2 flex gap-1 opacity-40 transition-opacity hover:opacity-100">
+    <div className="kb-copy-bar">
       <Button
         size="small"
         type="text"

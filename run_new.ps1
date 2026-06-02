@@ -145,8 +145,7 @@ if (-not $NoBackendReload) {
   $backendArgs += @(
     '--reload',
     '--reload-dir', (Join-Path $here 'api'),
-    '--reload-dir', (Join-Path $here 'kb'),
-    '--reload-dir', (Join-Path $here 'ui')
+    '--reload-dir', (Join-Path $here 'kb')
   )
 }
 $backendProc = Start-Process `

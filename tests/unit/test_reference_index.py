@@ -56,6 +56,78 @@ def test_assess_source_reference_alignment_allows_doi_only_rows_when_local_entri
     assert ref_index._assess_source_reference_alignment(ref_map, rows) is True
 
 
+def test_reference_metadata_classification_splits_actionable_reasons():
+    complete = ref_index.classify_reference_metadata(
+        {
+            "raw": "[1] Gehm M, Brady D. Single-shot compressive spectral imaging. Optics Express, 2007. doi:10.1364/OE.15.014013",
+            "title": "Single-shot compressive spectral imaging",
+            "authors": "Gehm M, Brady D",
+            "venue": "Optics Express",
+            "year": "2007",
+            "doi": "10.1364/OE.15.014013",
+        }
+    )
+    assert complete["metadata_status"] == "complete"
+    assert complete["missing_reason"] == ""
+
+    crossref = ref_index.classify_reference_metadata(
+        {
+            "raw": "[1] Gehm M, Brady D. Single-shot compressive spectral imaging. Optics Express, 2007.",
+            "title": "Single-shot compressive spectral imaging",
+            "authors": "Gehm M, Brady D",
+            "venue": "Optics Express",
+            "year": "2007",
+            "doi": "10.1364/OE.15.014013",
+            "crossref_ok": True,
+            "match_method": "title+doi_backfill",
+        }
+    )
+    assert crossref["metadata_status"] == "crossref_enriched"
+
+    sparse = ref_index.classify_reference_metadata(
+        {
+            "raw": "[2] Boyd et al. Alternating direction method of multipliers. 2011. doi:10.1561/2200000016",
+            "title": "Alternating direction method of multipliers",
+            "doi": "10.1561/2200000016",
+        }
+    )
+    assert sparse["metadata_status"] == "doi_sparse_refreshable"
+    assert sparse["metadata_action"] == "auto_backfill"
+
+    retryable = ref_index.classify_reference_metadata(
+        {
+            "raw": "[3] Smith J, Doe A. Snapshot compressive imaging with learned priors. Optics Express, 2020.",
+            "title": "Snapshot compressive imaging with learned priors",
+            "authors": "Smith J, Doe A",
+            "venue": "Optics Express",
+            "year": "2020",
+        }
+    )
+    assert retryable["metadata_status"] == "title_lookup_retryable"
+    assert retryable["metadata_action"] == "retry"
+
+    no_doi = ref_index.classify_reference_metadata(
+        {
+            "raw": "[4] OpenAI. GPT-4 technical report. Technical report, 2023. https://openai.com/research/gpt-4",
+            "title": "GPT-4 technical report",
+            "authors": "OpenAI",
+            "venue": "OpenAI",
+            "year": "2023",
+        }
+    )
+    assert no_doi["metadata_status"] == "non_article_source_ok"
+    assert no_doi["missing_reason"] == "no_doi_expected"
+    assert no_doi["metadata_action"] == "non_article_ok"
+
+    truncated = ref_index.classify_reference_metadata(
+        {"raw": "[5] Smith J. Incomplete reference ...", "parse_confidence": 0.40}
+    )
+    assert truncated["metadata_status"] == "truncated_reference"
+
+    low_confidence = ref_index.classify_reference_metadata({"raw": "[6] Bad OCR source 2020.", "parse_confidence": 0.45})
+    assert low_confidence["metadata_status"] == "low_confidence_match"
+
+
 def test_extract_references_map_cleans_noise_on_early_heading_return():
     md_text = (
         "# Demo\n\n"
@@ -90,6 +162,21 @@ def test_extract_references_map_does_not_use_body_fig_or_section_numbers_as_refs
     assert sorted(out.keys()) == [1, 2]
     assert "First real reference" in str(out.get(1) or "")
     assert "Second real reference" in str(out.get(2) or "")
+
+
+def test_extract_references_map_recovers_unheaded_references_before_methods():
+    body = "\n".join(f"Main result paragraph {idx} with Fig. {idx}." for idx in range(70))
+    refs = "\n".join(
+        f"{idx}. Author, A. et al. Reference title {idx}. Nat. Photon. {10 + idx}, {100 + idx}-{110 + idx} (20{idx:02d})."
+        for idx in range(1, 13)
+    )
+    md_text = f"# Demo\n\n{body}\n\n{refs}\n\n## Methods\n\nExperimental details."
+
+    out = ref_index.extract_references_map_from_md(md_text)
+
+    assert sorted(out.keys()) == list(range(1, 13))
+    assert "Reference title 1" in str(out.get(1) or "")
+    assert "Reference title 12" in str(out.get(12) or "")
 
 
 def test_build_reference_catalog_from_md_marks_gapped_tail_and_confidence():
@@ -225,6 +312,49 @@ def test_fallback_title_from_raw_reference_prefers_year_title_pattern():
     raw = "[14] Gonzalez RC, Woods RE (2006) Digital image processing, 3rd edn. Prentice-Hall, Inc, Upper Saddle River"
     title = ref_index._fallback_title_from_raw_reference(raw)
     assert title == "Digital image processing, 3rd edn"
+
+
+def test_fallback_reference_meta_protects_author_initial_periods():
+    raw = (
+        "[4] Jeffrey H. Shapiro and Robert W. Boyd. The physics of ghost imaging. "
+        "Quantum Information Processing, Aug 2012."
+    )
+
+    meta = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert meta["title"] == "The physics of ghost imaging"
+    assert meta["authors"] == "Jeffrey H. Shapiro and Robert W. Boyd"
+    assert meta["venue"] == "Quantum Information Processing"
+    assert meta["year"] == "2012"
+
+
+def test_fallback_reference_meta_extracts_initials_and_abbreviated_venue():
+    raw = (
+        "[11] Jiuxuan Zhao, Ashley Lyons, Jeff S. Lundeen, and Ryan W. Boyd. "
+        "Ghost imaging with entangled photons. Opt. Express, 30(3):3675-3683, Jan 2022."
+    )
+
+    meta = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert meta["title"] == "Ghost imaging with entangled photons"
+    assert "Jiuxuan Zhao" in meta["authors"]
+    assert meta["venue"] == "Opt. Express"
+    assert meta["year"] == "2022"
+
+
+def test_crossref_meta_uses_publisher_when_container_title_missing():
+    meta = citation_meta._meta_from_item(
+        {
+            "title": ["Introduction to Optical Microscopy"],
+            "author": [{"family": "Mertz", "given": "Jerome"}],
+            "publisher": "Cambridge University Press",
+            "issued": {"date-parts": [[2019]]},
+            "DOI": "10.1017/9781108552660",
+        }
+    )
+
+    assert meta["venue"] == "Cambridge University Press"
+    assert meta["authors"] == "Mertz J"
 
 
 def test_lookup_crossref_meta_for_entry_uses_title_lookup_without_year(monkeypatch):
@@ -497,6 +627,31 @@ def test_load_source_reference_rows_respects_fresh_negative_cache(monkeypatch):
     assert rows == []
 
 
+def test_prepare_doc_context_prefetch_does_not_fetch_source_references(tmp_path, monkeypatch):
+    md_path = tmp_path / "demo.en.md"
+    md_path.write_text(
+        "# Demo\n\nDOI: 10.1000/demo\n\n## References\n"
+        "[1] A. Author. Demo title. Demo Journal, 2020.\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        ref_index,
+        "_load_source_reference_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("prefetch must not hit Crossref source refs")),
+    )
+
+    out = ref_index._prepare_doc_context_prefetch(
+        md_path,
+        pdf_root_obj=None,
+        lib_citation_meta_map={},
+        crossref_enabled=True,
+    )
+
+    assert out["source_doi"] == "10.1000/demo"
+    assert out["source_ref_rows"] == []
+
+
 def test_infer_source_doi_from_doc_hints_prefers_heading_title_when_filename_is_truncated(monkeypatch, tmp_path):
     doc_dir = tmp_path / "NatCommun-2021-Imaging biological tissue with...pixel compressive holography"
     doc_dir.mkdir()
@@ -524,6 +679,34 @@ def test_infer_source_doi_from_doc_hints_prefers_heading_title_when_filename_is_
     assert doi == "10.1038/s41467-021-24990-0"
     assert captured
     assert captured[0] == "Imaging biological tissue with high-throughput single-pixel compressive holography"
+
+
+def test_infer_source_doi_from_doc_hints_reads_cache_when_crossref_disabled(tmp_path, monkeypatch):
+    md_path = tmp_path / "NatCommun-2021-Imaging biological tissue with...pixel compressive holography.en.md"
+    md_path.write_text(
+        "# Imaging biological tissue with high-throughput single-pixel compressive holography\n",
+        encoding="utf-8",
+    )
+    key = (
+        "imaging biological tissue with high throughput single pixel compressive holography"
+        "|2021|natcommun"
+    )
+    cache = {"source_work": {key: "10.1038/s41467-021-24990-0"}}
+
+    monkeypatch.setattr(
+        ref_index,
+        "fetch_best_crossref_meta",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("offline cache path must not fetch")),
+    )
+
+    doi = ref_index._infer_source_doi_from_doc_hints(
+        md_path,
+        md_path.read_text(encoding="utf-8"),
+        cache,
+        crossref_enabled=False,
+    )
+
+    assert doi == "10.1038/s41467-021-24990-0"
 
 
 def test_venue_similarity_handles_compact_filename_aliases():
@@ -1023,6 +1206,41 @@ def test_build_reference_index_falls_back_to_raw_title_when_meta_has_no_title(tm
     assert "raw_title" in str(ref.get("match_method") or "")
 
 
+def test_build_reference_index_fills_sparse_meta_from_raw_reference(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    md_path = src_root / "demo.en.md"
+    md_path.write_text(
+        "# Demo\n\n## References\n"
+        "[1] Jeffrey H. Shapiro and Robert W. Boyd. The physics of ghost imaging. "
+        "Quantum Information Processing, Aug 2012.\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: False)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+    monkeypatch.setattr(ref_index, "_lookup_pdf_for_md_doc", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ref_index, "_extract_source_doi_from_md_head", lambda *args, **kwargs: "")
+    monkeypatch.setattr(ref_index, "_infer_source_doi_from_doc_hints", lambda *args, **kwargs: "")
+    monkeypatch.setattr(ref_index, "_load_source_reference_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(ref_index, "_lookup_crossref_meta_for_entry", lambda *args, **kwargs: (None, ""))
+
+    ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=False,
+        enable_title_lookup=True,
+    )
+    data = ref_index.load_reference_index(db_dir)
+    doc = next(iter((data.get("docs") or {}).values()))
+    ref = (doc.get("refs") or {}).get("1") or {}
+    assert str(ref.get("title") or "") == "The physics of ghost imaging"
+    assert str(ref.get("authors") or "") == "Jeffrey H. Shapiro and Robert W. Boyd"
+    assert str(ref.get("venue") or "") == "Quantum Information Processing"
+    assert "raw_meta" in str(ref.get("match_method") or "")
+
+
 def test_build_reference_index_uses_cached_doi_backfill_when_crossref_offline(tmp_path, monkeypatch):
     src_root = tmp_path / "src"
     db_dir = tmp_path / "db"
@@ -1095,6 +1313,87 @@ def test_build_reference_index_uses_cached_doi_backfill_when_crossref_offline(tm
     assert str(ref.get("doi") or "") == "10.1234/demo"
     assert str(ref.get("title") or "") == "Recovered Title From Cached DOI"
     assert "doi_backfill" in str(ref.get("match_method") or "")
+
+
+def test_build_reference_index_refreshes_sparse_cached_doi_meta(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    md_path.write_text(
+        "# Demo\n\n## References\n"
+        "[1] Mertz, J. Introduction to Optical Microscopy 2nd edn (Cambridge Univ. Press, 2019). "
+        "doi:10.1017/9781108552660\n",
+        encoding="utf-8",
+    )
+
+    cache_data = {
+        "version": 1,
+        "updated_at": 0,
+        "doi": {
+            "10.1017/9781108552660": {
+                "title": "Introduction to Optical Microscopy",
+                "authors": "Mertz J",
+                "venue": "",
+                "year": "2019",
+                "doi": "10.1017/9781108552660",
+                "match_method": "doi",
+            }
+        },
+        "bib": {},
+        "source_refs": {},
+        "source_work": {},
+        "title": {},
+    }
+    (db_dir / "crossref_cache.json").write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: True)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+    monkeypatch.setattr(ref_index, "_lookup_pdf_for_md_doc", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ref_index, "_extract_source_doi_from_md_head", lambda *args, **kwargs: "")
+    monkeypatch.setattr(ref_index, "_infer_source_doi_from_doc_hints", lambda *args, **kwargs: "")
+    monkeypatch.setattr(ref_index, "_load_source_reference_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        ref_index,
+        "_lookup_crossref_meta_for_entry",
+        lambda *args, **kwargs: (
+            {
+                "title": "Introduction to Optical Microscopy",
+                "authors": "Mertz J",
+                "venue": "",
+                "year": "2019",
+                "doi": "10.1017/9781108552660",
+                "match_method": "bibliographic",
+            },
+            "10.1017/9781108552660",
+        ),
+    )
+    monkeypatch.setattr(
+        ref_index,
+        "fetch_best_crossref_meta",
+        lambda **kwargs: {
+            "title": "Introduction to Optical Microscopy",
+            "authors": "Mertz J",
+            "venue": "Cambridge University Press",
+            "year": "2019",
+            "doi": "10.1017/9781108552660",
+            "match_method": "doi",
+        },
+    )
+
+    ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=False,
+        enable_title_lookup=True,
+    )
+    data = ref_index.load_reference_index(db_dir)
+    doc = next(iter((data.get("docs") or {}).values()))
+    ref = (doc.get("refs") or {}).get("1") or {}
+    assert str(ref.get("venue") or "") == "Cambridge University Press"
+    cache = json.loads((db_dir / "crossref_cache.json").read_text(encoding="utf-8"))
+    assert cache["doi"]["10.1017/9781108552660"]["venue"] == "Cambridge University Press"
 
 
 def test_prefetch_doi_meta_parallel_populates_cache_with_dedup(monkeypatch):

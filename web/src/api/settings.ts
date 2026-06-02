@@ -23,6 +23,7 @@ export interface SettingsPatch {
   answerOutputMode?: string
   refsCardLocale?: 'auto' | 'zh' | 'en'
   uiLocale?: 'zh' | 'en'
+  sidebarCollapsed?: boolean
 }
 
 export interface PickDirResponse {
@@ -46,6 +47,7 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.answerOutputMode !== undefined) out.answer_output_mode = patch.answerOutputMode
   if (patch.refsCardLocale !== undefined) out.refs_card_locale = patch.refsCardLocale
   if (patch.uiLocale !== undefined) out.ui_locale = patch.uiLocale
+  if (patch.sidebarCollapsed !== undefined) out.sidebar_collapsed = patch.sidebarCollapsed
   return out
 }
 

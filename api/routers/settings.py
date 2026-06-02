@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from api.deps import get_settings, load_prefs, save_prefs
@@ -10,6 +11,22 @@ from kb.file_ops import _pick_directory_dialog
 from kb.llm import DeepSeekChat
 
 router = APIRouter(prefix="/api", tags=["settings"])
+_PATH_PREF_KEYS = {"pdf_dir", "md_dir"}
+
+
+def _normalize_pref_value(key: str, value):
+    if key not in _PATH_PREF_KEYS:
+        return value
+    raw = str(value or "").strip()
+    if not raw:
+        raise HTTPException(400, f"{key} cannot be empty")
+    try:
+        path = Path(raw).expanduser().resolve(strict=False)
+    except Exception as exc:
+        raise HTTPException(400, f"invalid {key}: {exc}") from exc
+    if path.exists() and not path.is_dir():
+        raise HTTPException(400, f"{key} must be a directory")
+    return str(path)
 
 
 @router.get("/settings")
@@ -40,13 +57,14 @@ class PrefsPatch(BaseModel):
     answer_output_mode: str | None = None
     refs_card_locale: str | None = None
     ui_locale: str | None = None
+    sidebar_collapsed: bool | None = None
 
 
 @router.patch("/settings")
 def update_settings(body: PrefsPatch):
     prefs = load_prefs()
     for k, v in body.model_dump(exclude_none=True).items():
-        prefs[k] = v
+        prefs[k] = _normalize_pref_value(k, v)
     save_prefs(prefs)
     return {"ok": True}
 

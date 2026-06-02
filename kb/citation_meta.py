@@ -168,6 +168,18 @@ def _meta_from_item(item: dict[str, Any], *, fallback_title: str = "") -> dict[s
     title = html.unescape(str(title_list[0] if title_list else fallback_title)).strip()
     venue_list = item.get("container-title", []) or []
     venue = html.unescape(str(venue_list[0] if venue_list else "")).strip()
+    if not venue:
+        publisher = html.unescape(str(item.get("publisher") or "")).strip()
+        if publisher:
+            venue = publisher
+    if not venue:
+        institution = item.get("institution") or []
+        if isinstance(institution, list) and institution:
+            first = institution[0]
+            if isinstance(first, dict):
+                venue = html.unescape(str(first.get("name") or "")).strip()
+            else:
+                venue = html.unescape(str(first or "")).strip()
     return {
         "title": title,
         "authors": _format_authors(item) or "[Unknown Authors]",
@@ -269,7 +281,7 @@ def _crossref_search_title_raw(title: str, rows: int) -> list[dict[str, Any]]:
     params = {
         "query.title": q,
         "rows": int(max(1, min(8, rows))),
-        "select": "author,published-print,published-online,issued,created,container-title,volume,issue,page,DOI,title",
+        "select": "author,published-print,published-online,issued,created,container-title,publisher,institution,volume,issue,page,DOI,title",
     }
     headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
     url = "https://api.crossref.org/works"

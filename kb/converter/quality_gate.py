@@ -13,6 +13,11 @@ from .quality_repair import (
 
 
 _BLOCKING_ACTIONS = {"reconvert", "review"}
+_CRITICAL_AUTOFIX_ISSUES = {
+    "missing_source_pages",
+    "page_marker_gaps",
+    "reference_index_truncated",
+}
 
 
 def _report_is_stale(md_path: Path, report: dict[str, Any]) -> bool:
@@ -59,12 +64,17 @@ def _compact_plan(plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def load_or_write_conversion_quality_result(md_path: Path | str, *, refresh_stale: bool = True) -> dict[str, Any]:
+def load_or_write_conversion_quality_result(
+    md_path: Path | str,
+    *,
+    refresh_stale: bool = True,
+    source_pdf_path: Path | str | None = None,
+) -> dict[str, Any]:
     path = Path(md_path).expanduser()
     report = load_conversion_quality_result(path)
     if refresh_stale and _report_is_stale(path, report):
         try:
-            report = write_conversion_quality_result(path)
+            report = write_conversion_quality_result(path, source_pdf_path=source_pdf_path)
         except Exception:
             report = {}
     return report if isinstance(report, dict) else {}
@@ -76,6 +86,7 @@ def assess_markdown_index_quality(
     quality_result: dict[str, Any] | None = None,
     refresh_stale: bool = True,
     allow_blocked: bool = False,
+    source_pdf_path: Path | str | None = None,
 ) -> dict[str, Any]:
     path = Path(md_path).expanduser()
     if not path.exists() or not path.is_file():
@@ -95,9 +106,9 @@ def assess_markdown_index_quality(
 
     report = dict(quality_result or {})
     if not report:
-        report = load_or_write_conversion_quality_result(path, refresh_stale=refresh_stale)
+        report = load_or_write_conversion_quality_result(path, refresh_stale=refresh_stale, source_pdf_path=source_pdf_path)
     elif refresh_stale and _report_is_stale(path, report):
-        report = load_or_write_conversion_quality_result(path, refresh_stale=True)
+        report = load_or_write_conversion_quality_result(path, refresh_stale=True, source_pdf_path=source_pdf_path)
     if not report:
         plan = plan_conversion_quality_repair(["quality_scan_failed"])
         compact = _compact_plan(plan)
@@ -120,12 +131,15 @@ def assess_markdown_index_quality(
     compact = _compact_plan(plan)
     action = str(compact.get("action") or "review").strip().lower() or "review"
     issue_codes = [str(item) for item in list(compact.get("issue_codes") or []) if str(item or "").strip()]
+    critical_autofix_codes = [code for code in issue_codes if code in _CRITICAL_AUTOFIX_ISSUES]
     blocking_codes = (
         list(compact.get("reconvert_issue_codes") or []) + list(compact.get("review_issue_codes") or [])
         if action in _BLOCKING_ACTIONS
         else []
     )
-    blocked = action in _BLOCKING_ACTIONS
+    if critical_autofix_codes:
+        blocking_codes = list(blocking_codes) + critical_autofix_codes
+    blocked = action in _BLOCKING_ACTIONS or bool(critical_autofix_codes)
     status = "blocked" if blocked else ("ready" if action == "none" else "degraded")
     indexable = (not blocked) or bool(allow_blocked)
     if blocked and allow_blocked:
@@ -150,9 +164,10 @@ def prepare_markdown_for_index(
     *,
     auto_repair: bool = True,
     allow_blocked: bool = False,
+    source_pdf_path: Path | str | None = None,
 ) -> dict[str, Any]:
     path = Path(md_path).expanduser()
-    assessment = assess_markdown_index_quality(path, allow_blocked=allow_blocked)
+    assessment = assess_markdown_index_quality(path, allow_blocked=allow_blocked, source_pdf_path=source_pdf_path)
     repair_result: dict[str, Any] = {}
     action_before_repair = str(assessment.get("action") or "").strip().lower()
     issue_codes_before_repair = [
@@ -165,13 +180,14 @@ def prepare_markdown_for_index(
     )
     if bool(auto_repair) and should_attempt_repair:
         try:
-            repair_result = repair_markdown_quality(path, issue_codes=issue_codes_before_repair)
-            report = write_conversion_quality_result(path, auto_repair_result=repair_result)
+            repair_result = repair_markdown_quality(path, issue_codes=issue_codes_before_repair, source_pdf_path=source_pdf_path)
+            report = write_conversion_quality_result(path, auto_repair_result=repair_result, source_pdf_path=source_pdf_path)
             assessment = assess_markdown_index_quality(
                 path,
                 quality_result=report,
                 refresh_stale=False,
                 allow_blocked=allow_blocked,
+                source_pdf_path=source_pdf_path,
             )
         except Exception as exc:
             assessment = {

@@ -30,6 +30,8 @@ interface Props {
   onMouseLeave?: () => void
 }
 
+type CompactMetaItem = { key: string; label: string; value: string; href?: string; tone: string }
+
 function compact(value: string) {
   return String(value || '').trim()
 }
@@ -137,6 +139,18 @@ function looksNarrativeMetadataText(value: string, detail: CiteDetail): boolean 
   const venue = compact(detail.venue)
   if (venue && containsIdentityText(text, venue, 7)) return true
   return false
+}
+
+function looksGenericSystemBTakeawayText(value: string): boolean {
+  const text = compact(value).replace(/\s+/g, ' ')
+  if (!text) return false
+  return (
+    /作为当前论文引用的方法背景或实现依据/.test(text)
+    || /帮助核对该方法线索从哪里来/.test(text)
+    || /把回答中的说法追溯到当前论文引用的上游文献/.test(text)
+    || /links? the answer back to an upstream reference/i.test(text)
+    || /upstream reference cited by the current paper/i.test(text)
+  )
 }
 
 function isLowValueSystemAClaim(value: string): boolean {
@@ -355,6 +369,7 @@ export function CitationPopover({
     || ((!suppressRawSystemBContextFallback && !systemBRawContextIsLowValue) ? systemBRawContextCandidate : '')
   const systemBCitationContextLabel = cardEvidenceLabel || '引用语境'
   const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
+    && !looksGenericSystemBTakeawayText(cardTakeaway)
     ? cardTakeaway
     : ''
   const rawSystemBContextSummary = cleanCitationDisplayText(contextSummarySection?.text || detail.cardContextSummary)
@@ -503,7 +518,7 @@ export function CitationPopover({
     display.venueYear ? { label: '发表', value: display.venueYear } : null,
   ].filter(Boolean) as Array<{ label: string; value: string }>
   const showMetaGrid = false
-  const showMetrics = Boolean(isSystemB && (metrics.length > 0 || doiLabel))
+  const showMetrics = false
   const showCardQuality = Boolean(
     cardQualityLabel
     && (cardWarning || systemAHasReviewRisk || cardQualityScore < 0.62),
@@ -548,14 +563,44 @@ export function CitationPopover({
           value: item,
           tone: 'metric',
         })),
-      ].filter(Boolean) as Array<{ key: string; label: string; value: string; href?: string; tone: string }>)
+      ].filter(Boolean) as CompactMetaItem[])
     : []
-  const showSystemACompactMeta = systemACompactMetaItems.length > 0
+  const systemBCompactMetaItems = isSystemB
+    ? ([
+        display.authors ? {
+          key: 'authors',
+          label: '作者',
+          value: display.authors,
+          tone: 'muted',
+        } : null,
+        display.venueYear ? {
+          key: 'published',
+          label: '发表',
+          value: display.venueYear,
+          tone: 'muted',
+        } : null,
+        doiLabel ? {
+          key: 'doi',
+          label: 'DOI',
+          value: doiLabel,
+          href: doiHref,
+          tone: 'doi',
+        } : null,
+        ...metrics.map((item) => ({
+          key: `metric-${item}`,
+          label: '',
+          value: item,
+          tone: 'metric',
+        })),
+      ].filter(Boolean) as CompactMetaItem[])
+    : []
+  const compactMetaItems = isSystemB ? systemBCompactMetaItems : systemACompactMetaItems
+  const showCompactMeta = compactMetaItems.length > 0
 
   return (
     <div
       ref={ref}
-      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b' : 'kb-cite-pop-system-a'} fixed z-50 w-[500px] max-w-[calc(100vw-20px)]`}
+      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b' : 'kb-cite-pop-system-a'} fixed z-50 w-[460px] max-w-[calc(100vw-20px)]`}
       data-testid="citation-popover"
       style={style ?? { left: position.x + 10, top: position.y + 10, visibility: 'hidden' }}
       onMouseEnter={onMouseEnter}
@@ -569,9 +614,12 @@ export function CitationPopover({
           </div>
           <div className="kb-cite-pop-title">{isSystemB ? systemBTitle : systemATitle}</div>
           {headerSubtitle ? <div className="kb-cite-pop-title-sub">{headerSubtitle}</div> : null}
-          {showSystemACompactMeta ? (
-            <div className="kb-cite-pop-compact-meta" data-testid="citation-popover-system-a-compact-meta">
-              {systemACompactMetaItems.map((item) => (
+          {showCompactMeta ? (
+            <div
+              className="kb-cite-pop-compact-meta"
+              data-testid={isSystemB ? 'citation-popover-system-b-compact-meta' : 'citation-popover-system-a-compact-meta'}
+            >
+              {compactMetaItems.map((item) => (
                 item.href ? (
                   <a
                     className={`kb-cite-pop-compact-pill kb-cite-pop-compact-${item.tone} kb-cite-pop-link`}

@@ -10972,6 +10972,8 @@ def _is_summary_quality_ok(text: str) -> bool:
     s = _clean_summary_line(text)
     if not s:
         return False
+    if _looks_low_value_shelf_summary(s):
+        return False
     if _looks_fragmentary_ref_summary(s):
         return False
     if _looks_why_like_ref_summary(s):
@@ -10991,6 +10993,39 @@ def _is_summary_quality_ok(text: str) -> bool:
     ):
         return False
     return True
+
+
+def _looks_low_value_shelf_summary(text: str) -> bool:
+    s = _clean_summary_line(text)
+    if not s:
+        return False
+    low = s.lower()
+    patterns = (
+        r"\u5e2e\u52a9\u6838\u5bf9",
+        r"\u7ebf\u7d22\u4ece\u54ea\u91cc\u6765",
+        r"\u65b9\u6cd5\u80cc\u666f|\u5b9e\u73b0\u4f9d\u636e",
+        r"\u4f5c\u4e3a\u5f53\u524d\u8bba\u6587\u5f15\u7528",
+        r"\u5f53\u524d\u8bba\u6587\u5f15\u7528\u7684\u65b9\u6cd5",
+        r"\u5f15\u7528\u7684\u65b9\u6cd5\u80cc\u666f",
+        r"\u6765\u6e90\u7ebf\u7d22",
+        r"\bhelps?\s+(?:verify|check|trace)\b",
+        r"\bmethod\s+background\b",
+        r"\bcited\s+(?:prior\s+)?work\b",
+    )
+    return any(re.search(pattern, s) or re.search(pattern, low) for pattern in patterns)
+
+
+def _looks_metadata_only_summary(text: str) -> bool:
+    s = _clean_summary_line(text)
+    if not s:
+        return False
+    return bool(
+        re.search(
+            r"\u4ec5\u68c0\u7d22\u5230|\u6682\u65e0\u53ef\u7528\u6458\u8981|\u7f3a\u5c11\u53ef\u7528\u6458\u8981|\u5efa\u8bae.*DOI|metadata only|no abstract",
+            s,
+            flags=re.I,
+        )
+    )
 
 
 @lru_cache(maxsize=512)
@@ -11126,6 +11161,10 @@ def _summary_quality_contract(meta: dict) -> dict:
 
     if not summary:
         issues.append({"code": "missing_summary", "severity": "error", "field": "summary_line"})
+    elif _looks_low_value_shelf_summary(summary):
+        issues.append({"code": "low_value_summary", "severity": "error", "field": "summary_line"})
+    elif source == "metadata" and _looks_metadata_only_summary(summary):
+        issues.append({"code": "metadata_only_summary", "severity": "warning", "field": "summary_line"})
     elif not _is_summary_quality_ok(summary):
         issues.append({"code": "weak_summary", "severity": "warning", "field": "summary_line"})
     if summary and title and _looks_like_title_echo(summary, title):
@@ -11189,8 +11228,16 @@ def _ensure_summary_line(meta: dict, *, allow_crossref_abstract: bool) -> dict:
     existing_line = _summary_excerpt(str(out.get("summary_line") or ""), max_sentences=3, max_len=360)
     existing_source = str(out.get("summary_source") or "").strip().lower()
     title = str(out.get("title") or "").strip()
+    if existing_line and _looks_low_value_shelf_summary(existing_line):
+        existing_line = ""
+        out.pop("summary_line", None)
+        out.pop("summary_source", None)
+        out.pop("summary_generation", None)
     if existing_line:
-        if (existing_source == "metadata") and _looks_like_title_echo(existing_line, title):
+        if (existing_source == "metadata") and (
+            _looks_like_title_echo(existing_line, title)
+            or _looks_metadata_only_summary(existing_line)
+        ):
             existing_line = ""
         elif existing_source == "abstract":
             final_line, generation = _finalize_abstract_summary_line(title=title, abstract_text=existing_line)

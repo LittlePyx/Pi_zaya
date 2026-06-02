@@ -320,12 +320,21 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
         metrics = summarize_conversion_quality(path)
         report_payload = load_conversion_quality_result(path)
         conversion_report = _conversion_quality_report_summary(path, report_payload)
+        source_quality = (conversion_report or {}).get("source_quality") if isinstance(conversion_report, dict) else {}
+        source_document_type = str((source_quality or {}).get("document_type") or "").strip().lower() if isinstance(source_quality, dict) else ""
+        references_not_required = source_document_type == "supplementary"
         report_plan = report_payload.get("repair_plan") if isinstance(report_payload.get("repair_plan"), dict) else {}
         report_issue_codes = [
             str(code or "").strip().lower()
             for code in list((report_plan or {}).get("issue_codes") or [])
             if str(code or "").strip()
         ]
+        if references_not_required:
+            report_issue_codes = [
+                code
+                for code in report_issue_codes
+                if code not in {"missing_abstract", "missing_references", "weak_structure"}
+            ]
         report_action = str((report_plan or {}).get("action") or report_payload.get("recommended_action") or "").strip().lower()
         report_stale = bool((conversion_report or {}).get("stale")) if isinstance(conversion_report, dict) else True
         metric_view = {
@@ -416,7 +425,7 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
                 add_issue("missing_page_markers", "Missing page anchors", penalty=8)
             if metrics.page_marker_gap_count > 0:
                 add_issue("page_marker_gaps", "Page anchor gaps", count=metrics.page_marker_gap_count, penalty=6)
-            if metrics.extracted_reference_count <= 0 and metrics.reference_line_count <= 0:
+            if (not references_not_required) and metrics.extracted_reference_count <= 0 and metrics.reference_line_count <= 0:
                 add_issue("missing_references", "Missing reference list", penalty=12)
             if metrics.image_count > 0 and metrics.caption_count <= 0:
                 add_issue("missing_captions", "Figures lack captions", count=metrics.image_count, penalty=5)
@@ -429,10 +438,12 @@ def _conversion_quality_summary(md_path: str | Path) -> dict | None:
         status = "error" if hard_issue else ("warning" if issues else "good")
         label = "Needs repair" if status == "error" else ("Needs review" if status == "warning" else "Ready")
         score = max(0, min(100, int(score)))
+        reference_count = metrics.extracted_reference_count or metrics.reference_line_count
+        reference_summary = "refs n/a" if references_not_required and reference_count <= 0 else f"{reference_count} refs"
         summary = (
             f"{label} | Q{score} | "
             f"{metrics.page_marker_count} pages | "
-            f"{metrics.extracted_reference_count or metrics.reference_line_count} refs | "
+            f"{reference_summary} | "
             f"{metrics.image_count} figures | "
             f"{metrics.display_math_block_count + metrics.inline_math_count} math"
         )
@@ -593,6 +604,25 @@ def _path_is_within(path_obj: Path, roots: list[Path]) -> bool:
         except Exception:
             continue
     return False
+
+
+def _resolve_library_pdf_path_arg(path_raw: str) -> Path:
+    raw = str(path_raw or "").strip()
+    if not raw:
+        raise HTTPException(400, "path required")
+    pdf_d = _pdf_dir()
+    try:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = pdf_d / candidate
+        resolved = candidate.resolve(strict=False)
+    except Exception as exc:
+        raise HTTPException(400, f"invalid path: {exc}") from exc
+    if resolved.suffix.lower() != ".pdf":
+        raise HTTPException(400, "path must point to a PDF")
+    if not _path_is_within(resolved, [pdf_d]):
+        raise HTTPException(400, "path must be within the configured PDF directory")
+    return resolved
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -6012,6 +6042,7 @@ class BatchUpdateLibraryMetaBody(BaseModel):
 class RegenerateLibrarySuggestionsBody(BaseModel):
     pdf_names: list[str] = []
     sha1s: list[str] = []
+    auto_apply_empty: bool = False
 
 
 class LibrarySuggestionActionBody(BaseModel):
@@ -6641,7 +6672,7 @@ def update_library_meta(body: UpdateLibraryMetaBody):
             raise HTTPException(400, "invalid pdf_name")
         resolved_path = (_pdf_dir() / pdf_name).expanduser()
     elif path_raw:
-        resolved_path = Path(path_raw).expanduser()
+        resolved_path = _resolve_library_pdf_path_arg(path_raw)
     elif not sha1:
         raise HTTPException(400, "pdf_name, path, or sha1 required")
 
@@ -6733,6 +6764,7 @@ def regenerate_library_meta_suggestions(body: RegenerateLibrarySuggestionsBody):
     payloads = _library_store().regenerate_paper_suggestions(
         sha1s=sha1s,
         paths=paths,
+        auto_apply_empty=bool(body.auto_apply_empty),
     )
     return {
         "ok": True,
@@ -6767,7 +6799,7 @@ def apply_library_meta_suggestions(body: LibrarySuggestionActionBody):
             raise HTTPException(400, "invalid pdf_name")
         resolved_path = (_pdf_dir() / pdf_name).expanduser()
     elif path_raw:
-        resolved_path = Path(path_raw).expanduser()
+        resolved_path = _resolve_library_pdf_path_arg(path_raw)
     elif not sha1:
         raise HTTPException(400, "pdf_name, path, or sha1 required")
 

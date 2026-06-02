@@ -71,6 +71,25 @@ def test_summarize_conversion_quality_counts_research_paper_surfaces(tmp_path):
     assert metrics.body_citation_expanded_index_count == 2
 
 
+def test_summarize_conversion_quality_counts_unheaded_references_before_methods(tmp_path):
+    body = "\n".join(f"Main result paragraph {idx}." for idx in range(70))
+    refs = "\n".join(
+        f"{idx}. Author, A. et al. Reference title {idx}. Nat. Photon. {10 + idx}, {100 + idx}-{110 + idx} (20{idx:02d})."
+        for idx in range(1, 13)
+    )
+    md_path = tmp_path / "nature_style.md"
+    md_path.write_text(
+        f"# Demo\n\n## Abstract\n\nSummary.\n\n{body}\n\n{refs}\n\n## Methods\n\nExperimental details.",
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.extracted_reference_count == 12
+    assert metrics.reference_line_count == 12
+    assert metrics.max_reference_index == 12
+
+
 def test_page_marker_quality_allows_textless_pdf_page_skips(tmp_path):
     md_path = tmp_path / "paper.md"
     md_path.write_text(

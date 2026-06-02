@@ -48,14 +48,15 @@ def _set_state_if_current(run_id: int, **patch: Any) -> bool:
 def _fmt_done_message(stats: dict[str, Any]) -> str:
     docs = int(stats.get("docs_indexed", 0) or 0)
     refs = int(stats.get("refs_total", 0) or 0)
-    doi = int(stats.get("refs_with_doi", 0) or 0)
-    src = int(stats.get("refs_source_map_ok", 0) or 0)
-    cross = int(stats.get("refs_crossref_ok", 0) or 0)
+    ready = int(stats.get("refs_metadata_ready", 0) or 0)
+    auto_backfill = int(stats.get("refs_action_auto_backfill", 0) or 0)
+    non_article_ok = int(stats.get("refs_action_non_article_ok", 0) or 0)
+    retry_repair = int(stats.get("refs_action_retry_or_source_repair", 0) or 0)
     attempts = int(stats.get("crossref_network_attempts", 0) or 0)
-    skipped = int(stats.get("crossref_negative_hits", 0) or 0) + int(stats.get("docs_retry_suppressed", 0) or 0)
     return (
-        f"参考文献索引已更新：文档 {docs}，条目 {refs}，含 DOI {doi}，"
-        f"源文献映射 {src}，Crossref 匹配 {cross}，联网查询 {attempts}，跳过重试 {skipped}。"
+        f"参考文献索引已更新：文档 {docs}，条目 {refs}，"
+        f"元数据就绪 {ready}/{refs}，可自动补 {auto_backfill}，"
+        f"非期刊来源 {non_article_ok}，需重试/源头修复 {retry_repair}，联网查询 {attempts}。"
     )
 
 

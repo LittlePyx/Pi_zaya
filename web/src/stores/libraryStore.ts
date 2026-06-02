@@ -11,7 +11,7 @@ import {
   type LibraryMetaUpdateBody,
   type LibrarySuggestionRegenerateBody,
 } from '../api/library'
-import { referencesApi } from '../api/references'
+import { referencesApi, type ReferenceSyncStats } from '../api/references'
 
 interface ConvertProgressState {
   total: number
@@ -35,7 +35,7 @@ interface RefSyncState {
   docsDone: number
   docsTotal: number
   runId: number
-  stats: Record<string, unknown>
+  stats: ReferenceSyncStats
 }
 
 interface LibraryState {
@@ -105,6 +105,23 @@ interface LibraryState {
   stopProgressStream: () => void
   startRefSyncStream: () => void
   stopRefSyncStream: () => void
+}
+
+function normalizeRefSyncStats(value: unknown): ReferenceSyncStats {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const out: ReferenceSyncStats = {}
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (
+      raw === null
+      || raw === undefined
+      || typeof raw === 'number'
+      || typeof raw === 'string'
+      || typeof raw === 'boolean'
+    ) {
+      out[key] = raw
+    }
+  }
+  return out
 }
 
 export const useLibraryStore = create<LibraryState>((set, get) => ({
@@ -406,7 +423,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             docsDone: Number(data.docs_done || 0),
             docsTotal: Number(data.docs_total || 0),
             runId: Number(data.run_id || 0),
-            stats: (data.stats && typeof data.stats === 'object' && !Array.isArray(data.stats)) ? data.stats as Record<string, unknown> : {},
+            stats: normalizeRefSyncStats(data.stats),
           },
         })
       },

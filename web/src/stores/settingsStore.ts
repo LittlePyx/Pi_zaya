@@ -35,10 +35,12 @@ interface SettingsState {
   answerDepthAuto: boolean
   answerModeHint: string
   answerOutputMode: string
+  refsCardLocale: 'auto' | 'zh' | 'en'
   pdfDir: string
   mdDir: string
   uiLocale: 'zh' | 'en'
   theme: 'light' | 'dark'
+  sidebarCollapsed: boolean
   model: string
   hasApiKey: boolean
   loaded: boolean
@@ -57,10 +59,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   answerDepthAuto: true,
   answerModeHint: '',
   answerOutputMode: '',
+  refsCardLocale: 'auto',
   pdfDir: '',
   mdDir: '',
   uiLocale: 'zh',
   theme: readInitialTheme(),
+  sidebarCollapsed: false,
   model: '',
   hasApiKey: false,
   loaded: false,
@@ -71,6 +75,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const p = data.prefs || {}
       const nextTheme = (p.theme as 'light' | 'dark') || 'dark'
       const nextUiLocale = ((p.ui_locale as 'zh' | 'en') || 'zh')
+      const rawRefsCardLocale = String(p.refs_card_locale || 'auto')
+      const nextRefsCardLocale = rawRefsCardLocale === 'zh' || rawRefsCardLocale === 'en' ? rawRefsCardLocale : 'auto'
       persistTheme(nextTheme)
       set({
         model: data.model,
@@ -84,10 +90,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         answerDepthAuto: p.answer_depth_auto !== false,
         answerModeHint: String(p.answer_mode_hint || ''),
         answerOutputMode: String(p.answer_output_mode || ''),
+        refsCardLocale: nextRefsCardLocale,
         pdfDir: String(p.pdf_dir || ''),
         mdDir: String(p.md_dir || ''),
         uiLocale: nextUiLocale,
         theme: nextTheme,
+        sidebarCollapsed: Boolean(p.sidebar_collapsed),
         loaded: true,
       })
       if (!String((p as Record<string, unknown>).ui_locale || '').trim()) {
@@ -112,6 +120,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (patch.answerDepthAuto !== undefined) localPatch.answerDepthAuto = patch.answerDepthAuto
     if (patch.answerModeHint !== undefined) localPatch.answerModeHint = patch.answerModeHint
     if (patch.answerOutputMode !== undefined) localPatch.answerOutputMode = patch.answerOutputMode
+    if (patch.refsCardLocale !== undefined) localPatch.refsCardLocale = patch.refsCardLocale
     if (patch.theme !== undefined) {
       localPatch.theme = patch.theme
       persistTheme(patch.theme)
@@ -119,6 +128,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (patch.pdfDir !== undefined) localPatch.pdfDir = patch.pdfDir
     if (patch.mdDir !== undefined) localPatch.mdDir = patch.mdDir
     if (patch.uiLocale !== undefined) localPatch.uiLocale = patch.uiLocale
+    if (patch.sidebarCollapsed !== undefined) localPatch.sidebarCollapsed = patch.sidebarCollapsed
     set(localPatch)
     await settingsApi.update(patchToSend).catch(() => {})
   },

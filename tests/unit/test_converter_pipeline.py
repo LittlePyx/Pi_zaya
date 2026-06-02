@@ -3,6 +3,7 @@ import json
 import pytest
 import fitz
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from kb.converter.pipeline import PDFConverter
@@ -578,3 +579,54 @@ def test_auto_repair_final_markdown_applies_safe_quality_repairs(tmp_path):
     assert "**Figure 1.** Optical layout with the detector and modulation mask." in out
     assert out.rstrip().endswith("$$")
     assert repair_result["changed"] is True
+
+
+def test_auto_repair_final_markdown_recovers_missing_pdf_pages_on_first_conversion(tmp_path):
+    pdf_path = tmp_path / "nature-layout.pdf"
+    page_texts = {
+        page: f"page{page:02d} " + " ".join(f"token{page:02d}{idx:03d}" for idx in range(90))
+        for page in range(1, 14)
+    }
+    doc = fitz.open()
+    for page in range(1, 14):
+        pdf_page = doc.new_page()
+        pdf_page.insert_textbox(fitz.Rect(40, 60, 560, 760), page_texts[page], fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    cfg = ConvertConfig(
+        pdf_path=pdf_path,
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+    md_parts = []
+    for page in range(1, 8):
+        md_parts.extend([f"<!-- kb_page: {page} -->", page_texts[page]])
+    md_parts.extend(
+        [
+            "## References",
+            f"[1] Reference line one, Journal, 2024. {page_texts[9]} <!-- kb_page: 9 -->",
+            f"[2] Reference line two, Journal, 2025. {page_texts[10]} <!-- kb_page: 10 -->",
+            "<!-- kb_page: 13 -->",
+            page_texts[13],
+        ]
+    )
+    md = "\n\n".join(md_parts)
+
+    out, repair_result = converter._auto_repair_final_markdown(md, out_file=tmp_path / "output.md")
+
+    markers = [int(match.group(1)) for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", out)]
+    assert repair_result["changed"] is True
+    assert "recover_missing_source_pages" in repair_result["applied"]
+    assert markers == list(range(1, 14))
+    assert "page08 token08000" in out
+    assert "page11 token11000" in out
+    assert "page12 token12000" in out
+    assert "missing_source_pages" not in repair_result["remaining_issue_codes"]
+    assert "page_marker_gaps" not in repair_result["remaining_issue_codes"]

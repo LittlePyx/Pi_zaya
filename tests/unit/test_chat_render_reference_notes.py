@@ -799,6 +799,104 @@ def test_citation_plan_allows_normal_question_to_render_system_b_without_validat
     assert (msg.get("cite_details") or [])[0]["routing_reason"] == "citation_plan"
 
 
+def test_named_upstream_title_is_linked_from_current_reference_index(monkeypatch):
+    from api import chat_render
+    from ui import refs_renderer
+
+    source_path = r"db\paper\paper.en.md"
+    source_key = chat_render._render_norm_source_key(source_path)
+    index_data = {
+        "docs": {
+            source_key: {
+                "path": source_path,
+                "name": "paper.pdf",
+                "sha1": "abc",
+                "refs": {
+                    "24": {
+                        "authors": "Jiang X, Li Z, Du G",
+                        "venue": "Optics Express",
+                        "year": "2022",
+                        "doi": "10.1364/oe.458742",
+                        "title": "Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination",
+                        "raw": (
+                            "[24] Jiang X, Li Z, Du G. Fast hyperspectral single-pixel imaging via "
+                            "frequency-division multiplexed illumination. Optics Express, 2022. "
+                            "doi:10.1364/oe.458742"
+                        ),
+                    }
+                },
+            }
+        }
+    }
+
+    monkeypatch.setattr(chat_render, "_load_reference_index_cached", lambda: index_data)
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: index_data)
+
+    messages = [
+        {"id": 1, "role": "user", "content": "What else should I read?"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": (
+                "You can compare against Fast hyperspectral single-pixel imaging via "
+                "frequency-division multiplexed illumination for real-time SPI context."
+            ),
+        },
+    ]
+    refs_by_user = {
+        1: {
+            "hits": [
+                {
+                    "text": "The current paper cites fast hyperspectral SPI reconstruction [24].",
+                    "meta": {"source_path": source_path, "source_sha1": "abc"},
+                }
+            ]
+        }
+    }
+
+    rendered = enrich_messages_with_reference_render(messages, refs_by_user, conv_id="conv-title-sysb")
+    msg = rendered[-1]
+    body = str(msg.get("rendered_body") or "")
+    details = list(msg.get("cite_details") or [])
+
+    assert "[[CITE:" not in body
+    assert "[24](#kb-cite-" in body
+    assert len(details) == 1
+    assert details[0]["is_inpaper"] is True
+    assert details[0]["doi"] == "10.1364/oe.458742"
+    assert "frequency-division multiplexed illumination" in details[0]["title"]
+
+
+def test_named_upstream_title_repair_does_not_link_short_venue_mentions(monkeypatch):
+    from api import chat_render
+
+    source_path = r"db\paper\paper.en.md"
+    index_data = {
+        "docs": {
+            chat_render._render_norm_source_key(source_path): {
+                "path": source_path,
+                "name": "paper.pdf",
+                "refs": {
+                    "24": {
+                        "title": "Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination",
+                        "raw": "[24] Jiang X. Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination. Optics Express, 2022.",
+                    }
+                },
+            }
+        }
+    }
+    monkeypatch.setattr(chat_render, "_load_reference_index_cached", lambda: index_data)
+
+    repaired, changed = chat_render._repair_named_system_b_citation_markers(
+        "For comparison, the Optica 2024 work is also relevant.",
+        [{"text": "hit", "meta": {"source_path": source_path}}],
+        {"budget": {"system_b": 2}},
+    )
+
+    assert changed is False
+    assert "[[CITE:" not in repaired
+
+
 @pytest.mark.parametrize(
     "case",
     [

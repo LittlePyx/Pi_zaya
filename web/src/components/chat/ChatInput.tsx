@@ -7,12 +7,11 @@ import {
   type DragEvent,
   type KeyboardEvent,
 } from 'react'
-import { Button, Input, Tag, Typography, message } from 'antd'
+import { Button, Input, Tag, message } from 'antd'
 import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
 import type { ChatImageAttachment, ChatUploadItem } from '../../api/chat'
 import { useT } from '../../i18n'
 
-const { Text } = Typography
 const { TextArea } = Input
 
 interface Props {
@@ -261,8 +260,8 @@ export function ChatInput({
   const statusItems = uploadItems.filter((item) => item.kind !== 'image')
 
   return (
-    <div className="px-4 pb-4 pt-3">
-      <div className="mx-auto flex w-full max-w-5xl flex-col gap-2.5">
+    <div className="kb-chat-input-wrap">
+      <div className="kb-chat-input-inner">
         {statusItems.length > 0 ? (
           <div className="flex flex-wrap gap-2">
             {statusItems.map((item) => {
@@ -378,11 +377,7 @@ export function ChatInput({
         ) : null}
 
         <div
-          className={`kb-chat-input-shell relative flex items-end gap-2 rounded-[24px] border p-3 transition ${
-            dragActive
-              ? 'border-[var(--accent)] bg-[var(--msg-user-bg)] shadow-[0_0_0_4px_color-mix(in_srgb,var(--accent)_10%,transparent)]'
-              : 'border-transparent bg-transparent shadow-none'
-          }`}
+          className={`kb-chat-input-shell relative flex items-end gap-2 transition ${dragActive ? 'is-drag-active' : ''}`}
           onDragEnter={onDragEnter}
           onDragOver={onDragOver}
           onDragLeave={onDragLeave}
@@ -427,14 +422,8 @@ export function ChatInput({
                 >
                   {S.upload_file_btn}
                 </Button>
-                <Text type="secondary" className="kb-chat-help-text">
-                  {S.upload_help_text}
-                </Text>
               </div>
               <div className="kb-chat-toolbar-right">
-                <Text type="secondary" className="kb-chat-shortcut-text">
-                  Enter {S.send} / Shift+Enter {S.newline}
-                </Text>
                 {generating ? (
                   <Button className="kb-stop-btn" icon={<PauseOutlined />} onClick={onStop} danger>
                     {S.stop}

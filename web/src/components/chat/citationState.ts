@@ -1307,20 +1307,29 @@ function trustedShelfSummarySource(source: string): boolean {
   ].includes(s)
 }
 
-function titleBasedShelfSummary(detail: CiteDetail): string {
-  const title = trimShelfSummary(detail.title || '', 180)
-  if (!title) return ''
-  const lower = title.toLowerCase()
-  if (lower.includes('missing cone') || lower.includes('low-pass distortion')) {
-    return '题名显示这篇文献讨论三维显微图像中的缺失锥频率与低通失真问题，可作为理解成像失真或分辨率限制的上游参考。'
-  }
-  if (lower.includes('interferometric') || lower.includes('iscat')) {
-    return '题名显示这篇文献关注干涉或散射显微成像，可作为理解无标记检测与显微分辨率提升的上游参考。'
-  }
-  if (lower.includes('single-pixel') || lower.includes('compressive')) {
-    return '题名显示这篇文献关注单像素或压缩成像，可作为理解相关成像机制、采样策略或重建方法的上游参考。'
-  }
-  return `题名显示这篇文献关注“${title}”，可先作为当前回答追溯引用来源的候选读物；摘要缺失时建议打开引用语境核对。`
+export function looksLowValueShelfSummary(value: string): boolean {
+  const text = trimShelfSummary(value, 420)
+  if (!text) return false
+  const low = text.toLowerCase()
+  const genericPatterns = [
+    /\u5e2e\u52a9\u6838\u5bf9/,
+    /\u7ebf\u7d22\u4ece\u54ea\u91cc\u6765/,
+    /\u65b9\u6cd5\u80cc\u666f|\u5b9e\u73b0\u4f9d\u636e/,
+    /\u4f5c\u4e3a\u5f53\u524d\u8bba\u6587\u5f15\u7528/,
+    /\u5f53\u524d\u8bba\u6587\u5f15\u7528\u7684\u65b9\u6cd5/,
+    /\u5f15\u7528\u7684\u65b9\u6cd5\u80cc\u666f/,
+    /\u6765\u6e90\u7ebf\u7d22/,
+    /\bhelps?\s+(?:verify|check|trace)\b/,
+    /\bmethod\s+background\b/,
+    /\bcited\s+(?:prior\s+)?work\b/,
+  ]
+  return genericPatterns.some((pattern) => pattern.test(text) || pattern.test(low))
+}
+
+function looksMetadataOnlyShelfSummary(value: string): boolean {
+  const text = trimShelfSummary(value, 520)
+  if (!text) return false
+  return /仅检索到|暂无可用摘要|缺少可用摘要|建议.*DOI|metadata only|no abstract/i.test(text)
 }
 
 function deriveShelfSummary(detail: CiteDetail): { line: string; source: string } {
@@ -1328,48 +1337,36 @@ function deriveShelfSummary(detail: CiteDetail): { line: string; source: string 
   const existingSource = String(detail.summarySource || '').trim().toLowerCase()
   const summaryQuality = detail.summaryQuality || {}
   const qualityOk = summaryQuality.ok === true || String(summaryQuality.status || '').trim().toLowerCase() === 'grounded'
+  const inpaperContextSummary = detail.isInpaper && existingSource === 'citation_context'
+  const metadataOnlyExisting = existingSource === 'metadata' && looksMetadataOnlyShelfSummary(existing)
   if (
     existing
     && !(detail.isInpaper && looksLowValueCitationContext(existing))
+    && !looksLowValueShelfSummary(existing)
+    && !inpaperContextSummary
+    && !metadataOnlyExisting
     && (trustedShelfSummarySource(existingSource) || qualityOk)
   ) {
     return { line: existing, source: detail.summarySource || 'fulltext' }
   }
 
   const viewSummary = trimShelfSummary(citationCardView(detail).summary, 420)
-  if (viewSummary) {
+  if (!detail.isInpaper && viewSummary && !looksLowValueShelfSummary(viewSummary)) {
     return { line: viewSummary, source: 'citation_card_view' }
   }
-  const suppressRawSystemBContext = detail.isInpaper
-    && (
-      detail.cardQualityFlags.includes('weak_citation_context')
-      || detail.cardQualityFlags.includes('missing_citation_context')
-    )
-  if (existing && !(detail.isInpaper && looksLowValueCitationContext(existing))) {
-    return { line: existing, source: detail.summarySource || 'metadata' }
+  if (existing && !inpaperContextSummary && !metadataOnlyExisting && !(detail.isInpaper && looksLowValueCitationContext(existing)) && !looksLowValueShelfSummary(existing)) {
+    return { line: existing, source: existingSource === 'metadata' ? 'fulltext' : (detail.summarySource || 'fulltext') }
   }
 
   const lines: string[] = []
   if (detail.isInpaper) {
-    const takeaway = trimShelfSummary(detail.cardTakeaway || deriveSystemBTakeaway(detail), 220)
-    if (takeaway && !looksGenericSystemBTakeaway(takeaway)) appendUniqueSummaryLine(lines, `上游作用：${takeaway}`)
-
-    const rawContext = suppressRawSystemBContext ? '' : (detail.citationContext || detail.evidenceQuote)
-    const context = trimShelfSummary(detail.cardEvidence || rawContext, 240)
-    if (context && !looksLowValueCitationContext(context)) appendUniqueSummaryLine(lines, `引用语境：${context}`)
-
-    const relation = trimShelfSummary(detail.userQuestionRelation || detail.upstreamWorkRole || detail.supportRelation || detail.whyLine, 220)
-    if (relation && !looksGenericSystemBTakeaway(relation)) appendUniqueSummaryLine(lines, relation)
-
-    if (lines.length <= 0) appendUniqueSummaryLine(lines, titleBasedShelfSummary(detail))
-    return { line: lines.slice(0, 3).join(' '), source: 'citation_context' }
+    return { line: '', source: '' }
   }
 
   appendUniqueSummaryLine(lines, detail.cardTakeaway)
   appendUniqueSummaryLine(lines, detail.answerClaim || detail.cardClaim)
   appendUniqueSummaryLine(lines, detail.evidenceQuote || detail.cardEvidence)
-  if (lines.length <= 0) appendUniqueSummaryLine(lines, titleBasedShelfSummary(detail))
-  return { line: lines.slice(0, 3).join(' '), source: 'citation_card' }
+  return { line: lines.slice(0, 3).join(' '), source: lines.length > 0 ? 'citation_card' : '' }
 }
 
 export function toShelfItem(detail: CiteDetail): CiteShelfItem {

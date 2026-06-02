@@ -142,7 +142,14 @@ def test_post_convert_source_retry_targets_source_level_conversion_damage(monkey
     assert _post_convert_source_retry_needed(assessment) is True
 
     assessment["action"] = "autofix"
+    assessment["blocking_issue_codes"] = ["missing_page_markers"]
+    assessment["repair_plan"]["reconvert_issue_codes"] = []
+    assessment["repair_plan"]["autofix_issue_codes"] = ["missing_page_markers"]
     assert _post_convert_source_retry_needed(assessment) is False
+
+    assessment["blocking_issue_codes"] = ["missing_source_pages"]
+    assessment["repair_plan"]["autofix_issue_codes"] = ["missing_source_pages"]
+    assert _post_convert_source_retry_needed(assessment) is True
 
     assessment["action"] = "reconvert"
     monkeypatch.setenv("KB_POST_CONVERT_SOURCE_RETRY", "0")
@@ -198,6 +205,37 @@ def test_post_convert_quality_gate_autofixes_and_records_attempt(monkeypatch, tm
     assert attempt["task_id"] == "task-1"
     assert attempt["extra"]["auto_repair"]["changed"] is True
     assert attempt["extra"]["structured_indices_rebuilt"] is True
+
+
+def test_post_convert_quality_gate_passes_source_pdf_path(monkeypatch, tmp_path: Path):
+    from kb import task_runtime
+
+    md_path = tmp_path / "paper.en.md"
+    pdf_path = tmp_path / "paper.pdf"
+    md_path.write_text(_post_convert_good_markdown(), encoding="utf-8")
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    captured: dict = {}
+
+    def fake_prepare(md_path_arg, **kwargs):
+        captured["md_path"] = Path(md_path_arg)
+        captured["source_pdf_path"] = kwargs.get("source_pdf_path")
+        return {
+            "indexable": True,
+            "status": "ready",
+            "action": "none",
+            "issue_codes": [],
+            "blocking_issue_codes": [],
+            "auto_repair": {"attempted": False, "changed": False, "unsafe": False, "applied": []},
+            "repair_plan": {"action": "none", "scope": "", "issue_codes": []},
+        }
+
+    monkeypatch.setattr(task_runtime, "prepare_markdown_for_index", fake_prepare)
+
+    result = _bg_post_convert_quality_gate(md_path, task_id="task-source", speed_mode="balanced", source_pdf_path=pdf_path)
+
+    assert result["indexable"] is True
+    assert captured["md_path"] == md_path
+    assert captured["source_pdf_path"] == pdf_path
 
 
 def test_post_convert_quality_gate_blocks_damaged_markdown_before_indexing(monkeypatch, tmp_path: Path):

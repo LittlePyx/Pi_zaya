@@ -33,6 +33,7 @@ from api.reference_metadata_quality import (
     citation_metadata_export_acceptance,
     citation_metadata_quality,
     hydrate_repaired_citation_metadata,
+    persist_repaired_citation_metadata,
     repair_citation_metadata_batch,
     scan_reference_metadata_backfill_targets,
 )
@@ -1858,23 +1859,47 @@ def _bibliometrics_quality_contract(meta: dict | None) -> dict:
     return data
 
 
+def _bibliometrics_summary_export_ready(acceptance: dict | None) -> bool:
+    if not isinstance(acceptance, dict):
+        return False
+    if bool(acceptance.get("summary_export_ready")):
+        return True
+    summary = acceptance.get("summary")
+    if isinstance(summary, dict):
+        return bool(summary.get("export_ready"))
+    return False
+
+
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     meta = body.meta or {}
-    hydrated = hydrate_repaired_citation_metadata(meta, db_dir=get_settings().db_dir)
+    settings = get_settings()
+    hydrated = hydrate_repaired_citation_metadata(meta, db_dir=settings.db_dir)
     quality = hydrated.get("metadata_quality") if isinstance(hydrated.get("metadata_quality"), dict) else {}
     acceptance = (
         hydrated.get("metadata_export_acceptance")
         if isinstance(hydrated.get("metadata_export_acceptance"), dict)
         else {}
     )
-    if bool(quality.get("ok")) and bool(acceptance.get("export_ready")):
+    if (
+        bool(quality.get("ok"))
+        and bool(acceptance.get("export_ready"))
+        and _bibliometrics_summary_export_ready(acceptance)
+    ):
         return _bibliometrics_quality_contract(hydrated)
     seed = {**dict(meta or {}), **dict(hydrated or {})}
     enriched = enrich_citation_detail_meta(seed)
     if not isinstance(enriched, dict):
         enriched = {}
-    return _bibliometrics_quality_contract({**seed, **enriched})
+    result = _bibliometrics_quality_contract({**seed, **enriched})
+    acceptance = (
+        result.get("metadata_export_acceptance")
+        if isinstance(result.get("metadata_export_acceptance"), dict)
+        else {}
+    )
+    if _bibliometrics_summary_export_ready(acceptance):
+        persist_repaired_citation_metadata(result, db_dir=settings.db_dir)
+    return result
 
 
 @router.post("/shelf/metadata/repair")

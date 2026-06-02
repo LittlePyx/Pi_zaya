@@ -889,6 +889,63 @@ const plainCitationRefsFallbackRefs: Record<string, unknown> = {
   },
 }
 
+const plainMathWidthMessages: Message[] = [
+  {
+    id: 9201,
+    role: 'user',
+    content: 'Compare PILN with fast SPI reconstruction and explain the iteration formula.',
+    created_at: Date.now(),
+  },
+  {
+    id: 9202,
+    role: 'assistant',
+    content: [
+      'Conclusion: PILN is useful for low-sampling self-supervised reconstruction, but it is not a real-time reconstruction method.',
+      '',
+      'Evidence: PILN 的迭代过程（image = f_ILNet(2D signal) → I_N(out) = image · S_N(x,y) → L_ILNet = ||I_N(real) - I_N(out)||²）需要多次循环才能收敛，因此速度目标不同。',
+      '',
+      'Limits: This answer only checks the retrieved abstracts and method snippets.',
+      '',
+      'Next Steps: Compare PSNR/SSIM and runtime against DeepInverse or U-Net at 1%, 5%, and 10% sampling.',
+    ].join('\n'),
+    rendered_body: [
+      'Conclusion: PILN is useful for low-sampling self-supervised reconstruction, but it is not a real-time reconstruction method.',
+      '',
+      'Evidence: PILN 的迭代过程（image = f_ILNet(2D signal) → I_N(out) = image · S_N(x,y) → L_ILNet = ||I_N(real) - I_N(out)||²）需要多次循环才能收敛，因此速度目标不同。',
+      '',
+      'Limits: This answer only checks the retrieved abstracts and method snippets.',
+      '',
+      'Next Steps: Compare PSNR/SSIM and runtime against DeepInverse or U-Net at 1%, 5%, and 10% sampling.',
+    ].join('\n'),
+    copy_text: 'PILN plain math width regression',
+    copy_markdown: 'PILN plain math width regression',
+    refs_user_msg_id: 9201,
+    created_at: Date.now(),
+  },
+]
+
+const plainMathWidthRefs: Record<string, unknown> = {
+  '9201': {
+    hits: [
+      {
+        score: 9.2,
+        text: 'PILN introduces a part-based image-loop network and optimizes an image-loop consistency loss.',
+        ui_meta: {
+          display_name: 'PILN Paper.pdf',
+          source_path: '__fixtures__/piln-paper.en.md',
+          heading_path: 'PILN Paper / Method',
+          summary_line: 'PILN introduces a part-based image-loop network and optimizes an image-loop consistency loss.',
+          why_line: 'This hit grounds the plain-text formula used in the answer.',
+        },
+        meta: {
+          source_path: '__fixtures__/piln-paper.en.md',
+          heading_path: 'PILN Paper / Method',
+        },
+      },
+    ],
+  },
+}
+
 const guideFilterOnlyMessages: Message[] = [
   {
     id: 1,
@@ -1076,6 +1133,7 @@ type RegressionScenario =
   | 'low-quality-system-a-old-packet'
   | 'fragmentary-system-a-old-packet'
   | 'plain-citation-refs-fallback'
+  | 'plain-math-width'
   | 'guide-filter-empty-external'
   | 'negative-evidence-locate'
   | 'normal-multi-doc-ambiguous-inline-locate'
@@ -1100,6 +1158,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'low-quality-system-a-old-packet') return 'low-quality-system-a-old-packet'
     if (scenarioParam === 'fragmentary-system-a-old-packet') return 'fragmentary-system-a-old-packet'
     if (scenarioParam === 'plain-citation-refs-fallback') return 'plain-citation-refs-fallback'
+    if (scenarioParam === 'plain-math-width') return 'plain-math-width'
     if (scenarioParam === 'guide-filter-empty-external') return 'guide-filter-empty-external'
     if (scenarioParam === 'negative-evidence-locate') return 'negative-evidence-locate'
     if (scenarioParam === 'normal-multi-doc-ambiguous-inline-locate') return 'normal-multi-doc-ambiguous-inline-locate'
@@ -1120,6 +1179,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'low-quality-system-a-old-packet') return lowQualitySystemAOldPacketMessages
     if (scenario === 'fragmentary-system-a-old-packet') return fragmentarySystemAOldPacketMessages
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackMessages
+    if (scenario === 'plain-math-width') return plainMathWidthMessages
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyMessages
     if (scenario === 'negative-evidence-locate') return negativeEvidenceLocateMessages
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateMessages
@@ -1129,6 +1189,7 @@ export default function MessageListRegressionPage() {
   const regressionRefs: Record<string, unknown> = (() => {
     if (scenario === 'guide-filter-empty-external') return guideFilterOnlyRefs
     if (scenario === 'plain-citation-refs-fallback') return plainCitationRefsFallbackRefs
+    if (scenario === 'plain-math-width') return plainMathWidthRefs
     if (scenario === 'normal-multi-doc-ambiguous-inline-locate') return normalMultiDocAmbiguousInlineLocateRefs
     if (scenario === 'live-user-pending-refs') return liveUserPendingRefs
     return {}

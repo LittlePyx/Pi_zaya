@@ -243,6 +243,7 @@ export interface LibraryMetaBatchUpdateResponse {
 export interface LibrarySuggestionRegenerateBody {
   pdf_names?: string[]
   sha1s?: string[]
+  auto_apply_empty?: boolean
 }
 
 export interface LibrarySuggestionActionBody {

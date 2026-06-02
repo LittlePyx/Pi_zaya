@@ -8,7 +8,7 @@ import sqlite3
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 from urllib.parse import quote
 
 import requests
@@ -46,6 +46,33 @@ _YEAR_ANY_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 _REFERENCE_TRUNCATION_HINT_RE = re.compile(
     r"(?:\.\.\.|…|\b(?:incomplete|partially visible|not fully visible|unreadable|illegible)\b)",
     re.IGNORECASE,
+)
+_REFERENCE_PERIOD_PLACEHOLDER = "<KB_REF_PERIOD>"
+_REFERENCE_PERIOD_ABBREVIATIONS = (
+    "appl",
+    "assoc",
+    "conf",
+    "commun",
+    "comput",
+    "ed",
+    "eds",
+    "express",
+    "fig",
+    "inf",
+    "int",
+    "lett",
+    "math",
+    "nat",
+    "no",
+    "opt",
+    "phys",
+    "proc",
+    "rev",
+    "sci",
+    "soc",
+    "suppl",
+    "trans",
+    "vol",
 )
 
 
@@ -166,7 +193,10 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
         total = len(_lines)
         if total < 80:
             return None
-        scan_from = max(0, int(total * 0.45))
+        # Some publishers, notably Nature, place an unheaded reference list
+        # before Methods/Extended Data. Start early enough to catch that shape,
+        # but require a dense bibliographic sequence below to avoid body lists.
+        scan_from = max(0, int(total * 0.20))
         cand_idx: list[int] = []
         cand_num: list[int] = []
         for j in range(scan_from, total):
@@ -198,12 +228,17 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
             return None
 
         cluster_nums: list[int] = []
+        cluster_lines: list[str] = []
         for j, n0 in zip(cand_idx, cand_num):
             if best_idx <= j <= (best_idx + 260):
                 cluster_nums.append(int(n0))
+                cluster_lines.append(str(_lines[j] or "").strip())
         if len(cluster_nums) < 8:
             return None
         if max(cluster_nums) < 8:
+            return None
+        promising_count = sum(1 for line in cluster_lines if is_promising_reference_text(line))
+        if promising_count < max(5, int(len(cluster_lines) * 0.35)):
             return None
         inc = 0
         for a, b in zip(cluster_nums, cluster_nums[1:]):
@@ -504,12 +539,229 @@ def persist_reference_catalog_for_md(
     return catalog
 
 
+def _strip_reference_number(raw: str) -> str:
+    s = str(raw or "").strip()
+    s = re.sub(r"^\[(\d{1,4})\]\s*", "", s).strip()
+    s = re.sub(r"^(\d{1,4})\.\s*", "", s).strip()
+    return s
+
+
+def _protect_reference_periods(text: str) -> str:
+    s = str(text or "")
+    if not s:
+        return ""
+    s = re.sub(r"\b([A-Z])\.", rf"\1{_REFERENCE_PERIOD_PLACEHOLDER}", s)
+    for token in _REFERENCE_PERIOD_ABBREVIATIONS:
+        s = re.sub(
+            rf"\b({re.escape(token)})\.",
+            lambda m: f"{m.group(1)}{_REFERENCE_PERIOD_PLACEHOLDER}",
+            s,
+            flags=re.IGNORECASE,
+        )
+    return s
+
+
+def _restore_reference_periods(text: str) -> str:
+    return str(text or "").replace(_REFERENCE_PERIOD_PLACEHOLDER, ".")
+
+
+def _reference_sentence_segments(text: str) -> list[str]:
+    s = re.sub(r"\s{2,}", " ", str(text or "")).strip()
+    if not s:
+        return []
+    protected = _protect_reference_periods(s)
+    parts = [
+        _restore_reference_periods(x).strip(" .;:")
+        for x in re.split(r"\.\s+", protected)
+        if _restore_reference_periods(x).strip(" .;:")
+    ]
+    return parts
+
+
+def _looks_reference_author_segment(seg: str) -> bool:
+    t = str(seg or "").strip(" .;:,")
+    if not t:
+        return False
+    low = t.lower()
+    if low.startswith(("in ", "in:", "proceedings", "journal of", "abstracts of")):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'\-]*", t)
+    if len(words) < 2 or len(words) > 48:
+        return False
+    comma_n = t.count(",")
+    and_n = len(re.findall(r"\b(?:and|et al)\b|&", t, flags=re.IGNORECASE))
+    init_n = len(re.findall(r"\b[A-Z]{1,3}\.?\b", t))
+    cap_n = sum(1 for w in words if w[:1].isupper())
+    cap_ratio = cap_n / max(1, len(words))
+    family_initial_pairs = len(re.findall(r"\b[A-Z][A-Za-z'\-]{1,24}\s+[A-Z]{1,3}\.?\b", t))
+    given_family_pairs = len(
+        re.findall(r"\b[A-Z][a-z][A-Za-z'\-]+(?:\s+[A-Z]\.?)?\s+[A-Z][A-Za-z'\-]+\b", t)
+    )
+    has_connector = bool((comma_n >= 1) or (and_n >= 1) or (family_initial_pairs >= 2))
+    return bool(
+        cap_ratio >= 0.45
+        and (
+            (has_connector and (init_n >= 1 or family_initial_pairs >= 1 or given_family_pairs >= 1))
+            or (family_initial_pairs >= 2)
+            or (given_family_pairs >= 2 and and_n >= 1)
+        )
+    )
+
+
+def _reference_title_looks_author_noise(title: str) -> bool:
+    t = str(title or "").strip()
+    if not t:
+        return False
+    if _looks_reference_author_segment(t):
+        return True
+    words = [w for w in re.split(r"\s+", t) if w]
+    if 2 <= len(words) <= 8 and re.search(r"\band\b", t, flags=re.IGNORECASE):
+        cap_n = sum(1 for w in words if w[:1].isupper())
+        init_n = len(re.findall(r"\b[A-Z]{1,3}\.?\b", t))
+        return bool((cap_n / max(1, len(words))) >= 0.55 and init_n >= 1)
+    return False
+
+
+def _clean_raw_reference_authors(text: str) -> str:
+    s = str(text or "").strip(" .;:,")
+    if not s:
+        return ""
+    s = re.sub(r"\b(?:ed|eds|editor|editors)\.?\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\((?:ed|eds|editor|editors)\.?\)", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\b(?:19|20)\d{2}\b", "", s)
+    s = re.sub(r"\s+", " ", s).strip(" .;:,")
+    if not _looks_reference_author_segment(s):
+        return ""
+    return s[:320]
+
+
+def _extract_venue_from_reference_tail(tail: str) -> str:
+    s = str(tail or "").strip(" .;:,")
+    if not s:
+        return ""
+    s = re.sub(r"https?://\S+", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\bdoi\s*:?\s*10\.\S+.*$", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\barxiv\s*:?\s*\S+.*$", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s{2,}", " ", s).strip(" .;:,")
+    if not s:
+        return ""
+    first_sentence = (_reference_sentence_segments(s) or [s])[0].strip(" .;:,")
+    first_sentence = re.sub(r"^in:\s*", "", first_sentence, flags=re.IGNORECASE).strip(" .;:,")
+    comma_parts = [p.strip(" .;:,") for p in first_sentence.split(",") if p.strip(" .;:,")]
+    cand = comma_parts[0] if comma_parts else first_sentence
+    cand = re.sub(r"\b(?:pp|pages?)\.?\s*\d.*$", "", cand, flags=re.IGNORECASE).strip(" .;:,")
+    cand = re.sub(r"\b(?:vol|volume|no|number)\.?\s*\d.*$", "", cand, flags=re.IGNORECASE).strip(" .;:,")
+    if not cand or len(cand) > 180:
+        return ""
+    if re.fullmatch(r"(?:19|20)\d{2}", cand):
+        return ""
+    if len([w for w in re.split(r"\s+", cand) if w]) > 14 and (not _looks_like_venue_or_publisher(cand)):
+        return ""
+    return cand[:180]
+
+
+def _fallback_meta_from_raw_reference(raw: str) -> dict[str, str]:
+    s = _strip_reference_number(raw)
+    if not s:
+        return {}
+
+    out: dict[str, str] = {}
+    year = extract_year_hint(s)
+    if year:
+        out["year"] = year
+
+    mq = _QUOTED_TITLE_RE.search(s)
+    if mq:
+        title = str(mq.group(1) or "").strip(" .;:,")
+        if _is_plausible_reference_title(title):
+            out["title"] = title[:260]
+            out["authors"] = _clean_raw_reference_authors(s[: mq.start()])
+            out["venue"] = _extract_venue_from_reference_tail(s[mq.end() :])
+            out["match_method"] = "raw_meta"
+            return {k: v for k, v in out.items() if str(v or "").strip()}
+
+    my = re.match(r"(?P<authors>.+?)\s*\((?P<year>(?:19|20)\d{2})\)\s*(?P<tail>.+)$", s)
+    if my:
+        authors = _clean_raw_reference_authors(str(my.group("authors") or ""))
+        tail = str(my.group("tail") or "").strip()
+        segs = _reference_sentence_segments(tail)
+        title = segs[0].strip(" .;:,") if segs else ""
+        if authors:
+            out["authors"] = authors
+        out["year"] = str(my.group("year") or "").strip()
+        if _is_plausible_reference_title(title):
+            out["title"] = title[:260]
+            out["venue"] = _extract_venue_from_reference_tail(". ".join(segs[1:]))
+            out["match_method"] = "raw_meta"
+            return {k: v for k, v in out.items() if str(v or "").strip()}
+
+    segs = _reference_sentence_segments(s)
+    if len(segs) >= 2 and _looks_reference_author_segment(segs[0]):
+        title = segs[1].strip(" .;:,")
+        if _is_plausible_reference_title(title):
+            out["authors"] = _clean_raw_reference_authors(segs[0])
+            out["title"] = title[:260]
+            out["venue"] = _extract_venue_from_reference_tail(". ".join(segs[2:]))
+            out["match_method"] = "raw_meta"
+            return {k: v for k, v in out.items() if str(v or "").strip()}
+
+    title = _extract_query_title(s).strip(" .;:,")
+    if _is_plausible_reference_title(title):
+        out["title"] = title[:260]
+        out["match_method"] = "raw_meta"
+    return {k: v for k, v in out.items() if str(v or "").strip()}
+
+
+def _merge_raw_reference_meta(meta: dict | None, raw_meta: dict[str, str]) -> dict | None:
+    if not isinstance(raw_meta, dict) or not raw_meta:
+        return dict(meta) if isinstance(meta, dict) else None
+    merged = dict(meta) if isinstance(meta, dict) else {}
+    changed = False
+
+    for key in ("authors", "venue", "year", "volume", "issue", "pages", "doi"):
+        value = str(raw_meta.get(key) or "").strip()
+        if value and not str(merged.get(key) or "").strip():
+            merged[key] = value
+            changed = True
+
+    raw_title = str(raw_meta.get("title") or "").strip()
+    cur_title = str(merged.get("title") or "").strip()
+    changed_title = False
+    if raw_title:
+        should_replace = (
+            not cur_title
+            or _reference_title_looks_author_noise(cur_title)
+            or (not _is_plausible_reference_title(cur_title))
+        )
+        if should_replace:
+            merged["title"] = raw_title
+            changed = True
+            changed_title = True
+
+    if changed:
+        base_mm = str(merged.get("match_method") or "").strip()
+        raw_mm = str(raw_meta.get("match_method") or "raw_meta").strip()
+        if changed_title and raw_mm and "raw_title" not in raw_mm:
+            raw_mm = f"raw_title+{raw_mm}"
+        if not base_mm:
+            merged["match_method"] = raw_mm
+        elif raw_mm and raw_mm not in base_mm:
+            merged["match_method"] = f"{base_mm}+{raw_mm}"
+    return merged if merged else None
+
+
+def _reference_match_method_has_external_resolution(match_method: str, doi: str = "") -> bool:
+    if _clean_doi_for_url(str(doi or "")):
+        return True
+    tokens = {p.strip().lower() for p in str(match_method or "").split("+") if p.strip()}
+    return bool(tokens.intersection({"bibliographic", "title", "doi", "doi_backfill"}))
+
+
 def _extract_query_title(entry: str) -> str:
     s = (entry or "").strip()
     if not s:
         return ""
-    s = re.sub(r"^\[(\d{1,4})\]\s*", "", s)
-    s = re.sub(r"^(\d{1,4})\.\s*", "", s)
+    s = _strip_reference_number(s)
     s = re.sub(r"https?://\S+", " ", s, flags=re.IGNORECASE)
     s = re.sub(r"\bdoi\s*:?\s*10\.\S+", " ", s, flags=re.IGNORECASE)
     s = re.sub(r"\barxiv\s*:?\s*\S+", " ", s, flags=re.IGNORECASE)
@@ -525,18 +777,7 @@ def _extract_query_title(entry: str) -> str:
             return cand_q[:260]
 
     def _looks_author_segment(seg: str) -> bool:
-        t = str(seg or "").strip()
-        if not t:
-            return False
-        words = re.findall(r"[A-Za-z][A-Za-z'\-]*", t)
-        if len(words) < 4:
-            return False
-        comma_n = t.count(",")
-        and_n = len(re.findall(r"\b(?:and|et al)\b|&", t, flags=re.IGNORECASE))
-        init_n = len(re.findall(r"\b[A-Z]\.?\b", t))
-        cap_n = sum(1 for w in words if w[:1].isupper())
-        cap_ratio = cap_n / max(1, len(words))
-        return bool((comma_n >= 2) and (cap_ratio >= 0.55) and ((and_n >= 1) or (init_n >= 2)))
+        return _looks_reference_author_segment(seg)
 
     def _looks_venue_segment(seg: str) -> bool:
         t = str(seg or "").strip().lower()
@@ -562,6 +803,12 @@ def _extract_query_title(entry: str) -> str:
             return True
         return False
 
+    protected_segs = _reference_sentence_segments(s)
+    if len(protected_segs) >= 2 and _looks_author_segment(protected_segs[0]):
+        cand0 = protected_segs[1].strip(" .;:,")
+        if cand0 and (not _looks_author_segment(cand0)) and (not _looks_venue_segment(cand0)):
+            return cand0[:260]
+
     # Heuristic 1: title often lies between first and second period.
     m_title = re.search(r"^[^.]{4,260}\.\s*([^.]{8,260})\.", s)
     if m_title:
@@ -570,7 +817,7 @@ def _extract_query_title(entry: str) -> str:
             return cand[:260]
 
     # Heuristic 2: choose best scored segment among sentence-like chunks.
-    segs = [x.strip(" .;:") for x in re.split(r"\.\s+", s) if x.strip(" .;:")]
+    segs = protected_segs or [x.strip(" .;:") for x in re.split(r"\.\s+", s) if x.strip(" .;:")]
     if not segs:
         return s[:260]
 
@@ -741,8 +988,13 @@ def _merge_reference_meta(base: dict | None, supplement: dict | None) -> dict | 
             return
         if allow_noisy_replace:
             cur_words = [w for w in re.split(r"\s+", cur) if w]
-            cur_noisy = (len(cur) >= 200) or (len(cur_words) >= 28)
-            if cur_noisy:
+            cur_noisy = (
+                (len(cur) >= 200)
+                or (len(cur_words) >= 28)
+                or _reference_title_looks_author_noise(cur)
+                or (not _is_plausible_reference_title(cur))
+            )
+            if cur_noisy and _is_plausible_reference_title(new):
                 merged[key] = new
                 return
         if prefer_longer and len(new) > len(cur):
@@ -819,14 +1071,16 @@ def _doc_crossref_retry_due(prev_doc: dict[str, Any] | None, *, now_ts: float | 
     return bool((now - last_attempt) >= _reference_sync_retry_ttl_s())
 
 
-def _doc_ref_quality_tuple(refs: dict[str, dict] | None) -> tuple[int, int, int, int, int]:
+def _doc_ref_quality_tuple(refs: dict[str, dict] | None) -> tuple[int, int, int, int, int, int, int]:
     if not isinstance(refs, dict):
-        return (-10**9, -10**9, -10**9, -10**9, -10**9)
+        return (-10**9, -10**9, -10**9, -10**9, -10**9, -10**9, -10**9)
     unresolved = 0
     doi_n = 0
     cross_n = 0
     authors_n = 0
     title_n = 0
+    venue_n = 0
+    pages_n = 0
     for rec in refs.values():
         if not isinstance(rec, dict):
             continue
@@ -840,10 +1094,14 @@ def _doc_ref_quality_tuple(refs: dict[str, dict] | None) -> tuple[int, int, int,
             authors_n += 1
         if str(rec.get("title") or "").strip():
             title_n += 1
+        if str(rec.get("venue") or "").strip():
+            venue_n += 1
+        if str(rec.get("pages") or "").strip():
+            pages_n += 1
         if (not doi) and (not cross_ok):
             unresolved += 1
     # Larger tuple is better.
-    return (-int(unresolved), int(doi_n), int(cross_n), int(authors_n), int(title_n))
+    return (-int(unresolved), int(doi_n), int(cross_n), int(authors_n), int(title_n), int(venue_n), int(pages_n))
 
 
 def _prefer_previous_doc_refs(prev_refs: dict[str, dict] | None, new_refs: dict[str, dict] | None) -> bool:
@@ -862,6 +1120,205 @@ def _doi_url(doi: str) -> str:
     if not d:
         return ""
     return "https://doi.org/" + quote(d, safe="/-._;()")
+
+
+REFERENCE_METADATA_STATUS_CODES = (
+    "complete",
+    "crossref_enriched",
+    "doi_sparse_refreshable",
+    "title_lookup_retryable",
+    "non_article_source_ok",
+    "no_doi_expected",
+    "truncated_reference",
+    "low_confidence_match",
+)
+REFERENCE_MISSING_REASON_CODES = (
+    "doi_sparse_refreshable",
+    "title_lookup_retryable",
+    "non_article_source_ok",
+    "no_doi_expected",
+    "truncated_reference",
+    "low_confidence_match",
+)
+
+_NON_ARTICLE_SOURCE_RE = re.compile(
+    r"\b("
+    r"book|chapter|edited\s+volume|monograph|dataset|data\s+set|software|code|github|"
+    r"protocol|protocols\.io|standard|iso|technical\s+report|report|white\s+paper|"
+    r"manual|thesis|dissertation|patent|preprint|arxiv|bioRxiv|medRxiv|zenodo|figshare|"
+    r"institution|university|publisher|press|repository"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+_NO_DOI_EXPECTED_RE = re.compile(
+    r"\b("
+    r"arxiv|preprint|book|chapter|monograph|dataset|data\s+set|software|code|github|"
+    r"protocol|standard|technical\s+report|report|white\s+paper|manual|thesis|"
+    r"dissertation|patent|repository|url|available\s+at"
+    r")\b|https?://(?!doi\.org)",
+    flags=re.IGNORECASE,
+)
+
+
+def _float_meta_value(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _reference_has_usable_title(title: str) -> bool:
+    t = str(title or "").strip()
+    if not t:
+        return False
+    if re.fullmatch(r"references?\s*\d*", t, flags=re.IGNORECASE):
+        return False
+    if re.fullmatch(r"reference\s+\d{1,4}", t, flags=re.IGNORECASE):
+        return False
+    words = [w for w in re.split(r"\s+", t) if w]
+    if len(t) < 8 or len(t) > 260 or len(words) < 2 or len(words) > 36:
+        return False
+    if _reference_title_looks_author_noise(t):
+        return False
+    if _looks_like_venue_or_publisher(t) and len(words) <= 3:
+        return False
+    return bool(len(re.findall(r"[A-Za-z\u4e00-\u9fff]{2,}", t)) >= 2)
+
+
+def _reference_has_usable_authors(authors: str) -> bool:
+    a = str(authors or "").strip()
+    if not a:
+        return False
+    low = a.lower().strip(" .;:,[]()")
+    if not low or "unknown author" in low or low in {"unknown", "et al", "et al."}:
+        return False
+    return bool(len(re.findall(r"[A-Za-z\u4e00-\u9fff]{2,}", a)) >= 1)
+
+
+def _reference_has_usable_venue(venue: str) -> bool:
+    v = str(venue or "").strip()
+    if not v:
+        return False
+    if v.lower().strip(" .;:,") in {"unknown", "journal", "conference", "references", "reference"}:
+        return False
+    return True
+
+
+def _reference_has_usable_year(year: str) -> bool:
+    return bool(re.fullmatch(r"(?:18|19|20)\d{2}", str(year or "").strip()))
+
+
+def _reference_has_external_metadata(rec: Mapping[str, Any], match_method: str, doi: str) -> bool:
+    if bool(rec.get("crossref_ok")):
+        return True
+    tokens = {p.strip().lower() for p in str(match_method or "").split("+") if p.strip()}
+    return bool(tokens.intersection({"bibliographic", "title", "doi", "doi_backfill", "shelf_metadata_repair"}))
+
+
+def classify_reference_metadata(
+    rec: Mapping[str, Any] | None,
+    *,
+    enable_title_lookup: bool = True,
+) -> dict[str, Any]:
+    """Classify one reference into a sync/backfill action bucket."""
+    data: Mapping[str, Any] = rec if isinstance(rec, Mapping) else {}
+    raw = str(data.get("raw") or data.get("cite_fmt") or "").strip()
+    doi = _clean_doi_for_url(str(data.get("doi") or data.get("doi_url") or ""))
+    if not doi and raw:
+        doi = _clean_doi_for_url(extract_first_doi(raw))
+    title = str(data.get("title") or "").strip()
+    authors = str(data.get("authors") or "").strip()
+    venue = str(data.get("venue") or "").strip()
+    year = str(data.get("year") or "").strip()
+    match_method = str(data.get("match_method") or "").strip()
+    parse_confidence = _float_meta_value(data.get("parse_confidence"), _reference_parse_confidence(raw))
+    match_score = _float_meta_value(data.get("match_score"), 1.0 if match_method else 0.0)
+
+    has_title = _reference_has_usable_title(title)
+    has_authors = _reference_has_usable_authors(authors)
+    has_venue = _reference_has_usable_venue(venue)
+    has_year = _reference_has_usable_year(year)
+    text_for_kind = " ".join([raw, title, venue, match_method])
+    non_article_signal = bool(_NON_ARTICLE_SOURCE_RE.search(text_for_kind))
+    no_doi_expected_signal = bool(_NO_DOI_EXPECTED_RE.search(text_for_kind))
+    external_metadata = _reference_has_external_metadata(data, match_method, doi)
+
+    missing_fields: list[str] = []
+    if not doi:
+        missing_fields.append("doi")
+    if not has_title:
+        missing_fields.append("title")
+    if not has_authors:
+        missing_fields.append("authors")
+    if not has_venue:
+        missing_fields.append("venue")
+    if not has_year:
+        missing_fields.append("year")
+
+    status = "low_confidence_match"
+    reason = "low_confidence_match"
+    action = "source_repair"
+    ready = False
+
+    core_complete = bool(doi and has_title and has_authors and has_venue and has_year)
+    if core_complete:
+        status = "crossref_enriched" if external_metadata else "complete"
+        reason = ""
+        action = "none"
+        ready = True
+    else:
+        truncated = bool(_REFERENCE_TRUNCATION_HINT_RE.search(raw) or parse_confidence < 0.32)
+        if truncated:
+            status = "truncated_reference"
+            reason = "truncated_reference"
+            action = "source_repair"
+        elif doi and _reference_meta_is_sparse(dict(data)):
+            status = "doi_sparse_refreshable"
+            reason = "doi_sparse_refreshable"
+            action = "auto_backfill"
+        elif non_article_signal and has_title and has_year and (has_venue or no_doi_expected_signal):
+            status = "non_article_source_ok"
+            reason = "no_doi_expected" if (not doi and no_doi_expected_signal) else "non_article_source_ok"
+            action = "non_article_ok"
+            ready = True
+        elif (not doi) and no_doi_expected_signal and has_title and has_year:
+            status = "no_doi_expected"
+            reason = "no_doi_expected"
+            action = "non_article_ok"
+            ready = True
+        else:
+            title_hint = _extract_query_title(raw)
+            can_retry_title = bool(
+                enable_title_lookup
+                and (not doi)
+                and raw
+                and title_hint
+                and _should_try_title_lookup(raw, title_hint)
+            )
+            if can_retry_title:
+                status = "title_lookup_retryable"
+                reason = "title_lookup_retryable"
+                action = "retry"
+            elif parse_confidence < 0.52 or (match_score and match_score < 0.74):
+                status = "low_confidence_match"
+                reason = "low_confidence_match"
+                action = "source_repair"
+            elif (not has_title) or (not has_authors):
+                status = "low_confidence_match"
+                reason = "low_confidence_match"
+                action = "source_repair"
+            else:
+                status = "title_lookup_retryable" if not doi else "low_confidence_match"
+                reason = status
+                action = "retry" if status == "title_lookup_retryable" else "source_repair"
+
+    return {
+        "metadata_status": status,
+        "missing_reason": reason,
+        "metadata_action": action,
+        "metadata_ready": bool(ready),
+        "metadata_missing_fields": missing_fields,
+    }
 
 
 def _read_text_head(path: Path, *, max_bytes: int = 220_000) -> str:
@@ -1046,8 +1503,6 @@ def _infer_source_doi_from_doc_hints(
     crossref_enabled: bool,
     stats: dict[str, int] | None = None,
 ) -> str:
-    if not crossref_enabled:
-        return ""
     venue0, year0, title0 = _parse_doc_name_hints(md_path)
     title_head = _extract_doc_title_from_md_head(md_head)
     title_h = title_head or title0
@@ -1088,6 +1543,9 @@ def _infer_source_doi_from_doc_hints(
             _stat_inc(stats, "crossref_cache_hits")
             _stat_inc(stats, "source_work_cache_hits")
             return cached_doi
+
+    if not crossref_enabled:
+        return ""
 
     doi = ""
     try:
@@ -2113,25 +2571,15 @@ def _prepare_doc_context_prefetch(
     if not source_doi:
         source_doi = _extract_source_doi_from_md_head(md_head)
 
-    source_ref_rows: list[dict[str, str]] = []
-    if source_doi and crossref_enabled:
-        try:
-            local_cache = {"source_refs": {}}
-            source_ref_rows = _load_source_reference_rows(
-                source_doi,
-                local_cache,
-                crossref_enabled=True,
-            )
-        except Exception:
-            source_ref_rows = []
-
     return {
         "md_head": md_head,
         "md_tail": md_tail,
         "ref_map": ref_map if isinstance(ref_map, dict) else {},
         "reference_catalog": catalog if isinstance(catalog, dict) else {},
         "source_doi": _clean_doi_for_url(source_doi),
-        "source_ref_rows": source_ref_rows if isinstance(source_ref_rows, list) else [],
+        # Keep preparation I/O-only. Source references are loaded in the main pass so
+        # the shared cache and Crossref time budget are respected.
+        "source_ref_rows": [],
     }
 
 
@@ -2402,6 +2850,18 @@ def build_reference_index(
             mm = str(rv.get("match_method") or "").strip()
             if mm.startswith("source_work_reference"):
                 refs_source_map_ok += 1
+            classification = classify_reference_metadata(rv, enable_title_lookup=bool(enable_title_lookup))
+            status = str(rv.get("metadata_status") or classification.get("metadata_status") or "").strip()
+            reason = str(rv.get("missing_reason") or classification.get("missing_reason") or "").strip()
+            action = str(rv.get("metadata_action") or classification.get("metadata_action") or "").strip()
+            if status in REFERENCE_METADATA_STATUS_CODES:
+                _stat_inc(crossref_stats, f"refs_metadata_status_{status}")
+            if reason in REFERENCE_MISSING_REASON_CODES:
+                _stat_inc(crossref_stats, f"refs_missing_reason_{reason}")
+            if action:
+                _stat_inc(crossref_stats, f"refs_action_{action}")
+            if action in {"retry", "source_repair"}:
+                _stat_inc(crossref_stats, "refs_action_retry_or_source_repair")
 
     _emit_progress("prepare", docs_done=0, current="")
     if (not bool(quality_gate)) and int(doc_prepare_workers) > 1 and total_docs > 1:
@@ -2545,7 +3005,9 @@ def build_reference_index(
             refs_obj: dict[str, dict] = {}
             unresolved_promising = 0
             sparse_promising = 0
-            crossref_active_source = bool(crossref_enabled)
+            crossref_active_source = bool(
+                crossref_enabled and ((time.monotonic() - crossref_start_ts) <= float(max(5.0, crossref_time_budget_s)))
+            )
             doc_crossref_attempted = False
             doc_crossref_attempt_ts = 0.0
 
@@ -2571,6 +3033,11 @@ def build_reference_index(
                     crossref_enabled=crossref_active_source,
                     stats=crossref_stats,
                 )
+                if crossref_enabled and (not crossref_budget_exhausted):
+                    if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
+                        crossref_budget_exhausted = True
+                if crossref_budget_exhausted:
+                    crossref_active_source = False
             if source_doi and source_ref_rows:
                 src_cache = cache.get("source_refs")
                 if not isinstance(src_cache, dict):
@@ -2589,6 +3056,9 @@ def build_reference_index(
                     crossref_enabled=crossref_active_source,
                     stats=crossref_stats,
                 )
+                if crossref_enabled and (not crossref_budget_exhausted):
+                    if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
+                        crossref_budget_exhausted = True
             if int(doi_prefetch_workers) > 1:
                 crossref_active_prefetch = bool(
                     crossref_enabled and ((time.monotonic() - crossref_start_ts) <= float(max(5.0, crossref_time_budget_s)))
@@ -2755,6 +3225,9 @@ def build_reference_index(
                         if crossref_enabled and (not crossref_budget_exhausted):
                             if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
                                 crossref_budget_exhausted = True
+
+                raw_meta = _fallback_meta_from_raw_reference(raw)
+                meta = _merge_raw_reference_meta(meta, raw_meta)
                 doi = ""
                 doi_url = ""
                 if isinstance(meta, dict):
@@ -2774,6 +3247,7 @@ def build_reference_index(
                         year0 = str(meta.get("year") or "").strip() if isinstance(meta, dict) else ""
                         vol0 = str(meta.get("volume") or "").strip() if isinstance(meta, dict) else ""
                         pages0 = str(meta.get("pages") or "").strip() if isinstance(meta, dict) else ""
+                        match0 = str(meta.get("match_method") or "").strip() if isinstance(meta, dict) else ""
                         title_words = [w for w in re.split(r"\s+", title0) if w]
                         noisy_title = (not title0) or (len(title0) >= 200) or (len(title_words) >= 28)
                         needs_backfill = (not authors0) or (not venue0) or (not year0) or (noisy_title) or ((not vol0) and (not pages0))
@@ -2784,12 +3258,21 @@ def build_reference_index(
                             cache["doi"] = doi_cache
                         by_doi = None
                         doi_backfill_skip_miss = False
+                        cached_doi_meta: dict | None = None
                         if needs_backfill and doi_key:
                             cached_doi = doi_cache.get(doi_key)
                             if _is_crossref_meta_cache_hit(cached_doi):
                                 _stat_inc(crossref_stats, "crossref_cache_hits")
                                 _stat_inc(crossref_stats, "doi_cache_hits")
-                                by_doi = cached_doi
+                                cached_doi_meta = dict(cached_doi) if isinstance(cached_doi, dict) else None
+                                if (
+                                    isinstance(cached_doi_meta, dict)
+                                    and _reference_meta_is_sparse(cached_doi_meta)
+                                    and crossref_enabled
+                                ):
+                                    _stat_inc(crossref_stats, "doi_sparse_cache_refreshes")
+                                else:
+                                    by_doi = cached_doi_meta
                             elif _is_fresh_crossref_cache_miss(cached_doi):
                                 _stat_inc(crossref_stats, "crossref_negative_hits")
                                 _stat_inc(crossref_stats, "doi_negative_hits")
@@ -2807,13 +3290,15 @@ def build_reference_index(
                             )
                             if isinstance(by_doi, dict) and by_doi and doi_key:
                                 doi_cache[doi_key] = by_doi
+                            elif isinstance(cached_doi_meta, dict) and cached_doi_meta:
+                                by_doi = cached_doi_meta
                             elif doi_key:
                                 doi_cache[doi_key] = _crossref_cache_miss("doi_backfill_not_found")
                                 _stat_inc(crossref_stats, "crossref_negative_writes")
                                 _stat_inc(crossref_stats, "doi_negative_writes")
                             if isinstance(by_doi, dict) and by_doi:
                                 merged = dict(meta) if isinstance(meta, dict) else {}
-                                if noisy_title or (not str(merged.get("title") or "").strip()):
+                                if noisy_title or ("raw_meta" in match0) or (not str(merged.get("title") or "").strip()):
                                     merged["title"] = str(by_doi.get("title") or merged.get("title") or "").strip()
                                 if not str(merged.get("authors") or "").strip():
                                     merged["authors"] = str(by_doi.get("authors") or "").strip()
@@ -2836,7 +3321,7 @@ def build_reference_index(
                                 meta = merged
                         elif isinstance(by_doi, dict) and by_doi:
                             merged = dict(meta) if isinstance(meta, dict) else {}
-                            if noisy_title or (not str(merged.get("title") or "").strip()):
+                            if noisy_title or ("raw_meta" in match0) or (not str(merged.get("title") or "").strip()):
                                 merged["title"] = str(by_doi.get("title") or merged.get("title") or "").strip()
                             if not str(merged.get("authors") or "").strip():
                                 merged["authors"] = str(by_doi.get("authors") or "").strip()
@@ -2871,6 +3356,11 @@ def build_reference_index(
                         else:
                             meta["match_method"] = "raw_title"
     
+                match_method = (
+                    str(meta.get("match_method") or "").strip()
+                    if isinstance(meta, dict)
+                    else ("raw_title" if str(title_fallback or "").strip() else "")
+                )
                 rec = {
                     "num": int(n),
                     "raw": raw,
@@ -2887,15 +3377,16 @@ def build_reference_index(
                     "volume": str(meta.get("volume") or "").strip() if isinstance(meta, dict) else "",
                     "issue": str(meta.get("issue") or "").strip() if isinstance(meta, dict) else "",
                     "pages": str(meta.get("pages") or "").strip() if isinstance(meta, dict) else "",
-                    "crossref_ok": bool(isinstance(meta, dict)),
-                    "match_method": (
-                        str(meta.get("match_method") or "").strip()
-                        if isinstance(meta, dict)
-                        else ("raw_title" if str(title_fallback or "").strip() else "")
+                    "crossref_ok": bool(
+                        isinstance(meta, dict)
+                        and _reference_match_method_has_external_resolution(match_method, doi)
                     ),
+                    "match_method": match_method,
+                    "match_score": _float_meta_value(meta.get("match_score"), 0.0) if isinstance(meta, dict) else 0.0,
                     "parse_confidence": _reference_parse_confidence(raw),
                     "tail_continuity_status": str(reference_catalog.get("tail_continuity_status") or "").strip(),
                 }
+                rec.update(classify_reference_metadata(rec, enable_title_lookup=bool(enable_title_lookup)))
                 refs_obj[str(int(n))] = rec
                 if promising_ref:
                     has_resolved = bool(str(rec.get("doi") or "").strip() or bool(rec.get("crossref_ok")))
@@ -3009,6 +3500,12 @@ def build_reference_index(
         "crossref_budget_exhausted": 1 if bool(crossref_budget_exhausted) else 0,
         "elapsed_s": round(float(elapsed_s), 3),
     }
+    for code in REFERENCE_METADATA_STATUS_CODES:
+        out_stats[f"refs_metadata_status_{code}"] = 0
+    for code in REFERENCE_MISSING_REASON_CODES:
+        out_stats[f"refs_missing_reason_{code}"] = 0
+    for action in ("none", "auto_backfill", "retry", "source_repair", "non_article_ok", "retry_or_source_repair"):
+        out_stats[f"refs_action_{action}"] = 0
     out_stats.update({k: int(v) for k, v in crossref_stats.items()})
     return out_stats
 

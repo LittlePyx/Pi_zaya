@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kb.converter.quality_gate import prepare_markdown_for_index
+from kb.converter.quality_gate import assess_markdown_index_quality, prepare_markdown_for_index
 from kb.converter.quality_repair import conversion_quality_result_path
 
 
@@ -50,6 +50,78 @@ def test_quality_gate_autofixes_safe_issue_before_indexing(tmp_path: Path):
     assert result["status"] == "ready"
     assert result["auto_repair"]["changed"] is True
     assert md_path.read_text(encoding="utf-8").lstrip().startswith("<!-- kb_page: 1 -->")
+
+
+def test_quality_gate_recovers_missing_source_pages_before_indexing(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "paged.pdf"
+    page_texts = [
+        " ".join(f"alpha{i:02d}" for i in range(90)),
+        " ".join(f"bravo{i:02d}" for i in range(90)),
+        " ".join(f"charlie{i:02d}" for i in range(90)),
+    ]
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "paged.en.md"
+    md_path.write_text(
+        "\n\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Paged Paper",
+                "## Abstract",
+                "This paper studies source page recovery and cites prior work [1].",
+                page_texts[0],
+                "<!-- kb_page: 3 -->",
+                "## Method",
+                page_texts[2],
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal of Testing, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = prepare_markdown_for_index(md_path, auto_repair=True, source_pdf_path=pdf_path)
+
+    repaired = md_path.read_text(encoding="utf-8")
+    assert result["indexable"] is True
+    assert result["status"] == "ready"
+    assert result["auto_repair"]["changed"] is True
+    assert "<!-- kb_page: 2 -->" in repaired
+    assert "bravo00 bravo01 bravo02" in repaired
+
+
+def test_quality_gate_blocks_persistent_critical_autofix_issue(tmp_path: Path):
+    md_path = tmp_path / "persistent.en.md"
+    md_path.write_text(_good_markdown(), encoding="utf-8")
+
+    result = assess_markdown_index_quality(
+        md_path,
+        quality_result={
+            "repair_plan": {
+                "action": "autofix",
+                "scope": "markdown",
+                "reason": "Missing source pages remain after deterministic repair.",
+                "issue_codes": ["missing_source_pages"],
+                "autofix_issue_codes": ["missing_source_pages"],
+                "reconvert_issue_codes": [],
+                "review_issue_codes": [],
+            },
+            "metrics": {},
+        },
+        refresh_stale=False,
+    )
+
+    assert result["indexable"] is False
+    assert result["status"] == "blocked"
+    assert result["action"] == "autofix"
+    assert result["blocking_issue_codes"] == ["missing_source_pages"]
 
 
 def test_quality_gate_blocks_source_level_conversion_damage(tmp_path: Path):

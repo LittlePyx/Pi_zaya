@@ -23,7 +23,7 @@ Windows 下可直接用脚本：
 - `run_new.ps1` 默认不会自动安装依赖，需要时加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
 - `run_new.ps1` 默认开启后端 `uvicorn --reload`；若你想用单进程模式，可加 `-NoBackendReload`。
 - `run_new.ps1` 默认端口：后端 `8000`，前端 `5173`。
-- 旧版 Streamlit 入口已移除，开发和验收都以 FastAPI + React 为准。
+- 旧版 Streamlit 入口已移除，开发和验收都以 FastAPI + React 为准；旧 UI 依赖如确需排查可单独看 `requirements-legacy.txt`。
 
 ## 2. 你能做什么
 

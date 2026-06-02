@@ -10,9 +10,8 @@ import re
 import time
 from pathlib import Path
 
-import streamlit as st
-
 from ui.strings import S
+from ui.streamlit_compat import st
 
 _STRUCT_CITE_CANON_RE = re.compile(
     r"\[\[\s*CITE\s*:\s*([A-Za-z0-9_-]{4,24})\s*:\s*(\d{1,4})\s*\]\]",

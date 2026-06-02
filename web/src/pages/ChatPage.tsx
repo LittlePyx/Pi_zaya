@@ -27,7 +27,6 @@ const DESKTOP_READER_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const READER_WIDTH_STORAGE_KEY = 'kb:paper-guide-reader-width'
 const READER_COLLAPSED_STORAGE_KEY = 'kb:paper-guide-reader-collapsed'
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
-const TIMELINE_RAIL_LABEL = '\u65f6\u95f4\u7ebf'
 const showLegacyUiBlocks = false
 
 function uploadItemKey(item: ChatUploadItem) {
@@ -128,6 +127,8 @@ export default function ChatPage() {
   const [readerSessionHighlights, setReaderSessionHighlights] = useState<Record<string, ReaderSessionHighlight[]>>({})
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
   const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
+  const [citationShelfOpen, setCitationShelfOpen] = useState(false)
+  const [closeShelfSignal, setCloseShelfSignal] = useState(0)
   const [desktopReaderEligible, setDesktopReaderEligible] = useState(
     () => (typeof window !== 'undefined' ? window.innerWidth >= DESKTOP_READER_BREAKPOINT : false),
   )
@@ -607,9 +608,18 @@ export default function ChatPage() {
     }
     readerPayloadRef.current = nextPayload
     setReaderPayload(nextPayload)
+    setCitationShelfOpen(false)
+    setCloseShelfSignal((value) => value + 1)
     setReaderCollapsed(false)
     setReaderOpen(true)
   }
+
+  const handleCitationShelfOpenChange = useCallback((open: boolean) => {
+    setCitationShelfOpen(open)
+    if (open && readerOpenRef.current && desktopReaderEligible) {
+      setReaderCollapsed(true)
+    }
+  }, [desktopReaderEligible])
 
   const refreshShelfSourceQuality = useCallback(() => {
     setSourceQualityRefreshToken((value) => value + 1)
@@ -825,11 +835,13 @@ export default function ChatPage() {
 
   const desktopReaderVisible = readerOpen && desktopReaderEligible
   const desktopReaderExpanded = desktopReaderVisible && !readerCollapsed
+  const rightWorkspaceOccupied = citationShelfOpen || readerOpen
   const timelineUiReady = !conversationLoading && timelineItems.length > 0
-  const showDesktopTimeline = timelineUiReady && timelineOpen && !desktopReaderExpanded
-  const showInlineTimelineToggle = timelineUiReady && (!desktopReaderEligible || desktopReaderExpanded)
-  const showDesktopTimelineToggleRail = timelineUiReady && desktopReaderEligible && !desktopReaderExpanded && !timelineOpen
+  const showDesktopTimeline = timelineUiReady && timelineOpen && !rightWorkspaceOccupied
+  const showInlineTimelineToggle = timelineUiReady && (!desktopReaderEligible || rightWorkspaceOccupied)
+  const showDesktopTimelineToggleRail = timelineUiReady && desktopReaderEligible && !rightWorkspaceOccupied && !timelineOpen
   const showConversationMeta = !conversationLoading && (timelineUiReady || activeConversation?.mode === 'paper_guide')
+  const hideConversationMetaOnDesktop = showDesktopTimeline && activeConversation?.mode !== 'paper_guide'
   const guideSourceLabel = String(activeConversation?.bound_source_name || '').trim()
     || String(activeConversation?.bound_source_path || '').trim()
     || S.guide_unbound
@@ -882,23 +894,43 @@ export default function ChatPage() {
     finishReaderResize(false)
     event.preventDefault()
   }
+  const chatComposer = (
+    <ChatInput
+      onSend={onSend}
+      onStop={cancelGen}
+      onUpload={onUpload}
+      onRetryUploadItem={onRetryUpload}
+      onCancelUploadItem={onCancelUpload}
+      onRemoveImage={removePendingImage}
+      onDismissUploadItem={dismissUploadItem}
+      onStartGuideFromUpload={onStartGuideFromUpload}
+      uploadItems={uploadItems}
+      pendingImages={pendingImages}
+      uploading={uploading}
+      generating={!!generation}
+      appendSignal={appendSignal}
+    />
+  )
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!activeConvId && messages.length === 0 ? (
-        <div className="kb-empty-state flex flex-1 flex-col items-center justify-center gap-4 px-4">
-          <div className="kb-empty-brand">
-            <div className="kb-empty-logo-wrap flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
-              <img src="/pi_logo.png" alt="Pi assistant" className="kb-empty-logo h-9 w-9 object-contain" loading="lazy" />
+        <>
+          <div className="kb-empty-state flex flex-1 flex-col items-center justify-center gap-4 px-4">
+            <div className="kb-empty-brand">
+              <div className="kb-empty-logo-wrap flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
+                <img src="/pi_logo.png" alt="Pi assistant" className="kb-empty-logo h-9 w-9 object-contain" loading="lazy" />
+              </div>
+              <div className="kb-empty-typewriter" aria-label={S.brand_subtitle}>
+                {S.brand_subtitle}
+              </div>
             </div>
-            <div className="kb-empty-typewriter" aria-label={S.brand_subtitle}>
-              {S.brand_subtitle}
-            </div>
+            <Text type="secondary" className="max-w-xs text-center">
+              {S.no_msgs}
+            </Text>
           </div>
-          <Text type="secondary" className="max-w-xs text-center">
-            {S.no_msgs}
-          </Text>
-        </div>
+          {chatComposer}
+        </>
       ) : (
         <>
           {showLegacyUiBlocks ? (
@@ -964,7 +996,7 @@ export default function ChatPage() {
           ) : null}
 
           {showConversationMeta ? (
-            <div className="px-4 pb-2 pt-3">
+            <div className={`px-4 pb-2 pt-3 ${hideConversationMetaOnDesktop ? 'lg:hidden' : ''}`}>
               <div className="mx-auto max-w-7xl">
                 <section className="kb-chat-meta-shell">
                   <div className="kb-chat-meta-strip">
@@ -1065,8 +1097,15 @@ export default function ChatPage() {
             </div>
           ) : null}
 
-          <div ref={splitLayoutRef} className="relative flex min-h-0 flex-1">
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            ref={splitLayoutRef}
+            className={`kb-chat-main-region relative flex min-h-0 flex-1 ${
+              showDesktopTimeline ? 'has-timeline-rail' : ''
+            }`}
+          >
+            <div className={`kb-chat-workspace flex min-h-0 min-w-0 flex-1 flex-col ${
+              citationShelfOpen ? 'is-citation-shelf-open' : ''
+            }`}>
               <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 {conversationLoading ? (
                   <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden px-6 py-6">
@@ -1105,27 +1144,15 @@ export default function ChatPage() {
                     }}
                     onOpenReader={openReader}
                     readerLocateResults={readerLocateResults}
+                    onShelfOpenChange={handleCitationShelfOpenChange}
+                    closeShelfSignal={closeShelfSignal}
                     sourceQualityRefreshToken={sourceQualityRefreshToken}
                     paperGuideSourcePath={effectiveGuide.sourcePath}
                     paperGuideSourceName={effectiveGuide.sourceName}
                   />
                 )}
               </div>
-              <ChatInput
-                onSend={onSend}
-                onStop={cancelGen}
-                onUpload={onUpload}
-                onRetryUploadItem={onRetryUpload}
-                onCancelUploadItem={onCancelUpload}
-                onRemoveImage={removePendingImage}
-                onDismissUploadItem={dismissUploadItem}
-                onStartGuideFromUpload={onStartGuideFromUpload}
-                uploadItems={uploadItems}
-                pendingImages={pendingImages}
-                uploading={uploading}
-                generating={!!generation}
-                appendSignal={appendSignal}
-              />
+              {chatComposer}
             </div>
             {desktopReaderExpanded ? (
               <div
@@ -1143,21 +1170,22 @@ export default function ChatPage() {
                 <button
                   type="button"
                   className="kb-chat-timeline-rail-toggle pointer-events-auto"
-                  aria-label={TIMELINE_RAIL_LABEL}
+                  aria-label={S.timeline_label}
                   onClick={toggleTimelineOpen}
                 >
-                  鏃堕棿绾?
+                  {S.timeline_label}
                 </button>
               </div>
             ) : null}
             {showDesktopTimeline ? (
-              <aside className="kb-chat-timeline hidden h-full shrink-0 border-l border-[var(--border)] lg:flex">
+              <aside className={`kb-chat-timeline pointer-events-none absolute inset-y-0 right-0 z-20 hidden lg:flex ${
+                desktopReaderVisible ? 'is-reader-collapsed' : ''
+              }`}>
                 <div className="kb-chat-timeline-shell">
                   <div className="kb-chat-timeline-head">
                     <div className="kb-chat-timeline-title-row">
                       <div className="min-w-0">
                         <div className="kb-chat-timeline-title">{S.timeline_label}</div>
-                        <div className="kb-chat-timeline-hint">{S.timeline_hint}</div>
                       </div>
                       <div className="kb-chat-timeline-head-actions">
                         <span className="kb-chat-timeline-count">{timelineItems.length}</span>
@@ -1170,8 +1198,6 @@ export default function ChatPage() {
                         </button>
                       </div>
                     </div>
-                    <div className="text-sm font-medium">{S.timeline_label}</div>
-                    <div className="mt-1 text-xs text-black/50 dark:text-white/50">{S.timeline_hint}</div>
                   </div>
                   <div className="kb-chat-timeline-list">
                     {timelineItems.map((item) => (
@@ -1182,9 +1208,13 @@ export default function ChatPage() {
                           activeTimelineUserMsgId === item.userMsgId
                             ? 'is-active'
                             : ''
-                        }`}
+                        } ${item.hasAnswer ? 'is-ready' : 'is-pending'}`}
+                        aria-current={activeTimelineUserMsgId === item.userMsgId ? 'step' : undefined}
+                        aria-label={`Q${item.order}: ${item.questionPreview}`}
+                        title={item.questionPreview}
                         onClick={() => jumpToTimelineItem(item)}
                       >
+                        <span className="kb-chat-timeline-item-node" aria-hidden="true" />
                         <div className="kb-chat-timeline-item-meta">
                           <span className="kb-chat-timeline-item-order">Q{item.order}</span>
                           <span className={`kb-chat-timeline-item-status ${item.hasAnswer ? 'is-ready' : 'is-pending'}`}>

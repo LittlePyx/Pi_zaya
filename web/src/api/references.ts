@@ -208,6 +208,48 @@ export interface ShelfMetadataBackfillStartResponse {
   state: ShelfMetadataBackfillJobState
 }
 
+export type ReferenceSyncStatKey =
+  | 'docs_total'
+  | 'docs_indexed'
+  | 'refs_total'
+  | 'refs_metadata_ready'
+  | 'refs_metadata_status_complete'
+  | 'refs_metadata_status_crossref_enriched'
+  | 'refs_metadata_status_doi_sparse_refreshable'
+  | 'refs_metadata_status_title_lookup_retryable'
+  | 'refs_metadata_status_non_article_source_ok'
+  | 'refs_metadata_status_no_doi_expected'
+  | 'refs_metadata_status_truncated_reference'
+  | 'refs_metadata_status_low_confidence_match'
+  | 'refs_missing_reason_doi_sparse_refreshable'
+  | 'refs_missing_reason_title_lookup_retryable'
+  | 'refs_missing_reason_truncated_reference'
+  | 'refs_missing_reason_low_confidence_match'
+  | 'refs_action_auto_backfill'
+  | 'refs_action_non_article_ok'
+  | 'refs_action_retry_or_source_repair'
+  | 'crossref_network_attempts'
+  | 'elapsed_s'
+
+export type ReferenceSyncStats = Partial<Record<ReferenceSyncStatKey, number | string | boolean | null>> & {
+  [key: string]: number | string | boolean | null | undefined
+}
+
+export interface ReferenceSyncStatusEvent {
+  running?: boolean
+  status?: string
+  stage?: string
+  message?: string
+  error?: string
+  current?: string
+  docs_done?: number | string
+  docs_total?: number | string
+  run_id?: number | string
+  stats?: ReferenceSyncStats | Record<string, unknown>
+  done?: boolean
+  [key: string]: unknown
+}
+
 function stableStringify(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value !== 'object') return JSON.stringify(value)
@@ -240,7 +282,7 @@ export const referencesApi = {
   startSync: () =>
     api.post<{ started: boolean; reason?: string; run_id?: number }>('/api/references/sync'),
   streamSyncStatus: (
-    onData: (data: Record<string, unknown>) => void,
+    onData: (data: ReferenceSyncStatusEvent) => void,
     onDone: () => void,
     onError?: (err: unknown) => void,
   ): AbortController => {
@@ -260,7 +302,7 @@ export const referencesApi = {
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue
             try {
-              const data = JSON.parse(line.slice(6)) as Record<string, unknown>
+              const data = JSON.parse(line.slice(6)) as ReferenceSyncStatusEvent
               onData(data)
               if (data.done === true) { onDone(); return }
             } catch { /* skip bad JSON */ }

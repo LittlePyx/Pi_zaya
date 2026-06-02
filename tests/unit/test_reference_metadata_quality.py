@@ -573,6 +573,52 @@ def test_scan_reference_metadata_backfill_targets_reads_full_reference_index(tmp
     assert {item["name"] for item in scan["missing_fields"]} >= {"authors", "venue", "year"}
 
 
+def test_scan_reference_metadata_backfill_targets_excludes_expected_no_doi_sources(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    source_path = tmp_path / "paper.en.md"
+    (db_dir / "references_index.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "docs": {
+                    "paper": {
+                        "path": str(source_path),
+                        "name": source_path.name,
+                        "refs": {
+                            "1": {
+                                "num": 1,
+                                "raw": (
+                                    "[1] OpenAI. GPT-4 technical report. Technical report, 2023. "
+                                    "https://openai.com/research/gpt-4"
+                                ),
+                                "title": "GPT-4 technical report",
+                                "authors": "OpenAI",
+                                "venue": "OpenAI",
+                                "year": "2023",
+                                "metadata_status": "non_article_source_ok",
+                                "missing_reason": "no_doi_expected",
+                                "metadata_action": "non_article_ok",
+                            }
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda detail: dict(detail))
+
+    scan = mq.scan_reference_metadata_backfill_targets(db_dir=db_dir, limit=20)
+
+    assert scan["scanned"] == 1
+    assert scan["needs_repair"] == 0
+    assert scan["target_count"] == 0
+    assert scan["non_article_ok"] == 1
+    assert {item["name"] for item in scan["missing_reasons"]} == {"no_doi_expected"}
+
+
 def test_backfill_reference_metadata_updates_reference_index_from_scan(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir()

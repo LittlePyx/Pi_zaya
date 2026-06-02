@@ -1131,13 +1131,18 @@ def _pdf_source_stats(source_pdf_path: Path | str | None) -> dict[str, Any]:
 
 def _document_profile(md_path: Path, text: str) -> dict[str, Any]:
     name = f"{md_path.parent.name} {md_path.name}".lower()
+    file_name = md_path.name.lower()
     front = re.sub(r"\s+", " ", str(text or "")[:5000]).lower()
+    file_title_hint = re.sub(r"^.*?\b(?:19|20)\d{2}\b[\s._-]*", "", file_name).strip()
     is_supplement = bool(
         re.search(r"\b(?:supplement|supplementary|supplemental)\b", name)
         or re.search(r"\b(?:supplement|supplementary|supplemental)\s+(?:document|material|information|doi)\b", front)
         or "parent article doi" in front
     )
-    is_review = bool(re.search(r"\b(?:review|survey)\b", name) or re.search(r"\breview article\b", front))
+    is_review = bool(
+        re.search(r"\b(?:review|survey)\b", file_title_hint)
+        or re.search(r"\b(?:review article|survey article|systematic review|brief review|comprehensive review)\b", front)
+    )
     doc_type = "supplementary" if is_supplement else ("review" if is_review else "research_article")
     return {
         "document_type": doc_type,
@@ -1487,6 +1492,8 @@ def _regression_reasons(base_text: str, candidate_text: str) -> list[str]:
     cand = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
     flags = comparison.get("regression_flags") if isinstance(comparison.get("regression_flags"), dict) else {}
     reasons = [str(key) for key, value in flags.items() if bool(value)]
+    base_chars = int(base.get("chars") or 0)
+    cand_chars = int(cand.get("chars") or 0)
     if reasons == ["analyzer_warnings_increased"]:
         base_no_markers = re.sub(r"\s*<!--\s*kb_page:\s*\d+\s*-->\s*", " ", str(base_text or ""))
         cand_no_markers = re.sub(r"\s*<!--\s*kb_page:\s*\d+\s*-->\s*", " ", str(candidate_text or ""))
@@ -1503,10 +1510,12 @@ def _regression_reasons(base_text: str, candidate_text: str) -> list[str]:
             and int(cand.get("table_block_count") or 0) >= int(base.get("table_block_count") or 0)
             and int(cand.get("reference_line_count") or 0) >= int(base.get("reference_line_count") or 0)
         )
-        if marker_only_change or (structural_gain and no_content_loss):
+        base_warning_count = int(base.get("analyzer_warning_count") or 0)
+        cand_warning_count = int(cand.get("analyzer_warning_count") or 0)
+        low_warning_delta = cand_warning_count <= max(3, base_warning_count + 2)
+        content_backfill_gain = base_chars > 0 and cand_chars >= base_chars + max(1000, int(base_chars * 0.08))
+        if marker_only_change or (structural_gain and no_content_loss) or (content_backfill_gain and no_content_loss and low_warning_delta):
             reasons = []
-    base_chars = int(base.get("chars") or 0)
-    cand_chars = int(cand.get("chars") or 0)
     if base_chars > 1000 and cand_chars < int(base_chars * 0.82):
         reasons.append("content_shrank_too_much")
     return reasons
@@ -1840,20 +1849,28 @@ def _line_start_before(text: str, offset: int) -> int:
 
 
 def _insertion_offset_for_missing_page(text: str, page_no: int) -> int:
-    markers: list[tuple[int, int]] = []
+    markers: list[tuple[int, int, int]] = []
     for match in PAGE_MARKER_RE.finditer(str(text or "")):
         try:
-            markers.append((int(match.group(1)), int(match.start())))
+            start = int(match.start())
+            markers.append((int(match.group(1)), start, _line_start_before(text, start)))
         except Exception:
             continue
-    next_offsets = [_line_start_before(text, offset) for page, offset in markers if page > page_no]
     ref_match = re.search(r"(?mi)^#{1,6}\s+References\s*$", str(text or ""))
     ref_offset = int(ref_match.start()) if ref_match else -1
-    candidates = [pos for pos in next_offsets if pos >= 0]
     if ref_offset >= 0:
-        candidates.append(ref_offset)
-    if candidates:
-        return min(candidates)
+        reference_pages = [page for page, offset, _line_start in markers if offset >= ref_offset]
+        first_reference_page = min(reference_pages) if reference_pages else 0
+        if first_reference_page > 0 and page_no < first_reference_page:
+            return ref_offset
+    next_offsets = [line_start for page, _offset, line_start in markers if page > page_no and line_start >= 0]
+    if next_offsets:
+        return min(next_offsets)
+    if ref_offset >= 0:
+        reference_pages = [page for page, offset, _line_start in markers if offset >= ref_offset]
+        first_reference_page = min(reference_pages) if reference_pages else 0
+        if first_reference_page <= 0 or page_no < first_reference_page:
+            return ref_offset
     return len(str(text or ""))
 
 

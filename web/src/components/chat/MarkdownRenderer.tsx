@@ -120,10 +120,102 @@ function normalizeReferenceSectionSpacing(text: string): string {
   return out.join('\n').replace(/\n{3,}/g, '\n\n')
 }
 
+const SUPERSCRIPT_CHAR_MAP: Record<string, string> = {
+  '⁰': '0',
+  '¹': '1',
+  '²': '2',
+  '³': '3',
+  '⁴': '4',
+  '⁵': '5',
+  '⁶': '6',
+  '⁷': '7',
+  '⁸': '8',
+  '⁹': '9',
+}
+
+const SUBSCRIPT_CHAR_MAP: Record<string, string> = {
+  '₀': '0',
+  '₁': '1',
+  '₂': '2',
+  '₃': '3',
+  '₄': '4',
+  '₅': '5',
+  '₆': '6',
+  '₇': '7',
+  '₈': '8',
+  '₉': '9',
+}
+
+function normalizePlainMathExpression(value: string): string {
+  let s = String(value || '').trim()
+  s = s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹]+/g, (match) => `^${Array.from(match).map((ch) => SUPERSCRIPT_CHAR_MAP[ch] || ch).join('')}`)
+  s = s.replace(/[₀₁₂₃₄₅₆₇₈₉]+/g, (match) => `_${Array.from(match).map((ch) => SUBSCRIPT_CHAR_MAP[ch] || ch).join('')}`)
+  s = s.replace(/([A-Za-z])_([A-Za-z][A-Za-z0-9]{1,})/g, '$1_{\\mathrm{$2}}')
+  return s
+    .replace(/→/g, '\\to')
+    .replace(/←/g, '\\leftarrow')
+    .replace(/⇒/g, '\\Rightarrow')
+    .replace(/↔/g, '\\leftrightarrow')
+    .replace(/·/g, '\\cdot')
+    .replace(/×/g, '\\times')
+    .replace(/≥/g, '\\ge')
+    .replace(/≤/g, '\\le')
+    .replace(/≠/g, '\\ne')
+    .replace(/≈/g, '\\approx')
+    .replace(/\s{2,}/g, ' ')
+}
+
+function isLikelyPlainMathExpression(value: string): boolean {
+  const s = String(value || '').trim()
+  if (s.length < 6 || s.length > 420) return false
+  if (/[$`[\]{}]/.test(s)) return false
+  if (/https?:\/\//i.test(s)) return false
+  if (!/[=<>≤≥≈≠∝→←↔⇒]|\\[A-Za-z]+/.test(s)) return false
+  const cjkCount = (s.match(/[\u4e00-\u9fff]/g) || []).length
+  if (cjkCount > 0 && cjkCount / Math.max(s.length, 1) > 0.12) return false
+
+  let score = 0
+  const relationCount = (s.match(/[=<>≤≥≈≠∝→←↔⇒]/g) || []).length
+  if (relationCount > 0) score += 2
+  if (relationCount >= 2) score += 1
+  if (/[_^₀-₉⁰¹²³⁴⁵⁶⁷⁸⁹]/.test(s)) score += 1
+  if (/[+\-*/]|·|×|\|\|/.test(s)) score += 1
+  if (/[A-Za-z][A-Za-z0-9]*\s*[_₀-₉]/.test(s)) score += 1
+  if (/[A-Za-z][A-Za-z0-9_]*\([^)]{1,80}\)/.test(s)) score += 1
+  if (/\\[A-Za-z]+/.test(s)) score += 2
+  return score >= 4
+}
+
+function wrapPlainMathParentheticalsInLine(line: string): string {
+  if (!/[=<>≤≥≈≠∝→←↔⇒]/.test(line)) return line
+  let out = line.replace(/（([^（）\n]{4,420})）/g, (match, inner: string) => {
+    if (!isLikelyPlainMathExpression(inner)) return match
+    return `（$${normalizePlainMathExpression(inner)}$）`
+  })
+  out = out.replace(/\(([^()\n]{4,260})\)/g, (match, inner: string) => {
+    if (!isLikelyPlainMathExpression(inner)) return match
+    return `($${normalizePlainMathExpression(inner)}$)`
+  })
+  return out
+}
+
+function normalizePlainMathParentheticals(text: string): string {
+  const lines = String(text || '').split('\n')
+  let inFence = false
+  return lines.map((line) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      return line
+    }
+    if (inFence) return line
+    return wrapPlainMathParentheticalsInLine(line)
+  }).join('\n')
+}
+
 function normalize(text: string) {
-  return normalizeReferenceSectionSpacing(repairCollapsedGfmTables(text))
+  return normalizePlainMathParentheticals(normalizeReferenceSectionSpacing(repairCollapsedGfmTables(text))
     .replace(/\\\(/g, '$').replace(/\\\)/g, '$')
-    .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$')
+    .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$'))
 }
 
 function resolvePlainCitationDetail(
