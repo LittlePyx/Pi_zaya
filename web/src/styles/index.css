@@ -1085,6 +1085,70 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-cite-pop-system-b {
   border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 12px 12px 10px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.09);
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-head {
+  margin-bottom: 0;
+  padding-bottom: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-kicker {
+  margin-bottom: 6px;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-kind {
+  color: color-mix(in srgb, var(--text-main) 54%, transparent);
+  font-size: 10.8px;
+  text-transform: none;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-badge {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: transparent;
+  padding: 2px 7px;
+  font-size: 10.8px;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-title {
+  font-size: 14px;
+  line-height: 1.34;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-compact-meta {
+  gap: 5px 10px;
+  margin-top: 7px;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-compact-pill {
+  font-size: 10.8px;
+  line-height: 1.3;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-compact-pill[data-compact-key="authors"] {
+  flex-basis: 100%;
+  align-items: flex-start;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-compact-pill[data-compact-key="authors"] .kb-cite-pop-compact-value {
+  max-width: 100%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-compact-pill[data-compact-key="published"] {
+  color: color-mix(in srgb, var(--text-main) 66%, transparent);
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-compact-pill[data-compact-key="doi"] {
+  width: fit-content;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-compact-pill[data-compact-key="doi"] .kb-cite-pop-compact-value {
+  max-width: 180px;
 }
 
 .kb-cite-pop-head {
@@ -1473,8 +1537,13 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-cite-pop-system-b .kb-cite-pop-evidence-map {
   gap: 0;
-  margin-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  margin-top: 0;
+  border-top: 0;
+}
+
+.kb-cite-pop-literature-card {
+  display: grid;
+  min-width: 0;
 }
 
 .kb-cite-pop-claim,
@@ -1565,6 +1634,37 @@ body.kb-reader-resizing .kb-reader-content {
   border-radius: 0;
   background: transparent;
   padding: 8px 0;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-paper-overview {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 46%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 0;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-paper-overview .kb-cite-pop-section-title {
+  color: color-mix(in srgb, var(--text-main) 52%, transparent);
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-paper-overview .kb-cite-pop-main {
+  color: color-mix(in srgb, var(--text-main) 88%, transparent);
+  font-size: 12.4px;
+  font-weight: 560;
+  line-height: 1.55;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-evidence {
+  padding: 9px 0;
+}
+
+.kb-cite-pop-system-b .kb-cite-pop-evidence .kb-cite-pop-main {
+  color: color-mix(in srgb, var(--text-main) 70%, transparent);
+  font-size: 11.2px;
+  font-weight: 500;
+  line-height: 1.48;
 }
 
 .kb-cite-pop-system-b :where(.kb-cite-pop-takeaway, .kb-cite-pop-context-summary) {

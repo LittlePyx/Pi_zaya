@@ -353,7 +353,7 @@ export const S = {
   cite_answer_point: '答案要点',
   cite_context: '引用语境',
   cite_context_summary: '语境摘要',
-  cite_paper_overview: '文献概要',
+  cite_paper_overview: '内容概要',
   cite_trace_complete: '链路已闭合',
   cite_trace_review: '链路需核对',
   cite_binding_mismatch: '疑似错配',
@@ -381,7 +381,8 @@ export const S = {
   cite_reliability: '可靠度',
   cite_evidence_chain: '证据链',
   cite_upstream_role: '上游作用',
-  cite_reference_entry: '上游文献条目',
+  cite_reference_entry: '参考文献条目',
+  cite_original_reference_entry: '原始条目',
   cite_note: '说明',
   cite_flow_aria: '引用定位路径',
 

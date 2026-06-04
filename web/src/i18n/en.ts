@@ -353,7 +353,7 @@ export const S = {
   cite_answer_point: 'Answer point',
   cite_context: 'Citation context',
   cite_context_summary: 'Context summary',
-  cite_paper_overview: 'Paper overview',
+  cite_paper_overview: 'Content summary',
   cite_trace_complete: 'Chain complete',
   cite_trace_review: 'Needs review',
   cite_binding_mismatch: 'Possible mismatch',
@@ -382,6 +382,7 @@ export const S = {
   cite_evidence_chain: 'Evidence chain',
   cite_upstream_role: 'Upstream role',
   cite_reference_entry: 'Reference entry',
+  cite_original_reference_entry: 'Original entry',
   cite_note: 'Note',
   cite_flow_aria: 'Citation location path',
 

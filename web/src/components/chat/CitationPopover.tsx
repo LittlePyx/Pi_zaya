@@ -412,7 +412,7 @@ export function CitationPopover({
     ? rawSystemBPaperOverviewCandidate
     : ''
   const systemBPaperOverviewPreview = evidencePreview(systemBPaperOverviewText, 360)
-  const systemBPaperOverviewLabel = ((S as unknown as Record<string, string>).cite_paper_overview || 'Paper overview')
+  const systemBPaperOverviewLabel = ((S as unknown as Record<string, string>).cite_paper_overview || 'Content summary')
   const systemBCitationContextText = ''
   const systemBCitationContextLabel = cardEvidenceLabel || S.cite_context
   const systemBTakeawayText = ''
@@ -546,6 +546,7 @@ export function CitationPopover({
     ),
   )
   const systemBReferencePreview = evidencePreview(systemBReferenceText, 260)
+  const systemBReferenceLabel = ((S as unknown as Record<string, string>).cite_original_reference_entry || S.cite_reference_entry)
   const systemAMetaSource = display.source && !isOnlyPaperLabel(display.source, [systemATitle, sourcePaperText])
     ? display.source
     : ''
@@ -636,7 +637,7 @@ export function CitationPopover({
   return (
     <div
       ref={ref}
-      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b' : 'kb-cite-pop-system-a'} fixed z-50 w-[460px] max-w-[calc(100vw-20px)]`}
+      className={`kb-cite-pop ${isSystemB ? 'kb-cite-pop-system-b w-[480px]' : 'kb-cite-pop-system-a w-[460px]'} fixed z-50 max-w-[calc(100vw-20px)]`}
       data-testid="citation-popover"
       style={style ?? { left: position.x + 10, top: position.y + 10, visibility: 'hidden' }}
       onMouseEnter={onMouseEnter}
@@ -659,6 +660,7 @@ export function CitationPopover({
                 item.href ? (
                   <a
                     className={`kb-cite-pop-compact-pill kb-cite-pop-compact-${item.tone} kb-cite-pop-link`}
+                    data-compact-key={item.key}
                     href={item.href}
                     key={item.key}
                     rel="noreferrer"
@@ -671,6 +673,7 @@ export function CitationPopover({
                 ) : (
                   <span
                     className={`kb-cite-pop-compact-pill kb-cite-pop-compact-${item.tone}`}
+                    data-compact-key={item.key}
                     key={item.key}
                     title={item.value}
                   >
@@ -760,7 +763,7 @@ export function CitationPopover({
           ) : null}
         </div>
       ) : (
-        <div className="kb-cite-pop-evidence-map">
+        <div className="kb-cite-pop-evidence-map kb-cite-pop-literature-card" data-testid="citation-popover-system-b-card">
           {showSystemBTrace ? (
             <div
               className={`kb-cite-pop-trace kb-cite-pop-trace-${systemBTraceStatus.tone}`}
@@ -822,7 +825,7 @@ export function CitationPopover({
           ) : null}
           {showSystemBReference ? (
             <div className="kb-cite-pop-evidence" data-testid="citation-popover-system-b-reference">
-              <div className="kb-cite-pop-section-title">{cardReferenceLabel || S.cite_reference_entry}</div>
+              <div className="kb-cite-pop-section-title">{cardReferenceLabel || systemBReferenceLabel}</div>
               <div className="kb-cite-pop-main">{systemBReferencePreview}</div>
             </div>
           ) : null}
