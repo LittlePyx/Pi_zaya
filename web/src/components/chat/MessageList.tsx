@@ -5862,11 +5862,13 @@ export function MessageList({
       note: mergeSelectionNote(existingSnapshot?.note || summaryTarget.note, note),
     }, { force: true })
   }
+  const addReaderSelectionToShelfRef = useRef(addReaderSelectionToShelf)
+  addReaderSelectionToShelfRef.current = addReaderSelectionToShelf
 
   useEffect(() => {
     const handleWindowEvent = (event: Event) => {
       const custom = event as CustomEvent<unknown>
-      addReaderSelectionToShelf(custom.detail)
+      addReaderSelectionToShelfRef.current(custom.detail)
     }
     window.addEventListener(READER_SELECTION_SHELF_EVENT, handleWindowEvent)
 
@@ -5878,14 +5880,14 @@ export function MessageList({
           ? event.data as Record<string, unknown>
           : {}
         if (String(data.type || '') !== 'reader-selection-shelf') return
-        addReaderSelectionToShelf(data)
+        addReaderSelectionToShelfRef.current(data)
       }
     }
     return () => {
       window.removeEventListener(READER_SELECTION_SHELF_EVENT, handleWindowEvent)
       channel?.close()
     }
-  }, [activeConvId, S])
+  }, [])
 
   const startPaperGuideFromDetail = async (detail: CiteDetail) => {
     const isInPaperReference = Boolean(detail.isInpaper)

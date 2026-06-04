@@ -147,7 +147,7 @@ export default function ReaderPage() {
   const params = useParams<{ sessionId: string }>()
   const sessionId = String(params.sessionId || '').trim()
   const [session, setSession] = useState<ReaderSessionRecord | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => Boolean(sessionId))
   const [error, setError] = useState('')
   const [reloadToken, setReloadToken] = useState(0)
   const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
@@ -157,12 +157,13 @@ export default function ReaderPage() {
   useEffect(() => {
     let cancelled = false
     if (!sessionId) {
-      setLoading(false)
-      setError(S.reader_standalone_missing || 'Reader session is missing.')
       return
     }
-    setLoading(true)
-    setError('')
+    Promise.resolve().then(() => {
+      if (cancelled) return
+      setLoading(true)
+      setError('')
+    })
     chatApi.getReaderSession(sessionId)
       .then((res) => {
         if (cancelled) return
@@ -192,6 +193,8 @@ export default function ReaderPage() {
   }, [S.reader_standalone_missing, reloadToken, sessionId])
 
   const payload = useMemo(() => normalizeReaderPayload(session), [session])
+  const payloadSourcePath = String(payload?.sourcePath || '').trim()
+  const sessionConversationId = String(session?.conversation_id || '').trim()
   const title = String(session?.title || payload?.sourceName || payload?.sourcePath || S.side_dock_reader || 'Reader').trim()
 
   useEffect(() => {
@@ -204,7 +207,7 @@ export default function ReaderPage() {
         : {}
       if (String(data.type || '') !== 'reader-session-state') return
       const sourcePath = String(data.sourcePath || '').trim()
-      if (!sourcePath || sourcePath !== String(payload?.sourcePath || '').trim()) return
+      if (!sourcePath || sourcePath !== payloadSourcePath) return
       if (String(data.sessionId || '').trim() === sessionId) return
       const highlights = normalizeSessionHighlights(data.highlights)
       setSessionHighlights((current) => {
@@ -216,14 +219,14 @@ export default function ReaderPage() {
       channel.close()
       if (broadcastRef.current === channel) broadcastRef.current = null
     }
-  }, [payload?.sourcePath, sessionId])
+  }, [payloadSourcePath, sessionId])
 
   const publishState = useCallback((state: Record<string, unknown>) => {
-    if (!sessionId || !payload?.sourcePath) return
+    if (!sessionId || !payloadSourcePath) return
     const nextState = {
       ...state,
-      sourcePath: payload.sourcePath,
-      conversationId: session?.conversation_id || '',
+      sourcePath: payloadSourcePath,
+      conversationId: sessionConversationId,
     }
     void chatApi.updateReaderSessionState(sessionId, nextState).catch(() => {})
     broadcastRef.current?.postMessage({
@@ -231,12 +234,12 @@ export default function ReaderPage() {
       sessionId,
       ...nextState,
     })
-  }, [payload?.sourcePath, session?.conversation_id, sessionId])
+  }, [payloadSourcePath, sessionConversationId, sessionId])
 
   useEffect(() => {
-    if (!stateHydratedRef.current || !payload?.sourcePath) return
+    if (!stateHydratedRef.current || !payloadSourcePath) return
     publishState({ highlights: sessionHighlights, updatedAt: Date.now() })
-  }, [payload?.sourcePath, publishState, sessionHighlights])
+  }, [payloadSourcePath, publishState, sessionHighlights])
 
   const goBack = useCallback(() => {
     if (window.opener && window.history.length <= 1) {

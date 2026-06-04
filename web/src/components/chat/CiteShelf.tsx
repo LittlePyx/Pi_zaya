@@ -885,7 +885,7 @@ export function CiteShelf({
       sorted.sort((a, b) => impactScore(b) - impactScore(a))
     }
     return sorted
-  }, [items, searchText, sortKey, tagFilter])
+  }, [S.shelf_answer, items, searchText, sortKey, tagFilter])
 
   const groupedVisibleItems = useMemo(() => {
     if (groupMode === 'none') {
