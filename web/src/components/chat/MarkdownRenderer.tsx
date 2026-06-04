@@ -403,6 +403,37 @@ function withCitationOccurrenceContext(detail: CiteDetail, link: HTMLElement, en
   }
 }
 
+function readerShelfOriginForLink(detail: CiteDetail, link: HTMLElement): string {
+  if (link.closest('.kb-md-reference-entry')) return 'reader_references'
+  if (detail.isInpaper) return 'reader_cross_reference'
+  return 'reader_citation'
+}
+
+function withReaderShelfContext(
+  detail: CiteDetail,
+  opts: {
+    origin?: string
+    kind?: string
+    excerpt?: string
+    excerptLabel?: string
+    contextSource?: string
+  } = {},
+): CiteDetail {
+  const kind = opts.kind || (detail.isInpaper ? 'reference' : 'citation')
+  const origin = opts.origin || detail.shelfOrigin || 'reader_citation'
+  const excerpt = String(opts.excerpt || detail.shelfExcerpt || detail.citationContext || detail.evidenceQuote || detail.cardEvidence || '').trim()
+  const excerptLabel = String(opts.excerptLabel || detail.shelfExcerptLabel || '').trim()
+  return {
+    ...detail,
+    shelfItemKind: kind,
+    shelfOrigin: origin,
+    shelfExcerpt: excerpt,
+    shelfExcerptLabel: excerptLabel,
+    citationContext: excerpt || detail.citationContext,
+    citationContextSource: opts.contextSource || detail.citationContextSource,
+  }
+}
+
 function firstCitationDetailInNode(node: ReactNode, byAnchor: Map<string, CiteDetail>): CiteDetail | null {
   if (node === null || node === undefined || typeof node === 'boolean') return null
   if (typeof node === 'string' || typeof node === 'number') return null
@@ -651,6 +682,7 @@ interface Props {
   content: string
   citeDetails?: CiteDetail[]
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
+  onCitationAddToShelf?: (detail: CiteDetail) => void
   onCitationHover?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
   onCitationLeave?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void
   onLocateSnippet?: (snippet: string, meta?: LocateRenderMeta) => void
@@ -1374,6 +1406,7 @@ function buildMarkdownComponents(
   citationByNum: Map<number, CiteDetail[]>,
   duplicateCitationAnchors: Set<string>,
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
+  onCitationAddToShelf?: (detail: CiteDetail) => void,
   onCitationHover?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   onCitationLeave?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   toneBySource?: Map<string, CiteChipTone>,
@@ -1693,10 +1726,32 @@ function buildMarkdownComponents(
             aria-label={citationInlineLabel(detail, { includeSource: false })}
             onClick={(event) => {
               event.preventDefault()
-              onCitationClick?.(withCitationOccurrenceContext(detail, event.currentTarget, useOccurrenceContext), event)
+              const occurrenceDetail = withCitationOccurrenceContext(detail, event.currentTarget, useOccurrenceContext)
+              const readerOrigin = readerShelfOriginForLink(detail, event.currentTarget)
+              const readerDetail = variant === 'reader'
+                ? withReaderShelfContext(occurrenceDetail, {
+                  origin: readerOrigin,
+                  kind: detail.isInpaper ? 'reference' : 'citation',
+                  excerpt: citationOccurrenceContextFromLink(event.currentTarget) || occurrenceDetail.citationContext,
+                  excerptLabel: S?.shelf_excerpt_head || 'Excerpt',
+                  contextSource: readerOrigin === 'reader_references' ? 'reader_references' : 'reader_occurrence',
+                })
+                : occurrenceDetail
+              onCitationClick?.(readerDetail, event)
             }}
             onMouseEnter={(event) => {
-              onCitationHover?.(withCitationOccurrenceContext(detail, event.currentTarget, useOccurrenceContext), event)
+              const occurrenceDetail = withCitationOccurrenceContext(detail, event.currentTarget, useOccurrenceContext)
+              const readerOrigin = readerShelfOriginForLink(detail, event.currentTarget)
+              const readerDetail = variant === 'reader'
+                ? withReaderShelfContext(occurrenceDetail, {
+                  origin: readerOrigin,
+                  kind: detail.isInpaper ? 'reference' : 'citation',
+                  excerpt: citationOccurrenceContextFromLink(event.currentTarget) || occurrenceDetail.citationContext,
+                  excerptLabel: S?.shelf_excerpt_head || 'Excerpt',
+                  contextSource: readerOrigin === 'reader_references' ? 'reader_references' : 'reader_occurrence',
+                })
+                : occurrenceDetail
+              onCitationHover?.(readerDetail, event)
             }}
             onMouseLeave={(event) => {
               onCitationLeave?.(detail, event)
@@ -1772,8 +1827,19 @@ function buildMarkdownComponents(
             const isReferenceEntry = looksLikeBibliographyEntryText(text)
             if (!isReferenceEntry) return <p {...attrs}>{content}</p>
             const refDetail = firstCitationDetailInNode(content, byAnchor) || firstReferenceEntryDetail(text, citationByNum)
-            const canOpenRef = Boolean(refDetail && onCitationClick)
+            const refDetailForRow = refDetail
+              ? withReaderShelfContext(refDetail, {
+                origin: 'reader_references',
+                kind: 'reference',
+                excerpt: text,
+                excerptLabel: S?.shelf_reference_entry || 'Reference entry',
+                contextSource: 'reader_references',
+              })
+              : null
+            const canOpenRef = Boolean(refDetailForRow && onCitationClick)
+            const canAddRef = Boolean(refDetailForRow && onCitationAddToShelf)
             const actionTitle = S?.cite_open_context || 'Open reference card'
+            const addTitle = S?.reader_add_to_shelf_title || 'Add to research basket'
             const className = canOpenRef
               ? 'kb-md-reference-entry kb-md-reference-entry-clickable'
               : 'kb-md-reference-entry'
@@ -1787,24 +1853,31 @@ function buildMarkdownComponents(
                 onClick={canOpenRef ? (event) => {
                   const target = event.target as HTMLElement | null
                   if (target?.closest('a,button')) return
-                  onCitationClick?.(refDetail as CiteDetail, event as unknown as MouseEvent<HTMLElement>)
+                  onCitationClick?.(refDetailForRow as CiteDetail, event as unknown as MouseEvent<HTMLElement>)
                 } : undefined}
                 onKeyDown={canOpenRef ? (event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return
                   const target = event.target as HTMLElement | null
                   if (target?.closest('a,button')) return
                   event.preventDefault()
-                  onCitationClick?.(refDetail as CiteDetail, event as unknown as MouseEvent<HTMLElement>)
+                  onCitationClick?.(refDetailForRow as CiteDetail, event as unknown as MouseEvent<HTMLElement>)
                 } : undefined}
               >
                 <span className="kb-md-reference-entry-body">{content}</span>
-                {canOpenRef ? (
-                  <span
+                {canAddRef ? (
+                  <button
+                    type="button"
                     className="kb-md-reference-entry-action"
-                    aria-hidden="true"
+                    aria-label={addTitle}
+                    title={addTitle}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      onCitationAddToShelf?.(refDetailForRow as CiteDetail)
+                    }}
                   >
-                    ›
-                  </span>
+                    {S?.reader_add_to_shelf || 'Shelf'}
+                  </button>
                 ) : null}
               </p>
             )
@@ -1916,6 +1989,7 @@ export function MarkdownRenderer({
   content,
   citeDetails = [],
   onCitationClick,
+  onCitationAddToShelf,
   onCitationHover,
   onCitationLeave,
   onLocateSnippet,
@@ -1962,6 +2036,7 @@ export function MarkdownRenderer({
     citationByNum,
     duplicateCitationAnchors,
     onCitationClick,
+    onCitationAddToShelf,
     onCitationHover,
     onCitationLeave,
     toneBySource,

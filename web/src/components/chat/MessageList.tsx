@@ -4067,6 +4067,9 @@ function citeDetailFromReaderSelection(
     evidence_source: 'reader_selection',
     citation_context: payload.text,
     citation_context_source: 'reader_selection',
+    shelf_item_kind: 'reader_selection',
+    shelf_origin: 'reader_selection',
+    shelf_excerpt: payload.text,
     location_label: payload.headingPath || '',
     block_id: payload.blockId || '',
     anchor_id: payload.anchorId || '',
@@ -4356,6 +4359,10 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.summarySource === b.summarySource
     && a.summaryProvider === b.summaryProvider
     && JSON.stringify(a.summaryQuality || null) === JSON.stringify(b.summaryQuality || null)
+    && a.shelfItemKind === b.shelfItemKind
+    && a.shelfOrigin === b.shelfOrigin
+    && a.shelfExcerpt === b.shelfExcerpt
+    && a.shelfExcerptLabel === b.shelfExcerptLabel
     && a.answerClaim === b.answerClaim
     && a.headingPath === b.headingPath
     && a.evidenceQuote === b.evidenceQuote
@@ -4596,6 +4603,10 @@ function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteS
     summarySource: preferExistingText(item.summarySource, live.summarySource),
     summaryProvider: preferExistingText(item.summaryProvider, live.summaryProvider),
     summaryQuality: item.summaryQuality || live.summaryQuality,
+    shelfItemKind: preferExistingText(item.shelfItemKind, live.shelfItemKind),
+    shelfOrigin: preferExistingText(item.shelfOrigin, live.shelfOrigin),
+    shelfExcerpt: preferRicherField('title', item.shelfExcerpt, live.shelfExcerpt),
+    shelfExcerptLabel: preferExistingText(item.shelfExcerptLabel, live.shelfExcerptLabel),
     metadataQuality,
     metadataRepairStatus: preferIncomingMetadata
       ? preferExistingText(live.metadataRepairStatus, item.metadataRepairStatus)
@@ -6061,6 +6072,10 @@ export function MessageList({
         key: existing?.key || mergedIncoming.key,
         tags: normalizeShelfTags(existing?.tags || mergedIncoming.tags),
         note: mergeSelectionNote(existing?.note || mergedIncoming.note, note),
+        shelfItemKind: 'reader_selection',
+        shelfOrigin: 'reader_selection',
+        shelfExcerpt: preferRicherField('title', existing?.shelfExcerpt || '', payload.text) || mergedIncoming.shelfExcerpt,
+        shelfExcerptLabel: existing?.shelfExcerptLabel || mergedIncoming.shelfExcerptLabel,
         evidenceQuote: preferRicherField('title', existing?.evidenceQuote || '', payload.text) || mergedIncoming.evidenceQuote,
         evidenceSource: 'reader_selection',
         headingPath: payload.headingPath || mergedIncoming.headingPath,

@@ -799,10 +799,11 @@ export function PaperGuideReaderDrawer({
       variant="reader"
       citeDetails={citeDetails}
       onCitationClick={showReaderCitation}
+      onCitationAddToShelf={addReaderCitationToShelf}
       readerAnchors={readerAnchors}
       readerBlocks={readerBlocks}
     />
-  ), [citeDetails, markdown, readerAnchors, readerBlocks, showReaderCitation])
+  ), [addReaderCitationToShelf, citeDetails, markdown, readerAnchors, readerBlocks, showReaderCitation])
 
   const sourceLabel = [title, activeHeadingPath].filter(Boolean).join(' / ')
   const enrichSessionHighlight = useCallback((highlight: ReaderSessionHighlight): ReaderSessionHighlight => {

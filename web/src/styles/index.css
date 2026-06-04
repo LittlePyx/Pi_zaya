@@ -1001,28 +1001,31 @@ body.kb-reader-resizing .kb-reader-content {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  min-width: 42px;
+  min-height: 24px;
+  padding: 0 8px;
   margin-top: 2px;
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
-  border-radius: 999px;
-  background: transparent;
-  color: color-mix(in srgb, var(--muted-text) 76%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-main));
   font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 18px;
-  font-weight: 720;
+  font-size: 11px;
+  font-weight: 680;
   line-height: 1;
   white-space: nowrap;
-  pointer-events: none;
-  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+  cursor: pointer;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
 }
 
 .kb-markdown.kb-markdown-reader .kb-md-reference-entry-clickable:hover .kb-md-reference-entry-action,
-.kb-markdown.kb-markdown-reader .kb-md-reference-entry-clickable:focus-visible .kb-md-reference-entry-action {
+.kb-markdown.kb-markdown-reader .kb-md-reference-entry-clickable:focus-visible .kb-md-reference-entry-action,
+.kb-markdown.kb-markdown-reader .kb-md-reference-entry-action:hover,
+.kb-markdown.kb-markdown-reader .kb-md-reference-entry-action:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
   background: color-mix(in srgb, var(--accent) 9%, var(--panel));
   color: var(--accent);
-  transform: translateX(1px);
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.1);
 }
 
 .kb-markdown.kb-markdown-reader pre {
@@ -2915,6 +2918,33 @@ body.kb-reader-resizing .kb-reader-content {
   text-decoration: underline;
 }
 
+.kb-shelf-excerpt {
+  margin-top: 7px;
+  padding: 6px 8px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--panel) 72%, var(--bg));
+}
+
+.kb-shelf-excerpt-head {
+  margin-bottom: 4px;
+  color: color-mix(in srgb, var(--text-main) 56%, transparent);
+  font-size: 10.5px;
+  line-height: 1;
+  font-weight: 720;
+}
+
+.kb-shelf-excerpt-text {
+  display: -webkit-box;
+  max-height: 86px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-main) 78%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
 .kb-shelf-note-editor:hover,
 .kb-shelf-note-editor.ant-input:hover {
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border)) !important;
@@ -2965,6 +2995,31 @@ body.kb-reader-resizing .kb-reader-content {
   font-size: 9.5px;
   line-height: 1;
   white-space: nowrap;
+}
+
+.kb-shelf-kind {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, #14b8a6 8%, var(--panel));
+  color: color-mix(in srgb, #0f766e 82%, var(--text-main));
+  font-size: 9.5px;
+  line-height: 1;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.kb-shelf-kind.is-citation {
+  background: color-mix(in srgb, #2563eb 8%, var(--panel));
+  color: color-mix(in srgb, #1d4ed8 78%, var(--text-main));
+}
+
+.kb-shelf-kind.is-reader_selection,
+.kb-shelf-kind.is-excerpt {
+  background: color-mix(in srgb, #7c3aed 8%, var(--panel));
+  color: color-mix(in srgb, #6d28d9 78%, var(--text-main));
 }
 
 .kb-shelf-source-open-quality,
@@ -3432,6 +3487,7 @@ body.kb-reader-resizing .kb-reader-content {
 .kb-shelf-metrics,
 .kb-shelf-doi,
 .kb-shelf-note,
+.kb-shelf-excerpt,
 .kb-shelf-summary {
   margin-left: 26px;
 }
@@ -3444,6 +3500,7 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-shelf-quality-chip,
 .kb-shelf-origin,
+.kb-shelf-kind,
 .kb-shelf-source-open-quality,
 .kb-shelf-library-match,
 .kb-shelf-tag,
@@ -3519,6 +3576,21 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-shelf-note-preview {
   color: color-mix(in srgb, var(--text-main) 64%, transparent);
+}
+
+.kb-shelf-excerpt {
+  border: 0;
+  border-left: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: transparent;
+  padding: 2px 0 2px 8px;
+}
+
+.kb-shelf-excerpt-head {
+  color: color-mix(in srgb, var(--text-main) 54%, transparent);
+}
+
+.kb-shelf-excerpt-text {
+  color: color-mix(in srgb, var(--text-main) 66%, transparent);
 }
 
 .kb-shelf-metrics {

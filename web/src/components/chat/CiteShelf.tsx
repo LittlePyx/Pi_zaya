@@ -14,9 +14,12 @@ import {
   cleanCitationDisplayText,
   isLikelyWeakCitationTitle,
   looksLowValueShelfSummary,
+  normalizeShelfItemKind,
   normalizeShelfTags,
+  shelfItemKindLabel,
   shelfItemHasConflictingVenueSignals,
   shelfItemNeedsMetadataRepair,
+  shelfOriginLabel,
   strictRepairMerge,
   summarySourceLabel,
 } from './citationState'
@@ -55,7 +58,7 @@ interface Props {
 
 const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
 
-type GroupMode = 'none' | 'tag' | 'source'
+type GroupMode = 'none' | 'tag' | 'source' | 'kind'
 type SourceQualityByPath = Record<string, LibrarySourceQualityItem>
 type ShelfExportKind = 'bib' | 'csv' | 'ris'
 type ShelfExportOptions = { skipPreflight?: boolean; onlyMetadataReady?: boolean; autoRepair?: boolean }
@@ -76,6 +79,7 @@ const GROUP_MODE_LABEL = (S: Record<string, string>): Record<GroupMode, string> 
   none: S.shelf_no_group,
   tag: S.shelf_by_tag,
   source: S.shelf_by_source,
+  kind: S.shelf_by_type,
 })
 
 const normalizeDoiLike = (value: string): string =>
@@ -869,6 +873,11 @@ export function CiteShelf({
         item.doiUrl,
         item.sourceName,
         item.note,
+        item.shelfItemKind,
+        shelfItemKindLabel(item.shelfItemKind, S),
+        item.shelfOrigin,
+        shelfOriginLabel(item.shelfOrigin, S),
+        item.shelfExcerpt,
         item.traceAssistantOrder ? S.shelf_answer.replace('{n}', String(item.traceAssistantOrder)) : '',
         ...tags,
       ]
@@ -885,7 +894,7 @@ export function CiteShelf({
       sorted.sort((a, b) => impactScore(b) - impactScore(a))
     }
     return sorted
-  }, [S.shelf_answer, items, searchText, sortKey, tagFilter])
+  }, [S, items, searchText, sortKey, tagFilter])
 
   const groupedVisibleItems = useMemo(() => {
     if (groupMode === 'none') {
@@ -900,6 +909,10 @@ export function CiteShelf({
         const primaryTag = tags[0] || S.shelf_untagged
         groupKey = `tag:${primaryTag.toLowerCase()}`
         groupLabel = S.shelf_tag_prefix.replace('{tag}', primaryTag)
+      } else if (groupMode === 'kind') {
+        const kind = normalizeShelfItemKind(item.shelfItemKind)
+        groupKey = `kind:${kind}`
+        groupLabel = (S.shelf_type_prefix || 'Type · {type}').replace('{type}', shelfItemKindLabel(kind, S))
       } else {
         const src = String(item.sourceName || item.sourcePath || '').trim() || S.shelf_unknown_source
         groupKey = `source:${src}`
@@ -915,11 +928,7 @@ export function CiteShelf({
     return Array.from(groups.entries()).map(([k, v]) => ({ key: k, label: v.label, items: v.items }))
   }, [
     groupMode,
-    S.shelf_all,
-    S.shelf_source_prefix,
-    S.shelf_tag_prefix,
-    S.shelf_unknown_source,
-    S.shelf_untagged,
+    S,
     visibleItems,
   ])
 
@@ -1795,6 +1804,7 @@ export function CiteShelf({
                       { value: 'none', label: S.shelf_group_none },
                       { value: 'tag', label: S.shelf_group_tag },
                       { value: 'source', label: S.shelf_group_source },
+                      { value: 'kind', label: S.shelf_group_type },
                     ]}
                   />
                   <Select
@@ -1882,6 +1892,18 @@ export function CiteShelf({
                       const visibleQualityChips = isFocused ? quality.chips.slice(0, 3) : quality.chips.slice(0, 1)
                       const showQuality = Boolean(quality.needsRepair || isFocused)
                       const libraryMatch = libraryMatchView(item)
+                      const shelfKind = normalizeShelfItemKind(item.shelfItemKind)
+                      const shelfKindText = shelfItemKindLabel(shelfKind, S)
+                      const shelfOriginText = shelfOriginLabel(item.shelfOrigin, S)
+                      const shelfExcerpt = cleanCitationDisplayText(item.shelfExcerpt || '')
+                      const rawShelfExcerptLabel = String(item.shelfExcerptLabel || '').trim()
+                      const shelfExcerptLabel = rawShelfExcerptLabel === 'Reference entry'
+                        ? S.shelf_reference_entry
+                        : rawShelfExcerptLabel === 'Selected text'
+                          ? S.shelf_reader_selection_selected
+                          : rawShelfExcerptLabel === 'Excerpt'
+                            ? S.shelf_excerpt_head
+                            : rawShelfExcerptLabel || S.shelf_excerpt_head
 
                       return (
                         <div
@@ -1980,6 +2002,17 @@ export function CiteShelf({
                           ) : null}
                           <div className="kb-shelf-meta-row">
                             <div className="kb-shelf-meta-badges">
+                              <span
+                                className={`kb-shelf-kind is-${shelfKind}`}
+                                title={shelfOriginText || undefined}
+                              >
+                                {shelfKindText}
+                              </span>
+                              {shelfOriginText ? (
+                                <span className="kb-shelf-origin" title={shelfOriginText}>
+                                  {shelfOriginText}
+                                </span>
+                              ) : null}
                               {visibleTraceLabels.map((label, idx) => (
                                 <span key={`${item.key}-trace-${idx}-${label}`} className="kb-shelf-origin" title={trace.debugTitle || undefined}>
                                   {label}
@@ -2057,6 +2090,16 @@ export function CiteShelf({
                                   ) : null}
                                 </div>
                               )}
+                            </div>
+                          ) : null}
+                          {isFocused && shelfExcerpt ? (
+                            <div className="kb-shelf-excerpt" data-testid="citation-shelf-excerpt">
+                              <div className="kb-shelf-excerpt-head">
+                                {shelfExcerptLabel || S.shelf_excerpt_head}
+                              </div>
+                              <div className="kb-shelf-excerpt-text">
+                                {shelfExcerpt}
+                              </div>
                             </div>
                           ) : null}
                           {visibleMetrics.length > 0 ? (

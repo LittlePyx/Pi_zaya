@@ -98,6 +98,10 @@ export interface CiteDetail {
   summarySource: string
   summaryProvider: string
   summaryQuality: Record<string, unknown> | null
+  shelfItemKind: string
+  shelfOrigin: string
+  shelfExcerpt: string
+  shelfExcerptLabel: string
   answerClaim: string
   headingPath: string
   evidenceQuote: string
@@ -170,6 +174,8 @@ export interface CiteShelfItem extends CiteDetail {
   note: string
 }
 
+export type ShelfItemKind = 'citation' | 'reference' | 'reader_selection' | 'excerpt'
+
 function asText(value: unknown): string {
   if (typeof value === 'string') return value.trim()
   if (typeof value === 'number' && Number.isFinite(value)) return String(value)
@@ -203,6 +209,96 @@ export function cleanCitationDisplayText(value: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^(?:\.{2,}|…)+\s*/, '')
+}
+
+export function normalizeShelfItemKind(value: string | null | undefined): ShelfItemKind {
+  const key = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+  if (key === 'reference' || key === 'inpaper' || key === 'reader_reference' || key === 'reader_references') return 'reference'
+  if (key === 'reader_selection' || key === 'selection' || key === 'reader_excerpt') return 'reader_selection'
+  if (key === 'excerpt' || key === 'note') return 'excerpt'
+  return 'citation'
+}
+
+export function inferShelfItemKind(detail: Partial<CiteDetail>): ShelfItemKind {
+  const explicit = String(detail.shelfItemKind || '').trim()
+  if (explicit) return normalizeShelfItemKind(explicit)
+  const cardKind = String(detail.cardKind || '').trim().toLowerCase()
+  const evidenceSource = String(detail.evidenceSource || '').trim().toLowerCase()
+  const citationContextSource = String(detail.citationContextSource || '').trim().toLowerCase()
+  if (cardKind === 'reader_selection' || evidenceSource === 'reader_selection' || citationContextSource === 'reader_selection') {
+    return 'reader_selection'
+  }
+  if (detail.isInpaper) return 'reference'
+  return 'citation'
+}
+
+export function shelfItemKindLabel(kind: string | null | undefined, S: Record<string, string>): string {
+  const normalized = normalizeShelfItemKind(kind)
+  if (normalized === 'reference') return S.shelf_type_reference || 'Reference'
+  if (normalized === 'reader_selection') return S.shelf_type_reader_selection || 'Reader excerpt'
+  if (normalized === 'excerpt') return S.shelf_type_excerpt || 'Excerpt'
+  return S.shelf_type_citation || 'Citation'
+}
+
+function normalizeShelfOriginKey(value: string | null | undefined): string {
+  const key = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+  if (key === 'reader_reference' || key === 'reader_reference_entry') return 'reader_references'
+  if (key === 'selection') return 'reader_selection'
+  if (key === 'answer') return 'chat_answer'
+  return key
+}
+
+export function shelfOriginLabel(origin: string | null | undefined, S: Record<string, string>): string {
+  const key = normalizeShelfOriginKey(origin)
+  if (!key) return ''
+  const label = S[`shelf_origin_${key}`]
+  if (label) return label
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function inferShelfOrigin(detail: Partial<CiteDetail>, kind: ShelfItemKind): string {
+  const explicit = normalizeShelfOriginKey(detail.shelfOrigin)
+  if (explicit) return explicit
+  const evidenceSource = normalizeShelfOriginKey(detail.evidenceSource)
+  const contextSource = normalizeShelfOriginKey(detail.citationContextSource)
+  if (kind === 'reader_selection') return 'reader_selection'
+  if (contextSource.startsWith('reader_')) return contextSource
+  if (evidenceSource.startsWith('reader_')) return evidenceSource
+  if (detail.isInpaper) return 'reader_cross_reference'
+  if (Number(detail.traceAssistantOrder || 0) > 0 || Number(detail.traceAssistantMsgId || 0) > 0) return 'chat_answer'
+  if (kind === 'reference') return 'reference'
+  return 'citation'
+}
+
+function defaultShelfExcerptLabel(kind: ShelfItemKind): string {
+  if (kind === 'reference') return 'Reference entry'
+  if (kind === 'reader_selection') return 'Selected text'
+  return 'Excerpt'
+}
+
+function inferShelfExcerpt(detail: Partial<CiteDetail>, kind: ShelfItemKind): string {
+  const explicit = cleanCitationDisplayText(String(detail.shelfExcerpt || ''))
+  if (explicit) return explicit
+  const candidates = kind === 'reference'
+    ? [detail.citationContext, detail.cardReferenceEntry, detail.raw, detail.citeFmt]
+    : kind === 'reader_selection'
+      ? [detail.evidenceQuote, detail.citationContext, detail.raw, detail.cardEvidence]
+      : [detail.evidenceQuote, detail.cardEvidence, detail.citationContext, detail.answerClaim, detail.raw]
+  for (const candidate of candidates) {
+    const text = cleanCitationDisplayText(String(candidate || ''))
+    if (text) return text.slice(0, 1600)
+  }
+  return ''
 }
 
 function looseTokens(value: string): string[] {
@@ -958,6 +1054,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     summarySource: pickText(rec, 'summary_source', 'summarySource'),
     summaryProvider: pickText(rec, 'summary_provider', 'summaryProvider'),
     summaryQuality: pickRecord(rec, 'summary_quality', 'summaryQuality'),
+    shelfItemKind: pickText(rec, 'shelf_item_kind', 'shelfItemKind'),
+    shelfOrigin: pickText(rec, 'shelf_origin', 'shelfOrigin'),
+    shelfExcerpt: pickText(rec, 'shelf_excerpt', 'shelfExcerpt'),
+    shelfExcerptLabel: pickText(rec, 'shelf_excerpt_label', 'shelfExcerptLabel'),
     answerClaim: pickText(rec, 'answer_claim', 'answerClaim'),
     headingPath: pickText(rec, 'heading_path', 'headingPath'),
     evidenceQuote: pickText(rec, 'evidence_quote', 'evidenceQuote'),
@@ -1027,6 +1127,9 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'citeFmt',
     'title',
     'summaryLine',
+    'shelfOrigin',
+    'shelfExcerpt',
+    'shelfExcerptLabel',
     'answerClaim',
     'headingPath',
     'evidenceQuote',
@@ -1398,11 +1501,19 @@ export function toShelfItem(detail: CiteDetail): CiteShelfItem {
   const main = citationMain(detail)
   const baseKey = `${detail.anchor}|${detail.sourceName || detail.sourcePath}|${detail.num}`
   const summary = deriveShelfSummary(detail)
+  const shelfItemKind = inferShelfItemKind(detail)
+  const shelfOrigin = cleanCitationDisplayText(inferShelfOrigin(detail, shelfItemKind))
+  const shelfExcerpt = inferShelfExcerpt(detail, shelfItemKind)
+  const shelfExcerptLabel = cleanCitationDisplayText(detail.shelfExcerptLabel || defaultShelfExcerptLabel(shelfItemKind))
   return {
     ...detail,
     summaryLine: summary.line,
     summarySource: summary.line ? summary.source : detail.summarySource,
     summaryProvider: detail.summaryProvider,
+    shelfItemKind,
+    shelfOrigin,
+    shelfExcerpt,
+    shelfExcerptLabel,
     key: baseKey,
     main,
     tags: [],
