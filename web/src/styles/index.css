@@ -1659,6 +1659,12 @@ body.kb-reader-resizing .kb-reader-content {
   line-height: 1.55;
 }
 
+.kb-cite-pop-system-b-loading {
+  margin: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 46%, transparent);
+  padding: 8px 0;
+}
+
 .kb-cite-pop-system-b .kb-cite-pop-evidence {
   padding: 9px 0;
 }

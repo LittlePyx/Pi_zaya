@@ -246,9 +246,9 @@ test('render packet contract can drive body render and strict locate without top
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('单次压缩光谱成像')
   await expect(page.getByTestId('citation-popover-system-b-trace')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-b-context')).toHaveCount(0)
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('引用所在论文')
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('仅定位到当前论文')
-  await expect(page.getByTestId('citation-popover-system-b-support')).toContainText('cited prior work')
+  await expect(page.getByTestId('citation-popover-system-b-location')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-b-support')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-b-reference')).toContainText('Single-shot compressive spectral imaging')
   await expect(page.locator('.kb-cite-pop')).toContainText('Single-shot compressive spectral imaging')
   await expect(page.locator('.kb-cite-pop')).toContainText('DOI 10.1364/OE.15.014013')
   await expect(page.locator('.kb-cite-pop')).toContainText('被引 123')
@@ -289,16 +289,15 @@ test('system B upstream reference citation is explicitly clickable and opens its
   await expect(popover).toHaveClass(/kb-cite-pop-system-b/)
   await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('单次压缩光谱成像')
   await expect(page.getByTestId('citation-popover-system-b-context')).toHaveCount(0)
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('引用所在论文')
-  await expect(page.getByTestId('citation-popover-system-b-location')).toContainText('仅定位到当前论文')
-  await expect(page.getByTestId('citation-popover-system-b-reference')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-b-location')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-b-reference')).toContainText('Single-shot compressive spectral imaging')
   await expect(popover).toContainText('DOI 10.1364/OE.15.014013')
   await expect(popover).toContainText('被引 123')
   await expect(popover).toContainText('IF 3.8')
   await expect(popover).toContainText('JCR Q2')
 })
 
-test('system B popover can show LLM citation-context summary while hiding answer-context raw text', async ({ page }) => {
+test('system B popover folds LLM citation-context summary into current-paper usage', async ({ page }) => {
   await mockReaderDoc(page)
   await page.route('**/api/references/citation-card-polish', async (route) => {
     await route.fulfill({
@@ -320,7 +319,8 @@ test('system B popover can show LLM citation-context summary while hiding answer
   await expect(systemBChip).toBeVisible()
   await systemBChip.click()
 
-  await expect(page.getByTestId('citation-popover-system-b-context-summary')).toContainText('单次压缩光谱成像的上游来源')
+  await expect(page.getByTestId('citation-popover-system-b-context-summary')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-system-b-takeaway')).toContainText('单次压缩光谱成像的上游来源')
   await expect(page.getByTestId('citation-popover-system-b-context')).toHaveCount(0)
 })
 
