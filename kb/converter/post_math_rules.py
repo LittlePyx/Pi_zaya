@@ -224,9 +224,10 @@ def fix_math_markdown(md: str) -> str:
                 t,
             )
         )
+        microsecond_like = bool(re.search(r"(?:\\mus\b|\\mu\s*s\b|[μµ]s\b)", t))
         if word_n >= 10 and sym_n <= 1:
             return True
-        if word_n >= 8 and unit_like and sym_n <= 1:
+        if word_n >= 8 and (unit_like or microsecond_like) and sym_n <= 1:
             return True
         # Fragmentary short math blocks with unbalanced delimiters are usually extraction junk.
         if len(t) <= 40:

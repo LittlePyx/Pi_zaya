@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Empty, Spin, message } from 'antd'
 import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { chatApi, type ReaderSessionRecord } from '../api/chat'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type {
@@ -12,10 +12,25 @@ import type {
   ReaderOpenPayload,
   ReaderSessionHighlight,
 } from '../components/chat/reader/readerTypes'
-import { READER_SELECTION_SHELF_CHANNEL } from '../components/chat/reader/readerTypes'
+import {
+  READER_CITATION_SHELF_CHANNEL,
+  READER_SELECTION_SHELF_CHANNEL,
+  READER_SESSION_NAV_CHANNEL,
+  READER_SESSION_SYNC_CHANNEL,
+} from '../components/chat/reader/readerTypes'
+import type { CiteDetail } from '../components/chat/citationState'
 import { useT } from '../i18n'
 
-const READER_SESSION_SYNC_CHANNEL = 'kb:reader-session-sync'
+const LINKED_CONVERSATION_QUERY_KEYS = ['conversation', 'conversation_id', 'conv'] as const
+
+function linkedConversationIdFromSearch(search: string) {
+  const params = new URLSearchParams(search)
+  for (const key of LINKED_CONVERSATION_QUERY_KEYS) {
+    const value = String(params.get(key) || '').trim()
+    if (value) return value
+  }
+  return ''
+}
 
 function stringField(rec: Record<string, unknown>, key: string) {
   return String(rec[key] || '').trim()
@@ -58,6 +73,18 @@ function normalizeSessionHighlights(value: unknown): ReaderSessionHighlight[] {
     .map((item) => ({
       id: stringField(item, 'id') || `imported-${Math.random().toString(36).slice(2, 10)}`,
       text: stringField(item, 'text'),
+      noteKind: stringField(item, 'noteKind') || undefined,
+      sourcePath: stringField(item, 'sourcePath') || undefined,
+      sourceName: stringField(item, 'sourceName') || undefined,
+      conversationId: stringField(item, 'conversationId') || undefined,
+      messageId: numberField(item, 'messageId'),
+      locateRequestId: numberField(item, 'locateRequestId'),
+      locateFeedbackKey: stringField(item, 'locateFeedbackKey') || undefined,
+      createdAt: numberField(item, 'createdAt'),
+      updatedAt: numberField(item, 'updatedAt'),
+      feedback: stringField(item, 'feedback') || undefined,
+      feedbackAt: numberField(item, 'feedbackAt'),
+      headingPath: stringField(item, 'headingPath') || undefined,
       startOffset: numberField(item, 'startOffset'),
       endOffset: numberField(item, 'endOffset'),
       blockId: stringField(item, 'blockId') || undefined,
@@ -69,6 +96,17 @@ function normalizeSessionHighlights(value: unknown): ReaderSessionHighlight[] {
       endReadableIndex: numberField(item, 'endReadableIndex'),
     }))
     .filter((item) => Boolean(item.id && item.text))
+}
+
+function readerHighlightsSignature(items: ReaderSessionHighlight[]) {
+  return items
+    .map((item) => [
+      String(item.id || '').trim(),
+      String(item.updatedAt || item.createdAt || ''),
+      String(item.feedback || ''),
+      String(item.text || '').length,
+    ].join(':'))
+    .join('|')
 }
 
 function normalizeLocateTarget(value: unknown): ReaderLocateTarget | undefined {
@@ -144,6 +182,7 @@ function normalizeReaderPayload(record: ReaderSessionRecord | null): ReaderOpenP
 export default function ReaderPage() {
   const S = useT()
   const navigate = useNavigate()
+  const location = useLocation()
   const params = useParams<{ sessionId: string }>()
   const sessionId = String(params.sessionId || '').trim()
   const [session, setSession] = useState<ReaderSessionRecord | null>(null)
@@ -153,6 +192,8 @@ export default function ReaderPage() {
   const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
   const stateHydratedRef = useRef(false)
   const broadcastRef = useRef<BroadcastChannel | null>(null)
+  const pendingStateRef = useRef<Record<string, unknown>>({})
+  const saveTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -165,14 +206,29 @@ export default function ReaderPage() {
       setError('')
     })
     chatApi.getReaderSession(sessionId)
-      .then((res) => {
+      .then(async (res) => {
         if (cancelled) return
         stateHydratedRef.current = false
         setSession(res)
         const state = (res.state && typeof res.state === 'object')
           ? res.state as Record<string, unknown>
           : {}
-        setSessionHighlights(normalizeSessionHighlights(state.highlights))
+        let highlights = normalizeSessionHighlights(state.highlights || state.evidenceNotes)
+        const payloadFromRecord = normalizeReaderPayload(res)
+        const sourcePath = String(payloadFromRecord?.sourcePath || '').trim()
+        const conversationId = String(res.conversation_id || linkedConversationIdFromSearch(location.search)).trim()
+        if (highlights.length === 0 && conversationId && sourcePath) {
+          try {
+            const readerState = await chatApi.getConversationReaderState(conversationId, sourcePath)
+            if (!cancelled) {
+              highlights = normalizeSessionHighlights(readerState.state?.highlights || readerState.state?.evidenceNotes)
+            }
+          } catch {
+            // Reader sessions remain usable even when the linked conversation state is unavailable.
+          }
+        }
+        if (cancelled) return
+        setSessionHighlights(highlights)
         window.requestAnimationFrame(() => {
           stateHydratedRef.current = true
         })
@@ -190,11 +246,11 @@ export default function ReaderPage() {
     return () => {
       cancelled = true
     }
-  }, [S.reader_standalone_missing, reloadToken, sessionId])
+  }, [S.reader_standalone_missing, location.search, reloadToken, sessionId])
 
   const payload = useMemo(() => normalizeReaderPayload(session), [session])
   const payloadSourcePath = String(payload?.sourcePath || '').trim()
-  const sessionConversationId = String(session?.conversation_id || '').trim()
+  const sessionConversationId = String(session?.conversation_id || linkedConversationIdFromSearch(location.search)).trim()
   const title = String(session?.title || payload?.sourceName || payload?.sourcePath || S.side_dock_reader || 'Reader').trim()
 
   useEffect(() => {
@@ -211,7 +267,7 @@ export default function ReaderPage() {
       if (String(data.sessionId || '').trim() === sessionId) return
       const highlights = normalizeSessionHighlights(data.highlights)
       setSessionHighlights((current) => {
-        if (JSON.stringify(current) === JSON.stringify(highlights)) return current
+        if (readerHighlightsSignature(current) === readerHighlightsSignature(highlights)) return current
         return highlights
       })
     }
@@ -221,33 +277,102 @@ export default function ReaderPage() {
     }
   }, [payloadSourcePath, sessionId])
 
-  const publishState = useCallback((state: Record<string, unknown>) => {
+  const flushPendingState = useCallback(() => {
+    const pending = pendingStateRef.current
+    if (Object.keys(pending).length === 0) return
+    pendingStateRef.current = {}
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
+    }
+    if (sessionId && payloadSourcePath) {
+      void chatApi.updateReaderSessionState(sessionId, pending).catch(() => {})
+    }
+    if (sessionConversationId && payloadSourcePath) {
+      void chatApi.updateConversationReaderState(sessionConversationId, payloadSourcePath, pending).catch(() => {})
+    }
+  }, [payloadSourcePath, sessionConversationId, sessionId])
+
+  const scheduleStateSave = useCallback(() => {
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null
+      flushPendingState()
+    }, 600)
+  }, [flushPendingState])
+
+  useEffect(() => () => {
+    flushPendingState()
+  }, [flushPendingState])
+
+  const publishState = useCallback((state: Record<string, unknown>, opts?: { flushNow?: boolean }) => {
     if (!sessionId || !payloadSourcePath) return
     const nextState = {
       ...state,
       sourcePath: payloadSourcePath,
       conversationId: sessionConversationId,
     }
-    void chatApi.updateReaderSessionState(sessionId, nextState).catch(() => {})
+    pendingStateRef.current = {
+      ...pendingStateRef.current,
+      ...nextState,
+    }
     broadcastRef.current?.postMessage({
       type: 'reader-session-state',
       sessionId,
       ...nextState,
     })
-  }, [payloadSourcePath, sessionConversationId, sessionId])
+    if (opts?.flushNow) {
+      flushPendingState()
+    } else {
+      scheduleStateSave()
+    }
+  }, [flushPendingState, payloadSourcePath, scheduleStateSave, sessionConversationId, sessionId])
 
   useEffect(() => {
     if (!stateHydratedRef.current || !payloadSourcePath) return
-    publishState({ highlights: sessionHighlights, updatedAt: Date.now() })
+    publishState({ highlights: sessionHighlights, evidenceNotes: sessionHighlights, updatedAt: Date.now() })
   }, [payloadSourcePath, publishState, sessionHighlights])
 
   const goBack = useCallback(() => {
+    if (sessionConversationId) {
+      flushPendingState()
+      const navPayload = {
+        type: 'reader-return-to-conversation',
+        conversationId: sessionConversationId,
+        sessionId,
+        sourcePath: payloadSourcePath,
+      }
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel(READER_SESSION_NAV_CHANNEL)
+        channel.postMessage(navPayload)
+        channel.close()
+      }
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage(navPayload, window.location.origin)
+          window.opener.focus()
+        } catch {
+          // Fall back to BroadcastChannel; the reader window can still close itself.
+        }
+        window.setTimeout(() => window.close(), 80)
+        window.setTimeout(() => {
+          if (!window.closed) {
+            message.info(S.reader_returned_to_session || 'Switched the original session window. You can close this reader window.')
+          }
+        }, 220)
+        return
+      }
+      const params = new URLSearchParams()
+      params.set('conversation', sessionConversationId)
+      navigate({ pathname: '/', search: `?${params.toString()}` })
+      return
+    }
     if (window.opener && window.history.length <= 1) {
       window.close()
       return
     }
     navigate('/')
-  }, [navigate])
+  }, [S.reader_returned_to_session, flushPendingState, navigate, payloadSourcePath, sessionConversationId, sessionId])
 
   const appendSelection = useCallback((text: string) => {
     const raw = String(text || '').trim()
@@ -291,10 +416,61 @@ export default function ReaderPage() {
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
   }, [S.reader_added_to_shelf, payload?.sourceName, payload?.sourcePath, session?.conversation_id, title])
 
+  const addCitationToShelf = useCallback((detail: CiteDetail) => {
+    if (!detail) return
+    if (typeof BroadcastChannel !== 'undefined') {
+      const channel = new BroadcastChannel(READER_CITATION_SHELF_CHANNEL)
+      channel.postMessage({
+        type: 'reader-citation-shelf',
+        detail: detail as unknown as Record<string, unknown>,
+        conversationId: session?.conversation_id || sessionConversationId || '',
+        createdAt: Date.now(),
+      })
+      channel.close()
+    }
+    message.success(S.reader_added_to_shelf || 'Added to citation shelf')
+  }, [S.reader_added_to_shelf, session?.conversation_id, sessionConversationId])
+
+  const openCitationShelf = useCallback(() => {
+    if (sessionConversationId) {
+      const navPayload = {
+        type: 'reader-return-to-conversation',
+        conversationId: sessionConversationId,
+        sessionId,
+        sourcePath: payloadSourcePath,
+      }
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel(READER_SESSION_NAV_CHANNEL)
+        channel.postMessage(navPayload)
+        channel.close()
+      }
+      try {
+        window.opener?.postMessage(navPayload, window.location.origin)
+        window.opener?.focus()
+      } catch {
+        // Returning to the session is best-effort for standalone reader windows.
+      }
+    }
+  }, [payloadSourcePath, sessionConversationId, sessionId])
+
   const addSessionHighlight = useCallback((highlight: ReaderSessionHighlight) => {
     setSessionHighlights((current) => {
       if (current.some((item) => item.id === highlight.id)) return current
       return [...current, highlight]
+    })
+  }, [])
+
+  const updateSessionHighlight = useCallback((highlight: ReaderSessionHighlight) => {
+    const targetId = String(highlight?.id || '').trim()
+    if (!targetId) return
+    setSessionHighlights((current) => {
+      let changed = false
+      const next = current.map((item) => {
+        if (String(item.id || '').trim() !== targetId) return item
+        changed = true
+        return { ...item, ...highlight }
+      })
+      return changed ? next : current
     })
   }, [])
 
@@ -322,7 +498,7 @@ export default function ReaderPage() {
           className="kb-reader-page-back"
           onClick={goBack}
         >
-          {S.reader_standalone_back || 'Back'}
+          {sessionConversationId ? (S.reader_standalone_back_to_session || S.reader_standalone_back || 'Back') : (S.reader_standalone_back || 'Back')}
         </Button>
         <div className="kb-reader-page-heading">
           <div className="kb-reader-page-kicker">{S.side_dock_reader || 'Reader'}</div>
@@ -355,11 +531,16 @@ export default function ReaderPage() {
             onAppendSelection={appendSelection}
             presentation="inline"
             surface="page"
+            conversationId={sessionConversationId}
+            messageId={session?.message_id ?? null}
             sessionHighlights={sessionHighlights}
             onAddSessionHighlight={addSessionHighlight}
+            onUpdateSessionHighlight={updateSessionHighlight}
             onRemoveSessionHighlight={removeSessionHighlight}
             onLocateResult={recordLocateResult}
             onAddSelectionToShelf={addSelectionToShelf}
+            onAddCitationToShelf={addCitationToShelf}
+            onOpenCitationShelf={openCitationShelf}
           />
         )}
       </main>

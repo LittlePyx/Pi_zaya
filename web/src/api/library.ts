@@ -461,6 +461,111 @@ export interface LibraryConversionQualityBatchResponse {
   review_paths: string[]
 }
 
+export interface LibraryFigureAssetIssue {
+  code: 'missing_asset' | 'invalid_image' | 'low_resolution' | 'duplicate_asset' | 'suspicious_crop' | string
+  severity: 'warning' | 'error' | string
+  asset_name: string
+  page: number
+  figure_number: number
+  message: string
+  actual_width?: number
+  actual_height?: number
+  expected_width?: number
+  expected_height?: number
+  estimated_dpi?: number
+  duplicates?: string[]
+}
+
+export interface LibraryFigureAssetDetail {
+  asset_name: string
+  page: number
+  figure_number: number
+  exists: boolean
+  width: number
+  height: number
+  expected_width: number
+  expected_height: number
+  file_size?: number
+  estimated_dpi?: number
+  issue_codes: string[]
+}
+
+export interface LibraryFigureAssetScanItem {
+  ok: boolean
+  status: 'good' | 'warning' | 'error' | string
+  source_name: string
+  pdf_name: string
+  pdf_path: string
+  md_path: string
+  assets_dir: string
+  source_pdf_path: string
+  source_pdf_available: boolean
+  target_dpi: number
+  figures: number
+  issue_count: number
+  issue_counts: Record<string, number>
+  severity_counts?: Record<string, number>
+  refresh_recommended: boolean
+  issues: LibraryFigureAssetIssue[]
+  assets: LibraryFigureAssetDetail[]
+}
+
+export interface LibraryFigureAssetScanResponse {
+  ok: boolean
+  target_count: number
+  limit: number
+  status: 'good' | 'warning' | 'error' | string
+  scanned: number
+  figures: number
+  docs_with_issues: number
+  refresh_recommended: number
+  issue_counts: Record<string, number>
+  severity_counts: Record<string, number>
+  target_dpi?: number
+  failed: number
+  errors: Array<{ path?: string; name?: string; error: string }>
+  items: LibraryFigureAssetScanItem[]
+}
+
+export interface LibraryFigureAssetRefreshBody {
+  pdf_names?: string[]
+  sources?: Array<{ source_path: string; source_name?: string }>
+  limit?: number
+  speed_mode?: string
+  no_llm?: boolean
+  replace?: boolean
+  target_dpi?: number
+}
+
+export interface LibraryFigureAssetRefreshItem {
+  source_name: string
+  pdf_name: string
+  pdf_path: string
+  md_path: string
+  issue_count: number
+  issue_codes: string[]
+  enqueued: boolean
+  skipped_busy: boolean
+  task_id: string
+  error: string
+}
+
+export interface LibraryFigureAssetRefreshResponse {
+  ok: boolean
+  requested: number
+  scanned: number
+  figures: number
+  docs_with_issues: number
+  refresh_recommended: number
+  issue_counts: Record<string, number>
+  severity_counts: Record<string, number>
+  enqueued: number
+  skipped_busy: number
+  failed: number
+  errors: Array<{ path?: string; name?: string; error: string }>
+  items: LibraryFigureAssetRefreshItem[]
+}
+
 export interface LibraryReaderLocateQualityPayload {
   source_path: string
   source_name?: string
@@ -1120,6 +1225,10 @@ export const libraryApi = {
     api.post<LibrarySourceQualityResponse>('/api/library/quality/sources', { sources }),
   conversionQualityBatch: (body: LibraryConversionQualityBatchBody = {}) =>
     api.post<LibraryConversionQualityBatchResponse>('/api/library/quality/conversion/batch', body),
+  figureAssetQualityScan: (body: { limit?: number; include_all?: boolean; target_dpi?: number } = {}) =>
+    api.post<LibraryFigureAssetScanResponse>('/api/library/quality/figure-assets/scan', body),
+  refreshFigureAssets: (body: LibraryFigureAssetRefreshBody = {}) =>
+    api.post<LibraryFigureAssetRefreshResponse>('/api/library/quality/figure-assets/refresh', body),
   recordReaderLocateQuality: (body: LibraryReaderLocateQualityPayload) =>
     api.post<LibraryReaderLocateQualityResponse>('/api/library/quality/reader-locate', body),
   openQualityArtifact: (domain: 'research_qa' | 'citation_cards' | string, target: 'report' | 'folder' | 'raw' | 'summary' | 'runbook' | string = 'report') =>

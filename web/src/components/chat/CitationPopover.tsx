@@ -28,6 +28,8 @@ interface Props {
   onStartGuide: (detail: CiteDetail) => void
   onMouseEnter?: () => void
   onMouseLeave?: () => void
+  showOpenReaderAction?: boolean
+  showStartGuideAction?: boolean
 }
 
 type CompactMetaItem = { key: string; label: string; value: string; href?: string; tone: string }
@@ -234,6 +236,8 @@ export function CitationPopover({
   onStartGuide,
   onMouseEnter,
   onMouseLeave,
+  showOpenReaderAction = true,
+  showStartGuideAction = true,
 }: Props) {
   const S = useT()
   const ref = useRef<HTMLDivElement>(null)
@@ -319,7 +323,7 @@ export function CitationPopover({
   const doiLabel = compact(detail.doi) || compact(detail.doiUrl)
   const doiHref = compact(detail.doiUrl) || (doiLabel ? `https://doi.org/${doiLabel}` : '')
   const metrics = citeMetricSummary(detail)
-  const inlineLabel = citationInlineLabel(detail)
+  const inlineLabel = citationInlineLabel(detail, { includeSource: false })
   const canOpenReader = Boolean(compact(detail.sourcePath))
   const isSystemB = Boolean(detail.isInpaper)
   const view = citationCardView(detail)
@@ -372,11 +376,6 @@ export function CitationPopover({
   const cardQualityFlags = Array.isArray(detail.cardQualityFlags)
     ? detail.cardQualityFlags.map((item) => compact(item)).filter(Boolean)
     : []
-  const answerContextOnly = isSystemB && (
-    cardQualityFlags.includes('answer_context_only')
-    || compact(detail.citationContextSource).toLowerCase() === 'answer_context'
-    || compact(detail.systemBTraceSource).toLowerCase() === 'answer_context'
-  )
   const cardFlow = Array.isArray(detail.cardFlow)
     ? detail.cardFlow.map((item) => compact(item)).filter(Boolean)
     : []
@@ -402,35 +401,22 @@ export function CitationPopover({
   const systemAEvidencePreview = evidencePreview(systemAEvidenceText, systemATakeawayText ? 250 : 330)
   const systemBExplicitReferenceText = cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry)
   const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
-  const systemBCardEvidenceText = answerContextOnly ? '' : cleanCitationDisplayText(evidenceSection?.text || detail.cardEvidence)
-  const systemBRawContextCandidate = cleanCitationDisplayText(
-    compact(detail.citationContext) || compact(detail.evidenceQuote) || compact(detail.summaryLine),
-  )
-  const suppressRawSystemBContextFallback = isSystemB
-    && (
-      cardQualityFlags.includes('weak_citation_context')
-      || cardQualityFlags.includes('missing_citation_context')
-      || answerContextOnly
-    )
-  const systemBRawContextIsLowValue = Boolean(
-    systemBRawContextCandidate && looksLowValueCitationContext(systemBRawContextCandidate),
-  )
-  const systemBCitationContextText = systemBCardEvidenceText
-    || ((!suppressRawSystemBContextFallback && !systemBRawContextIsLowValue) ? systemBRawContextCandidate : '')
+  const systemBOverviewSource = compact(detail.summarySource).toLowerCase()
+  const rawSystemBPaperOverviewCandidate = cleanCitationDisplayText(detail.summaryLine)
+  const systemBPaperOverviewText = isSystemB
+    && rawSystemBPaperOverviewCandidate
+    && !['answer_context', 'citation_context', 'reader_occurrence', 'reader_reference_link'].includes(systemBOverviewSource)
+    && !looksLowValueCitationContext(rawSystemBPaperOverviewCandidate)
+    && !looksGenericSystemBTakeawayText(rawSystemBPaperOverviewCandidate)
+    && !/\b(?:doi|jcr|impact\s*factor|if\s*[:：]?\s*\d|citation\s+count|cited\s+by)\b/i.test(rawSystemBPaperOverviewCandidate)
+    ? rawSystemBPaperOverviewCandidate
+    : ''
+  const systemBPaperOverviewPreview = evidencePreview(systemBPaperOverviewText, 360)
+  const systemBPaperOverviewLabel = ((S as unknown as Record<string, string>).cite_paper_overview || 'Paper overview')
+  const systemBCitationContextText = ''
   const systemBCitationContextLabel = cardEvidenceLabel || S.cite_context
-  const systemBTakeawayText = isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, systemBCitationContextText)
-    && !looksGenericSystemBTakeawayText(cardTakeaway)
-    ? cardTakeaway
-    : ''
-  const rawSystemBContextSummary = cleanCitationDisplayText(contextSummarySection?.text || detail.cardContextSummary)
-  const systemBContextSummaryText = isSystemB
-    && rawSystemBContextSummary
-    && !looksNarrativeMetadataText(rawSystemBContextSummary, detail)
-    && !substantiallySame(rawSystemBContextSummary, systemBCitationContextText)
-    && !substantiallySame(rawSystemBContextSummary, systemBReferenceText)
-    && !substantiallySame(rawSystemBContextSummary, systemBTakeawayText)
-    ? rawSystemBContextSummary
-    : ''
+  const systemBTakeawayText = ''
+  const systemBContextSummaryText = ''
   const systemBContextSummaryLabel = localizeKnownLabel(contextSummarySection?.label || '') || S.cite_context_summary
   const systemBTraceSteps = isSystemB && Array.isArray(detail.systemBTraceSteps)
     ? detail.systemBTraceSteps.map((item) => compact(item)).filter(Boolean)
@@ -445,7 +431,7 @@ export function CitationPopover({
   const systemBTraceStatus = detail.systemBTraceComplete
     ? { label: S.cite_trace_complete, tone: 'complete' }
     : { label: S.cite_trace_review, tone: 'review' }
-  const systemBCitationContextPreview = evidencePreview(systemBCitationContextText, systemBTakeawayText ? 250 : 330)
+  const systemBCitationContextPreview = evidencePreview(systemBCitationContextText, 330)
   const whyText = compact(detail.whyLine)
   const bindingStatus = compact(detail.bindingStatus).toLowerCase()
   const bindingReason = localizeKnownBody(detail.bindingReason)
@@ -515,7 +501,7 @@ export function CitationPopover({
     && !substantiallySame(supportText, systemAEvidenceText)
     && !substantiallySame(supportText, systemAClaimText),
   )
-  const primaryActionLabel = isSystemB ? S.cite_open_context : S.cite_open_evidence
+  const primaryActionLabel = isSystemB ? S.cite_read_locate : S.cite_open_evidence
   const explainText = ''
   const flowSteps = isSystemB ? [] : cardFlow
   const rawSystemBLocationText = compact(locatorSection?.text || '') || compact(detail.cardLocator) || compact(detail.locationLabel) || [sourcePaperText, headingPath, pageLabel].filter(Boolean).join(' / ')
@@ -536,21 +522,14 @@ export function CitationPopover({
   const systemBLocationHint = systemBLocationIsPaperOnly
     ? S.cite_location_paper_only_hint
     : ''
-  const showSystemBLocation = Boolean(systemBLocationText)
+  const showSystemBLocation = false
   const systemBSupportText = isSystemB
     && explicitSupportText
     && !substantiallySame(explicitSupportText, systemBCitationContextText)
     && !substantiallySame(explicitSupportText, systemBReferenceText)
     ? explicitSupportText
     : ''
-  const showSystemBSupport = Boolean(
-    systemBSupportText
-    && !cardWarning
-    && (
-      cardQualityFlags.includes('reference_entry_only')
-      || !systemBCitationContextText
-    ),
-  )
+  const showSystemBSupport = false
   const hasSystemBHeaderIdentity = Boolean(
     (systemBTitle && systemBTitle !== S.cite_upstream_reference)
     || headerSubtitle
@@ -560,7 +539,8 @@ export function CitationPopover({
   const showSystemBReference = Boolean(
     systemBReferenceText
     && (
-      systemBTitleMissing
+      !systemBPaperOverviewText
+      || systemBTitleMissing
       || cardQualityFlags.includes('missing_reference_title')
       || (cardQualityFlags.includes('reference_entry_only') && !hasSystemBHeaderIdentity)
     ),
@@ -806,6 +786,12 @@ export function CitationPopover({
               {systemBTraceReason ? <div className="kb-cite-pop-trace-reason">{systemBTraceReason}</div> : null}
             </div>
           ) : null}
+          {systemBPaperOverviewText ? (
+            <div className="kb-cite-pop-insight kb-cite-pop-paper-overview" data-testid="citation-popover-system-b-overview">
+              <span className="kb-cite-pop-section-title">{systemBPaperOverviewLabel}</span>
+              <div className="kb-cite-pop-main">{systemBPaperOverviewPreview}</div>
+            </div>
+          ) : null}
           {systemBTakeawayText ? (
             <div className="kb-cite-pop-insight kb-cite-pop-takeaway" data-testid="citation-popover-system-b-takeaway">
               <span className="kb-cite-pop-section-title">{cardTakeawayLabel || S.cite_upstream_role}</span>
@@ -889,22 +875,26 @@ export function CitationPopover({
       ) : null}
 
       <div className="kb-cite-pop-actions">
-        <button
-          className="kb-cite-pop-open-shelf kb-cite-pop-action-primary"
-          type="button"
-          disabled={!canOpenReader}
-          onClick={() => onOpenReader(detail)}
-        >
-          {primaryActionLabel}
-        </button>
-        <button
-          className="kb-cite-pop-open-shelf"
-          type="button"
-          onClick={() => onStartGuide(detail)}
-          disabled={guideLoading}
-        >
-          {guideLoading ? S.cite_starting_guide : S.cite_start_guide}
-        </button>
+        {showOpenReaderAction ? (
+          <button
+            className="kb-cite-pop-open-shelf kb-cite-pop-action-primary"
+            type="button"
+            disabled={!canOpenReader}
+            onClick={() => onOpenReader(detail)}
+          >
+            {primaryActionLabel}
+          </button>
+        ) : null}
+        {showStartGuideAction ? (
+          <button
+            className="kb-cite-pop-open-shelf"
+            type="button"
+            onClick={() => onStartGuide(detail)}
+            disabled={guideLoading}
+          >
+            {guideLoading ? S.cite_starting_guide : S.cite_start_guide}
+          </button>
+        ) : null}
         <button className="kb-cite-pop-open-shelf" type="button" onClick={onOpenShelf}>
           {S.cite_open_shelf}
         </button>

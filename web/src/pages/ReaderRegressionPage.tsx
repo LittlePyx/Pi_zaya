@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Button } from 'antd'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type { ReaderLocateResult, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
+import type { CiteDetail } from '../components/chat/citationState'
 import {
   buildReaderRegressionDocResponse,
   buildReaderRegressionPayload,
@@ -21,6 +22,8 @@ function parseScenario(input: string | null): ReaderRegressionScenario {
   if (raw === 'equation') return 'equation'
   if (raw === 'figure') return 'figure'
   if (raw === 'multi-panel') return 'multi-panel'
+  if (raw === 'render-polish') return 'render-polish'
+  if (raw === 'citation-links') return 'citation-links'
   return 'strict-quote'
 }
 
@@ -29,9 +32,24 @@ export default function ReaderRegressionPage() {
   const scenario = parseScenario(params.get('scenario'))
   const payload = useMemo(() => buildReaderRegressionPayload(scenario), [scenario])
   const documentOverride = useMemo(() => buildReaderRegressionDocResponse(scenario), [scenario])
-  const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
+  const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>(() => (
+    params.get('seedHighlight') === '1'
+      ? [{
+        id: 'seed-highlight-quote-1',
+        text: 'SCI compresses a short video into one coded measurement.',
+        noteKind: 'highlight',
+        sourcePath: '__reader_regression__/fixture.md',
+        sourceName: 'Fixture Paper',
+        headingPath: 'Fixture Paper / 1. Introduction',
+        blockId: 'quote-1',
+        anchorId: 'a-quote-1',
+        createdAt: Date.now(),
+      }]
+      : []
+  ))
   const [appendLog, setAppendLog] = useState('')
   const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
+  const [readerCitationShelf, setReaderCitationShelf] = useState<CiteDetail[]>([])
   const appendSelectionLog = useCallback((text: string) => {
     setAppendLog((current) => (current ? `${current}\n---\n${text}` : text))
   }, [])
@@ -43,6 +61,13 @@ export default function ReaderRegressionPage() {
   }, [])
   const removeSessionHighlight = useCallback((highlightId: string) => {
     setSessionHighlights((current) => current.filter((item) => item.id !== highlightId))
+  }, [])
+  const updateSessionHighlight = useCallback((highlight: ReaderSessionHighlight) => {
+    const targetId = String(highlight?.id || '').trim()
+    if (!targetId) return
+    setSessionHighlights((current) => current.map((item) => (
+      item.id === targetId ? { ...item, ...highlight } : item
+    )))
   }, [])
   const recordLocateResult = useCallback((result: ReaderLocateResult) => {
     setLocateResult((current) => {
@@ -56,6 +81,13 @@ export default function ReaderRegressionPage() {
         return current
       }
       return result
+    })
+  }, [])
+  const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
+    setReaderCitationShelf((current) => {
+      const key = String(detail.anchor || '').trim()
+      if (key && current.some((item) => String(item.anchor || '').trim() === key)) return current
+      return [detail, ...current]
     })
   }, [])
 
@@ -74,6 +106,9 @@ export default function ReaderRegressionPage() {
           <div className="flex items-center gap-2">
             <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-black/55 dark:text-white/55" data-testid="highlight-count">
               {sessionHighlights.length} highlights
+            </span>
+            <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-black/55 dark:text-white/55" data-testid="reader-citation-shelf-count">
+              {readerCitationShelf.length} citation refs
             </span>
             <Button size="small" onClick={() => setSessionHighlights([])}>
               Clear highlights
@@ -94,9 +129,11 @@ export default function ReaderRegressionPage() {
             presentation="inline"
             sessionHighlights={sessionHighlights}
             onAddSessionHighlight={addSessionHighlight}
+            onUpdateSessionHighlight={updateSessionHighlight}
             onRemoveSessionHighlight={removeSessionHighlight}
             onLocateResult={recordLocateResult}
             documentOverride={documentOverride}
+            onAddCitationToShelf={addReaderCitationToShelf}
           />
         </div>
         <aside className="max-h-72 min-h-0 overflow-y-auto bg-[var(--panel)]/35 px-4 py-4 xl:max-h-none">

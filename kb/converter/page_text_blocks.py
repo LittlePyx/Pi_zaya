@@ -12,6 +12,7 @@ except ImportError:
 
 from .block_classifier import _looks_like_code_block, _looks_like_math_block
 from .geometry_utils import _bbox_width, _rect_area, _rect_intersection_area, _union_rect
+from .figure_assets import figure_asset_needs_refresh, resolve_figure_asset_dpi
 from .heuristics import (
     _is_caption_like_text,
     _is_noise_line,
@@ -475,7 +476,7 @@ def extract_text_blocks(
         if cropped_rect.width <= 0 or cropped_rect.height <= 0:
             continue
 
-        # Save image with proper DPI from config
+        # Save image with a dedicated user-visible figure DPI.
         # Use a stable per-page index to avoid filename collisions/overwrites on Windows.
         img_name = f"page_{page_index+1}_fig_{rect_idx+1}.png"
         img_path = assets_dir / img_name
@@ -499,15 +500,16 @@ def extract_text_blocks(
             )
             img_count += 1
 
+        # Use a higher DPI than OCR page renders so figures remain crisp in the reader.
+        dpi = resolve_figure_asset_dpi(converter, base_dpi=getattr(converter, "dpi", 200))
+
         try:
-            if img_path.exists() and img_path.stat().st_size >= 256:
+            if not figure_asset_needs_refresh(img_path, clip_rect=used_clip, dpi=dpi):
                 _record_saved_asset(used_clip)
                 continue
         except Exception:
             pass
 
-        # Use configured DPI
-        dpi = converter.dpi
         try:
             pixmap_start = time.time()
             pix = page.get_pixmap(clip=cropped_rect, dpi=dpi)
@@ -522,7 +524,7 @@ def extract_text_blocks(
             # Fallback to original rect if crop fails
             try:
                 used_clip = rect
-                if img_path.exists() and img_path.stat().st_size >= 256:
+                if not figure_asset_needs_refresh(img_path, clip_rect=used_clip, dpi=dpi):
                     _record_saved_asset(used_clip)
                     continue
                 pix = page.get_pixmap(clip=rect, dpi=dpi)

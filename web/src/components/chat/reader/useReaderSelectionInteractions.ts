@@ -14,6 +14,7 @@ interface UseReaderSelectionInteractionsArgs {
   sourcePath: string
   markdown: string
   locateRequestId: number
+  headingPath: string
   contentRef: RefObject<HTMLDivElement | null>
   sessionHighlights: ReaderSessionHighlight[]
   onAddSessionHighlight?: (highlight: ReaderSessionHighlight) => void
@@ -27,6 +28,7 @@ export function useReaderSelectionInteractions({
   sourcePath,
   markdown,
   locateRequestId,
+  headingPath,
   contentRef,
   sessionHighlights,
   onAddSessionHighlight,
@@ -111,6 +113,7 @@ export function useReaderSelectionInteractions({
     onAddSessionHighlight?.({
       id: nextId,
       text: selected.text,
+      headingPath: String(headingPath || '').trim() || undefined,
       startOffset: selected.startOffset >= 0 ? selected.startOffset : undefined,
       endOffset: selected.endOffset > selected.startOffset ? selected.endOffset : undefined,
       blockId: selected.blockId || undefined,

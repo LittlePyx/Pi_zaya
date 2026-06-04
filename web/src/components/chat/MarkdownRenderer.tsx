@@ -1,6 +1,8 @@
 ﻿import { Children, cloneElement, isValidElement, useMemo, type CSSProperties, type MouseEvent, type ReactNode } from 'react'
 import { createContext } from 'react'
 import { Fragment } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { ComponentPropsWithoutRef } from 'react'
 import { message } from 'antd'
 import { useT } from '../../i18n'
@@ -16,7 +18,13 @@ const TABLE_SEPARATOR_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/
 const TABLE_ROW_RE = /^\s*\|?.+\|.+\|?\s*$/
 const REFERENCES_HEADING_RE = /^#{1,6}\s+(references|bibliography|参考文献)\b/i
 const PLAIN_REFERENCES_HEADING_RE = /^(references|bibliography|参考文献)\s*$/i
-const REFERENCE_ENTRY_START_RE = /^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}\.)\s+/
+const REFERENCE_ENTRY_START_RE = /^\s*(?:\[\s*\d{1,4}\s*\](?:\([^)]+\))?|\d{1,4}\.)\s+/
+const REFERENCE_ENTRY_LINKED_START_RE = /^\s*\d{1,4}\s+[A-Z\u4e00-\u9fff]/
+const PAGE_MARKER_LINE_RE = /^\s*(?:<!--\s*kb_page\s*:\s*(\d{1,5})\s*-->|&lt;!--\s*kb_page\s*:\s*(\d{1,5})\s*--&gt;)\s*$/i
+const PAGE_MARKER_HREF_RE = /^kb-page-(\d{1,5})$/i
+
+type ImagePreviewMode = 'fit' | 'actual'
+type ImagePreviewSize = { width: number; height: number }
 
 function normalizeTableSegment(segment: string): string {
   let s = String(segment || '').trim()
@@ -60,6 +68,35 @@ function isReferencesHeadingLine(text: string): boolean {
   return REFERENCES_HEADING_RE.test(line) || PLAIN_REFERENCES_HEADING_RE.test(line)
 }
 
+function pageMarkerNumber(text: string): string {
+  const match = String(text || '').trim().match(PAGE_MARKER_LINE_RE)
+  return String(match?.[1] || match?.[2] || '').trim()
+}
+
+function isPageMarkerLine(text: string): boolean {
+  return Boolean(pageMarkerNumber(text))
+}
+
+function normalizeReaderPageMarkers(text: string): string {
+  return String(text || '').split('\n').map((line) => {
+    const pageNo = pageMarkerNumber(line)
+    if (!pageNo) return line
+    return `[Page ${pageNo}](#kb-page-${pageNo})`
+  }).join('\n')
+}
+
+function splitCollapsedReferenceEntries(line: string): string[] {
+  const raw = String(line || '').replace(/\s+/g, ' ').trim()
+  if (!raw || !REFERENCE_ENTRY_START_RE.test(raw)) return [line]
+  const parts = raw
+    .split(/\s+(?=\[\s*\d{1,4}\s*\](?:\([^)]+\))?\s+)/g)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (parts.length <= 1) return [line]
+  if (!parts.every((item) => REFERENCE_ENTRY_START_RE.test(item))) return [line]
+  return parts
+}
+
 function normalizeReferenceSectionSpacing(text: string): string {
   if (!text || !/(references|bibliography|参考文献)/i.test(text)) return text
   const lines = text.split('\n')
@@ -83,6 +120,15 @@ function normalizeReferenceSectionSpacing(text: string): string {
     }
 
     if (inReferences) {
+      if (isPageMarkerLine(trimmed)) {
+        if (out.length > 0 && out[out.length - 1] !== '') {
+          out.push('')
+        }
+        out.push(line)
+        out.push('')
+        currentEntryIndex = -1
+        continue
+      }
       if (/^#{1,6}\s+/.test(trimmed) && !isReferencesHeadingLine(trimmed)) {
         while (out.length > 0 && out[out.length - 1] === '') {
           out.pop()
@@ -95,11 +141,13 @@ function normalizeReferenceSectionSpacing(text: string): string {
       }
       if (!trimmed) continue
       if (REFERENCE_ENTRY_START_RE.test(trimmed)) {
-        if (out.length > 0 && out[out.length - 1] !== '') {
-          out.push('')
+        for (const entry of splitCollapsedReferenceEntries(trimmed)) {
+          if (out.length > 0 && out[out.length - 1] !== '') {
+            out.push('')
+          }
+          out.push(entry)
+          currentEntryIndex = out.length - 1
         }
-        out.push(line)
-        currentEntryIndex = out.length - 1
         continue
       }
       if (currentEntryIndex >= 0) {
@@ -144,6 +192,25 @@ const SUBSCRIPT_CHAR_MAP: Record<string, string> = {
   '₇': '7',
   '₈': '8',
   '₉': '9',
+}
+
+const MICRO_UNIT_LETTERS = 'mWlLsSA'
+const GLUED_MICRO_UNIT_RE = new RegExp(`\\\\mu([${MICRO_UNIT_LETTERS}])\\b`, 'g')
+const SPACED_MICRO_UNIT_RE = new RegExp(`\\\\mu\\s+(?!\\\\mathrm\\{)([${MICRO_UNIT_LETTERS}])\\b`, 'g')
+
+function normalizeMicroUnitLatex(text: string): string {
+  const lines = String(text || '').split('\n')
+  let inFence = false
+  return lines.map((line) => {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      return line
+    }
+    if (inFence) return line
+    return line
+      .replace(GLUED_MICRO_UNIT_RE, (_match, unit: string) => `\\mu\\mathrm{${unit}}`)
+      .replace(SPACED_MICRO_UNIT_RE, (_match, unit: string) => `\\mu\\mathrm{${unit}}`)
+  }).join('\n')
 }
 
 function normalizePlainMathExpression(value: string): string {
@@ -213,9 +280,9 @@ function normalizePlainMathParentheticals(text: string): string {
 }
 
 function normalize(text: string) {
-  return normalizePlainMathParentheticals(normalizeReferenceSectionSpacing(repairCollapsedGfmTables(text))
+  return normalizePlainMathParentheticals(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(repairCollapsedGfmTables(text))
     .replace(/\\\(/g, '$').replace(/\\\)/g, '$')
-    .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$'))
+    .replace(/\\\[/g, '$$').replace(/\\\]/g, '$$')))
 }
 
 function resolvePlainCitationDetail(
@@ -306,13 +373,27 @@ function escapeRegExp(value: string): string {
 }
 
 function withCitationOccurrenceContext(detail: CiteDetail, link: HTMLElement, enabled: boolean): CiteDetail {
-  if (!enabled || detail.isInpaper) return detail
+  if (!enabled) return detail
+  if (detail.isInpaper && link.closest('.kb-md-reference-entry')) return detail
   const context = citationOccurrenceContextFromLink(link)
   if (!context || isLowValueCitationOccurrenceContext(context)) return detail
   const existing = String(detail.cardClaim || detail.answerClaim || '').trim()
   if (existing && cleanCitationOccurrenceText(existing).toLowerCase() === context.toLowerCase()) return detail
   const flags = Array.isArray(detail.cardQualityFlags) ? detail.cardQualityFlags.slice() : []
   if (!flags.includes('occurrence_specific_claim')) flags.push('occurrence_specific_claim')
+  if (detail.isInpaper) {
+    return {
+      ...detail,
+      answerClaim: context,
+      cardClaim: context,
+      cardClaimLabel: detail.cardClaimLabel || 'Citation context',
+      citationContext: context,
+      citationContextSource: 'reader_occurrence',
+      evidenceQuote: context,
+      evidenceSource: 'reader_occurrence',
+      cardQualityFlags: flags,
+    }
+  }
   return {
     ...detail,
     answerClaim: context,
@@ -322,28 +403,28 @@ function withCitationOccurrenceContext(detail: CiteDetail, link: HTMLElement, en
   }
 }
 
-function linkifyPlainCitationSegment(segment: string, byNum: Map<number, CiteDetail[]>): string {
-  if (!segment || byNum.size <= 0 || !/\[[Rr]?\d/.test(segment)) return segment
-  return segment.replace(
-    /(!?)\[([Rr]?\d{1,4}(?:\s*[,，、]\s*[Rr]?\d{1,4})*)\](?!\()/g,
-    (match, imageBang: string, body: string, offset: number, full: string) => {
-      if (imageBang) return match
-      const prev = offset > 0 ? full[offset - 1] : ''
-      if (prev === '[' || prev === '\\') return match
-      let changed = false
-      const linked = String(body || '').replace(/[Rr]?\d{1,4}/g, (token) => {
-        const detail = resolvePlainCitationDetail(token, byNum)
-        if (!detail?.anchor) return token
-        changed = true
-        return `[${token}](#${detail.anchor})`
-      })
-      return changed ? linked : match
-    },
-  )
+function firstCitationDetailInNode(node: ReactNode, byAnchor: Map<string, CiteDetail>): CiteDetail | null {
+  if (node === null || node === undefined || typeof node === 'boolean') return null
+  if (typeof node === 'string' || typeof node === 'number') return null
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const detail = firstCitationDetailInNode(item, byAnchor)
+      if (detail) return detail
+    }
+    return null
+  }
+  if (!isValidElement(node)) return null
+  const props = node.props as { href?: string; children?: ReactNode }
+  const href = String(props.href || '').trim()
+  const key = href.startsWith('#') ? href.slice(1) : ''
+  if (key) {
+    const detail = byAnchor.get(key)
+    if (detail) return detail
+  }
+  return firstCitationDetailInNode(props.children, byAnchor)
 }
 
-function linkifyPlainCitationMarkers(text: string, citeDetails: CiteDetail[]): string {
-  if (!text || citeDetails.length <= 0 || !/\[[Rr]?\d/.test(text)) return text
+function buildCitationNumberMap(citeDetails: CiteDetail[]): Map<number, CiteDetail[]> {
   const byNum = new Map<number, CiteDetail[]>()
   for (const detail of citeDetails) {
     const anchor = String(detail.anchor || '').trim()
@@ -363,6 +444,167 @@ function linkifyPlainCitationMarkers(text: string, citeDetails: CiteDetail[]): s
       byNum.set(num, list)
     }
   }
+  return byNum
+}
+
+function firstReferenceEntryDetail(text: string, byNum: Map<number, CiteDetail[]>): CiteDetail | null {
+  if (byNum.size <= 0) return null
+  const match = String(text || '').trim().match(/^\[?\s*(\d{1,4})\s*\]?/)
+  const num = Number(match?.[1] || 0)
+  if (!Number.isFinite(num) || num <= 0) return null
+  const candidates = byNum.get(num) || []
+  return candidates.find((detail) => detail.isInpaper) || candidates[0] || null
+}
+
+function looksLikeAuthorAffiliationCitationLine(text: string): boolean {
+  const trimmed = String(text || '').trim()
+  if (!trimmed || !/\[\s*\d/.test(trimmed)) return false
+  if (/[.!?。！？]\s*$/.test(trimmed)) return false
+  const markerCount = Array.from(trimmed.matchAll(/\[\s*\d{1,3}(?:\s*[,，、;；]\s*\d{1,3})*\s*\]/g)).length
+  if (markerCount <= 0) return false
+  const words = trimmed.match(/[A-Z][A-Za-z.'-]+|[\u4e00-\u9fff]{2,}/g) || []
+  const separatorHints = /(?:,|&|\band\b|；|;)/i.test(trimmed)
+  return separatorHints && words.length >= Math.max(4, markerCount + 2)
+}
+
+function looksLikeBibliographyEntryText(text: string): boolean {
+  const trimmed = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!trimmed) return false
+  if (!(REFERENCE_ENTRY_START_RE.test(trimmed) || REFERENCE_ENTRY_LINKED_START_RE.test(trimmed))) return false
+  const body = trimmed
+    .replace(/^\s*(?:\[\s*\d{1,4}\s*\](?:\([^)]+\))?|\d{1,4}\.)\s+/, '')
+    .replace(/^\s*\d{1,4}\s+/, '')
+    .trim()
+  if (!body) return false
+  if (/^(?:department|school|college|faculty|institute|state\s+key|key\s+laboratory|laboratory|centre|center|university|academy)\b/i.test(body)) {
+    return false
+  }
+  if (/\b(?:19|20)\d{2}\b/.test(body)) return true
+  if (/\b(?:doi|arxiv|isbn|issn)\b|10\.\d{4,9}\//i.test(body)) return true
+  if (/\b(?:nat\.|nature|science|cell|ieee|acm|optica|optic|photon|appl\.|phys\.|journal|proceedings|conference|trans\.|lett\.|express|commun\.)\b/i.test(body)) return true
+  const sentenceDots = (body.match(/\.\s+/g) || []).length
+  return /\bet\s+al\./i.test(body) && sentenceDots >= 1
+}
+
+function citationLinkMarkdownForToken(token: string, byNum: Map<number, CiteDetail[]>): { text: string; linked: boolean } {
+  const raw = String(token || '').trim()
+  if (!raw) return { text: '', linked: false }
+  const detail = resolvePlainCitationDetail(raw, byNum)
+  if (!detail?.anchor) return { text: `[${raw}]`, linked: false }
+  return { text: `[${raw}](#${detail.anchor})`, linked: true }
+}
+
+function citationTokenNumber(token: string): number {
+  const num = Number(String(token || '').trim().replace(/^r/i, ''))
+  return Number.isFinite(num) ? num : 0
+}
+
+function citationTokenPrefix(token: string): string {
+  return /^r/i.test(String(token || '').trim()) ? 'R' : ''
+}
+
+function expandPlainCitationBody(body: string, byNum: Map<number, CiteDetail[]>): { text: string; changed: boolean } {
+  const rawBody = String(body || '')
+  const tokens = Array.from(rawBody.matchAll(/[Rr]?\d{1,4}/g)).map((match) => ({
+    raw: match[0],
+    start: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }))
+  if (!tokens.length) return { text: rawBody, changed: false }
+
+  let out = ''
+  let last = 0
+  let changed = false
+  for (let idx = 0; idx < tokens.length; idx += 1) {
+    const token = tokens[idx]
+    const next = tokens[idx + 1]
+    out += rawBody.slice(last, token.start)
+
+    const sep = next ? rawBody.slice(token.end, next.start) : ''
+    const rangeSep = Boolean(next && /^\s*[-–—−]\s*$/.test(sep))
+    const startNum = citationTokenNumber(token.raw)
+    const endNum = next ? citationTokenNumber(next.raw) : 0
+    const rangePrefix = citationTokenPrefix(token.raw) || (next ? citationTokenPrefix(next.raw) : '')
+    const compatiblePrefix = !next || citationTokenPrefix(token.raw) === citationTokenPrefix(next.raw)
+    const rangeLen = endNum - startNum + 1
+
+    if (
+      rangeSep
+      && compatiblePrefix
+      && startNum > 0
+      && endNum >= startNum
+      && rangeLen >= 2
+      && rangeLen <= 64
+    ) {
+      for (let num = startNum; num <= endNum; num += 1) {
+        const rendered = citationLinkMarkdownForToken(`${rangePrefix}${num}`, byNum)
+        out += rendered.text
+        changed = changed || rendered.linked
+      }
+      idx += 1
+      last = next.end
+      continue
+    }
+
+    const rendered = citationLinkMarkdownForToken(token.raw, byNum)
+    out += rendered.linked ? rendered.text : token.raw
+    changed = changed || rendered.linked
+    last = token.end
+  }
+  out += rawBody.slice(last)
+  return { text: out, changed }
+}
+
+function linkifyPlainCitationSegment(segment: string, byNum: Map<number, CiteDetail[]>): string {
+  if (!segment || byNum.size <= 0 || !/\[[Rr]?\d/.test(segment)) return segment
+  return segment.replace(
+    /(!?)\[([Rr]?\d{1,4}(?:\s*[,，、;；\-–—−]\s*[Rr]?\d{1,4})*)\](?!\()/g,
+    (match, imageBang: string, body: string, offset: number, full: string) => {
+      if (imageBang) return match
+      const prev = offset > 0 ? full[offset - 1] : ''
+      if (prev === '[' || prev === '\\') return match
+      const expanded = expandPlainCitationBody(body, byNum)
+      return expanded.changed ? expanded.text : match
+    },
+  )
+}
+
+function linkifyPlainCitationTextSegment(segment: string, byNum: Map<number, CiteDetail[]>): string {
+  let inReferences = false
+  let seenDocumentTitle = false
+  let beforeFirstBodyHeading = false
+  return String(segment || '').split('\n').map((line) => {
+    const trimmed = line.trim()
+    if (/^#\s+/.test(trimmed)) {
+      seenDocumentTitle = true
+      beforeFirstBodyHeading = true
+      return line
+    }
+    if (/^#{2,6}\s+/.test(trimmed)) {
+      beforeFirstBodyHeading = false
+    }
+    if (isReferencesHeadingLine(trimmed)) {
+      inReferences = true
+      return line
+    }
+    if (inReferences) {
+      if (/^#{1,6}\s+/.test(trimmed) && !isReferencesHeadingLine(trimmed)) {
+        inReferences = false
+      } else {
+        return line
+      }
+    }
+    if (seenDocumentTitle && beforeFirstBodyHeading && looksLikeAuthorAffiliationCitationLine(trimmed)) return line
+    return linkifyPlainCitationSegment(line, byNum)
+  }).join('\n')
+}
+
+function linkifyPlainCitationMarkers(
+  text: string,
+  citeDetails: CiteDetail[],
+  byNum = buildCitationNumberMap(citeDetails),
+): string {
+  if (!text || citeDetails.length <= 0 || !/\[[Rr]?\d/.test(text)) return text
   if (byNum.size <= 0) return text
 
   const protectedRe = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g
@@ -370,11 +612,11 @@ function linkifyPlainCitationMarkers(text: string, citeDetails: CiteDetail[]): s
   let last = 0
   for (const match of text.matchAll(protectedRe)) {
     const index = match.index ?? 0
-    out += linkifyPlainCitationSegment(text.slice(last, index), byNum)
+    out += linkifyPlainCitationTextSegment(text.slice(last, index), byNum)
     out += match[0]
     last = index + match[0].length
   }
-  out += linkifyPlainCitationSegment(text.slice(last), byNum)
+  out += linkifyPlainCitationTextSegment(text.slice(last), byNum)
   return out
 }
 
@@ -399,6 +641,10 @@ function dedupeRepeatedReaderImageMarkdown(text: string): string {
     out.push(line)
   }
   return out.join('\n')
+}
+
+function normalizeReaderMarkdown(text: string): string {
+  return normalizeReaderPageMarkers(normalizeMicroUnitLatex(normalizeReferenceSectionSpacing(dedupeRepeatedReaderImageMarkdown(text))))
 }
 
 interface Props {
@@ -1125,6 +1371,7 @@ function parseAnswerContract(text: string): { preamble: string; sections: Parsed
 
 function buildMarkdownComponents(
   byAnchor: Map<string, CiteDetail>,
+  citationByNum: Map<number, CiteDetail[]>,
   duplicateCitationAnchors: Set<string>,
   onCitationClick?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
   onCitationHover?: (detail: CiteDetail, event: MouseEvent<HTMLElement>) => void,
@@ -1141,6 +1388,7 @@ function buildMarkdownComponents(
   readerAnchorAllocator?: ReaderAnchorAllocator | null,
   readerBlockResolver?: ReaderBlockResolver | null,
   S?: Record<string, string>,
+  onImagePreview?: (src: string, alt: string) => void,
 ) {
   const effectiveInlineLocateTokenPolicy = normalizeInlineLocateTokenPolicy(inlineLocateTokenPolicy)
   const effectiveLocateSurfacePolicy = normalizeLocateSurfacePolicy(locateSurfacePolicy)
@@ -1411,6 +1659,16 @@ function buildMarkdownComponents(
     },
     a: ({ href, children }: { href?: string; children?: ReactNode }) => {
       const key = typeof href === 'string' && href.startsWith('#') ? href.slice(1) : ''
+      const pageMatch = variant === 'reader' ? key.match(PAGE_MARKER_HREF_RE) : null
+      if (pageMatch) {
+        const pageNo = pageMatch[1] || ''
+        const pageLabel = (S?.reader_page_marker || 'Page {n}').replace('{n}', pageNo)
+        return (
+          <span id={`kb-page-${pageNo}`} className="kb-md-page-marker" data-kb-page-marker={pageNo}>
+            {pageLabel}
+          </span>
+        )
+      }
       const detail = key ? byAnchor.get(key) : undefined
       if (detail) {
         const useOccurrenceContext = duplicateCitationAnchors.has(detail.anchor)
@@ -1421,13 +1679,18 @@ function buildMarkdownComponents(
               ['--kb-cite-fg-hover' as string]: tone.fgHover,
             } as CSSProperties)
           : undefined
+        const readerMarkerText = variant === 'reader'
+          ? plainText(children).replace(/\s+/g, '').trim()
+          : ''
+        const inlineLabel = variant === 'reader' && detail.isInpaper && readerMarkerText
+          ? `[${readerMarkerText}]`
+          : citationInlineLabel(detail, { includeSource: false })
         return (
           <a
             href={`#${detail.anchor}`}
             className={detail.isInpaper ? 'kb-cite-chip-sysb' : 'kb-cite-chip'}
             style={toneStyle}
-            title={detail.sourceName || detail.sourcePath || undefined}
-            aria-label={detail.sourceName || detail.sourcePath || citationInlineLabel(detail, { includeSource: false })}
+            aria-label={citationInlineLabel(detail, { includeSource: false })}
             onClick={(event) => {
               event.preventDefault()
               onCitationClick?.(withCitationOccurrenceContext(detail, event.currentTarget, useOccurrenceContext), event)
@@ -1439,7 +1702,7 @@ function buildMarkdownComponents(
               onCitationLeave?.(detail, event)
             }}
           >
-            {citationInlineLabel(detail, { includeSource: false })}
+            {inlineLabel}
           </a>
         )
       }
@@ -1462,16 +1725,32 @@ function buildMarkdownComponents(
       const attrs = variant === 'reader'
         ? readerAnchorAttrs(pickReaderAnchor(node, ['figure']))
         : undefined
+      const imageAlt = String(alt || 'figure')
+      const imageTitle = S?.reader_expand_image || 'Expand image'
+      const imageNode = (
+        <img
+          src={resolvedSrc}
+          alt={imageAlt}
+          className="kb-md-image"
+          loading="lazy"
+        />
+      )
       return (
         <span className={btn ? 'kb-md-figure-shell' : undefined} {...attrs}>
-          <a href={resolvedSrc} target="_blank" rel="noreferrer" className="kb-md-image-link">
-            <img
-              src={resolvedSrc}
-              alt={String(alt || 'figure')}
-              className="kb-md-image"
-              loading="lazy"
-            />
-          </a>
+          {onImagePreview ? (
+            <button
+              type="button"
+              className="kb-md-image-link kb-md-image-button"
+              title={imageTitle}
+              onClick={() => onImagePreview(resolvedSrc, imageAlt)}
+            >
+              {imageNode}
+            </button>
+          ) : (
+            <a href={resolvedSrc} target="_blank" rel="noreferrer" className="kb-md-image-link">
+              {imageNode}
+            </a>
+          )}
           {btn ? <span className="kb-md-figure-tail">{btn}</span> : null}
         </span>
       )
@@ -1489,7 +1768,46 @@ function buildMarkdownComponents(
             : { content: children, count: 0, figureRefCount: 0 }
           const content = inline.count > 0 ? inline.content : children
           if (variant !== 'chat') {
-            return <p {...attrs}>{content}</p>
+            const text = plainText(content).replace(/\s+/g, ' ').trim()
+            const isReferenceEntry = looksLikeBibliographyEntryText(text)
+            if (!isReferenceEntry) return <p {...attrs}>{content}</p>
+            const refDetail = firstCitationDetailInNode(content, byAnchor) || firstReferenceEntryDetail(text, citationByNum)
+            const canOpenRef = Boolean(refDetail && onCitationClick)
+            const actionTitle = S?.cite_open_context || 'Open reference card'
+            const className = canOpenRef
+              ? 'kb-md-reference-entry kb-md-reference-entry-clickable'
+              : 'kb-md-reference-entry'
+            return (
+              <p
+                {...attrs}
+                className={className}
+                title={canOpenRef ? actionTitle : undefined}
+                role={canOpenRef ? 'button' : undefined}
+                tabIndex={canOpenRef ? 0 : undefined}
+                onClick={canOpenRef ? (event) => {
+                  const target = event.target as HTMLElement | null
+                  if (target?.closest('a,button')) return
+                  onCitationClick?.(refDetail as CiteDetail, event as unknown as MouseEvent<HTMLElement>)
+                } : undefined}
+                onKeyDown={canOpenRef ? (event) => {
+                  if (event.key !== 'Enter' && event.key !== ' ') return
+                  const target = event.target as HTMLElement | null
+                  if (target?.closest('a,button')) return
+                  event.preventDefault()
+                  onCitationClick?.(refDetail as CiteDetail, event as unknown as MouseEvent<HTMLElement>)
+                } : undefined}
+              >
+                <span className="kb-md-reference-entry-body">{content}</span>
+                {canOpenRef ? (
+                  <span
+                    className="kb-md-reference-entry-action"
+                    aria-hidden="true"
+                  >
+                    ›
+                  </span>
+                ) : null}
+              </p>
+            )
           }
           if (isFigureHostParagraph(content)) {
             return <p {...attrs} className="kb-md-figure-host">{content}</p>
@@ -1612,13 +1930,18 @@ export function MarkdownRenderer({
   readerBlocks,
 }: Props) {
   const S = useT()
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt: string } | null>(null)
+  const [imagePreviewMode, setImagePreviewMode] = useState<ImagePreviewMode>('fit')
+  const [imagePreviewSize, setImagePreviewSize] = useState<ImagePreviewSize | null>(null)
   const rawContent = String(content || '')
-  const renderContent = variant === 'reader'
-    ? dedupeRepeatedReaderImageMarkdown(rawContent)
-    : normalize(linkifyPlainCitationMarkers(rawContent, citeDetails))
+  const normalizedContent = variant === 'reader'
+    ? normalizeReaderMarkdown(rawContent)
+    : normalize(rawContent)
+  const citationByNum = buildCitationNumberMap(citeDetails)
+  const renderContent = linkifyPlainCitationMarkers(normalizedContent, citeDetails, citationByNum)
   const byAnchor = new Map(citeDetails.map((detail) => [detail.anchor, detail]))
   const duplicateCitationAnchors = new Set<string>()
-  if (variant === 'chat' && byAnchor.size > 0) {
+  if (byAnchor.size > 0) {
     for (const anchor of byAnchor.keys()) {
       const pattern = new RegExp(`#${escapeRegExp(anchor)}(?=[\\s)"']|$)`, 'g')
       const count = renderContent.match(pattern)?.length || 0
@@ -1636,6 +1959,7 @@ export function MarkdownRenderer({
   )
   const components = buildMarkdownComponents(
     byAnchor,
+    citationByNum,
     duplicateCitationAnchors,
     onCitationClick,
     onCitationHover,
@@ -1652,6 +1976,11 @@ export function MarkdownRenderer({
     readerAnchorAllocator,
     readerBlockResolver,
     S,
+    (src, alt) => {
+      setPreviewImage({ src, alt })
+      setImagePreviewMode('fit')
+      setImagePreviewSize(null)
+    },
   )
   const parsedContract = variant === 'chat' ? parseAnswerContract(renderContent) : null
   const sectionLabelMap: Record<string, string> = {
@@ -1661,8 +1990,88 @@ export function MarkdownRenderer({
     next_steps: S.section_next_steps,
   }
 
+  useEffect(() => {
+    if (!previewImage) return undefined
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setPreviewImage(null)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [previewImage])
+
+  const previewDevicePixelRatio = typeof window !== 'undefined' ? Math.max(1, window.devicePixelRatio || 1) : 1
+  const actualPreviewStyle: CSSProperties | undefined = imagePreviewMode === 'actual' && imagePreviewSize
+    ? {
+      width: `${Math.max(1, Math.round(imagePreviewSize.width / previewDevicePixelRatio))}px`,
+      height: 'auto',
+      maxWidth: 'none',
+      maxHeight: 'none',
+    }
+    : undefined
+  const previewSizeLabel = imagePreviewSize
+    ? `${imagePreviewSize.width} x ${imagePreviewSize.height}`
+    : ''
+
+  const imagePreviewNode = previewImage && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        className="kb-md-image-preview-backdrop"
+        role="dialog"
+        aria-modal="true"
+        aria-label={previewImage.alt || (S.reader_expand_image || 'Image preview')}
+        onClick={() => setPreviewImage(null)}
+      >
+        <div className="kb-md-image-preview-shell" onClick={(event) => event.stopPropagation()}>
+          <div className="kb-md-image-preview-bar">
+            <span className="kb-md-image-preview-size">{previewSizeLabel}</span>
+            <div className="kb-md-image-preview-toggle" role="group" aria-label={S.reader_image_zoom_mode || 'Image zoom mode'}>
+              <button
+                type="button"
+                className={imagePreviewMode === 'fit' ? 'active' : undefined}
+                onClick={() => setImagePreviewMode('fit')}
+              >
+                {S.reader_image_fit || 'Fit'}
+              </button>
+              <button
+                type="button"
+                className={imagePreviewMode === 'actual' ? 'active' : undefined}
+                onClick={() => setImagePreviewMode('actual')}
+              >
+                {S.reader_image_actual || 'Actual'}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="kb-md-image-preview-close"
+            onClick={() => setPreviewImage(null)}
+            aria-label={S.shelf_close || 'Close'}
+          >
+            &times;
+          </button>
+          <div className={`kb-md-image-preview-stage kb-md-image-preview-stage-${imagePreviewMode}`}>
+            <img
+              src={previewImage.src}
+              alt={previewImage.alt || 'figure'}
+              className="kb-md-image-preview-img"
+              style={actualPreviewStyle}
+              onLoad={(event) => {
+                const img = event.currentTarget
+                setImagePreviewSize({ width: img.naturalWidth, height: img.naturalHeight })
+              }}
+            />
+          </div>
+          {previewImage.alt ? <div className="kb-md-image-preview-caption">{previewImage.alt}</div> : null}
+        </div>
+      </div>,
+      document.body,
+    )
+    : null
+
   return (
-    <div className={`kb-markdown prose dark:prose-invert max-w-none min-w-0 text-sm ${variant === 'reader' ? 'kb-markdown-reader' : 'kb-markdown-chat'}`}>
+    <>
+      <div className={`kb-markdown prose dark:prose-invert max-w-none min-w-0 text-sm ${variant === 'reader' ? 'kb-markdown-reader' : 'kb-markdown-chat'}`}>
       {parsedContract ? (
         <div className="kb-answer-contract">
           {parsedContract.preamble ? (
@@ -1696,6 +2105,8 @@ export function MarkdownRenderer({
           {renderContent}
         </ReactMarkdown>
       )}
-    </div>
+      </div>
+      {imagePreviewNode}
+    </>
   )
 }

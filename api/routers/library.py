@@ -61,6 +61,11 @@ from kb.converter.quality_center import (
     quality_center_summary,
     repair_quality_targets,
     scan_quality_targets,
+    source_pdf_for_markdown,
+)
+from kb.converter.figure_assets import (
+    scan_figure_asset_quality,
+    summarize_figure_asset_quality_reports,
 )
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.library_store import LibraryStore
@@ -4393,6 +4398,50 @@ def _quality_overview_from_listing(listing: dict) -> dict:
     }
 
 
+def _figure_asset_scan_payload(
+    md_paths: list[Path],
+    *,
+    pdf_root: Path,
+    target_dpi: int = 0,
+    include_all: bool = False,
+    max_errors: int = 20,
+) -> dict:
+    reports: list[dict] = []
+    visible_items: list[dict] = []
+    errors: list[dict] = []
+    for md_path in md_paths:
+        try:
+            source_pdf = source_pdf_for_markdown(md_path, pdf_root)
+            report = scan_figure_asset_quality(
+                md_path,
+                source_pdf_path=source_pdf,
+                target_dpi=int(target_dpi or 0) or None,
+            )
+            source_name = _strip_known_source_ext(md_path.parent.name or md_path.stem)
+            report = {
+                **report,
+                "source_name": source_name,
+                "pdf_name": Path(str(source_pdf or "")).name if source_pdf else "",
+                "pdf_path": str(source_pdf or ""),
+            }
+            reports.append(report)
+            if bool(include_all) or int(report.get("issue_count") or 0) > 0:
+                visible_items.append(report)
+        except Exception as exc:
+            if len(errors) < max(0, int(max_errors)):
+                errors.append({"path": str(md_path), "error": str(exc)[:400]})
+
+    summary = summarize_figure_asset_quality_reports(reports)
+    if reports:
+        summary["target_dpi"] = int(reports[0].get("target_dpi") or 0)
+    return {
+        **summary,
+        "failed": len(errors),
+        "errors": errors,
+        "items": visible_items,
+    }
+
+
 def _parse_rename_scan_limit(scope: str) -> int:
     raw = str(scope or "30").strip().lower()
     if raw in {"all", "*", "0", "full"}:
@@ -5994,6 +6043,22 @@ class QualitySourcesBody(BaseModel):
     sources: list[QualitySourceItem] = []
 
 
+class FigureAssetQualityScanBody(BaseModel):
+    limit: int = 1000
+    include_all: bool = False
+    target_dpi: int = 0
+
+
+class FigureAssetRefreshBody(BaseModel):
+    pdf_names: list[str] = []
+    sources: list[QualitySourceItem] = []
+    limit: int = 200
+    speed_mode: str = "balanced"
+    no_llm: bool = False
+    replace: bool = True
+    target_dpi: int = 0
+
+
 class QualityConversionBatchBody(BaseModel):
     repair: bool = False
     rebuild_indices: bool = True
@@ -6089,6 +6154,210 @@ def conversion_quality_batch(body: QualityConversionBatchBody):
         "limit": limit,
         "needs_reindex": needs_reindex,
         **stats,
+    }
+
+
+@router.post("/quality/figure-assets/scan")
+def figure_asset_quality_scan(body: FigureAssetQualityScanBody):
+    pdf_d = _pdf_dir()
+    md_d = _md_dir()
+    try:
+        limit = int(body.limit or 1000)
+    except Exception:
+        limit = 1000
+    limit = max(1, min(limit, 5000))
+    targets = discover_quality_markdown_files(md_d, limit=limit)
+    payload = _figure_asset_scan_payload(
+        targets,
+        pdf_root=pdf_d,
+        target_dpi=int(body.target_dpi or 0),
+        include_all=bool(body.include_all),
+    )
+    return {
+        "ok": True,
+        "target_count": len(targets),
+        "limit": limit,
+        **payload,
+    }
+
+
+@router.post("/quality/figure-assets/refresh")
+def refresh_figure_assets(body: FigureAssetRefreshBody):
+    settings = get_settings()
+    pdf_d = _pdf_dir()
+    md_d = _md_dir()
+    md_d.mkdir(parents=True, exist_ok=True)
+
+    speed_mode = str(body.speed_mode or "balanced").strip() or "balanced"
+    no_llm = bool(body.no_llm) or speed_mode.lower() == "no_llm"
+    replace = bool(body.replace)
+    try:
+        limit = int(body.limit or 200)
+    except Exception:
+        limit = 200
+    limit = max(1, min(limit, 5000))
+
+    explicit_targets: list[Path] = []
+    explicit_pdf_by_md: dict[str, Path] = {}
+    errors: list[dict] = []
+
+    for raw_name in list(body.pdf_names or []):
+        pdf_name = str(raw_name or "").strip()
+        if (not pdf_name) or Path(pdf_name).name != pdf_name:
+            errors.append({"name": pdf_name, "error": "invalid pdf_name"})
+            continue
+        pdf_path = (pdf_d / pdf_name).expanduser()
+        if not _path_is_file(pdf_path):
+            errors.append({"name": pdf_name, "error": "pdf not found"})
+            continue
+        _md_folder, md_main, md_exists = _resolve_md_output_paths(md_d, pdf_path)
+        if not md_exists:
+            errors.append({"name": pdf_name, "pdf_path": str(pdf_path), "error": "markdown not found"})
+            continue
+        explicit_targets.append(md_main)
+        explicit_pdf_by_md[str(md_main)] = pdf_path
+
+    for source in list(body.sources or []):
+        resolved = _resolve_quality_source(
+            source_path=str(source.source_path or ""),
+            source_name=str(source.source_name or ""),
+        )
+        md_path_raw = str(resolved.get("md_path") or "").strip()
+        pdf_path_raw = str(resolved.get("pdf_path") or "").strip()
+        if not md_path_raw or not bool(resolved.get("md_exists")):
+            errors.append({
+                "source_path": str(source.source_path or ""),
+                "source_name": str(source.source_name or ""),
+                "error": "markdown not found",
+            })
+            continue
+        md_path = Path(md_path_raw).expanduser()
+        explicit_targets.append(md_path)
+        if pdf_path_raw:
+            explicit_pdf_by_md[str(md_path)] = Path(pdf_path_raw).expanduser()
+
+    explicit_targets = _dedupe_paths(explicit_targets)
+    targets = explicit_targets or discover_quality_markdown_files(md_d, limit=limit)
+    scan = _figure_asset_scan_payload(
+        targets,
+        pdf_root=pdf_d,
+        target_dpi=int(body.target_dpi or 0),
+        include_all=False,
+    )
+    scan_errors = list(scan.get("errors") or [])
+    if scan_errors:
+        errors.extend(scan_errors[: max(0, 20 - len(errors))])
+
+    snap = _bg_snapshot()
+    task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
+    enqueued = 0
+    skipped_busy = 0
+    failed = 0
+    items: list[dict] = []
+    seen_pdf_keys: set[str] = set()
+
+    for report in list(scan.get("items") or []):
+        if enqueued >= limit:
+            break
+        if not isinstance(report, dict):
+            continue
+        if not bool(report.get("refresh_recommended")):
+            continue
+        md_path = Path(str(report.get("md_path") or "")).expanduser()
+        pdf_path = explicit_pdf_by_md.get(str(md_path))
+        if pdf_path is None:
+            raw_pdf = str(report.get("pdf_path") or "").strip()
+            pdf_path = Path(raw_pdf).expanduser() if raw_pdf else source_pdf_for_markdown(md_path, pdf_d)
+        issue_counts = report.get("issue_counts") if isinstance(report.get("issue_counts"), dict) else {}
+        issue_codes = [str(code) for code in issue_counts.keys() if str(code or "").strip()]
+        base_item = {
+            "source_name": str(report.get("source_name") or ""),
+            "pdf_name": Path(str(pdf_path or "")).name if pdf_path else str(report.get("pdf_name") or ""),
+            "pdf_path": str(pdf_path or ""),
+            "md_path": str(md_path),
+            "issue_count": int(report.get("issue_count") or 0),
+            "issue_codes": issue_codes,
+            "enqueued": False,
+            "skipped_busy": False,
+            "task_id": "",
+            "error": "",
+        }
+        if pdf_path is None or (not _path_is_file(pdf_path)):
+            items.append({**base_item, "error": "source pdf not found"})
+            failed += 1
+            continue
+        pdf_key = _normalized_path_key(pdf_path)
+        if pdf_key and pdf_key in seen_pdf_keys:
+            continue
+        seen_pdf_keys.add(pdf_key)
+        task_info = task_by_path.get(pdf_key) if pdf_key else None
+        if not isinstance(task_info, dict):
+            task_info = task_by_name.get(pdf_path.name) if isinstance(task_by_name.get(pdf_path.name), dict) else {}
+        if bool(task_info.get("queued")) or bool(task_info.get("running")):
+            items.append({**base_item, "skipped_busy": True, "error": "already queued or running"})
+            skipped_busy += 1
+            continue
+
+        try:
+            task = _build_bg_task(
+                pdf_path=pdf_path,
+                out_root=md_d,
+                db_dir=Path(settings.db_dir).expanduser(),
+                no_llm=no_llm,
+                replace=replace,
+                speed_mode=speed_mode,
+                repair_context={
+                    "action": "reconvert",
+                    "scope": "figure_assets",
+                    "reason": "figure asset quality refresh",
+                    "source": "figure_asset_quality_refresh",
+                    "issue_codes": issue_codes,
+                },
+            )
+            _bg_enqueue(task)
+            task_id = str(task.get("_tid") or "")
+            try:
+                append_conversion_repair_attempt(
+                    md_path,
+                    event="figure_asset_refresh_queued",
+                    status="queued",
+                    action="reconvert",
+                    scope="figure_assets",
+                    speed_mode=speed_mode,
+                    issue_codes=issue_codes,
+                    task_id=task_id,
+                    source="figure_asset_quality_refresh",
+                    reason="figure asset quality refresh",
+                    detail="Figure asset scan queued source reconversion to refresh image crops and DPI.",
+                    extra={
+                        "replace": replace,
+                        "no_llm": no_llm,
+                        "target_dpi": int(scan.get("target_dpi") or body.target_dpi or 0),
+                        "issue_counts": issue_counts,
+                    },
+                )
+            except Exception:
+                pass
+            items.append({**base_item, "enqueued": True, "task_id": task_id})
+            enqueued += 1
+        except Exception as exc:
+            items.append({**base_item, "error": str(exc)[:240] or "enqueue failed"})
+            failed += 1
+
+    return {
+        "ok": failed == 0,
+        "requested": len(targets),
+        "scanned": int(scan.get("scanned") or 0),
+        "figures": int(scan.get("figures") or 0),
+        "docs_with_issues": int(scan.get("docs_with_issues") or 0),
+        "refresh_recommended": int(scan.get("refresh_recommended") or 0),
+        "issue_counts": scan.get("issue_counts") or {},
+        "severity_counts": scan.get("severity_counts") or {},
+        "enqueued": int(enqueued),
+        "skipped_busy": int(skipped_busy),
+        "failed": int(failed),
+        "errors": errors[:20],
+        "items": items,
     }
 
 

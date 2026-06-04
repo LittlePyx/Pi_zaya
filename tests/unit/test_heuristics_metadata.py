@@ -82,3 +82,41 @@ def test_detect_first_page_author_name_line_as_metadata():
         body_font_size=9.0,
         is_references_page=False,
     )
+
+
+def test_detect_article_history_received_date_as_metadata():
+    text = "Received 12 March 2023; Accepted 4 July 2023; Published online 15 August 2023"
+    assert _is_non_body_metadata_text(
+        text,
+        page_index=0,
+        y0=820,
+        y1=845,
+        page_height=900,
+        max_font_size=8.0,
+        body_font_size=10.0,
+        is_references_page=False,
+    )
+
+
+def test_do_not_drop_first_page_body_paragraph_with_received_word_near_bottom():
+    text = (
+        "Single-photon avalanche diode (SPAD) array has received wide attention due to "
+        "its excellent single-photon sensitivity 1-4. Such a single-photon imaging "
+        "sensor has been widely applied in various fields such as fluorescence lifetime "
+        "imaging 5, fluorescence fluctuation spectroscopy 6, time-of-flight imaging 7-9, "
+        "quantum communication and computing 10, 11, and so on 12, 13. Compared with "
+        "EMCCD and sCMOS cameras that also maintain high detection sensitivity, SPAD "
+        "arrays acquire photon-level light signals at a low-noise level, and perform "
+        "direct photon-digital conversion that can effectively eliminate readout noise "
+        "and enhance readout speed 14."
+    )
+    assert not _is_non_body_metadata_text(
+        text,
+        page_index=0,
+        y0=573.8,
+        y1=678.5,
+        page_height=686.0,
+        max_font_size=8.3,
+        body_font_size=9.0,
+        is_references_page=False,
+    )

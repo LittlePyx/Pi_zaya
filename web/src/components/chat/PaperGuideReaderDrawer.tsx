@@ -1,7 +1,9 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { message } from 'antd'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import { CitationPopover } from './CitationPopover'
 import { PaperGuideReaderPanel } from './reader/PaperGuideReaderPanel'
 import { useReaderDocument } from './reader/useReaderDocument'
 import { PaperGuideReaderShell } from './reader/PaperGuideReaderShell'
@@ -11,7 +13,12 @@ import { useReaderSessionHighlightLayer } from './reader/useReaderSessionHighlig
 import { useReaderOutline } from './reader/useReaderOutline'
 import { useReaderHighlightWorkspace } from './reader/useReaderHighlightWorkspace'
 import { useReaderEvidenceNavigator } from './reader/useReaderEvidenceNavigator'
-import type { ReaderDocResponse } from '../../api/references'
+import { referencesApi, type ReaderDocResponse } from '../../api/references'
+import {
+  mergeCiteMeta,
+  toShelfItem,
+  type CiteDetail,
+} from './citationState'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -29,6 +36,7 @@ import {
   compactLocateHintLabel,
   resolveDirectTargetNode,
   resolveStickyHighlightTarget,
+  sameHighlightTarget,
   scrollReaderTargetIntoView,
 } from './reader/readerDomUtils'
 import { useT } from '../../i18n'
@@ -50,6 +58,20 @@ interface LocateMetaBadge {
   testId?: string
 }
 
+type HighlightUndoAction =
+  | { kind: 'remove'; highlight: ReaderSessionHighlight }
+  | { kind: 'restore'; highlight: ReaderSessionHighlight }
+
+function sameHighlightUndoAction(left: HighlightUndoAction, right: HighlightUndoAction): boolean {
+  return left.kind === right.kind && String(left.highlight.id || '').trim() === String(right.highlight.id || '').trim()
+}
+
+function isEditableUndoTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  return Boolean(target.closest('input, textarea, select, [contenteditable="true"], .ant-input'))
+}
+
 interface Props {
   open: boolean
   payload: ReaderOpenPayload | null
@@ -59,11 +81,16 @@ interface Props {
   surface?: 'dock' | 'page'
   onCollapse?: () => void
   onOpenStandalone?: () => void
+  conversationId?: string
+  messageId?: number | null
   sessionHighlights?: ReaderSessionHighlight[]
   onAddSessionHighlight?: (highlight: ReaderSessionHighlight) => void
+  onUpdateSessionHighlight?: (highlight: ReaderSessionHighlight) => void
   onRemoveSessionHighlight?: (highlightId: string) => void
   onLocateResult?: (result: ReaderLocateResult) => void
   onAddSelectionToShelf?: (payload: ReaderSelectionShelfPayload) => void
+  onAddCitationToShelf?: (detail: CiteDetail) => void
+  onOpenCitationShelf?: () => void
   documentOverride?: ReaderDocResponse | null
 }
 
@@ -161,17 +188,34 @@ export function PaperGuideReaderDrawer({
   surface = 'dock',
   onCollapse,
   onOpenStandalone,
+  conversationId,
+  messageId,
   sessionHighlights = [],
   onAddSessionHighlight,
+  onUpdateSessionHighlight,
   onRemoveSessionHighlight,
   onLocateResult,
   onAddSelectionToShelf,
+  onAddCitationToShelf,
+  onOpenCitationShelf,
   documentOverride,
 }: Props) {
   const S = useT()
   const contentRef = useRef<HTMLDivElement>(null)
+  const highlightUndoStackRef = useRef<HighlightUndoAction[]>([])
   const [drawerReady, setDrawerReady] = useState(false)
   const [altChangeSource, setAltChangeSource] = useState<'system' | 'manual'>('system')
+  const [highlightBubble, setHighlightBubble] = useState<{
+    x: number
+    y: number
+    highlightId: string
+    text: string
+  } | null>(null)
+  const [citationPopoverDetail, setCitationPopoverDetail] = useState<CiteDetail | null>(null)
+  const [citationPopoverPos, setCitationPopoverPos] = useState<{ x: number; y: number } | null>(null)
+  const [citationPopoverLoading, setCitationPopoverLoading] = useState(false)
+  const [readerCitationShelfKeys, setReaderCitationShelfKeys] = useState<Set<string>>(() => new Set())
+  const activeCitationRequestKeyRef = useRef('')
   const isInlinePresentation = presentation === 'inline'
   const isPageSurface = isInlinePresentation && surface === 'page'
 
@@ -207,6 +251,7 @@ export function PaperGuideReaderDrawer({
   const locateRequestId = Number.isFinite(Number(payload?.locateRequestId || 0))
     ? Math.max(0, Math.floor(Number(payload?.locateRequestId || 0)))
     : 0
+  const locateFeedbackKey = String(payload?.locateFeedbackKey || '').trim()
 
   const alternatives = useMemo(() => {
     const listRaw = [
@@ -291,6 +336,7 @@ export function PaperGuideReaderDrawer({
     markdown,
     readerAnchors,
     readerBlocks,
+    citeDetails,
     resolvedName,
   } = useReaderDocument({
     open,
@@ -685,16 +731,172 @@ export function PaperGuideReaderDrawer({
     return statusTextFull || decisionText
   }, [decisionText, statusTextFull])
 
+  useEffect(() => {
+    setCitationPopoverDetail(null)
+    setCitationPopoverPos(null)
+    setCitationPopoverLoading(false)
+    activeCitationRequestKeyRef.current = ''
+  }, [open, sourcePath])
+
+  const mergeReaderCitationMeta = useCallback((itemKey: string, metas: Array<Record<string, unknown>>) => {
+    const usable = metas.filter((meta) => meta && Object.keys(meta).length > 0)
+    if (usable.length <= 0) return
+    setCitationPopoverDetail((current) => {
+      if (!current) return current
+      if (toShelfItem(current).key !== itemKey) return current
+      let merged = current
+      for (const meta of usable) {
+        merged = mergeCiteMeta(merged, meta)
+      }
+      return merged
+    })
+  }, [])
+
+  const showReaderCitation = useCallback((detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
+    const itemKey = toShelfItem(detail).key
+    activeCitationRequestKeyRef.current = itemKey
+    setCitationPopoverDetail(detail)
+    setCitationPopoverPos({ x: event.clientX, y: event.clientY })
+    const hasDoi = Boolean(String(detail.doi || detail.doiUrl || '').trim())
+    const reqs: Array<Promise<Record<string, unknown>>> = []
+    if (!detail.bibliometricsChecked && (hasDoi || detail.title || detail.raw || detail.citeFmt)) {
+      reqs.push(referencesApi.bibliometricsCached(detail as unknown as Record<string, unknown>).catch(() => ({})))
+    }
+    reqs.push(referencesApi.citationCardPolishCached(detail as unknown as Record<string, unknown>, 1.5).catch(() => ({})))
+    setCitationPopoverLoading(reqs.length > 0)
+    Promise.all(reqs)
+      .then((metas) => {
+        if (activeCitationRequestKeyRef.current !== itemKey) return
+        mergeReaderCitationMeta(itemKey, metas)
+      })
+      .finally(() => {
+        if (activeCitationRequestKeyRef.current === itemKey) {
+          setCitationPopoverLoading(false)
+        }
+      })
+  }, [mergeReaderCitationMeta])
+
+  const closeReaderCitationPopover = useCallback(() => {
+    setCitationPopoverDetail(null)
+    setCitationPopoverPos(null)
+    setCitationPopoverLoading(false)
+    activeCitationRequestKeyRef.current = ''
+  }, [])
+
+  const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
+    onAddCitationToShelf?.(detail)
+    const key = toShelfItem(detail).key
+    setReaderCitationShelfKeys((current) => {
+      const next = new Set(current)
+      next.add(key)
+      return next
+    })
+  }, [onAddCitationToShelf])
+
   const readerMarkdownNode = useMemo(() => (
     <MarkdownRenderer
       content={markdown}
       variant="reader"
+      citeDetails={citeDetails}
+      onCitationClick={showReaderCitation}
       readerAnchors={readerAnchors}
       readerBlocks={readerBlocks}
     />
-  ), [markdown, readerAnchors, readerBlocks])
+  ), [citeDetails, markdown, readerAnchors, readerBlocks, showReaderCitation])
 
   const sourceLabel = [title, activeHeadingPath].filter(Boolean).join(' / ')
+  const enrichSessionHighlight = useCallback((highlight: ReaderSessionHighlight): ReaderSessionHighlight => {
+    const now = Date.now()
+    const rawMessageId = highlight.messageId ?? messageId
+    const nextMessageId = rawMessageId == null || !Number.isFinite(Number(rawMessageId))
+      ? undefined
+      : Number(rawMessageId)
+    const rawLocateRequestId = highlight.locateRequestId ?? locateRequestId
+    const nextLocateRequestId = rawLocateRequestId == null || !Number.isFinite(Number(rawLocateRequestId)) || Number(rawLocateRequestId) <= 0
+      ? undefined
+      : Number(rawLocateRequestId)
+    return {
+      ...highlight,
+      noteKind: highlight.noteKind || 'highlight',
+      sourcePath: highlight.sourcePath || sourcePath || undefined,
+      sourceName: highlight.sourceName || title || sourceName || undefined,
+      conversationId: highlight.conversationId || String(conversationId || '').trim() || undefined,
+      messageId: nextMessageId,
+      locateRequestId: nextLocateRequestId,
+      locateFeedbackKey: highlight.locateFeedbackKey || locateFeedbackKey || undefined,
+      headingPath: highlight.headingPath || activeHeadingPath || undefined,
+      createdAt: Number.isFinite(Number(highlight.createdAt)) ? Number(highlight.createdAt) : now,
+      updatedAt: now,
+    }
+  }, [activeHeadingPath, conversationId, locateFeedbackKey, locateRequestId, messageId, sourceName, sourcePath, title])
+
+  const applyHighlightUndoAction = useCallback((action: HighlightUndoAction): boolean => {
+    const highlightId = String(action.highlight.id || '').trim()
+    if (!highlightId) return false
+    if (action.kind === 'remove') {
+      onRemoveSessionHighlight?.(highlightId)
+    } else {
+      onAddSessionHighlight?.(action.highlight)
+    }
+    setHighlightBubble(null)
+    return true
+  }, [onAddSessionHighlight, onRemoveSessionHighlight])
+
+  const undoHighlightAction = useCallback((specificAction?: HighlightUndoAction): boolean => {
+    let action = specificAction || highlightUndoStackRef.current.pop()
+    if (specificAction) {
+      const idx = [...highlightUndoStackRef.current]
+        .reverse()
+        .findIndex((item) => sameHighlightUndoAction(item, specificAction))
+      if (idx < 0) return false
+      const removeAt = highlightUndoStackRef.current.length - 1 - idx
+      action = highlightUndoStackRef.current[removeAt]
+      highlightUndoStackRef.current.splice(removeAt, 1)
+    }
+    if (!action) return false
+    return applyHighlightUndoAction(action)
+  }, [applyHighlightUndoAction])
+
+  const addHighlightWithUndo = useCallback((highlight: ReaderSessionHighlight) => {
+    const nextHighlight = enrichSessionHighlight(highlight)
+    const nextId = String(nextHighlight?.id || '').trim()
+    const alreadyExists = sessionHighlights.some((item) => (
+      String(item.id || '').trim() === nextId || sameHighlightTarget(item, nextHighlight)
+    ))
+    if (alreadyExists) return
+    onAddSessionHighlight?.(nextHighlight)
+    highlightUndoStackRef.current.push({ kind: 'remove', highlight: nextHighlight })
+  }, [enrichSessionHighlight, onAddSessionHighlight, sessionHighlights])
+
+  const removeHighlightWithUndo = useCallback((highlightId: string) => {
+    const targetId = String(highlightId || '').trim()
+    if (!targetId) return
+    const removed = sessionHighlights.find((item) => item.id === targetId) || null
+    onRemoveSessionHighlight?.(targetId)
+    setHighlightBubble(null)
+    if (removed && onAddSessionHighlight) {
+      const undoAction: HighlightUndoAction = { kind: 'restore', highlight: removed }
+      highlightUndoStackRef.current.push(undoAction)
+      message.open({
+        type: 'success',
+        content: (
+          <span className="kb-reader-toast-content">
+            <span>{S.reader_highlight_removed || 'Highlight removed'}</span>
+            <button
+              type="button"
+              className="kb-reader-toast-action"
+              onClick={() => undoHighlightAction(undoAction)}
+            >
+              {S.reader_undo || 'Undo'}
+            </button>
+          </span>
+        ),
+      })
+      return
+    }
+    message.success(S.reader_highlight_removed || 'Highlight removed')
+  }, [S, onAddSessionHighlight, onRemoveSessionHighlight, sessionHighlights, undoHighlightAction])
+
   const {
     outlineItems,
     outlineOpen,
@@ -722,10 +924,11 @@ export function PaperGuideReaderDrawer({
     sourcePath,
     markdown,
     locateRequestId,
+    headingPath: activeHeadingPath,
     contentRef,
     sessionHighlights,
-    onAddSessionHighlight,
-    onRemoveSessionHighlight,
+    onAddSessionHighlight: addHighlightWithUndo,
+    onRemoveSessionHighlight: removeHighlightWithUndo,
     onAppendSelection,
     sourceLabel,
   })
@@ -754,6 +957,129 @@ export function PaperGuideReaderDrawer({
     clearSelectionState(true)
   }
 
+  const activeHighlightAction = highlightBubble
+    ? sessionHighlights.find((item) => item.id === highlightBubble.highlightId) || null
+    : null
+
+  const setActiveHighlightFeedback = useCallback((feedback: 'useful' | 'needs_check') => {
+    const item = activeHighlightAction
+    if (!item || !onUpdateSessionHighlight) return
+    const nextFeedback = item.feedback === feedback ? undefined : feedback
+    const updated = enrichSessionHighlight({
+      ...item,
+      feedback: nextFeedback,
+      feedbackAt: nextFeedback ? Date.now() : undefined,
+    })
+    onUpdateSessionHighlight(updated)
+    message.success(S.reader_feedback_saved || 'Evidence note updated')
+    setHighlightBubble(null)
+  }, [S.reader_feedback_saved, activeHighlightAction, enrichSessionHighlight, onUpdateSessionHighlight])
+
+  const appendActiveHighlight = () => {
+    const item = activeHighlightAction
+    const text = String(item?.text || '').trim()
+    if (!item || !text) return
+    const quoted = text.split('\n').map((line) => `> ${line}`).join('\n')
+    const sourceLine = sourceLabel ? `> Source: ${sourceLabel}\n` : ''
+    onAppendSelection(`${sourceLine}${quoted}\n\n`)
+    setHighlightBubble(null)
+  }
+
+  const addActiveHighlightToShelf = activeHighlightAction && onAddSelectionToShelf
+    ? () => {
+      const item = activeHighlightAction
+      const text = String(item.text || '').trim()
+      if (!text) return
+      onAddSelectionToShelf({
+        text,
+        sourcePath,
+        sourceName: title,
+        headingPath: String(item.headingPath || activeHeadingPath || '').trim() || undefined,
+        blockId: String(item.blockId || activeBlockId || '').trim() || undefined,
+        anchorId: String(item.anchorId || activeAnchorId || '').trim() || undefined,
+        anchorKind: String(activeAnchorKind || '').trim() || undefined,
+        startOffset: Number.isFinite(Number(item.startOffset ?? -1)) && Number(item.startOffset) >= 0 ? Number(item.startOffset) : undefined,
+        endOffset: Number.isFinite(Number(item.endOffset ?? -1)) && Number(item.endOffset) >= 0 ? Number(item.endOffset) : undefined,
+        occurrence: Number.isFinite(Number(item.occurrence)) ? Number(item.occurrence) : undefined,
+        readableIndex: Number.isFinite(Number(item.readableIndex ?? -1)) && Number(item.readableIndex) >= 0 ? Number(item.readableIndex) : undefined,
+        documentOccurrence: Number.isFinite(Number(item.documentOccurrence ?? -1)) && Number(item.documentOccurrence) >= 0 ? Number(item.documentOccurrence) : undefined,
+        startReadableIndex: Number.isFinite(Number(item.startReadableIndex ?? -1)) && Number(item.startReadableIndex) >= 0 ? Number(item.startReadableIndex) : undefined,
+        endReadableIndex: Number.isFinite(Number(item.endReadableIndex ?? -1)) && Number(item.endReadableIndex) >= 0 ? Number(item.endReadableIndex) : undefined,
+        createdAt: Date.now(),
+      })
+      setHighlightBubble(null)
+    }
+    : undefined
+
+  const removeActiveHighlight = () => {
+    if (!activeHighlightAction) return
+    removeHighlightWithUndo(activeHighlightAction.id)
+  }
+
+  const openHighlightMenuFromClick = (event: MouseEvent<HTMLDivElement>) => {
+    const root = contentRef.current
+    const target = event.target instanceof HTMLElement ? event.target : null
+    const mark = target?.closest<HTMLElement>('.kb-reader-user-highlight') || null
+    if (!root || !mark || !root.contains(mark)) {
+      setHighlightBubble(null)
+      return
+    }
+    const highlightId = String(mark.getAttribute('data-kb-session-highlight-id') || '').trim()
+    const item = sessionHighlights.find((entry) => entry.id === highlightId) || null
+    if (!item) {
+      setHighlightBubble(null)
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    clearSelectionState(true)
+    const rect = mark.getBoundingClientRect()
+    const containerRect = root.getBoundingClientRect()
+    const x = Math.max(18, Math.min(containerRect.width - 18, rect.left + (rect.width / 2) - containerRect.left))
+    const aboveY = rect.top - containerRect.top - 10
+    const belowY = rect.bottom - containerRect.top + 10
+    const y = aboveY >= 16 ? aboveY : belowY
+    setHighlightBubble({
+      x,
+      y,
+      highlightId,
+      text: String(item.text || '').trim(),
+    })
+  }
+
+  const handleContentScroll = () => {
+    queueSelectionStateSync()
+    setHighlightBubble(null)
+  }
+
+  useEffect(() => {
+    if (!highlightBubble) return
+    if (sessionHighlights.some((item) => item.id === highlightBubble.highlightId)) return
+    setHighlightBubble(null)
+  }, [highlightBubble, sessionHighlights])
+
+  useEffect(() => {
+    highlightUndoStackRef.current = []
+    setHighlightBubble(null)
+  }, [open, sourcePath])
+
+  useEffect(() => {
+    if (!open) return undefined
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const key = String(event.key || '').toLowerCase()
+      const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && key === 'z'
+      if (!isUndo || isEditableUndoTarget(event.target)) return
+      if (!undoHighlightAction()) return
+      event.preventDefault()
+      event.stopPropagation()
+      message.success(S.reader_undo_complete || 'Undone')
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true)
+    }
+  }, [S.reader_undo_complete, open, undoHighlightAction])
+
   useReaderSessionHighlightLayer({
     open,
     drawerReady,
@@ -776,7 +1102,7 @@ export function PaperGuideReaderDrawer({
     contentRef,
     readerBlocks,
     sessionHighlights,
-    onRemoveSessionHighlight,
+    onRemoveSessionHighlight: removeHighlightWithUndo,
   })
 
   const {
@@ -883,17 +1209,28 @@ export function PaperGuideReaderDrawer({
       error={error}
       hasMarkdown={Boolean(markdown)}
       selectionBubble={selectionBubble}
+      highlightBubble={highlightBubble}
+      activeHighlightFeedback={String(activeHighlightAction?.feedback || '')}
       onToggleSelectionHighlight={toggleSelectionHighlight}
       onAddSelectionToShelf={onAddSelectionToShelf ? addSelectionToShelf : undefined}
+      onRemoveActiveHighlight={removeActiveHighlight}
+      onAddActiveHighlightToShelf={addActiveHighlightToShelf}
+      onSetActiveHighlightFeedback={onUpdateSessionHighlight ? setActiveHighlightFeedback : undefined}
+      onAskActiveHighlight={appendActiveHighlight}
       onAskSelection={appendSelection}
       isInlinePresentation={isInlinePresentation}
       isPageSurface={isPageSurface}
       contentRef={contentRef}
+      onContentClick={openHighlightMenuFromClick}
       onContentMouseUp={queueSelectionStateSync}
       onContentKeyUp={queueSelectionStateSync}
+      onContentScroll={handleContentScroll}
     >
       {readerMarkdownNode}
     </PaperGuideReaderPanel>
+  )
+  const citationPopoverInShelf = Boolean(
+    citationPopoverDetail && readerCitationShelfKeys.has(toShelfItem(citationPopoverDetail).key),
   )
 
   return (
@@ -912,6 +1249,20 @@ export function PaperGuideReaderDrawer({
       onAfterOpenChange={setDrawerReady}
     >
       {panel}
+      <CitationPopover
+        detail={citationPopoverDetail}
+        position={citationPopoverPos}
+        loading={citationPopoverLoading}
+        guideLoading={false}
+        inShelf={citationPopoverInShelf}
+        onClose={closeReaderCitationPopover}
+        onAddToShelf={addReaderCitationToShelf}
+        onOpenShelf={() => onOpenCitationShelf?.()}
+        onOpenReader={() => {}}
+        onStartGuide={() => {}}
+        showOpenReaderAction={false}
+        showStartGuideAction={false}
+      />
     </PaperGuideReaderShell>
   )
 }

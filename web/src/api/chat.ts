@@ -261,6 +261,14 @@ export interface ReaderSessionRecord {
   updated_at?: number
 }
 
+export interface ConversationReaderStateRecord {
+  conv_id: string
+  source_path: string
+  state: Record<string, unknown>
+  created_at?: number
+  updated_at?: number
+}
+
 export interface MessageProvenanceSegment {
   segment_id: string
   segment_index?: number
@@ -505,4 +513,13 @@ export const chatApi = {
     api.get<ReaderSessionRecord>(`/api/reader/sessions/${encodeURIComponent(sessionId)}`),
   updateReaderSessionState: (sessionId: string, state: Record<string, unknown>) =>
     api.patch<ReaderSessionRecord>(`/api/reader/sessions/${encodeURIComponent(sessionId)}/state`, { state }),
+  getConversationReaderState: (convId: string, sourcePath: string) =>
+    api.get<ConversationReaderStateRecord>(
+      `/api/conversations/${encodeURIComponent(convId)}/reader-state?source_path=${encodeURIComponent(sourcePath)}`,
+    ),
+  updateConversationReaderState: (convId: string, sourcePath: string, state: Record<string, unknown>) =>
+    api.patch<ConversationReaderStateRecord>(
+      `/api/conversations/${encodeURIComponent(convId)}/reader-state?source_path=${encodeURIComponent(sourcePath)}`,
+      { state },
+    ),
 }

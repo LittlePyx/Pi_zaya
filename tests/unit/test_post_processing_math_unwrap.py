@@ -111,6 +111,16 @@ Cover glasses (high precision, $22 \times 22\,mm$ No. 1.5H $170\,\mum \pm 5\,\mu
     assert "37 °C" in out
 
 
+def test_normalize_glued_microsecond_latex_units():
+    src = r"""
+Under each illumination, the integration time is $0.02\,\mus$, and the frame time is $20\,\mus$.
+"""
+    out = postprocess_markdown(src)
+    assert r"\mus" not in out
+    assert r"$0.02\,\mu\mathrm{s}$" in out
+    assert r"$20\,\mu\mathrm{s}$" in out
+
+
 def test_normalize_unit_wrapping_and_common_ocr_word_splits():
     src = r"""
 **Figure 3.** Example at 0.5 μ W and scale bar 10 μ m. Line pro fi les on fl at- fi elded background at ( t 0 − t 4 ).

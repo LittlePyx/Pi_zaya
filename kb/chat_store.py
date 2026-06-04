@@ -205,6 +205,23 @@ class ChatStore:
                 """
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_conversation_sources_conv_id ON conversation_sources(conv_id);")
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS conversation_reader_states (
+                  conv_id TEXT NOT NULL,
+                  source_path TEXT NOT NULL,
+                  state_json TEXT NOT NULL DEFAULT '{}',
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  PRIMARY KEY(conv_id, source_path),
+                  FOREIGN KEY(conv_id) REFERENCES conversations(id)
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_conversation_reader_states_conv_id "
+                "ON conversation_reader_states(conv_id, updated_at DESC);"
+            )
 
     def _archive_excess_conversations(
         self,
@@ -494,6 +511,7 @@ class ChatStore:
 
     def delete_conversation(self, conv_id: str) -> None:
         with self._connect() as conn:
+            conn.execute("DELETE FROM conversation_reader_states WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM conversation_sources WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM message_refs WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM messages WHERE conv_id = ?", (conv_id,))
@@ -544,6 +562,95 @@ class ChatStore:
             }
             for r in rows
         ]
+
+    def get_conversation_reader_state(self, conv_id: str, source_path: str) -> dict | None:
+        cid = str(conv_id or "").strip()
+        src = str(source_path or "").strip()
+        if (not cid) or (not src):
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT conv_id, source_path, state_json, created_at, updated_at
+                FROM conversation_reader_states
+                WHERE conv_id = ? AND source_path = ?
+                """,
+                (cid, src),
+            ).fetchone()
+        if not row:
+            return {
+                "conv_id": cid,
+                "source_path": src,
+                "state": {},
+                "created_at": 0.0,
+                "updated_at": 0.0,
+            }
+        try:
+            state = json.loads(row["state_json"] or "{}")
+        except Exception:
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+        return {
+            "conv_id": str(row["conv_id"] or ""),
+            "source_path": str(row["source_path"] or ""),
+            "state": state,
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
+    def patch_conversation_reader_state(self, conv_id: str, source_path: str, patch: dict) -> dict | None:
+        cid = str(conv_id or "").strip()
+        src = str(source_path or "").strip()
+        if (not cid) or (not src):
+            return None
+        patch_dict = dict(patch or {})
+        now = time.time()
+        with self._connect() as conn:
+            conv = conn.execute("SELECT id FROM conversations WHERE id = ?", (cid,)).fetchone()
+            if not conv:
+                return None
+            row = conn.execute(
+                """
+                SELECT state_json, created_at
+                FROM conversation_reader_states
+                WHERE conv_id = ? AND source_path = ?
+                """,
+                (cid, src),
+            ).fetchone()
+            if row:
+                try:
+                    current = json.loads(row["state_json"] or "{}")
+                except Exception:
+                    current = {}
+                if not isinstance(current, dict):
+                    current = {}
+                created_at = float(row["created_at"] or now)
+            else:
+                current = {}
+                created_at = now
+            current.update(patch_dict)
+            try:
+                state_json = json.dumps(current, ensure_ascii=False, default=str)
+            except Exception:
+                state_json = "{}"
+                current = {}
+            conn.execute(
+                """
+                INSERT INTO conversation_reader_states (conv_id, source_path, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(conv_id, source_path)
+                DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at
+                """,
+                (cid, src, state_json, created_at, now),
+            )
+        return {
+            "conv_id": cid,
+            "source_path": src,
+            "state": current,
+            "created_at": created_at,
+            "updated_at": now,
+        }
 
     def get_messages(self, conv_id: str, limit: int | None = None) -> list[dict]:
         sql = "SELECT id, role, content, attachments_json, meta_json, created_at FROM messages WHERE conv_id = ? ORDER BY id ASC"

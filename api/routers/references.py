@@ -49,6 +49,7 @@ from kb.citation_card_polish import (
     citation_card_polish_enabled,
     polish_citation_card_detail,
 )
+from kb.citation_card import compose_citation_card
 from kb.file_ops import _resolve_md_output_paths
 from kb.library_store import LibraryStore
 from kb.reference_query_family import (
@@ -56,6 +57,11 @@ from kb.reference_query_family import (
     prompt_reference_focus_action,
 )
 from kb.paper_guide_shared import _source_name_from_md_path
+from kb.reference_index import (
+    extract_references_map_from_md,
+    load_reference_index,
+    resolve_reference_entry,
+)
 from kb.source_blocks import load_source_blocks, source_blocks_to_reader_anchors
 from api.sse import sse_generator, sse_response
 from kb.reference_sync import (
@@ -2844,6 +2850,104 @@ def _reader_doc_hash(md_text: str) -> str:
     return hashlib.sha1(str(md_text or "").encode("utf-8", errors="ignore")).hexdigest()
 
 
+def _reader_reference_index_data() -> dict:
+    try:
+        return load_reference_index(Path(get_settings().db_dir).expanduser())
+    except Exception:
+        return {}
+
+
+def _resolve_reader_reference_entry(
+    index_data: dict,
+    *,
+    source_path: str,
+    md_path: Path,
+    ref_num: int,
+) -> dict | None:
+    for candidate in [source_path, str(md_path)]:
+        raw = str(candidate or "").strip()
+        if not raw:
+            continue
+        try:
+            resolved = resolve_reference_entry(index_data, raw, int(ref_num))
+        except Exception:
+            resolved = None
+        if isinstance(resolved, dict):
+            return resolved
+    return None
+
+
+def _reader_reference_cite_details(
+    md_text: str,
+    *,
+    source_path: str,
+    source_name: str,
+    md_path: Path,
+    doc_hash: str,
+) -> list[dict]:
+    ref_map = extract_references_map_from_md(md_text)
+    if not ref_map:
+        return []
+    index_data = _reader_reference_index_data()
+    anchor_sig = hashlib.sha1(
+        f"{str(md_path)}|{doc_hash}".encode("utf-8", errors="ignore"),
+    ).hexdigest()[:12]
+    out: list[dict] = []
+    for ref_num in sorted(int(n) for n in ref_map.keys() if int(n) > 0)[:600]:
+        resolved = _resolve_reader_reference_entry(
+            index_data,
+            source_path=source_path,
+            md_path=md_path,
+            ref_num=ref_num,
+        )
+        ref = resolved.get("ref") if isinstance(resolved, dict) and isinstance(resolved.get("ref"), dict) else {}
+        raw_ref = str(ref.get("raw") or ref_map.get(ref_num) or "").strip()
+        if not raw_ref:
+            continue
+        anchor = f"kb-cite-reader-{anchor_sig}-{ref_num}"
+        context = f"The opened paper cites this upstream work as reference [{ref_num}]."
+        rec = {
+            "num": ref_num,
+            "display_num": ref_num,
+            "linked_nums": [ref_num],
+            "anchor": anchor,
+            "source_name": source_name,
+            "source_path": str(source_path or md_path),
+            "is_inpaper": True,
+            "citation_route": "system_b",
+            "routing_reason": "reader_reference_index",
+            "routing_confidence": 1.0 if ref else 0.72,
+            "raw": raw_ref,
+            "cite_fmt": raw_ref,
+            "title": str(ref.get("title") or "").strip(),
+            "authors": str(ref.get("authors") or "").strip(),
+            "venue": str(ref.get("venue") or "").strip(),
+            "year": str(ref.get("year") or "").strip(),
+            "volume": str(ref.get("volume") or "").strip(),
+            "issue": str(ref.get("issue") or "").strip(),
+            "pages": str(ref.get("pages") or "").strip(),
+            "doi": str(ref.get("doi") or "").strip(),
+            "doi_url": str(ref.get("doi_url") or "").strip(),
+            "heading_path": "References",
+            "location_label": f"{source_name} / References / [{ref_num}]",
+            "evidence_quote": context,
+            "evidence_source": "reader_reference_link",
+            "citation_context": context,
+            "citation_context_source": "reader_reference_link",
+            "summary_line": context,
+            "summary_source": "reader_reference_link",
+            "answer_claim": context,
+            "support_relation": "This bibliography entry is linked from the opened Reader document.",
+            "binding_status": "reader_reference",
+            "binding_confidence": 1.0 if ref else 0.72,
+            "binding_reason": "Resolved from the opened paper's local reference list.",
+            "card_reference_entry": raw_ref,
+            "render_locale": str(load_prefs().get("ui_locale") or "").strip(),
+        }
+        out.append(compose_citation_card(rec, locale=str(rec.get("render_locale") or "")))
+    return out
+
+
 def _reader_outline_quality(blocks: list[dict]) -> dict:
     heading_blocks = [
         dict(block)
@@ -2925,17 +3029,27 @@ def get_reader_doc(body: ReaderDocBody):
         source_name = source_name[:-6] + ".pdf"
     elif low.endswith(".md"):
         source_name = source_name[:-3] + ".pdf"
+    doc_hash = _reader_doc_hash(md_text)
+    cite_details = _reader_reference_cite_details(
+        md_text,
+        source_path=source_path,
+        source_name=source_name,
+        md_path=md_path,
+        doc_hash=doc_hash,
+    )
 
     return {
         "ok": True,
         "source_path": source_path,
         "source_name": source_name,
         "md_path": str(md_path),
-        "doc_hash": _reader_doc_hash(md_text),
+        "doc_hash": doc_hash,
         "outline_quality": _reader_outline_quality(blocks),
         "markdown": md_render,
         "anchors": anchors,
         "blocks": blocks,
+        "cite_details": cite_details,
+        "reference_cite_details": cite_details,
     }
 
 

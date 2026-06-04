@@ -10,11 +10,14 @@ import type {
   ReaderSelectionShelfPayload,
   ReaderLocateCandidate,
   ReaderLocateClaimGroup,
+  ReaderCitationShelfPayload,
   ReaderLocateResult,
   ReaderLocateTarget,
   ReaderOpenPayload,
 } from './reader/readerTypes'
 import {
+  READER_CITATION_SHELF_CHANNEL,
+  READER_CITATION_SHELF_EVENT,
   READER_SELECTION_SHELF_CHANNEL,
   READER_SELECTION_SHELF_EVENT,
 } from './reader/readerTypes'
@@ -3980,6 +3983,23 @@ function normalizeReaderSelectionShelfPayload(raw: unknown): ReaderSelectionShel
   }
 }
 
+function normalizeReaderCitationShelfPayload(raw: unknown): ReaderCitationShelfPayload | null {
+  const rec = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  const detailRaw = (rec.detail && typeof rec.detail === 'object')
+    ? rec.detail as Record<string, unknown>
+    : (rec.citationDetail && typeof rec.citationDetail === 'object')
+      ? rec.citationDetail as Record<string, unknown>
+      : null
+  if (!detailRaw) return null
+  const detail = normalizeCiteDetail(detailRaw)
+  if (!detail) return null
+  return {
+    detail: detail as unknown as Record<string, unknown>,
+    conversationId: String(rec.conversationId || rec.conversation_id || '').trim() || undefined,
+    createdAt: Number.isFinite(Number(rec.createdAt)) ? Number(rec.createdAt) : Date.now(),
+  }
+}
+
 function readerSelectionShelfTitle(payload: ReaderSelectionShelfPayload): string {
   const fallback = String(payload.sourcePath || '').split(/[\\/]/).pop() || 'Reader selection'
   return cleanCitationDisplayText(String(payload.sourceName || fallback || 'Reader selection'))
@@ -5309,7 +5329,10 @@ export function MessageList({
       }
       : item
     setShelfSummaryLoadingKey(item.key)
-    referencesApi.bibliometrics(requestItem as unknown as Record<string, unknown>)
+    const loadBibliometrics = options?.force
+      ? referencesApi.bibliometrics
+      : referencesApi.bibliometricsCached
+    loadBibliometrics(requestItem as unknown as Record<string, unknown>)
       .then((meta) => {
         if (!meta || Object.keys(meta).length === 0) return
         const articleSummaryPatch = articleSummaryPatchFromMeta(meta)
@@ -5801,8 +5824,46 @@ export function MessageList({
     })
     setFocusedShelfKey(summaryTarget.key)
     setShelfOpen(true)
-    fetchShelfSummaryForItem(summaryTarget, { force: true })
+    window.setTimeout(() => {
+      fetchShelfSummaryForItem(summaryTarget)
+    }, 160)
   }
+
+  const addReaderCitationToShelf = (rawPayload: unknown) => {
+    const payload = normalizeReaderCitationShelfPayload(rawPayload)
+    if (!payload) return
+    const payloadConvId = String(payload.conversationId || '').trim()
+    if (payloadConvId && activeConvId && payloadConvId !== activeConvId) return
+    const detail = normalizeCiteDetail(payload.detail)
+    if (!detail) return
+    addToShelf(detail)
+  }
+  const addReaderCitationToShelfRef = useRef(addReaderCitationToShelf)
+  addReaderCitationToShelfRef.current = addReaderCitationToShelf
+
+  useEffect(() => {
+    const handleWindowEvent = (event: Event) => {
+      const custom = event as CustomEvent<unknown>
+      addReaderCitationToShelfRef.current(custom.detail)
+    }
+    window.addEventListener(READER_CITATION_SHELF_EVENT, handleWindowEvent)
+
+    let channel: BroadcastChannel | null = null
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(READER_CITATION_SHELF_CHANNEL)
+      channel.onmessage = (event) => {
+        const data = event?.data && typeof event.data === 'object'
+          ? event.data as Record<string, unknown>
+          : {}
+        if (String(data.type || '') !== 'reader-citation-shelf') return
+        addReaderCitationToShelfRef.current(data)
+      }
+    }
+    return () => {
+      window.removeEventListener(READER_CITATION_SHELF_EVENT, handleWindowEvent)
+      channel?.close()
+    }
+  }, [])
 
   const addReaderSelectionToShelf = (rawPayload: unknown) => {
     const payload = normalizeReaderSelectionShelfPayload(rawPayload)
@@ -5891,13 +5952,9 @@ export function MessageList({
 
   const startPaperGuideFromDetail = async (detail: CiteDetail) => {
     const isInPaperReference = Boolean(detail.isInpaper)
-    if (isInPaperReference) {
-      message.info(S.reader_pdf_not_ready)
-      return
-    }
     const sourcePath = String(detail.sourcePath || '').trim()
     if (!sourcePath) {
-      message.info(S.reader_missing_path)
+      message.info(isInPaperReference ? S.reader_pdf_not_ready : S.reader_missing_path)
       return
     }
     const sourceName = String(detail.sourceName || detail.title || '').trim() || sourcePath.split(/[\\/]/).pop() || S.default_source_fallback
@@ -6512,7 +6569,6 @@ export function MessageList({
               && (
               guideSourcePath
               && provenanceLocateEntries.length > 0
-              && !strictStructuredLocateOnly
               ),
             )
             const provenanceModeLabel = prep?.provenanceModeLabel || ''
@@ -7280,6 +7336,21 @@ export function MessageList({
                           if (strictStructuredLocateOnly) {
                             if (!strictStructuredInlineLocate) return false
                             const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
+                            if (targetKind === 'paragraph' || targetKind === 'list_item') {
+                              const raw = String(snippet || '').trim()
+                              if (raw.length < 18) return false
+                              const picked = resolveProvenanceLocateCandidates(snippet, 1)[0] || null
+                              if (!picked) return false
+                              const keyBase = locateCandidateKey(picked)
+                              const snippetKey = normalizeLocateText(raw).slice(0, 96)
+                              const key = keyBase ? `${keyBase}::${snippetKey}` : snippetKey
+                              if (!key) return false
+                              if (locateButtonShownKeys.has(key)) return false
+                              if (optionalLocateButtonCount >= locateButtonCap) return false
+                              locateButtonShownKeys.add(key)
+                              optionalLocateButtonCount += 1
+                              return true
+                            }
                             if (!['quote', 'blockquote', 'equation', 'figure'].includes(targetKind)) {
                               return false
                             }
@@ -7348,6 +7419,12 @@ export function MessageList({
                             if (strictStructuredLocateOnly) {
                               if (!strictStructuredInlineLocate) return
                               const targetKind = normalizeStructuredLocateKind(String(meta?.kind || ''))
+                              if (targetKind === 'paragraph' || targetKind === 'list_item') {
+                                const pickedList = resolveProvenanceLocateCandidates(snippet, 6)
+                                if (pickedList.length <= 0) return
+                                openReaderByCandidates(pickedList, snippet, { strictLocate: true })
+                                return
+                              }
                               const resolved = resolveExactStructuredInlineResolution(snippet, meta)
                               const entry = resolved?.entry || null
                               if (!entry) return

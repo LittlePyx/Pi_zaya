@@ -5,6 +5,15 @@ import {
   type ReaderRegressionScenario,
 } from '../../src/testing/readerRegressionFixtures'
 
+const STRICT_LOCATE_LABEL_RE = /^(Strict locate|Evidence locate|证据定位)$/
+const EXACT_TARGET_LABEL_RE = /^(Exact target|精确命中)$/
+const SECTION_ONLY_LABEL_RE = /^(Section only|仅到章节)$/
+const UNRESOLVED_LABEL_RE = /^(Unresolved|未定位)$/
+const AUTO_SWITCHED_LABEL_RE = /^(Auto-switched|已自动切换)$/
+const ONE_HIGHLIGHT_LABEL_RE = /^1 (highlight|highlights|条高亮)$/
+const REQUESTED_LABEL_RE = /Requested|请求/
+const RESOLVED_LABEL_RE = /Resolved|已解析/
+
 async function mockReaderDoc(page: Page, scenario: ReaderRegressionScenario = 'strict-quote') {
   await page.route('**/api/references/reader/doc', async (route) => {
     const req = route.request()
@@ -28,7 +37,12 @@ async function mockReaderDoc(page: Page, scenario: ReaderRegressionScenario = 's
 async function openHarness(page: Page, scenario: ReaderRegressionScenario) {
   await mockReaderDoc(page, scenario)
   await page.goto(`/__reader_test__?scenario=${scenario}`)
-  await expect(page.getByTestId('reader-content')).toContainText('Fixture Paper')
+  const expectedTitle = scenario === 'citation-links'
+    ? 'Citation Fixture'
+    : scenario === 'render-polish'
+      ? 'Render Polish Fixture'
+      : 'Fixture Paper'
+  await expect(page.getByTestId('reader-content')).toContainText(expectedTitle)
 }
 
 async function openSplitHarness(page: Page) {
@@ -116,8 +130,8 @@ async function selectText(page: Page, startText: string, endText?: string) {
 
 test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await openHarness(page, 'strict-quote')
-  await expect(page.getByTestId('reader-locate-mode')).toHaveText('Strict locate')
-  await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Exact target')
+  await expect(page.getByTestId('reader-locate-mode')).toHaveText(STRICT_LOCATE_LABEL_RE)
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_TARGET_LABEL_RE)
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "exact"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"ok": true')
@@ -134,8 +148,8 @@ test('multi-panel caption locate highlights the combined target snippet', async 
 test('discussion-only locate can open the reader at section level without an exact block id', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 640 })
   await openHarness(page, 'discussion-only')
-  await expect(page.getByTestId('reader-locate-mode')).toHaveText('Strict locate')
-  await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Section only')
+  await expect(page.getByTestId('reader-locate-mode')).toHaveText(STRICT_LOCATE_LABEL_RE)
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(SECTION_ONLY_LABEL_RE)
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Heading match')
   await expect(page.locator('.kb-reader-focus')).toContainText('4. Discussion')
   await expect(page.getByRole('heading', { name: '4. Discussion' })).toBeInViewport()
@@ -193,19 +207,19 @@ test('outline active section follows reader scroll position', async ({ page }) =
 
 test('structured fallback switches to the resolved alternative instead of re-ranking blindly', async ({ page }) => {
   await openHarness(page, 'candidate-fallback')
-  await expect(page.getByTestId('reader-locate-switch')).toHaveText('Auto-switched')
-  await expect(page.getByTestId('reader-locate-decision')).toContainText('best backup evidence')
+  await expect(page.getByTestId('reader-locate-switch')).toHaveText(AUTO_SWITCHED_LABEL_RE)
+  await expect(page.getByTestId('reader-locate-decision')).toHaveText(/best backup evidence|最接近的备用证据/)
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Exact phrase')
-  await expect(page.getByTestId('reader-candidate-chip-0')).toContainText('Requested')
+  await expect(page.getByTestId('reader-candidate-chip-0')).toContainText(REQUESTED_LABEL_RE)
   await expect(page.getByTestId('reader-candidate-chip-1')).toHaveClass(/is-active/)
-  await expect(page.getByTestId('reader-candidate-chip-1')).toContainText('Resolved')
+  await expect(page.getByTestId('reader-candidate-chip-1')).toContainText(RESOLVED_LABEL_RE)
   await expect(page.getByTestId('reader-candidate-chip-2')).toBeVisible()
   await expect(page.getByTestId('reader-evidence-nav')).toHaveCount(0)
 })
 
 test('strict exact locate does not degrade to heading fallback when direct identity is missing', async ({ page }) => {
   await openHarness(page, 'strict-missing-exact')
-  await expect(page.getByTestId('reader-locate-resolution')).toHaveText('Unresolved')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(UNRESOLVED_LABEL_RE)
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Strict stopped')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "failed"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"repairable": true')
@@ -250,7 +264,7 @@ test('highlights workspace can jump back to a saved session highlight', async ({
   })
   await selectText(page, 'Looking ahead, the most direct extension would be to combine the current pipeline with adaptive masking')
   await page.getByTestId('reader-selection-highlight').click()
-  await expect(page.getByTestId('reader-highlights-toggle')).toContainText('1 highlight')
+  await expect(page.getByTestId('reader-highlights-toggle')).toHaveText(ONE_HIGHLIGHT_LABEL_RE)
 
   await reader.evaluate((node) => {
     ;(node as HTMLDivElement).scrollTop = 0
@@ -288,9 +302,9 @@ test('duplicate section alternatives collapse to distinct visible entries', asyn
   await openHarness(page, 'duplicate-sections')
   await expect(page.getByTestId('reader-evidence-nav')).toBeVisible()
   await expect(page.getByTestId('reader-evidence-position')).toHaveText('1 / 3')
-  await expect(page.getByRole('button', { name: '3 candidates' })).toBeVisible()
+  await expect(page.getByTestId('reader-candidate-toggle')).toHaveText(/^(3 candidates|3 个候选)$/)
 
-  await page.getByRole('button', { name: '3 candidates' }).click()
+  await page.getByTestId('reader-candidate-toggle').click()
   await expect(page.getByTestId('reader-candidate-chip-0')).toContainText('2. Method')
   await expect(page.getByTestId('reader-candidate-chip-1')).toContainText('Eq. (1)')
   await expect(page.getByTestId('reader-candidate-chip-2')).toContainText('Figure 1')
@@ -300,6 +314,68 @@ test('duplicate section alternatives collapse to distinct visible entries', asyn
 test('reader suppresses repeated identical figure assets in the same document render', async ({ page }) => {
   await openHarness(page, 'duplicate-images')
   await expect(page.locator('.kb-md-image')).toHaveCount(1)
+})
+
+test('reader normalizes glued microsecond latex units before KaTeX render', async ({ page }) => {
+  await openHarness(page, 'render-polish')
+  const reader = page.getByTestId('reader-content')
+  await expect(reader).toContainText('0.02')
+  await expect(reader).toContainText('20')
+  await expect(reader).not.toContainText('\\mus')
+  await expect(reader.locator('.katex-error')).toHaveCount(0)
+  const referenceEntries = page.locator('.kb-md-reference-entry')
+  await expect(referenceEntries).toHaveCount(3)
+  await expect(referenceEntries.nth(0)).toContainText('First reference title')
+  await expect(referenceEntries.nth(1)).toContainText('Second reference should split')
+  await expect(referenceEntries.nth(2)).toContainText('Third reference already starts')
+})
+
+test('reader in-paper citations and reference entries open system-b cards', async ({ page }) => {
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ bibliometrics_checked: true }),
+    })
+  })
+  await page.route('**/api/references/citation-card-polish', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ citation_card_polish_status: 'disabled', citation_card_polish_checked: true }),
+    })
+  })
+  await openHarness(page, 'citation-links')
+
+  const citeChips = page.locator('[data-testid="reader-content"] .kb-cite-chip-sysb')
+  await expect(citeChips).toHaveCount(6)
+  await expect(citeChips.first()).toHaveText('[1]')
+  await expect(citeChips.nth(2)).toHaveText('[1]')
+  await expect(citeChips.nth(3)).toHaveText('[2]')
+  await expect(citeChips.nth(4)).toHaveText('[3]')
+  await expect(citeChips.nth(5)).toHaveText('[4]')
+  await expect(page.locator('.kb-md-reference-entry')).toHaveCount(4)
+  await expect(page.locator('.kb-md-reference-entry .kb-cite-chip-sysb')).toHaveCount(0)
+  await expect(page.locator('.kb-md-reference-entry-action')).toHaveCount(4)
+
+  await citeChips.first().click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await expect(popover).toHaveClass(/kb-cite-pop-system-b/)
+  await expect(popover).toContainText('Single-shot compressive spectral imaging')
+  await expect(popover).toContainText('This paper introduces a dual-disperser architecture')
+  await expect(popover).not.toContainText('Snapshot compressive imaging often builds')
+  await popover.locator('.kb-cite-pop-close').click()
+  await expect(popover).toHaveCount(0)
+
+  await page.locator('.kb-md-reference-entry').first().click({ position: { x: 220, y: 12 } })
+  await expect(popover).toBeVisible()
+  await expect(popover).toHaveClass(/kb-cite-pop-system-b/)
+  await expect(popover).toContainText('Single-shot compressive spectral imaging')
+  await expect(popover).not.toContainText('The opened paper cites this upstream work as reference [1].')
+
+  await popover.locator('.kb-cite-pop-add').click()
+  await expect(page.getByTestId('reader-citation-shelf-count')).toHaveText('1 citation refs')
 })
 
 test('equation and figure fixtures resolve through the same structured target contract', async ({ page }) => {

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -84,6 +84,10 @@ class ReaderSessionCreateBody(BaseModel):
 
 
 class ReaderSessionStatePatchBody(BaseModel):
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationReaderStatePatchBody(BaseModel):
     state: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -846,6 +850,32 @@ def update_reader_session_state(session_id: str, body: ReaderSessionStatePatchBo
     record = _reader_session_store().update_state(session_id, body.state)
     if record is None:
         raise HTTPException(404, "reader session not found")
+    return record
+
+
+@router.get("/conversations/{conv_id}/reader-state")
+def get_conversation_reader_state(conv_id: str, source_path: str = Query("")):
+    src = str(source_path or "").strip()
+    if not src:
+        raise HTTPException(400, "source_path required")
+    store = get_chat_store()
+    if store.get_conversation(conv_id) is None:
+        raise HTTPException(404, "conversation not found")
+    return store.get_conversation_reader_state(conv_id, src)
+
+
+@router.patch("/conversations/{conv_id}/reader-state")
+def patch_conversation_reader_state(
+    conv_id: str,
+    body: ConversationReaderStatePatchBody,
+    source_path: str = Query(""),
+):
+    src = str(source_path or "").strip()
+    if not src:
+        raise HTTPException(400, "source_path required")
+    record = get_chat_store().patch_conversation_reader_state(conv_id, src, body.state)
+    if record is None:
+        raise HTTPException(404, "conversation not found")
     return record
 
 

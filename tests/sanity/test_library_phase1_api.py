@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -327,6 +328,62 @@ def test_library_files_route_includes_conversion_quality(monkeypatch, tmp_path: 
     assert feature_health["status"] == "error"
     feature_keys = {str(item.get("key") or "") for item in list(feature_health.get("items") or [])}
     assert {"pdf_conversion", "general_qa", "paper_guide", "citation_cards", "literature_basket", "reader_locate", "repair_loop"}.issubset(feature_keys)
+
+
+def test_figure_asset_refresh_queues_problem_markdown(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    Image = pytest.importorskip("PIL.Image")
+    ImageDraw = pytest.importorskip("PIL.ImageDraw")
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    assets = md_dir / "paper" / "assets"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    assets.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    md_path = md_dir / "paper" / "paper.en.md"
+    md_path.write_text("![Figure](./assets/page_1_fig_1.png)\n", encoding="utf-8")
+
+    img = Image.new("RGB", (160, 160), "white")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([20, 20, 140, 140], outline="black", width=3)
+    img.save(assets / "page_1_fig_1.png")
+    (assets / "figure_index.json").write_text(
+        json.dumps(
+            {
+                "figures": [
+                    {
+                        "page": 1,
+                        "index": 1,
+                        "asset_name": "page_1_fig_1.png",
+                        "crop_bbox": [0, 0, 72, 72],
+                        "bbox": [0, 0, 72, 72],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    queued: list[dict] = []
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": [], "active_tasks": []})
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: queued.append(dict(task)))
+
+    client = TestClient(app)
+    response = client.post("/api/library/quality/figure-assets/refresh", json={"limit": 10, "target_dpi": 320})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["enqueued"] == 1
+    assert payload["issue_counts"]["low_resolution"] == 1
+    assert len(queued) == 1
+    assert queued[0]["pdf"] == str(pdf_path)
+    assert queued[0]["replace"] is True
+    assert queued[0]["repair_context"]["source"] == "figure_asset_quality_refresh"
 
 
 def test_library_files_route_exposes_authoritative_index_state(monkeypatch, tmp_path: Path):

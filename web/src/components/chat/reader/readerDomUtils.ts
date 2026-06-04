@@ -668,6 +668,8 @@ export function highlightSessionTextInContainer(
     occurrence,
     attributes: {
       'data-kb-session-highlight-id': highlightId,
+      role: 'button',
+      tabindex: '0',
     },
   })
 }

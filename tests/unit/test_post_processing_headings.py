@@ -439,6 +439,32 @@ Body text.
     assert out.index("## Introduction") < out.index("## Results")
 
 
+def test_insert_missing_introduction_after_explicit_abstract_for_natcommun_like_layout():
+    src = """
+# High-resolution single-photon imaging with physics-informed deep learning
+
+Liheng Bian [1,2,5], Haoze Song [1,5] & Jun Zhang [1]
+
+## Abstract
+
+High-resolution single-photon imaging remains a big challenge due to the complex hardware manufacturing craft and noise disturbances. Here, we introduce deep learning into SPAD, enabling super-resolution single-photon imaging with enhancement of bit depth and imaging quality. The experiments validate the technique's state-of-the-art super-resolution SPAD imaging performance.
+
+Single-photon avalanche diode (SPAD) array has received wide attention due to its excellent single-photon sensitivity [1-4]. Such a single-photon imaging sensor has been widely applied in various fields such as fluorescence lifetime imaging [5], fluorescence fluctuation spectroscopy [6], time-off-light imaging [7-9], quantum communication and computing [10,11], and so on [12,13].
+
+While early SPAD arrays were limited in imaging resolution due to low fill factors, recent advance has exhibited higher fill factors approaching 100% [16]. Nevertheless, compared with the well-established manufacture craft of CMOS, the array size of SPAD in academic literature was only 400 x 400 in 2019 [18].
+
+## Results
+
+We first studied the complex photon flow model of SPAD electronics.
+"""
+    out = postprocess_markdown(src)
+    assert "## Introduction" in out
+    assert out.index("## Abstract") < out.index("High-resolution single-photon imaging remains")
+    assert out.index("## Introduction") < out.index("Single-photon avalanche diode")
+    assert out.index("Single-photon avalanche diode") < out.index("While early SPAD arrays")
+    assert out.index("While early SPAD arrays") < out.index("## Results")
+
+
 def test_insert_missing_abstract_before_explicit_roman_introduction_for_arxiv_like_layout():
     src = """
 # Quantum correlation light-field microscope with extreme depth of field

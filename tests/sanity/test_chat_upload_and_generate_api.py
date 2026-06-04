@@ -63,6 +63,51 @@ def test_reader_sessions_persist_payload(monkeypatch, tmp_path: Path):
     assert patched.json()["state"]["highlights"][0]["text"] == "important sentence"
 
 
+def test_conversation_reader_state_persists_by_source(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+    from kb.chat_store import ChatStore
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("Guide")
+    source_path = str(tmp_path / "paper.en.md")
+    other_source_path = str(tmp_path / "other.en.md")
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+
+    client = TestClient(app)
+    missing_source = client.get(f"/api/conversations/{conv_id}/reader-state")
+    assert missing_source.status_code == 400
+
+    initial = client.get(
+        f"/api/conversations/{conv_id}/reader-state",
+        params={"source_path": source_path},
+    )
+    assert initial.status_code == 200
+    assert initial.json()["state"] == {}
+
+    patched = client.patch(
+        f"/api/conversations/{conv_id}/reader-state",
+        params={"source_path": source_path},
+        json={"state": {"highlights": [{"id": "h1", "text": "important sentence"}]}},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["source_path"] == source_path
+    assert patched.json()["state"]["highlights"][0]["id"] == "h1"
+
+    loaded = client.get(
+        f"/api/conversations/{conv_id}/reader-state",
+        params={"source_path": source_path},
+    )
+    assert loaded.status_code == 200
+    assert loaded.json()["state"]["highlights"][0]["text"] == "important sentence"
+
+    other = client.get(
+        f"/api/conversations/{conv_id}/reader-state",
+        params={"source_path": other_source_path},
+    )
+    assert other.status_code == 200
+    assert other.json()["state"] == {}
+
+
 def test_chat_uploads_route_handles_pdf_and_image(monkeypatch, tmp_path: Path):
     from api.routers import chat as chat_router
 
@@ -591,3 +636,37 @@ def test_references_reader_doc_exposes_outline_contract(monkeypatch, tmp_path: P
     assert [row.get("heading_level") for row in heading_blocks] == [1, 2, 3]
     heading_anchors = [row for row in payload["anchors"] if row.get("kind") == "heading"]
     assert [row.get("heading_level") for row in heading_anchors] == [1, 2, 3]
+
+
+def test_references_reader_doc_exposes_reference_cite_details(monkeypatch, tmp_path: Path):
+    from api.routers import references as refs_router
+
+    md_root = tmp_path / "md_output"
+    doc_dir = md_root / "paper"
+    doc_dir.mkdir(parents=True, exist_ok=True)
+    md_path = doc_dir / "paper.en.md"
+    md_path.write_text(
+        "# Paper Title\n\n"
+        "Prior spectral imaging appears in this paper [1].\n\n"
+        "## References\n\n"
+        "[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(refs_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(refs_router, "_reference_asset_roots", lambda: [md_root.resolve()])
+    monkeypatch.setattr(refs_router, "_reader_reference_index_data", lambda: {})
+    client = TestClient(app)
+
+    doc_resp = client.post("/api/references/reader/doc", json={"source_path": str(md_path)})
+    assert doc_resp.status_code == 200
+    payload = doc_resp.json()
+    details = payload.get("cite_details") or []
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["num"] == 1
+    assert detail["is_inpaper"] is True
+    assert detail["citation_route"] == "system_b"
+    assert str(detail["anchor"]).startswith("kb-cite-reader-")
+    assert "Single-shot compressive spectral imaging" in detail["raw"]
+    assert "Single-shot compressive spectral imaging" in detail["card_reference_entry"]

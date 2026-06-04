@@ -403,3 +403,40 @@ def test_sort_blocks_reading_order_keeps_left_column_before_right_when_left_spil
     assert out[0].text == header.text
     assert out[1].text == left.text
     assert out[2].text == right.text
+
+
+def test_sort_blocks_reading_order_keeps_upper_right_abstract_before_lower_two_column_intro():
+    page_w = 595.0
+    title = TextBlock(
+        bbox=(39.7, 113.5, 553.8, 167.3),
+        text="High-resolution single-photon imaging with physics-informed deep learning",
+        max_font_size=17.0,
+        is_bold=True,
+    )
+    abstract = TextBlock(
+        bbox=(217.3, 270.4, 561.3, 545.4),
+        text="High-resolution single-photon imaging remains a big challenge. " * 5,
+        max_font_size=9.0,
+        is_bold=False,
+    )
+    intro_left = TextBlock(
+        bbox=(39.7, 573.8, 294.9, 678.5),
+        text="Single-photon avalanche diode (SPAD) array has received wide attention. " * 4,
+        max_font_size=8.2,
+        is_bold=False,
+    )
+    intro_right = TextBlock(
+        bbox=(306.1, 573.8, 561.4, 657.0),
+        text="While early SPAD arrays were limited in imaging resolution. " * 4,
+        max_font_size=8.2,
+        is_bold=False,
+    )
+
+    out = sort_blocks_reading_order([intro_right, abstract, title, intro_left], page_width=page_w)
+
+    assert [b.text for b in out] == [
+        title.text,
+        abstract.text,
+        intro_left.text,
+        intro_right.text,
+    ]

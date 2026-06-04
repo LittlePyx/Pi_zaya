@@ -522,6 +522,18 @@ def _is_non_body_metadata_text(
     has_url = bool(re.search(r"https?://|www\.[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", low))
     has_doi = bool(re.search(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b", t)) or ("doi:" in low) or ("doi.org/" in low)
     has_page_counter = bool(re.search(r"\(\s*\d+\s+of\s+\d+\s*\)", low))
+    has_article_history_label = bool(re.match(r"^(?:article history|keywords?|key words)\b\s*:?", low))
+    has_article_history_date = bool(
+        re.match(
+            r"^(?:received|accepted|revised|published online)\b\s*:?\s*"
+            r"(?:\d{1,2}\b|[a-z]{3,12}\b|\d{4}\b)",
+            low,
+        )
+        or re.search(
+            r"\b(?:received|accepted|revised)\s+\d{1,2}\s+[a-z]{3,12}\s+\d{4}\b",
+            low,
+        )
+    )
 
     if has_email or has_orcid:
         return True
@@ -554,7 +566,7 @@ def _is_non_body_metadata_text(
         return True
     if re.search(r"\b(?:all rights reserved|creative commons|open access|copyright|published by)\b", low):
         return True
-    if re.search(r"\b(?:received|accepted|published online|article history|keywords)\b", low) and (edge_zone or page_index <= 1):
+    if (has_article_history_label or has_article_history_date) and (edge_zone or page_index <= 1):
         return True
 
     aff_n = _count_keyword_hits(low, _AFFILIATION_KEYWORDS)

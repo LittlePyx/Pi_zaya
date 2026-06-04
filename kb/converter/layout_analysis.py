@@ -483,8 +483,46 @@ def sort_blocks_reading_order(blocks: list, page_width: float) -> list:
         nonlocal segment
         if not segment:
             return
-        left = [b for b in segment if ((float(b.bbox[0]) + float(b.bbox[2])) / 2.0) < col_split]
-        right = [b for b in segment if ((float(b.bbox[0]) + float(b.bbox[2])) / 2.0) >= col_split]
+
+        # Some first pages have title/front matter above the body, with an abstract
+        # block in the upper right column and the introduction starting below it in
+        # two-column flow. Keep such top-only blocks in visual y order before falling
+        # back to left-column-then-right-column reading.
+        remaining = list(segment)
+        vertical_gap = max(6.0, page_width * 0.012)
+
+        def _column_parts(items: list) -> tuple[list, list]:
+            left_items = [
+                b
+                for b in items
+                if ((float(b.bbox[0]) + float(b.bbox[2])) / 2.0) < col_split
+            ]
+            right_items = [
+                b
+                for b in items
+                if ((float(b.bbox[0]) + float(b.bbox[2])) / 2.0) >= col_split
+            ]
+            return left_items, right_items
+
+        def _starts_after(block, items: list) -> bool:
+            if not items:
+                return False
+            other_top = min(float(b.bbox[1]) for b in items)
+            return float(block.bbox[3]) <= other_top - vertical_gap
+
+        while True:
+            left, right = _column_parts(remaining)
+            if not left or not right:
+                break
+            first = min(remaining, key=lambda b: (float(b.bbox[1]), float(b.bbox[0])))
+            first_is_left = ((float(first.bbox[0]) + float(first.bbox[2])) / 2.0) < col_split
+            other = right if first_is_left else left
+            if not _starts_after(first, other):
+                break
+            out.append(first)
+            remaining.remove(first)
+
+        left, right = _column_parts(remaining)
         left.sort(key=lambda b: (b.bbox[1], b.bbox[0]))
         right.sort(key=lambda b: (b.bbox[1], b.bbox[0]))
         out.extend(left)

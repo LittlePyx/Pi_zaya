@@ -54,6 +54,8 @@ export interface ReaderDocResponse {
   markdown: string
   anchors?: ReaderDocAnchor[]
   blocks?: ReaderDocBlock[]
+  cite_details?: Array<Record<string, unknown>>
+  reference_cite_details?: Array<Record<string, unknown>>
 }
 
 export interface ShelfMetadataQualityIssue {

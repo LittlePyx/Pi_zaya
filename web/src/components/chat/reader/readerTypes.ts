@@ -84,6 +84,18 @@ export interface ReaderLocateResult {
 export interface ReaderSessionHighlight {
   id: string
   text: string
+  noteKind?: 'highlight' | 'quote' | string
+  sourcePath?: string
+  sourceName?: string
+  conversationId?: string
+  messageId?: number
+  locateRequestId?: number
+  locateFeedbackKey?: string
+  createdAt?: number
+  updatedAt?: number
+  feedback?: 'useful' | 'needs_check' | 'wrong' | string
+  feedbackAt?: number
+  headingPath?: string
   startOffset?: number
   endOffset?: number
   // Legacy compatibility fields for pre-range highlights. Prefer start/end offsets.
@@ -98,6 +110,10 @@ export interface ReaderSessionHighlight {
 
 export const READER_SELECTION_SHELF_EVENT = 'kb:reader-selection-shelf'
 export const READER_SELECTION_SHELF_CHANNEL = 'kb:reader-selection-shelf'
+export const READER_CITATION_SHELF_EVENT = 'kb:reader-citation-shelf'
+export const READER_CITATION_SHELF_CHANNEL = 'kb:reader-citation-shelf'
+export const READER_SESSION_SYNC_CHANNEL = 'kb:reader-session-sync'
+export const READER_SESSION_NAV_CHANNEL = 'kb:reader-session-nav'
 
 export interface ReaderSelectionShelfPayload {
   text: string
@@ -114,6 +130,12 @@ export interface ReaderSelectionShelfPayload {
   documentOccurrence?: number
   startReadableIndex?: number
   endReadableIndex?: number
+  conversationId?: string
+  createdAt?: number
+}
+
+export interface ReaderCitationShelfPayload {
+  detail: Record<string, unknown>
   conversationId?: string
   createdAt?: number
 }

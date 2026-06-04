@@ -1,4 +1,4 @@
-import type { ReactNode, RefObject } from 'react'
+import type { MouseEvent, ReactNode, RefObject, UIEvent } from 'react'
 import { AimOutlined } from '@ant-design/icons'
 import { Empty, Spin } from 'antd'
 import { ReaderOutlinePanel } from './ReaderOutlinePanel'
@@ -30,6 +30,13 @@ interface ReaderSelectionBubbleState {
   y: number
   canHighlight: boolean
   highlightId: string
+}
+
+interface ReaderHighlightActionState {
+  x: number
+  y: number
+  highlightId: string
+  text: string
 }
 
 interface PaperGuideReaderPanelProps {
@@ -77,14 +84,22 @@ interface PaperGuideReaderPanelProps {
   error: string
   hasMarkdown: boolean
   selectionBubble: ReaderSelectionBubbleState | null
+  highlightBubble: ReaderHighlightActionState | null
+  activeHighlightFeedback: string
   onToggleSelectionHighlight: () => void
   onAddSelectionToShelf?: () => void
+  onRemoveActiveHighlight: () => void
+  onAddActiveHighlightToShelf?: () => void
+  onSetActiveHighlightFeedback?: (feedback: 'useful' | 'needs_check') => void
+  onAskActiveHighlight: () => void
   onAskSelection: () => void
   isInlinePresentation: boolean
   isPageSurface: boolean
   contentRef: RefObject<HTMLDivElement | null>
+  onContentClick: (event: MouseEvent<HTMLDivElement>) => void
   onContentMouseUp: () => void
   onContentKeyUp: () => void
+  onContentScroll: (event: UIEvent<HTMLDivElement>) => void
   children: ReactNode
 }
 
@@ -133,14 +148,22 @@ export function PaperGuideReaderPanel({
   error,
   hasMarkdown,
   selectionBubble,
+  highlightBubble,
+  activeHighlightFeedback,
   onToggleSelectionHighlight,
   onAddSelectionToShelf,
+  onRemoveActiveHighlight,
+  onAddActiveHighlightToShelf,
+  onSetActiveHighlightFeedback,
+  onAskActiveHighlight,
   onAskSelection,
   isInlinePresentation,
   isPageSurface,
   contentRef,
+  onContentClick,
   onContentMouseUp,
   onContentKeyUp,
+  onContentScroll,
   children,
 }: PaperGuideReaderPanelProps) {
   const S = useT()
@@ -314,6 +337,8 @@ export function PaperGuideReaderPanel({
                     onRemoveItem={onRemoveHighlight}
                     titleLabel={S.reader_highlights || 'Highlights'}
                     removeLabel={S.reader_remove_highlight || 'Remove'}
+                    usefulLabel={S.reader_feedback_useful || 'Useful'}
+                    checkLabel={S.reader_feedback_check || 'Check'}
                   />
                 ) : null}
               </div>
@@ -338,7 +363,7 @@ export function PaperGuideReaderPanel({
                     data-testid="reader-selection-highlight"
                   >
                     {selectionBubble.highlightId
-                      ? (S.reader_marked || 'Marked')
+                      ? (S.reader_undo_highlight || 'Undo')
                       : (S.reader_highlight || 'Highlight')}
                   </button>
                 ) : null}
@@ -364,13 +389,78 @@ export function PaperGuideReaderPanel({
                 </button>
               </div>
             ) : null}
+            {highlightBubble ? (
+              <div
+                className="kb-reader-selection-bubble is-highlight-menu"
+                style={{ left: `${highlightBubble.x}px`, top: `${highlightBubble.y}px` }}
+                onMouseDown={(event) => event.preventDefault()}
+                data-testid="reader-highlight-menu"
+              >
+                <span className="kb-reader-highlight-menu-text" title={highlightBubble.text}>
+                  {S.reader_evidence_note || S.reader_highlight || 'Evidence'}
+                </span>
+                {onSetActiveHighlightFeedback ? (
+                  <>
+                    <button
+                      type="button"
+                      className={`kb-reader-selection-action is-feedback ${activeHighlightFeedback === 'useful' ? 'is-active' : ''}`}
+                      onClick={() => onSetActiveHighlightFeedback('useful')}
+                      title={S.reader_feedback_useful_title || 'Mark this evidence as useful'}
+                      data-testid="reader-highlight-menu-feedback-useful"
+                    >
+                      {S.reader_feedback_useful || 'Useful'}
+                    </button>
+                    <button
+                      type="button"
+                      className={`kb-reader-selection-action is-feedback ${activeHighlightFeedback === 'needs_check' ? 'is-active' : ''}`}
+                      onClick={() => onSetActiveHighlightFeedback('needs_check')}
+                      title={S.reader_feedback_check_title || 'Mark this evidence as needing review'}
+                      data-testid="reader-highlight-menu-feedback-check"
+                    >
+                      {S.reader_feedback_check || 'Check'}
+                    </button>
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  className="kb-reader-selection-action is-danger"
+                  onClick={onRemoveActiveHighlight}
+                  title={S.reader_remove_highlight || 'Remove highlight'}
+                  data-testid="reader-highlight-menu-remove"
+                >
+                  {S.reader_remove_highlight || 'Remove'}
+                </button>
+                {onAddActiveHighlightToShelf ? (
+                  <button
+                    type="button"
+                    className="kb-reader-selection-action"
+                    onClick={onAddActiveHighlightToShelf}
+                    title={S.reader_add_to_shelf_title || 'Add this selection to the citation shelf'}
+                    data-testid="reader-highlight-menu-shelf"
+                  >
+                    {S.reader_add_to_shelf || 'Shelf'}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="kb-reader-selection-action is-accent"
+                  onClick={onAskActiveHighlight}
+                  title={S.reader_ask_selection_title || 'Ask about this selection'}
+                  data-testid="reader-highlight-menu-ask"
+                >
+                  {S.reader_ask_selection || 'Ask'}
+                </button>
+              </div>
+            ) : null}
             <div
               ref={contentRef}
               className={isInlinePresentation
                 ? 'kb-reader-content min-w-0 w-full flex-1 min-h-0 overflow-x-auto overflow-y-auto pr-1'
                 : 'kb-reader-content min-w-0 max-h-[calc(100vh-180px)] overflow-x-auto overflow-y-auto pr-1'}
+              onClick={onContentClick}
               onMouseUp={onContentMouseUp}
               onKeyUp={onContentKeyUp}
+              onScroll={onContentScroll}
               data-testid="reader-content"
             >
               {children}

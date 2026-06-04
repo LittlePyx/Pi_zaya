@@ -13,6 +13,7 @@ except ImportError:
     fitz = None
 
 from .geometry_utils import _bbox_width, _overlap_1d, _rect_area
+from .figure_assets import figure_asset_needs_refresh, resolve_figure_asset_dpi
 from .heuristics import _page_has_references_heading, _page_looks_like_references_content
 from .layout_analysis import _collect_visual_rects, _detect_column_split_x, page_has_full_page_image_layer
 from .page_figure_metadata import infer_visual_rects_from_caption_candidates
@@ -165,25 +166,27 @@ def _extract_page_visual_assets(
                     }
                 )
 
+            asset_dpi = resolve_figure_asset_dpi(converter, base_dpi=dpi)
+
             try:
-                if img_path.exists() and img_path.stat().st_size >= 256:
+                if not figure_asset_needs_refresh(img_path, clip_rect=used_clip, dpi=asset_dpi):
                     _record_saved_asset(used_clip)
                     continue
             except Exception:
                 pass
 
             try:
-                pix_img = page.get_pixmap(clip=cropped_rect, dpi=dpi)
+                pix_img = page.get_pixmap(clip=cropped_rect, dpi=asset_dpi)
                 pix_img.save(img_path)
                 if img_path.exists() and img_path.stat().st_size >= 256:
                     _record_saved_asset(used_clip)
             except Exception:
                 try:
                     used_clip = rect
-                    if img_path.exists() and img_path.stat().st_size >= 256:
+                    if not figure_asset_needs_refresh(img_path, clip_rect=used_clip, dpi=asset_dpi):
                         _record_saved_asset(used_clip)
                         continue
-                    pix_img = page.get_pixmap(clip=rect, dpi=dpi)
+                    pix_img = page.get_pixmap(clip=rect, dpi=asset_dpi)
                     pix_img.save(img_path)
                     if img_path.exists() and img_path.stat().st_size >= 256:
                         _record_saved_asset(used_clip)

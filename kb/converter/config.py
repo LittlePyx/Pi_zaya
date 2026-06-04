@@ -32,6 +32,7 @@ class ConvertConfig:
     llm_classify_only_if_needed: bool = True
     classify_batch_size: int = 40
     image_scale: float = 2.2
+    figure_dpi: int | None = 320
     image_alpha: bool = False
     detect_tables: bool = True
     table_pdfplumber_fallback: bool = False

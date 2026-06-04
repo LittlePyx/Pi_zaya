@@ -2,17 +2,13 @@ import { useEffect, type RefObject } from 'react'
 import type { ReaderDocBlock } from '../../../api/references'
 import type { ReaderSessionHighlight } from './readerTypes'
 import {
-  USER_HIGHLIGHT_NAME,
   buildTextNodeCorpus,
   clearReaderUserHighlights,
   closestReadableBlock,
-  ensureReaderCustomHighlightStyle,
   highlightRawRangeInCorpus,
   highlightSessionTextInContainer,
-  rawOffsetToDomPoint,
   readableBlocks,
   resolveDirectTargetNode,
-  supportsCustomHighlights,
 } from './readerDomUtils'
 
 interface UseReaderSessionHighlightLayerArgs {
@@ -38,30 +34,16 @@ export function useReaderSessionHighlightLayer({
     if (!root) return
     clearReaderUserHighlights(root)
     const corpus = buildTextNodeCorpus(root)
-    const useCustomHighlights = supportsCustomHighlights()
-    if (useCustomHighlights) ensureReaderCustomHighlightStyle()
-    const ranges: Range[] = []
     for (const item of sessionHighlights) {
       const startOffset = Number(item?.startOffset ?? -1)
       const endOffset = Number(item?.endOffset ?? -1)
       if (startOffset >= 0 && endOffset > startOffset) {
-        const start = rawOffsetToDomPoint(corpus.nodes, startOffset)
-        const end = rawOffsetToDomPoint(corpus.nodes, endOffset)
-        if (start && end && (start.node !== end.node || start.offset !== end.offset)) {
-          if (useCustomHighlights) {
-            const range = document.createRange()
-            try {
-              range.setStart(start.node, start.offset)
-              range.setEnd(end.node, end.offset)
-              if (!range.collapsed) ranges.push(range)
-            } catch {
-              // ignore
-            }
-          } else {
-            highlightRawRangeInCorpus(corpus.nodes, startOffset, endOffset, 'kb-reader-user-highlight', {
-              'data-kb-session-highlight-id': String(item?.id || '').trim(),
-            })
-          }
+        highlightRawRangeInCorpus(corpus.nodes, startOffset, endOffset, 'kb-reader-user-highlight', {
+          'data-kb-session-highlight-id': String(item?.id || '').trim(),
+          role: 'button',
+          tabindex: '0',
+        })
+        if (root.querySelector(`[data-kb-session-highlight-id="${CSS.escape(String(item?.id || '').trim())}"]`)) {
           continue
         }
       }
@@ -101,12 +83,6 @@ export function useReaderSessionHighlightLayer({
           String(item?.id || '').trim(),
           rootOccurrence,
         )
-      }
-    }
-    if (useCustomHighlights) {
-      const scope = globalThis as { CSS?: { highlights?: { set?: (name: string, value: unknown) => void } }; Highlight?: new (...ranges: Range[]) => unknown }
-      if (ranges.length > 0 && scope.CSS?.highlights?.set && scope.Highlight) {
-        scope.CSS.highlights.set(USER_HIGHLIGHT_NAME, new scope.Highlight(...ranges))
       }
     }
   }, [

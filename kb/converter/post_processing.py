@@ -1221,8 +1221,17 @@ def _normalize_common_rendering_artifacts(md: str) -> str:
             out.append(ln)
             continue
         t = unicodedata.normalize("NFKC", ln)
-        t = t.replace("\\mum", "\\mu m")
+        t = re.sub(
+            rf"\\mu([{unit_letters}])\b",
+            lambda m: f"\\mu\\mathrm{{{m.group(1)}}}",
+            t,
+        )
         t = t.replace("掳C", "°C")
+        t = re.sub(
+            rf"(?<!\$)\b(\d+(?:\.\d+)?)\s*[μµ]\s*([{unit_letters}])\b",
+            lambda m: f"${m.group(1)}\\,\\mu\\mathrm{{{m.group(2)}}}$",
+            t,
+        )
         t = re.sub(
             rf"\\mu\s+(?!\\mathrm\{{)([{unit_letters}])\b",
             lambda m: f"\\mu\\mathrm{{{m.group(1)}}}",

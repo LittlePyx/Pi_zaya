@@ -8,6 +8,8 @@ interface ReaderHighlightsPanelProps {
   onRemoveItem: (highlightId: string) => void
   titleLabel: string
   removeLabel: string
+  usefulLabel: string
+  checkLabel: string
 }
 
 function highlightExcerpt(text: string, maxLen = 120): string {
@@ -17,6 +19,14 @@ function highlightExcerpt(text: string, maxLen = 120): string {
   return `${raw.slice(0, Math.max(36, maxLen - 3)).trimEnd()}...`
 }
 
+function highlightLocation(item: ReaderSessionHighlight): string {
+  const heading = String(item.headingPath || '').replace(/\s+/g, ' ').trim()
+  if (heading) {
+    return heading.split('/').map((part) => part.trim()).filter(Boolean).slice(-2).join(' / ')
+  }
+  return String(item.blockId || item.anchorId || '').replace(/\s+/g, ' ').trim()
+}
+
 export function ReaderHighlightsPanel({
   items,
   activeItemId,
@@ -24,6 +34,8 @@ export function ReaderHighlightsPanel({
   onRemoveItem,
   titleLabel,
   removeLabel,
+  usefulLabel,
+  checkLabel,
 }: ReaderHighlightsPanelProps) {
   const activeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -54,15 +66,24 @@ export function ReaderHighlightsPanel({
                 data-testid={`reader-highlight-item-${index}`}
               >
                 <span className="kb-reader-highlight-item-label">{highlightExcerpt(item.text)}</span>
+                {highlightLocation(item) ? (
+                  <span className="kb-reader-highlight-item-meta">{highlightLocation(item)}</span>
+                ) : null}
+                {item.feedback === 'useful' || item.feedback === 'needs_check' ? (
+                  <span className={`kb-reader-highlight-feedback is-${item.feedback}`}>
+                    {item.feedback === 'useful' ? usefulLabel : checkLabel}
+                  </span>
+                ) : null}
               </button>
               <button
                 type="button"
                 className="kb-reader-highlight-remove"
                 title={removeLabel}
                 onClick={() => onRemoveItem(item.id)}
+                aria-label={removeLabel}
                 data-testid={`reader-highlight-remove-${index}`}
               >
-                {removeLabel}
+                ×
               </button>
             </div>
           )

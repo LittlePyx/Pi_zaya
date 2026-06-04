@@ -14,6 +14,8 @@ export type ReaderRegressionScenario =
   | 'equation'
   | 'figure'
   | 'multi-panel'
+  | 'render-polish'
+  | 'citation-links'
 
 export const READER_REGRESSION_SOURCE_PATH = '__reader_regression__/fixture.md'
 export const READER_REGRESSION_SOURCE_NAME = 'Fixture Paper'
@@ -134,7 +136,182 @@ const readerRegressionDuplicateImageMarkdown = [
   '',
 ].join('\n')
 
+const readerRegressionRenderPolishMarkdown = [
+  '# Render Polish Fixture',
+  '',
+  '<!-- kb_page: 1 -->',
+  '',
+  '## Figure Check',
+  '',
+  `![Figure 1. Centered preview image](${FIGURE_DATA_URI})`,
+  '',
+  '*Figure 1. Centered preview image.*',
+  '',
+  '<!-- kb_page: 2 -->',
+  '',
+  'Under each illumination, the integration time is $0.02\\,\\mus$, and the frame time is $20\\,\\mus$.',
+  '',
+  '## References',
+  '',
+  '[1] Alpha A, Beta B. First reference title. Journal of Clean Rendering. 2024. [2] Chen C, Delta D. Second reference should split onto its own line. Optics Letters. 2025.',
+  '',
+  '[3] Evans E, Fox F. Third reference already starts on a new line. Nature Methods. 2026.',
+  '',
+].join('\n')
+
+const readerRegressionCitationMarkdown = [
+  '# Citation Fixture',
+  '',
+  'Alice Example [1,2], Bob Example [1] & Carol Example [2]',
+  '',
+  '[1] Department of Imaging, Example University',
+  '',
+  '## Introduction',
+  '',
+  'Snapshot compressive imaging often builds on single-shot spectral imaging [1, 2].',
+  '',
+  'The reconstruction paragraph cites a compact range for related priors [1-4].',
+  '',
+  '## References',
+  '',
+  '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013',
+  '',
+  '[2] Duarte M F, Davenport M A, Takhar D, Laska J N, Kelly K E and Baraniuk R G. Single-pixel imaging via compressive sampling. IEEE Signal Processing Magazine, 2008.',
+  '',
+  '[3] Candes E, Romberg J and Tao T. Robust uncertainty principles: exact signal reconstruction from highly incomplete frequency information. IEEE Transactions on Information Theory, 2006.',
+  '',
+  '[4] Donoho D L. Compressed sensing. IEEE Transactions on Information Theory, 2006.',
+  '',
+].join('\n')
+
+const readerRegressionCitationDetails = [
+  {
+    num: 1,
+    display_num: 1,
+    linked_nums: [1],
+    anchor: 'kb-cite-reader-fixture-1',
+    source_name: READER_REGRESSION_SOURCE_NAME,
+    source_path: READER_REGRESSION_SOURCE_PATH,
+    is_inpaper: true,
+    citation_route: 'system_b',
+    routing_reason: 'reader_reference_index',
+    raw: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013',
+    cite_fmt: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013',
+    title: 'Single-shot compressive spectral imaging with a dual-disperser architecture',
+    authors: 'Gehm M, Brady D',
+    venue: 'Optics Express',
+    year: '2007',
+    doi: '10.1364/OE.15.014013',
+    doi_url: 'https://doi.org/10.1364/OE.15.014013',
+    heading_path: 'References',
+    location_label: 'Fixture Paper / References / [1]',
+    citation_context: 'The opened paper cites this upstream work as reference [1].',
+    citation_context_source: 'reader_reference_link',
+    evidence_quote: 'The opened paper cites this upstream work as reference [1].',
+    evidence_source: 'reader_reference_link',
+    summary_line: 'This paper introduces a dual-disperser architecture for single-shot compressive spectral imaging.',
+    summary_source: 'abstract',
+    card_reference_entry: '[1] Gehm M, Brady D. Single-shot compressive spectral imaging with a dual-disperser architecture. Optics Express, 2007. doi:10.1364/OE.15.014013',
+  },
+  {
+    num: 2,
+    display_num: 2,
+    linked_nums: [2],
+    anchor: 'kb-cite-reader-fixture-2',
+    source_name: READER_REGRESSION_SOURCE_NAME,
+    source_path: READER_REGRESSION_SOURCE_PATH,
+    is_inpaper: true,
+    citation_route: 'system_b',
+    routing_reason: 'reader_reference_index',
+    raw: '[2] Duarte M F, Davenport M A, Takhar D, Laska J N, Kelly K E and Baraniuk R G. Single-pixel imaging via compressive sampling. IEEE Signal Processing Magazine, 2008.',
+    cite_fmt: '[2] Duarte M F, Davenport M A, Takhar D, Laska J N, Kelly K E and Baraniuk R G. Single-pixel imaging via compressive sampling. IEEE Signal Processing Magazine, 2008.',
+    title: 'Single-pixel imaging via compressive sampling',
+    authors: 'Duarte M F, Davenport M A, Takhar D, Laska J N, Kelly K E and Baraniuk R G',
+    venue: 'IEEE Signal Processing Magazine',
+    year: '2008',
+    heading_path: 'References',
+    location_label: 'Fixture Paper / References / [2]',
+    citation_context: 'The opened paper cites this upstream work as reference [2].',
+    citation_context_source: 'reader_reference_link',
+    evidence_quote: 'The opened paper cites this upstream work as reference [2].',
+    evidence_source: 'reader_reference_link',
+    card_reference_entry: '[2] Duarte M F, Davenport M A, Takhar D, Laska J N, Kelly K E and Baraniuk R G. Single-pixel imaging via compressive sampling. IEEE Signal Processing Magazine, 2008.',
+  },
+  {
+    num: 3,
+    display_num: 3,
+    linked_nums: [3],
+    anchor: 'kb-cite-reader-fixture-3',
+    source_name: READER_REGRESSION_SOURCE_NAME,
+    source_path: READER_REGRESSION_SOURCE_PATH,
+    is_inpaper: true,
+    citation_route: 'system_b',
+    routing_reason: 'reader_reference_index',
+    raw: '[3] Candes E, Romberg J and Tao T. Robust uncertainty principles: exact signal reconstruction from highly incomplete frequency information. IEEE Transactions on Information Theory, 2006.',
+    cite_fmt: '[3] Candes E, Romberg J and Tao T. Robust uncertainty principles: exact signal reconstruction from highly incomplete frequency information. IEEE Transactions on Information Theory, 2006.',
+    title: 'Robust uncertainty principles: exact signal reconstruction from highly incomplete frequency information',
+    authors: 'Candes E, Romberg J and Tao T',
+    venue: 'IEEE Transactions on Information Theory',
+    year: '2006',
+    heading_path: 'References',
+    location_label: 'Fixture Paper / References / [3]',
+    citation_context: 'The opened paper cites this upstream work as reference [3].',
+    citation_context_source: 'reader_reference_link',
+    evidence_quote: 'The opened paper cites this upstream work as reference [3].',
+    evidence_source: 'reader_reference_link',
+    card_reference_entry: '[3] Candes E, Romberg J and Tao T. Robust uncertainty principles: exact signal reconstruction from highly incomplete frequency information. IEEE Transactions on Information Theory, 2006.',
+  },
+  {
+    num: 4,
+    display_num: 4,
+    linked_nums: [4],
+    anchor: 'kb-cite-reader-fixture-4',
+    source_name: READER_REGRESSION_SOURCE_NAME,
+    source_path: READER_REGRESSION_SOURCE_PATH,
+    is_inpaper: true,
+    citation_route: 'system_b',
+    routing_reason: 'reader_reference_index',
+    raw: '[4] Donoho D L. Compressed sensing. IEEE Transactions on Information Theory, 2006.',
+    cite_fmt: '[4] Donoho D L. Compressed sensing. IEEE Transactions on Information Theory, 2006.',
+    title: 'Compressed sensing',
+    authors: 'Donoho D L',
+    venue: 'IEEE Transactions on Information Theory',
+    year: '2006',
+    heading_path: 'References',
+    location_label: 'Fixture Paper / References / [4]',
+    citation_context: 'The opened paper cites this upstream work as reference [4].',
+    citation_context_source: 'reader_reference_link',
+    evidence_quote: 'The opened paper cites this upstream work as reference [4].',
+    evidence_source: 'reader_reference_link',
+    card_reference_entry: '[4] Donoho D L. Compressed sensing. IEEE Transactions on Information Theory, 2006.',
+  },
+]
+
 export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScenario) {
+  if (scenario === 'citation-links') {
+    return {
+      ok: true,
+      source_path: READER_REGRESSION_SOURCE_PATH,
+      source_name: READER_REGRESSION_SOURCE_NAME,
+      md_path: 'fixture-citation-links.md',
+      markdown: readerRegressionCitationMarkdown,
+      anchors: [] as ReaderDocAnchor[],
+      blocks: [] as ReaderDocBlock[],
+      cite_details: readerRegressionCitationDetails,
+      reference_cite_details: readerRegressionCitationDetails,
+    }
+  }
+  if (scenario === 'render-polish') {
+    return {
+      ok: true,
+      source_path: READER_REGRESSION_SOURCE_PATH,
+      source_name: READER_REGRESSION_SOURCE_NAME,
+      md_path: 'fixture-render-polish.md',
+      markdown: readerRegressionRenderPolishMarkdown,
+      anchors: [] as ReaderDocAnchor[],
+      blocks: [] as ReaderDocBlock[],
+    }
+  }
   if (scenario === 'duplicate-images') {
     return {
       ok: true,
@@ -150,6 +327,28 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
 }
 
 export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario): ReaderOpenPayload {
+  if (scenario === 'citation-links') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Citation Fixture / Introduction',
+      snippet: 'Snapshot compressive imaging often builds on single-shot spectral imaging',
+      highlightSnippet: 'Snapshot compressive imaging often builds on single-shot spectral imaging',
+      strictLocate: false,
+    }
+  }
+
+  if (scenario === 'render-polish') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Render Polish Fixture / Figure Check',
+      snippet: 'Figure 1. Centered preview image.',
+      highlightSnippet: 'Figure 1. Centered preview image.',
+      strictLocate: false,
+    }
+  }
+
   if (scenario === 'duplicate-images') {
     return {
       sourcePath: READER_REGRESSION_SOURCE_PATH,

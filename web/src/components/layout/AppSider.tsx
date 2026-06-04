@@ -34,6 +34,7 @@ import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { Conversation, Project } from '../../api/chat'
+import { READER_SESSION_NAV_CHANNEL } from '../chat/reader/readerTypes'
 import { SettingsDrawer } from './SettingsDrawer'
 
 const { Sider, Content } = Layout
@@ -41,6 +42,23 @@ const { Text } = Typography
 
 const SIDEBAR_WIDTH = 296
 const SIDEBAR_COLLAPSED_WIDTH = 68
+const LINKED_CONVERSATION_QUERY_KEYS = ['conversation', 'conversation_id', 'conv'] as const
+
+function linkedConversationIdFromSearch(search: string) {
+  const params = new URLSearchParams(search)
+  for (const key of LINKED_CONVERSATION_QUERY_KEYS) {
+    const value = String(params.get(key) || '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+function clearLinkedConversationSearch(search: string) {
+  const params = new URLSearchParams(search)
+  for (const key of LINKED_CONVERSATION_QUERY_KEYS) params.delete(key)
+  const next = params.toString()
+  return next ? `?${next}` : ''
+}
 
 function formatRelativeTime(ts: number | undefined, txt: { just_now: string; minutes_ago: string; hours_ago: string; days_ago: string }) {
   if (!ts) return ''
@@ -353,6 +371,53 @@ export function AppLayout({ children }: { children: ReactNode }) {
       message.error(err instanceof Error ? err.message : S.sidebar_load_failed)
     })
   }, [S.sidebar_load_failed, loadSidebarData])
+
+  useEffect(() => {
+    if (loc.pathname !== '/') return
+    const linkedConversationId = linkedConversationIdFromSearch(loc.search)
+    if (!linkedConversationId) return
+    void selectConv(linkedConversationId)
+    const nextSearch = clearLinkedConversationSearch(loc.search)
+    if (nextSearch !== loc.search) {
+      nav({ pathname: '/', search: nextSearch }, { replace: true })
+    }
+  }, [loc.pathname, loc.search, nav, selectConv])
+
+  const openLinkedConversation = useCallback((conversationId: string) => {
+    const cid = String(conversationId || '').trim()
+    if (!cid) return
+    if (loc.pathname !== '/') {
+      nav('/', { replace: false })
+    }
+    void selectConv(cid)
+    try {
+      window.focus()
+    } catch {
+      // Browser focus can be denied; selecting the conversation is enough.
+    }
+  }, [loc.pathname, nav, selectConv])
+
+  useEffect(() => {
+    const handlePayload = (raw: unknown) => {
+      const data = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {}
+      if (String(data.type || '') !== 'reader-return-to-conversation') return
+      openLinkedConversation(String(data.conversationId || ''))
+    }
+    const handleWindowMessage = (event: MessageEvent) => {
+      if (event.origin && event.origin !== window.location.origin) return
+      handlePayload(event.data)
+    }
+    window.addEventListener('message', handleWindowMessage)
+    let channel: BroadcastChannel | null = null
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(READER_SESSION_NAV_CHANNEL)
+      channel.onmessage = (event) => handlePayload(event.data)
+    }
+    return () => {
+      window.removeEventListener('message', handleWindowMessage)
+      channel?.close()
+    }
+  }, [openLinkedConversation])
 
   const menuKey = loc.pathname === '/library' ? 'library' : 'chat'
   const normalizedKeyword = keyword.trim().toLowerCase()

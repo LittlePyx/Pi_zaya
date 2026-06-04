@@ -199,6 +199,7 @@ class PDFConverter:
         self.noise_texts: Set[str] = set()
         # Store optional config attributes
         self.dpi = getattr(cfg, 'dpi', 200)
+        self.figure_dpi = getattr(cfg, 'figure_dpi', 320)
         self.analyze_quality = getattr(cfg, 'analyze_quality', True)
         # Track seen headings to avoid duplicates
         self.seen_headings: Set[str] = set()

@@ -56,7 +56,7 @@ class _DummyPage:
         }
 
     def get_pixmap(self, *, clip, dpi):
-        assert dpi == 200
+        assert dpi == 320
         return _DummyPixmap()
 
 
