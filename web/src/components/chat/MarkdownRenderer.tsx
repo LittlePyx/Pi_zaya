@@ -692,18 +692,27 @@ interface Props {
   inlineTextLocateEnabled?: boolean
   inlineTextTailLocateEnabled?: boolean
   locateSurfacePolicy?: Partial<Record<LocateSurfaceKind, boolean>>
+  onReaderBlockAddToShelf?: (payload: ReaderBlockShelfPayload) => void
   variant?: 'chat' | 'reader'
   readerAnchors?: ReaderDocAnchor[]
   readerBlocks?: ReaderDocBlock[]
 }
 
-type LocateSurfaceKind = 'paragraph' | 'list_item' | 'quote' | 'blockquote' | 'equation' | 'figure'
+export interface ReaderBlockShelfPayload {
+  text: string
+  headingPath?: string
+  blockId?: string
+  anchorId?: string
+  anchorKind?: string
+}
+
+type LocateSurfaceKind = 'paragraph' | 'list_item' | 'quote' | 'blockquote' | 'equation' | 'figure' | 'table'
 
 interface LocateRenderMeta {
   kind: LocateSurfaceKind
   order: number
 }
-type InlineLocateTokenKind = 'quote' | 'figure_ref'
+type InlineLocateTokenKind = 'quote' | 'figure_ref' | 'equation_ref' | 'table_ref'
 interface InlineLocateToken {
   start: number
   end: number
@@ -714,6 +723,9 @@ interface ReaderAnchorToken {
   anchorId: string
   blockId?: string
   kind: string
+  headingPath?: string
+  text?: string
+  number?: number
 }
 
 interface ReaderAnchorAllocator {
@@ -801,6 +813,8 @@ function normalizeInlineLocateTokenPolicy(
   return {
     quote: policy?.quote !== false,
     figure_ref: policy?.figure_ref !== false,
+    equation_ref: policy?.equation_ref !== false,
+    table_ref: policy?.table_ref !== false,
   }
 }
 
@@ -814,6 +828,7 @@ function normalizeLocateSurfacePolicy(
     blockquote: policy?.blockquote !== false,
     equation: policy?.equation !== false,
     figure: policy?.figure !== false,
+    table: policy?.table !== false,
   }
 }
 
@@ -1031,7 +1046,7 @@ function toLocateSnippet(node: ReactNode): string {
 function preferredBlockquoteLocateSnippet(node: ReactNode): string {
   const raw = plainText(node).replace(/\s+/g, ' ').trim() || rawNodeText(node).replace(/\s+/g, ' ').trim()
   if (!raw) return ''
-  const quoteTokens = collectInlineLocateTokens(raw, { quote: true, figure_ref: false })
+  const quoteTokens = collectInlineLocateTokens(raw, { quote: true, figure_ref: false, equation_ref: false, table_ref: false })
     .filter((token) => token.kind === 'quote')
     .sort((a, b) => b.text.length - a.text.length)
   const preferred = String(quoteTokens[0]?.text || '').trim()
@@ -1071,7 +1086,7 @@ function isFigureHostParagraph(node: ReactNode): boolean {
 function preferredFigureCaptionSnippet(node: ReactNode): string {
   const raw = plainText(node).replace(/\s+/g, ' ').trim() || rawNodeText(node).replace(/\s+/g, ' ').trim()
   if (!raw) return ''
-  const tokens = collectInlineLocateTokens(raw, { quote: false, figure_ref: true })
+  const tokens = collectInlineLocateTokens(raw, { quote: false, figure_ref: true, equation_ref: false, table_ref: false })
     .filter((token) => token.kind === 'figure_ref')
     .sort((a, b) => {
       if (b.text.length !== a.text.length) return b.text.length - a.text.length
@@ -1164,6 +1179,32 @@ function collectInlineLocateTokens(
       push(start0, start0 + full.length, full, 'figure_ref')
     }
   }
+  if (effectivePolicy.equation_ref) {
+    for (const pattern of [
+      /\b(?:eq(?:uation)?s?\.?)\s*(?:[（(]\s*)?#?\d{1,4}(?:\s*[)）])?/gi,
+      /(?:公式|方程|式)\s*[（(]?\s*\d{1,4}\s*[)）]?/g,
+    ]) {
+      for (const m of src.matchAll(pattern)) {
+        const full = String(m[0] || '').trim()
+        if (!full) continue
+        const start0 = Number(m.index || 0)
+        push(start0, start0 + full.length, full, 'equation_ref')
+      }
+    }
+  }
+  if (effectivePolicy.table_ref) {
+    for (const pattern of [
+      /\b(?:table|tab\.?)\s*#?\d{1,4}\b/gi,
+      /表\s*\d{1,4}/g,
+    ]) {
+      for (const m of src.matchAll(pattern)) {
+        const full = String(m[0] || '').trim()
+        if (!full) continue
+        const start0 = Number(m.index || 0)
+        push(start0, start0 + full.length, full, 'table_ref')
+      }
+    }
+  }
   raw.sort((a, b) => {
     if (a.start !== b.start) return a.start - b.start
     return (b.end - b.start) - (a.end - a.start)
@@ -1202,6 +1243,9 @@ function createReaderAnchorAllocator(
       anchor_id: item.anchor_id,
       block_id: item.block_id,
       kind: item.kind,
+      heading_path: item.heading_path,
+      text: item.text || item.raw_text,
+      number: item.number,
     }))
     : anchorList
   if (list.length <= 0) return null
@@ -1215,7 +1259,16 @@ function createReaderAnchorAllocator(
     if (!dedupeId || seen.has(dedupeId)) continue
     seen.add(dedupeId)
     const kind = normalizeReaderAnchorKind(String(item?.kind || 'paragraph'))
-    const token: ReaderAnchorToken = { anchorId, blockId: blockId || undefined, kind }
+    const token: ReaderAnchorToken = {
+      anchorId,
+      blockId: blockId || undefined,
+      kind,
+      headingPath: String((item as { heading_path?: string } | null)?.heading_path || '').trim() || undefined,
+      text: String((item as { text?: string } | null)?.text || '').replace(/\s+/g, ' ').trim() || undefined,
+      number: Number.isFinite(Number((item as { number?: number } | null)?.number || 0))
+        ? Math.floor(Number((item as { number?: number } | null)?.number || 0))
+        : undefined,
+    }
     all.push(token)
     const arr = buckets.get(kind) || []
     arr.push(token)
@@ -1297,6 +1350,9 @@ function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): 
           anchorId,
           blockId: blockId || undefined,
           kind,
+          headingPath: String(row?.heading_path || '').trim() || undefined,
+          text: String(row?.text || row?.raw_text || '').replace(/\s+/g, ' ').trim() || undefined,
+          number: Number.isFinite(Number(row?.number || 0)) ? Math.floor(Number(row?.number || 0)) : undefined,
         },
         kind,
         lineStart: Math.floor(lineStart),
@@ -1357,6 +1413,9 @@ function readerAnchorAttrs(anchor: ReaderAnchorToken | null): Record<string, str
     'data-kb-anchor-kind': anchor.kind,
   }
   if (anchor.blockId) attrs['data-kb-block-id'] = anchor.blockId
+  if (Number.isFinite(Number(anchor.number || 0)) && Number(anchor.number || 0) > 0) {
+    attrs['data-kb-anchor-number'] = String(Math.floor(Number(anchor.number || 0)))
+  }
   return attrs
 }
 
@@ -1422,6 +1481,7 @@ function buildMarkdownComponents(
   readerBlockResolver?: ReaderBlockResolver | null,
   S?: Record<string, string>,
   onImagePreview?: (src: string, alt: string) => void,
+  onReaderBlockAddToShelf?: (payload: ReaderBlockShelfPayload) => void,
 ) {
   const effectiveInlineLocateTokenPolicy = normalizeInlineLocateTokenPolicy(inlineLocateTokenPolicy)
   const effectiveLocateSurfacePolicy = normalizeLocateSurfacePolicy(locateSurfacePolicy)
@@ -1477,6 +1537,8 @@ function buildMarkdownComponents(
         ? (S?.locate_badge_quote || '引')
       : kind === 'figure'
         ? (S?.locate_badge_fig || '图')
+      : kind === 'table'
+        ? (S?.locate_badge_table || '表')
         : (S?.locate_badge_source || '原文')
     return (
       <button
@@ -1496,6 +1558,54 @@ function buildMarkdownComponents(
     )
   }
 
+  const renderReaderBlockShelfButton = (
+    anchor: ReaderAnchorToken | null,
+    fallback: ReactNode | string,
+  ) => {
+    if (variant !== 'reader' || !onReaderBlockAddToShelf || !anchor) return null
+    const kind = normalizeReaderAnchorKind(anchor.kind)
+    if (!['figure', 'equation', 'table'].includes(kind)) return null
+    let text = String(anchor.text || '').replace(/\s+/g, ' ').trim()
+    if (!text) {
+      text = typeof fallback === 'string'
+        ? String(fallback || '').replace(/\s+/g, ' ').trim()
+        : toLocateSnippet(fallback)
+    }
+    if (!text) return null
+    const excerpt = text.length <= 1400 ? text : `${text.slice(0, 1400).trimEnd()}...`
+    const label = S?.reader_add_to_shelf || 'Shelf'
+    const kindLabel = kind === 'equation'
+      ? (S?.locate_badge_eq || 'Eq')
+      : kind === 'figure'
+        ? (S?.locate_badge_fig || 'Fig')
+        : (S?.locate_badge_table || 'Tbl')
+    const title = S?.reader_add_to_shelf_title || 'Add to research basket'
+    return (
+      <button
+        type="button"
+        className={`kb-md-reader-block-shelf kb-md-reader-block-shelf-${kind}`}
+        title={title}
+        aria-label={title}
+        data-testid="reader-block-shelf"
+        data-kb-reader-block-kind={kind}
+        onClick={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          onReaderBlockAddToShelf({
+            text: excerpt,
+            headingPath: anchor.headingPath,
+            blockId: anchor.blockId,
+            anchorId: anchor.anchorId,
+            anchorKind: kind,
+          })
+        }}
+      >
+        <span className="kb-md-reader-block-shelf-kind" aria-hidden="true">{kindLabel}</span>
+        <span className="kb-md-reader-block-shelf-text">{label}</span>
+      </button>
+    )
+  }
+
   const decorateInlineLocateAnchors = (
     children: ReactNode,
     meta: LocateRenderMeta,
@@ -1504,6 +1614,8 @@ function buildMarkdownComponents(
     const metaForToken = (kind: InlineLocateTokenKind): LocateRenderMeta => {
       if (kind === 'quote') return { ...meta, kind: 'quote' }
       if (kind === 'figure_ref') return { ...meta, kind: 'figure' }
+      if (kind === 'equation_ref') return { ...meta, kind: 'equation' }
+      if (kind === 'table_ref') return { ...meta, kind: 'table' }
       return meta
     }
     const renderStringNode = (text0: string, keyBase: string): InlineDecorateResult => {
@@ -1622,12 +1734,22 @@ function buildMarkdownComponents(
       )
     },
     table: ({ node, children }: { node?: unknown; children?: ReactNode }) => {
+      const anchor = variant === 'reader' ? pickReaderAnchor(node, ['table']) : null
       const attrs = variant === 'reader'
-        ? readerAnchorAttrs(pickReaderAnchor(node, ['table']))
+        ? readerAnchorAttrs(anchor)
         : undefined
+      const renderOrder = nextLocateRenderOrder()
+      const locateBtn = variant === 'chat'
+        ? renderLocateButton(children, {
+          meta: { kind: 'table', order: renderOrder },
+        })
+        : null
+      const shelfBtn = renderReaderBlockShelfButton(anchor, children)
       return (
-        <div className="kb-table-wrap">
+        <div className={`kb-table-wrap ${locateBtn || shelfBtn ? 'kb-md-table-action-host' : ''}`.trim()}>
           <table {...attrs}>{children}</table>
+          {locateBtn ? <span className="kb-md-table-tail">{locateBtn}</span> : null}
+          {shelfBtn ? <span className="kb-md-reader-block-shelf-tail">{shelfBtn}</span> : null}
         </div>
       )
     },
@@ -1777,9 +1899,11 @@ function buildMarkdownComponents(
           meta: { kind: 'figure', order: nextLocateRenderOrder() },
         })
         : null
+      const anchor = variant === 'reader' ? pickReaderAnchor(node, ['figure']) : null
       const attrs = variant === 'reader'
-        ? readerAnchorAttrs(pickReaderAnchor(node, ['figure']))
+        ? readerAnchorAttrs(anchor)
         : undefined
+      const shelfBtn = renderReaderBlockShelfButton(anchor, figureSnippet)
       const imageAlt = String(alt || 'figure')
       const imageTitle = S?.reader_expand_image || 'Expand image'
       const imageNode = (
@@ -1790,8 +1914,12 @@ function buildMarkdownComponents(
           loading="lazy"
         />
       )
+      const shellClass = [
+        btn || shelfBtn ? 'kb-md-figure-shell' : '',
+        shelfBtn ? 'kb-md-reader-block-action-host' : '',
+      ].filter(Boolean).join(' ') || undefined
       return (
-        <span className={btn ? 'kb-md-figure-shell' : undefined} {...attrs}>
+        <span className={shellClass} {...attrs}>
           {onImagePreview ? (
             <button
               type="button"
@@ -1807,14 +1935,16 @@ function buildMarkdownComponents(
             </a>
           )}
           {btn ? <span className="kb-md-figure-tail">{btn}</span> : null}
+          {shelfBtn ? <span className="kb-md-reader-block-shelf-tail">{shelfBtn}</span> : null}
         </span>
       )
     },
     p: ({ node, children }: { node?: unknown; children?: ReactNode }) => (
       <BlockquoteLocateContext.Consumer>
         {(insideBlockquote) => {
+          const readerAnchor = variant === 'reader' ? pickReaderAnchor(node, ['paragraph']) : null
           const attrs = variant === 'reader'
-            ? readerAnchorAttrs(pickReaderAnchor(node, ['paragraph']))
+            ? readerAnchorAttrs(readerAnchor)
             : undefined
           const renderOrder = nextLocateRenderOrder()
           const meta = { kind: 'paragraph' as const, order: renderOrder }
@@ -1825,6 +1955,19 @@ function buildMarkdownComponents(
           if (variant !== 'chat') {
             const text = plainText(content).replace(/\s+/g, ' ').trim()
             const isReferenceEntry = looksLikeBibliographyEntryText(text)
+            const equationShelfBtn = normalizeReaderAnchorKind(String(readerAnchor?.kind || '')) === 'equation'
+              ? renderReaderBlockShelfButton(readerAnchor, content)
+              : null
+            if (!isReferenceEntry && equationShelfBtn) {
+              return (
+                <p {...attrs} className="kb-md-equation-block kb-md-reader-block-action-host">
+                  <span className="kb-md-equation-inline">
+                    {content}
+                    <span className="kb-md-reader-block-shelf-tail">{equationShelfBtn}</span>
+                  </span>
+                </p>
+              )
+            }
             if (!isReferenceEntry) return <p {...attrs}>{content}</p>
             const refDetail = firstCitationDetailInNode(content, byAnchor) || firstReferenceEntryDetail(text, citationByNum)
             const refDetailForRow = refDetail
@@ -1941,10 +2084,25 @@ function buildMarkdownComponents(
       const displayMath = isDisplayMathClass(cls)
       if (!displayMath) return <div className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</div>
       if (variant === 'reader') {
+        const anchor = pickReaderAnchor(props.node, ['equation'])
+        const attrs = readerAnchorAttrs(anchor)
+        const shelfBtn = renderReaderBlockShelfButton(anchor, children)
         // Display equations are bound at runtime to visible .katex-display nodes.
         // Static line-based binding is too unstable here and can mis-assign them
         // to neighboring paragraph blocks in the browser render path.
-        return <div className={cls || undefined} data-kb-display-equation="1" {...(rest as Record<string, unknown>)}>{children}</div>
+        return (
+          <div
+            className={`${cls || ''} kb-md-equation-block ${shelfBtn ? 'kb-md-reader-block-action-host' : ''}`.trim()}
+            data-kb-display-equation="1"
+            {...(rest as Record<string, unknown>)}
+            {...attrs}
+          >
+            <span className="kb-md-equation-inline">
+              {children}
+              {shelfBtn ? <span className="kb-md-reader-block-shelf-tail">{shelfBtn}</span> : null}
+            </span>
+          </div>
+        )
       }
       const btn = renderLocateButton(children, {
         force: true,
@@ -1966,7 +2124,22 @@ function buildMarkdownComponents(
       const displayMath = isDisplayMathClass(cls)
       if (!displayMath) return <span className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</span>
       if (variant === 'reader') {
-        return <span className={cls || undefined} data-kb-display-equation="1" {...(rest as Record<string, unknown>)}>{children}</span>
+        const anchor = pickReaderAnchor(props.node, ['equation'])
+        const attrs = readerAnchorAttrs(anchor)
+        const shelfBtn = renderReaderBlockShelfButton(anchor, children)
+        return (
+          <span
+            className={`${cls || ''} kb-md-equation-block ${shelfBtn ? 'kb-md-reader-block-action-host' : ''}`.trim()}
+            data-kb-display-equation="1"
+            {...(rest as Record<string, unknown>)}
+            {...attrs}
+          >
+            <span className="kb-md-equation-inline">
+              {children}
+              {shelfBtn ? <span className="kb-md-reader-block-shelf-tail">{shelfBtn}</span> : null}
+            </span>
+          </span>
+        )
       }
       const btn = renderLocateButton(children, {
         force: true,
@@ -1999,6 +2172,7 @@ export function MarkdownRenderer({
   inlineTextLocateEnabled = true,
   inlineTextTailLocateEnabled = false,
   locateSurfacePolicy,
+  onReaderBlockAddToShelf,
   variant = 'chat',
   readerAnchors,
   readerBlocks,
@@ -2056,6 +2230,7 @@ export function MarkdownRenderer({
       setImagePreviewMode('fit')
       setImagePreviewSize(null)
     },
+    onReaderBlockAddToShelf,
   )
   const parsedContract = variant === 'chat' ? parseAnswerContract(renderContent) : null
   const sectionLabelMap: Record<string, string> = {

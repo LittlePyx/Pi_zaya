@@ -382,6 +382,25 @@ test('reader in-paper citations and reference entries open system-b cards', asyn
   await expect(page.getByTestId('reader-citation-shelf-count')).toHaveText('1 citation refs')
 })
 
+test('reader figure and equation blocks can be added directly to the research basket', async ({ page }) => {
+  await openHarness(page, 'strict-quote')
+
+  const equationButton = page.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="equation"]').first()
+  const figureButton = page.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="figure"]').first()
+  await expect(equationButton).toBeVisible()
+  await expect(figureButton).toBeVisible()
+
+  await equationButton.click()
+  await expect(page.getByTestId('reader-selection-shelf-count')).toHaveText('1 selections')
+  await expect(page.getByTestId('reader-selection-shelf-kind-0')).toHaveText('equation')
+  await expect(page.getByTestId('reader-selection-shelf-list')).toContainText('C(r)')
+
+  await figureButton.click()
+  await expect(page.getByTestId('reader-selection-shelf-count')).toHaveText('2 selections')
+  await expect(page.getByTestId('reader-selection-shelf-kind-0')).toHaveText('figure')
+  await expect(page.getByTestId('reader-selection-shelf-list')).toContainText('Figure 1. SCI system pipeline.')
+})
+
 test('equation and figure fixtures resolve through the same structured target contract', async ({ page }) => {
   await openHarness(page, 'equation')
   await expect(page.getByTestId('reader-locate-status')).toHaveText('Equation block')

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { message } from 'antd'
-import { MarkdownRenderer } from './MarkdownRenderer'
+import { MarkdownRenderer, type ReaderBlockShelfPayload } from './MarkdownRenderer'
 import { CitationPopover } from './CitationPopover'
 import { PaperGuideReaderPanel } from './reader/PaperGuideReaderPanel'
 import { useReaderDocument } from './reader/useReaderDocument'
@@ -34,6 +34,7 @@ import {
   clearReaderFocusClasses,
   closestReadableBlock,
   compactLocateHintLabel,
+  orderedEquationReaderBlocks,
   resolveDirectTargetNode,
   resolveStickyHighlightTarget,
   sameHighlightTarget,
@@ -793,6 +794,106 @@ export function PaperGuideReaderDrawer({
     })
   }, [onAddCitationToShelf])
 
+  const addReaderBlockToShelf = useCallback((block: ReaderBlockShelfPayload) => {
+    const text = String(block?.text || '').trim()
+    if (!text || !sourcePath || !onAddSelectionToShelf) return
+    onAddSelectionToShelf({
+      text,
+      sourcePath,
+      sourceName: title,
+      headingPath: String(block.headingPath || '').trim() || undefined,
+      blockId: String(block.blockId || '').trim() || undefined,
+      anchorId: String(block.anchorId || '').trim() || undefined,
+      anchorKind: String(block.anchorKind || '').trim() || undefined,
+      createdAt: Date.now(),
+    })
+  }, [onAddSelectionToShelf, sourcePath, title])
+
+  useEffect(() => {
+    if (!open || !onAddSelectionToShelf || !contentRef.current || !sourcePath) return undefined
+    const root = contentRef.current
+    const equationBlocks = orderedEquationReaderBlocks(readerBlocks)
+    if (equationBlocks.length <= 0) return undefined
+    const equationNodes = Array.from(root.querySelectorAll<HTMLElement>('.katex-display'))
+    if (equationNodes.length <= 0) return undefined
+    const cleanup: Array<() => void> = []
+    const limit = Math.min(equationNodes.length, equationBlocks.length)
+    const label = S.reader_add_to_shelf || 'Shelf'
+    const titleLabel = S.reader_add_to_shelf_title || 'Add to research basket'
+    const kindLabel = S.locate_badge_eq || 'Eq'
+    for (let idx = 0; idx < limit; idx += 1) {
+      const node = equationNodes[idx]
+      const block = equationBlocks[idx]
+      const blockId = String(block?.block_id || '').trim()
+      const anchorId = String(block?.anchor_id || '').trim()
+      if (!node || (!blockId && !anchorId)) continue
+      if (node.querySelector(':scope > .kb-md-reader-block-shelf-tail[data-kb-imperative-equation="1"]')) continue
+      node.classList.add('kb-md-reader-equation-action-host')
+      node.setAttribute('data-kb-block-id', blockId)
+      node.setAttribute('data-kb-anchor-id', anchorId)
+      node.setAttribute('data-kb-anchor-kind', 'equation')
+      const number = Number(block?.number || 0)
+      if (Number.isFinite(number) && number > 0) {
+        node.setAttribute('data-kb-anchor-number', String(Math.floor(number)))
+      }
+      const tail = document.createElement('span')
+      tail.className = 'kb-md-reader-block-shelf-tail'
+      tail.setAttribute('data-kb-imperative-equation', '1')
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'kb-md-reader-block-shelf kb-md-reader-block-shelf-equation'
+      button.title = titleLabel
+      button.setAttribute('aria-label', titleLabel)
+      button.setAttribute('data-testid', 'reader-block-shelf')
+      button.setAttribute('data-kb-reader-block-kind', 'equation')
+      const kindSpan = document.createElement('span')
+      kindSpan.className = 'kb-md-reader-block-shelf-kind'
+      kindSpan.setAttribute('aria-hidden', 'true')
+      kindSpan.textContent = kindLabel
+      const textSpan = document.createElement('span')
+      textSpan.className = 'kb-md-reader-block-shelf-text'
+      textSpan.textContent = label
+      button.append(kindSpan, textSpan)
+      const handleClick = (event: Event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const text = String(block.text || block.raw_text || node.textContent || '').replace(/\s+/g, ' ').trim()
+        if (!text) return
+        onAddSelectionToShelf({
+          text: text.length <= 1400 ? text : `${text.slice(0, 1400).trimEnd()}...`,
+          sourcePath,
+          sourceName: title,
+          headingPath: String(block.heading_path || '').trim() || undefined,
+          blockId: blockId || undefined,
+          anchorId: anchorId || undefined,
+          anchorKind: 'equation',
+          createdAt: Date.now(),
+        })
+      }
+      button.addEventListener('click', handleClick)
+      tail.appendChild(button)
+      node.appendChild(tail)
+      cleanup.push(() => {
+        button.removeEventListener('click', handleClick)
+        tail.remove()
+        node.classList.remove('kb-md-reader-equation-action-host')
+      })
+    }
+    return () => {
+      cleanup.forEach((dispose) => dispose())
+    }
+  }, [
+    S.locate_badge_eq,
+    S.reader_add_to_shelf,
+    S.reader_add_to_shelf_title,
+    markdown,
+    onAddSelectionToShelf,
+    open,
+    readerBlocks,
+    sourcePath,
+    title,
+  ])
+
   const readerMarkdownNode = useMemo(() => (
     <MarkdownRenderer
       content={markdown}
@@ -800,10 +901,11 @@ export function PaperGuideReaderDrawer({
       citeDetails={citeDetails}
       onCitationClick={showReaderCitation}
       onCitationAddToShelf={addReaderCitationToShelf}
+      onReaderBlockAddToShelf={onAddSelectionToShelf ? addReaderBlockToShelf : undefined}
       readerAnchors={readerAnchors}
       readerBlocks={readerBlocks}
     />
-  ), [addReaderCitationToShelf, citeDetails, markdown, readerAnchors, readerBlocks, showReaderCitation])
+  ), [addReaderBlockToShelf, addReaderCitationToShelf, citeDetails, markdown, onAddSelectionToShelf, readerAnchors, readerBlocks, showReaderCitation])
 
   const sourceLabel = [title, activeHeadingPath].filter(Boolean).join(' / ')
   const enrichSessionHighlight = useCallback((highlight: ReaderSessionHighlight): ReaderSessionHighlight => {

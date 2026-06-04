@@ -7108,6 +7108,69 @@ export function MessageList({
               }
               return rawBestScore >= 0.26 ? rawBest : null
             }
+            const resolveStructuredEquationEntry = (
+              snippet: string,
+            ): StructuredLocateResolution | null => {
+              const raw = stripProvenanceNoise(stripMarkdownInline(String(snippet || ''))).trim()
+              if (!raw) return null
+              const eqNumbers = extractEquationNumbersFromText(raw)
+              const equationEntries = provenanceLocateEntries.filter((entry) => {
+                const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
+                const claimType = String(entry.claimType || '').trim().toLowerCase()
+                return anchorKind === 'equation' || claimType === 'formula_claim'
+              })
+              if (equationEntries.length <= 0) return null
+              let best: ProvenanceLocateEntry | null = null
+              let bestScore = Number.NEGATIVE_INFINITY
+              for (const entry of equationEntries) {
+                const claimType = String(entry.claimType || '').trim().toLowerCase()
+                const anchorKind = String(entry.anchorKind || '').trim().toLowerCase()
+                const formulaOrigin = String(entry.formulaOrigin || '').trim().toLowerCase()
+                const locateSurfacePolicy = String(entry.locateSurfacePolicy || '').trim().toLowerCase()
+                const entryText = [
+                  entry.anchorText,
+                  entry.evidenceQuote,
+                  entry.segmentText,
+                  entry.primary?.focusSnippet,
+                  entry.primary?.headingPath,
+                ].filter(Boolean).join(' ')
+                const entryNumbers = Array.from(new Set([
+                  Number(entry.equationNumber || 0),
+                  Number(entry.primary?.anchorNumber || 0),
+                  ...extractEquationNumbersFromText(entryText),
+                ].filter((item) => Number.isFinite(Number(item)) && Number(item) > 0)
+                  .map((item) => Math.floor(Number(item)))))
+                let score = Math.max(
+                  scoreProvenanceSegment(raw, entry.segmentText, entry.snippetKey),
+                  overlapScore(raw, entry.anchorText || entry.segmentText),
+                  overlapScore(raw, entry.evidenceQuote || entry.segmentText),
+                )
+                if (eqNumbers.length > 0) {
+                  const matchedNumber = entryNumbers.some((num) => eqNumbers.includes(num))
+                  if (matchedNumber) score += 1.65
+                  else if (entryNumbers.length > 0) score -= 0.95
+                }
+                if (claimType === 'formula_claim') score += 0.46
+                if (anchorKind === 'equation') score += 0.42
+                if (formulaOrigin === 'source') score += 0.22
+                if (locateSurfacePolicy === 'primary') score += 0.18
+                if (entry.mustLocate || entry.locatePolicy === 'required') score += 0.08
+                if (score > bestScore) {
+                  best = entry
+                  bestScore = score
+                }
+              }
+              const floor = eqNumbers.length > 0 ? 0.72 : 0.5
+              if (!best || bestScore < floor) return null
+              const order = Number(structuredLocateOrderBySegmentId.get(String(best.segmentId || '').trim()) || 0)
+              return {
+                entry: best,
+                order: order > 0
+                  ? order
+                  : 10000 + Math.max(0, provenanceLocateEntries.findIndex((item) => item.segmentId === best.segmentId)),
+                fallback: !(order > 0),
+              }
+            }
             const resolveStructuredQuoteEntry = (
               snippet: string,
               targetKindInput?: string,
@@ -7218,7 +7281,7 @@ export function MessageList({
                   fallback: false,
                 }
               }
-              if (targetKind === 'equation') return null
+              if (targetKind === 'equation') return resolveStructuredEquationEntry(snippet)
               const fallbackEntry = resolveStructuredFallbackLocateEntry(snippet, meta, provenanceLocateEntries)
               const finalEntry = fallbackEntry
               if (!finalEntry || !isStrictStructuredTargetCompatible(finalEntry, targetKind)) return null

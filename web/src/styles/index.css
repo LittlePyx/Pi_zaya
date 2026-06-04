@@ -536,6 +536,10 @@ body.kb-reader-resizing .kb-reader-content {
   max-width: min(100%, 520px);
 }
 
+.kb-markdown .kb-md-reader-block-action-host {
+  position: relative;
+}
+
 .kb-markdown .kb-md-figure-host {
   margin-bottom: 0.3em;
 }
@@ -584,6 +588,15 @@ body.kb-reader-resizing .kb-reader-content {
   padding-right: 2.8rem;
 }
 
+.kb-markdown.kb-markdown-reader .kb-md-equation-inline {
+  padding-right: 4.9rem;
+}
+
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host {
+  position: relative;
+  padding-right: 4.9rem;
+}
+
 .kb-markdown .kb-md-equation-inline :where(.katex-display) {
   margin: 0;
 }
@@ -603,6 +616,73 @@ body.kb-reader-resizing .kb-reader-content {
 .kb-markdown .kb-md-equation-tail .kb-md-locate-inline-btn:hover,
 .kb-markdown .kb-md-equation-tail .kb-md-locate-inline-btn:focus-visible {
   transform: scale(1.02);
+}
+
+.kb-markdown .kb-md-table-action-host {
+  position: relative;
+}
+
+.kb-markdown .kb-md-table-tail {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+}
+
+.kb-markdown .kb-md-reader-block-shelf-tail {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+}
+
+.kb-markdown .kb-md-figure-shell .kb-md-reader-block-shelf-tail {
+  top: 12px;
+  right: 12px;
+}
+
+.kb-markdown .kb-md-equation-inline .kb-md-reader-block-shelf-tail {
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+}
+
+.kb-markdown .kb-md-reader-block-shelf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  color: color-mix(in srgb, var(--accent) 86%, var(--text-main));
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.kb-markdown .kb-md-reader-block-shelf:hover,
+.kb-markdown .kb-md-reader-block-shelf:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 56%, var(--border));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.14);
+}
+
+.kb-markdown .kb-md-reader-block-shelf-kind {
+  opacity: 0.76;
+}
+
+.kb-markdown .kb-md-reader-block-shelf-text {
+  display: inline-block;
 }
 
 .kb-markdown .kb-md-locate-inline-btn {

@@ -1,7 +1,11 @@
 import { useCallback, useMemo, useState } from 'react'
 import { Button } from 'antd'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
-import type { ReaderLocateResult, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
+import type {
+  ReaderLocateResult,
+  ReaderSelectionShelfPayload,
+  ReaderSessionHighlight,
+} from '../components/chat/reader/readerTypes'
 import type { CiteDetail } from '../components/chat/citationState'
 import {
   buildReaderRegressionDocResponse,
@@ -50,6 +54,7 @@ export default function ReaderRegressionPage() {
   const [appendLog, setAppendLog] = useState('')
   const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
   const [readerCitationShelf, setReaderCitationShelf] = useState<CiteDetail[]>([])
+  const [readerSelectionShelf, setReaderSelectionShelf] = useState<ReaderSelectionShelfPayload[]>([])
   const appendSelectionLog = useCallback((text: string) => {
     setAppendLog((current) => (current ? `${current}\n---\n${text}` : text))
   }, [])
@@ -90,6 +95,23 @@ export default function ReaderRegressionPage() {
       return [detail, ...current]
     })
   }, [])
+  const addReaderSelectionToShelf = useCallback((payload: ReaderSelectionShelfPayload) => {
+    setReaderSelectionShelf((current) => {
+      const key = [
+        payload.sourcePath,
+        payload.blockId || payload.anchorId || '',
+        payload.anchorKind || '',
+        payload.text,
+      ].join('|')
+      if (current.some((item) => [
+        item.sourcePath,
+        item.blockId || item.anchorId || '',
+        item.anchorKind || '',
+        item.text,
+      ].join('|') === key)) return current
+      return [payload, ...current]
+    })
+  }, [])
 
   return (
     <div className="flex h-screen min-h-0 flex-col bg-[var(--bg)]">
@@ -109,6 +131,9 @@ export default function ReaderRegressionPage() {
             </span>
             <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-black/55 dark:text-white/55" data-testid="reader-citation-shelf-count">
               {readerCitationShelf.length} citation refs
+            </span>
+            <span className="rounded-full border border-[var(--border)] px-2 py-1 text-xs text-black/55 dark:text-white/55" data-testid="reader-selection-shelf-count">
+              {readerSelectionShelf.length} selections
             </span>
             <Button size="small" onClick={() => setSessionHighlights([])}>
               Clear highlights
@@ -134,6 +159,7 @@ export default function ReaderRegressionPage() {
             onLocateResult={recordLocateResult}
             documentOverride={documentOverride}
             onAddCitationToShelf={addReaderCitationToShelf}
+            onAddSelectionToShelf={addReaderSelectionToShelf}
           />
         </div>
         <aside className="max-h-72 min-h-0 overflow-y-auto bg-[var(--panel)]/35 px-4 py-4 xl:max-h-none">
@@ -159,6 +185,26 @@ export default function ReaderRegressionPage() {
               >
                 {appendLog || '(empty)'}
               </pre>
+            </section>
+            <section className="space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black/40 dark:text-white/40">
+                Reader shelf selections
+              </div>
+              <div className="space-y-2" data-testid="reader-selection-shelf-list">
+                {readerSelectionShelf.length > 0 ? readerSelectionShelf.map((item, idx) => (
+                  <div
+                    key={`${item.blockId || item.anchorId || idx}-${idx}`}
+                    className="rounded-2xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs text-black/70 dark:text-white/70"
+                  >
+                    <div data-testid={`reader-selection-shelf-kind-${idx}`}>{item.anchorKind || 'selection'}</div>
+                    <div>{item.text}</div>
+                  </div>
+                )) : (
+                  <div className="rounded-2xl border border-dashed border-[var(--border)] px-3 py-4 text-xs text-black/45 dark:text-white/45">
+                    No reader selections yet.
+                  </div>
+                )}
+              </div>
             </section>
             <section className="space-y-2">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black/40 dark:text-white/40">
