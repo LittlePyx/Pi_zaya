@@ -29,6 +29,29 @@ def test_chat_store_persists_message_attachments(tmp_path: Path):
     assert messages[0]["attachments"][0]["url"].startswith("/api/chat/uploads/image")
 
 
+def test_chat_store_default_title_updates_only_placeholders(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    draft_id = store.create_conversation("研究问答 · 06/05 14:20")
+    guide_id = store.create_conversation("阅读指导 · Demo Paper", mode="paper_guide")
+    named_id = store.create_conversation("User title")
+
+    store.set_title_if_default(draft_id, "first research question")
+    store.set_title_if_default(guide_id, "should not replace guide")
+    store.set_title_if_default(named_id, "should not replace user title")
+
+    assert store.get_conversation(draft_id)["title"] == "first research question"
+    assert store.get_conversation(guide_id)["title"] == "阅读指导 · Demo Paper"
+    assert store.get_conversation(named_id)["title"] == "User title"
+
+
+def test_chat_store_manual_title_update_renames_non_default(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("first research question")
+
+    assert store.set_title(conv_id, "Manual rename") is True
+    assert store.get_conversation(conv_id)["title"] == "Manual rename"
+
+
 def test_chat_store_persists_message_meta_and_provenance(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")
     conv_id = store.create_conversation()

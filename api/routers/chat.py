@@ -1135,7 +1135,9 @@ def list_refs(conv_id: str):
 
 @router.patch("/conversations/{conv_id}/title")
 def update_title(conv_id: str, body: UpdateTitleBody):
-    get_chat_store().set_title_if_default(conv_id, body.title)
+    ok = get_chat_store().set_title(conv_id, body.title)
+    if not ok:
+        raise HTTPException(404, "conversation not found")
     return {"ok": True}
 
 

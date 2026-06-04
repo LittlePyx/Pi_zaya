@@ -44,6 +44,9 @@ import type {
   ConversionRepairAttempt,
   ConversionQualitySummary,
   LibraryFileItem,
+  LibraryFigureAssetRefreshResponse,
+  LibraryFigureAssetScanItem,
+  LibraryFigureAssetScanResponse,
   LibraryQualityActionDelta,
   LibraryQualityActionHistoryItem,
   LibraryQualityActionSnapshot,
@@ -1205,6 +1208,10 @@ export default function LibraryPage() {
   const [qualityRepairImpact, setQualityRepairImpact] = useState<LibraryQualityRepairImpact | null>(null)
   const [qualityBatchRunning, setQualityBatchRunning] = useState(false)
   const [qualityBatchResult, setQualityBatchResult] = useState<LibraryConversionQualityBatchResponse | null>(null)
+  const [figureAssetScan, setFigureAssetScan] = useState<LibraryFigureAssetScanResponse | null>(null)
+  const [figureAssetScanRunning, setFigureAssetScanRunning] = useState(false)
+  const [figureAssetRefreshResult, setFigureAssetRefreshResult] = useState<LibraryFigureAssetRefreshResponse | null>(null)
+  const [figureAssetRefreshRunning, setFigureAssetRefreshRunning] = useState(false)
   const [qualityRepairRun, setQualityRepairRun] = useState<LibraryQualityRepairRun | null>(null)
   const [qualityRepairAdvancing, setQualityRepairAdvancing] = useState(false)
   const [qualityRepairHistory, setQualityRepairHistory] = useState<Record<string, QualityRepairHistoryRecord>>(() => loadQualityRepairHistory())
@@ -1642,6 +1649,32 @@ export default function LibraryPage() {
       : shelfMetadataBackfillScan
         ? (Number(shelfMetadataBackfillScan.needs_repair || 0) > 0 ? 'warning' : 'good')
         : 'unknown'
+  const figureAssetTone = figureAssetScanRunning || figureAssetRefreshRunning
+    ? 'warning'
+    : figureAssetScan
+      ? (
+          normalizeTextValue(figureAssetScan.status).toLowerCase() === 'error'
+            ? 'error'
+            : Number(figureAssetScan.docs_with_issues || 0) > 0 || Number(figureAssetScan.refresh_recommended || 0) > 0
+              ? 'warning'
+              : 'good'
+        )
+      : 'unknown'
+  const figureAssetIssueStats = useMemo(
+    () => Object.entries(figureAssetScan?.issue_counts || {})
+      .map(([name, count]) => ({ name, count: Number(count || 0) }))
+      .filter((item) => item.name && item.count > 0)
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+      .slice(0, 6),
+    [figureAssetScan],
+  )
+  const figureAssetPreviewItems = useMemo<LibraryFigureAssetScanItem[]>(
+    () => (Array.isArray(figureAssetScan?.items) ? figureAssetScan.items : [])
+      .filter((item) => item && (Number(item.issue_count || 0) > 0 || Boolean(item.refresh_recommended)))
+      .slice(0, 5),
+    [figureAssetScan],
+  )
+  const figureAssetRefreshableCount = Number(figureAssetScan?.refresh_recommended || 0)
   const qualityRerunSummary = backendQualityOverview?.rerun_summary
   const qualityFailureCases = useMemo<LibraryQualityFailureCase[]>(
     () => (Array.isArray(backendQualityOverview?.failure_cases) ? backendQualityOverview.failure_cases : [])
@@ -3650,6 +3683,68 @@ export default function LibraryPage() {
     }
   }
 
+  const runFigureAssetQualityScan = async (includeAll = false) => {
+    setFigureAssetScanRunning(true)
+    try {
+      const res = await libraryApi.figureAssetQualityScan({
+        limit: 1000,
+        include_all: includeAll,
+      })
+      setFigureAssetScan(res)
+      setFigureAssetRefreshResult(null)
+      if (Number(res.refresh_recommended || 0) > 0) {
+        message.warning(`Figure asset scan found ${res.refresh_recommended} sources to refresh`)
+      } else {
+        message.success(`Figure asset scan checked ${res.scanned} sources`)
+      }
+      return res
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Figure asset scan failed')
+      return null
+    } finally {
+      setFigureAssetScanRunning(false)
+    }
+  }
+
+  const refreshFigureAssets = async () => {
+    setFigureAssetRefreshRunning(true)
+    try {
+      const sourceItems = figureAssetScan
+        ? (figureAssetScan.items || []).filter((item) => Boolean(item.refresh_recommended))
+        : []
+      const sources = sourceItems.map((item) => ({
+        source_path: item.md_path,
+        source_name: item.source_name || item.pdf_name,
+      })).filter((item) => item.source_path || item.source_name)
+      const res = await libraryApi.refreshFigureAssets({
+        sources,
+        limit: Math.max(1000, sources.length || 0),
+        speed_mode: CONVERT_MODE,
+        replace: true,
+        target_dpi: figureAssetScan?.target_dpi,
+      })
+      setFigureAssetRefreshResult(res)
+      if (Number(res.enqueued || 0) > 0) {
+        message.success(`Figure asset refresh queued: ${res.enqueued}`)
+        store.startProgressStream()
+      } else if (Number(res.skipped_busy || 0) > 0) {
+        message.warning(`Figure asset refresh skipped busy sources: ${res.skipped_busy}`)
+      } else if (Number(res.failed || 0) > 0) {
+        message.error(`Figure asset refresh failed: ${res.failed}`)
+      } else {
+        message.info('No figure assets need refresh right now')
+      }
+      await store.loadFiles(scope)
+      await store.loadQualityOverview('all')
+      return res
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : 'Figure asset refresh failed')
+      return null
+    } finally {
+      setFigureAssetRefreshRunning(false)
+    }
+  }
+
   const handleAdvanceQualityRepairRun = async () => {
     const runId = normalizeTextValue(qualityRepairRun?.run_id)
     if (!runId) return
@@ -5436,6 +5531,105 @@ export default function LibraryPage() {
                 onClick={() => { void refreshShelfMetadataBackfillState(false) }}
               >
                 Refresh
+              </Button>
+            </div>
+          </div>
+          <div
+            className={`kb-lib-quality-figure-assets is-${figureAssetTone}`}
+            data-testid="library-figure-assets-health"
+          >
+            <div className="kb-lib-quality-figure-assets-head">
+              <div>
+                <Text className="kb-lib-quality-report-section-title">Figure assets</Text>
+                <strong>
+                  {figureAssetScan
+                    ? `${Number(figureAssetScan.refresh_recommended || 0)}/${Number(figureAssetScan.scanned || 0)} refresh`
+                    : 'Not scanned'}
+                </strong>
+              </div>
+              <Tag color={figureAssetScanRunning || figureAssetRefreshRunning ? 'processing' : figureAssetTone === 'good' ? 'success' : figureAssetTone === 'error' ? 'error' : figureAssetTone === 'warning' ? 'warning' : 'default'}>
+                {figureAssetScanRunning
+                  ? 'Scanning'
+                  : figureAssetRefreshRunning
+                    ? 'Queueing'
+                    : figureAssetTone === 'unknown'
+                      ? 'Idle'
+                      : qualityStatusText(figureAssetTone, S)}
+              </Tag>
+            </div>
+            <div className="kb-lib-quality-figure-assets-grid">
+              <span>
+                <strong>{Number(figureAssetScan?.scanned || 0)}</strong>
+                <em>sources scanned</em>
+              </span>
+              <span>
+                <strong>{Number(figureAssetScan?.figures || 0)}</strong>
+                <em>figures</em>
+              </span>
+              <span>
+                <strong>{Number(figureAssetScan?.docs_with_issues || 0)}</strong>
+                <em>issue docs</em>
+              </span>
+              <span>
+                <strong>{figureAssetRefreshableCount}</strong>
+                <em>refresh queue</em>
+              </span>
+            </div>
+            {figureAssetIssueStats.length > 0 ? (
+              <div className="kb-lib-quality-figure-assets-fields" data-testid="library-figure-assets-issues">
+                {figureAssetIssueStats.map((item) => (
+                  <em key={item.name}>{item.name} x{item.count}</em>
+                ))}
+              </div>
+            ) : null}
+            {figureAssetPreviewItems.length > 0 ? (
+              <div className="kb-lib-quality-figure-assets-list" data-testid="library-figure-assets-list">
+                {figureAssetPreviewItems.map((item) => {
+                  const issueCodes = Object.keys(item.issue_counts || {}).filter((code) => Number(item.issue_counts?.[code] || 0) > 0)
+                  const firstIssue = item.issues?.[0]
+                  return (
+                    <div key={item.md_path || item.pdf_name || item.source_name} className="kb-lib-quality-figure-assets-row">
+                      <span title={item.source_name || item.pdf_name || item.md_path}>{item.source_name || item.pdf_name || 'Converted source'}</span>
+                      <strong>{issueCodes.slice(0, 3).join(' / ') || firstIssue?.code || 'issue'}</strong>
+                      <em>{firstIssue?.message || `${item.issue_count} issue(s)`}</em>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : null}
+            {figureAssetRefreshResult ? (
+              <div className="kb-lib-quality-figure-assets-result" data-testid="library-figure-assets-refresh-result">
+                <span>queued <strong>{Number(figureAssetRefreshResult.enqueued || 0)}</strong></span>
+                <span>busy <strong>{Number(figureAssetRefreshResult.skipped_busy || 0)}</strong></span>
+                <span>failed <strong>{Number(figureAssetRefreshResult.failed || 0)}</strong></span>
+              </div>
+            ) : null}
+            <div className="kb-lib-quality-figure-assets-actions">
+              <Button
+                size="small"
+                loading={figureAssetScanRunning}
+                disabled={figureAssetRefreshRunning}
+                onClick={() => { void runFigureAssetQualityScan(false) }}
+              >
+                Scan
+              </Button>
+              <Button
+                size="small"
+                type="text"
+                loading={figureAssetScanRunning}
+                disabled={figureAssetRefreshRunning}
+                onClick={() => { void runFigureAssetQualityScan(true) }}
+              >
+                Show all
+              </Button>
+              <Button
+                size="small"
+                className="kb-lib-quality-domain-action"
+                loading={figureAssetRefreshRunning}
+                disabled={figureAssetScanRunning || (figureAssetScan !== null && figureAssetRefreshableCount <= 0)}
+                onClick={() => { void refreshFigureAssets() }}
+              >
+                Refresh flagged
               </Button>
             </div>
           </div>

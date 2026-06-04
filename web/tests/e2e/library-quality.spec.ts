@@ -756,6 +756,145 @@ test.beforeEach(async ({ page }) => {
       }),
     })
   })
+  await page.route('**/api/library/quality/figure-assets/scan', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        target_count: 3,
+        limit: 1000,
+        status: 'error',
+        scanned: 3,
+        figures: 7,
+        docs_with_issues: 2,
+        refresh_recommended: 2,
+        issue_counts: {
+          missing_asset: 1,
+          low_resolution: 1,
+          duplicate_asset: 2,
+          suspicious_crop: 1,
+        },
+        severity_counts: { error: 1, warning: 4 },
+        target_dpi: 320,
+        failed: 0,
+        errors: [],
+        items: [
+          {
+            ok: true,
+            status: 'error',
+            source_name: 'Broken conversion',
+            pdf_name: brokenName,
+            pdf_path: `F:\\kb\\pdfs\\${brokenName}`,
+            md_path: 'F:\\kb\\md\\broken\\broken.en.md',
+            assets_dir: 'F:\\kb\\md\\broken\\assets',
+            source_pdf_path: `F:\\kb\\pdfs\\${brokenName}`,
+            source_pdf_available: true,
+            target_dpi: 320,
+            figures: 2,
+            issue_count: 2,
+            issue_counts: { missing_asset: 1, low_resolution: 1 },
+            severity_counts: { error: 1, warning: 1 },
+            refresh_recommended: true,
+            issues: [
+              {
+                code: 'missing_asset',
+                severity: 'error',
+                asset_name: 'page_1_fig_2.png',
+                page: 1,
+                figure_number: 2,
+                message: 'figure asset is missing or too small to be a valid image',
+              },
+              {
+                code: 'low_resolution',
+                severity: 'warning',
+                asset_name: 'page_1_fig_1.png',
+                page: 1,
+                figure_number: 1,
+                message: 'figure asset was rendered below the configured figure DPI',
+                actual_width: 160,
+                actual_height: 160,
+                expected_width: 320,
+                expected_height: 320,
+                estimated_dpi: 160,
+              },
+            ],
+            assets: [],
+          },
+          {
+            ok: true,
+            status: 'warning',
+            source_name: 'Weak anchors',
+            pdf_name: weakName,
+            pdf_path: `F:\\kb\\pdfs\\${weakName}`,
+            md_path: 'F:\\kb\\md\\weak\\weak.en.md',
+            assets_dir: 'F:\\kb\\md\\weak\\assets',
+            source_pdf_path: `F:\\kb\\pdfs\\${weakName}`,
+            source_pdf_available: true,
+            target_dpi: 320,
+            figures: 3,
+            issue_count: 3,
+            issue_counts: { duplicate_asset: 2, suspicious_crop: 1 },
+            severity_counts: { warning: 3 },
+            refresh_recommended: true,
+            issues: [
+              {
+                code: 'duplicate_asset',
+                severity: 'warning',
+                asset_name: 'page_2_fig_1.png',
+                page: 2,
+                figure_number: 3,
+                message: 'multiple figure assets have identical image bytes',
+                duplicates: ['page_2_fig_1.png', 'page_2_fig_2.png'],
+              },
+              {
+                code: 'suspicious_crop',
+                severity: 'warning',
+                asset_name: 'page_2_fig_3.png',
+                page: 2,
+                figure_number: 4,
+                message: 'saved crop is much smaller than the detected visual figure box',
+              },
+            ],
+            assets: [],
+          },
+        ],
+      }),
+    })
+  })
+  await page.route('**/api/library/quality/figure-assets/refresh', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 2,
+        scanned: 2,
+        figures: 5,
+        docs_with_issues: 2,
+        refresh_recommended: 2,
+        issue_counts: { missing_asset: 1, low_resolution: 1, duplicate_asset: 2, suspicious_crop: 1 },
+        severity_counts: { error: 1, warning: 4 },
+        enqueued: 2,
+        skipped_busy: 1,
+        failed: 0,
+        errors: [],
+        items: (payload.sources || []).map((source, idx) => ({
+          source_name: source.source_name || '',
+          pdf_name: idx === 0 ? brokenName : weakName,
+          pdf_path: `F:\\kb\\pdfs\\${idx === 0 ? brokenName : weakName}`,
+          md_path: source.source_path || '',
+          issue_count: idx === 0 ? 2 : 3,
+          issue_codes: idx === 0 ? ['missing_asset', 'low_resolution'] : ['duplicate_asset', 'suspicious_crop'],
+          enqueued: true,
+          skipped_busy: idx === 1,
+          task_id: `fig-refresh-${idx + 1}`,
+          error: idx === 1 ? 'already queued or running' : '',
+        })),
+      }),
+    })
+  })
   await page.route('**/api/library/quality/repair-runs**', async (route) => {
     const url = route.request().url()
     const runId = (url.split('/quality/repair-runs/')[1]?.split('/advance')[0]?.split(/[?#]/)[0] || 'run-repair-1')
@@ -1420,6 +1559,27 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('24/42')
   await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('authors x8')
   await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('preheated')
+  await expect(page.getByTestId('library-figure-assets-health')).toContainText('Figure assets')
+  await expect(page.getByTestId('library-figure-assets-health')).toContainText('Not scanned')
+  const figureScanRequest = page.waitForRequest('**/api/library/quality/figure-assets/scan')
+  await page.getByTestId('library-figure-assets-health').getByRole('button', { name: 'Scan' }).click()
+  await expect.poll(async () => {
+    const payload = (await figureScanRequest).postDataJSON() as { include_all?: boolean }
+    return payload.include_all
+  }).toBe(false)
+  await expect(page.getByTestId('library-figure-assets-health')).toContainText('2/3 refresh')
+  await expect(page.getByTestId('library-figure-assets-issues')).toContainText('missing_asset x1')
+  await expect(page.getByTestId('library-figure-assets-issues')).toContainText('duplicate_asset x2')
+  await expect(page.getByTestId('library-figure-assets-list')).toContainText('Broken conversion')
+  await expect(page.getByTestId('library-figure-assets-list')).toContainText('figure asset is missing')
+  const figureRefreshRequest = page.waitForRequest('**/api/library/quality/figure-assets/refresh')
+  await page.getByTestId('library-figure-assets-health').getByRole('button', { name: 'Refresh flagged' }).click()
+  await expect.poll(async () => {
+    const payload = (await figureRefreshRequest).postDataJSON() as { sources?: Array<{ source_path?: string }> }
+    return payload.sources?.length || 0
+  }).toBe(2)
+  await expect(page.getByTestId('library-figure-assets-refresh-result')).toContainText('queued')
+  await expect(page.getByTestId('library-figure-assets-refresh-result')).toContainText('2')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Feature health')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Paper Guide')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Literature basket')

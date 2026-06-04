@@ -4,9 +4,16 @@ import sqlite3
 import time
 import uuid
 import json
+import re
 from pathlib import Path
 
 DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
+
+
+_DEFAULT_CONVERSATION_TITLE_RE = re.compile(
+    r"^(?:新对话|New Chat|研究问答\s*[·:：-]\s*[\d:/\-\s]+|Research QA\s*[·:：-]\s*[\d:/\-\s]+)$",
+    flags=re.IGNORECASE,
+)
 
 
 def _normalize_conversation_mode(mode: str) -> str:
@@ -14,6 +21,13 @@ def _normalize_conversation_mode(mode: str) -> str:
     if m in {"paper_guide", "normal"}:
         return m
     return "normal"
+
+
+def _is_default_conversation_title(title: str) -> bool:
+    text = str(title or "").strip()
+    if not text:
+        return True
+    return bool(_DEFAULT_CONVERSATION_TITLE_RE.match(text))
 
 
 class ChatStore:
@@ -1500,7 +1514,7 @@ class ChatStore:
             row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conv_id,)).fetchone()
             if not row:
                 return
-            if (row["title"] or "").strip() not in ("新对话", ""):
+            if not _is_default_conversation_title(str(row["title"] or "")):
                 return
             now = time.time()
             conn.execute(
@@ -1509,3 +1523,21 @@ class ChatStore:
             )
             project_id = self._touch_conversation_active(conn, conv_id, now)
             self._archive_excess_conversations(conn, project_id=project_id)
+
+    def set_title(self, conv_id: str, new_title: str) -> bool:
+        cid = (conv_id or "").strip()
+        title = (new_title or "").replace("\n", " ").strip()[:80]
+        if not cid or not title:
+            return False
+        now = time.time()
+        with self._connect() as conn:
+            row = conn.execute("SELECT project_id FROM conversations WHERE id = ?", (cid,)).fetchone()
+            if not row:
+                return False
+            conn.execute(
+                "UPDATE conversations SET title = ?, updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
+                (title, now, cid),
+            )
+            project_id = str(row["project_id"] or "").strip() or None
+            self._archive_excess_conversations(conn, project_id=project_id)
+        return True

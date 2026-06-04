@@ -112,6 +112,20 @@ const REFS_PERF_LIMIT = 720
 const SIDEBAR_CONVERSATION_LIMIT = 80
 const MESSAGE_PAGE_SIZE = 24
 
+function conversationDraftTimestamp() {
+  const d = new Date()
+  const mm = `${d.getMonth() + 1}`.padStart(2, '0')
+  const dd = `${d.getDate()}`.padStart(2, '0')
+  const hh = `${d.getHours()}`.padStart(2, '0')
+  const min = `${d.getMinutes()}`.padStart(2, '0')
+  return `${mm}/${dd} ${hh}:${min}`
+}
+
+function buildDefaultConversationTitle(locale: string) {
+  const prefix = locale.toLowerCase().startsWith('zh') ? '研究问答' : 'Research QA'
+  return `${prefix} · ${conversationDraftTimestamp()}`
+}
+
 function nowMs() {
   try {
     return performance.now()
@@ -1303,7 +1317,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   createConversation: async () => {
     const projectId = get().activeProjectId
     const locale = useSettingsStore.getState().uiLocale
-    const defaultTitle = locale === 'zh' ? zh.default_new_chat_title : en.default_new_chat_title
+    const defaultTitle = buildDefaultConversationTitle(locale)
     const { id } = await chatApi.createConversation(defaultTitle, projectId)
     await get().loadSidebarData()
     stopMessagePostprocessPolling()
