@@ -9,6 +9,7 @@ from api import reference_metadata_quality as mq
 from api.main import app
 from api.routers import library as library_router
 from api.routers import references as references_router
+from kb.library_store import LibraryStore
 
 
 class _ImmediateThread:
@@ -283,6 +284,59 @@ def test_bibliometrics_route_enriches_ready_metadata_when_summary_missing(tmp_pa
     assert cached["summary_source"] == "abstract"
 
 
+def test_bibliometrics_route_prefers_local_markdown_abstract_for_shelf_summary(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "# Fast hyperspectral single-pixel imaging",
+                "",
+                "## Abstract",
+                "This paper proposes a frequency-division multiplexed illumination method for fast hyperspectral single-pixel imaging. "
+                "The method reconstructs spectral images from multiplexed measurements and validates improved acquisition speed.",
+                "",
+                "## References",
+                "[1] Other work.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_enrich(detail):
+        return dict(detail)
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "local-summary",
+                "source_path": str(md_path),
+                "title": "Fast hyperspectral single-pixel imaging",
+                "authors": "Jiang X, Li Z",
+                "venue": "Optics Express",
+                "year": "2022",
+                "doi": "10.1364/oe.458742",
+                "summary_line": "This citation supports the current answer.",
+                "summary_source": "citation_context",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary_source"] == "abstract"
+    assert payload["summary_provider"] == "local_markdown"
+    assert payload["summary_quality"]["status"] == "grounded"
+    assert "frequency-division multiplexed illumination" in payload["summary_line"]
+    assert payload["metadata_export_acceptance"]["summary_export_ready"] is True
+
+
 def test_bibliometrics_route_attaches_quality_contract_to_enriched_result(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
@@ -322,6 +376,112 @@ def test_bibliometrics_route_attaches_quality_contract_to_enriched_result(tmp_pa
     assert payload["metadata_export_acceptance"]["export_ready"] is True
     assert payload["metadata_repair_status"] == "ready"
     assert payload["doi"] == "10.1109/TASSP.1988.1164940"
+
+
+def test_bibliometrics_route_reports_local_library_doi_match(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    library_db = tmp_path / "library.sqlite3"
+    pdf_path = tmp_path / "papers" / "Fast hyperspectral single-pixel imaging.pdf"
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    LibraryStore(library_db).upsert(
+        "sha1-local-oe",
+        pdf_path,
+        citation_meta={
+            "title": "Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination",
+            "authors": "Jiang X, Li Z, Du G, et al",
+            "venue": "Optics Express",
+            "year": "2022",
+            "doi": "10.1364/oe.458742",
+            "doi_url": "https://doi.org/10.1364/oe.458742",
+        },
+    )
+
+    def fake_enrich(detail):
+        return dict(detail)
+
+    monkeypatch.setattr(
+        references_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=db_dir, library_db_path=library_db),
+    )
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "oe-local",
+                "anchor": "ref-184",
+                "source_path": "current-paper.md",
+                "title": "Fast hyperspectral single-pixel imaging via frequency-division multiplexed illumination",
+                "authors": "Jiang X, Li Z, Du G, et al",
+                "venue": "Optics Express",
+                "year": "2022",
+                "doi": "https://doi.org/10.1364/oe.458742",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["library_match_status"] == "in_library"
+    assert payload["library_match_method"] == "doi"
+    assert payload["library_match_path"] == str(pdf_path)
+    assert payload["library_match"]["matched"] is True
+    assert payload["library_match"]["confidence"] >= 0.99
+
+
+def test_bibliometrics_route_does_not_treat_inpaper_source_as_upstream_library_match(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    library_db = tmp_path / "library.sqlite3"
+    current_pdf = tmp_path / "papers" / "Current paper.pdf"
+    current_pdf.parent.mkdir(parents=True, exist_ok=True)
+    current_pdf.write_bytes(b"%PDF-1.4\n")
+    LibraryStore(library_db).upsert(
+        "sha1-current",
+        current_pdf,
+        citation_meta={
+            "title": "Current paper already in the local library",
+            "year": "2025",
+            "doi": "10.0000/current-paper",
+        },
+    )
+
+    def fake_enrich(detail):
+        return dict(detail)
+
+    monkeypatch.setattr(
+        references_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=db_dir, library_db_path=library_db),
+    )
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", fake_enrich)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "meta": {
+                "key": "system-b-upstream",
+                "anchor": "ref-upstream",
+                "is_inpaper": True,
+                "source_path": str(current_pdf),
+                "source_name": current_pdf.name,
+                "title": "Different upstream method without a local PDF",
+                "year": "2021",
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["library_match"]["matched"] is False
+    assert payload["library_match_status"] in {"not_in_library", "unknown"}
+    assert payload.get("library_match_path", "") == ""
 
 
 def test_shelf_metadata_backfill_route_scans_and_repairs_reference_index(tmp_path, monkeypatch):

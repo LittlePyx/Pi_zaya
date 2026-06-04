@@ -275,6 +275,7 @@ export function useReaderLocateEngine({
     let scrollTimerIds: number[] = []
     let retryTimer = 0
     let observer: MutationObserver | null = null
+    let userInterruptedAutoScroll = false
     // Strict locate may need more time for KaTeX and large markdown to fully render/bind anchors.
     const deadline = Date.now() + (strictLocate ? 6500 : 1800)
     const scheduleLocate = (delayMs = 0) => {
@@ -302,10 +303,14 @@ export function useReaderLocateEngine({
       scrollRafIds = []
       scrollTimerIds = []
     }
+    const cancelAutoScrollForUserIntent = () => {
+      userInterruptedAutoScroll = true
+      clearScheduledScrolls()
+    }
     const scheduleReliableScroll = (root: HTMLElement, target: HTMLElement, force = false) => {
       clearScheduledScrolls()
       const run = () => {
-        if (cancelled) return
+        if (cancelled || userInterruptedAutoScroll) return
         scrollReaderTargetIntoView(root, target, { force })
       }
       const first = window.requestAnimationFrame(() => {
@@ -318,14 +323,6 @@ export function useReaderLocateEngine({
         const timer = window.setTimeout(run, delay)
         scrollTimerIds.push(timer)
       })
-    }
-    const needsComfortScroll = (root: HTMLElement, target: HTMLElement) => {
-      const rootRect = root.getBoundingClientRect()
-      const targetRect = target.getBoundingClientRect()
-      if (rootRect.height <= 0 || targetRect.height <= 0) return true
-      const topPadding = Math.max(20, Math.min(52, root.clientHeight * 0.08))
-      const comfortableBottom = rootRect.top + Math.max(180, root.clientHeight * 0.55)
-      return targetRect.top < rootRect.top + topPadding || targetRect.top > comfortableBottom
     }
     const retryLocate = () => {
       if (Date.now() >= deadline) return false
@@ -737,7 +734,7 @@ export function useReaderLocateEngine({
         strictLocate,
       }
       const autoScrollKey = `${locateRequestId}::${activeAltIndex}`
-      if (lastAutoScrollKeyRef.current !== autoScrollKey || needsComfortScroll(root, focusNode)) {
+      if (lastAutoScrollKeyRef.current !== autoScrollKey) {
         lastAutoScrollKeyRef.current = autoScrollKey
         const forceScroll = Boolean(usedHeadingFallback || (!activeFocusSnippet && activeHeadingPath))
         scheduleReliableScroll(root, focusNode, forceScroll)
@@ -817,6 +814,10 @@ export function useReaderLocateEngine({
     }
     const root = contentRef.current
     if (root) {
+      root.addEventListener('wheel', cancelAutoScrollForUserIntent, { passive: true })
+      root.addEventListener('touchstart', cancelAutoScrollForUserIntent, { passive: true })
+      root.addEventListener('pointerdown', cancelAutoScrollForUserIntent, { passive: true })
+      root.addEventListener('keydown', cancelAutoScrollForUserIntent)
       observer = new MutationObserver(() => {
         if (cancelled) return
         scheduleLocate(20)
@@ -833,6 +834,10 @@ export function useReaderLocateEngine({
       cancelled = true
       finishLocate()
       clearScheduledScrolls()
+      root?.removeEventListener('wheel', cancelAutoScrollForUserIntent)
+      root?.removeEventListener('touchstart', cancelAutoScrollForUserIntent)
+      root?.removeEventListener('pointerdown', cancelAutoScrollForUserIntent)
+      root?.removeEventListener('keydown', cancelAutoScrollForUserIntent)
     }
   }, [
     open,

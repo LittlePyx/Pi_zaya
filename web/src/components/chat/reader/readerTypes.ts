@@ -95,3 +95,25 @@ export interface ReaderSessionHighlight {
   startReadableIndex?: number
   endReadableIndex?: number
 }
+
+export const READER_SELECTION_SHELF_EVENT = 'kb:reader-selection-shelf'
+export const READER_SELECTION_SHELF_CHANNEL = 'kb:reader-selection-shelf'
+
+export interface ReaderSelectionShelfPayload {
+  text: string
+  sourcePath: string
+  sourceName?: string
+  headingPath?: string
+  blockId?: string
+  anchorId?: string
+  anchorKind?: string
+  startOffset?: number
+  endOffset?: number
+  occurrence?: number
+  readableIndex?: number
+  documentOccurrence?: number
+  startReadableIndex?: number
+  endReadableIndex?: number
+  conversationId?: string
+  createdAt?: number
+}

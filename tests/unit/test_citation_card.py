@@ -822,3 +822,53 @@ def test_system_b_card_view_contract_separates_context_from_reference_entry() ->
     assert "reference" not in section_ids
     assert "The current paper cites" in section_text
     assert "Macias-Garza, F." not in view["summary"]
+
+
+def test_citation_card_contract_uses_english_locale_for_system_a_review_copy() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "PILN.pdf",
+            "heading_path": "Abstract",
+            "answer_claim": "PILN targets low-sampling single-pixel imaging.",
+            "evidence_quote": "The part-based image-loop network reconstructs single-pixel images at low sampling rates.",
+            "location_label": "Abstract",
+            "binding_status": "candidate",
+            "binding_confidence": 0.56,
+        },
+        locale="en",
+    )
+
+    assert detail["render_locale"] == "en"
+    assert detail["card_view"]["header"]["kicker"] == "Answer evidence"
+    assert detail["card_takeaway_label"] == "Evidence focus"
+    assert detail["card_claim_label"] == "Answer point"
+    assert detail["card_locator_label"] == "Source location"
+    assert detail["card_evidence_label"] == "Source evidence"
+    assert detail["card_support_label"] == "Evidence reliability"
+    assert detail["card_quality_label"] == "Candidate evidence"
+    assert detail["card_warning"] == "This link is candidate evidence. Open the source to confirm the context."
+
+
+def test_citation_card_contract_uses_english_locale_for_system_b_trace_copy() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": True,
+            "source_name": "Current.pdf",
+            "raw": "[12] Doe, J. Compressive sampling for single-pixel imaging. Optics Letters (2010).",
+            "answer_claim": "The answer traces compressive sampling background through the current paper.",
+            "location_label": "Related Work",
+        },
+        locale="en",
+    )
+
+    assert detail["render_locale"] == "en"
+    assert detail["card_view"]["header"]["kicker"] == "Upstream citation"
+    assert detail["card_title"] != "上游参考文献"
+    assert detail["card_takeaway_label"] == "Upstream role"
+    assert detail["card_claim_label"] == "Answer sentence"
+    assert detail["card_locator_label"] == "Where current paper cites it"
+    assert detail["card_evidence_label"] == "Citation context"
+    assert detail["card_reference_label"] == "Upstream reference entry"
+    assert detail["system_b_trace_steps"] == ["Answer sentence", "Citation context to check", "Upstream reference"]
+    assert "citation context" in detail["system_b_trace_reason"].lower()

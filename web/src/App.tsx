@@ -14,6 +14,7 @@ const MessageListRegressionPage = lazy(() => import('./pages/MessageListRegressi
 const RefsPanelRegressionPage = lazy(() => import('./pages/RefsPanelRegressionPage'))
 const ReaderRegressionPage = lazy(() => import('./pages/ReaderRegressionPage'))
 const ReaderSplitRegressionPage = lazy(() => import('./pages/ReaderSplitRegressionPage'))
+const ReaderPage = lazy(() => import('./pages/ReaderPage'))
 const ResearchQaReplayPage = lazy(() => import('./pages/ResearchQaReplayPage'))
 
 function App() {
@@ -39,6 +40,7 @@ function App() {
             <Route path="/__reader_test__" element={<ReaderRegressionPage />} />
             <Route path="/__reader_split_test__" element={<ReaderSplitRegressionPage />} />
             <Route path="/__research_qa_replay__" element={<ResearchQaReplayPage />} />
+            <Route path="/reader/session/:sessionId" element={<ReaderPage />} />
             <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />
             <Route path="/library" element={<AppLayout><LibraryPage /></AppLayout>} />
           </Routes>

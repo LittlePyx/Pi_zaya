@@ -7896,10 +7896,11 @@ def build_hit_ui_meta(
             ),
         )
     ]
+    render_locale = _ref_card_user_locale(prompt, display_name, heading_path or heading, summary_line, why_line)
     summary_line, why_line, copy_changed = _finalize_ref_card_copy(
         summary_line=summary_line,
         why_line=why_line,
-        prefer_zh=_prefer_zh_ref_card_locale(prompt, display_name, heading_path or heading, summary_line, why_line),
+        prefer_zh=render_locale == "zh",
         focus_terms=copy_focus_terms,
         heading_path=heading_path or heading,
         action=_shared_prompt_reference_focus_action(prompt),
@@ -8028,6 +8029,7 @@ def build_hit_ui_meta(
         citation_meta=citation_meta if isinstance(citation_meta, dict) else {},
         source_path=source_path,
         reader_open=reader_open if isinstance(reader_open, dict) else {},
+        render_locale=render_locale,
     )
 
 

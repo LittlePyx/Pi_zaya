@@ -110,6 +110,7 @@ from .tables import _is_markdown_table_sane, table_text_to_markdown
 from .block_classifier import _looks_like_math_block, _looks_like_code_block
 from .llm_worker import LLMWorker
 from .post_processing import postprocess_markdown
+from .post_heading_rules import _is_common_section_heading, _parse_numbered_heading_level
 from .quality_repair import repair_markdown_text, write_conversion_quality_result
 from .md_analyzer import MarkdownAnalyzer
 from .pipeline_vision_direct import process_batch_vision_direct
@@ -386,26 +387,125 @@ class PDFConverter:
             except Exception as e:
                 print(f"[WARN] quality analysis failed: {e}", flush=True)
 
+    @staticmethod
+    def _clean_document_title_candidate(raw: object) -> str:
+        title = str(raw or "").replace("\r", " ").replace("\n", " ").strip()
+        if not title:
+            return ""
+        title = re.sub(r"\s+", " ", title.replace("_", " ")).strip(" -.\t")
+        if not title:
+            return ""
+        low = title.lower()
+        if low in {"untitled", "unknown", "abstract", "introduction", "references"}:
+            return ""
+        if any(tok in low for tok in ("microsoft word", "untitled document", "www.", "http://", "https://")):
+            return ""
+        if re.fullmatch(r"[a-z]{2,8}[-_]?\d{4,12}(?:[_-]am)?", low):
+            return ""
+        if len(title) < 8 or len(title) > 240:
+            return ""
+        latin_words = re.findall(r"[A-Za-z]{3,}", title)
+        cjk_chars = re.findall(r"[\u4e00-\u9fff]", title)
+        if len(latin_words) < 3 and len(cjk_chars) < 6:
+            return ""
+        if title.count(",") >= 4 or title.count(";") >= 3:
+            return ""
+        return title
+
+    @staticmethod
+    def _title_from_pdf_filename(path: object) -> str:
+        try:
+            stem = Path(path).stem
+        except Exception:
+            stem = ""
+        if not stem:
+            return ""
+        candidate = re.sub(r"\s+", " ", stem.replace("_", " ")).strip()
+        candidate = re.sub(
+            r"^[A-Za-z][A-Za-z0-9 &+.,'()[\]/-]{1,90}?[\s.-]+(?:19|20)\d{2}[\s.-]+",
+            "",
+            candidate,
+        ).strip()
+        candidate = re.sub(r"^(?:19|20)\d{2}[\s.-]+", "", candidate).strip()
+        return PDFConverter._clean_document_title_candidate(candidate)
+
+    @staticmethod
+    def _normalized_title_key(text: str) -> str:
+        key = _normalize_text(text or "").strip().lower()
+        key = re.sub(r"^#{1,6}\s+", "", key)
+        key = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", key)
+        return re.sub(r"\s+", " ", key).strip()
+
+    @classmethod
+    def _markdown_has_document_title(cls, lines: list[str], title: str) -> bool:
+        title_key = cls._normalized_title_key(title)
+        for line in lines[:80]:
+            stripped = str(line or "").strip()
+            if not stripped or stripped.startswith("<!--"):
+                continue
+            match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+            if not match:
+                continue
+            heading_text = str(match.group(2) or "").strip()
+            heading_key = cls._normalized_title_key(heading_text)
+            if title_key and heading_key == title_key and len(match.group(1)) == 1:
+                return True
+            if len(match.group(1)) == 1:
+                if not _is_common_section_heading(heading_text) and not _parse_numbered_heading_level(heading_text):
+                    return True
+        return False
+
+    @classmethod
+    def _insert_document_title_heading(cls, md: str, title: str) -> str:
+        title = cls._clean_document_title_candidate(title)
+        if not md or not title:
+            return md
+        lines = md.splitlines()
+        if cls._markdown_has_document_title(lines, title):
+            return md
+
+        title_key = cls._normalized_title_key(title)
+        if title_key:
+            for idx, line in enumerate(lines[:80]):
+                stripped = str(line or "").strip()
+                match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+                if not match:
+                    continue
+                heading_text = str(match.group(2) or "").strip()
+                if cls._normalized_title_key(heading_text) != title_key:
+                    continue
+                fixed_lines = list(lines)
+                fixed_lines[idx] = f"# {title}"
+                return "\n".join(fixed_lines)
+
+        insert_at = 0
+        while insert_at < len(lines):
+            stripped = str(lines[insert_at] or "").strip()
+            if not stripped:
+                insert_at += 1
+                continue
+            if re.match(r"^<!--\s*kb_page\s*:\s*\d{1,5}\s*-->$", stripped, flags=re.IGNORECASE):
+                insert_at += 1
+                continue
+            break
+
+        insertion = [f"# {title}", ""]
+        fixed_lines = lines[:insert_at] + insertion + lines[insert_at:]
+        return "\n".join(fixed_lines)
+
     def _inject_title_from_pdf_metadata(self, md: str, doc) -> str:
         if not md:
             return md
         try:
-            title = str((doc.metadata or {}).get("title") or "").strip()
+            meta_title = str((doc.metadata or {}).get("title") or "").strip()
         except Exception:
-            title = ""
+            meta_title = ""
+        title = self._clean_document_title_candidate(meta_title)
+        if not title:
+            title = self._title_from_pdf_filename(getattr(self.cfg, "pdf_path", ""))
         if not title:
             return md
-        if len(title) < 8:
-            return md
-        lines = md.splitlines()
-        first_nonempty = next((ln.strip() for ln in lines if ln.strip()), "")
-        if re.match(r"^#\s+", first_nonempty):
-            return md
-        hay = "\n".join(lines[:40]).lower()
-        if title.lower() in hay:
-            return md
-        prefix = f"# {title}\n\n"
-        return prefix + md.lstrip()
+        return self._insert_document_title_heading(md, title)
 
     def _cleanup_stale_page_assets(self, *, assets_dir: Path, total_pages: int) -> None:
         cleanup_stale_page_assets(cfg=self.cfg, assets_dir=assets_dir, total_pages=total_pages)

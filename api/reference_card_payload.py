@@ -45,6 +45,7 @@ def build_ref_card_ui_payload(
     citation_meta: Mapping[str, Any] | None,
     source_path: str,
     reader_open: Mapping[str, Any] | None,
+    render_locale: str = "",
 ) -> dict[str, Any]:
     """Assemble the stable UI contract for one reference card.
 
@@ -88,5 +89,6 @@ def build_ref_card_ui_payload(
         "citation_meta": _as_dict(citation_meta),
         "source_path": source_path,
         "reader_open": _as_dict(reader_open),
+        "render_locale": _as_text(render_locale),
     }
     return attach_ref_card_polish_contract(payload)

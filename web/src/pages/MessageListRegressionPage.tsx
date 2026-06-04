@@ -397,6 +397,67 @@ const renderPacketContractMessages: Message[] = [
   },
 ]
 
+const unlinkedReferenceCandidateMessages: Message[] = [
+  {
+    id: 1,
+    role: 'assistant',
+    content: 'For real-time imaging, the Optica 2024 work is a better comparison point.',
+    created_at: Date.now(),
+    meta: {
+      paper_guide_contracts: {
+        version: 1,
+        render_packet: {
+          answer_markdown: 'For real-time imaging, the Optica 2024 work is a better comparison point.',
+          rendered_body: 'For real-time imaging, the Optica 2024 work is a better comparison point.',
+          rendered_content: 'For real-time imaging, the Optica 2024 work is a better comparison point.',
+          copy_text: 'For real-time imaging, the Optica 2024 work is a better comparison point.',
+          copy_markdown: 'For real-time imaging, the Optica 2024 work is a better comparison point.',
+          unlinked_reference_candidates: [
+            {
+              id: 'unlinked-optica-2024',
+              status: 'reference_list_hit',
+              match_method: 'unique_venue_year_mention',
+              confidence: 0.68,
+              mention: 'Optica 2024',
+              source_path: READER_REGRESSION_SOURCE_PATH,
+              source_name: READER_REGRESSION_SOURCE_NAME,
+              ref_num: 18,
+              title: 'Fast rotation-shearing single-pixel imaging',
+              authors: 'Smith J, Lee K',
+              venue: 'Optica',
+              year: '2024',
+              doi: '10.1364/optica.demo',
+              doi_url: 'https://doi.org/10.1364/optica.demo',
+              raw: 'Smith J, Lee K. Fast rotation-shearing single-pixel imaging. Optica. 2024.',
+              cite_detail: {
+                num: 18,
+                anchor: 'kb-unlinked-optica-2024',
+                source_name: READER_REGRESSION_SOURCE_NAME,
+                source_path: READER_REGRESSION_SOURCE_PATH,
+                is_inpaper: true,
+                citation_route: 'system_b',
+                raw: 'Smith J, Lee K. Fast rotation-shearing single-pixel imaging. Optica. 2024.',
+                title: 'Fast rotation-shearing single-pixel imaging',
+                authors: 'Smith J, Lee K',
+                venue: 'Optica',
+                year: '2024',
+                doi: '10.1364/optica.demo',
+                doi_url: 'https://doi.org/10.1364/optica.demo',
+                heading_path: 'References',
+                location_label: 'References / [18]',
+                summary_line: 'Optica 2024',
+                summary_source: 'answer_reference_mention',
+                binding_status: 'candidate',
+                binding_confidence: 0.68,
+              },
+            },
+          ],
+        },
+      },
+    },
+  },
+]
+
 const renderPacketHiddenLocateMessages: Message[] = [
   {
     id: 1,
@@ -1124,6 +1185,7 @@ type RegressionScenario =
   | 'guide-figure-remap'
   | 'guide-formula-remap'
   | 'render-packet-contract'
+  | 'unlinked-reference-candidate'
   | 'render-packet-hidden-locate'
   | 'citation-hover-race'
   | 'weak-system-b-popover'
@@ -1149,6 +1211,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'guide-figure-remap') return 'guide-figure-remap'
     if (scenarioParam === 'guide-formula-remap') return 'guide-formula-remap'
     if (scenarioParam === 'render-packet-contract') return 'render-packet-contract'
+    if (scenarioParam === 'unlinked-reference-candidate') return 'unlinked-reference-candidate'
     if (scenarioParam === 'render-packet-hidden-locate') return 'render-packet-hidden-locate'
     if (scenarioParam === 'citation-hover-race') return 'citation-hover-race'
     if (scenarioParam === 'weak-system-b-popover') return 'weak-system-b-popover'
@@ -1170,6 +1233,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'guide-figure-remap') return guideFigureRemapMessages
     if (scenario === 'guide-formula-remap') return guideFormulaRemapMessages
     if (scenario === 'render-packet-contract') return renderPacketContractMessages
+    if (scenario === 'unlinked-reference-candidate') return unlinkedReferenceCandidateMessages
     if (scenario === 'render-packet-hidden-locate') return renderPacketHiddenLocateMessages
     if (scenario === 'citation-hover-race') return citationHoverRaceMessages
     if (scenario === 'weak-system-b-popover') return weakSystemBPopoverMessages
@@ -1245,6 +1309,19 @@ export default function MessageListRegressionPage() {
       return { ...current, [key]: result }
     })
   }, [])
+  const dispatchReaderSelectionShelfFixture = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('kb:reader-selection-shelf', {
+      detail: {
+        text: 'The selected reader sentence says PILN needs multiple iterations, so it is less suitable for real-time high-speed imaging.',
+        sourcePath: READER_REGRESSION_SOURCE_PATH,
+        sourceName: READER_REGRESSION_SOURCE_NAME,
+        headingPath: 'Abstract / Method comparison',
+        blockId: 'blk-test-reader-selection',
+        anchorId: 'p-test-reader-selection',
+        createdAt: Date.now(),
+      },
+    }))
+  }, [])
 
   return (
     <div className="min-h-screen bg-[var(--bg)] px-6 py-6">
@@ -1256,10 +1333,19 @@ export default function MessageListRegressionPage() {
           <div className="text-xs text-black/45 dark:text-white/45" data-testid="message-list-test-scenario">
             {scenario}
           </div>
+          <button
+            type="button"
+            className="mt-3 rounded border border-[var(--border)] px-3 py-1 text-xs text-black/60 dark:text-white/60"
+            onClick={dispatchReaderSelectionShelfFixture}
+            data-testid="message-list-reader-selection-shelf-fixture"
+          >
+            Add reader selection fixture
+          </button>
         </div>
 
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <MessageList
+            activeConvId={`message-list-regression:${scenario}`}
             messages={regressionMessages}
             refs={regressionRefs}
             onOpenReader={(nextPayload) => setPayload(nextPayload)}

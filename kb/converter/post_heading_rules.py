@@ -39,7 +39,12 @@ _ALLOWED_UNNUMBERED_HEADINGS = {
 }
 
 _JOURNAL_METADATA_HEADINGS = {
+    "ARTICLE",
+    "RESEARCH ARTICLE",
     "REVIEW ARTICLE",
+    "LETTER",
+    "LETTERS",
+    "NEWS & VIEWS",
     "NATURAL PHOTONICS",
     "NATURE PHOTONICS",
     "OPTICS EXPRESS",
@@ -103,6 +108,20 @@ def _is_caption_heading_text(title: str) -> bool:
         return False
     if _looks_like_body_figure_reference_sentence(t):
         return False
+    if re.match(
+        r"^(?:extended\s+data\s+)?(?:fig(?:ure)?\.?|table|algorithm)\s*"
+        r"(?:\d+[A-Za-z]?|S\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
+        t,
+        re.IGNORECASE,
+    ):
+        return True
+    if re.match(
+        r"^(?:supplementary|supplemental)\s+(?:fig(?:ure)?\.?|table)\s*"
+        r"(?:\d+[A-Za-z]?|S\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
+        t,
+        re.IGNORECASE,
+    ):
+        return True
     if re.match(r"^(?:figure|fig\.?|table|algorithm)\s*(?:\d+|[ivxlc]+)\b", t, re.IGNORECASE):
         return True
     if re.match(r"^(?:figure|fig\.?|table|algorithm)\s+\d+\s+caption\b", t, re.IGNORECASE):
@@ -116,6 +135,8 @@ def _is_journal_metadata_heading(title: str) -> bool:
         return False
     t = re.sub(r"\s+", " ", t).strip().upper()
     if t in _JOURNAL_METADATA_HEADINGS:
+        return True
+    if re.fullmatch(r"NATURE\s*\|\s*VOL\.?\s*\d+.*\|\s*\d{1,5}", t, flags=re.IGNORECASE):
         return True
     if re.fullmatch(r"(?:NATURE|SCIENCE)\s+[A-Z][A-Z\s\-]{2,40}", t):
         return True

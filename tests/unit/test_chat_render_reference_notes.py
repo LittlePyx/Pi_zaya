@@ -3214,3 +3214,48 @@ def test_enrich_messages_invalidates_render_cache_when_refs_change(monkeypatch, 
 
     assert calls["primary"] == 2
     assert str(first[-1].get("rendered_content") or "") != str(second[-1].get("rendered_content") or "")
+
+
+def test_unlinked_reference_candidates_find_unique_venue_year(monkeypatch):
+    from api import chat_render
+
+    monkeypatch.setattr(
+        chat_render,
+        "_load_reference_index_cached",
+        lambda: {
+            "docs": {
+                "demo": {
+                    "path": "current-paper.md",
+                    "name": "current-paper.en.md",
+                    "refs": {
+                        "7": {
+                            "num": 7,
+                            "raw": "Smith J. Fast rotation-shearing single-pixel imaging. Optica. 2024.",
+                            "title": "Fast rotation-shearing single-pixel imaging",
+                            "authors": "Smith J",
+                            "venue": "Optica",
+                            "year": "2024",
+                            "doi": "10.1364/optica.demo",
+                        }
+                    },
+                }
+            }
+        },
+    )
+
+    candidates = chat_render._build_unlinked_reference_candidates(
+        answer_markdown="For real-time imaging, the Optica 2024 work is a better comparison point.",
+        rendered_body="",
+        copy_text="",
+        cite_details=[],
+        ref_pack={"hits": [{"meta": {"source_path": "current-paper.md"}}]},
+        provenance_segments=[],
+        render_locale="en",
+        anchor_ns="test",
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0]["match_method"] == "unique_venue_year_mention"
+    assert candidates[0]["ref_num"] == 7
+    assert candidates[0]["title"] == "Fast rotation-shearing single-pixel imaging"
+    assert candidates[0]["cite_detail"]["citation_route"] == "system_b"

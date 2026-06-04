@@ -2,14 +2,21 @@
 
 import { startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Button, message, Typography } from 'antd'
+import { BookOutlined, ClockCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
-import type { ReaderLocateResult, ReaderOpenPayload, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
-import type { ChatUploadItem, Message } from '../api/chat'
+import {
+  READER_SELECTION_SHELF_EVENT,
+  type ReaderLocateResult,
+  type ReaderOpenPayload,
+  type ReaderSelectionShelfPayload,
+  type ReaderSessionHighlight,
+} from '../components/chat/reader/readerTypes'
+import { chatApi, type ChatUploadItem, type Message } from '../api/chat'
 import { libraryApi } from '../api/library'
 import { useT } from '../i18n'
 
@@ -20,12 +27,14 @@ const LIVE_WINDOW = 16
 const READY_DISMISS_MS = 2600
 const DUPLICATE_DISMISS_MS = 3600
 const DESKTOP_READER_BREAKPOINT = 1280
-const DESKTOP_READER_DEFAULT_WIDTH = 560
-const DESKTOP_READER_MIN_WIDTH = 420
-const DESKTOP_READER_MAX_WIDTH = 760
-const DESKTOP_READER_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
-const READER_WIDTH_STORAGE_KEY = 'kb:paper-guide-reader-width'
-const READER_COLLAPSED_STORAGE_KEY = 'kb:paper-guide-reader-collapsed'
+const DESKTOP_DOCK_DEFAULT_WIDTH = 392
+const DESKTOP_DOCK_MIN_WIDTH = 320
+const DESKTOP_DOCK_MAX_WIDTH = 760
+const DESKTOP_DOCK_COLLAPSED_WIDTH = 48
+const DESKTOP_DOCK_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
+const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
+const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
+const READER_SESSION_SYNC_CHANNEL = 'kb:reader-session-sync'
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
 const showLegacyUiBlocks = false
 
@@ -55,20 +64,20 @@ function stripSourceExt(name: string) {
     .trim()
 }
 
-function clampReaderWidth(value: number) {
-  if (!Number.isFinite(value)) return DESKTOP_READER_DEFAULT_WIDTH
-  return Math.max(DESKTOP_READER_MIN_WIDTH, Math.min(DESKTOP_READER_MAX_WIDTH, Math.round(value)))
+function clampRightDockWidth(value: number) {
+  if (!Number.isFinite(value)) return DESKTOP_DOCK_DEFAULT_WIDTH
+  return Math.max(DESKTOP_DOCK_MIN_WIDTH, Math.min(DESKTOP_DOCK_MAX_WIDTH, Math.round(value)))
 }
 
-function loadStoredReaderWidth() {
-  if (typeof window === 'undefined') return DESKTOP_READER_DEFAULT_WIDTH
-  const raw = Number(window.localStorage.getItem(READER_WIDTH_STORAGE_KEY) || 0)
-  return clampReaderWidth(raw || DESKTOP_READER_DEFAULT_WIDTH)
+function loadStoredRightDockWidth() {
+  if (typeof window === 'undefined') return DESKTOP_DOCK_DEFAULT_WIDTH
+  const raw = Number(window.localStorage.getItem(RIGHT_DOCK_WIDTH_STORAGE_KEY) || 0)
+  return clampRightDockWidth(raw || DESKTOP_DOCK_DEFAULT_WIDTH)
 }
 
-function loadStoredReaderCollapsed() {
+function loadStoredRightDockCollapsed() {
   if (typeof window === 'undefined') return false
-  return window.localStorage.getItem(READER_COLLAPSED_STORAGE_KEY) === '1'
+  return window.localStorage.getItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY) === '1'
 }
 
 function readerHighlightScopeKey(convId: string | null | undefined, sourcePath: string) {
@@ -92,6 +101,8 @@ interface TimelineItem {
   questionPreview: string
   hasAnswer: boolean
 }
+
+type RightDockPanel = 'timeline' | 'shelf' | 'reader'
 
 export default function ChatPage() {
   const S = useT()
@@ -122,17 +133,20 @@ export default function ChatPage() {
   const [activeTimelineUserMsgId, setActiveTimelineUserMsgId] = useState<number | null>(null)
   const [readerOpen, setReaderOpen] = useState(false)
   const [readerPayload, setReaderPayload] = useState<ReaderOpenPayload | null>(null)
-  const [readerCollapsed, setReaderCollapsed] = useState(loadStoredReaderCollapsed)
-  const [readerWidth, setReaderWidth] = useState(loadStoredReaderWidth)
+  const [rightDockCollapsed, setRightDockCollapsed] = useState(loadStoredRightDockCollapsed)
+  const [rightDockWidth, setRightDockWidth] = useState(loadStoredRightDockWidth)
   const [readerSessionHighlights, setReaderSessionHighlights] = useState<Record<string, ReaderSessionHighlight[]>>({})
   const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
   const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
   const [citationShelfOpen, setCitationShelfOpen] = useState(false)
-  const [closeShelfSignal, setCloseShelfSignal] = useState(0)
+  const [citationShelfCount, setCitationShelfCount] = useState(0)
+  const [openShelfSignal, setOpenShelfSignal] = useState(0)
+  const [rightDockPanel, setRightDockPanel] = useState<RightDockPanel>('timeline')
+  const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
   const [desktopReaderEligible, setDesktopReaderEligible] = useState(
     () => (typeof window !== 'undefined' ? window.innerWidth >= DESKTOP_READER_BREAKPOINT : false),
   )
-  const [readerResizing, setReaderResizing] = useState(false)
+  const [rightDockResizing, setRightDockResizing] = useState(false)
   const [appendSignal, setAppendSignal] = useState<{ token: number; text: string } | null>(null)
   const uploadNoticeRef = useRef<Record<string, string>>({})
   const dismissTimerRef = useRef<Record<string, number>>({})
@@ -143,14 +157,15 @@ export default function ChatPage() {
   const readerPayloadRef = useRef<ReaderOpenPayload | null>(null)
   const readerOpenRef = useRef(readerOpen)
   const readerPayloadByFeedbackKeyRef = useRef<Record<string, ReaderOpenPayload>>({})
+  const activeReaderSessionHighlightsRef = useRef<ReaderSessionHighlight[]>([])
   const readerLocateSourceRepairStreamRef = useRef<AbortController | null>(null)
   const splitLayoutRef = useRef<HTMLDivElement | null>(null)
-  const readerResizeGuideRef = useRef<HTMLDivElement | null>(null)
-  const readerResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
-  const readerActivePointerIdRef = useRef<number | null>(null)
-  const readerResizeFocusRestoreRef = useRef<HTMLElement | null>(null)
-  const readerWidthLiveRef = useRef(readerWidth)
-  const readerResizePreviewWidthRef = useRef(readerWidth)
+  const rightDockResizeGuideRef = useRef<HTMLDivElement | null>(null)
+  const rightDockResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
+  const rightDockActivePointerIdRef = useRef<number | null>(null)
+  const rightDockResizeFocusRestoreRef = useRef<HTMLElement | null>(null)
+  const rightDockWidthLiveRef = useRef(rightDockWidth)
+  const rightDockResizePreviewWidthRef = useRef(rightDockWidth)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
 
   const nextEventToken = () => {
@@ -188,7 +203,9 @@ export default function ChatPage() {
     readerPayloadByFeedbackKeyRef.current = {}
     readerLocateSourceRepairStreamRef.current?.abort()
     readerLocateSourceRepairStreamRef.current = null
-    setReaderCollapsed(false)
+    setCitationShelfOpen(false)
+    setCitationShelfCount(0)
+    setRightDockPanel('timeline')
     setAppendSignal(null)
   }, [activeConvId])
 
@@ -219,19 +236,19 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem(READER_WIDTH_STORAGE_KEY, String(clampReaderWidth(readerWidth)))
-  }, [readerWidth])
+    window.localStorage.setItem(RIGHT_DOCK_WIDTH_STORAGE_KEY, String(clampRightDockWidth(rightDockWidth)))
+  }, [rightDockWidth])
 
   useEffect(() => {
-    window.localStorage.setItem(READER_COLLAPSED_STORAGE_KEY, readerCollapsed ? '1' : '0')
-  }, [readerCollapsed])
+    window.localStorage.setItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY, rightDockCollapsed ? '1' : '0')
+  }, [rightDockCollapsed])
 
   useEffect(() => {
-    readerWidthLiveRef.current = readerWidth
-    if (!readerResizing) {
-      readerResizePreviewWidthRef.current = readerWidth
+    rightDockWidthLiveRef.current = rightDockWidth
+    if (!rightDockResizing) {
+      rightDockResizePreviewWidthRef.current = rightDockWidth
     }
-  }, [readerResizing, readerWidth])
+  }, [rightDockResizing, rightDockWidth])
 
   useLayoutEffect(() => {
     const targetTop = timelineScrollRestoreTopRef.current
@@ -253,11 +270,11 @@ export default function ChatPage() {
       window.cancelAnimationFrame(frameA)
       window.cancelAnimationFrame(frameB)
     }
-  }, [timelineOpen, desktopReaderEligible, readerOpen, readerCollapsed])
+  }, [timelineOpen, desktopReaderEligible, readerOpen, rightDockCollapsed])
 
-  const restoreReaderResizeFocus = () => {
-    const target = readerResizeFocusRestoreRef.current
-    readerResizeFocusRestoreRef.current = null
+  const restoreRightDockResizeFocus = () => {
+    const target = rightDockResizeFocusRestoreRef.current
+    rightDockResizeFocusRestoreRef.current = null
     if (!target || !target.isConnected) return
     try {
       target.focus({ preventScroll: true })
@@ -266,43 +283,43 @@ export default function ChatPage() {
     }
   }
 
-  const clearReaderResizeSession = () => {
-    readerResizeRef.current = null
-    readerActivePointerIdRef.current = null
-    readerResizePreviewWidthRef.current = readerWidthLiveRef.current
-    document.body.classList.remove('kb-reader-resizing')
+  const clearRightDockResizeSession = () => {
+    rightDockResizeRef.current = null
+    rightDockActivePointerIdRef.current = null
+    rightDockResizePreviewWidthRef.current = rightDockWidthLiveRef.current
+    document.body.classList.remove('kb-right-dock-resizing')
     document.body.style.removeProperty('cursor')
     document.body.style.removeProperty('user-select')
-    const guide = readerResizeGuideRef.current
+    const guide = rightDockResizeGuideRef.current
     if (guide) {
       guide.style.removeProperty('left')
     }
   }
 
   useEffect(() => () => {
-    clearReaderResizeSession()
+    clearRightDockResizeSession()
   }, [])
 
-  const updateReaderResizeGuide = (nextWidth: number) => {
-    const guide = readerResizeGuideRef.current
+  const updateRightDockResizeGuide = (nextWidth: number) => {
+    const guide = rightDockResizeGuideRef.current
     const layout = splitLayoutRef.current
-    const clampedWidth = clampReaderWidth(nextWidth)
-    readerResizePreviewWidthRef.current = clampedWidth
-    if (!guide || !layout || readerCollapsed) return
+    const clampedWidth = clampRightDockWidth(nextWidth)
+    rightDockResizePreviewWidthRef.current = clampedWidth
+    if (!guide || !layout || rightDockCollapsed) return
     const nextLeft = Math.max(0, layout.clientWidth - clampedWidth)
     guide.style.left = `${Math.round(nextLeft)}px`
   }
 
-  const finishReaderResize = (commit: boolean) => {
-    const finalWidth = clampReaderWidth(
-      commit ? readerResizePreviewWidthRef.current || readerWidthLiveRef.current : readerWidthLiveRef.current,
+  const finishRightDockResize = (commit: boolean) => {
+    const finalWidth = clampRightDockWidth(
+      commit ? rightDockResizePreviewWidthRef.current || rightDockWidthLiveRef.current : rightDockWidthLiveRef.current,
     )
-    clearReaderResizeSession()
-    setReaderResizing(false)
-    if (commit && !readerCollapsed) {
-      setReaderWidth(finalWidth)
+    clearRightDockResizeSession()
+    setRightDockResizing(false)
+    if (commit && !rightDockCollapsed) {
+      setRightDockWidth(finalWidth)
     }
-    window.requestAnimationFrame(restoreReaderResizeFocus)
+    window.requestAnimationFrame(restoreRightDockResizeFocus)
   }
 
   useEffect(() => {
@@ -404,7 +421,7 @@ export default function ChatPage() {
       await createPaperGuideConversation({
         sourcePath,
         sourceName,
-        title: `阅读指导 · ${sourceName}`,
+        title: S.default_guide_title.replace('{name}', sourceName),
       })
       hide()
       message.success(S.reader_entered_guide)
@@ -608,18 +625,95 @@ export default function ChatPage() {
     }
     readerPayloadRef.current = nextPayload
     setReaderPayload(nextPayload)
-    setCitationShelfOpen(false)
-    setCloseShelfSignal((value) => value + 1)
-    setReaderCollapsed(false)
+    setRightDockPanel('reader')
+    setRightDockCollapsed(false)
     setReaderOpen(true)
   }
 
+  const openReaderStandalone = useCallback(async (payloadInput?: ReaderOpenPayload | null) => {
+    const payload = payloadInput || readerPayloadRef.current
+    const sourcePath = String(payload?.sourcePath || '').trim()
+    if (!payload || !sourcePath) {
+      message.info(S.reader_missing_path)
+      return
+    }
+    const sourceName = String(payload.sourceName || '').trim()
+      || sourcePath.split(/[\\/]/).pop()
+      || S.side_dock_reader
+    let popup: Window | null = null
+    try {
+      popup = window.open('', '_blank')
+      if (popup) {
+        popup.document.title = sourceName
+        popup.document.body.style.margin = '0'
+        popup.document.body.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+        popup.document.body.innerHTML = `<div style="display:grid;place-items:center;min-height:100vh;color:#64748b;font-size:14px;">${S.reader_opening_window || 'Opening reader...'}</div>`
+      }
+    } catch {
+      popup = null
+    }
+    try {
+      const session = await chatApi.createReaderSession(payload, {
+        title: sourceName,
+        conversationId: activeConvId,
+        state: {
+          sourcePath,
+          conversationId: activeConvId || '',
+          highlights: activeReaderSessionHighlightsRef.current,
+        },
+      })
+      const url = `${window.location.origin}/reader/session/${encodeURIComponent(session.id)}`
+      if (popup && !popup.closed) {
+        popup.location.href = url
+      } else {
+        const opened = window.open(url, '_blank', 'noopener,noreferrer')
+        if (!opened) message.info(S.reader_window_blocked || 'The browser blocked the reader window.')
+      }
+    } catch (err) {
+      if (popup && !popup.closed) {
+        popup.close()
+      }
+      message.error(err instanceof Error ? err.message : (S.reader_open_window_failed || 'Failed to open reader window'))
+    }
+  }, [
+    S.reader_missing_path,
+    S.reader_open_window_failed,
+    S.reader_opening_window,
+    S.reader_window_blocked,
+    S.side_dock_reader,
+    activeConvId,
+  ])
+
   const handleCitationShelfOpenChange = useCallback((open: boolean) => {
     setCitationShelfOpen(open)
-    if (open && readerOpenRef.current && desktopReaderEligible) {
-      setReaderCollapsed(true)
+    if (open && desktopReaderEligible) {
+      setRightDockPanel('shelf')
+      setRightDockCollapsed(false)
     }
   }, [desktopReaderEligible])
+
+  const handleCitationShelfStateChange = useCallback((state: { open: boolean; count: number }) => {
+    setCitationShelfCount(Math.max(0, Math.floor(Number(state.count || 0))))
+    setCitationShelfOpen(Boolean(state.open))
+    if (state.open && desktopReaderEligible) {
+      setRightDockPanel('shelf')
+      setRightDockCollapsed(false)
+    }
+  }, [desktopReaderEligible])
+
+  const activateDockPanel = useCallback((panel: RightDockPanel) => {
+    setRightDockPanel(panel)
+    setRightDockCollapsed(false)
+    if (panel === 'timeline') {
+      setTimelineOpen(true)
+      return
+    }
+    if (panel === 'shelf') {
+      setOpenShelfSignal((value) => value + 1)
+      setCitationShelfOpen(true)
+      return
+    }
+  }, [])
 
   const refreshShelfSourceQuality = useCallback(() => {
     setSourceQualityRefreshToken((value) => value + 1)
@@ -640,7 +734,8 @@ export default function ChatPage() {
     readerPayloadByFeedbackKeyRef.current[key] = nextPayload
     readerPayloadRef.current = nextPayload
     setReaderPayload(nextPayload)
-    setReaderCollapsed(false)
+    setRightDockPanel('reader')
+    setRightDockCollapsed(false)
     setReaderOpen(true)
   }, [nextReaderLocateRequestId])
 
@@ -796,6 +891,25 @@ export default function ChatPage() {
     })
   }
 
+  const addReaderSelectionToShelf = useCallback((payload: ReaderSelectionShelfPayload) => {
+    const text = String(payload?.text || '').trim()
+    const sourcePath = String(payload?.sourcePath || '').trim()
+    if (!text || !sourcePath) return
+    const detail: ReaderSelectionShelfPayload = {
+      ...payload,
+      text,
+      sourcePath,
+      conversationId: activeConvId || payload.conversationId || '',
+      createdAt: Number(payload.createdAt || Date.now()),
+    }
+    window.dispatchEvent(new CustomEvent(READER_SELECTION_SHELF_EVENT, { detail }))
+    setOpenShelfSignal((value) => value + 1)
+    setCitationShelfOpen(true)
+    setRightDockPanel('shelf')
+    setRightDockCollapsed(false)
+    message.success(S.reader_added_to_shelf || 'Added to citation shelf')
+  }, [S.reader_added_to_shelf, activeConvId])
+
   const activeReaderHighlightScope = useMemo(
     () => readerHighlightScopeKey(activeConvId, String(readerPayload?.sourcePath || '')),
     [activeConvId, readerPayload?.sourcePath],
@@ -804,6 +918,37 @@ export default function ChatPage() {
     () => (activeReaderHighlightScope ? readerSessionHighlights[activeReaderHighlightScope] || [] : []),
     [activeReaderHighlightScope, readerSessionHighlights],
   )
+  useEffect(() => {
+    activeReaderSessionHighlightsRef.current = activeReaderSessionHighlights
+  }, [activeReaderSessionHighlights])
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return undefined
+    const channel = new BroadcastChannel(READER_SESSION_SYNC_CHANNEL)
+    channel.onmessage = (event) => {
+      const data = (event?.data && typeof event.data === 'object')
+        ? event.data as Record<string, unknown>
+        : {}
+      if (String(data.type || '') !== 'reader-session-state') return
+      const sourcePath = String(data.sourcePath || '').trim()
+      if (!sourcePath) return
+      const conversationId = String(data.conversationId || '').trim()
+      if (conversationId && activeConvId && conversationId !== activeConvId) return
+      const highlights = Array.isArray(data.highlights)
+        ? data.highlights.filter((item): item is ReaderSessionHighlight => Boolean(item) && typeof item === 'object')
+        : null
+      if (!highlights) return
+      const scopeKey = readerHighlightScopeKey(activeConvId, sourcePath)
+      if (!scopeKey) return
+      setReaderSessionHighlights((current) => {
+        const prev = current[scopeKey] || []
+        if (JSON.stringify(prev) === JSON.stringify(highlights)) return current
+        return { ...current, [scopeKey]: highlights }
+      })
+    }
+    return () => {
+      channel.close()
+    }
+  }, [activeConvId])
   const addReaderSessionHighlight = (highlight: ReaderSessionHighlight) => {
     const scopeKey = activeReaderHighlightScope
     if (!scopeKey) return
@@ -833,65 +978,84 @@ export default function ChatPage() {
     })
   }
 
-  const desktopReaderVisible = readerOpen && desktopReaderEligible
-  const desktopReaderExpanded = desktopReaderVisible && !readerCollapsed
-  const rightWorkspaceOccupied = citationShelfOpen || readerOpen
   const timelineUiReady = !conversationLoading && timelineItems.length > 0
-  const showDesktopTimeline = timelineUiReady && timelineOpen && !rightWorkspaceOccupied
-  const showInlineTimelineToggle = timelineUiReady && (!desktopReaderEligible || rightWorkspaceOccupied)
-  const showDesktopTimelineToggleRail = timelineUiReady && desktopReaderEligible && !rightWorkspaceOccupied && !timelineOpen
+  const dockTimelineAvailable = timelineUiReady
+  const dockShelfAvailable = citationShelfOpen || citationShelfCount > 0
+  const dockReaderAvailable = readerOpen
+  const showRightDock = desktopReaderEligible && (dockTimelineAvailable || dockShelfAvailable || dockReaderAvailable)
+  const activeRightDockPanel: RightDockPanel | null = showRightDock
+    ? (
+      rightDockPanel === 'reader' && dockReaderAvailable
+        ? 'reader'
+        : rightDockPanel === 'shelf' && (dockShelfAvailable || citationShelfOpen)
+          ? 'shelf'
+          : rightDockPanel === 'timeline' && dockTimelineAvailable
+            ? 'timeline'
+            : dockReaderAvailable
+              ? 'reader'
+              : dockShelfAvailable
+                ? 'shelf'
+                : dockTimelineAvailable
+                  ? 'timeline'
+                  : null
+  )
+    : null
+  const desktopReaderVisible = readerOpen && desktopReaderEligible
+  const rightDockExpanded = showRightDock && !rightDockCollapsed
+  const showDesktopTimeline = false
+  const showInlineTimelineToggle = timelineUiReady && !desktopReaderEligible
   const showConversationMeta = !conversationLoading && (timelineUiReady || activeConversation?.mode === 'paper_guide')
-  const hideConversationMetaOnDesktop = showDesktopTimeline && activeConversation?.mode !== 'paper_guide'
+  const hideConversationMetaOnDesktop = showRightDock && activeConversation?.mode !== 'paper_guide'
   const guideSourceLabel = String(activeConversation?.bound_source_name || '').trim()
     || String(activeConversation?.bound_source_path || '').trim()
     || S.guide_unbound
   const guideSourceReady = Boolean(activeConversation?.bound_source_ready)
   const guideStatusLabel = guideSourceReady ? S.timeline_guide_ready : S.timeline_guide_pending
-  const beginReaderResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!desktopReaderExpanded || !event.isPrimary) return
-    const currentWidth = clampReaderWidth(readerWidthLiveRef.current)
-    readerResizeRef.current = {
+  const beginRightDockResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!rightDockExpanded || !event.isPrimary) return
+    const currentWidth = clampRightDockWidth(rightDockWidthLiveRef.current)
+    rightDockResizeRef.current = {
       startX: event.clientX,
       startWidth: currentWidth,
     }
-    readerActivePointerIdRef.current = event.pointerId
-    readerResizePreviewWidthRef.current = currentWidth
-    updateReaderResizeGuide(currentWidth)
+    rightDockActivePointerIdRef.current = event.pointerId
+    rightDockResizePreviewWidthRef.current = currentWidth
+    updateRightDockResizeGuide(currentWidth)
     const activeElement = document.activeElement
     if (
       activeElement instanceof HTMLElement
       && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')
     ) {
-      readerResizeFocusRestoreRef.current = activeElement
+      rightDockResizeFocusRestoreRef.current = activeElement
       activeElement.blur()
     } else {
-      readerResizeFocusRestoreRef.current = null
+      rightDockResizeFocusRestoreRef.current = null
     }
-    setReaderResizing(true)
-    document.body.classList.add('kb-reader-resizing')
+    setRightDockResizing(true)
+    document.body.classList.add('kb-right-dock-resizing')
     document.body.style.setProperty('cursor', 'col-resize')
     document.body.style.setProperty('user-select', 'none')
     event.currentTarget.setPointerCapture(event.pointerId)
     event.preventDefault()
   }
 
-  const handleReaderResizeMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (readerActivePointerIdRef.current !== event.pointerId) return
-    const state = readerResizeRef.current
+  const handleRightDockResizeMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (rightDockActivePointerIdRef.current !== event.pointerId) return
+    const state = rightDockResizeRef.current
     if (!state) return
-    updateReaderResizeGuide(state.startWidth + (state.startX - event.clientX))
+    updateRightDockResizeGuide(state.startWidth + (state.startX - event.clientX))
     event.preventDefault()
   }
 
-  const commitReaderResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (readerActivePointerIdRef.current !== event.pointerId) return
-    finishReaderResize(true)
+  const commitRightDockResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (rightDockActivePointerIdRef.current !== event.pointerId) return
+    finishRightDockResize(true)
     event.preventDefault()
   }
 
-  const cancelReaderResize = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (readerActivePointerIdRef.current !== event.pointerId) return
-    finishReaderResize(false)
+  const cancelRightDockResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (rightDockActivePointerIdRef.current !== event.pointerId) return
+    finishRightDockResize(false)
     event.preventDefault()
   }
   const chatComposer = (
@@ -1145,7 +1309,11 @@ export default function ChatPage() {
                     onOpenReader={openReader}
                     readerLocateResults={readerLocateResults}
                     onShelfOpenChange={handleCitationShelfOpenChange}
-                    closeShelfSignal={closeShelfSignal}
+                    onShelfStateChange={handleCitationShelfStateChange}
+                    openShelfSignal={openShelfSignal}
+                    shelfDockMode={showRightDock}
+                    shelfPortalTarget={shelfDockTarget}
+                    shelfVisible={activeRightDockPanel === 'shelf'}
                     sourceQualityRefreshToken={sourceQualityRefreshToken}
                     paperGuideSourcePath={effectiveGuide.sourcePath}
                     paperGuideSourceName={effectiveGuide.sourceName}
@@ -1154,146 +1322,142 @@ export default function ChatPage() {
               </div>
               {chatComposer}
             </div>
-            {desktopReaderExpanded ? (
+            {rightDockExpanded ? (
               <div
-                ref={readerResizeGuideRef}
+                ref={rightDockResizeGuideRef}
                 className={`pointer-events-none absolute inset-y-0 z-20 hidden w-0 xl:block ${
-                  readerResizing ? 'opacity-100' : 'opacity-0'
+                  rightDockResizing ? 'opacity-100' : 'opacity-0'
                 }`}
                 aria-hidden="true"
               >
                 <div className="absolute inset-y-0 -translate-x-1/2 border-l-2 border-[var(--accent)]/75 shadow-[0_0_0_1px_rgba(22,119,255,0.15)]" />
               </div>
             ) : null}
-            {showDesktopTimelineToggleRail ? (
-              <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden items-start lg:flex">
-                <button
-                  type="button"
-                  className="kb-chat-timeline-rail-toggle pointer-events-auto"
-                  aria-label={S.timeline_label}
-                  onClick={toggleTimelineOpen}
-                >
-                  {S.timeline_label}
-                </button>
-              </div>
+            {rightDockExpanded ? (
+              <div
+                className={`kb-chat-side-resize-handle ${rightDockResizing ? 'is-resizing' : ''}`}
+                aria-label={S.side_dock_resize || 'Resize right sidebar'}
+                onPointerDown={beginRightDockResize}
+                onPointerMove={handleRightDockResizeMove}
+                onPointerUp={commitRightDockResize}
+                onPointerCancel={cancelRightDockResize}
+              />
             ) : null}
-            {showDesktopTimeline ? (
-              <aside className={`kb-chat-timeline pointer-events-none absolute inset-y-0 right-0 z-20 hidden lg:flex ${
-                desktopReaderVisible ? 'is-reader-collapsed' : ''
-              }`}>
-                <div className="kb-chat-timeline-shell">
-                  <div className="kb-chat-timeline-head">
-                    <div className="kb-chat-timeline-title-row">
-                      <div className="min-w-0">
-                        <div className="kb-chat-timeline-title">{S.timeline_label}</div>
-                      </div>
-                      <div className="kb-chat-timeline-head-actions">
-                        <span className="kb-chat-timeline-count">{timelineItems.length}</span>
-                        <button
-                          type="button"
-                          className="kb-chat-timeline-toggle"
-                          onClick={toggleTimelineOpen}
-                        >
-                          {S.timeline_collapse}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="kb-chat-timeline-list">
-                    {timelineItems.map((item) => (
-                      <button
-                        key={`m-timeline-${item.userMsgId}-${item.order}`}
-                        type="button"
-                        className={`kb-chat-timeline-item ${
-                          activeTimelineUserMsgId === item.userMsgId
-                            ? 'is-active'
-                            : ''
-                        } ${item.hasAnswer ? 'is-ready' : 'is-pending'}`}
-                        aria-current={activeTimelineUserMsgId === item.userMsgId ? 'step' : undefined}
-                        aria-label={`Q${item.order}: ${item.questionPreview}`}
-                        title={item.questionPreview}
-                        onClick={() => jumpToTimelineItem(item)}
-                      >
-                        <span className="kb-chat-timeline-item-node" aria-hidden="true" />
-                        <div className="kb-chat-timeline-item-meta">
-                          <span className="kb-chat-timeline-item-order">Q{item.order}</span>
-                          <span className={`kb-chat-timeline-item-status ${item.hasAnswer ? 'is-ready' : 'is-pending'}`}>
-                            {item.hasAnswer ? S.timeline_answered : S.timeline_pending_qa}
-                          </span>
-                        </div>
-                        <div className="kb-chat-timeline-item-text">
-                          {item.questionPreview}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+            {showRightDock ? (
+              <aside
+                className={`kb-chat-side-dock is-${activeRightDockPanel || 'empty'} ${rightDockCollapsed ? 'is-collapsed' : ''} ${rightDockResizing ? 'is-resizing' : ''}`}
+                style={{
+                  width: rightDockCollapsed ? `${DESKTOP_DOCK_COLLAPSED_WIDTH}px` : `${rightDockWidth}px`,
+                  transition: rightDockResizing ? 'none' : DESKTOP_DOCK_WIDTH_TRANSITION,
+                }}
+              >
+                <div className="kb-chat-side-tabs" role="tablist" aria-label="Research side workspace">
+                  <button
+                    type="button"
+                    className="kb-chat-side-collapse-btn"
+                    aria-label={rightDockCollapsed ? (S.side_dock_expand || 'Expand right sidebar') : (S.side_dock_collapse || 'Collapse right sidebar')}
+                    title={rightDockCollapsed ? (S.side_dock_expand || 'Expand right sidebar') : (S.side_dock_collapse || 'Collapse right sidebar')}
+                    onClick={() => setRightDockCollapsed((value) => !value)}
+                  >
+                    {rightDockCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                  </button>
+                  {dockTimelineAvailable ? (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeRightDockPanel === 'timeline'}
+                      className={`kb-chat-side-tab ${activeRightDockPanel === 'timeline' ? 'is-active' : ''}`}
+                      onClick={() => activateDockPanel('timeline')}
+                    >
+                      <ClockCircleOutlined />
+                      <span>{S.timeline_label}</span>
+                      <strong>{timelineItems.length}</strong>
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeRightDockPanel === 'shelf'}
+                    className={`kb-chat-side-tab ${activeRightDockPanel === 'shelf' ? 'is-active' : ''}`}
+                    onClick={() => activateDockPanel('shelf')}
+                  >
+                    <BookOutlined />
+                    <span>{S.shelf_title}</span>
+                    {citationShelfCount > 0 ? <strong>{citationShelfCount}</strong> : null}
+                  </button>
+                  {dockReaderAvailable ? (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeRightDockPanel === 'reader'}
+                      className={`kb-chat-side-tab ${activeRightDockPanel === 'reader' ? 'is-active' : ''}`}
+                      onClick={() => activateDockPanel('reader')}
+                    >
+                      <ReadOutlined />
+                      <span>{S.side_dock_reader || 'Reader'}</span>
+                    </button>
+                  ) : null}
                 </div>
-              </aside>
-            ) : null}
-            {desktopReaderVisible ? (
-              <aside className="hidden h-full shrink-0 xl:flex">
-                {!readerCollapsed ? (
-                  <div
-                    className={`w-2 shrink-0 cursor-col-resize transition ${
-                      readerResizing
-                        ? 'bg-[var(--accent)]/30'
-                        : 'bg-transparent hover:bg-black/[0.05] dark:hover:bg-white/[0.05]'
-                    }`}
-                    onPointerDown={beginReaderResize}
-                    onPointerMove={handleReaderResizeMove}
-                    onPointerUp={commitReaderResize}
-                    onPointerCancel={cancelReaderResize}
-                  />
-                ) : null}
-                <div
-                  className={`flex h-full shrink-0 border-l border-[var(--border)] ${
-                    readerResizing ? 'bg-[var(--panel)]' : 'bg-[var(--panel)]/70 backdrop-blur-sm'
-                  } ${
-                    readerCollapsed ? 'w-12' : ''
-                  }`}
-                  style={readerCollapsed ? undefined : {
-                    width: `${readerWidth}px`,
-                    transition: readerResizing ? 'none' : DESKTOP_READER_WIDTH_TRANSITION,
-                  }}
-                >
-                  {readerCollapsed ? (
-                    <div className="flex h-full w-12 flex-col items-center justify-between py-3">
-                      <button
-                        type="button"
-                        className="rounded-full border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-xs text-black/65 transition hover:border-[var(--accent)] hover:text-[var(--accent)] dark:text-white/65"
-                        onClick={() => setReaderCollapsed(false)}
-                        title="Expand reader"
-                      >
-                        {'<'}
-                      </button>
-                      <div className="flex flex-1 items-center justify-center px-1">
-                        <div className="[writing-mode:vertical-rl] rotate-180 text-xs text-black/45 dark:text-white/45">
-                          {stripSourceExt(String(readerPayload?.sourceName || '').trim()) || 'Reader'}
+                <div className="kb-chat-side-body">
+                  {dockTimelineAvailable ? (
+                    <section className={`kb-chat-side-panel kb-chat-side-timeline ${activeRightDockPanel === 'timeline' ? 'is-active' : ''}`}>
+                      <div className="kb-chat-side-panel-head">
+                        <div>
+                          <div className="kb-chat-side-panel-title">{S.timeline_label}</div>
+                          <div className="kb-chat-side-panel-subtitle">{S.timeline_badge.replace('{n}', String(timelineItems.length))}</div>
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        className="rounded-full border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-xs text-black/65 transition hover:border-[var(--accent)] hover:text-[var(--accent)] dark:text-white/65"
-                        onClick={() => setReaderOpen(false)}
-                        title="Close reader"
-                      >
-                        x
-                      </button>
-                    </div>
-                  ) : (
-                    <PaperGuideReaderDrawer
-                      open={readerOpen}
-                      payload={readerPayload}
-                      onClose={() => setReaderOpen(false)}
-                      onAppendSelection={appendReaderSelection}
-                      presentation="inline"
-                      onCollapse={() => setReaderCollapsed(true)}
-                      sessionHighlights={activeReaderSessionHighlights}
-                      onAddSessionHighlight={addReaderSessionHighlight}
-                      onRemoveSessionHighlight={removeReaderSessionHighlight}
-                      onLocateResult={handleReaderLocateResult}
-                    />
-                  )}
+                      <div className="kb-chat-timeline-list is-docked">
+                        {timelineItems.map((item) => (
+                          <button
+                            key={`m-timeline-dock-${item.userMsgId}-${item.order}`}
+                            type="button"
+                            className={`kb-chat-timeline-item ${
+                              activeTimelineUserMsgId === item.userMsgId
+                                ? 'is-active'
+                                : ''
+                            } ${item.hasAnswer ? 'is-ready' : 'is-pending'}`}
+                            aria-current={activeTimelineUserMsgId === item.userMsgId ? 'step' : undefined}
+                            aria-label={`Q${item.order}: ${item.questionPreview}`}
+                            title={item.questionPreview}
+                            onClick={() => jumpToTimelineItem(item)}
+                          >
+                            <span className="kb-chat-timeline-item-node" aria-hidden="true" />
+                            <div className="kb-chat-timeline-item-meta">
+                              <span className="kb-chat-timeline-item-order">Q{item.order}</span>
+                              <span className={`kb-chat-timeline-item-status ${item.hasAnswer ? 'is-ready' : 'is-pending'}`}>
+                                {item.hasAnswer ? S.timeline_answered : S.timeline_pending_qa}
+                              </span>
+                            </div>
+                            <div className="kb-chat-timeline-item-text">
+                              {item.questionPreview}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                  <section className={`kb-chat-side-panel kb-chat-side-shelf ${activeRightDockPanel === 'shelf' ? 'is-active' : ''}`}>
+                    <div ref={setShelfDockTarget} className="kb-chat-side-shelf-host" />
+                  </section>
+                  {dockReaderAvailable ? (
+                    <section className={`kb-chat-side-panel kb-chat-side-reader ${activeRightDockPanel === 'reader' ? 'is-active' : ''}`}>
+                      <PaperGuideReaderDrawer
+                        open={readerOpen}
+                        payload={readerPayload}
+                        onClose={() => setReaderOpen(false)}
+                        onAppendSelection={appendReaderSelection}
+                        presentation="inline"
+                        onCollapse={() => setRightDockCollapsed(true)}
+                        onOpenStandalone={() => { void openReaderStandalone(readerPayload) }}
+                        sessionHighlights={activeReaderSessionHighlights}
+                        onAddSessionHighlight={addReaderSessionHighlight}
+                        onRemoveSessionHighlight={removeReaderSessionHighlight}
+                        onLocateResult={handleReaderLocateResult}
+                        onAddSelectionToShelf={addReaderSelectionToShelf}
+                      />
+                    </section>
+                  ) : null}
                 </div>
               </aside>
             ) : null}
@@ -1306,10 +1470,12 @@ export default function ChatPage() {
           payload={readerPayload}
           onClose={() => setReaderOpen(false)}
           onAppendSelection={appendReaderSelection}
+          onOpenStandalone={() => { void openReaderStandalone(readerPayload) }}
           sessionHighlights={activeReaderSessionHighlights}
           onAddSessionHighlight={addReaderSessionHighlight}
           onRemoveSessionHighlight={removeReaderSessionHighlight}
           onLocateResult={handleReaderLocateResult}
+          onAddSelectionToShelf={addReaderSelectionToShelf}
         />
       ) : null}
     </div>

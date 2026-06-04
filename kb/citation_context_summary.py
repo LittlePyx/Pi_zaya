@@ -137,6 +137,7 @@ def build_system_b_context_summary(
     source: Any = "",
     reference_entry: Any = "",
     locator: Any = "",
+    locale: str = "",
 ) -> str:
     text = clean_display_text(context, max_len=520)
     if not text or looks_low_value_citation_context(text):
@@ -145,24 +146,53 @@ def build_system_b_context_summary(
     if "answer_context" in low:
         return ""
 
+    prefer_en = str(locale or "").strip().lower() == "en"
     if "missing cone" in low or "low-pass distortion" in low:
-        candidate = "当前论文在讨论三维显微成像的频率缺失或低通失真限制时引用它，用来追溯这一成像瓶颈的来源。"
+        candidate = (
+            "The current paper cites it while discussing frequency loss or low-pass distortion limits in 3D microscopy."
+            if prefer_en
+            else "当前论文在讨论三维显微成像的频率缺失或低通失真限制时引用它，用来追溯这一成像瓶颈的来源。"
+        )
     elif "admm" in low or "alternating direction method" in low:
-        candidate = "当前论文在讨论重建或优化方法时引用它，用来说明相关思路来自既有 ADMM 优化框架。"
+        candidate = (
+            "The current paper cites it while discussing reconstruction or optimization methods, linking the idea back to ADMM-style optimization."
+            if prefer_en
+            else "当前论文在讨论重建或优化方法时引用它，用来说明相关思路来自既有 ADMM 优化框架。"
+        )
     elif "single-shot compressive spectral imaging" in low:
-        candidate = "当前论文在追溯单次压缩光谱成像背景时引用它，用来补上这一成像路线的上游来源。"
+        candidate = (
+            "The current paper cites it as upstream background for single-shot compressive spectral imaging."
+            if prefer_en
+            else "当前论文在追溯单次压缩光谱成像背景时引用它，用来补上这一成像路线的上游来源。"
+        )
     elif (
         ("single-pixel" in low or "spi" in low)
         and ("focal plane" in low or "single-pixel detector" in low or "spd" in low or "cost" in low)
     ):
-        candidate = "当前论文在说明单像素探测相对焦平面阵列的硬件或成本差异时引用它。"
+        candidate = (
+            "The current paper cites it when contrasting single-pixel detection with focal-plane arrays in hardware or cost."
+            if prefer_en
+            else "当前论文在说明单像素探测相对焦平面阵列的硬件或成本差异时引用它。"
+        )
     elif "structured detection" in low or ("super-resolution" in low and "sectioning" in low):
-        candidate = "当前论文在讨论结构化检测如何兼顾分辨率、信噪比和光学切片时引用它。"
+        candidate = (
+            "The current paper cites it when discussing how structured detection balances resolution, SNR, and optical sectioning."
+            if prefer_en
+            else "当前论文在讨论结构化检测如何兼顾分辨率、信噪比和光学切片时引用它。"
+        )
     elif "detector-array" in low or "calibrated detector" in low:
-        candidate = "当前论文在说明探测器阵列或标定设计时引用它，用来连接当前方法与已有硬件方案。"
+        candidate = (
+            "The current paper cites it when discussing detector-array or calibration design, connecting the method to prior hardware approaches."
+            if prefer_en
+            else "当前论文在说明探测器阵列或标定设计时引用它，用来连接当前方法与已有硬件方案。"
+        )
     elif re.search(r"\bcites?\b.+\bwhen\b", low):
         focus = _first_sentence(text, max_len=120)
-        candidate = f"当前论文在这一语境中引用它：{focus}" if focus else ""
+        candidate = (
+            f"The current paper cites it in this context: {focus}"
+            if prefer_en and focus
+            else (f"当前论文在这一语境中引用它：{focus}" if focus else "")
+        )
     else:
         candidate = ""
 

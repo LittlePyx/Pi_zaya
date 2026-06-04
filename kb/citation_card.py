@@ -10,6 +10,98 @@ from kb.evidence_text import clean_display_text, finish_evidence_text, source_ti
 CITATION_CARD_DISPLAY_CONTRACT_VERSION = 2
 CITATION_CARD_VIEW_CONTRACT_VERSION = 2
 
+_CARD_LABELS: dict[str, dict[str, str]] = {
+    "zh": {
+        "warning": "提醒",
+        "takeaway_system_a": "证据重点",
+        "takeaway_system_b": "上游作用",
+        "evidence": "原文证据",
+        "source_location": "原文位置",
+        "current_citation_location": "当前论文引用处",
+        "context_summary": "语境摘要",
+        "citation_context": "引用语境",
+        "reference_entry": "上游文献条目",
+        "support_system_a": "可靠度",
+        "support_system_b": "说明",
+        "header_system_a": "答案依据",
+        "header_system_b": "上游引用",
+        "title_system_a": "答案依据",
+        "title_system_b": "上游参考文献",
+        "answer_point": "答案要点",
+        "answer_sentence": "答案里的这句话",
+        "citation_location": "引用出现位置",
+        "quality_system_b_high": "上游来源清楚",
+        "quality_system_b_mid": "可追溯来源",
+        "quality_system_b_low": "需要核对来源",
+        "quality_system_a_high": "证据匹配",
+        "quality_system_a_mid": "候选依据",
+        "quality_system_a_low": "需要核对",
+        "support_label_review": "这条依据的可靠度",
+        "candidate_support": "这条引用只能作为候选依据；请打开原文核对答案句和命中片段是否真正对应。",
+        "warning_mismatch": "答案句和命中片段术语冲突，已尽量抑制链接；如果仍看到这张卡，请优先打开原文核对。",
+        "warning_candidate": "这条链接只是候选依据，建议打开原文确认语境。",
+        "warning_upstream_incomplete": "这条上游参考信息不完整，建议打开引用语境确认。",
+        "trace_complete": "答案句命中了当前论文的引用语境，该语境再指向这篇上游文献。",
+        "trace_answer_context_only": "目前只拿到了答案句里的引用线索，还没有定位到当前论文正文中的引用语境。",
+        "trace_missing_context": "缺少当前论文里围绕该引用的正文语境，需要打开引用语境核对。",
+        "trace_reference_entry": "当前语境看起来像参考文献条目本身，不足以说明答案句如何使用了它。",
+        "trace_review": "这条上游引用链还需要结合当前论文位置和参考条目核对。",
+        "trace_step_answer": "答案句",
+        "trace_step_context": "当前论文引用处",
+        "trace_step_review": "引用语境待核对",
+        "trace_step_reference": "上游文献",
+    },
+    "en": {
+        "warning": "Note",
+        "takeaway_system_a": "Evidence focus",
+        "takeaway_system_b": "Upstream role",
+        "evidence": "Source evidence",
+        "source_location": "Source location",
+        "current_citation_location": "Where current paper cites it",
+        "context_summary": "Context summary",
+        "citation_context": "Citation context",
+        "reference_entry": "Upstream reference entry",
+        "support_system_a": "Reliability",
+        "support_system_b": "Note",
+        "header_system_a": "Answer evidence",
+        "header_system_b": "Upstream citation",
+        "title_system_a": "Answer evidence",
+        "title_system_b": "Upstream reference",
+        "answer_point": "Answer point",
+        "answer_sentence": "Answer sentence",
+        "citation_location": "Citation location",
+        "quality_system_b_high": "Clear upstream source",
+        "quality_system_b_mid": "Traceable source",
+        "quality_system_b_low": "Needs source check",
+        "quality_system_a_high": "Evidence matched",
+        "quality_system_a_mid": "Candidate evidence",
+        "quality_system_a_low": "Needs review",
+        "support_label_review": "Evidence reliability",
+        "candidate_support": "This citation is only candidate evidence. Open the source to confirm the answer sentence and matched passage actually correspond.",
+        "warning_mismatch": "The answer sentence and matched passage use conflicting terms. The link was suppressed as much as possible; if this card still appears, check the source first.",
+        "warning_candidate": "This link is candidate evidence. Open the source to confirm the context.",
+        "warning_upstream_incomplete": "This upstream reference is incomplete. Open the citation context to verify it.",
+        "trace_complete": "The answer sentence hits citation context in the current paper, and that context points to this upstream reference.",
+        "trace_answer_context_only": "Only the citation cue in the answer sentence is available; the citing context in the current paper has not been located yet.",
+        "trace_missing_context": "The surrounding citing context in the current paper is missing, so open the citation context to verify it.",
+        "trace_reference_entry": "The current context looks like a bibliography entry, not enough to show how the answer sentence uses it.",
+        "trace_review": "This upstream citation chain still needs checking against the current paper location and bibliography entry.",
+        "trace_step_answer": "Answer sentence",
+        "trace_step_context": "Current paper citation",
+        "trace_step_review": "Citation context to check",
+        "trace_step_reference": "Upstream reference",
+    },
+}
+
+
+def _card_locale(value: Any = "") -> str:
+    return "en" if str(value or "").strip().lower() == "en" else "zh"
+
+
+def _card_label(locale: str, key: str) -> str:
+    labels = _CARD_LABELS.get(_card_locale(locale), _CARD_LABELS["zh"])
+    return labels.get(key) or _CARD_LABELS["zh"].get(key) or key
+
 
 def _clean_text(value: Any, *, max_len: int = 520) -> str:
     return clean_display_text(value, max_len=max_len)
@@ -142,7 +234,7 @@ def _card_visible_sections(out: Mapping[str, Any], *, route: str) -> list[str]:
         and str(out.get("card_reference_entry") or "").strip()
         and (
             "missing_reference_title" in flags
-            or str(out.get("card_title") or "").strip() in {"", "上游参考文献"}
+            or str(out.get("card_title") or "").strip() in {"", "上游参考文献", "Upstream reference"}
         )
     ):
         sections.append("reference")
@@ -200,7 +292,7 @@ def _append_card_view_section(
     )
 
 
-def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
+def _build_card_view(out: Mapping[str, Any], *, route: str, locale: str = "") -> dict[str, Any]:
     is_system_b = route == "system_b"
     title = _clean_text(out.get("card_title"), max_len=220)
     subtitle = _clean_text(out.get("card_subtitle"), max_len=220)
@@ -211,7 +303,7 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
         _append_card_view_section(
             sections,
             section_id="warning",
-            label="提醒",
+            label=_card_label(locale, "warning"),
             text=str(out.get("card_warning") or ""),
             kind="warning",
             tone="warning",
@@ -219,7 +311,7 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
     _append_card_view_section(
         sections,
         section_id="takeaway",
-        label=str(out.get("card_takeaway_label") or ("上游作用" if is_system_b else "证据重点")),
+        label=str(out.get("card_takeaway_label") or _card_label(locale, "takeaway_system_b" if is_system_b else "takeaway_system_a")),
         text=str(out.get("card_takeaway") or ""),
         kind="insight",
         tone="primary",
@@ -228,14 +320,14 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
         _append_card_view_section(
             sections,
             section_id="evidence",
-            label=str(out.get("card_evidence_label") or "原文证据"),
+            label=str(out.get("card_evidence_label") or _card_label(locale, "evidence")),
             text=str(out.get("card_evidence") or ""),
             kind="quote",
         )
         _append_card_view_section(
             sections,
             section_id="locator",
-            label=str(out.get("card_locator_label") or "原文位置"),
+            label=str(out.get("card_locator_label") or _card_label(locale, "source_location")),
             text=str(out.get("card_locator") or ""),
             kind="locator",
         )
@@ -243,21 +335,21 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
         _append_card_view_section(
             sections,
             section_id="locator",
-            label=str(out.get("card_locator_label") or "当前论文引用处"),
+            label=str(out.get("card_locator_label") or _card_label(locale, "current_citation_location")),
             text=str(out.get("card_locator") or ""),
             kind="locator",
         )
         _append_card_view_section(
             sections,
             section_id="context_summary",
-            label="语境摘要",
+            label=_card_label(locale, "context_summary"),
             text=str(out.get("card_context_summary") or ""),
             kind="summary",
         )
         _append_card_view_section(
             sections,
             section_id="evidence",
-            label=str(out.get("card_evidence_label") or "引用语境"),
+            label=str(out.get("card_evidence_label") or _card_label(locale, "citation_context")),
             text=str(out.get("card_evidence") or ""),
             kind="quote",
         )
@@ -265,7 +357,7 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
             _append_card_view_section(
                 sections,
                 section_id="reference",
-                label=str(out.get("card_reference_label") or "上游文献条目"),
+                label=str(out.get("card_reference_label") or _card_label(locale, "reference_entry")),
                 text=str(out.get("card_reference_entry") or ""),
                 kind="reference",
             )
@@ -279,7 +371,7 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
         _append_card_view_section(
             sections,
             section_id="support",
-            label=str(out.get("card_support_label") or ("说明" if is_system_b else "可靠度")),
+            label=str(out.get("card_support_label") or _card_label(locale, "support_system_b" if is_system_b else "support_system_a")),
             text=str(out.get("card_support_explanation") or ""),
             kind="support",
         )
@@ -296,7 +388,7 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
         "route": route,
         "kind": _clean_text(out.get("card_kind"), max_len=80),
         "header": {
-            "kicker": "上游引用" if is_system_b else "答案依据",
+            "kicker": _card_label(locale, "header_system_b" if is_system_b else "header_system_a"),
             "title": title,
             "subtitle": subtitle,
         },
@@ -311,7 +403,7 @@ def _build_card_view(out: Mapping[str, Any], *, route: str) -> dict[str, Any]:
     }
 
 
-def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]:
+def _finalize_card_output(card: dict[str, Any], *, route: str, locale: str = "") -> dict[str, Any]:
     out = dict(card)
     flags = _clean_quality_flags(out.get("card_quality_flags"))
     for key, limit in _CARD_TEXT_LIMITS.items():
@@ -379,9 +471,10 @@ def _finalize_card_output(card: dict[str, Any], *, route: str) -> dict[str, Any]
     if not str(out.get("card_evidence") or "").strip():
         out["card_evidence_label"] = _clean_text(out.get("card_evidence_label"), max_len=80)
     out["card_quality_flags"] = _dedup_strings(flags)
+    out["render_locale"] = _card_locale(locale)
     out["card_display_contract_version"] = CITATION_CARD_DISPLAY_CONTRACT_VERSION
     out["card_visible_sections"] = _card_visible_sections(out, route=route)
-    out["card_view"] = _build_card_view(out, route=route)
+    out["card_view"] = _build_card_view(out, route=route, locale=locale)
     return out
 
 
@@ -681,9 +774,9 @@ def _takeaway_from_english_evidence(evidence: str) -> str:
     return ""
 
 
-def _system_a_takeaway(*, claim: str, evidence: str, heading: str) -> str:
+def _system_a_takeaway(*, claim: str, evidence: str, heading: str, locale: str = "") -> str:
     claim_clean = _trim_takeaway(claim, max_len=110)
-    if claim_clean and _has_cjk(claim_clean) and not _looks_low_value_takeaway(claim_clean):
+    if _card_locale(locale) != "en" and claim_clean and _has_cjk(claim_clean) and not _looks_low_value_takeaway(claim_clean):
         return claim_clean
 
     evidence_takeaway = _trim_takeaway(_takeaway_from_english_evidence(evidence), max_len=110)
@@ -691,7 +784,7 @@ def _system_a_takeaway(*, claim: str, evidence: str, heading: str) -> str:
         return evidence_takeaway
 
     heading_clean = _clean_text(heading, max_len=120)
-    if _has_cjk(heading_clean) and evidence:
+    if _card_locale(locale) != "en" and _has_cjk(heading_clean) and evidence:
         candidate = f"这条证据对应“{heading_clean}”这一部分的关键表述。"
         if not _looks_low_value_takeaway(candidate):
             return candidate
@@ -721,10 +814,16 @@ def _looks_generic_system_b_text(value: str) -> bool:
     return len(tokens) <= 5
 
 
-def _system_b_explicit_takeaway(*, role: str, relation: str) -> str:
+def _system_b_explicit_takeaway(*, role: str, relation: str, locale: str = "") -> str:
     for value in (role, relation):
         text = _trim_takeaway(value, max_len=118)
-        if not text or not _has_cjk(text) or _looks_generic_system_b_text(text):
+        if not text or _looks_generic_system_b_text(text):
+            continue
+        if _card_locale(locale) == "en":
+            if _has_cjk(text):
+                continue
+            return _trim_takeaway(text, max_len=118)
+        if not _has_cjk(text):
             continue
         text = re.sub(r"^用户问[“\"].+?[”\"，,；;]\s*", "", text)
         text = re.sub(r"^这条参考(?:正好)?说明", "这篇上游文献说明", text)
@@ -733,45 +832,46 @@ def _system_b_explicit_takeaway(*, role: str, relation: str) -> str:
     return ""
 
 
-def _system_b_takeaway(*, title: str, claim: str, context: str, role: str, relation: str) -> str:
-    explicit = _system_b_explicit_takeaway(role=role, relation=relation)
+def _system_b_takeaway(*, title: str, claim: str, context: str, role: str, relation: str, locale: str = "") -> str:
+    explicit = _system_b_explicit_takeaway(role=role, relation=relation, locale=locale)
     if explicit:
         return explicit
 
     combined = " ".join(str(part or "") for part in (title, claim, context, role, relation)).lower()
+    prefer_en = _card_locale(locale) == "en"
     if "admm-net" in combined or "unfold" in combined or "unrolled" in combined:
-        return "这篇上游文献提供把迭代优化思想展开成可训练网络的前人线索。"
+        return "This upstream work links iterative optimization ideas to trainable network designs." if prefer_en else "这篇上游文献提供把迭代优化思想展开成可训练网络的前人线索。"
     if "admm" in combined or "alternating direction method" in combined:
-        return "这篇上游文献提供 ADMM 优化框架背景，用来判断当前论文是在借鉴既有方法。"
+        return "This upstream work provides ADMM optimization background for checking how the current paper builds on prior methods." if prefer_en else "这篇上游文献提供 ADMM 优化框架背景，用来判断当前论文是在借鉴既有方法。"
     if "single-shot compressive spectral imaging" in combined:
-        return "这篇上游文献提供单次压缩光谱成像的前人背景，是回答中相关概念的来源线索。"
+        return "This upstream work provides background for single-shot compressive spectral imaging." if prefer_en else "这篇上游文献提供单次压缩光谱成像的前人背景，是回答中相关概念的来源线索。"
     if "single-pixel imaging via compressive sampling" in combined or (
         "single-pixel" in combined and "compressive sampling" in combined
     ):
-        return "这篇上游文献是单像素压缩采样路线的经典来源，适合用来补上“单个探测器如何靠调制与重建成像”的基础背景。"
+        return "This upstream work is a classic source for the compressive-sampling route in single-pixel imaging." if prefer_en else "这篇上游文献是单像素压缩采样路线的经典来源，适合用来补上“单个探测器如何靠调制与重建成像”的基础背景。"
     if re.search(r"\b(?:baseline|compare|compared|comparison|against)\b", combined):
-        return "这篇上游文献在当前论文中主要作为对比基线或相关方法参照。"
+        return "This upstream work is mainly used as a comparison baseline or related-method reference." if prefer_en else "这篇上游文献在当前论文中主要作为对比基线或相关方法参照。"
     if re.search(r"\b(?:dataset|benchmark|evaluation|experiment)\b", combined):
-        return "这篇上游文献提供实验数据、评测场景或 benchmark 线索。"
+        return "This upstream work provides dataset, evaluation, or benchmark context." if prefer_en else "这篇上游文献提供实验数据、评测场景或 benchmark 线索。"
     if re.search(r"\b(?:architecture|network|model|module)\b", combined):
-        return "这篇上游文献提供模型结构或方法设计上的前人参考。"
+        return "This upstream work provides prior context for model architecture or method design." if prefer_en else "这篇上游文献提供模型结构或方法设计上的前人参考。"
     if re.search(r"\b(?:background|prior work|related work|origin|source)\b", combined):
-        return "这篇上游文献提供当前说法的相关工作背景和来源线索。"
+        return "This upstream work provides related-work background and source context for the claim." if prefer_en else "这篇上游文献提供当前说法的相关工作背景和来源线索。"
     return ""
 
 
-def _quality_label(score: float, *, route: str) -> str:
+def _quality_label(score: float, *, route: str, locale: str = "") -> str:
     if route == "system_b":
         if score >= 0.78:
-            return "上游来源清楚"
+            return _card_label(locale, "quality_system_b_high")
         if score >= 0.58:
-            return "可追溯来源"
-        return "需要核对来源"
+            return _card_label(locale, "quality_system_b_mid")
+        return _card_label(locale, "quality_system_b_low")
     if score >= 0.78:
-        return "证据匹配"
+        return _card_label(locale, "quality_system_a_high")
     if score >= 0.52:
-        return "候选依据"
-    return "需要核对"
+        return _card_label(locale, "quality_system_a_mid")
+    return _card_label(locale, "quality_system_a_low")
 
 
 def _dedup_strings(values: list[str] | tuple[str, ...]) -> list[str]:
@@ -811,6 +911,7 @@ def _compose_system_b_trace(
     raw_reference: str,
     reference_entry: str,
     score: float,
+    locale: str = "",
 ) -> dict[str, Any]:
     reference = reference_entry or raw_reference or title
     context_source = str(rec.get("citation_context_source") or rec.get("evidence_source") or "").strip().lower()
@@ -864,17 +965,21 @@ def _compose_system_b_trace(
     trace_score = max(0.0, min(1.0, trace_score))
 
     if trace_complete:
-        reason = "答案句命中了当前论文的引用语境，该语境再指向这篇上游文献。"
+        reason = _card_label(locale, "trace_complete")
     elif "answer_context_only" in flags:
-        reason = "目前只拿到了答案句里的引用线索，还没有定位到当前论文正文中的引用语境。"
+        reason = _card_label(locale, "trace_answer_context_only")
     elif "missing_citation_context" in flags:
-        reason = "缺少当前论文里围绕该引用的正文语境，需要打开引用语境核对。"
+        reason = _card_label(locale, "trace_missing_context")
     elif "context_is_reference_entry" in flags:
-        reason = "当前语境看起来像参考文献条目本身，不足以说明答案句如何使用了它。"
+        reason = _card_label(locale, "trace_reference_entry")
     else:
-        reason = "这条上游引用链还需要结合当前论文位置和参考条目核对。"
+        reason = _card_label(locale, "trace_review")
 
-    steps = ["答案句", "当前论文引用处", "上游文献"] if trace_complete else ["答案句", "引用语境待核对", "上游文献"]
+    steps = (
+        [_card_label(locale, "trace_step_answer"), _card_label(locale, "trace_step_context"), _card_label(locale, "trace_step_reference")]
+        if trace_complete
+        else [_card_label(locale, "trace_step_answer"), _card_label(locale, "trace_step_review"), _card_label(locale, "trace_step_reference")]
+    )
     return {
         "system_b_trace_complete": trace_complete,
         "system_b_trace_score": round(trace_score, 3),
@@ -899,10 +1004,10 @@ def _locator(rec: Mapping[str, Any]) -> str:
     return " · ".join(part for part in (heading, page, kind) if part)
 
 
-def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
+def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any]:
     source = _first_text(rec, "source_name", max_len=180) or _source_name(str(rec.get("source_path") or ""))
     heading = _first_text(rec, "heading_path", "title", max_len=180)
-    title = source or heading or "答案依据"
+    title = source or heading or _card_label(locale, "title_system_a")
     claim_raw = _first_text(rec, "answer_claim", max_len=420)
     evidence_raw = _first_text(rec, "evidence_quote", "summary_line", "raw", "cite_fmt", max_len=1400)
     evidence_raw_for_pack = _first_raw_value(rec, "evidence_quote", "summary_line", "raw", "cite_fmt") or evidence_raw
@@ -918,10 +1023,11 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
         heading=heading,
         location_label=locator,
         support_hint=support_hint,
+        locale=locale,
     )
     claim = pack.answer_claim
     evidence = pack.evidence_quote
-    takeaway = _system_a_takeaway(claim=claim, evidence=evidence, heading=heading)
+    takeaway = _system_a_takeaway(claim=claim, evidence=evidence, heading=heading, locale=locale)
     if not takeaway:
         takeaway = pack.evidence_focus
     if takeaway and (_sameish(takeaway, evidence) or _sameish(takeaway, claim)):
@@ -962,13 +1068,13 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
     support_label = ""
     support_text = ""
     if needs_review:
-        support_label = "这条依据的可靠度"
-        support_text = support or "这条引用只能作为候选依据；请打开原文核对答案句和命中片段是否真正对应。"
+        support_label = _card_label(locale, "support_label_review")
+        support_text = support or _card_label(locale, "candidate_support")
     warning = ""
     if "binding_mismatch" in flags:
-        warning = "答案句和命中片段术语冲突，已尽量抑制链接；如果仍看到这张卡，请优先打开原文核对。"
+        warning = _card_label(locale, "warning_mismatch")
     elif "candidate_binding" in flags or score < 0.55:
-        warning = "这条链接只是候选依据，建议打开原文确认语境。"
+        warning = _card_label(locale, "warning_candidate")
 
     return _finalize_card_output({
         "card_kind": "answer_evidence",
@@ -977,30 +1083,30 @@ def _compose_system_a(rec: dict[str, Any]) -> dict[str, Any]:
         "answer_claim": claim,
         "evidence_quote": evidence,
         "summary_line": evidence,
-        "card_takeaway_label": "证据重点",
+        "card_takeaway_label": _card_label(locale, "takeaway_system_a"),
         "card_takeaway": takeaway,
-        "card_claim_label": "答案要点",
+        "card_claim_label": _card_label(locale, "answer_point"),
         "card_claim": claim,
-        "card_locator_label": pack.location_label_name or "原文位置",
+        "card_locator_label": pack.location_label_name or _card_label(locale, "source_location"),
         "card_locator": pack.location_label or locator,
-        "card_evidence_label": pack.evidence_label or "原文证据",
+        "card_evidence_label": pack.evidence_label or _card_label(locale, "evidence"),
         "card_evidence": evidence,
         "card_support_label": support_label,
         "card_support_explanation": support_text,
-        "card_quality_label": _quality_label(score, route="system_a"),
+        "card_quality_label": _quality_label(score, route="system_a", locale=locale),
         "card_quality_score": round(score, 3),
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
-    }, route="system_a")
+    }, route="system_a", locale=locale)
 
 
-def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
+def _compose_system_b(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any]:
     source = _first_text(rec, "source_name", max_len=180) or _source_name(str(rec.get("source_path") or ""))
     raw_reference = _clean_reference_entry(rec.get("raw") or rec.get("cite_fmt"), max_len=900)
     explicit_title = _first_text(rec, "title", max_len=220)
     parsed_title = _fallback_system_b_title_from_raw_reference(raw_reference)
-    title = explicit_title or parsed_title or "上游参考文献"
+    title = explicit_title or parsed_title or _card_label(locale, "title_system_b")
     subtitle = " · ".join(
         part
         for part in (
@@ -1026,10 +1132,11 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         raw_reference=raw_reference,
         role_hint=role,
         relation_hint=relation,
+        locale=locale,
     )
     claim = pack.answer_claim
     context = pack.evidence_quote
-    takeaway = _system_b_takeaway(title=title, claim=claim, context=context, role=role, relation=relation)
+    takeaway = _system_b_takeaway(title=title, claim=claim, context=context, role=role, relation=relation, locale=locale)
     support = pack.support_explanation
 
     score = 0.72 + pack.score_delta
@@ -1060,22 +1167,23 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         raw_reference=raw_reference,
         reference_entry=pack.reference_entry,
         score=score,
+        locale=locale,
     )
 
-    evidence_label = pack.evidence_label or "引用语境"
+    evidence_label = pack.evidence_label or _card_label(locale, "citation_context")
     warning = pack.warning
     if not warning and score < 0.58:
-        warning = "这条上游参考信息不完整，建议打开引用语境确认。"
+        warning = _card_label(locale, "warning_upstream_incomplete")
 
     return _finalize_card_output({
         "card_kind": "upstream_reference",
         "card_title": title,
         "card_subtitle": subtitle,
-        "card_takeaway_label": "上游作用",
+        "card_takeaway_label": _card_label(locale, "takeaway_system_b"),
         "card_takeaway": takeaway,
-        "card_claim_label": "答案里的这句话",
+        "card_claim_label": _card_label(locale, "answer_sentence"),
         "card_claim": claim,
-        "card_locator_label": pack.location_label_name or "引用出现位置",
+        "card_locator_label": pack.location_label_name or _card_label(locale, "citation_location"),
         "card_locator": pack.location_label or locator,
         "card_evidence_label": evidence_label,
         "card_evidence": context,
@@ -1084,28 +1192,32 @@ def _compose_system_b(rec: dict[str, Any]) -> dict[str, Any]:
         "card_reference_entry": pack.reference_entry,
         "card_support_label": "",
         "card_support_explanation": support,
-        "card_quality_label": _quality_label(score, route="system_b"),
+        "card_quality_label": _quality_label(score, route="system_b", locale=locale),
         "card_quality_score": round(score, 3),
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
         **trace,
-    }, route="system_b")
+    }, route="system_b", locale=locale)
 
 
-def compose_citation_card(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+def compose_citation_card(detail: Mapping[str, Any] | None, *, locale: str = "") -> dict[str, Any]:
     rec = dict(detail or {}) if isinstance(detail, Mapping) else {}
     if not rec:
         return {}
-    card = _compose_system_b(rec) if bool(rec.get("is_inpaper")) else _compose_system_a(rec)
+    render_locale = _card_locale(locale or rec.get("render_locale") or rec.get("locale"))
+    rec["render_locale"] = render_locale
+    card = _compose_system_b(rec, locale=render_locale) if bool(rec.get("is_inpaper")) else _compose_system_a(rec, locale=render_locale)
     rec.update(card)
     return rec
 
 
-def refresh_citation_card_contract(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+def refresh_citation_card_contract(detail: Mapping[str, Any] | None, *, locale: str = "") -> dict[str, Any]:
     """Rebuild display contract fields after trusted text fields are patched."""
     rec = dict(detail or {}) if isinstance(detail, Mapping) else {}
     if not rec:
         return {}
+    render_locale = _card_locale(locale or rec.get("render_locale") or rec.get("locale"))
+    rec["render_locale"] = render_locale
     route = "system_b" if bool(rec.get("is_inpaper")) or str(rec.get("card_kind") or "") == "upstream_reference" else "system_a"
-    return _finalize_card_output(rec, route=route)
+    return _finalize_card_output(rec, route=route, locale=render_locale)

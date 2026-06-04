@@ -211,6 +211,45 @@ Optics EXPRESS
     assert "Optics EXPRESS" not in out
 
 
+def test_drop_publisher_article_page_label_headings_and_running_header():
+    src = """
+# Electrically driven lasing from a dual-cavity perovskite device
+
+## Abstract
+
+Abstract text.
+
+Nature | Vol 645 | 11 September 2025 | 371
+
+## Article
+
+![Fig. 1](./assets/page_2_fig_1.png)
+
+## Characterization of microcavity PeLEDs under d.c. and pulsed operations
+
+Body text.
+"""
+    out = postprocess_markdown(src)
+    assert "## Article" not in out
+    assert "Nature | Vol 645" not in out
+    assert "## Characterization of microcavity PeLEDs under d.c. and pulsed operations" in out
+
+
+def test_demote_extended_data_figure_heading_to_caption_text():
+    src = """
+# Paper Title
+
+## Results
+
+### Extended Data Fig. 4 | Performance of standard bottom-emission PeLEDs
+
+![Extended Data Fig. 4](./assets/page_12_fig_1.png)
+"""
+    out = postprocess_markdown(src)
+    assert "### Extended Data Fig. 4" not in out
+    assert "Extended Data Fig. 4 | Performance" in out
+
+
 def test_drop_affiliation_metadata_directly_below_abstract_heading():
     src = """
 # Sequentially Designed Compressed Sensing

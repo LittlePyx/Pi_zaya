@@ -151,13 +151,18 @@ def _ref_card_page_label(ui: Mapping[str, Any]) -> str:
     return f"pp. {min(start, end)}-{max(start, end)}"
 
 
+def _ref_card_locale(ui: Mapping[str, Any]) -> str:
+    return "en" if str((ui or {}).get("render_locale") or "").strip().lower() == "en" else "zh"
+
+
 def _ref_card_location_text(ui: Mapping[str, Any]) -> str:
     heading = _clean_ref_card_text(
         ui.get("heading_path") or ui.get("section_label") or ui.get("subsection_label"),
         max_len=220,
     )
     page = _ref_card_page_label(ui)
-    return " · ".join(part for part in (heading, page) if part)
+    sep = " / " if _ref_card_locale(ui) == "en" else " · "
+    return sep.join(part for part in (heading, page) if part)
 
 
 def _ref_card_section(
@@ -205,13 +210,14 @@ def build_ref_card_view(ui_meta: Mapping[str, Any] | None) -> dict[str, Any]:
     if not ui:
         return {}
     citation_meta = _as_dict(ui.get("citation_meta"))
+    locale = _ref_card_locale(ui)
     title = _clean_ref_card_text(
         citation_meta.get("title") or ui.get("display_name") or ui.get("source_path"),
         max_len=240,
     )
     subtitle = _ref_card_location_text(ui)
-    summary_label = _clean_ref_card_text(ui.get("summary_label"), max_len=80) or "导读"
-    summary_title = _clean_ref_card_text(ui.get("summary_title"), max_len=120) or "命中章节讲什么"
+    summary_label = _clean_ref_card_text(ui.get("summary_label"), max_len=80) or ("Guide" if locale == "en" else "导读")
+    summary_title = _clean_ref_card_text(ui.get("summary_title"), max_len=120) or ("What This Evidence Shows" if locale == "en" else "命中章节讲什么")
     sections: list[dict[str, Any]] = []
     _append_ref_card_section(
         sections,
@@ -229,8 +235,8 @@ def build_ref_card_view(ui_meta: Mapping[str, Any] | None) -> dict[str, Any]:
         sections,
         _ref_card_section(
             "why",
-            label="Relevance",
-            title="Why this is relevant",
+            label="Relevance" if locale == "en" else "相关性",
+            title="Why this is relevant" if locale == "en" else "为什么与当前问题相关",
             text=str(ui.get("why_line") or ""),
             kind="reason",
             source=str(ui.get("why_generation") or ""),
@@ -240,8 +246,8 @@ def build_ref_card_view(ui_meta: Mapping[str, Any] | None) -> dict[str, Any]:
         sections,
         _ref_card_section(
             "location",
-            label="位置",
-            title="原文位置",
+            label="Location" if locale == "en" else "位置",
+            title="Source location" if locale == "en" else "原文位置",
             text=subtitle,
             kind="locator",
             source=str(ui.get("primary_evidence_source") or ""),

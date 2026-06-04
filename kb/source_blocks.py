@@ -17,6 +17,7 @@ class SourceBlock(TypedDict, total=False):
     anchor_id: str
     kind: str
     heading_path: str
+    heading_level: int
     order_index: int
     page_start: int
     page_end: int
@@ -634,7 +635,7 @@ def build_source_blocks(
                 while heading_stack and heading_stack[-1][0] >= level:
                     heading_stack.pop()
                 heading_stack.append((level, text))
-                push("heading", text, line_start=line_no, line_end=line_no)
+                push("heading", text, line_start=line_no, line_end=line_no, extras={"heading_level": level})
             continue
 
         box_start = _BOX_START_RE.match(line)
@@ -902,6 +903,8 @@ def source_blocks_to_reader_anchors(blocks: list[SourceBlock]) -> list[dict]:
         }
         if int(block.get("number") or 0) > 0:
             rec["number"] = int(block.get("number") or 0)
+        if int(block.get("heading_level") or 0) > 0:
+            rec["heading_level"] = int(block.get("heading_level") or 0)
         if str(block.get("figure_id") or "").strip():
             rec["figure_id"] = str(block.get("figure_id") or "").strip()
         if int(block.get("paper_figure_number") or 0) > 0:

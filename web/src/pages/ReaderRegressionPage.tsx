@@ -3,6 +3,7 @@ import { Button } from 'antd'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type { ReaderLocateResult, ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
 import {
+  buildReaderRegressionDocResponse,
   buildReaderRegressionPayload,
   type ReaderRegressionScenario,
 } from '../testing/readerRegressionFixtures'
@@ -27,6 +28,7 @@ export default function ReaderRegressionPage() {
   const params = useMemo(() => new URLSearchParams(window.location.search), [])
   const scenario = parseScenario(params.get('scenario'))
   const payload = useMemo(() => buildReaderRegressionPayload(scenario), [scenario])
+  const documentOverride = useMemo(() => buildReaderRegressionDocResponse(scenario), [scenario])
   const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
   const [appendLog, setAppendLog] = useState('')
   const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
@@ -82,8 +84,8 @@ export default function ReaderRegressionPage() {
           </div>
         </div>
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-h-0 border-r border-[var(--border)]">
+      <div className="flex min-h-0 flex-1 flex-col xl:grid xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-h-0 flex-1 border-r border-[var(--border)]">
           <PaperGuideReaderDrawer
             open
             payload={payload}
@@ -94,9 +96,10 @@ export default function ReaderRegressionPage() {
             onAddSessionHighlight={addSessionHighlight}
             onRemoveSessionHighlight={removeSessionHighlight}
             onLocateResult={recordLocateResult}
+            documentOverride={documentOverride}
           />
         </div>
-        <aside className="min-h-0 overflow-y-auto bg-[var(--panel)]/35 px-4 py-4">
+        <aside className="max-h-72 min-h-0 overflow-y-auto bg-[var(--panel)]/35 px-4 py-4 xl:max-h-none">
           <div className="space-y-4">
             <section className="space-y-2">
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-black/40 dark:text-white/40">

@@ -1818,6 +1818,484 @@ _INLINE_EQ_RE = re.compile(r"\$[^$]{1,280}\$")
 _TEX_CMD_RE = re.compile(r"\\[a-zA-Z]{2,}")
 
 
+_LOCAL_SUMMARY_SECTION_PRIORITY: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("abstract", ("abstract", "summary", "摘要")),
+    ("fulltext", ("introduction", "background", "overview", "引言", "简介")),
+    ("fulltext", ("discussion", "conclusion", "conclusions", "结论", "讨论")),
+)
+
+
+def _clean_markdown_for_local_summary(text: str) -> str:
+    raw = str(text or "")
+    if not raw:
+        return ""
+    raw = re.sub(r"<!--\s*kb_page:\s*\d+\s*-->", " ", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"<!--[\s\S]*?-->", " ", raw)
+    raw = re.sub(r"!\[[^\]]*]\([^)]+\)", " ", raw)
+    raw = re.sub(r"\[([^\]]+)]\([^)]+\)", r"\1", raw)
+    raw = re.sub(r"`([^`]+)`", r"\1", raw)
+    raw = re.sub(r"\*\*([^*]+)\*\*", r"\1", raw)
+    raw = re.sub(r"\*([^*]+)\*", r"\1", raw)
+    raw = re.sub(r"^\s{0,3}#{1,6}\s+", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^\s{0,3}>\s?", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^\s*(?:[-*+]|\d+[.)])\s+", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$", " ", raw, flags=re.MULTILINE)
+    raw = re.sub(r"^\s*\|", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"\|\s*$", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"\s*\|\s*", " ", raw)
+    raw = re.sub(r"<[^>]+>", " ", raw)
+    raw = re.sub(r"\s+", " ", raw)
+    return raw.strip()
+
+
+def _local_summary_heading_key(text: str) -> str:
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", str(text or "").lower()).strip()
+
+
+def _heading_matches_local_summary_section(heading: str, needles: tuple[str, ...]) -> bool:
+    key = _local_summary_heading_key(heading)
+    if not key:
+        return False
+    if key in {"references", "bibliography", "acknowledgements", "acknowledgments"}:
+        return False
+    tokens = set(key.split())
+    for raw in needles:
+        needle = _local_summary_heading_key(raw)
+        if not needle:
+            continue
+        if key == needle or key.endswith(f" {needle}") or needle in tokens:
+            return True
+    return False
+
+
+def _extract_local_summary_section(md_text: str, needles: tuple[str, ...]) -> str:
+    lines = str(md_text or "").splitlines()
+    capture = False
+    level_start = 0
+    out: list[str] = []
+    for line in lines:
+        m = _MD_HEADING_RE.match(line)
+        if m:
+            level = len(str(m.group(1) or ""))
+            heading = str(m.group(2) or "").strip()
+            if capture and level <= level_start:
+                break
+            if (not capture) and _heading_matches_local_summary_section(heading, needles):
+                capture = True
+                level_start = level
+                continue
+        if capture:
+            out.append(line)
+            if len("\n".join(out)) > 12000:
+                break
+    return "\n".join(out).strip()
+
+
+def _local_summary_excerpt(text: str, *, max_len: int = 420) -> str:
+    clean = _clean_markdown_for_local_summary(text)
+    if not clean:
+        return ""
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[。！？!?])\s+|(?<=[A-Za-z0-9][.!?])\s+(?=[A-Z(])", clean)
+        if part.strip()
+    ]
+    picked: list[str] = []
+    for part in parts or [clean]:
+        if not part:
+            continue
+        picked.append(part)
+        joined = " ".join(picked).strip()
+        if len(picked) >= 2 or len(joined) >= 220:
+            break
+    summary = " ".join(picked).strip() or clean
+    return _compact_reader_open_text(summary, max_len=max_len)
+
+
+def _local_source_summary_meta(meta: dict | None) -> dict:
+    data = dict(meta or {})
+    source_path = str(data.get("source_path") or data.get("sourcePath") or "").strip()
+    if not source_path:
+        return {}
+    md_path = _resolve_reader_md_path(source_path)
+    if md_path is None:
+        return {}
+    try:
+        md_text = md_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return {}
+    for source, headings in _LOCAL_SUMMARY_SECTION_PRIORITY:
+        section = _extract_local_summary_section(md_text, headings)
+        summary = _local_summary_excerpt(section)
+        if not summary:
+            continue
+        return {
+            "summary_line": summary,
+            "summary_source": source,
+            "summary_provider": "local_markdown",
+            "summary_generation": "extractive_local_markdown",
+            "summary_quality": {
+                "contract_version": 1,
+                "ok": True,
+                "status": "grounded",
+                "score": 94 if source == "abstract" else 90,
+                "source": source,
+                "provider": "local_markdown",
+                "generation": "extractive_local_markdown",
+                "issues": [],
+                "export_ready": True,
+            },
+        }
+    return {}
+
+
+def _bibliometrics_accept_local_source_summary(meta: dict | None) -> bool:
+    data = dict(meta or {})
+    summary = str(data.get("summary_line") or data.get("summaryLine") or "").strip()
+    source = str(data.get("summary_source") or data.get("summarySource") or "").strip().lower()
+    quality = data.get("summary_quality") or data.get("summaryQuality")
+    quality_ok = bool(isinstance(quality, dict) and (quality.get("ok") or str(quality.get("status") or "").lower() == "grounded"))
+    if not summary:
+        return True
+    if source in {"metadata", "citation_context", "citation_card", "citation_card_view", "references_panel_hit"}:
+        return True
+    if source in {"abstract", "fulltext"} and quality_ok:
+        return False
+    return not quality_ok
+
+
+_LIBRARY_MATCH_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
+_LIBRARY_MATCH_TITLE_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "by",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "the",
+    "to",
+    "via",
+    "with",
+}
+
+
+def _library_match_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _library_match_normalize_doi(value: object) -> str:
+    text = _library_match_text(value)
+    if not text:
+        return ""
+    text = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text, flags=re.IGNORECASE).strip()
+    match = _LIBRARY_MATCH_DOI_RE.search(text)
+    doi = match.group(0) if match else text
+    doi = doi.strip().strip("<>[](){}").rstrip(".,;:")
+    return doi.lower() if re.match(r"^10\.\d{4,9}/", doi, flags=re.IGNORECASE) else ""
+
+
+def _library_match_first_doi(data: dict) -> str:
+    for key in (
+        "doi",
+        "doi_url",
+        "doiUrl",
+        "external_doi",
+        "externalDoi",
+        "external_doi_url",
+        "externalDoiUrl",
+        "raw",
+        "cite_fmt",
+        "citeFmt",
+        "card_reference_entry",
+        "cardReferenceEntry",
+    ):
+        doi = _library_match_normalize_doi(data.get(key))
+        if doi:
+            return doi
+    return ""
+
+
+def _library_match_year(value: object) -> str:
+    match = re.search(r"\b(?:19|20)\d{2}\b", _library_match_text(value))
+    return match.group(0) if match else ""
+
+
+def _library_match_first_year(data: dict) -> str:
+    for key in ("year", "external_year", "externalYear", "raw", "cite_fmt", "citeFmt", "source_name", "sourceName"):
+        year = _library_match_year(data.get(key))
+        if year:
+            return year
+    return ""
+
+
+def _library_match_normalize_title(value: object) -> str:
+    text = _library_match_text(value)
+    if not text:
+        return ""
+    text = re.sub(r"\.(?:pdf|md)$", "", text, flags=re.IGNORECASE)
+    text = text.replace("_", " ").replace("-", " ")
+    text = re.sub(r"^https?://\S+$", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bdoi\s*:\s*\S+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text.lower())
+    tokens = [tok for tok in text.split() if tok not in _LIBRARY_MATCH_TITLE_STOPWORDS]
+    return " ".join(tokens).strip()
+
+
+def _library_match_title_usable(title_key: str) -> bool:
+    key = _library_match_text(title_key)
+    if not key:
+        return False
+    if re.search(r"[\u4e00-\u9fff]", key):
+        return len(key) >= 12
+    tokens = key.split()
+    return len(tokens) >= 4 and len(key) >= 24
+
+
+def _library_match_title_candidates(data: dict) -> list[tuple[str, str]]:
+    is_inpaper = bool(data.get("is_inpaper") is True or data.get("isInpaper") is True)
+    keys = [
+        "title",
+        "external_title",
+        "externalTitle",
+        "card_title",
+        "cardTitle",
+        "main",
+    ]
+    if not is_inpaper:
+        keys.extend(["source_name", "sourceName"])
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for key in keys:
+        title = _library_match_text(data.get(key))
+        norm = _library_match_normalize_title(title)
+        if not _library_match_title_usable(norm) or norm in seen:
+            continue
+        seen.add(norm)
+        out.append((norm, title))
+    return out
+
+
+def _library_match_record_title_values(record: dict) -> list[str]:
+    meta = record.get("citation_meta") if isinstance(record.get("citation_meta"), dict) else {}
+    values = [
+        meta.get("title"),
+        meta.get("display_title"),
+        meta.get("external_title"),
+        meta.get("card_title"),
+    ]
+    path_text = _library_match_text(record.get("path"))
+    if path_text:
+        try:
+            values.append(Path(path_text).stem)
+        except Exception:
+            values.append(path_text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _library_match_text(value)
+        if not text:
+            continue
+        norm = _library_match_normalize_title(text)
+        if not _library_match_title_usable(norm) or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(text)
+    return out
+
+
+def _library_match_record_dois(record: dict) -> list[str]:
+    meta = record.get("citation_meta") if isinstance(record.get("citation_meta"), dict) else {}
+    values = [
+        meta.get("doi"),
+        meta.get("doi_url"),
+        meta.get("doiUrl"),
+        meta.get("external_doi"),
+        meta.get("externalDoi"),
+        meta.get("external_doi_url"),
+        meta.get("externalDoiUrl"),
+    ]
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        doi = _library_match_normalize_doi(value)
+        if doi and doi not in seen:
+            seen.add(doi)
+            out.append(doi)
+    return out
+
+
+def _library_match_record_year(record: dict) -> str:
+    meta = record.get("citation_meta") if isinstance(record.get("citation_meta"), dict) else {}
+    for value in (meta.get("year"), meta.get("external_year"), record.get("path")):
+        year = _library_match_year(value)
+        if year:
+            return year
+    return ""
+
+
+def _library_match_record_title(record: dict) -> str:
+    for title in _library_match_record_title_values(record):
+        if title:
+            return title
+    path_text = _library_match_text(record.get("path"))
+    return Path(path_text).stem if path_text else ""
+
+
+def _library_match_payload(
+    *,
+    status: str,
+    reason: str,
+    method: str = "",
+    confidence: float = 0.0,
+    record: dict | None = None,
+    query_doi: str = "",
+    query_title: str = "",
+) -> dict:
+    rec = record if isinstance(record, dict) else {}
+    dois = _library_match_record_dois(rec) if rec else []
+    return {
+        "status": status,
+        "matched": status == "in_library",
+        "confidence": round(float(confidence or 0.0), 3),
+        "method": method,
+        "reason": reason,
+        "path": _library_match_text(rec.get("path")),
+        "sha1": _library_match_text(rec.get("sha1")),
+        "title": _library_match_record_title(rec) if rec else "",
+        "doi": dois[0] if dois else "",
+        "year": _library_match_record_year(rec) if rec else "",
+        "query_doi": query_doi,
+        "query_title": query_title,
+    }
+
+
+def _library_match_unique_records(matches: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for record in matches:
+        key = _library_match_text(record.get("sha1")) or _library_match_text(record.get("path")).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(record)
+    return out
+
+
+def _match_citation_meta_to_library(meta: dict | None) -> dict:
+    data = dict(meta or {})
+    query_doi = _library_match_first_doi(data)
+    title_candidates = _library_match_title_candidates(data)
+    query_title = title_candidates[0][1] if title_candidates else ""
+    query_year = _library_match_first_year(data)
+    if not query_doi and not title_candidates:
+        return _library_match_payload(status="unknown", reason="insufficient_metadata")
+
+    try:
+        records = _lib_store().list_citation_records(limit=8000)
+    except Exception:
+        return _library_match_payload(
+            status="unknown",
+            reason="library_unavailable",
+            query_doi=query_doi,
+            query_title=query_title,
+        )
+    if not records:
+        return _library_match_payload(
+            status="not_in_library",
+            reason="library_empty",
+            query_doi=query_doi,
+            query_title=query_title,
+        )
+
+    if query_doi:
+        for record in records:
+            if query_doi in _library_match_record_dois(record):
+                return _library_match_payload(
+                    status="in_library",
+                    reason="doi_exact",
+                    method="doi",
+                    confidence=0.99,
+                    record=record,
+                    query_doi=query_doi,
+                    query_title=query_title,
+                )
+
+    title_entries: list[tuple[str, dict, str]] = []
+    for record in records:
+        rec_year = _library_match_record_year(record)
+        for title in _library_match_record_title_values(record):
+            norm = _library_match_normalize_title(title)
+            if _library_match_title_usable(norm):
+                title_entries.append((norm, record, rec_year))
+
+    for title_key, raw_title in title_candidates:
+        exact = [
+            record for rec_title, record, rec_year in title_entries
+            if rec_title == title_key and (not query_year or not rec_year or query_year == rec_year)
+        ]
+        exact_unique = _library_match_unique_records(exact)
+        if len(exact_unique) == 1:
+            method = "title_year" if query_year else "title"
+            return _library_match_payload(
+                status="in_library",
+                reason="title_exact",
+                method=method,
+                confidence=0.9 if query_year else 0.84,
+                record=exact_unique[0],
+                query_doi=query_doi,
+                query_title=raw_title,
+            )
+
+    for title_key, raw_title in title_candidates:
+        if len(title_key) < 32:
+            continue
+        fuzzy = [
+            record for rec_title, record, rec_year in title_entries
+            if (
+                (title_key in rec_title or rec_title in title_key)
+                and (not query_year or not rec_year or query_year == rec_year)
+            )
+        ]
+        fuzzy_unique = _library_match_unique_records(fuzzy)
+        if len(fuzzy_unique) == 1:
+            return _library_match_payload(
+                status="in_library",
+                reason="title_contained",
+                method="title_contains",
+                confidence=0.78,
+                record=fuzzy_unique[0],
+                query_doi=query_doi,
+                query_title=raw_title,
+            )
+
+    return _library_match_payload(
+        status="not_in_library",
+        reason="no_match",
+        query_doi=query_doi,
+        query_title=query_title,
+    )
+
+
+def _attach_library_match_contract(meta: dict | None) -> dict:
+    data = dict(meta or {})
+    match = _match_citation_meta_to_library(data)
+    data["library_match"] = match
+    data["library_match_status"] = match.get("status") or ""
+    data["library_match_confidence"] = match.get("confidence") or 0
+    data["library_match_method"] = match.get("method") or ""
+    data["library_match_reason"] = match.get("reason") or ""
+    data["library_match_path"] = match.get("path") or ""
+    data["library_match_sha1"] = match.get("sha1") or ""
+    data["library_match_title"] = match.get("title") or ""
+    data["library_match_doi"] = match.get("doi") or ""
+    data["library_match_year"] = match.get("year") or ""
+    return data
+
+
 @router.post("/open")
 def open_reference(body: OpenReferenceBody):
     ok, message = open_reference_source(
@@ -1875,6 +2353,10 @@ def get_bibliometrics(body: BibliometricsBody):
     meta = body.meta or {}
     settings = get_settings()
     hydrated = hydrate_repaired_citation_metadata(meta, db_dir=settings.db_dir)
+    if _bibliometrics_accept_local_source_summary(hydrated):
+        local_summary = _local_source_summary_meta(hydrated)
+        if local_summary:
+            hydrated = _bibliometrics_quality_contract({**dict(hydrated or {}), **local_summary})
     quality = hydrated.get("metadata_quality") if isinstance(hydrated.get("metadata_quality"), dict) else {}
     acceptance = (
         hydrated.get("metadata_export_acceptance")
@@ -1886,12 +2368,16 @@ def get_bibliometrics(body: BibliometricsBody):
         and bool(acceptance.get("export_ready"))
         and _bibliometrics_summary_export_ready(acceptance)
     ):
-        return _bibliometrics_quality_contract(hydrated)
+        return _attach_library_match_contract(_bibliometrics_quality_contract(hydrated))
     seed = {**dict(meta or {}), **dict(hydrated or {})}
     enriched = enrich_citation_detail_meta(seed)
     if not isinstance(enriched, dict):
         enriched = {}
     result = _bibliometrics_quality_contract({**seed, **enriched})
+    if _bibliometrics_accept_local_source_summary(result):
+        local_summary = _local_source_summary_meta(result)
+        if local_summary:
+            result = _bibliometrics_quality_contract({**result, **local_summary})
     acceptance = (
         result.get("metadata_export_acceptance")
         if isinstance(result.get("metadata_export_acceptance"), dict)
@@ -1899,7 +2385,7 @@ def get_bibliometrics(body: BibliometricsBody):
     )
     if _bibliometrics_summary_export_ready(acceptance):
         persist_repaired_citation_metadata(result, db_dir=settings.db_dir)
-    return result
+    return _attach_library_match_contract(result)
 
 
 @router.post("/shelf/metadata/repair")
@@ -2221,7 +2707,10 @@ def _resolve_reader_md_path(source_path: str) -> Path | None:
     if src.suffix.lower().endswith(".md"):
         try:
             if src.exists() and src.is_file():
-                return src.resolve(strict=False)
+                resolved = src.resolve(strict=False)
+                if not _path_within_roots(resolved, _reference_asset_roots()):
+                    return None
+                return resolved
         except Exception:
             return None
         return None
@@ -2351,6 +2840,66 @@ def _build_reader_anchors(md_text: str, *, md_path: Path) -> tuple[list[dict], l
     return anchors, blocks
 
 
+def _reader_doc_hash(md_text: str) -> str:
+    return hashlib.sha1(str(md_text or "").encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _reader_outline_quality(blocks: list[dict]) -> dict:
+    heading_blocks = [
+        dict(block)
+        for block in (blocks or [])
+        if str((block or {}).get("kind") or "").strip().lower() == "heading"
+    ]
+    heading_count = len(heading_blocks)
+    missing_level_count = 0
+    caption_heading_count = 0
+    publisher_heading_count = 0
+    has_document_title = False
+    max_heading_level = 0
+    for block in heading_blocks:
+        text = str(block.get("text") or "").strip()
+        heading_path = str(block.get("heading_path") or "").strip()
+        try:
+            level = int(block.get("heading_level") or 0)
+        except Exception:
+            level = 0
+        if level <= 0:
+            missing_level_count += 1
+        else:
+            max_heading_level = max(max_heading_level, level)
+            if level == 1:
+                has_document_title = True
+        if not has_document_title and heading_path and len([part for part in heading_path.split(" / ") if part.strip()]) == 1:
+            has_document_title = True
+        if re.match(r"^(?:fig(?:ure)?|table|extended\s+data\s+fig(?:ure)?)\.?\s+\d+", text, re.IGNORECASE):
+            caption_heading_count += 1
+        if text.strip().lower() in {"article", "research article", "letter", "nature", "communications", "optica"}:
+            publisher_heading_count += 1
+    issues: list[str] = []
+    if heading_count <= 0:
+        issues.append("no_outline")
+    if heading_count > 0 and not has_document_title:
+        issues.append("missing_document_title")
+    if missing_level_count > 0:
+        issues.append("missing_heading_level")
+    if caption_heading_count > 0:
+        issues.append("caption_heading")
+    if publisher_heading_count > 0:
+        issues.append("publisher_heading")
+    return {
+        "contract_version": 1,
+        "ok": not issues,
+        "status": "ok" if not issues else "warning",
+        "heading_count": heading_count,
+        "has_document_title": has_document_title,
+        "max_heading_level": max_heading_level,
+        "missing_heading_level_count": missing_level_count,
+        "caption_heading_count": caption_heading_count,
+        "publisher_heading_count": publisher_heading_count,
+        "issues": issues,
+    }
+
+
 @router.post("/reader/doc")
 def get_reader_doc(body: ReaderDocBody):
     source_path = str(body.source_path or "").strip()
@@ -2382,6 +2931,8 @@ def get_reader_doc(body: ReaderDocBody):
         "source_path": source_path,
         "source_name": source_name,
         "md_path": str(md_path),
+        "doc_hash": _reader_doc_hash(md_text),
+        "outline_quality": _reader_outline_quality(blocks),
         "markdown": md_render,
         "anchors": anchors,
         "blocks": blocks,

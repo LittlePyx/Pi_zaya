@@ -3535,8 +3535,17 @@ _SYSTEM_A_WRAPPED_EXCERPT_RE = re.compile(
 )
 
 
-def _system_b_prefers_zh(*texts: str) -> bool:
+def _locale_prefers_zh(locale: str, *texts: str) -> bool:
+    raw = str(locale or "").strip().lower()
+    if raw == "zh":
+        return True
+    if raw == "en":
+        return False
     return bool(re.search(r"[\u4e00-\u9fff]", " ".join(str(text or "") for text in texts)))
+
+
+def _system_b_prefers_zh(*texts: str, locale: str = "") -> bool:
+    return _locale_prefers_zh(locale, *texts)
 
 
 def _system_a_prefers_zh(*texts: str) -> bool:
@@ -4140,7 +4149,7 @@ def _assess_system_a_hit_binding(
     }
 
 
-def _system_b_upstream_role(context_line: str, ref_rec: dict) -> str:
+def _system_b_upstream_role(context_line: str, ref_rec: dict, *, locale: str = "") -> str:
     raw = " ".join(
         [
             str(context_line or ""),
@@ -4148,7 +4157,7 @@ def _system_b_upstream_role(context_line: str, ref_rec: dict) -> str:
             str((ref_rec or {}).get("raw") or ""),
         ]
     ).strip()
-    prefer_zh = _system_b_prefers_zh(context_line)
+    prefer_zh = _system_b_prefers_zh(context_line, locale=locale)
     if _SYSTEM_B_PRIOR_CONTEXT_RE.search(raw):
         if prefer_zh:
             return "作为当前论文引用的已有方法或前人工作，用来追溯回答中这个判断的上游来源。"
@@ -4162,8 +4171,8 @@ def _system_b_upstream_role(context_line: str, ref_rec: dict) -> str:
     return "Upstream bibliography reference used by the current answer; open it to inspect the cited source."
 
 
-def _system_b_user_relation(context_line: str, ref_rec: dict) -> str:
-    prefer_zh = _system_b_prefers_zh(context_line)
+def _system_b_user_relation(context_line: str, ref_rec: dict, *, locale: str = "") -> str:
+    prefer_zh = _system_b_prefers_zh(context_line, locale=locale)
     raw = " ".join([str(context_line or ""), str((ref_rec or {}).get("title") or "")]).strip()
     if _SYSTEM_B_PRIOR_CONTEXT_RE.search(raw):
         if prefer_zh:
@@ -4181,7 +4190,7 @@ def _system_b_reference_index_fallback_is_grounded(detail: dict) -> bool:
         return False
     if str(detail.get("routing_reason") or "").strip().lower() != "reference_index_fallback":
         return True
-    card = compose_citation_card(detail)
+    card = compose_citation_card(detail, locale=str(detail.get("render_locale") or ""))
     for key, value in card.items():
         if str(key).startswith("system_b_trace_") or str(key).startswith("card_"):
             detail[key] = value
@@ -4204,6 +4213,7 @@ def _annotate_inpaper_citations_with_hover_meta(
     anchor_ns: str = "",
     canonical_paths: list[str] | None = None,
     citation_plan: dict | None = None,
+    render_locale: str = "",
 ) -> tuple[str, list[dict]]:
     s = (md or "")
     if not s or "[" not in s:
@@ -4437,8 +4447,8 @@ def _annotate_inpaper_citations_with_hover_meta(
 
         def _enrich_system_b_detail_from_answer_context(detail: dict, *, token_start: int, token_end: int) -> None:
             context_line = _citation_context_line(token_start=token_start, token_end=token_end)
-            role_line = _system_b_upstream_role(context_line, detail)
-            relation_line = _system_b_user_relation(context_line, detail)
+            role_line = _system_b_upstream_role(context_line, detail, locale=render_locale)
+            relation_line = _system_b_user_relation(context_line, detail, locale=render_locale)
             if role_line and not str(detail.get("upstream_work_role") or "").strip():
                 detail["upstream_work_role"] = role_line
             if relation_line and not str(detail.get("user_question_relation") or "").strip():
@@ -4977,6 +4987,8 @@ def _annotate_inpaper_citations_with_hover_meta(
                         token_end=int(m.end()),
                     ):
                         detail["reference_index_fallback_legacy_identity_signal"] = True
+                    if render_locale:
+                        detail["render_locale"] = render_locale
                     if not _system_b_reference_index_fallback_is_grounded(detail):
                         items.append(f"[{int(n)}]")
                         plain_fallback_count += 1
@@ -5083,7 +5095,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             nums.append(primary)
         return (min(nums) if nums else 0, str(rec.get("source_name") or ""))
 
-    details = [compose_citation_card(rec) for rec in sorted(unique_details.values(), key=_detail_sort_key)]
+    details = [compose_citation_card(rec, locale=render_locale) for rec in sorted(unique_details.values(), key=_detail_sort_key)]
     return "\n".join(out_lines), details
 
 

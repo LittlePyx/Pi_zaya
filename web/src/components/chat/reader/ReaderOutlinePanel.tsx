@@ -5,12 +5,14 @@ interface ReaderOutlinePanelProps {
   items: ReaderOutlineItem[]
   activeItemId: string
   onSelectItem: (item: ReaderOutlineItem) => void
+  titleLabel: string
 }
 
 export function ReaderOutlinePanel({
   items,
   activeItemId,
   onSelectItem,
+  titleLabel,
 }: ReaderOutlinePanelProps) {
   const activeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -21,7 +23,7 @@ export function ReaderOutlinePanel({
   return (
     <div className="kb-reader-outline-panel" data-testid="reader-outline-panel">
       <div className="kb-reader-outline-head">
-        <div className="kb-reader-outline-title">Sections</div>
+        <div className="kb-reader-outline-title">{titleLabel}</div>
         <div className="kb-reader-outline-count">{items.length}</div>
       </div>
       <div className="kb-reader-outline-list">

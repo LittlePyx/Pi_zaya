@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -18,6 +19,7 @@ from api.message_render_contract import (
     render_payload_is_degraded_for_citations,
     strip_legacy_render_fields,
 )
+from api.deps import load_prefs
 from api.reference_card_quality import attach_refs_pack_polish_contract
 from kb import task_runtime
 from kb.paper_guide_contracts import (
@@ -77,10 +79,26 @@ _EQ_SOURCE_NOTE_RE = re.compile(
     r"\*\s*.*?\((\d{1,4})\).*?`([^`]+)`.*?(?:Open/Page)?[^\n]*\*",
     re.IGNORECASE,
 )
+
+
+def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kwargs):
+    call_kwargs = dict(kwargs)
+    locale = str(render_locale or "").strip()
+    if locale:
+        try:
+            params = inspect.signature(func).parameters
+            accepts_locale = "render_locale" in params or any(
+                param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+            )
+        except (TypeError, ValueError):
+            accepts_locale = True
+        if accepts_locale:
+            call_kwargs["render_locale"] = locale
+    return func(*args, **call_kwargs)
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 19
+_RENDER_CACHE_SCHEMA_VERSION = 20
 
 
 def _env_flag(name: str, default: str = "0") -> bool:
@@ -449,7 +467,7 @@ def _system_a_detail_needs_ref_primary_backfill(detail: dict) -> bool:
     return False
 
 
-def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_pack: dict | None) -> list[dict]:
+def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_pack: dict | None, *, render_locale: str = "") -> list[dict]:
     if not cite_details or not isinstance(ref_pack, dict):
         return cite_details
     primary_by_source = _ref_pack_primary_evidence_by_source(ref_pack)
@@ -488,7 +506,7 @@ def _backfill_system_a_cite_details_from_ref_pack(cite_details: list[dict], ref_
             location_bits.append(str(detail.get("anchor_kind") or "").strip())
         if location_bits:
             detail["location_label"] = " · ".join(part for part in location_bits if part)
-        out.append(compose_citation_card(detail))
+        out.append(compose_citation_card(detail, locale=render_locale))
     return out
 
 
@@ -530,6 +548,30 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
             if value not in (None, "", [], {}):
                 merged[key] = value
     return attach_refs_pack_polish_contract(merged)
+
+
+def _effective_citation_render_locale(ref_pack: dict | None = None) -> str:
+    packs: list[dict] = []
+    if isinstance(ref_pack, dict):
+        packs.append(ref_pack)
+        rendered_payload = ref_pack.get("rendered_payload")
+        if isinstance(rendered_payload, dict):
+            packs.append(rendered_payload)
+    for pack in packs:
+        raw = str(pack.get("render_locale") or "").strip().lower()
+        if raw in {"zh", "en"}:
+            return raw
+    try:
+        prefs = load_prefs()
+    except Exception:
+        prefs = {}
+    raw_card = str((prefs or {}).get("refs_card_locale") or "").strip().lower()
+    if raw_card in {"zh", "en"}:
+        return raw_card
+    raw_ui = str((prefs or {}).get("ui_locale") or "").strip().lower()
+    if raw_ui in {"zh", "en"}:
+        return raw_ui
+    return "zh"
 
 
 @lru_cache(maxsize=1)
@@ -1128,6 +1170,473 @@ def _repair_named_system_b_citation_markers(
     return out, True
 
 
+_SUPP_REF_DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", re.IGNORECASE)
+
+
+def _supp_ref_normalize_search_text(text: str) -> str:
+    raw = str(text or "").lower()
+    raw = re.sub(r"https?://(?:dx\.)?doi\.org/", " ", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", " ", raw)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _supp_ref_title_key(title: str) -> str:
+    return " ".join(_title_tokens_for_named_system_b(str(title or "")))
+
+
+def _supp_ref_clean_doi(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    raw = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", raw, flags=re.IGNORECASE).strip()
+    doi = extract_first_doi(raw) or raw
+    doi = re.sub(r"^(?:doi\s*:\s*)", "", str(doi or "").strip(), flags=re.IGNORECASE)
+    doi = doi.strip().rstrip(".,;)]}")
+    return doi.lower()
+
+
+def _supp_ref_doi_url(doi: str) -> str:
+    d = _supp_ref_clean_doi(doi)
+    return f"https://doi.org/{d}" if d else ""
+
+
+def _supp_ref_answer_dois(*texts: str) -> set[str]:
+    out: set[str] = set()
+    for text in texts:
+        for m in _SUPP_REF_DOI_RE.finditer(str(text or "")):
+            doi = _supp_ref_clean_doi(m.group(0))
+            if doi:
+                out.add(doi)
+    return out
+
+
+def _supp_ref_add_source_identity(
+    raw: dict | None,
+    out: list[dict],
+    seen: set[str],
+    *,
+    fallback_source_path: str = "",
+    fallback_source_name: str = "",
+) -> None:
+    if not isinstance(raw, dict):
+        return
+    source_path = str(
+        raw.get("source_path")
+        or raw.get("sourcePath")
+        or raw.get("md_path")
+        or raw.get("mdPath")
+        or fallback_source_path
+        or ""
+    ).strip()
+    source_name = str(
+        raw.get("source_name")
+        or raw.get("sourceName")
+        or raw.get("display_name")
+        or raw.get("displayName")
+        or fallback_source_name
+        or ""
+    ).strip()
+    source_sha1 = str(raw.get("source_sha1") or raw.get("sourceSha1") or "").strip().lower()
+    if not source_path:
+        return
+    key = _render_norm_source_key(source_path)
+    if not key or key in seen:
+        return
+    seen.add(key)
+    out.append({"source_path": source_path, "source_name": source_name, "source_sha1": source_sha1})
+
+
+def _supp_ref_collect_source_identities(
+    *,
+    ref_pack: dict | None,
+    cite_details: list[dict] | None,
+    provenance_segments: list[dict] | None,
+    limit: int = 12,
+) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(raw: dict | None, *, fallback_source_path: str = "", fallback_source_name: str = "") -> None:
+        if len(out) >= limit:
+            return
+        _supp_ref_add_source_identity(
+            raw,
+            out,
+            seen,
+            fallback_source_path=fallback_source_path,
+            fallback_source_name=fallback_source_name,
+        )
+
+    for detail in list(cite_details or []):
+        if isinstance(detail, dict):
+            add(detail)
+
+    packs: list[dict] = []
+    if isinstance(ref_pack, dict):
+        packs.append(ref_pack)
+        rendered_payload = ref_pack.get("rendered_payload")
+        if isinstance(rendered_payload, dict):
+            packs.append(rendered_payload)
+    for pack in packs:
+        add(pack.get("primary_evidence") if isinstance(pack.get("primary_evidence"), dict) else None)
+        for key in ("hits", "enriched_hits"):
+            for hit in list(pack.get(key) or []):
+                if not isinstance(hit, dict):
+                    continue
+                meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+                ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+                add(meta if isinstance(meta, dict) else None)
+                add(ui_meta if isinstance(ui_meta, dict) else None)
+                add(ui_meta.get("reader_open") if isinstance(ui_meta.get("reader_open"), dict) else None)
+                add(ui_meta.get("primary_evidence") if isinstance(ui_meta.get("primary_evidence"), dict) else None)
+                if len(out) >= limit:
+                    break
+            if len(out) >= limit:
+                break
+
+    for seg in list(provenance_segments or []):
+        if not isinstance(seg, dict):
+            continue
+        add(seg)
+        add(seg.get("reader_open") if isinstance(seg.get("reader_open"), dict) else None)
+        add(seg.get("locate_target") if isinstance(seg.get("locate_target"), dict) else None)
+        if len(out) >= limit:
+            break
+
+    return out[:limit]
+
+
+def _supp_ref_iter_index_rows(
+    index_data: dict | None,
+    source_identities: list[dict],
+) -> list[dict]:
+    rows: list[dict] = []
+    seen_docs: set[str] = set()
+    for source in source_identities:
+        if not isinstance(source, dict):
+            continue
+        source_path = str(source.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        doc = _reference_index_doc_for_source(
+            index_data,
+            source_path,
+            source_sha1=str(source.get("source_sha1") or "").strip().lower(),
+        )
+        if not isinstance(doc, dict):
+            continue
+        doc_key = _render_norm_source_key(str(doc.get("path") or source_path))
+        if doc_key in seen_docs:
+            continue
+        seen_docs.add(doc_key)
+        refs = doc.get("refs")
+        if not isinstance(refs, dict):
+            continue
+        display_source_path = str(doc.get("path") or source_path).strip()
+        display_source_name = str(doc.get("name") or source.get("source_name") or _source_name_from_path(display_source_path)).strip()
+        for raw_num, raw_ref in sorted(refs.items(), key=lambda item: int(item[0]) if str(item[0]).isdigit() else 10**9):
+            if not isinstance(raw_ref, dict):
+                continue
+            try:
+                ref_num = int(raw_num)
+            except Exception:
+                continue
+            if ref_num <= 0:
+                continue
+            ref2 = _normalize_reference_for_popup(raw_ref) or {}
+            raw_text = str(ref2.get("raw") or raw_ref.get("raw") or "").strip()
+            doi = _supp_ref_clean_doi(str(ref2.get("doi") or raw_ref.get("doi") or extract_first_doi(raw_text) or ""))
+            title = str(ref2.get("title") or raw_ref.get("title") or "").strip()
+            rows.append(
+                {
+                    "source_path": display_source_path,
+                    "source_name": display_source_name,
+                    "ref_num": ref_num,
+                    "ref": raw_ref,
+                    "ref_norm": ref2,
+                    "raw": raw_text,
+                    "doi": doi,
+                    "doi_url": str(ref2.get("doi_url") or raw_ref.get("doi_url") or _supp_ref_doi_url(doi)).strip(),
+                    "title": title,
+                    "authors": str(ref2.get("authors") or raw_ref.get("authors") or "").strip(),
+                    "venue": str(ref2.get("venue") or raw_ref.get("venue") or "").strip(),
+                    "year": str(ref2.get("year") or raw_ref.get("year") or "").strip(),
+                    "volume": str(ref2.get("volume") or raw_ref.get("volume") or "").strip(),
+                    "issue": str(ref2.get("issue") or raw_ref.get("issue") or "").strip(),
+                    "pages": str(ref2.get("pages") or raw_ref.get("pages") or "").strip(),
+                }
+            )
+    return rows
+
+
+def _supp_ref_venue_year_phrase(row: dict) -> str:
+    venue = str((row or {}).get("venue") or "").strip()
+    year = str((row or {}).get("year") or "").strip()
+    if not venue or not re.fullmatch(r"(?:19|20)\d{2}", year):
+        return ""
+    venue_norm = _supp_ref_normalize_search_text(venue)
+    if len(venue_norm) < 5:
+        return ""
+    if venue_norm in {"ieee", "acm", "springer", "elsevier", "nature", "science"}:
+        return ""
+    return _supp_ref_normalize_search_text(f"{venue} {year}")
+
+
+def _supp_ref_existing_identity(cite_details: list[dict] | None) -> tuple[set[tuple[str, int]], set[str], set[str]]:
+    ref_keys: set[tuple[str, int]] = set()
+    dois: set[str] = set()
+    titles: set[str] = set()
+    for detail in list(cite_details or []):
+        if not isinstance(detail, dict):
+            continue
+        source_path = str(detail.get("source_path") or detail.get("sourcePath") or "").strip()
+        try:
+            ref_num = int(detail.get("num") or 0)
+        except Exception:
+            ref_num = 0
+        if source_path and ref_num > 0:
+            ref_keys.add((_render_norm_source_key(source_path), ref_num))
+        doi = _supp_ref_clean_doi(str(detail.get("doi") or detail.get("doi_url") or detail.get("doiUrl") or ""))
+        if doi:
+            dois.add(doi)
+        title_key = _supp_ref_title_key(str(detail.get("title") or detail.get("card_title") or detail.get("cardTitle") or ""))
+        if title_key:
+            titles.add(title_key)
+    return ref_keys, dois, titles
+
+
+def _supp_ref_context_line(text: str, start: int, end: int) -> str:
+    raw = str(text or "")
+    if not raw:
+        return ""
+    try:
+        return extract_structured_cite_answer_context_line(
+            raw,
+            int(max(0, start)),
+            int(max(0, end)),
+            normalizer=_md_to_plain_text,
+        )
+    except Exception:
+        left = raw[: max(0, int(start))]
+        right = raw[int(end) :]
+        line_start = max(left.rfind("\n"), left.rfind("。"), left.rfind("."), left.rfind(";"), left.rfind("；"))
+        line_end_candidates = [
+            idx for idx in (right.find("\n"), right.find("。"), right.find("."), right.find(";"), right.find("；")) if idx >= 0
+        ]
+        line_end = min(line_end_candidates) if line_end_candidates else min(len(right), 220)
+        return raw[line_start + 1 : int(end) + line_end].strip()
+
+
+def _supp_ref_candidate_detail(
+    *,
+    row: dict,
+    anchor_ns: str,
+    answer_context: str,
+    render_locale: str,
+    match_method: str,
+    confidence: float,
+) -> dict:
+    source_path = str(row.get("source_path") or "").strip()
+    source_name = str(row.get("source_name") or _source_name_from_path(source_path)).strip()
+    ref_num = int(row.get("ref_num") or 0)
+    title = str(row.get("title") or "").strip()
+    raw = str(row.get("raw") or "").strip()
+    anchor = _build_anchor(anchor_ns, _source_cite_id(source_path), ref_num, source_name)
+    locale = str(render_locale or "").strip().lower()
+    if locale == "en":
+        support_relation = "The answer mentions this work, and it appears in the current paper's bibliography."
+        binding_reason = f"Matched from local reference index by {match_method}."
+    else:
+        support_relation = "回答提到了这项工作，且它出现在当前论文的参考文献表中。"
+        binding_reason = f"根据本地参考文献索引命中：{match_method}。"
+    rec = {
+        "num": ref_num,
+        "anchor": anchor,
+        "source_name": source_name,
+        "source_path": source_path,
+        "is_inpaper": True,
+        "citation_route": "system_b",
+        "routing_reason": f"unlinked_reference_candidate:{match_method}",
+        "routing_confidence": float(confidence),
+        "raw": raw,
+        "title": title,
+        "authors": str(row.get("authors") or "").strip(),
+        "venue": str(row.get("venue") or "").strip(),
+        "year": str(row.get("year") or "").strip(),
+        "volume": str(row.get("volume") or "").strip(),
+        "issue": str(row.get("issue") or "").strip(),
+        "pages": str(row.get("pages") or "").strip(),
+        "doi": str(row.get("doi") or "").strip(),
+        "doi_url": str(row.get("doi_url") or "").strip(),
+        "cite_fmt": raw,
+        "heading_path": "References",
+        "location_label": f"References / [{ref_num}]",
+        "evidence_quote": raw,
+        "evidence_source": "reference_index",
+        "citation_context": str(answer_context or "").strip(),
+        "citation_context_source": "answer_reference_mention",
+        "summary_line": str(answer_context or "").strip(),
+        "summary_source": "answer_reference_mention",
+        "answer_claim": str(answer_context or "").strip(),
+        "support_relation": support_relation,
+        "binding_status": "candidate",
+        "binding_confidence": float(confidence),
+        "binding_reason": binding_reason,
+        "render_locale": locale,
+    }
+    enrich_inpaper_detail_context(
+        rec,
+        source_path=source_path,
+        ref_num=ref_num,
+        answer_context=str(answer_context or "").strip(),
+        source_answer_context=str(answer_context or "").strip(),
+    )
+    return compose_citation_card(rec, locale=render_locale)
+
+
+def _build_unlinked_reference_candidates(
+    *,
+    answer_markdown: str,
+    rendered_body: str,
+    copy_text: str,
+    cite_details: list[dict] | None,
+    ref_pack: dict | None,
+    provenance_segments: list[dict] | None,
+    render_locale: str = "",
+    anchor_ns: str = "",
+    limit: int = 5,
+) -> list[dict]:
+    source_text = "\n\n".join([str(answer_markdown or ""), str(rendered_body or ""), str(copy_text or "")]).strip()
+    if not source_text:
+        return []
+    index_data = _load_reference_index_cached()
+    if not isinstance(index_data, dict) or not index_data:
+        return []
+    source_identities = _supp_ref_collect_source_identities(
+        ref_pack=ref_pack,
+        cite_details=cite_details,
+        provenance_segments=provenance_segments,
+    )
+    if not source_identities:
+        return []
+    rows = _supp_ref_iter_index_rows(index_data, source_identities)
+    if not rows:
+        return []
+
+    answer_dois = _supp_ref_answer_dois(source_text)
+    answer_norm = _supp_ref_normalize_search_text(_md_to_plain_text(source_text) or source_text)
+    existing_ref_keys, existing_dois, existing_title_keys = _supp_ref_existing_identity(cite_details)
+    phrase_rows: dict[str, list[dict]] = {}
+    for row in rows:
+        phrase = _supp_ref_venue_year_phrase(row)
+        if not phrase:
+            continue
+        if phrase and phrase in answer_norm:
+            phrase_rows.setdefault(phrase, []).append(row)
+
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add_candidate(row: dict, *, match_method: str, confidence: float, mention: str, start: int = -1, end: int = -1) -> None:
+        if len(out) >= limit:
+            return
+        source_path = str(row.get("source_path") or "").strip()
+        ref_num = int(row.get("ref_num") or 0)
+        source_key = _render_norm_source_key(source_path)
+        doi = _supp_ref_clean_doi(str(row.get("doi") or ""))
+        title_key = _supp_ref_title_key(str(row.get("title") or ""))
+        if (source_key, ref_num) in existing_ref_keys:
+            return
+        if doi and doi in existing_dois:
+            return
+        if title_key and title_key in existing_title_keys:
+            return
+        candidate_key = doi or f"{source_key}::{ref_num}" or title_key
+        if not candidate_key or candidate_key in seen:
+            return
+        seen.add(candidate_key)
+        context = _supp_ref_context_line(source_text, start, end) if start >= 0 and end >= start else str(mention or "").strip()
+        detail = _supp_ref_candidate_detail(
+            row=row,
+            anchor_ns=anchor_ns or "unlinked-reference",
+            answer_context=context,
+            render_locale=render_locale,
+            match_method=match_method,
+            confidence=confidence,
+        )
+        out.append(
+            {
+                "id": hashlib.sha1(f"{candidate_key}|{match_method}".encode("utf-8", "ignore")).hexdigest()[:12],
+                "status": "reference_list_hit",
+                "match_method": match_method,
+                "confidence": round(float(confidence), 3),
+                "mention": str(mention or "").strip(),
+                "source_path": source_path,
+                "source_name": str(row.get("source_name") or "").strip(),
+                "ref_num": ref_num,
+                "title": str(row.get("title") or "").strip(),
+                "authors": str(row.get("authors") or "").strip(),
+                "venue": str(row.get("venue") or "").strip(),
+                "year": str(row.get("year") or "").strip(),
+                "doi": doi,
+                "doi_url": str(row.get("doi_url") or _supp_ref_doi_url(doi)).strip(),
+                "raw": str(row.get("raw") or "").strip(),
+                "cite_detail": detail,
+            }
+        )
+
+    for row in rows:
+        doi = _supp_ref_clean_doi(str(row.get("doi") or ""))
+        if doi and doi in answer_dois:
+            pos = source_text.lower().find(doi)
+            add_candidate(
+                row,
+                match_method="doi_mention",
+                confidence=0.96,
+                mention=doi,
+                start=pos,
+                end=pos + len(doi) if pos >= 0 else -1,
+            )
+        if len(out) >= limit:
+            return out
+
+    for row in rows:
+        title = str(row.get("title") or "").strip()
+        pattern = _named_system_b_title_pattern(title)
+        if pattern is None:
+            continue
+        match = pattern.search(source_text)
+        if not match:
+            continue
+        if _title_match_has_nearby_cite_marker(source_text, int(match.start()), int(match.end())):
+            continue
+        add_candidate(
+            row,
+            match_method="title_mention",
+            confidence=0.9,
+            mention=match.group(1),
+            start=int(match.start()),
+            end=int(match.end()),
+        )
+        if len(out) >= limit:
+            return out
+
+    for phrase, matched_rows in phrase_rows.items():
+        if len(matched_rows) != 1:
+            continue
+        row = matched_rows[0]
+        add_candidate(
+            row,
+            match_method="unique_venue_year_mention",
+            confidence=0.68,
+            mention=" ".join([str(row.get("venue") or "").strip(), str(row.get("year") or "").strip()]).strip(),
+        )
+        if len(out) >= limit:
+            return out
+
+    return out
+
+
 def _should_link_inpaper_citations_for_message(*, rec: dict | None, content: str, hits: list[dict] | None = None) -> bool:
     raw = str(content or "")
     if not raw:
@@ -1217,6 +1726,7 @@ def _build_message_render_cache_key(
     refs_user_msg_id: int,
     ref_pack: dict | None,
     provenance: dict | None,
+    render_locale: str = "",
 ) -> str:
     base = {
         "schema": _RENDER_CACHE_SCHEMA_VERSION,
@@ -1227,6 +1737,7 @@ def _build_message_render_cache_key(
         "refs_user_msg_id": int(refs_user_msg_id or 0),
         "ref_sig": _stable_json_hash(ref_pack or {}),
         "provenance_sig": _stable_json_hash(provenance or {}),
+        "render_locale": str(render_locale or "").strip().lower(),
     }
     return _stable_json_hash(base)
 
@@ -1350,6 +1861,7 @@ def _merge_render_packet_contract_meta(
     enriched_provenance: dict | None,
     ref_pack: dict | None = None,
     chat_store=None,
+    render_locale: str = "",
 ) -> None:
     meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
     contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
@@ -1384,18 +1896,18 @@ def _merge_render_packet_contract_meta(
                     contracts_changed = True
     existing_packet = dict(contracts.get("render_packet") or {}) if isinstance(contracts.get("render_packet"), dict) else {}
     existing_cite_details = [
-        compose_citation_card(item)
+        compose_citation_card(item, locale=render_locale)
         for item in list(existing_packet.get("cite_details") or [])
         if isinstance(item, dict)
     ]
     current_cite_details = [
-        compose_citation_card(item)
+        compose_citation_card(item, locale=render_locale)
         for item in list(rec.get("cite_details") or [])
         if isinstance(item, dict)
     ]
     if isinstance(ref_pack, dict):
-        existing_cite_details = _backfill_system_a_cite_details_from_ref_pack(existing_cite_details, ref_pack)
-        current_cite_details = _backfill_system_a_cite_details_from_ref_pack(current_cite_details, ref_pack)
+        existing_cite_details = _backfill_system_a_cite_details_from_ref_pack(existing_cite_details, ref_pack, render_locale=render_locale)
+        current_cite_details = _backfill_system_a_cite_details_from_ref_pack(current_cite_details, ref_pack, render_locale=render_locale)
     allow_inpaper_citation_linking = _should_link_inpaper_citations_for_message(
         rec=rec,
         content=str(rec.get("content") or ""),
@@ -1454,6 +1966,17 @@ def _merge_render_packet_contract_meta(
     # render degraded), do not accidentally drop a newly-detected notice (e.g.
     # KB-miss) just because the existing packet had no notice.
     notice = existing_notice if (preserve_existing_render and existing_notice) else current_notice
+    selected_cite_details = existing_cite_details if preserve_existing_render else current_cite_details
+    unlinked_reference_candidates = _build_unlinked_reference_candidates(
+        answer_markdown=answer_markdown,
+        rendered_body=rendered_body,
+        copy_text=copy_text,
+        cite_details=selected_cite_details,
+        ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
+        provenance_segments=provenance_segments,
+        render_locale=render_locale,
+        anchor_ns=f"unlinked:{msg_id}",
+    )
     render_packet_model = _build_paper_guide_render_packet_model(
         answer_markdown=answer_markdown,
         notice=notice,
@@ -1461,7 +1984,7 @@ def _merge_render_packet_contract_meta(
         rendered_content=rendered_content,
         copy_markdown=copy_markdown,
         copy_text=copy_text,
-        cite_details=existing_cite_details if preserve_existing_render else current_cite_details,
+        cite_details=selected_cite_details,
         citation_validation=(
             existing_packet.get("citation_validation")
             if isinstance(existing_packet.get("citation_validation"), dict)
@@ -1479,6 +2002,7 @@ def _merge_render_packet_contract_meta(
         ),
         provenance_segments=provenance_segments,
         primary_evidence=provenance_primary_evidence,
+        unlinked_reference_candidates=unlinked_reference_candidates,
     )
     render_packet = _paper_guide_model_dump(render_packet_model)
     cache_changed = _sync_render_cache_packet(meta, render_packet)
@@ -1742,6 +2266,7 @@ def _enrich_provenance_segments_for_display(
     source_name = str(provenance.get("source_name") or "").strip()
     if (not source_name) and source_path:
         source_name = _source_name_from_path(source_path)
+    render_locale = _effective_citation_render_locale(None)
     has_visible_direct_segment = any(
         isinstance(item, dict)
         and str(item.get("evidence_mode") or "").strip().lower() == "direct"
@@ -1763,20 +2288,24 @@ def _enrich_provenance_segments_for_display(
         if rendered_segment:
             rendered_segment = _annotate_equation_tags_with_sources(rendered_segment, hits)
             rendered_segment = _normalize_equation_source_notes(rendered_segment)
-            rendered_segment, cite_details = _annotate_inpaper_citations_with_hover_meta(
+            rendered_segment, cite_details = _call_with_optional_render_locale(
+                _annotate_inpaper_citations_with_hover_meta,
                 rendered_segment,
                 hits,
                 anchor_ns=f"{anchor_ns}:seg:{idx}",
+                render_locale=render_locale,
             )
             if _should_retry_structured_cite_fallback(
                 raw_body=raw_markdown,
                 rendered_body=rendered_segment,
                 cite_details=cite_details,
             ):
-                rendered_segment, cite_details = _fallback_render_structured_citations(
+                rendered_segment, cite_details = _call_with_optional_render_locale(
+                    _fallback_render_structured_citations,
                     raw_markdown,
                     hits,
                     anchor_ns=f"{anchor_ns}:seg:{idx}",
+                    render_locale=render_locale,
                 )
         seg["display_markdown"] = _normalize_chat_markdown_for_display(rendered_segment or raw_markdown or str(seg.get("text") or ""))
         seg["cite_details"] = cite_details
@@ -1863,7 +2392,7 @@ def _build_anchor(anchor_ns: str, sid: str, ref_num: int, source_name: str) -> s
     return f"kb-cite-{sig}-{int(ref_num)}"
 
 
-def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_ns: str) -> tuple[str, list[dict]]:
+def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_ns: str, render_locale: str = "") -> tuple[str, list[dict]]:
     src_by_sid: dict[str, str] = {}
     sha_by_source: dict[str, str] = {}
     for hit in hits or []:
@@ -1949,6 +2478,7 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
             "doi": str(ref2.get("doi") or doi).strip(),
             "doi_url": doi_url,
             "cite_fmt": str(ref2.get("cite_fmt") or raw).strip(),
+            "render_locale": str(render_locale or "").strip().lower(),
         }
         local_answer_context = str(answer_context or "").strip()
         enrich_inpaper_detail_context(
@@ -1981,7 +2511,7 @@ def _fallback_render_structured_citations(md: str, hits: list[dict], *, anchor_n
     out = _STRUCT_CITE_SID_ONLY_RE.sub("", out)
     out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
     details = [
-        compose_citation_card(item)
+        compose_citation_card(item, locale=render_locale)
         for item in sorted(details_by_key.values(), key=lambda item: (int(item.get("num") or 0), str(item.get("source_name") or "")))
     ]
     return out, details
@@ -2015,6 +2545,7 @@ def enrich_messages_with_reference_render(
 
         raw_ref_pack = refs_by_user.get(last_user_msg_id) if isinstance(refs_by_user, dict) else None
         ref_pack = _effective_reference_render_pack(raw_ref_pack if isinstance(raw_ref_pack, dict) else None)
+        render_locale = _effective_citation_render_locale(ref_pack if isinstance(ref_pack, dict) else None)
         if isinstance(raw_ref_pack, dict) and isinstance(ref_pack, dict) and ref_pack:
             raw_ref_pack.update(ref_pack)
         hits = list((ref_pack or {}).get("hits") or []) if isinstance(ref_pack, dict) else []
@@ -2027,6 +2558,7 @@ def enrich_messages_with_reference_render(
             refs_user_msg_id=int(last_user_msg_id or 0),
             ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
             provenance=provenance_raw if isinstance(provenance_raw, dict) else None,
+            render_locale=render_locale,
         )
         cached = _extract_render_cache(
             rec.get("meta") if isinstance(rec.get("meta"), dict) else None,
@@ -2084,9 +2616,11 @@ def enrich_messages_with_reference_render(
                         output_mode=_message_answer_output_mode(rec),
                         canonical_paths=_canon_paths or None,
                     )
-                    rendered_body, cite_details = _annotate_inpaper_citations_with_hover_meta(
+                    rendered_body, cite_details = _call_with_optional_render_locale(
+                        _annotate_inpaper_citations_with_hover_meta,
                         rendered_body,
                         hits,
+                        render_locale=render_locale,
                         **annotate_kwargs,
                     )
                     if _should_retry_structured_cite_fallback(
@@ -2094,10 +2628,12 @@ def enrich_messages_with_reference_render(
                         rendered_body=rendered_body,
                         cite_details=cite_details,
                     ) and _citation_plan_system_b_budget(citation_plan) > 0:
-                        rendered_body, cite_details = _fallback_render_structured_citations(
+                        rendered_body, cite_details = _call_with_optional_render_locale(
+                            _fallback_render_structured_citations,
                             raw_body,
                             hits,
                             anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
+                            render_locale=render_locale,
                         )
                 else:
                     rendered_body = _strip_structured_cite_tokens_for_display(rendered_body)
@@ -2142,6 +2678,7 @@ def enrich_messages_with_reference_render(
             enriched_provenance=enriched_provenance if isinstance(enriched_provenance, dict) else None,
             ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
             chat_store=chat_store,
+            render_locale=render_locale,
         )
         _project_render_packet_compat_fields(rec)
         _maybe_strip_legacy_render_fields(rec, enabled=bool(render_packet_only))

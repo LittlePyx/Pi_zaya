@@ -8,9 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from kb.converter.pipeline import PDFConverter
 from kb.converter.config import ConvertConfig
+from kb.converter.post_processing import postprocess_markdown
 from kb.converter.page_figure_metadata import persist_page_figure_metadata
 from kb.converter.page_image_markdown import repair_broken_image_links
 from kb.converter.models import TextBlock
+from kb.source_blocks import build_source_blocks
 
 @pytest.fixture
 def sample_pdf(tmp_path):
@@ -81,6 +83,97 @@ def test_ensure_page_marker_inserts_and_normalizes_marker():
     assert PDFConverter._ensure_page_marker("# Page body", 2).startswith("<!-- kb_page: 3 -->")
     assert PDFConverter._ensure_page_marker("<!-- kb_page: 99 -->\n\n# Page body", 2).startswith("<!-- kb_page: 3 -->")
     assert PDFConverter._ensure_page_marker("", 0) == "<!-- kb_page: 1 -->"
+
+
+def test_title_fallback_from_filename_preserves_numbered_outline_depth(tmp_path):
+    title = "Advances and Challenges of Single-Pixel Imaging Based on Deep Learning"
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / f"LPR-2025-{title}.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+    md = """
+<!-- kb_page: 1 -->
+
+# Abstract
+
+This review summarizes the field.
+
+## 1. Introduction
+
+Intro text.
+
+## 4. Strategy and Advantages of Single-Pixel Imaging via Deep Learning
+
+## 4.1. Strategy of Single-Pixel Imaging via Deep Learning
+
+Strategy overview text.
+
+### 4.1.1. Data-Driven Strategy
+
+Body text.
+"""
+
+    injected = converter._inject_title_from_pdf_metadata(md, SimpleNamespace(metadata={}))
+    fixed = postprocess_markdown(injected)
+
+    assert f"# {title}" in fixed
+    assert "## Abstract" in fixed
+    assert "## 4. Strategy and Advantages of Single-Pixel Imaging via Deep Learning" in fixed
+    assert "### 4.1. Strategy of Single-Pixel Imaging via Deep Learning" in fixed
+    assert "#### 4.1.1. Data-Driven Strategy" in fixed
+
+    heading_paths = {
+        str(block.get("text") or ""): str(block.get("heading_path") or "")
+        for block in build_source_blocks(fixed, doc_id="doc")
+        if str(block.get("kind") or "") == "heading"
+    }
+    assert heading_paths["4. Strategy and Advantages of Single-Pixel Imaging via Deep Learning"] == (
+        f"{title} / 4. Strategy and Advantages of Single-Pixel Imaging via Deep Learning"
+    )
+    assert heading_paths["4.1. Strategy of Single-Pixel Imaging via Deep Learning"] == (
+        f"{title} / 4. Strategy and Advantages of Single-Pixel Imaging via Deep Learning / "
+        "4.1. Strategy of Single-Pixel Imaging via Deep Learning"
+    )
+    assert heading_paths["4.1.1. Data-Driven Strategy"] == (
+        f"{title} / 4. Strategy and Advantages of Single-Pixel Imaging via Deep Learning / "
+        "4.1. Strategy of Single-Pixel Imaging via Deep Learning / 4.1.1. Data-Driven Strategy"
+    )
+
+
+def test_existing_title_heading_is_promoted_to_document_root(tmp_path):
+    title = "Imaging biological tissue with high-throughput single-pixel compressive holography"
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / f"NatCommun-2021-{title}.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+    md = f"""
+<!-- kb_page: 1 -->
+
+## {title}
+
+## Abstract
+
+Body text.
+"""
+
+    fixed = converter._inject_title_from_pdf_metadata(md, SimpleNamespace(metadata={}))
+
+    assert f"# {title}" in fixed
+    assert f"## {title}" not in fixed
 
 
 def test_repair_broken_image_links_uses_page_marker_and_filename_hint(tmp_path):

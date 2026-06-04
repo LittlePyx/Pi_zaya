@@ -6,6 +6,7 @@ import type {
   MessageProvenanceLocateTarget,
   MessageProvenanceReaderOpen,
   MessageRenderPacket,
+  MessageUnlinkedReferenceCandidate,
 } from '../../api/chat'
 
 export interface MessageRenderPacketLite {
@@ -16,6 +17,7 @@ export interface MessageRenderPacketLite {
   copyText: string
   copyMarkdown: string
   citeDetails: MessageCitationDetail[]
+  unlinkedReferenceCandidates: MessageUnlinkedReferenceCandidate[]
   locateTarget: MessageProvenanceLocateTarget | null
   readerOpen: MessageProvenanceReaderOpen | null
 }
@@ -40,6 +42,9 @@ export function getMessageRenderPacket(message: Pick<Message, 'meta'>): MessageR
     copyMarkdown: String(raw.copy_markdown || '').trim(),
     citeDetails: Array.isArray(raw.cite_details)
       ? raw.cite_details.filter((item): item is MessageCitationDetail => Boolean(item) && typeof item === 'object')
+      : [],
+    unlinkedReferenceCandidates: Array.isArray(raw.unlinked_reference_candidates)
+      ? raw.unlinked_reference_candidates.filter((item): item is MessageUnlinkedReferenceCandidate => Boolean(item) && typeof item === 'object')
       : [],
     locateTarget: (raw.locate_target && typeof raw.locate_target === 'object')
       ? raw.locate_target as MessageProvenanceLocateTarget

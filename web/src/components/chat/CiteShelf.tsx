@@ -25,6 +25,8 @@ import { referencesApi } from '../../api/references'
 
 interface Props {
   open: boolean
+  visible?: boolean
+  presentation?: 'floating' | 'dock'
   items: CiteShelfItem[]
   readerLocateResults?: Record<string, ReaderLocateResult>
   sourceQualityRefreshToken?: number
@@ -428,6 +430,18 @@ type ShelfSummaryDisplay = {
   quality: ReturnType<typeof summaryQualityView>
 }
 
+const shelfSummarySourceLabels = (S: Record<string, string>) => ({
+  fulltext: S.shelf_summary_source_fulltext,
+  crossref: S.shelf_summary_source_crossref,
+  openalex: S.shelf_summary_source_openalex,
+  semanticScholar: S.shelf_summary_source_semantic_scholar,
+  doiLandingPage: S.shelf_summary_source_doi_landing_page,
+  abstract: S.shelf_summary_source_abstract,
+  citationContext: S.shelf_summary_source_citation_context,
+  citationCard: S.shelf_summary_source_citation_card,
+  metadata: S.shelf_summary_source_metadata,
+})
+
 const trustedArticleSummarySource = (source: string): boolean => [
   'abstract',
   'fulltext',
@@ -474,6 +488,7 @@ const shelfSummaryDisplay = (
   S: Record<string, string>,
 ): ShelfSummaryDisplay => {
   const quality = summaryQualityView(item, S)
+  const sourceLabels = shelfSummarySourceLabels(S)
   const source = String(item.summarySource || '').trim().toLowerCase()
   const existing = compactShelfSummaryCandidate(item.summaryLine)
   if (
@@ -485,7 +500,7 @@ const shelfSummaryDisplay = (
   ) {
     return {
       line: existing,
-      sourceLabel: summarySourceLabel('fulltext'),
+      sourceLabel: summarySourceLabel('fulltext', '', sourceLabels),
       quality: groundedDisplaySummaryQuality(quality, S),
     }
   }
@@ -499,7 +514,7 @@ const shelfSummaryDisplay = (
   ) {
     return {
       line: existing,
-      sourceLabel: summarySourceLabel(item.summarySource, item.summaryProvider),
+      sourceLabel: summarySourceLabel(item.summarySource, item.summaryProvider, sourceLabels),
       quality,
     }
   }
@@ -508,7 +523,7 @@ const shelfSummaryDisplay = (
   if (!item.isInpaper && viewSummary && !looksLowValueShelfSummary(viewSummary)) {
     return {
       line: viewSummary,
-      sourceLabel: summarySourceLabel('citation_card_view'),
+      sourceLabel: summarySourceLabel('citation_card_view', '', sourceLabels),
       quality,
     }
   }
@@ -517,7 +532,7 @@ const shelfSummaryDisplay = (
   if (!item.isInpaper && directEvidence && !looksLowValueShelfSummary(directEvidence)) {
     return {
       line: directEvidence,
-      sourceLabel: summarySourceLabel('citation_card'),
+      sourceLabel: summarySourceLabel('citation_card', '', sourceLabels),
       quality,
     }
   }
@@ -529,21 +544,23 @@ const shelfSummaryDisplay = (
   }
 }
 
-const metadataIssueChip = (code: string): string => {
+const metadataIssueChip = (code: string, S: Record<string, string>): string => {
   const key = String(code || '').trim().toLowerCase()
-  if (key === 'missing_doi') return '自动匹配 DOI'
-  if (key === 'doi_not_promoted') return '写入 DOI'
-  if (key === 'missing_authors') return '自动补作者'
-  if (key === 'missing_venue') return '自动补期刊/会议'
-  if (key === 'missing_year') return '自动补年份'
-  if (key === 'weak_or_missing_title') return '自动校正标题'
-  if (key === 'missing_source') return '来源缺失'
-  if (key.startsWith('external_metadata_')) return '外部元数据校验'
-  return key ? key.replace(/_/g, ' ') : '自动补全'
+  if (key === 'missing_doi') return S.shelf_issue_match_doi
+  if (key === 'doi_not_promoted') return S.shelf_issue_write_doi
+  if (key === 'missing_authors') return S.shelf_issue_missing_authors
+  if (key === 'missing_venue') return S.shelf_issue_missing_venue
+  if (key === 'missing_year') return S.shelf_issue_missing_year
+  if (key === 'weak_or_missing_title') return S.shelf_issue_fix_title
+  if (key === 'missing_source') return S.shelf_issue_missing_source
+  if (key.startsWith('external_metadata_')) return S.shelf_issue_external_metadata
+  return key ? key.replace(/_/g, ' ') : S.shelf_issue_auto_complete
 }
 
 export function CiteShelf({
   open,
+  visible,
+  presentation = 'floating',
   items,
   readerLocateResults = {},
   sourceQualityRefreshToken = 0,
@@ -570,6 +587,8 @@ export function CiteShelf({
   onDeleteSnapshot,
 }: Props) {
   const S = useT()
+  const isDockPresentation = presentation === 'dock'
+  const panelVisible = visible ?? open
   const [expandedSummaryKeys, setExpandedSummaryKeys] = useState<Record<string, boolean>>({})
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({})
   const [searchText, setSearchText] = useState('')
@@ -653,6 +672,33 @@ export function CiteShelf({
     return { labels, debugTitle }
   }
 
+  const libraryMatchView = (item: CiteShelfItem): { label: string; title: string; tone: 'ready' | 'missing' } | null => {
+    const status = String(item.libraryMatchStatus || '').trim().toLowerCase()
+    if (!status || status === 'unknown') return null
+    const method = String(item.libraryMatchMethod || '').trim().toLowerCase()
+    const methodLabel = method === 'doi'
+      ? S.shelf_library_match_doi
+      : method.includes('title')
+        ? S.shelf_library_match_title
+        : S.shelf_library_match_local
+    if (status === 'in_library') {
+      const matched = String(item.libraryMatchTitle || item.libraryMatchPath || item.libraryMatchDoi || '').trim()
+      return {
+        label: S.shelf_library_in_library,
+        title: matched ? `${methodLabel}: ${matched}` : methodLabel,
+        tone: 'ready',
+      }
+    }
+    if (status === 'not_in_library') {
+      return {
+        label: S.shelf_library_not_in_library,
+        title: S.shelf_library_not_in_library_tip,
+        tone: 'missing',
+      }
+    }
+    return null
+  }
+
   const qualityHints = (
     item: CiteShelfItem,
     display: ReturnType<typeof citationDisplay>,
@@ -665,14 +711,14 @@ export function CiteShelf({
     if (contract && Array.isArray(contract.issues) && contract.issues.length > 0) {
       for (const issue of contract.issues) {
         const code = String(issue.code || '').trim()
-        const chip = metadataIssueChip(code)
+        const chip = metadataIssueChip(code, S)
         if (chip && !chips.includes(chip)) chips.push(chip)
       }
       const needsRepair = metadataQualityNeedsRepair(item)
       const score = Number(contract.score || 0)
       const tip = needsRepair
-        ? `系统会用参考文献原文、索引缓存和 Crossref 自动补全；当前 Q${Number.isFinite(score) ? Math.round(score) : 0}。`
-        : '系统已记录元数据质量状态。'
+        ? S.shelf_metadata_repair_tip_score.replace('{score}', String(Number.isFinite(score) ? Math.round(score) : 0))
+        : S.shelf_metadata_recorded_tip
       return { chips: chips.slice(0, 3), tip, needsRepair }
     }
     const rawTitle = String(item.title || '').trim()
@@ -688,7 +734,7 @@ export function CiteShelf({
     const bibliographicEntry = Boolean(item.isInpaper || item.raw || item.citeFmt || hasDoi || item.externalDoi || item.externalDoiUrl)
     const needsRepair = shelfItemNeedsMetadataRepair(item, display)
 
-    if (externalNeedsReview) chips.push('外部元数据校准中')
+    if (externalNeedsReview) chips.push(S.shelf_external_metadata_review)
     if (bibliographicEntry && !hasDoi) chips.push(S.shelf_missing_doi)
     if (bibliographicEntry && !hasAuthors) chips.push(S.shelf_missing_author)
     if (bibliographicEntry && !hasVenue) chips.push(S.shelf_missing_venue)
@@ -699,7 +745,7 @@ export function CiteShelf({
     if (!chips.length) return { chips: [], tip: '', needsRepair }
 
     let tip = S.shelf_auto_fix_tip
-    if (externalNeedsReview) tip = item.externalMetadataReason || '系统会以原参考条目为准自动比对 Crossref 与本地索引，DOI 和指标先作为校准线索。'
+    if (externalNeedsReview) tip = item.externalMetadataReason || S.shelf_external_metadata_tip
     else if (bibliographicEntry && !hasDoi) tip = S.shelf_no_doi_tip
     else if (hasMetaConflict) tip = S.shelf_conflict_tip
     else if (hasWeakStoredTitle && !hasWeakTitle) tip = S.shelf_weak_stored_tip
@@ -823,7 +869,7 @@ export function CiteShelf({
         item.doiUrl,
         item.sourceName,
         item.note,
-        item.traceAssistantOrder ? `回答 ${item.traceAssistantOrder}` : '',
+        item.traceAssistantOrder ? S.shelf_answer.replace('{n}', String(item.traceAssistantOrder)) : '',
         ...tags,
       ]
         .map((part) => String(part || '').toLowerCase())
@@ -1292,6 +1338,9 @@ export function CiteShelf({
         'source_open_status',
         'source_open_precision',
         'source_open_reason',
+        'library_match_status',
+        'library_match_method',
+        'library_match_path',
         'reference_num',
         'citation_count',
         'journal_if',
@@ -1319,6 +1368,9 @@ export function CiteShelf({
         sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).status,
         sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).precision,
         sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).reason,
+        item.libraryMatchStatus,
+        item.libraryMatchMethod,
+        item.libraryMatchPath,
         item.num || '',
         item.citationCount || 0,
         item.journalIf,
@@ -1453,17 +1505,21 @@ export function CiteShelf({
 
   return (
     <>
-      <button
-        aria-label={S.shelf_title}
-        className={`kb-shelf-toggle-btn fixed right-4 top-1/2 z-30 -translate-y-1/2 transition ${open ? 'pointer-events-none opacity-0' : ''}`}
-        data-testid="citation-shelf-toggle"
-        onClick={onToggle}
-        type="button"
-      >
-        {S.shelf_title}
-      </button>
+      {!isDockPresentation ? (
+        <button
+          aria-label={S.shelf_title}
+          className={`kb-shelf-toggle-btn fixed right-4 top-1/2 z-30 -translate-y-1/2 transition ${open ? 'pointer-events-none opacity-0' : ''}`}
+          data-testid="citation-shelf-toggle"
+          onClick={onToggle}
+          type="button"
+        >
+          {S.shelf_title}
+        </button>
+      ) : null}
       <aside
-        className={`kb-shelf-panel fixed right-0 top-0 z-40 h-full w-[360px] max-w-[92vw] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
+        className={isDockPresentation
+          ? `kb-shelf-panel kb-shelf-panel-docked ${panelVisible ? 'is-visible' : 'is-hidden'}`
+          : `kb-shelf-panel fixed right-0 top-0 z-40 h-full w-[360px] max-w-[92vw] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
         data-testid="citation-shelf"
       >
         <div className="flex h-full flex-col">
@@ -1583,7 +1639,7 @@ export function CiteShelf({
                 </div>
                 {repairImpact ? (
                   <div className="kb-shelf-repair-impact" data-testid="citation-shelf-repair-impact">
-                    <span>已自动补全 {repairImpact.changed} 条</span>
+                    <span>{S.shelf_repair_impact_changed.replace('{n}', String(repairImpact.changed))}</span>
                     {repairImpact.score_delta ? <span>Q{repairImpact.before_avg_score} -&gt; Q{repairImpact.after_avg_score}</span> : null}
                     {(repairImpact.changed_fields || []).slice(0, 3).map((field) => (
                       <span key={`field-${field.name}`}>{field.name} x{field.count}</span>
@@ -1825,6 +1881,7 @@ export function CiteShelf({
                       const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
                       const visibleQualityChips = isFocused ? quality.chips.slice(0, 3) : quality.chips.slice(0, 1)
                       const showQuality = Boolean(quality.needsRepair || isFocused)
+                      const libraryMatch = libraryMatchView(item)
 
                       return (
                         <div
@@ -1938,6 +1995,15 @@ export function CiteShelf({
                                   title={itemSourceOpenQuality.reason}
                                 >
                                   {itemSourceOpenQuality.label}
+                                </span>
+                              ) : null}
+                              {libraryMatch ? (
+                                <span
+                                  className={`kb-shelf-library-match is-${libraryMatch.tone}`}
+                                  data-testid="citation-shelf-library-match"
+                                  title={libraryMatch.title}
+                                >
+                                  {libraryMatch.label}
                                 </span>
                               ) : null}
                               {itemTags.map((tag) => (

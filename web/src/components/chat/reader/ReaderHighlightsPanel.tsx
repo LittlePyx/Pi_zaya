@@ -6,13 +6,15 @@ interface ReaderHighlightsPanelProps {
   activeItemId: string
   onSelectItem: (item: ReaderSessionHighlight) => void
   onRemoveItem: (highlightId: string) => void
+  titleLabel: string
+  removeLabel: string
 }
 
 function highlightExcerpt(text: string, maxLen = 120): string {
   const raw = String(text || '').replace(/\s+/g, ' ').trim()
   if (!raw) return 'Untitled highlight'
   if (raw.length <= maxLen) return raw
-  return `${raw.slice(0, Math.max(36, maxLen - 1)).trimEnd()}…`
+  return `${raw.slice(0, Math.max(36, maxLen - 3)).trimEnd()}...`
 }
 
 export function ReaderHighlightsPanel({
@@ -20,6 +22,8 @@ export function ReaderHighlightsPanel({
   activeItemId,
   onSelectItem,
   onRemoveItem,
+  titleLabel,
+  removeLabel,
 }: ReaderHighlightsPanelProps) {
   const activeButtonRef = useRef<HTMLButtonElement | null>(null)
 
@@ -30,7 +34,7 @@ export function ReaderHighlightsPanel({
   return (
     <div className="kb-reader-highlights-panel" data-testid="reader-highlights-panel">
       <div className="kb-reader-highlights-head">
-        <div className="kb-reader-highlights-title">Highlights</div>
+        <div className="kb-reader-highlights-title">{titleLabel}</div>
         <div className="kb-reader-highlights-count">{items.length}</div>
       </div>
       <div className="kb-reader-highlights-list">
@@ -54,11 +58,11 @@ export function ReaderHighlightsPanel({
               <button
                 type="button"
                 className="kb-reader-highlight-remove"
-                title="Remove highlight"
+                title={removeLabel}
                 onClick={() => onRemoveItem(item.id)}
                 data-testid={`reader-highlight-remove-${index}`}
               >
-                Remove
+                {removeLabel}
               </button>
             </div>
           )

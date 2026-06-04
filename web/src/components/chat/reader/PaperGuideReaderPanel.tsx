@@ -1,10 +1,12 @@
 import type { ReactNode, RefObject } from 'react'
+import { AimOutlined } from '@ant-design/icons'
 import { Empty, Spin } from 'antd'
 import { ReaderOutlinePanel } from './ReaderOutlinePanel'
 import { ReaderHighlightsPanel } from './ReaderHighlightsPanel'
 import { ReaderEvidenceNav } from './ReaderEvidenceNav'
 import type { ReaderSessionHighlight } from './readerTypes'
 import type { ReaderOutlineItem } from './useReaderOutline'
+import { useT } from '../../../i18n'
 
 interface ReaderCandidateOption {
   displayIndex: number
@@ -68,13 +70,18 @@ interface PaperGuideReaderPanelProps {
   onGoNextEvidence: () => void
   onToggleCandidatePicker: () => void
   onSelectCandidate: (idx: number) => void
+  onReturnToEvidence: () => void
+  returnToEvidenceLabel: string
+  returnToEvidenceTitle: string
   loading: boolean
   error: string
   hasMarkdown: boolean
   selectionBubble: ReaderSelectionBubbleState | null
   onToggleSelectionHighlight: () => void
+  onAddSelectionToShelf?: () => void
   onAskSelection: () => void
   isInlinePresentation: boolean
+  isPageSurface: boolean
   contentRef: RefObject<HTMLDivElement | null>
   onContentMouseUp: () => void
   onContentKeyUp: () => void
@@ -119,37 +126,63 @@ export function PaperGuideReaderPanel({
   onGoNextEvidence,
   onToggleCandidatePicker,
   onSelectCandidate,
+  onReturnToEvidence,
+  returnToEvidenceLabel,
+  returnToEvidenceTitle,
   loading,
   error,
   hasMarkdown,
   selectionBubble,
   onToggleSelectionHighlight,
+  onAddSelectionToShelf,
   onAskSelection,
   isInlinePresentation,
+  isPageSurface,
   contentRef,
   onContentMouseUp,
   onContentKeyUp,
   children,
 }: PaperGuideReaderPanelProps) {
+  const S = useT()
   const showSidebar = (hasOutline && outlineOpen) || (hasHighlights && highlightsOpen)
+  const canReturnToEvidence = Boolean(activeHeadingPath || statusTextCompact || activeEvidenceLabel || hasEvidenceNav || hasDistinctAlternatives)
+  const visibleLocateBadges = isPageSurface
+    ? locateBadges.filter((badge) => badge.key !== 'mode')
+    : locateBadges
 
   return (
     <>
-      <div className="kb-reader-meta-stack">
+      <div className={`kb-reader-meta-stack ${isPageSurface ? 'is-page' : 'is-dock'}`}>
         <div
           className="kb-reader-meta-location"
-          title={activeHeadingPath ? `Located: ${activeHeadingPath}` : 'Located: document start'}
+          title={activeHeadingPath
+            ? `${S.reader_located_prefix || 'Located'}: ${activeHeadingPath}`
+            : `${S.reader_located_prefix || 'Located'}: ${S.reader_document_start || 'document start'}`}
         >
           {metaLocationText}
         </div>
-        {hasOutline || locateBadges.length > 0 || statusTextCompact || selectionText || hasDistinctAlternatives ? (
+        {hasOutline || visibleLocateBadges.length > 0 || statusTextCompact || selectionText || hasDistinctAlternatives ? (
           <div className="kb-reader-meta-side">
+            {canReturnToEvidence ? (
+              <button
+                type="button"
+                className="kb-reader-return-btn"
+                onClick={onReturnToEvidence}
+                title={returnToEvidenceTitle}
+                data-testid="reader-return-evidence"
+              >
+                <AimOutlined />
+                <span>{returnToEvidenceLabel}</span>
+              </button>
+            ) : null}
             {hasOutline ? (
               <button
                 type="button"
                 className={`kb-reader-candidate-toggle ${outlineOpen ? 'is-open' : ''}`}
                 onClick={onToggleOutline}
-                title={outlineOpen ? 'Hide section outline' : 'Show section outline'}
+                title={outlineOpen
+                  ? (S.reader_hide_sections || 'Hide section outline')
+                  : (S.reader_show_sections || 'Show section outline')}
                 data-testid="reader-outline-toggle"
               >
                 {outlineToggleLabel}
@@ -160,7 +193,9 @@ export function PaperGuideReaderPanel({
                 type="button"
                 className={`kb-reader-candidate-toggle ${highlightsOpen ? 'is-open' : ''}`}
                 onClick={onToggleHighlights}
-                title={highlightsOpen ? 'Hide highlights' : 'Show highlights'}
+                title={highlightsOpen
+                  ? (S.reader_hide_highlights || 'Hide highlights')
+                  : (S.reader_show_highlights || 'Show highlights')}
                 data-testid="reader-highlights-toggle"
               >
                 {highlightsToggleLabel}
@@ -174,9 +209,11 @@ export function PaperGuideReaderPanel({
                 canGoNext={canGoNextEvidence}
                 onGoPrev={onGoPrevEvidence}
                 onGoNext={onGoNextEvidence}
+                prevLabel={S.reader_prev_evidence || 'Previous evidence'}
+                nextLabel={S.reader_next_evidence || 'Next evidence'}
               />
             ) : null}
-            {locateBadges.map((badge) => (
+            {visibleLocateBadges.map((badge) => (
               <span
                 key={badge.key}
                 className={`kb-reader-meta-pill is-${badge.tone || 'neutral'}`}
@@ -197,7 +234,7 @@ export function PaperGuideReaderPanel({
             ) : null}
             {selectionText ? (
               <span className="kb-reader-meta-pill">
-                {`${selectionText.length} chars`}
+                {(S.reader_selection_chars || '{n} chars').replace('{n}', String(selectionText.length))}
               </span>
             ) : null}
             {hasDistinctAlternatives ? (
@@ -205,7 +242,9 @@ export function PaperGuideReaderPanel({
                 type="button"
                 className={`kb-reader-candidate-toggle ${candidatePickerExpanded ? 'is-open' : ''}`}
                 onClick={onToggleCandidatePicker}
-                title={candidatePickerExpanded ? 'Hide candidates' : 'View candidates'}
+                title={candidatePickerExpanded
+                  ? (S.reader_hide_candidates || 'Hide candidates')
+                  : (S.reader_show_candidates || 'View candidates')}
                 data-testid="reader-candidate-toggle"
               >
                 {candidateToggleLabel}
@@ -264,6 +303,7 @@ export function PaperGuideReaderPanel({
                     items={outlineItems}
                     activeItemId={activeOutlineId}
                     onSelectItem={onSelectOutline}
+                    titleLabel={S.reader_sections || 'Sections'}
                   />
                 ) : null}
                 {highlightsOpen && hasHighlights ? (
@@ -272,6 +312,8 @@ export function PaperGuideReaderPanel({
                     activeItemId={activeHighlightId}
                     onSelectItem={onSelectHighlight}
                     onRemoveItem={onRemoveHighlight}
+                    titleLabel={S.reader_highlights || 'Highlights'}
+                    removeLabel={S.reader_remove_highlight || 'Remove'}
                   />
                 ) : null}
               </div>
@@ -290,20 +332,35 @@ export function PaperGuideReaderPanel({
                     type="button"
                     className={`kb-reader-selection-action ${selectionBubble.highlightId ? 'is-active' : ''}`}
                     onClick={onToggleSelectionHighlight}
-                    title={selectionBubble.highlightId ? 'Remove highlight' : 'Highlight this selection'}
+                    title={selectionBubble.highlightId
+                      ? (S.reader_remove_highlight || 'Remove highlight')
+                      : (S.reader_highlight_selection || 'Highlight this selection')}
                     data-testid="reader-selection-highlight"
                   >
-                    {selectionBubble.highlightId ? 'Marked' : 'Highlight'}
+                    {selectionBubble.highlightId
+                      ? (S.reader_marked || 'Marked')
+                      : (S.reader_highlight || 'Highlight')}
+                  </button>
+                ) : null}
+                {onAddSelectionToShelf ? (
+                  <button
+                    type="button"
+                    className="kb-reader-selection-action"
+                    onClick={onAddSelectionToShelf}
+                    title={S.reader_add_to_shelf_title || 'Add this selection to the citation shelf'}
+                    data-testid="reader-selection-shelf"
+                  >
+                    {S.reader_add_to_shelf || 'Shelf'}
                   </button>
                 ) : null}
                 <button
                   type="button"
                   className="kb-reader-selection-action is-accent"
                   onClick={onAskSelection}
-                  title="Ask about this selection"
+                  title={S.reader_ask_selection_title || 'Ask about this selection'}
                   data-testid="reader-selection-ask"
                 >
-                  Ask
+                  {S.reader_ask_selection || 'Ask'}
                 </button>
               </div>
             ) : null}
@@ -321,7 +378,7 @@ export function PaperGuideReaderPanel({
           </div>
         </div>
       ) : (
-        <Empty description="No readable content" />
+        <Empty description={S.reader_no_readable_content || 'No readable content'} />
       )}
     </>
   )

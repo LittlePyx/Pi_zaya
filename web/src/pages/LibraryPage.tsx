@@ -3725,7 +3725,7 @@ export default function LibraryPage() {
         sourcePath = String(item.md_path || '').trim()
         message.warning(S.lib_msg_guide_source_fallback)
       }
-      const convTitle = `阅读指导 · ${sourceName}`
+      const convTitle = S.default_guide_title.replace('{name}', sourceName)
       if (!sourcePath) throw new Error('source path not ready')
       await createPaperGuideConversation({
         sourcePath,

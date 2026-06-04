@@ -1,7 +1,7 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type { ReaderSessionHighlight } from '../components/chat/reader/readerTypes'
-import { buildReaderRegressionPayload } from '../testing/readerRegressionFixtures'
+import { buildReaderRegressionDocResponse, buildReaderRegressionPayload } from '../testing/readerRegressionFixtures'
 
 const DEFAULT_WIDTH = 560
 const MIN_WIDTH = 420
@@ -14,6 +14,7 @@ function clampWidth(value: number) {
 
 export default function ReaderSplitRegressionPage() {
   const payload = buildReaderRegressionPayload('strict-quote')
+  const documentOverride = buildReaderRegressionDocResponse('strict-quote')
   const [readerWidth, setReaderWidth] = useState(DEFAULT_WIDTH)
   const [previewWidth, setPreviewWidth] = useState(DEFAULT_WIDTH)
   const [readerResizing, setReaderResizing] = useState(false)
@@ -158,6 +159,7 @@ export default function ReaderSplitRegressionPage() {
               onRemoveSessionHighlight={(highlightId) => {
                 setSessionHighlights((current) => current.filter((item) => item.id !== highlightId))
               }}
+              documentOverride={documentOverride}
             />
           </div>
         </aside>

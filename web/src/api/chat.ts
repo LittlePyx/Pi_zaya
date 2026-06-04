@@ -88,6 +88,7 @@ export interface MessageCitationDetail {
   cite_fmt?: string
   linked_nums?: number[]
   evidence_fingerprint?: string
+  render_locale?: string
   citation_route?: string
   routing_reason?: string
   routing_confidence?: number
@@ -135,6 +136,26 @@ export interface MessageCitationDetail {
   [key: string]: unknown
 }
 
+export interface MessageUnlinkedReferenceCandidate {
+  id?: string
+  status?: string
+  match_method?: string
+  confidence?: number
+  mention?: string
+  source_path?: string
+  source_name?: string
+  ref_num?: number
+  title?: string
+  authors?: string
+  venue?: string
+  year?: string
+  doi?: string
+  doi_url?: string
+  raw?: string
+  cite_detail?: MessageCitationDetail
+  [key: string]: unknown
+}
+
 export interface MessageRenderPacket {
   answer_markdown?: string
   notice?: string
@@ -150,6 +171,7 @@ export interface MessageRenderPacket {
   visible_segment_ids?: string[]
   provenance_segment_count?: number
   visible_segment_count?: number
+  unlinked_reference_candidates?: MessageUnlinkedReferenceCandidate[]
   [key: string]: unknown
 }
 
@@ -226,6 +248,17 @@ export interface MessageProvenanceReaderOpen {
   visibleAlternatives?: MessageProvenanceReaderOpenCandidate[]
   evidenceAlternatives?: MessageProvenanceReaderOpenCandidate[]
   initialAltIndex?: number
+}
+
+export interface ReaderSessionRecord {
+  id: string
+  title?: string
+  conversation_id?: string
+  message_id?: number | null
+  payload: MessageProvenanceReaderOpen & Record<string, unknown>
+  state?: Record<string, unknown>
+  created_at?: number
+  updated_at?: number
 }
 
 export interface MessageProvenanceSegment {
@@ -361,7 +394,7 @@ export interface ChatUploadItem {
 export const chatApi = {
   listProjects: () =>
     api.get<Project[]>('/api/projects'),
-  createProject: (name = '未命名项目') =>
+  createProject: (name: string) =>
     api.post<{ id: string }>('/api/projects', { name }),
   renameProject: (projectId: string, name: string) =>
     api.patch(`/api/projects/${projectId}`, { name }),
@@ -452,4 +485,24 @@ export const chatApi = {
       bound_source_name: guide.bound_source_name,
       bound_source_ready: guide.bound_source_ready,
     }),
+  createReaderSession: <T extends MessageProvenanceReaderOpen>(
+    payload: T,
+    opts?: {
+      title?: string
+      conversationId?: string | null
+      messageId?: number | null
+      state?: Record<string, unknown>
+    },
+  ) =>
+    api.post<ReaderSessionRecord>('/api/reader/sessions', {
+      payload,
+      state: opts?.state ?? {},
+      title: opts?.title ?? '',
+      conversation_id: opts?.conversationId ?? '',
+      message_id: opts?.messageId ?? null,
+    }),
+  getReaderSession: (sessionId: string) =>
+    api.get<ReaderSessionRecord>(`/api/reader/sessions/${encodeURIComponent(sessionId)}`),
+  updateReaderSessionState: (sessionId: string, state: Record<string, unknown>) =>
+    api.patch<ReaderSessionRecord>(`/api/reader/sessions/${encodeURIComponent(sessionId)}/state`, { state }),
 }

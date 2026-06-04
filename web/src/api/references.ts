@@ -9,6 +9,7 @@ export interface ReaderDocAnchor {
   block_id?: string
   kind: string
   heading_path?: string
+  heading_level?: number
   text?: string
   line_start?: number
   line_end?: number
@@ -21,12 +22,38 @@ export interface ReaderDocBlock {
   anchor_id: string
   kind: string
   heading_path?: string
+  heading_level?: number
   order_index?: number
   line_start?: number
   line_end?: number
   text?: string
   raw_text?: string
   number?: number
+}
+
+export interface ReaderDocOutlineQuality {
+  contract_version?: number
+  ok?: boolean
+  status?: string
+  heading_count?: number
+  has_document_title?: boolean
+  max_heading_level?: number
+  missing_heading_level_count?: number
+  caption_heading_count?: number
+  publisher_heading_count?: number
+  issues?: string[]
+}
+
+export interface ReaderDocResponse {
+  ok: boolean
+  source_path: string
+  source_name: string
+  md_path: string
+  doc_hash?: string
+  outline_quality?: ReaderDocOutlineQuality
+  markdown: string
+  anchors?: ReaderDocAnchor[]
+  blocks?: ReaderDocBlock[]
 }
 
 export interface ShelfMetadataQualityIssue {
@@ -397,15 +424,7 @@ export const referencesApi = {
     return pending
   },
   readerDoc: (sourcePath: string) =>
-    api.post<{
-      ok: boolean
-      source_path: string
-      source_name: string
-      md_path: string
-      markdown: string
-      anchors?: ReaderDocAnchor[]
-      blocks?: ReaderDocBlock[]
-    }>('/api/references/reader/doc', {
+    api.post<ReaderDocResponse>('/api/references/reader/doc', {
       source_path: sourcePath,
     }),
 }

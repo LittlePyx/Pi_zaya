@@ -1,12 +1,13 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useEffect, useRef, useState } from 'react'
-import { referencesApi, type ReaderDocAnchor, type ReaderDocBlock } from '../../../api/references'
+import { referencesApi, type ReaderDocAnchor, type ReaderDocBlock, type ReaderDocResponse } from '../../../api/references'
 
 interface UseReaderDocumentOptions {
   open: boolean
   sourcePath: string
   sourceName: string
+  documentOverride?: ReaderDocResponse | null
   onBeforeLoad?: () => void
 }
 
@@ -23,6 +24,7 @@ export function useReaderDocument({
   open,
   sourcePath,
   sourceName,
+  documentOverride,
   onBeforeLoad,
 }: UseReaderDocumentOptions): ReaderDocumentState {
   const [loading, setLoading] = useState(false)
@@ -46,6 +48,16 @@ export function useReaderDocument({
     setMarkdown('')
     setReaderAnchors([])
     setReaderBlocks([])
+    if (documentOverride) {
+      setMarkdown(String(documentOverride.markdown || ''))
+      setReaderAnchors(Array.isArray(documentOverride.anchors) ? documentOverride.anchors : [])
+      setReaderBlocks(Array.isArray(documentOverride.blocks) ? documentOverride.blocks : [])
+      setResolvedName(String(documentOverride.source_name || sourceName || '').trim())
+      setLoading(false)
+      return () => {
+        cancelled = true
+      }
+    }
     referencesApi.readerDoc(sourcePath)
       .then((res) => {
         if (cancelled) return
@@ -67,7 +79,7 @@ export function useReaderDocument({
     return () => {
       cancelled = true
     }
-  }, [open, sourceName, sourcePath])
+  }, [documentOverride, open, sourceName, sourcePath])
 
   return {
     loading,

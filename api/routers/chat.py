@@ -5,12 +5,13 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 from fastapi import File, Form, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.chat_render import enrich_messages_with_reference_render
 from api.deps import get_chat_store, get_settings
@@ -23,6 +24,7 @@ from api.routers.library import (
 )
 from kb.file_ops import _path_exists
 from kb.pdf_tools import ensure_dir
+from kb.reader_session_store import ReaderSessionStore
 from kb.task_runtime import kickoff_paper_guide_prefetch
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -73,6 +75,18 @@ class UploadJobBody(BaseModel):
     job_id: str
 
 
+class ReaderSessionCreateBody(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] = Field(default_factory=dict)
+    title: str = ""
+    conversation_id: str = ""
+    message_id: int | None = None
+
+
+class ReaderSessionStatePatchBody(BaseModel):
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 IMAGE_MIME_TO_EXT = {
     "image/png": ".png",
@@ -95,6 +109,22 @@ def _chat_image_dir() -> Path:
     out = Path(settings.db_dir) / "_chat_uploads" / "images"
     ensure_dir(out)
     return out
+
+
+def _reader_session_store() -> ReaderSessionStore:
+    settings = get_settings()
+    return ReaderSessionStore(Path(settings.db_dir) / "_reader_sessions.json")
+
+
+def _normalize_reader_session_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    rec = dict(payload or {})
+    source_path = str(rec.get("sourcePath") or rec.get("source_path") or "").strip()
+    if source_path:
+        rec["sourcePath"] = source_path
+    source_name = str(rec.get("sourceName") or rec.get("source_name") or "").strip()
+    if source_name:
+        rec["sourceName"] = source_name
+    return rec
 
 
 def _safe_upload_stem(name: str) -> str:
@@ -785,6 +815,38 @@ async def upload_chat_files(
         })
 
     return {"items": results}
+
+
+@router.post("/reader/sessions")
+def create_reader_session(body: ReaderSessionCreateBody):
+    payload = _normalize_reader_session_payload(body.payload)
+    source_path = str(payload.get("sourcePath") or "").strip()
+    if not source_path:
+        raise HTTPException(400, "reader sourcePath required")
+    title = str(body.title or payload.get("sourceName") or Path(source_path).name).strip()
+    return _reader_session_store().create(
+        payload,
+        state=body.state,
+        title=title,
+        conversation_id=body.conversation_id,
+        message_id=body.message_id,
+    )
+
+
+@router.get("/reader/sessions/{session_id}")
+def get_reader_session(session_id: str):
+    record = _reader_session_store().get(session_id)
+    if record is None:
+        raise HTTPException(404, "reader session not found")
+    return record
+
+
+@router.patch("/reader/sessions/{session_id}/state")
+def update_reader_session_state(session_id: str, body: ReaderSessionStatePatchBody):
+    record = _reader_session_store().update_state(session_id, body.state)
+    if record is None:
+        raise HTTPException(404, "reader session not found")
+    return record
 
 
 @router.get("/projects")

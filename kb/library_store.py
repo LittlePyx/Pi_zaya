@@ -1424,6 +1424,32 @@ class LibraryStore:
             return json.loads(record["citation_meta"])
         except Exception:
             return None
+
+    def list_citation_records(self, limit: int = 5000) -> list[dict]:
+        """Return recent library PDF records with decoded citation metadata."""
+        try:
+            safe_limit = int(limit)
+        except Exception:
+            safe_limit = 5000
+        safe_limit = max(1, min(20000, safe_limit))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT sha1, path, created_at, citation_meta
+                FROM pdf_files
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        out: list[dict] = []
+        for row in rows:
+            rec = dict(row)
+            raw_meta = str(rec.get("citation_meta") or "")
+            rec["citation_meta_raw"] = raw_meta
+            rec["citation_meta"] = self._decode_citation_meta(raw_meta)
+            out.append(rec)
+        return out
     
     def set_citation_meta(self, path: Path, citation_meta: dict | None) -> None:
         """Store citation metadata for a PDF path."""

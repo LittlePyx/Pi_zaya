@@ -222,7 +222,11 @@ def _sanitize_location_label_for_evidence(*, location_label: str, evidence_raw: 
     return loc
 
 
-def _claim_support_sentence(*, claim: str, evidence: str, route: str) -> str:
+def _prefer_en_locale(locale: str) -> bool:
+    return str(locale or "").strip().lower() == "en"
+
+
+def _claim_support_sentence(*, claim: str, evidence: str, route: str, locale: str = "") -> str:
     if not claim or not evidence:
         return ""
     claim_tokens = set(_tokens(claim))
@@ -235,6 +239,10 @@ def _claim_support_sentence(*, claim: str, evidence: str, route: str) -> str:
     if len(overlap) < 2:
         return ""
     sample = " / ".join(overlap[:4])
+    if _prefer_en_locale(locale):
+        if route == "system_b":
+            return f"This upstream citation and the answer claim share key cues: {sample}."
+        return f"The answer sentence and source evidence share key cues: {sample}."
     if route == "system_b":
         return f"这条上游引用和回答中的说法共享关键线索：{sample}。"
     return f"回答句和原文证据共享关键线索：{sample}。"
@@ -260,6 +268,7 @@ def build_system_a_evidence_pack(
     heading: str = "",
     location_label: str = "",
     support_hint: Any = "",
+    locale: str = "",
 ) -> CitationEvidencePack:
     claim, low_claim = meaningful_answer_claim(answer_claim, max_len=220)
     evidence = pick_readable_evidence_text(
@@ -280,7 +289,7 @@ def build_system_a_evidence_pack(
         score_delta -= 0.06
     support = clean_display_text(support_hint, max_len=420)
     if not support:
-        support = _claim_support_sentence(claim=claim, evidence=evidence, route="system_a")
+        support = _claim_support_sentence(claim=claim, evidence=evidence, route="system_a", locale=locale)
     safe_location = _sanitize_location_label_for_evidence(
         location_label=location_label,
         evidence_raw=evidence_raw,
@@ -291,11 +300,11 @@ def build_system_a_evidence_pack(
         route="system_a",
         answer_claim=claim,
         evidence_quote=evidence,
-        evidence_label="原文证据",
+        evidence_label="Source evidence" if _prefer_en_locale(locale) else "原文证据",
         evidence_focus=_evidence_focus(claim=claim, evidence=evidence, route="system_a"),
         support_explanation=support,
         location_label=safe_location,
-        location_label_name="原文位置",
+        location_label_name="Source location" if _prefer_en_locale(locale) else "原文位置",
         flags=tuple(flags),
         score_delta=score_delta,
     )
@@ -313,6 +322,7 @@ def build_system_b_evidence_pack(
     raw_reference: Any = "",
     role_hint: Any = "",
     relation_hint: Any = "",
+    locale: str = "",
 ) -> CitationEvidencePack:
     claim, low_claim = meaningful_answer_claim(answer_claim, max_len=220)
     context = pick_readable_evidence_text(
@@ -333,7 +343,7 @@ def build_system_b_evidence_pack(
     reference_entry = _reference_entry(raw_reference, max_len=900)
     support = clean_display_text(relation_hint, max_len=420) or clean_display_text(role_hint, max_len=420)
     if not support and context and claim:
-        support = _claim_support_sentence(claim=claim, evidence=context, route="system_b")
+        support = _claim_support_sentence(claim=claim, evidence=context, route="system_b", locale=locale)
     context_summary = ""
 
     flags: list[str] = []
@@ -354,6 +364,7 @@ def build_system_b_evidence_pack(
             locator=location_label,
             role=clean_display_text(role_hint, max_len=260),
             relation=clean_display_text(relation_hint, max_len=260),
+            locale=locale,
         )
     if weak_context:
         flags.append("weak_citation_context")
@@ -363,16 +374,36 @@ def build_system_b_evidence_pack(
         score_delta -= 0.06
         if reference_entry:
             flags.append("reference_entry_only")
-            support = "暂未拿到上游论文正文；这张卡展示的是引用出现位置和参考文献条目。"
+            support = (
+                "The upstream paper text is not available yet; this card shows where the citation appears and the bibliography entry."
+                if _prefer_en_locale(locale)
+                else "暂未拿到上游论文正文；这张卡展示的是引用出现位置和参考文献条目。"
+            )
 
-    evidence_label = "回答里的线索" if answer_context_only else "引用语境"
+    evidence_label = (
+        ("Answer cue" if answer_context_only else "Citation context")
+        if _prefer_en_locale(locale)
+        else ("回答里的线索" if answer_context_only else "引用语境")
+    )
     warning = ""
     if answer_context_only:
-        warning = "目前只有回答线索或参考条目，完整引用语境仍建议打开原文核对。"
+        warning = (
+            "Only the answer cue or bibliography entry is available, so the full citation context should still be checked in the source."
+            if _prefer_en_locale(locale)
+            else "目前只有回答线索或参考条目，完整引用语境仍建议打开原文核对。"
+        )
     elif not context and reference_entry:
-        warning = "目前没有上游论文正文证据，只能先依据引用出现位置和参考文献条目判断来源。"
+        warning = (
+            "No upstream full-text evidence is available yet; use the citing location and bibliography entry as source clues."
+            if _prefer_en_locale(locale)
+            else "目前没有上游论文正文证据，只能先依据引用出现位置和参考文献条目判断来源。"
+        )
     elif weak_context:
-        warning = "当前自动抽取的引用语境质量较弱，已隐藏低价值片段；建议打开原文核对。"
+        warning = (
+            "The extracted citation context is weak, so low-value text was hidden. Open the source to verify it."
+            if _prefer_en_locale(locale)
+            else "当前自动抽取的引用语境质量较弱，已隐藏低价值片段；建议打开原文核对。"
+        )
 
     return CitationEvidencePack(
         route="system_b",
@@ -382,9 +413,9 @@ def build_system_b_evidence_pack(
         evidence_focus=context_summary,
         support_explanation=support,
         location_label=clean_display_text(location_label, max_len=260),
-        location_label_name="当前论文引用处",
+        location_label_name="Where current paper cites it" if _prefer_en_locale(locale) else "当前论文引用处",
         reference_entry=reference_entry,
-        reference_label="上游文献条目",
+        reference_label="Upstream reference entry" if _prefer_en_locale(locale) else "上游文献条目",
         warning=warning,
         flags=tuple(flags),
         score_delta=score_delta,

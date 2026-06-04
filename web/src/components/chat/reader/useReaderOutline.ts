@@ -23,6 +23,7 @@ interface UseReaderOutlineArgs {
   open: boolean
   sourcePath: string
   isInlinePresentation: boolean
+  defaultOutlineOpen?: boolean
   contentRef: RefObject<HTMLDivElement | null>
   readerBlocks: ReaderDocBlock[]
 }
@@ -74,7 +75,10 @@ function deriveOutlineItems(readerBlocks: ReaderDocBlock[]): ReaderOutlineItem[]
     seen.add(key)
     const parts = normalizeHeadingPath(headingPath)
     const label = String(row.text || '').trim() || parts[parts.length - 1] || headingPath
-    const depth = Math.max(0, parts.length - 2)
+    const explicitLevel = Number(row.heading_level || 0)
+    const depth = Number.isFinite(explicitLevel) && explicitLevel > 0
+      ? Math.max(0, Math.min(5, Math.floor(explicitLevel) - 1))
+      : Math.max(0, parts.length - 2)
     return [{
       id: blockId || anchorId || `outline-${index + 1}`,
       label,
@@ -178,17 +182,19 @@ export function useReaderOutline({
   open,
   sourcePath,
   isInlinePresentation,
+  defaultOutlineOpen,
   contentRef,
   readerBlocks,
 }: UseReaderOutlineArgs): UseReaderOutlineResult {
   const outlineItems = useMemo(() => deriveOutlineItems(readerBlocks), [readerBlocks])
-  const [outlineOpen, setOutlineOpen] = useState(() => isInlinePresentation)
+  const initialOutlineOpen = defaultOutlineOpen ?? isInlinePresentation
+  const [outlineOpen, setOutlineOpen] = useState(() => initialOutlineOpen)
   const [activeOutlineId, setActiveOutlineId] = useState('')
 
   useEffect(() => {
     if (!open) return
-    setOutlineOpen(isInlinePresentation)
-  }, [open, sourcePath, isInlinePresentation])
+    setOutlineOpen(defaultOutlineOpen ?? isInlinePresentation)
+  }, [defaultOutlineOpen, open, sourcePath, isInlinePresentation])
 
   useEffect(() => {
     if (!open) {

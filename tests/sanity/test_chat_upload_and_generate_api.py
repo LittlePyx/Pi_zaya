@@ -3,10 +3,64 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from api.main import app
+
+
+def test_reader_sessions_persist_payload(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    db_dir = tmp_path / "db"
+    monkeypatch.setattr(
+        chat_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=db_dir),
+    )
+
+    client = TestClient(app)
+    missing = client.post("/api/reader/sessions", json={"payload": {}})
+    assert missing.status_code == 400
+
+    response = client.post(
+        "/api/reader/sessions",
+        json={
+            "title": "Reader source",
+            "conversation_id": "conv-1",
+            "payload": {
+                "sourcePath": str(tmp_path / "source.en.md"),
+                "sourceName": "source.pdf",
+                "headingPath": "Methods / Reader",
+                "locateTarget": {"snippet": "important sentence"},
+            },
+            "state": {
+                "highlights": [{"id": "h1", "text": "important sentence"}],
+            },
+        },
+    )
+    assert response.status_code == 200
+    created = response.json()
+    assert created["id"]
+    assert created["payload"]["sourcePath"].endswith("source.en.md")
+    assert created["conversation_id"] == "conv-1"
+    assert (db_dir / "_reader_sessions.json").exists()
+
+    loaded = client.get(f"/api/reader/sessions/{created['id']}")
+    assert loaded.status_code == 200
+    payload = loaded.json()["payload"]
+    assert payload["sourceName"] == "source.pdf"
+    assert payload["locateTarget"]["snippet"] == "important sentence"
+    assert loaded.json()["state"]["highlights"][0]["id"] == "h1"
+
+    patched = client.patch(
+        f"/api/reader/sessions/{created['id']}/state",
+        json={"state": {"selection": {"text": "selected text"}}},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["state"]["selection"]["text"] == "selected text"
+    assert patched.json()["state"]["highlights"][0]["text"] == "important sentence"
 
 
 def test_chat_uploads_route_handles_pdf_and_image(monkeypatch, tmp_path: Path):
@@ -490,3 +544,50 @@ def test_references_reader_doc_rewrites_tmp_assets_and_serves(monkeypatch, tmp_p
     asset_resp = client.get(asset_url)
     assert asset_resp.status_code == 200
     assert asset_resp.headers["content-type"].startswith("image/png")
+
+
+def test_references_reader_doc_rejects_markdown_outside_allowed_roots(monkeypatch, tmp_path: Path):
+    from api.routers import references as refs_router
+
+    md_root = tmp_path / "md_output"
+    outside = tmp_path / "outside" / "paper.md"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_text("# Outside\n", encoding="utf-8")
+
+    monkeypatch.setattr(refs_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(refs_router, "_reference_asset_roots", lambda: [md_root.resolve()])
+    client = TestClient(app)
+
+    doc_resp = client.post("/api/references/reader/doc", json={"source_path": str(outside)})
+    assert doc_resp.status_code == 404
+
+
+def test_references_reader_doc_exposes_outline_contract(monkeypatch, tmp_path: Path):
+    from api.routers import references as refs_router
+
+    md_root = tmp_path / "md_output"
+    doc_dir = md_root / "paper"
+    doc_dir.mkdir(parents=True, exist_ok=True)
+    md_path = doc_dir / "paper.en.md"
+    md_path.write_text(
+        "# Paper Title\n\n## Abstract\n\nA compact abstract.\n\n### Details\n\nMore detail.\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(refs_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(refs_router, "_reference_asset_roots", lambda: [md_root.resolve()])
+    client = TestClient(app)
+
+    doc_resp = client.post("/api/references/reader/doc", json={"source_path": str(md_path)})
+    assert doc_resp.status_code == 200
+    payload = doc_resp.json()
+    assert re.fullmatch(r"[0-9a-f]{40}", str(payload.get("doc_hash") or ""))
+    quality = payload.get("outline_quality") or {}
+    assert quality["ok"] is True
+    assert quality["has_document_title"] is True
+    assert quality["heading_count"] == 3
+
+    heading_blocks = [row for row in payload["blocks"] if row.get("kind") == "heading"]
+    assert [row.get("heading_level") for row in heading_blocks] == [1, 2, 3]
+    heading_anchors = [row for row in payload["anchors"] if row.get("kind") == "heading"]
+    assert [row.get("heading_level") for row in heading_anchors] == [1, 2, 3]

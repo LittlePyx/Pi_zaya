@@ -105,3 +105,47 @@ def test_build_ref_card_ui_payload_normalizes_optional_mappings() -> None:
     assert payload["reader_open"] == {}
     assert payload["semantic_badges"] == []
     assert payload["card_view"]["sections"] == []
+
+
+def test_build_ref_card_ui_payload_uses_english_render_locale_defaults() -> None:
+    payload = build_ref_card_ui_payload(
+        display_name="Paper C",
+        heading_path="Paper C / Abstract",
+        section_label="Abstract",
+        subsection_label="",
+        page_start=1,
+        page_end=1,
+        score=6.0,
+        score_pending=False,
+        score_tier="medium",
+        summary_line="This abstract introduces a part-based image-loop network.",
+        summary_kind="section",
+        summary_surface={},
+        summary_generation="section_grounded",
+        summary_basis_meta={},
+        summary_source="navigation",
+        primary_evidence_heading_path="Paper C / Abstract",
+        primary_evidence={"snippet": "part-based image-loop network"},
+        why_line="The abstract matches the question about low-sampling reconstruction.",
+        why_generation="deterministic_grounded",
+        why_basis_meta={},
+        anchor_target_kind="section",
+        anchor_target_number=1,
+        anchor_match_score=6.0,
+        explicit_doc_match_score=1.0,
+        semantic_badges=[],
+        can_open=True,
+        citation_meta={},
+        source_path="db/paper-c.md",
+        reader_open={},
+        render_locale="en",
+    )
+
+    assert payload["render_locale"] == "en"
+    sections = {section["id"]: section for section in payload["card_view"]["sections"]}
+    assert sections["summary"]["label"] == "Guide"
+    assert sections["summary"]["title"] == "What This Evidence Shows"
+    assert sections["why"]["label"] == "Relevance"
+    assert sections["location"]["label"] == "Location"
+    assert sections["location"]["title"] == "Source location"
+    assert sections["location"]["text"] == "Paper C / Abstract / p. 1"

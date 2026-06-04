@@ -51,6 +51,7 @@ export interface CiteDetail {
   doiUrl: string
   linkedNums: number[]
   evidenceFingerprint: string
+  renderLocale: string
   citationRoute: string
   routingReason: string
   routingConfidence: number
@@ -69,6 +70,15 @@ export interface CiteDetail {
   conferenceName: string
   conferenceAcronym: string
   bibliometricsChecked: boolean
+  libraryMatchStatus: string
+  libraryMatchConfidence: number
+  libraryMatchMethod: string
+  libraryMatchReason: string
+  libraryMatchPath: string
+  libraryMatchSha1: string
+  libraryMatchTitle: string
+  libraryMatchDoi: string
+  libraryMatchYear: string
   metadataQuality: Record<string, unknown> | null
   metadataRepairStatus: string
   metadataRepairSources: string[]
@@ -875,6 +885,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
   const rec = value as Record<string, unknown>
   const anchor = pickText(rec, 'anchor')
   if (!anchor) return null
+  const libraryMatch = pickRecord(rec, 'library_match', 'libraryMatch') || {}
   const detail: CiteDetail = {
     num: pickNumber(rec, 'num'),
     displayNum: pickNumber(rec, 'display_num', 'displayNum', 'visible_num', 'visibleNum'),
@@ -900,6 +911,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     doiUrl: pickText(rec, 'doi_url', 'doiUrl'),
     linkedNums: pickNumberArray(rec, 'linked_nums', 'linkedNums'),
     evidenceFingerprint: pickText(rec, 'evidence_fingerprint', 'evidenceFingerprint'),
+    renderLocale: pickText(rec, 'render_locale', 'renderLocale', 'locale'),
     citationRoute: pickText(rec, 'citation_route', 'citationRoute'),
     routingReason: pickText(rec, 'routing_reason', 'routingReason'),
     routingConfidence: pickNumber(rec, 'routing_confidence', 'routingConfidence'),
@@ -918,6 +930,15 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     conferenceName: pickText(rec, 'conference_name', 'conferenceName'),
     conferenceAcronym: pickText(rec, 'conference_acronym', 'conferenceAcronym'),
     bibliometricsChecked: Boolean(rec.bibliometrics_checked ?? rec.bibliometricsChecked),
+    libraryMatchStatus: pickText(rec, 'library_match_status', 'libraryMatchStatus') || pickText(libraryMatch, 'status'),
+    libraryMatchConfidence: pickNumber(rec, 'library_match_confidence', 'libraryMatchConfidence') || pickNumber(libraryMatch, 'confidence'),
+    libraryMatchMethod: pickText(rec, 'library_match_method', 'libraryMatchMethod') || pickText(libraryMatch, 'method'),
+    libraryMatchReason: pickText(rec, 'library_match_reason', 'libraryMatchReason') || pickText(libraryMatch, 'reason'),
+    libraryMatchPath: pickText(rec, 'library_match_path', 'libraryMatchPath') || pickText(libraryMatch, 'path'),
+    libraryMatchSha1: pickText(rec, 'library_match_sha1', 'libraryMatchSha1') || pickText(libraryMatch, 'sha1'),
+    libraryMatchTitle: pickText(rec, 'library_match_title', 'libraryMatchTitle') || pickText(libraryMatch, 'title'),
+    libraryMatchDoi: pickText(rec, 'library_match_doi', 'libraryMatchDoi') || pickText(libraryMatch, 'doi'),
+    libraryMatchYear: pickText(rec, 'library_match_year', 'libraryMatchYear') || pickText(libraryMatch, 'year'),
     metadataQuality: pickRecord(rec, 'metadata_quality', 'metadataQuality'),
     metadataRepairStatus: pickText(rec, 'metadata_repair_status', 'metadataRepairStatus'),
     metadataRepairSources: pickStringArray(rec, 'metadata_repair_sources', 'metadataRepairSources'),
@@ -1042,6 +1063,10 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'citationCardPolishSource',
     'citationCardPolishKey',
     'citationCardPolishRoute',
+    'libraryMatchReason',
+    'libraryMatchPath',
+    'libraryMatchTitle',
+    'libraryMatchDoi',
   ] as const) {
     detail[key] = cleanCitationDisplayText(detail[key])
   }
@@ -1420,6 +1445,16 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     'summary_source',
     'summary_provider',
     'summary_quality',
+    'library_match',
+    'library_match_status',
+    'library_match_confidence',
+    'library_match_method',
+    'library_match_reason',
+    'library_match_path',
+    'library_match_sha1',
+    'library_match_title',
+    'library_match_doi',
+    'library_match_year',
     'metadata_quality',
     'metadata_repair_status',
     'metadata_repair_sources',
@@ -1877,19 +1912,44 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   return { gbt, bibtex, ris }
 }
 
-export function summarySourceLabel(source: string, provider = ''): string {
+export function summarySourceLabel(
+  source: string,
+  provider = '',
+  labels?: {
+    fulltext: string
+    crossref: string
+    openalex: string
+    semanticScholar: string
+    doiLandingPage: string
+    abstract: string
+    citationContext: string
+    citationCard: string
+    metadata: string
+  },
+): string {
   const s = String(source || '').trim().toLowerCase()
   const p = String(provider || '').trim().toLowerCase()
-  if (s === 'fulltext') return '全文'
-  if (s === 'abstract') {
-    if (p === 'crossref') return 'Crossref 摘要'
-    if (p === 'openalex') return 'OpenAlex 摘要'
-    if (p === 'semantic_scholar') return 'Semantic Scholar 摘要'
-    if (p === 'doi_landing_page') return '出版商页面'
-    return '摘要'
+  const text = labels || {
+    fulltext: '全文',
+    crossref: 'Crossref 摘要',
+    openalex: 'OpenAlex 摘要',
+    semanticScholar: 'Semantic Scholar 摘要',
+    doiLandingPage: '出版商页面',
+    abstract: '摘要',
+    citationContext: '引用语境',
+    citationCard: '证据卡片',
+    metadata: '元数据',
   }
-  if (s === 'citation_context') return '引用语境'
-  if (s === 'citation_card' || s === 'citation_card_view' || s === 'card_view') return '证据卡片'
-  if (s === 'metadata') return '元数据'
-  return '元数据'
+  if (s === 'fulltext') return text.fulltext
+  if (s === 'abstract') {
+    if (p === 'crossref') return text.crossref
+    if (p === 'openalex') return text.openalex
+    if (p === 'semantic_scholar') return text.semanticScholar
+    if (p === 'doi_landing_page') return text.doiLandingPage
+    return text.abstract
+  }
+  if (s === 'citation_context') return text.citationContext
+  if (s === 'citation_card' || s === 'citation_card_view' || s === 'card_view') return text.citationCard
+  if (s === 'metadata') return text.metadata
+  return text.metadata
 }

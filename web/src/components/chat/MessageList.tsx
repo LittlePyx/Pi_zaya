@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { Typography, message } from 'antd'
 import { UserOutlined } from '@ant-design/icons'
 import { MarkdownRenderer } from './MarkdownRenderer'
@@ -6,15 +7,22 @@ import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
 import type {
+  ReaderSelectionShelfPayload,
   ReaderLocateCandidate,
   ReaderLocateClaimGroup,
   ReaderLocateResult,
   ReaderLocateTarget,
   ReaderOpenPayload,
 } from './reader/readerTypes'
+import {
+  READER_SELECTION_SHELF_CHANNEL,
+  READER_SELECTION_SHELF_EVENT,
+} from './reader/readerTypes'
 import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
   isLikelyWeakCitationTitle,
+  buildCiteDetailFromMeta,
+  citationDisplay,
   cleanCitationDisplayText,
   looksLowValueShelfSummary,
   mergeCiteMeta,
@@ -127,7 +135,12 @@ interface Props {
   onTrackedMessageActive?: (messageId: number | null) => void
   onOpenReader?: (payload: ReaderOpenPayload) => void
   onShelfOpenChange?: (open: boolean) => void
+  onShelfStateChange?: (state: { open: boolean; count: number }) => void
   closeShelfSignal?: number
+  openShelfSignal?: number
+  shelfDockMode?: boolean
+  shelfPortalTarget?: HTMLElement | null
+  shelfVisible?: boolean
   readerLocateResults?: Record<string, ReaderLocateResult>
   sourceQualityRefreshToken?: number
   paperGuideSourcePath?: string
@@ -1953,6 +1966,7 @@ function buildFallbackCiteDetailsFromRefHits(opts: {
   traceConvId: string
   traceAssistantOrder: number
   traceUserMsgId: number
+  S?: Record<string, string>
 }): CiteDetail[] {
   const nums = citationNumbersInMarkdown(opts.bodyContent)
   if (nums.length <= 0 || opts.refHits.length <= 0) return []
@@ -1997,11 +2011,11 @@ function buildFallbackCiteDetailsFromRefHits(opts: {
       summary_line: String(ui.summary_line || evidenceQuote || '').trim(),
       summary_source: 'references_panel_hit',
       location_label: headingPath,
-      support_relation: whyLine || '这条链接由前端根据本轮 References 临时补齐，只能作为候选依据；请打开原文核对答案句和命中片段是否真正对应。',
+      support_relation: whyLine || opts.S?.cite_candidate_support_default || 'This citation is only candidate evidence. Open the source to confirm the answer sentence and matched passage actually correspond.',
       why_line: whyLine,
       binding_status: 'candidate',
       binding_confidence: 0.35,
-      binding_reason: '前端缺少后端 cite_details，只能按 References 顺序补齐候选链接。',
+      binding_reason: opts.S?.cite_frontend_candidate_reason || 'The backend did not return citation details, so the frontend matched this as a candidate from the References order.',
       score: Number(hit.score || 0),
     })
     if (!detail) continue
@@ -2014,6 +2028,92 @@ function buildFallbackCiteDetailsFromRefHits(opts: {
     })
   }
   return out
+}
+
+type UnlinkedReferenceCandidate = MessageRenderPacketLite['unlinkedReferenceCandidates'][number]
+
+interface UnlinkedReferenceView {
+  candidate: UnlinkedReferenceCandidate
+  detail: CiteDetail
+  label: string
+}
+
+function unlinkedReferenceMatchLabel(method: string, S?: Record<string, string>): string {
+  const raw = String(method || '').trim().toLowerCase()
+  if (raw.includes('doi')) return 'DOI'
+  if (raw.includes('title')) return S?.msg_reference_candidate_exact || 'Title match'
+  if (raw.includes('venue_year')) return S?.msg_reference_candidate_venue_year || 'Venue/year'
+  return S?.msg_reference_candidate_index || 'Reference index'
+}
+
+function sameReferenceDetailIdentity(left: CiteDetail, right: CiteDetail): boolean {
+  const leftDoi = String(left.doi || left.doiUrl || '').trim().toLowerCase()
+  const rightDoi = String(right.doi || right.doiUrl || '').trim().toLowerCase()
+  if (leftDoi && rightDoi && leftDoi === rightDoi) return true
+  if (
+    Number(left.num || 0) > 0
+    && Number(right.num || 0) > 0
+    && Number(left.num || 0) === Number(right.num || 0)
+    && sourcePathsReferToSameDocument(left.sourcePath, right.sourcePath)
+  ) {
+    return true
+  }
+  const leftTitle = cleanCitationDisplayText(left.title || left.cardTitle || left.raw || '').toLowerCase()
+  const rightTitle = cleanCitationDisplayText(right.title || right.cardTitle || right.raw || '').toLowerCase()
+  return Boolean(leftTitle && rightTitle && leftTitle.length >= 18 && leftTitle === rightTitle)
+}
+
+function buildUnlinkedReferenceViews(opts: {
+  packet: MessageRenderPacketLite | null
+  linkedDetails: CiteDetail[]
+  messageId: number
+  traceConvId: string
+  traceAssistantOrder: number
+  traceUserMsgId: number
+  S?: Record<string, string>
+}): UnlinkedReferenceView[] {
+  const candidates = Array.isArray(opts.packet?.unlinkedReferenceCandidates)
+    ? opts.packet?.unlinkedReferenceCandidates || []
+    : []
+  if (candidates.length <= 0) return []
+  const out: UnlinkedReferenceView[] = []
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue
+    const candidateRec = candidate as Record<string, unknown>
+    const detailSeed = (
+      candidateRec.cite_detail && typeof candidateRec.cite_detail === 'object'
+        ? candidateRec.cite_detail as Record<string, unknown>
+        : candidateRec
+    )
+    const detail = normalizeCiteDetail({
+      ...candidateRec,
+      ...detailSeed,
+      anchor: String(detailSeed.anchor || candidateRec.id || `kb-unlinked-ref-${opts.messageId}-${out.length + 1}`),
+      num: Number(detailSeed.num || candidateRec.ref_num || 0),
+      source_name: String(detailSeed.source_name || candidateRec.source_name || ''),
+      source_path: String(detailSeed.source_path || candidateRec.source_path || ''),
+      citation_route: String(detailSeed.citation_route || 'system_b'),
+      is_inpaper: true,
+      binding_status: String(detailSeed.binding_status || 'candidate'),
+      binding_confidence: Number(detailSeed.binding_confidence || candidateRec.confidence || 0),
+    })
+    if (!detail) continue
+    const tracedDetail: CiteDetail = {
+      ...detail,
+      traceConvId: opts.traceConvId,
+      traceAssistantMsgId: opts.messageId,
+      traceAssistantOrder: opts.traceAssistantOrder,
+      traceUserMsgId: opts.traceUserMsgId,
+    }
+    if (opts.linkedDetails.some((item) => sameReferenceDetailIdentity(item, tracedDetail))) continue
+    if (out.some((item) => sameReferenceDetailIdentity(item.detail, tracedDetail))) continue
+    out.push({
+      candidate,
+      detail: tracedDetail,
+      label: unlinkedReferenceMatchLabel(String(candidateRec.match_method || ''), opts.S),
+    })
+  }
+  return out.slice(0, 5)
 }
 
 function refDisplaySourceKey(value: string): string {
@@ -3832,6 +3932,12 @@ function shelfPaperIdentity(item: CiteShelfItem): string {
   return `key:${String(item.key || '').trim()}`
 }
 
+function shelfSourceIdentity(item: Pick<CiteShelfItem, 'sourcePath' | 'sourceName'>): string {
+  return String(item.sourcePath || item.sourceName || '')
+    .trim()
+    .toLowerCase()
+}
+
 function dedupeShelfItems(items: CiteShelfItem[]): CiteShelfItem[] {
   const seen = new Set<string>()
   const out: CiteShelfItem[] = []
@@ -3843,6 +3949,118 @@ function dedupeShelfItems(items: CiteShelfItem[]): CiteShelfItem[] {
     if (out.length >= SHELF_MAX_ITEMS) break
   }
   return out
+}
+
+function normalizeReaderSelectionShelfPayload(raw: unknown): ReaderSelectionShelfPayload | null {
+  const rec = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+  const text = cleanCitationDisplayText(String(rec.text || '')).trim()
+  const sourcePath = String(rec.sourcePath || rec.source_path || '').trim()
+  if (!text || !sourcePath) return null
+  const numberField = (key: string): number | undefined => {
+    const value = Number(rec[key])
+    return Number.isFinite(value) ? value : undefined
+  }
+  return {
+    text,
+    sourcePath,
+    sourceName: String(rec.sourceName || rec.source_name || '').trim() || undefined,
+    headingPath: String(rec.headingPath || rec.heading_path || '').trim() || undefined,
+    blockId: String(rec.blockId || rec.block_id || '').trim() || undefined,
+    anchorId: String(rec.anchorId || rec.anchor_id || '').trim() || undefined,
+    anchorKind: String(rec.anchorKind || rec.anchor_kind || '').trim() || undefined,
+    startOffset: numberField('startOffset'),
+    endOffset: numberField('endOffset'),
+    occurrence: numberField('occurrence'),
+    readableIndex: numberField('readableIndex'),
+    documentOccurrence: numberField('documentOccurrence'),
+    startReadableIndex: numberField('startReadableIndex'),
+    endReadableIndex: numberField('endReadableIndex'),
+    conversationId: String(rec.conversationId || rec.conversation_id || '').trim() || undefined,
+    createdAt: numberField('createdAt') || Date.now(),
+  }
+}
+
+function readerSelectionShelfTitle(payload: ReaderSelectionShelfPayload): string {
+  const fallback = String(payload.sourcePath || '').split(/[\\/]/).pop() || 'Reader selection'
+  return cleanCitationDisplayText(String(payload.sourceName || fallback || 'Reader selection'))
+    .replace(/\.en\.md$/i, '')
+    .replace(/\.md$/i, '')
+    .replace(/\.pdf$/i, '')
+    .trim() || fallback
+}
+
+function readerSelectionAnchor(payload: ReaderSelectionShelfPayload): string {
+  return [
+    'reader-selection',
+    payload.sourcePath,
+    payload.blockId || payload.anchorId || '',
+    payload.startOffset ?? '',
+    payload.endOffset ?? '',
+  ].join(':')
+}
+
+function readerSelectionNote(
+  payload: ReaderSelectionShelfPayload,
+  labels: { shelf_reader_selection_selected?: string; shelf_reader_selection_source?: string },
+): string {
+  const heading = String(payload.headingPath || '').trim()
+  const source = readerSelectionShelfTitle(payload)
+  const selectedLabel = labels.shelf_reader_selection_selected || 'Selected text'
+  const sourceLabel = labels.shelf_reader_selection_source || 'Source'
+  const parts = [
+    `${sourceLabel}: ${heading ? `${source} / ${heading}` : source}`,
+    `${selectedLabel}: ${payload.text}`,
+  ]
+  return parts.filter(Boolean).join('\n')
+}
+
+function mergeSelectionNote(existing: string, next: string): string {
+  const current = normalizeShelfNote(existing)
+  const incoming = normalizeShelfNote(next)
+  if (!incoming) return current
+  if (!current) return incoming
+  if (current.includes(incoming)) return current
+  return `${current}\n\n${incoming}`.trim()
+}
+
+function citeDetailFromReaderSelection(
+  payload: ReaderSelectionShelfPayload,
+  activeConvId?: string | null,
+): CiteDetail | null {
+  const sourceName = String(payload.sourceName || '').trim()
+    || String(payload.sourcePath || '').split(/[\\/]/).pop()
+    || 'Reader selection'
+  const title = readerSelectionShelfTitle({ ...payload, sourceName })
+  const meta = {
+    anchor: readerSelectionAnchor(payload),
+    num: 0,
+    source_name: sourceName,
+    source_path: payload.sourcePath,
+    trace_conv_id: String(activeConvId || payload.conversationId || ''),
+    raw: payload.text,
+    cite_fmt: payload.text,
+    is_inpaper: false,
+    title,
+    heading_path: payload.headingPath || '',
+    evidence_quote: payload.text,
+    evidence_source: 'reader_selection',
+    citation_context: payload.text,
+    citation_context_source: 'reader_selection',
+    location_label: payload.headingPath || '',
+    block_id: payload.blockId || '',
+    anchor_id: payload.anchorId || '',
+    anchor_kind: payload.anchorKind || '',
+    card_kind: 'reader_selection',
+    card_title: title,
+    card_subtitle: payload.headingPath || '',
+    card_claim: payload.text,
+    card_evidence: payload.text,
+  }
+  return buildCiteDetailFromMeta(meta, {
+    sourceName,
+    sourcePath: payload.sourcePath,
+    anchor: readerSelectionAnchor(payload),
+  })
 }
 
 function restoreShelfItems(rawItems: unknown[]): CiteShelfItem[] {
@@ -4089,6 +4307,15 @@ function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.num === b.num
     && a.anchor === b.anchor
     && a.bibliometricsChecked === b.bibliometricsChecked
+    && a.libraryMatchStatus === b.libraryMatchStatus
+    && a.libraryMatchConfidence === b.libraryMatchConfidence
+    && a.libraryMatchMethod === b.libraryMatchMethod
+    && a.libraryMatchReason === b.libraryMatchReason
+    && a.libraryMatchPath === b.libraryMatchPath
+    && a.libraryMatchSha1 === b.libraryMatchSha1
+    && a.libraryMatchTitle === b.libraryMatchTitle
+    && a.libraryMatchDoi === b.libraryMatchDoi
+    && a.libraryMatchYear === b.libraryMatchYear
     && JSON.stringify(a.metadataQuality || null) === JSON.stringify(b.metadataQuality || null)
     && a.metadataRepairStatus === b.metadataRepairStatus
     && JSON.stringify(a.metadataRepairSources || []) === JSON.stringify(b.metadataRepairSources || [])
@@ -4456,7 +4683,12 @@ export function MessageList({
   onTrackedMessageActive,
   onOpenReader,
   onShelfOpenChange,
+  onShelfStateChange,
   closeShelfSignal = 0,
+  openShelfSignal = 0,
+  shelfDockMode = false,
+  shelfPortalTarget = null,
+  shelfVisible,
   readerLocateResults = {},
   sourceQualityRefreshToken = 0,
   paperGuideSourcePath,
@@ -4517,9 +4749,18 @@ export function MessageList({
   }, [onShelfOpenChange, shelfOpen])
 
   useEffect(() => {
+    onShelfStateChange?.({ open: shelfOpen, count: shelfItems.length })
+  }, [onShelfStateChange, shelfItems.length, shelfOpen])
+
+  useEffect(() => {
     if (closeShelfSignal <= 0) return
     setShelfOpen(false)
   }, [closeShelfSignal])
+
+  useEffect(() => {
+    if (openShelfSignal <= 0) return
+    setShelfOpen(true)
+  }, [openShelfSignal])
 
   useEffect(() => {
     return () => {
@@ -5563,6 +5804,89 @@ export function MessageList({
     fetchShelfSummaryForItem(summaryTarget, { force: true })
   }
 
+  const addReaderSelectionToShelf = (rawPayload: unknown) => {
+    const payload = normalizeReaderSelectionShelfPayload(rawPayload)
+    if (!payload) return
+    const payloadConvId = String(payload.conversationId || '').trim()
+    if (payloadConvId && activeConvId && payloadConvId !== activeConvId) return
+    const detail = citeDetailFromReaderSelection(payload, activeConvId)
+    if (!detail) return
+    const item = toShelfItem(detail)
+    const identity = shelfPaperIdentity(item)
+    const sourceIdentity = shelfSourceIdentity(item)
+    const note = readerSelectionNote(payload, S)
+    const currentItems = latestShelfStateRef.current.items
+    const existingSnapshot = currentItems.find((entry) => (
+      entry.key === item.key
+      || shelfPaperIdentity(entry) === identity
+      || (sourceIdentity && shelfSourceIdentity(entry) === sourceIdentity)
+    ))
+    const summaryTarget = existingSnapshot ? mergeShelfItemWithLive(existingSnapshot, item) : item
+    const focusKey = existingSnapshot?.key || summaryTarget.key
+    setShelfItems((current) => {
+      const existing = current.find((entry) => (
+        entry.key === item.key
+        || shelfPaperIdentity(entry) === identity
+        || (sourceIdentity && shelfSourceIdentity(entry) === sourceIdentity)
+      ))
+      const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
+      const nextItem: CiteShelfItem = {
+        ...mergedIncoming,
+        key: existing?.key || mergedIncoming.key,
+        tags: normalizeShelfTags(existing?.tags || mergedIncoming.tags),
+        note: mergeSelectionNote(existing?.note || mergedIncoming.note, note),
+        evidenceQuote: preferRicherField('title', existing?.evidenceQuote || '', payload.text) || mergedIncoming.evidenceQuote,
+        evidenceSource: 'reader_selection',
+        headingPath: payload.headingPath || mergedIncoming.headingPath,
+        locationLabel: payload.headingPath || mergedIncoming.locationLabel,
+        blockId: payload.blockId || mergedIncoming.blockId,
+        anchorId: payload.anchorId || mergedIncoming.anchorId,
+        anchorKind: payload.anchorKind || mergedIncoming.anchorKind,
+      }
+      const next = [
+        nextItem,
+        ...current.filter((entry) => (
+          entry.key !== item.key
+          && entry.key !== existing?.key
+          && shelfPaperIdentity(entry) !== identity
+          && (!sourceIdentity || shelfSourceIdentity(entry) !== sourceIdentity)
+        )),
+      ]
+      return dedupeShelfItems(next).slice(0, SHELF_MAX_ITEMS)
+    })
+    setFocusedShelfKey(focusKey)
+    setShelfOpen(true)
+    fetchShelfSummaryForItem({
+      ...summaryTarget,
+      key: focusKey,
+      note: mergeSelectionNote(existingSnapshot?.note || summaryTarget.note, note),
+    }, { force: true })
+  }
+
+  useEffect(() => {
+    const handleWindowEvent = (event: Event) => {
+      const custom = event as CustomEvent<unknown>
+      addReaderSelectionToShelf(custom.detail)
+    }
+    window.addEventListener(READER_SELECTION_SHELF_EVENT, handleWindowEvent)
+
+    let channel: BroadcastChannel | null = null
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(READER_SELECTION_SHELF_CHANNEL)
+      channel.onmessage = (event) => {
+        const data = event?.data && typeof event.data === 'object'
+          ? event.data as Record<string, unknown>
+          : {}
+        if (String(data.type || '') !== 'reader-selection-shelf') return
+        addReaderSelectionToShelf(data)
+      }
+    }
+    return () => {
+      window.removeEventListener(READER_SELECTION_SHELF_EVENT, handleWindowEvent)
+      channel?.close()
+    }
+  }, [activeConvId, S])
+
   const startPaperGuideFromDetail = async (detail: CiteDetail) => {
     const isInPaperReference = Boolean(detail.isInpaper)
     if (isInPaperReference) {
@@ -6000,6 +6324,77 @@ export function MessageList({
     message.success(`Deleted snapshot: ${removedName}`)
   }
 
+  const shelfNode = (
+    <CiteShelf
+      open={shelfOpen}
+      visible={shelfDockMode ? shelfVisible : undefined}
+      presentation={shelfDockMode ? 'dock' : 'floating'}
+      items={shelfItems}
+      readerLocateResults={readerLocateResults}
+      sourceQualityRefreshToken={sourceQualityRefreshToken}
+      focusedKey={focusedShelfKey}
+      summaryLoadingKey={shelfSummaryLoadingKey}
+      repairLoadingKey={shelfRepairLoadingKey}
+      repairingKeys={shelfAutoRepairingKeys}
+      repairImpact={shelfRepairImpact}
+      snapshots={savedShelfSnapshots}
+      selectedSnapshotId={selectedSavedSnapshotId}
+      snapshotDiff={selectedSnapshotDiff}
+      onToggle={() => setShelfOpen((value) => !value)}
+      onSelect={(item) => {
+        setFocusedShelfKey(item.key)
+        fetchShelfSummaryForItem(item)
+      }}
+      onOpenSource={(item) => {
+        openReaderFromDetail(item as unknown as CiteDetail)
+      }}
+      onRemove={(key) => {
+        setShelfItems((current) => current.filter((item) => item.key !== key))
+        if (focusedShelfKey === key) setFocusedShelfKey('')
+        if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
+        if (shelfRepairLoadingKey === key) setShelfRepairLoadingKey('')
+        const nextRepairing = new Set(shelfAutoRepairingKeySetRef.current)
+        nextRepairing.delete(key)
+        setShelfAutoRepairingKeySet(nextRepairing)
+        delete shelfAutoRepairFingerprintsRef.current[key]
+        delete shelfAutoRepairRetryAfterRef.current[key]
+      }}
+      onClear={() => {
+        setShelfItems([])
+        setFocusedShelfKey('')
+        setShelfSummaryLoadingKey('')
+        setShelfRepairLoadingKey('')
+        setShelfAutoRepairingKeySet(new Set())
+        shelfAutoRepairFingerprintsRef.current = {}
+        shelfAutoRepairRetryAfterRef.current = {}
+        setShelfRepairImpact(null)
+      }}
+      onUpdateTags={(key, tags) => {
+        const nextTags = normalizeShelfTags(tags)
+        setShelfItems((current) => current.map((item) => (
+          item.key === key ? { ...item, tags: nextTags } : item
+        )))
+      }}
+      onUpdateNote={(key, note) => {
+        const nextNote = normalizeShelfNote(note)
+        setShelfItems((current) => current.map((item) => (
+          item.key === key ? { ...item, note: nextNote } : item
+        )))
+      }}
+      onRepair={(item, options) => {
+        repairShelfItemMeta(item, options)
+      }}
+      onApplyRepairCandidates={applyShelfMetadataRepairCandidates}
+      onSelectSnapshot={setSelectedSavedSnapshotId}
+      onSaveSnapshot={saveShelfSnapshot}
+      onLoadSnapshot={loadShelfSnapshot}
+      onDeleteSnapshot={deleteShelfSnapshot}
+    />
+  )
+  const renderedShelfNode = shelfDockMode
+    ? (shelfPortalTarget ? createPortal(shelfNode, shelfPortalTarget) : null)
+    : shelfNode
+
   return (
     <>
       <div ref={scrollRef} className="kb-message-scroll kb-main-scroll">
@@ -6024,6 +6419,7 @@ export function MessageList({
             const isUser = message.role === 'user'
             const trace = assistantTraceByMsgId.get(message.id)
             const researchTrace = !isUser ? getMessageResearchTrace(message) : null
+            const renderPacket = !isUser ? getMessageRenderPacket(message) : null
             const citeDetails = getMessageCiteDetailRecords(message)
               .map(normalizeCiteDetail)
               .filter((detail): detail is CiteDetail => Boolean(detail))
@@ -6063,12 +6459,24 @@ export function MessageList({
                 traceConvId: String(activeConvId || ''),
                 traceAssistantOrder: Number(trace?.answerOrder || 0),
                 traceUserMsgId: Number(trace?.userMsgId || refsUserMsgIdForCitations || 0),
+                S,
               })
               : []
             const effectiveCiteDetails = enrichCiteDetailsWithVisibleRefContext(
               citeDetails.length > 0 ? citeDetails : fallbackCiteDetails,
               refEntryForCitations,
             )
+            const unlinkedReferenceViews = !isUser
+              ? buildUnlinkedReferenceViews({
+                packet: renderPacket,
+                linkedDetails: effectiveCiteDetails,
+                messageId: message.id,
+                traceConvId: String(activeConvId || ''),
+                traceAssistantOrder: Number(trace?.answerOrder || 0),
+                traceUserMsgId: Number(trace?.userMsgId || refsUserMsgIdForCitations || 0),
+                S,
+              })
+              : []
             const guideSourcePath = String(paperGuideSourcePath || '').trim()
             const locateSourceName = prep?.locateSourceName || String(paperGuideSourceName || '').trim()
             const messageProvenance = prep?.messageProvenance || (
@@ -6980,6 +7388,52 @@ export function MessageList({
                           return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587'
                         }) : undefined}
                       />
+                      {unlinkedReferenceViews.length > 0 ? (
+                        <div className="kb-unlinked-ref-strip" data-testid={`unlinked-reference-candidates-${message.id}`}>
+                          <div className="kb-unlinked-ref-head">
+                            <span>{S.msg_reference_candidates_title || 'Possible cited papers'}</span>
+                            <span>{S.msg_reference_candidates_note || 'Found in this paper bibliography'}</span>
+                          </div>
+                          <div className="kb-unlinked-ref-list">
+                            {unlinkedReferenceViews.map((view) => {
+                              const display = citationDisplay(view.detail)
+                              const title = display.main || view.detail.title || view.detail.raw || S.default_source_fallback
+                              const metaText = [
+                                display.authors,
+                                display.venueYear || display.venue,
+                              ].filter(Boolean).join(' · ')
+                              const key = String((view.candidate as Record<string, unknown>).id || view.detail.anchor || title)
+                              return (
+                                <div className="kb-unlinked-ref-row" key={key}>
+                                  <div className="kb-unlinked-ref-main">
+                                    <div className="kb-unlinked-ref-title">{title}</div>
+                                    {metaText ? <div className="kb-unlinked-ref-meta">{metaText}</div> : null}
+                                  </div>
+                                  <span className="kb-unlinked-ref-reason">{view.label}</span>
+                                  <div className="kb-unlinked-ref-actions">
+                                    {onOpenReader && view.detail.sourcePath ? (
+                                      <button
+                                        type="button"
+                                        className="kb-unlinked-ref-action"
+                                        onClick={() => openReaderFromDetail(view.detail)}
+                                      >
+                                        {S.msg_reference_candidate_open || 'Open'}
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      className="kb-unlinked-ref-action is-primary"
+                                      onClick={() => addToShelf(view.detail)}
+                                    >
+                                      {S.msg_reference_candidate_add || 'Add'}
+                                    </button>
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
                       {Boolean(onOpenReader) && provenanceLocateEntries.length > 0 ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {provenanceLocateEntries.map((entry, idx) => {
@@ -7092,69 +7546,7 @@ export function MessageList({
         onMouseEnter={keepCitationPreviewOpen}
         onMouseLeave={scheduleCitationPreviewClose}
       />
-      <CiteShelf
-        open={shelfOpen}
-        items={shelfItems}
-        readerLocateResults={readerLocateResults}
-        sourceQualityRefreshToken={sourceQualityRefreshToken}
-        focusedKey={focusedShelfKey}
-        summaryLoadingKey={shelfSummaryLoadingKey}
-        repairLoadingKey={shelfRepairLoadingKey}
-        repairingKeys={shelfAutoRepairingKeys}
-        repairImpact={shelfRepairImpact}
-        snapshots={savedShelfSnapshots}
-        selectedSnapshotId={selectedSavedSnapshotId}
-        snapshotDiff={selectedSnapshotDiff}
-        onToggle={() => setShelfOpen((value) => !value)}
-        onSelect={(item) => {
-          setFocusedShelfKey(item.key)
-          fetchShelfSummaryForItem(item)
-        }}
-        onOpenSource={(item) => {
-          openReaderFromDetail(item as unknown as CiteDetail)
-        }}
-        onRemove={(key) => {
-          setShelfItems((current) => current.filter((item) => item.key !== key))
-          if (focusedShelfKey === key) setFocusedShelfKey('')
-          if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
-          if (shelfRepairLoadingKey === key) setShelfRepairLoadingKey('')
-          const nextRepairing = new Set(shelfAutoRepairingKeySetRef.current)
-          nextRepairing.delete(key)
-          setShelfAutoRepairingKeySet(nextRepairing)
-          delete shelfAutoRepairFingerprintsRef.current[key]
-          delete shelfAutoRepairRetryAfterRef.current[key]
-        }}
-        onClear={() => {
-          setShelfItems([])
-          setFocusedShelfKey('')
-          setShelfSummaryLoadingKey('')
-          setShelfRepairLoadingKey('')
-          setShelfAutoRepairingKeySet(new Set())
-          shelfAutoRepairFingerprintsRef.current = {}
-          shelfAutoRepairRetryAfterRef.current = {}
-          setShelfRepairImpact(null)
-        }}
-        onUpdateTags={(key, tags) => {
-          const nextTags = normalizeShelfTags(tags)
-          setShelfItems((current) => current.map((item) => (
-            item.key === key ? { ...item, tags: nextTags } : item
-          )))
-        }}
-        onUpdateNote={(key, note) => {
-          const nextNote = normalizeShelfNote(note)
-          setShelfItems((current) => current.map((item) => (
-            item.key === key ? { ...item, note: nextNote } : item
-          )))
-        }}
-        onRepair={(item, options) => {
-          repairShelfItemMeta(item, options)
-        }}
-        onApplyRepairCandidates={applyShelfMetadataRepairCandidates}
-        onSelectSnapshot={setSelectedSavedSnapshotId}
-        onSaveSnapshot={saveShelfSnapshot}
-        onLoadSnapshot={loadShelfSnapshot}
-        onDeleteSnapshot={deleteShelfSnapshot}
-      />
+      {renderedShelfNode}
     </>
   )
 }

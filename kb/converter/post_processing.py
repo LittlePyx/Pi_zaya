@@ -186,6 +186,10 @@ def _looks_like_running_journal_header_line(text: str) -> bool:
     if not t:
         return False
     low = t.lower()
+    if re.fullmatch(r"nature\s*\|\s*vol\.?\s*\d+.*\|\s*\d{1,5}", low):
+        return True
+    if re.fullmatch(r"www\.nature\.com/(?:nature|articles|[-a-z0-9_/]+)", low):
+        return True
     has_page_marker = bool(re.search(r"\bpage\s+\d+\s+of\s+\d+\b", low))
     has_journal_name = bool(
         re.search(
@@ -1970,6 +1974,9 @@ def _strip_frontmatter_metadata_lines(md: str) -> str:
     out: list[str] = []
     for idx, line in enumerate(lines):
         st = line.strip()
+        if idx < 30 and re.match(r"^#{1,6}\s+", st) and _looks_like_real_section_heading(st):
+            out.append(line)
+            continue
         if idx < 30 and _looks_like_frontmatter_metadata_line(st) and not _looks_like_substantial_body_paragraph(st):
             continue
         if idx < 30 and st == "---":
@@ -2096,6 +2103,22 @@ def _drop_empty_figure_duplicate_headings(md: str) -> str:
             out.append(line)
             i += 1
             continue
+
+        level = len(m.group(1))
+        if level == 1 and i <= 8:
+            if _looks_custom_heading(title):
+                out.append(line)
+                i += 1
+                continue
+            following_heading = re.match(r"^#{1,6}\s+(.+)$", first_following)
+            following_title = (following_heading.group(1) or "").strip() if following_heading else ""
+            if following_title and (
+                _is_common_section_heading(following_title)
+                or _parse_numbered_heading_level(following_title) is not None
+            ):
+                out.append(line)
+                i += 1
+                continue
 
         window_end = min(len(lines), i + 40)
         saw_image = False

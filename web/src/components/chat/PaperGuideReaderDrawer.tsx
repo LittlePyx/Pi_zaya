@@ -11,18 +11,27 @@ import { useReaderSessionHighlightLayer } from './reader/useReaderSessionHighlig
 import { useReaderOutline } from './reader/useReaderOutline'
 import { useReaderHighlightWorkspace } from './reader/useReaderHighlightWorkspace'
 import { useReaderEvidenceNavigator } from './reader/useReaderEvidenceNavigator'
+import type { ReaderDocResponse } from '../../api/references'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
   ReaderOpenPayload,
+  ReaderSelectionShelfPayload,
   ReaderSessionHighlight,
 } from './reader/readerTypes'
 import {
+  buildHighlightQueries,
   candidateDisplayLabel,
   candidateIdentityKey,
   candidateVisibilityKey,
+  clearReaderFocusClasses,
+  closestReadableBlock,
   compactLocateHintLabel,
+  resolveDirectTargetNode,
+  resolveStickyHighlightTarget,
+  scrollReaderTargetIntoView,
 } from './reader/readerDomUtils'
+import { useT } from '../../i18n'
 export type {
   ReaderLocateCandidate,
   ReaderLocateClaimGroup,
@@ -47,11 +56,15 @@ interface Props {
   onClose: () => void
   onAppendSelection: (text: string) => void
   presentation?: 'drawer' | 'inline'
+  surface?: 'dock' | 'page'
   onCollapse?: () => void
+  onOpenStandalone?: () => void
   sessionHighlights?: ReaderSessionHighlight[]
   onAddSessionHighlight?: (highlight: ReaderSessionHighlight) => void
   onRemoveSessionHighlight?: (highlightId: string) => void
   onLocateResult?: (result: ReaderLocateResult) => void
+  onAddSelectionToShelf?: (payload: ReaderSelectionShelfPayload) => void
+  documentOverride?: ReaderDocResponse | null
 }
 
 function locateResultBadge(
@@ -60,6 +73,7 @@ function locateResultBadge(
   activeAnchorKind: string,
   strictLocate: boolean,
   activeHeadingPath: string,
+  S: Record<string, string>,
 ): LocateMetaBadge | null {
   const hint = String(statusTextFull || '').trim().toLowerCase()
   const hitLevel = String(activeHitLevel || '').trim().toLowerCase()
@@ -69,7 +83,7 @@ function locateResultBadge(
   if (/\b(strict locate stopped|not found)\b/i.test(hint)) {
     return {
       key: 'result',
-      label: 'Unresolved',
+      label: S.reader_locate_unresolved || 'Unresolved',
       title,
       tone: 'danger',
       testId: 'reader-locate-resolution',
@@ -78,7 +92,7 @@ function locateResultBadge(
   if (hitLevel === 'heading' || /\bheading\b/i.test(hint)) {
     return {
       key: 'result',
-      label: 'Section only',
+      label: S.reader_locate_section_only || 'Section only',
       title,
       tone: strictLocate ? 'warning' : 'neutral',
       testId: 'reader-locate-resolution',
@@ -91,7 +105,7 @@ function locateResultBadge(
   ) {
     return {
       key: 'result',
-      label: 'Bound anchor',
+      label: S.reader_locate_bound_anchor || 'Bound anchor',
       title,
       tone: 'success',
       testId: 'reader-locate-resolution',
@@ -100,7 +114,7 @@ function locateResultBadge(
   if (/\b(neighbor evidence|fallback|block only)\b/i.test(hint)) {
     return {
       key: 'result',
-      label: 'Fallback evidence',
+      label: S.reader_locate_fallback_evidence || 'Fallback evidence',
       title,
       tone: 'warning',
       testId: 'reader-locate-resolution',
@@ -109,7 +123,7 @@ function locateResultBadge(
   if (hitLevel === 'block' || /\bevidence block matched\b/i.test(hint)) {
     return {
       key: 'result',
-      label: 'Bound block',
+      label: S.reader_locate_bound_block || 'Bound block',
       title,
       tone: 'success',
       testId: 'reader-locate-resolution',
@@ -118,7 +132,7 @@ function locateResultBadge(
   if (hitLevel === 'exact' || /\bexact\b/i.test(hint)) {
     return {
       key: 'result',
-      label: 'Exact target',
+      label: S.reader_locate_exact_target || 'Exact target',
       title,
       tone: 'success',
       testId: 'reader-locate-resolution',
@@ -127,7 +141,9 @@ function locateResultBadge(
   if (activeHeadingPath) {
     return {
       key: 'result',
-      label: strictLocate ? 'Requested section' : 'Section open',
+      label: strictLocate
+        ? (S.reader_locate_requested_section || 'Requested section')
+        : (S.reader_locate_section_open || 'Section open'),
       title,
       tone: 'neutral',
       testId: 'reader-locate-resolution',
@@ -142,16 +158,22 @@ export function PaperGuideReaderDrawer({
   onClose,
   onAppendSelection,
   presentation = 'drawer',
+  surface = 'dock',
   onCollapse,
+  onOpenStandalone,
   sessionHighlights = [],
   onAddSessionHighlight,
   onRemoveSessionHighlight,
   onLocateResult,
+  onAddSelectionToShelf,
+  documentOverride,
 }: Props) {
+  const S = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [drawerReady, setDrawerReady] = useState(false)
   const [altChangeSource, setAltChangeSource] = useState<'system' | 'manual'>('system')
   const isInlinePresentation = presentation === 'inline'
+  const isPageSurface = isInlinePresentation && surface === 'page'
 
   const sourcePath = String(payload?.sourcePath || '').trim()
   const sourceName = String(payload?.sourceName || '').trim()
@@ -274,6 +296,7 @@ export function PaperGuideReaderDrawer({
     open,
     sourcePath,
     sourceName,
+    documentOverride,
   })
 
   const title = useMemo(
@@ -375,30 +398,34 @@ export function PaperGuideReaderDrawer({
       const isActive = identity === candidateIdentityKey(activeAlt)
       if (requestedCandidateIdentity && identity === requestedCandidateIdentity) {
         return {
-          roleLabel: strictLocate ? 'Requested' : 'Primary',
+          roleLabel: strictLocate
+            ? (S.reader_candidate_requested || 'Requested')
+            : (S.reader_candidate_primary || 'Primary'),
           roleTone: 'accent',
         }
       }
       if (isActive && strictLocate && altChangeSource === 'system' && activeAltIndex !== requestedAltIndex) {
         return {
-          roleLabel: 'Resolved',
+          roleLabel: S.reader_candidate_resolved || 'Resolved',
           roleTone: 'success',
         }
       }
       if (isActive && strictLocate && altChangeSource === 'manual' && activeAltIndex !== requestedAltIndex) {
         return {
-          roleLabel: 'Manual',
+          roleLabel: S.reader_candidate_manual || 'Manual',
           roleTone: 'accent',
         }
       }
       if (evidenceCandidateIdentitySet.has(identity)) {
         return {
-          roleLabel: 'Evidence',
+          roleLabel: S.reader_candidate_evidence || 'Evidence',
           roleTone: 'success',
         }
       }
       return {
-        roleLabel: strictLocate ? 'Backup' : 'Alt',
+        roleLabel: strictLocate
+          ? (S.reader_candidate_backup || 'Backup')
+          : (S.reader_candidate_alt || 'Alt'),
         roleTone: 'neutral',
       }
     }
@@ -442,6 +469,7 @@ export function PaperGuideReaderDrawer({
     altChangeSource,
     requestedAltIndex,
     title,
+    S,
   ])
   const hasDistinctAlternatives = useMemo(() => {
     if (candidateOptions.length <= 1) return false
@@ -492,6 +520,38 @@ export function PaperGuideReaderDrawer({
     expectsEquationBinding,
   })
 
+  const returnToEvidence = () => {
+    const root = contentRef.current
+    if (!root) return
+    const resultBlockId = String(locateResult?.blockId || activeBlockId || '').trim()
+    const resultAnchorId = String(locateResult?.anchorId || activeAnchorId || '').trim()
+    const resultAnchorKind = String(locateResult?.anchorKind || activeAnchorKind || '').trim().toLowerCase()
+    const seed = String(activeHighlightSnippet || activeFocusSnippet || '').trim()
+    const direct = resolveDirectTargetNode(root, readerBlocks, {
+      blockId: resultBlockId,
+      anchorId: resultAnchorId,
+      anchorKind: resultAnchorKind,
+    })
+    const target = closestReadableBlock(direct.target) || direct.target || resolveStickyHighlightTarget(root, readerBlocks, {
+      blockId: resultBlockId,
+      anchorId: resultAnchorId,
+      anchorKind: resultAnchorKind,
+      anchorNumber: activeAnchorNumber,
+      headingPath: String(locateResult?.headingPath || activeHeadingPath || '').trim(),
+      highlightSeed: seed,
+      highlightQueries: buildHighlightQueries(seed, {
+        anchorKind: resultAnchorKind,
+        anchorNumber: activeAnchorNumber,
+      }),
+      relatedBlockIds,
+      strictLocate: false,
+    })
+    if (!target) return
+    clearReaderFocusClasses(root)
+    target.classList.add('kb-reader-focus')
+    scrollReaderTargetIntoView(root, target, { force: true })
+  }
+
   useEffect(() => {
     if (!open || !locateResult || !onLocateResult) return
     onLocateResult({
@@ -539,9 +599,9 @@ export function PaperGuideReaderDrawer({
   ])
 
   const sourceTitleAttr = String(sourcePath || sourceName || title || '').trim()
-  const metaLocationText = activeHeadingPath || 'Document start'
+  const metaLocationText = activeHeadingPath || (S.reader_document_start || 'Document start')
   const bindingStatusText = expectsEquationBinding && !equationBindingReady
-    ? `Binding eq anchors${equationBindingBoundCount > 0 ? ` (${equationBindingBoundCount})` : ''}`
+    ? `${S.reader_binding_equations || 'Binding equations'}${equationBindingBoundCount > 0 ? ` (${equationBindingBoundCount})` : ''}`
     : ''
   const statusTextFull = String(locateHint || bindingStatusText).trim()
   const statusTextCompact = compactLocateHintLabel(statusTextFull)
@@ -552,19 +612,23 @@ export function PaperGuideReaderDrawer({
   }, [hasDistinctAlternatives, activeAltIndex, locateHint, altChangeSource, requestedAltIndex])
   const candidateToggleLabel = hasDistinctAlternatives
       ? (candidatePickerExpanded
-      ? 'Hide list'
+      ? (S.reader_hide_list || 'Hide list')
       : activeAltIndex > 0
-        ? `Alt ${Math.max(1, candidateOptions.findIndex((item) => item.distinctKey === activeCandidateDistinctKey) + 1)}/${candidateOptions.length}`
-        : `${candidateOptions.length} candidates`)
+        ? (S.reader_alt_index || 'Alt {i}/{n}')
+          .replace('{i}', String(Math.max(1, candidateOptions.findIndex((item) => item.distinctKey === activeCandidateDistinctKey) + 1)))
+          .replace('{n}', String(candidateOptions.length))
+        : (S.reader_candidates_count || '{n} candidates').replace('{n}', String(candidateOptions.length)))
     : ''
   const locateBadges = useMemo(() => {
     const out: LocateMetaBadge[] = []
     out.push({
       key: 'mode',
-      label: strictLocate ? 'Strict locate' : 'Section locate',
+      label: strictLocate
+        ? (S.reader_locate_mode_strict || 'Strict locate')
+        : (S.reader_locate_mode_section || 'Section locate'),
       title: strictLocate
-        ? 'This reader open expects a direct evidence location before softer fallbacks.'
-        : 'This reader open starts from the best matched section or snippet.',
+        ? (S.reader_locate_mode_strict_title || 'This reader open expects a direct evidence location before softer fallbacks.')
+        : (S.reader_locate_mode_section_title || 'This reader open starts from the best matched section or snippet.'),
       tone: strictLocate ? 'accent' : 'neutral',
       testId: 'reader-locate-mode',
     })
@@ -574,27 +638,29 @@ export function PaperGuideReaderDrawer({
       activeAnchorKind,
       strictLocate,
       activeHeadingPath,
+      S,
     )
     if (resultBadge) out.push(resultBadge)
     if (hasDistinctAlternatives && altChangeSource === 'system' && activeAltIndex !== requestedAltIndex) {
       out.push({
         key: 'switch',
-        label: 'Auto-switched',
-        title: 'The requested candidate could not be bound directly, so the reader moved to a backup candidate.',
+        label: S.reader_auto_switched || 'Auto-switched',
+        title: S.reader_auto_switched_title || 'The requested candidate could not be bound directly, so the reader moved to a backup candidate.',
         tone: 'warning',
         testId: 'reader-locate-switch',
       })
     } else if (hasDistinctAlternatives && altChangeSource === 'manual' && activeAltIndex !== requestedAltIndex) {
       out.push({
         key: 'switch',
-        label: 'Manual alt',
-        title: 'You are viewing a manually selected alternate candidate.',
+        label: S.reader_manual_alt || 'Manual alt',
+        title: S.reader_manual_alt_title || 'You are viewing a manually selected alternate candidate.',
         tone: 'accent',
         testId: 'reader-locate-switch',
       })
     }
     return out
   }, [
+    S,
     strictLocate,
     statusTextFull,
     activeHitLevel,
@@ -607,13 +673,13 @@ export function PaperGuideReaderDrawer({
   ])
   const decisionText = useMemo(() => {
     if (hasDistinctAlternatives && altChangeSource === 'system' && activeAltIndex !== requestedAltIndex) {
-      return 'The requested target missed, so the reader moved to the best backup evidence.'
+      return S.reader_auto_switched_note || 'The requested target missed, so the reader moved to the best backup evidence.'
     }
     if (hasDistinctAlternatives && altChangeSource === 'manual' && activeAltIndex !== requestedAltIndex) {
-      return 'Showing a manually selected alternate candidate.'
+      return S.reader_manual_alt_note || 'Showing a manually selected alternate candidate.'
     }
     return ''
-  }, [hasDistinctAlternatives, altChangeSource, activeAltIndex, requestedAltIndex])
+  }, [S, hasDistinctAlternatives, altChangeSource, activeAltIndex, requestedAltIndex])
   const decisionTitle = useMemo(() => {
     if (!decisionText) return undefined
     return statusTextFull || decisionText
@@ -640,12 +706,14 @@ export function PaperGuideReaderDrawer({
     open,
     sourcePath,
     isInlinePresentation,
+    defaultOutlineOpen: isInlinePresentation && !isPageSurface,
     contentRef,
     readerBlocks,
   })
   const {
     selection,
     selectionBubble,
+    clearSelectionState,
     queueSelectionStateSync,
     appendSelection,
     toggleSelectionHighlight,
@@ -661,6 +729,30 @@ export function PaperGuideReaderDrawer({
     onAppendSelection,
     sourceLabel,
   })
+
+  const addSelectionToShelf = () => {
+    const selected = selectionBubble
+    const text = String(selected?.text || selection || '').trim()
+    if (!selected || !text || !onAddSelectionToShelf) return
+    onAddSelectionToShelf({
+      text,
+      sourcePath,
+      sourceName: title,
+      headingPath: String(activeHeadingPath || '').trim() || undefined,
+      blockId: String(selected.blockId || activeBlockId || '').trim() || undefined,
+      anchorId: String(selected.anchorId || activeAnchorId || '').trim() || undefined,
+      anchorKind: String(activeAnchorKind || '').trim() || undefined,
+      startOffset: selected.startOffset >= 0 ? selected.startOffset : undefined,
+      endOffset: selected.endOffset > selected.startOffset ? selected.endOffset : undefined,
+      occurrence: Number.isFinite(Number(selected.occurrence)) ? Number(selected.occurrence) : undefined,
+      readableIndex: selected.readableIndex >= 0 ? selected.readableIndex : undefined,
+      documentOccurrence: selected.documentOccurrence >= 0 ? selected.documentOccurrence : undefined,
+      startReadableIndex: selected.startReadableIndex >= 0 ? selected.startReadableIndex : undefined,
+      endReadableIndex: selected.endReadableIndex >= 0 ? selected.endReadableIndex : undefined,
+      createdAt: Date.now(),
+    })
+    clearSelectionState(true)
+  }
 
   useReaderSessionHighlightLayer({
     open,
@@ -766,8 +858,12 @@ export function PaperGuideReaderDrawer({
       canGoNextEvidence={canGoNextEvidence}
       hasDistinctAlternatives={hasDistinctAlternatives}
       candidatePickerExpanded={candidatePickerExpanded}
-      outlineToggleLabel={outlineOpen ? 'Hide sections' : 'Sections'}
-      highlightsToggleLabel={highlightsOpen ? 'Hide highlights' : `${sessionHighlights.length} highlights`}
+      outlineToggleLabel={outlineOpen && !isPageSurface
+        ? (S.reader_hide_sections || 'Hide sections')
+        : (S.reader_sections || 'Sections')}
+      highlightsToggleLabel={highlightsOpen && !isPageSurface
+        ? (S.reader_hide_highlights || 'Hide highlights')
+        : (S.reader_highlights_count || '{n} highlights').replace('{n}', String(sessionHighlights.length))}
       candidateToggleLabel={candidateToggleLabel}
       candidateOptions={candidateOptions}
       activeCandidateDistinctKey={activeCandidateDistinctKey}
@@ -780,13 +876,18 @@ export function PaperGuideReaderDrawer({
       onGoNextEvidence={goNextEvidence}
       onToggleCandidatePicker={() => setCandidatePickerExpanded((prev) => !prev)}
       onSelectCandidate={(idx) => setActiveAltIndex(idx, 'manual')}
+      onReturnToEvidence={returnToEvidence}
+      returnToEvidenceLabel={S.reader_return_to_evidence || 'Back to evidence'}
+      returnToEvidenceTitle={S.reader_return_to_evidence_title || 'Return to the located evidence'}
       loading={loading}
       error={error}
       hasMarkdown={Boolean(markdown)}
       selectionBubble={selectionBubble}
       onToggleSelectionHighlight={toggleSelectionHighlight}
+      onAddSelectionToShelf={onAddSelectionToShelf ? addSelectionToShelf : undefined}
       onAskSelection={appendSelection}
       isInlinePresentation={isInlinePresentation}
+      isPageSurface={isPageSurface}
       contentRef={contentRef}
       onContentMouseUp={queueSelectionStateSync}
       onContentKeyUp={queueSelectionStateSync}
@@ -799,10 +900,15 @@ export function PaperGuideReaderDrawer({
     <PaperGuideReaderShell
       open={open}
       isInlinePresentation={isInlinePresentation}
+      surface={surface}
       title={title}
       titleTooltip={sourceTitleAttr || title}
       onClose={onClose}
       onCollapse={onCollapse}
+      onOpenStandalone={onOpenStandalone}
+      openStandaloneLabel={S.reader_open_window || 'Open window'}
+      collapseLabel={S.reader_fold || 'Fold'}
+      closeLabel={S.shelf_close || 'Close'}
       onAfterOpenChange={setDrawerReady}
     >
       {panel}
