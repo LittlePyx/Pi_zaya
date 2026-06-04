@@ -4826,6 +4826,7 @@ export function MessageList({
   const shelfRevisionByKeyRef = useRef<Record<string, number>>({})
   const shelfBackendRevisionByKeyRef = useRef<Record<string, number>>({})
   const shelfBackendHydratedKeysRef = useRef(new Set<string>())
+  const shelfEmptyBackendSaveIntentRef = useRef<Record<string, number>>({})
   const shelfBackendHydrateSeqRef = useRef(0)
   const shelfStateTouchedAtRef = useRef(Date.now())
   const latestShelfStateRef = useRef<{ convId?: string | null; projectId?: string | null; open: boolean; items: CiteShelfItem[] }>({
@@ -4867,22 +4868,40 @@ export function MessageList({
     }
   }, [activeConvId, shelfScopeId])
 
-  const saveShelfBackendNow = useCallback((state: { convId?: string | null; projectId?: string | null; open: boolean; items: CiteShelfItem[] }) => {
+  const markShelfEmptyBackendSaveIntent = useCallback((projectId?: string | null) => {
+    const storageKey = shelfStorageKey(projectId)
+    shelfEmptyBackendSaveIntentRef.current[storageKey] = Date.now() + 5000
+  }, [])
+
+  const saveShelfBackendNow = useCallback((
+    state: { convId?: string | null; projectId?: string | null; open: boolean; items: CiteShelfItem[] },
+    options?: { allowEmptyOverwrite?: boolean },
+  ) => {
     const projectScopeId = shelfProjectScopeId(state.projectId)
     const storageKey = shelfStorageKey(projectScopeId)
     if (!shelfBackendHydratedKeysRef.current.has(storageKey)) return
     const items = shelfItemsForBackend(state.items)
+    const emptyClosed = items.length <= 0 && !state.open
+    const emptyIntentUntil = Number(shelfEmptyBackendSaveIntentRef.current[storageKey] || 0)
+    const allowEmptyOverwrite = Boolean(options?.allowEmptyOverwrite || emptyIntentUntil > Date.now())
+    if (emptyClosed && !allowEmptyOverwrite && Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0) > 0) {
+      return
+    }
     void chatApi.saveCitationShelf({
       convId: state.convId || undefined,
       projectId: projectScopeId === '__default__' ? undefined : projectScopeId,
       scope: 'project',
       open: state.open,
       items,
+      allowEmptyOverwrite,
     })
       .then((record) => {
         const latestKey = shelfStorageKey(projectScopeId)
         shelfBackendRevisionByKeyRef.current[latestKey] = Math.max(0, Number(record.revision || 0))
         shelfBackendHydratedKeysRef.current.add(latestKey)
+        if (emptyClosed && allowEmptyOverwrite) {
+          delete shelfEmptyBackendSaveIntentRef.current[latestKey]
+        }
       })
       .catch(() => {
         // Local shelf storage remains the immediate fallback when the API is unavailable.
@@ -6731,6 +6750,8 @@ export function MessageList({
       }}
       onOpenMessage={openMessageFromShelfItem}
       onRemove={(key) => {
+        const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
+        if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)
         setShelfItems((current) => current.filter((item) => item.key !== key))
         if (focusedShelfKey === key) setFocusedShelfKey('')
         if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
@@ -6742,6 +6763,7 @@ export function MessageList({
         delete shelfAutoRepairRetryAfterRef.current[key]
       }}
       onClear={() => {
+        markShelfEmptyBackendSaveIntent(shelfScopeId)
         setShelfItems([])
         setFocusedShelfKey('')
         setShelfSummaryLoadingKey('')
@@ -6750,6 +6772,21 @@ export function MessageList({
         shelfAutoRepairFingerprintsRef.current = {}
         shelfAutoRepairRetryAfterRef.current = {}
         setShelfRepairImpact(null)
+        const projectScopeId = shelfProjectScopeId(shelfScopeId)
+        const storageKey = shelfStorageKey(projectScopeId)
+        void chatApi.deleteCitationShelf({
+          convId: activeConvId || undefined,
+          projectId: projectScopeId === '__default__' ? undefined : projectScopeId,
+          scope: 'project',
+        })
+          .then((record) => {
+            shelfBackendRevisionByKeyRef.current[storageKey] = Math.max(0, Number(record.revision || 0))
+            shelfBackendHydratedKeysRef.current.add(storageKey)
+            delete shelfEmptyBackendSaveIntentRef.current[storageKey]
+          })
+          .catch(() => {
+            // Local state remains cleared; the guarded save path will avoid accidental backend overwrite.
+          })
       }}
       onUpdateTags={(key, tags) => {
         const nextTags = normalizeShelfTags(tags)

@@ -401,6 +401,7 @@ export interface CitationShelfRequest {
 export interface CitationShelfSaveBody extends CitationShelfRequest {
   items: Array<Record<string, unknown>>
   open?: boolean
+  allowEmptyOverwrite?: boolean
 }
 
 export interface ChatUploadItem {
@@ -514,6 +515,7 @@ export const chatApi = {
       open: Boolean(body.open),
       scope: body.scope || 'project',
       project_id: body.projectId ?? null,
+      allow_empty_overwrite: body.allowEmptyOverwrite ?? true,
     }),
   deleteCitationShelf: (opts?: CitationShelfRequest) =>
     api.delete<CitationShelfRecord>(citationShelfUrl(opts)),

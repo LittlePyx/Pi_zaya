@@ -96,6 +96,7 @@ class CitationShelfBody(BaseModel):
     open: bool = False
     scope: str | None = None
     project_id: str | None = None
+    allow_empty_overwrite: bool = True
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -942,6 +943,7 @@ def save_citation_shelf(
         scope=resolved_scope,
         items=body.items,
         open=body.open,
+        allow_empty_overwrite=body.allow_empty_overwrite,
     )
     if record is None:
         raise HTTPException(404, "conversation not found")

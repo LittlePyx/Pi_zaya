@@ -89,6 +89,45 @@ async function mockEmptyCitationShelf(page: Page) {
   })
 }
 
+async function mockProjectCitationShelf(page: Page, initialItems: Array<Record<string, unknown>>) {
+  let items = initialItems.map((item) => ({ ...item }))
+  let open = true
+  let revision = 7
+  const patchPayloads: Array<{ items?: unknown[]; open?: boolean; allow_empty_overwrite?: boolean }> = []
+  await page.route('**/api/chat/citation-shelf**', async (route) => {
+    const request = route.request()
+    if (request.method() === 'PATCH') {
+      const payload = request.postDataJSON() as { items?: unknown[]; open?: boolean; allow_empty_overwrite?: boolean } | undefined
+      patchPayloads.push(payload || {})
+      if (Array.isArray(payload?.items) && (payload.items.length > 0 || payload.allow_empty_overwrite !== false)) {
+        items = payload.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        revision += 1
+      }
+      open = Boolean(payload?.open)
+    } else if (request.method() === 'DELETE') {
+      items = []
+      open = false
+      revision = 0
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        version: 1,
+        scope: 'project',
+        scope_id: 'message-list-regression-project',
+        project_id: 'message-list-regression-project',
+        items,
+        open,
+        revision,
+        created_at: 1710000000,
+        updated_at: 1710000100,
+      }),
+    })
+  })
+  return patchPayloads
+}
+
 function shelfMetadataRepairFixture(items: Array<Record<string, unknown>>, ready: boolean) {
   const readyQuality = {
     contract_version: 1,
@@ -513,6 +552,48 @@ test('citation shelf persists under project scope across message-list conversati
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('required-fallback-anchor')
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item')).toContainText('Fixture Paper')
+})
+
+test('citation shelf restores backend project basket over stale empty local snapshot', async ({ page }) => {
+  await mockReaderDoc(page)
+  const patchPayloads = await mockProjectCitationShelf(page, [
+    {
+      key: 'backend-ref',
+      anchor: 'backend-ref-anchor',
+      main: 'Backend Project Paper',
+      title: 'Backend Project Paper',
+      sourceName: 'Backend Project Paper.pdf',
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      raw: 'Backend persisted reference entry.',
+      citeFmt: 'Backend persisted reference entry.',
+      shelfItemKind: 'reference',
+      shelfOrigin: 'reader_references',
+      shelfExcerpt: 'Backend persisted reference entry.',
+      shelfExcerptLabel: 'Reference entry',
+      traceConvId: 'previous-conversation',
+    },
+  ])
+  await page.addInitScript(() => {
+    window.localStorage.setItem('kb_cite_shelf:project:message-list-regression-project', JSON.stringify({
+      version: 4,
+      revision: 99,
+      updatedAt: Date.now() + 60000,
+      open: false,
+      items: [],
+    }))
+  })
+
+  await page.goto('/__message_list_test__?scenario=required-fallback-anchor')
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  await expect(page.getByTestId('citation-shelf-item')).toContainText('Backend Project Paper')
+  await page.waitForTimeout(450)
+  expect(patchPayloads.some((payload) => Array.isArray(payload.items) && payload.items.length === 0 && payload.allow_empty_overwrite === false)).toBe(false)
+
+  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  await expect(page.getByTestId('citation-shelf-item')).toContainText('Backend Project Paper')
 })
 
 test('citation shelf item exposes source trail and can jump back to the answer', async ({ page }) => {

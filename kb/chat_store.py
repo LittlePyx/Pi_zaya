@@ -16,6 +16,122 @@ _DEFAULT_CONVERSATION_TITLE_RE = re.compile(
 )
 
 
+def _shelf_text(value: object, limit: int = 2000) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("\x00", " ").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:limit]
+
+
+def _shelf_first_text(item: dict, *keys: str, limit: int = 2000) -> str:
+    for key in keys:
+        text = _shelf_text(item.get(key), limit=limit)
+        if text:
+            return text
+    return ""
+
+
+def _normalize_shelf_doi(value: object) -> str:
+    text = _shelf_text(value, limit=400).lower()
+    text = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", text)
+    return text.strip(" \t\r\n'\"`([{<.,;:)]}>")
+
+
+def _normalize_shelf_title(value: object) -> str:
+    text = _shelf_text(value, limit=800).lower()
+    text = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _shelf_item_kind(item: dict) -> str:
+    raw = _shelf_first_text(item, "shelfItemKind", "shelf_item_kind", "cardKind", "card_kind", limit=80)
+    key = re.sub(r"[\s-]+", "_", raw.lower())
+    if key in {"reference", "inpaper", "reader_reference", "reader_references"}:
+        return "reference"
+    if key in {"reader_selection", "selection", "reader_excerpt"}:
+        return "reader_selection"
+    if key in {"excerpt", "note"}:
+        return "excerpt"
+    if item.get("isInpaper") is True or item.get("is_inpaper") is True:
+        return "reference"
+    return "citation"
+
+
+def _shelf_item_identity(item: dict) -> str:
+    doi = _normalize_shelf_doi(_shelf_first_text(item, "doi", "doiUrl", "doi_url", limit=400))
+    if doi:
+        return f"doi:{doi}"
+    title = _normalize_shelf_title(_shelf_first_text(item, "title", "main", "cardTitle", "card_title", limit=800))
+    year = _shelf_first_text(item, "year", limit=20)
+    year = year if re.fullmatch(r"\d{4}", year) else ""
+    if title:
+        return f"title:{title}|{year}"
+    source = _shelf_first_text(item, "sourcePath", "source_path", "sourceName", "source_name", limit=800).lower()
+    anchor = _shelf_first_text(item, "anchor", "anchorId", "anchor_id", limit=800).lower()
+    if source or anchor:
+        return f"source:{source}|{anchor}"
+    return f"key:{_shelf_first_text(item, 'key', limit=400)}"
+
+
+def _normalize_citation_shelf_item(item: dict) -> dict:
+    out = dict(item)
+    kind = _shelf_item_kind(out)
+    origin = _shelf_first_text(out, "shelfOrigin", "shelf_origin", "evidenceSource", "evidence_source", limit=120)
+    if not origin:
+        origin = "reader_selection" if kind == "reader_selection" else "reader_references" if kind == "reference" else "chat_answer"
+    excerpt = _shelf_first_text(
+        out,
+        "shelfExcerpt",
+        "shelf_excerpt",
+        "evidenceQuote",
+        "evidence_quote",
+        "citationContext",
+        "citation_context",
+        "cardEvidence",
+        "card_evidence",
+        "raw",
+        "citeFmt",
+        "cite_fmt",
+        limit=1600,
+    )
+    label = _shelf_first_text(out, "shelfExcerptLabel", "shelf_excerpt_label", limit=120)
+    if not label:
+        label = "Reference entry" if kind == "reference" else "Selected text" if kind == "reader_selection" else "Excerpt"
+
+    out["shelfItemKind"] = kind
+    out["shelf_item_kind"] = kind
+    out["shelfOrigin"] = origin
+    out["shelf_origin"] = origin
+    out["shelfExcerpt"] = excerpt
+    out["shelf_excerpt"] = excerpt
+    out["shelfExcerptLabel"] = label
+    out["shelf_excerpt_label"] = label
+    out["key"] = _shelf_first_text(out, "key", limit=500) or _shelf_item_identity(out)
+    out["main"] = _shelf_first_text(out, "main", "title", "cardTitle", "card_title", "raw", limit=500)
+    tags = out.get("tags")
+    out["tags"] = [_shelf_text(tag, limit=60) for tag in tags if _shelf_text(tag, limit=60)] if isinstance(tags, list) else []
+    out["note"] = _shelf_text(out.get("note"), limit=4000)
+    return out
+
+
+def _normalize_citation_shelf_items(items: list[dict]) -> list[dict]:
+    seen = set()
+    out: list[dict] = []
+    for raw in list(items or []):
+        if not isinstance(raw, dict):
+            continue
+        item = _normalize_citation_shelf_item(raw)
+        identity = _shelf_item_identity(item)
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        out.append(item)
+        if len(out) >= 120:
+            break
+    return out
+
+
 def _normalize_conversation_mode(mode: str) -> str:
     m = str(mode or "").strip().lower()
     if m in {"paper_guide", "normal"}:
@@ -804,8 +920,9 @@ class ChatStore:
         conv_id: str | None = None,
         project_id: str | None = None,
         scope: str = "project",
+        allow_empty_overwrite: bool = True,
     ) -> dict | None:
-        normalized_items = [dict(item) for item in list(items or []) if isinstance(item, dict)][:120]
+        normalized_items = _normalize_citation_shelf_items(items)
         try:
             items_json = json.dumps(normalized_items, ensure_ascii=False, default=str)
         except Exception:
@@ -831,6 +948,18 @@ class ChatStore:
                 """,
                 (scope_norm, scope_id),
             ).fetchone()
+            if row and not normalized_items and not open_int and not allow_empty_overwrite:
+                try:
+                    existing_items = json.loads(row["items_json"] or "[]")
+                except Exception:
+                    existing_items = []
+                if isinstance(existing_items, list) and any(isinstance(item, dict) for item in existing_items):
+                    return self._hydrate_citation_shelf_row(
+                        row,
+                        scope=scope_norm,
+                        scope_id=scope_id,
+                        project_id=resolved_project_id,
+                    )
             if row and str(row["items_json"] or "[]") == items_json and int(row["open"] or 0) == open_int:
                 return self._hydrate_citation_shelf_row(
                     row,
