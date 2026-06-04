@@ -4813,6 +4813,7 @@ export function MessageList({
   const [shelfRepairImpact, setShelfRepairImpact] = useState<ShelfMetadataRepairImpact | null>(null)
   const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
   const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
+  const [shelfMessageFlashId, setShelfMessageFlashId] = useState<number | null>(null)
   const assistantLocatePrepCacheRef = useRef(new Map<string, AssistantLocatePrep>())
   const assistantLocatePrepPerfRef = useRef<MessageListPrepPerfEvent | null>(null)
   const [guideDocCandidates, setGuideDocCandidates] = useState<LocateCandidate[]>([])
@@ -4845,6 +4846,7 @@ export function MessageList({
   const shelfSummaryBackfillTimerRef = useRef<number | null>(null)
   const shelfSummaryBackfillInFlightRef = useRef(new Set<string>())
   const shelfSummaryBackfillAttemptedAtRef = useRef<Record<string, number>>({})
+  const shelfMessageFlashTimerRef = useRef<number | null>(null)
   const setShelfAutoRepairingKeySet = useCallback((nextSet: Set<string>) => {
     shelfAutoRepairingKeySetRef.current = nextSet
     setShelfAutoRepairingKeys(Array.from(nextSet))
@@ -4924,6 +4926,9 @@ export function MessageList({
       }
       if (shelfSummaryBackfillTimerRef.current !== null) {
         window.clearTimeout(shelfSummaryBackfillTimerRef.current)
+      }
+      if (shelfMessageFlashTimerRef.current !== null) {
+        window.clearTimeout(shelfMessageFlashTimerRef.current)
       }
       if (persistShelfBackendTimerRef.current !== null) {
         window.clearTimeout(persistShelfBackendTimerRef.current)
@@ -6289,6 +6294,33 @@ export function MessageList({
     onOpenReader(payload)
   }
 
+  const openMessageFromShelfItem = (item: CiteShelfItem) => {
+    const targetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
+    if (!Number.isFinite(targetId) || targetId <= 0) {
+      message.info(S.shelf_message_missing)
+      return
+    }
+    const el = scrollRef.current
+    if (!el) return
+    const target = el.querySelector<HTMLElement>(`[data-msg-id="${targetId}"]`)
+    if (!target) {
+      message.info(S.shelf_message_not_loaded)
+      return
+    }
+    const targetRect = target.getBoundingClientRect()
+    const containerRect = el.getBoundingClientRect()
+    const top = targetRect.top - containerRect.top + el.scrollTop - 12
+    el.scrollTo({ top: Math.max(0, top), behavior: 'smooth' })
+    setShelfMessageFlashId(targetId)
+    if (shelfMessageFlashTimerRef.current !== null) {
+      window.clearTimeout(shelfMessageFlashTimerRef.current)
+    }
+    shelfMessageFlashTimerRef.current = window.setTimeout(() => {
+      setShelfMessageFlashId((current) => (current === targetId ? null : current))
+      shelfMessageFlashTimerRef.current = null
+    }, 1400)
+  }
+
   const selectedSavedSnapshot = useMemo(
     () => savedShelfSnapshots.find((item) => item.id === selectedSavedSnapshotId) || null,
     [savedShelfSnapshots, selectedSavedSnapshotId],
@@ -6677,6 +6709,8 @@ export function MessageList({
       visible={shelfDockMode ? shelfVisible : undefined}
       presentation={shelfDockMode ? 'dock' : 'floating'}
       items={shelfItems}
+      activeConvId={activeConvId}
+      activeSourcePath={paperGuideSourcePath}
       readerLocateResults={readerLocateResults}
       sourceQualityRefreshToken={sourceQualityRefreshToken}
       focusedKey={focusedShelfKey}
@@ -6695,6 +6729,7 @@ export function MessageList({
       onOpenSource={(item) => {
         openReaderFromDetail(item as unknown as CiteDetail)
       }}
+      onOpenMessage={openMessageFromShelfItem}
       onRemove={(key) => {
         setShelfItems((current) => current.filter((item) => item.key !== key))
         if (focusedShelfKey === key) setFocusedShelfKey('')
@@ -7517,7 +7552,7 @@ export function MessageList({
               <div
                 key={message.id}
                 data-msg-id={message.id}
-                className={`kb-message-row ${isUser ? 'is-user' : 'is-assistant'}`}
+                className={`kb-message-row ${isUser ? 'is-user' : 'is-assistant'} ${shelfMessageFlashId === message.id ? 'is-shelf-jump' : ''}`}
               >
                 {!isUser ? <AssistantAvatar /> : null}
                 <div className={bubbleClass}>

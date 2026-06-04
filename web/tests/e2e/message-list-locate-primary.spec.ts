@@ -515,6 +515,65 @@ test('citation shelf persists under project scope across message-list conversati
   await expect(page.getByTestId('citation-shelf-item')).toContainText('Fixture Paper')
 })
 
+test('citation shelf item exposes source trail and can jump back to the answer', async ({ page }) => {
+  await mockReaderDoc(page)
+  await mockEmptyCitationShelf(page)
+  await page.route('**/api/library/quality/sources', async (route) => {
+    const payload = route.request().postDataJSON() as { sources?: Array<{ source_path?: string, source_name?: string }> }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: payload.sources?.length || 0,
+        review_count: 0,
+        items: (payload.sources || []).map((source) => ({
+          source_path: source.source_path || '',
+          source_name: source.source_name || '',
+          conversion_quality: { status: 'good', has_review_issue: false, score: 98, issues: [] },
+        })),
+      }),
+    })
+  })
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, requested: 0, ready: 0, partial: 0, failed: 0, items: [] }),
+    })
+  })
+  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').last().click()
+  await popover.locator('.kb-cite-pop-close').click()
+
+  const item = page.getByTestId('citation-shelf-item').first()
+  await expect(item).toBeVisible()
+  await item.click()
+
+  const trail = page.getByTestId('citation-shelf-source-trail')
+  await expect(trail).toBeVisible()
+  await expect(trail).toContainText('Fixture Paper')
+  await expect(trail).toContainText('2. Method')
+  await expect(trail).toContainText(/#1|1/)
+  await expect(page.getByTestId('citation-shelf-trail-open-source')).toBeVisible()
+  await expect(page.getByTestId('citation-shelf-trail-open-message')).toBeVisible()
+
+  await page.getByTestId('citation-shelf-trail-open-message').click()
+  await expect(page.locator('[data-msg-id="1"]')).toHaveClass(/is-shelf-jump/)
+
+  await page.locator('.kb-shelf-advanced-toggle').click()
+  await page.getByTestId('citation-shelf-scope-filter').click()
+  await page.locator('.ant-select-item-option').filter({ hasText: /当前文献|Current paper/ }).click()
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+})
+
 test('citation shelf migrates legacy conversation storage into project shelf', async ({ page }) => {
   await mockEmptyCitationShelf(page)
   await page.addInitScript(() => {
@@ -1072,6 +1131,7 @@ test('citation shelf export auto-completes metadata before download', async ({ p
   await popover.locator('.kb-cite-pop-close').click()
   await expect(popover).toBeHidden()
 
+  await page.locator('.kb-shelf-advanced-toggle').click()
   await page.getByTestId('citation-shelf-add-visible').click()
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
   await page.getByTestId('citation-shelf-export-bib').click()
@@ -1262,6 +1322,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await expect(openPayload).toContainText(READER_REGRESSION_SOURCE_PATH)
   await expect(openPayload).toContainText('"strictLocate": false')
 
+  await page.locator('.kb-shelf-advanced-toggle').click()
   await page.getByTestId('citation-shelf-add-visible').click()
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)

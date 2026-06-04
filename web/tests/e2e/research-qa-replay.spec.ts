@@ -446,6 +446,7 @@ test('research QA replay citation shelf workflow: snapshots and CSV export work'
       return false
     }
   })
+  await page.locator('.kb-shelf-advanced-toggle').click()
   await page.getByTestId('citation-shelf-add-visible').click()
   const autoRepairPayload = autoRepairRequest.then((request) => request.postDataJSON() as { sources?: Array<{ source_path?: string }> })
   await expect.poll(async () => (await autoRepairPayload).sources?.[0]?.source_path || '').toContain('SCINeRF')
@@ -474,7 +475,7 @@ test('research QA replay citation shelf workflow: snapshots and CSV export work'
   await expect(page.getByTestId('citation-shelf-batch-count')).toHaveCount(0)
 
   await page.getByTestId('citation-shelf-delete-snapshot').click()
-  await expect(page.getByTestId('citation-shelf-load-snapshot')).toBeDisabled()
+  await expect(page.getByTestId('citation-shelf-load-snapshot')).toHaveCount(0)
   await expectNoHorizontalOverflow(page)
 })
 

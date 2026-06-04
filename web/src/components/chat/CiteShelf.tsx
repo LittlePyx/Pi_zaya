@@ -31,6 +31,8 @@ interface Props {
   visible?: boolean
   presentation?: 'floating' | 'dock'
   items: CiteShelfItem[]
+  activeConvId?: string | null
+  activeSourcePath?: string
   readerLocateResults?: Record<string, ReaderLocateResult>
   sourceQualityRefreshToken?: number
   snapshots: Array<{ id: string; name: string; createdAt: number }>
@@ -45,6 +47,7 @@ interface Props {
   onClear: () => void
   onSelect: (item: CiteShelfItem) => void
   onOpenSource?: (item: CiteShelfItem) => void
+  onOpenMessage?: (item: CiteShelfItem) => void
   onRemove: (key: string) => void
   onUpdateTags: (key: string, tags: string[]) => void
   onUpdateNote: (key: string, note: string) => void
@@ -59,6 +62,7 @@ interface Props {
 const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
 
 type GroupMode = 'none' | 'tag' | 'source' | 'kind'
+type ScopeFilter = 'all' | 'conversation' | 'paper'
 type SourceQualityByPath = Record<string, LibrarySourceQualityItem>
 type ShelfExportKind = 'bib' | 'csv' | 'ris'
 type ShelfExportOptions = { skipPreflight?: boolean; onlyMetadataReady?: boolean; autoRepair?: boolean }
@@ -81,6 +85,21 @@ const GROUP_MODE_LABEL = (S: Record<string, string>): Record<GroupMode, string> 
   source: S.shelf_by_source,
   kind: S.shelf_by_type,
 })
+
+const SCOPE_FILTER_LABEL = (S: Record<string, string>): Record<ScopeFilter, string> => ({
+  all: S.shelf_scope_all_project,
+  conversation: S.shelf_scope_current_conversation,
+  paper: S.shelf_scope_current_paper,
+})
+
+const normalizeSourceIdentity = (value: string | null | undefined): string =>
+  String(value || '').trim().replace(/\\/g, '/').toLowerCase()
+
+const basenameFromPath = (value: string): string => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return text.split(/[\\/]/).filter(Boolean).pop() || text
+}
 
 const normalizeDoiLike = (value: string): string =>
   String(value || '')
@@ -566,6 +585,8 @@ export function CiteShelf({
   visible,
   presentation = 'floating',
   items,
+  activeConvId,
+  activeSourcePath,
   readerLocateResults = {},
   sourceQualityRefreshToken = 0,
   snapshots,
@@ -580,6 +601,7 @@ export function CiteShelf({
   onClear,
   onSelect,
   onOpenSource,
+  onOpenMessage,
   onRemove,
   onUpdateTags,
   onUpdateNote,
@@ -598,6 +620,7 @@ export function CiteShelf({
   const [searchText, setSearchText] = useState('')
   const [sortKey, setSortKey] = useState<'recent' | 'cited' | 'year' | 'impact'>('recent')
   const [groupMode, setGroupMode] = useState<GroupMode>('none')
+  const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
   const [tagFilter, setTagFilter] = useState<string>('all')
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
   const [preflightExportKind, setPreflightExportKind] = useState<ShelfExportKind | ''>('')
@@ -614,6 +637,8 @@ export function CiteShelf({
     () => new Set([repairLoadingKey, ...repairingKeys].map((key) => String(key || '').trim()).filter(Boolean)),
     [repairLoadingKey, repairingKeys],
   )
+  const activeConversationKey = String(activeConvId || '').trim()
+  const activeSourceKey = normalizeSourceIdentity(activeSourcePath)
 
   const sourceQualitySources = useMemo(() => {
     const seen = new Set<string>()
@@ -674,6 +699,54 @@ export function CiteShelf({
     const anchor = String(item.anchor || '').trim()
     const debugTitle = anchor ? S.shelf_anchor.replace('{anchor}', anchor) : ''
     return { labels, debugTitle }
+  }
+
+  const sourceTrailRows = (
+    item: CiteShelfItem,
+    shelfKindText: string,
+    shelfOriginText: string,
+  ): Array<{ id: string; label: string; value: string; title?: string }> => {
+    const rows: Array<{ id: string; label: string; value: string; title?: string }> = []
+    const push = (id: string, label: string, rawValue: string, title = '') => {
+      const value = cleanCitationDisplayText(rawValue || '')
+      if (!value) return
+      rows.push({ id, label, value, title: title || value })
+    }
+    const sourceName = String(item.sourceName || '').trim()
+    const sourcePath = String(item.sourcePath || '').trim()
+    const sourceLabel = sourceName || basenameFromPath(sourcePath)
+    const pageStart = Number(item.pageStart || 0)
+    const pageEnd = Number(item.pageEnd || 0)
+    const pageLabel = Number.isFinite(pageStart) && pageStart > 0
+      ? pageEnd > pageStart
+        ? `p. ${pageStart}-${pageEnd}`
+        : `p. ${pageStart}`
+      : ''
+    const location = String(item.locationLabel || '').trim()
+      || [item.headingPath, pageLabel].map((part) => String(part || '').trim()).filter(Boolean).join(' · ')
+    const answerParts: string[] = []
+    const answerOrder = Number(item.traceAssistantOrder || 0)
+    const assistantMsgId = Number(item.traceAssistantMsgId || 0)
+    const userMsgId = Number(item.traceUserMsgId || 0)
+    if (Number.isFinite(answerOrder) && answerOrder > 0) {
+      answerParts.push(S.shelf_answer.replace('{n}', String(answerOrder)))
+    }
+    if (Number.isFinite(assistantMsgId) && assistantMsgId > 0) {
+      answerParts.push(S.shelf_trace_message.replace('{n}', String(assistantMsgId)))
+    } else if (Number.isFinite(userMsgId) && userMsgId > 0) {
+      answerParts.push(S.shelf_trace_message.replace('{n}', String(userMsgId)))
+    }
+    const refNum = Number(item.num || 0)
+    const refLabel = Number.isFinite(refNum) && refNum > 0 ? S.shelf_ref_num.replace('{n}', String(refNum)) : ''
+    const anchor = String(item.anchor || '').trim()
+
+    push('origin', S.shelf_trace_origin, shelfOriginText || shelfKindText)
+    push('source', S.shelf_trace_source, sourceLabel, sourcePath || sourceLabel)
+    push('location', S.shelf_trace_location, location)
+    push('reference', S.shelf_trace_reference, [refLabel, anchor ? S.shelf_anchor.replace('{anchor}', anchor) : ''].filter(Boolean).join(' · '))
+    push('answer', S.shelf_trace_answer_head, answerParts.join(' · '))
+    push('reason', S.shelf_trace_reason, item.whyLine || item.supportRelation || item.answerClaim || item.upstreamWorkRole)
+    return rows
   }
 
   const libraryMatchView = (item: CiteShelfItem): { label: string; title: string; tone: 'ready' | 'missing' } | null => {
@@ -862,6 +935,12 @@ export function CiteShelf({
     const keyword = searchText.trim().toLowerCase()
     const matched = items.filter((item) => {
       const tags = normalizeShelfTags(item.tags)
+      if (scopeFilter === 'conversation' && activeConversationKey) {
+        if (String(item.traceConvId || '').trim() !== activeConversationKey) return false
+      }
+      if (scopeFilter === 'paper' && activeSourceKey) {
+        if (normalizeSourceIdentity(item.sourcePath) !== activeSourceKey) return false
+      }
       if (tagFilter !== 'all' && !tags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())) return false
       if (!keyword) return true
       const text = [
@@ -872,12 +951,19 @@ export function CiteShelf({
         item.doi,
         item.doiUrl,
         item.sourceName,
+        item.sourcePath,
+        item.headingPath,
+        item.locationLabel,
+        item.answerClaim,
+        item.whyLine,
+        item.supportRelation,
         item.note,
         item.shelfItemKind,
         shelfItemKindLabel(item.shelfItemKind, S),
         item.shelfOrigin,
         shelfOriginLabel(item.shelfOrigin, S),
         item.shelfExcerpt,
+        item.citationContext,
         item.traceAssistantOrder ? S.shelf_answer.replace('{n}', String(item.traceAssistantOrder)) : '',
         ...tags,
       ]
@@ -894,7 +980,7 @@ export function CiteShelf({
       sorted.sort((a, b) => impactScore(b) - impactScore(a))
     }
     return sorted
-  }, [S, items, searchText, sortKey, tagFilter])
+  }, [S, activeConversationKey, activeSourceKey, items, scopeFilter, searchText, sortKey, tagFilter])
 
   const groupedVisibleItems = useMemo(() => {
     if (groupMode === 'none') {
@@ -1001,7 +1087,7 @@ export function CiteShelf({
     () => visibleItems.reduce((acc, item) => acc + (selectedKeys[item.key] ? 1 : 0), 0),
     [selectedKeys, visibleItems],
   )
-  const advancedFilterActive = (groupMode !== 'none') || (tagFilter !== 'all')
+  const advancedFilterActive = (groupMode !== 'none') || (tagFilter !== 'all') || (scopeFilter !== 'all')
   const snapshotOptions = useMemo(
     () => snapshots.map((item) => {
       const created = Number(item.createdAt || 0)
@@ -1347,6 +1433,23 @@ export function CiteShelf({
         'source_open_status',
         'source_open_precision',
         'source_open_reason',
+        'source_origin',
+        'source_kind',
+        'source_path',
+        'trace_conversation_id',
+        'trace_assistant_message_id',
+        'trace_assistant_order',
+        'trace_user_message_id',
+        'heading_path',
+        'location_label',
+        'page_start',
+        'page_end',
+        'source_anchor',
+        'shelf_excerpt',
+        'answer_claim',
+        'why_collected',
+        'note',
+        'tags',
         'library_match_status',
         'library_match_method',
         'library_match_path',
@@ -1377,6 +1480,23 @@ export function CiteShelf({
         sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).status,
         sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).precision,
         sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key]).reason,
+        item.shelfOrigin,
+        item.shelfItemKind,
+        item.sourcePath,
+        item.traceConvId,
+        item.traceAssistantMsgId,
+        item.traceAssistantOrder,
+        item.traceUserMsgId,
+        item.headingPath,
+        item.locationLabel,
+        item.pageStart || '',
+        item.pageEnd || '',
+        item.anchor,
+        cleanCitationDisplayText(item.shelfExcerpt || ''),
+        cleanCitationDisplayText(item.answerClaim || ''),
+        cleanCitationDisplayText(item.whyLine || item.supportRelation || item.upstreamWorkRole || ''),
+        item.note || '',
+        normalizeShelfTags(item.tags).join('; '),
         item.libraryMatchStatus,
         item.libraryMatchMethod,
         item.libraryMatchPath,
@@ -1497,6 +1617,11 @@ export function CiteShelf({
     if (allTags.some((tag) => tag.toLowerCase() === tagFilter.toLowerCase())) return
     setTagFilter('all')
   }, [allTags, tagFilter])
+
+  useEffect(() => {
+    if (scopeFilter === 'conversation' && !activeConversationKey) setScopeFilter('all')
+    if (scopeFilter === 'paper' && !activeSourceKey) setScopeFilter('all')
+  }, [activeConversationKey, activeSourceKey, scopeFilter])
 
   useEffect(() => {
     if (selectedMetadataReviewCount > 0) return
@@ -1808,6 +1933,17 @@ export function CiteShelf({
                     ]}
                   />
                   <Select
+                    value={scopeFilter}
+                    onChange={(value) => setScopeFilter(value as ScopeFilter)}
+                    className="kb-shelf-sort"
+                    data-testid="citation-shelf-scope-filter"
+                    options={[
+                      { value: 'all', label: S.shelf_scope_all_project },
+                      { value: 'conversation', label: S.shelf_scope_current_conversation, disabled: !activeConversationKey },
+                      { value: 'paper', label: S.shelf_scope_current_paper, disabled: !activeSourceKey },
+                    ]}
+                  />
+                  <Select
                     allowClear
                     value={tagFilter === 'all' ? undefined : tagFilter}
                     onChange={(value) => setTagFilter(value || 'all')}
@@ -1832,6 +1968,15 @@ export function CiteShelf({
                           onClick={() => setGroupMode('none')}
                         >
                           {S.shelf_filter_pill_group.replace('{mode}', GROUP_MODE_LABEL(S)[groupMode])}
+                        </button>
+                      ) : null}
+                      {scopeFilter !== 'all' ? (
+                        <button
+                          type="button"
+                          className="kb-shelf-filter-pill"
+                          onClick={() => setScopeFilter('all')}
+                        >
+                          {S.shelf_filter_pill_scope.replace('{mode}', SCOPE_FILTER_LABEL(S)[scopeFilter])}
                         </button>
                       ) : null}
                       {tagFilter !== 'all' ? (
@@ -1895,6 +2040,14 @@ export function CiteShelf({
                       const shelfKind = normalizeShelfItemKind(item.shelfItemKind)
                       const shelfKindText = shelfItemKindLabel(shelfKind, S)
                       const shelfOriginText = shelfOriginLabel(item.shelfOrigin, S)
+                      const rawItemSourceLabel = String(item.sourceName || basenameFromPath(item.sourcePath) || '').trim()
+                      const itemLocationLabel = String(item.locationLabel || item.headingPath || '').trim()
+                      const itemSourceLabel = rawItemSourceLabel && normalizeTitle(rawItemSourceLabel) === normalizeTitle(shelfTitle) && itemLocationLabel
+                        ? itemLocationLabel
+                        : rawItemSourceLabel
+                      const sourceTrail = isFocused ? sourceTrailRows(item, shelfKindText, shelfOriginText) : []
+                      const messageTargetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
+                      const canOpenMessage = Boolean(onOpenMessage && Number.isFinite(messageTargetId) && messageTargetId > 0)
                       const shelfExcerpt = cleanCitationDisplayText(item.shelfExcerpt || '')
                       const rawShelfExcerptLabel = String(item.shelfExcerptLabel || '').trim()
                       const shelfExcerptLabel = rawShelfExcerptLabel === 'Reference entry'
@@ -1940,6 +2093,9 @@ export function CiteShelf({
                               <div className="kb-shelf-item-title" data-testid="citation-shelf-item-title">{shelfTitle}</div>
                               {display.authors ? (
                                 <div className="kb-shelf-item-authors">{display.authors}</div>
+                              ) : null}
+                              {itemSourceLabel ? (
+                                <div className="kb-shelf-item-source" data-testid="citation-shelf-item-source">{itemSourceLabel}</div>
                               ) : null}
                             </div>
                             <div className="kb-shelf-item-actions">
@@ -2092,6 +2248,56 @@ export function CiteShelf({
                               )}
                             </div>
                           ) : null}
+                          {isFocused && sourceTrail.length > 0 ? (
+                            <div
+                              className="kb-shelf-trace-detail"
+                              data-testid="citation-shelf-source-trail"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <div className="kb-shelf-trace-head">{S.shelf_trace_head}</div>
+                              <div className="kb-shelf-trace-rows">
+                                {sourceTrail.map((row) => (
+                                  <div
+                                    key={`${item.key}-trail-${row.id}`}
+                                    className="kb-shelf-trace-row"
+                                    data-testid={`citation-shelf-trace-row-${row.id}`}
+                                    title={row.title}
+                                  >
+                                    <span className="kb-shelf-trace-label">{row.label}</span>
+                                    <span className="kb-shelf-trace-value">{row.value}</span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="kb-shelf-trace-actions">
+                                {item.sourcePath && onOpenSource ? (
+                                  <button
+                                    type="button"
+                                    className="kb-shelf-trace-action"
+                                    data-testid="citation-shelf-trail-open-source"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      onOpenSource(item)
+                                    }}
+                                  >
+                                    {S.shelf_open_source}
+                                  </button>
+                                ) : null}
+                                {canOpenMessage && onOpenMessage ? (
+                                  <button
+                                    type="button"
+                                    className="kb-shelf-trace-action"
+                                    data-testid="citation-shelf-trail-open-message"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      onOpenMessage(item)
+                                    }}
+                                  >
+                                    {item.traceAssistantMsgId ? S.shelf_open_answer : S.shelf_open_message}
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          ) : null}
                           {isFocused && shelfExcerpt ? (
                             <div className="kb-shelf-excerpt" data-testid="citation-shelf-excerpt">
                               <div className="kb-shelf-excerpt-head">
@@ -2111,7 +2317,7 @@ export function CiteShelf({
                               ))}
                             </div>
                           ) : null}
-                          {isFocused || !item.doiUrl ? (
+                          {isFocused || item.doiUrl || !itemSourceLabel ? (
                             <div className="kb-shelf-doi">
                               {item.doiUrl ? (
                                 <a className="kb-shelf-doi-link" href={item.doiUrl} rel="noreferrer" target="_blank">
