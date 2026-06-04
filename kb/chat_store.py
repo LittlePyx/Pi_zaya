@@ -222,6 +222,24 @@ class ChatStore:
                 "CREATE INDEX IF NOT EXISTS idx_conversation_reader_states_conv_id "
                 "ON conversation_reader_states(conv_id, updated_at DESC);"
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS citation_shelves (
+                  scope TEXT NOT NULL,
+                  scope_id TEXT NOT NULL,
+                  items_json TEXT NOT NULL DEFAULT '[]',
+                  open INTEGER NOT NULL DEFAULT 0,
+                  revision INTEGER NOT NULL DEFAULT 0,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  PRIMARY KEY(scope, scope_id)
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_citation_shelves_updated "
+                "ON citation_shelves(updated_at DESC);"
+            )
 
     def _archive_excess_conversations(
         self,
@@ -321,6 +339,7 @@ class ChatStore:
             return
         with self._connect() as conn:
             conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", (project_id,))
+            conn.execute("DELETE FROM citation_shelves WHERE scope = 'project' AND scope_id = ?", (project_id,))
             conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
 
     def create_conversation(
@@ -651,6 +670,213 @@ class ChatStore:
             "created_at": created_at,
             "updated_at": now,
         }
+
+    def _resolve_citation_shelf_scope(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        conv_id: str | None = None,
+        project_id: str | None = None,
+        scope: str = "project",
+    ) -> tuple[str, str, str | None] | None:
+        scope_norm = str(scope or "").strip().lower()
+        if scope_norm in {"conversation", "conv"}:
+            scope_norm = "conversation"
+        else:
+            scope_norm = "project"
+
+        cid = str(conv_id or "").strip()
+        pid = str(project_id or "").strip() or None
+        if cid:
+            row = conn.execute("SELECT project_id FROM conversations WHERE id = ?", (cid,)).fetchone()
+            if not row:
+                return None
+            if not pid:
+                pid = str(row["project_id"] or "").strip() or None
+
+        if scope_norm == "conversation":
+            if not cid:
+                return None
+            return scope_norm, cid, pid
+        return scope_norm, pid or "__default__", pid
+
+    def _citation_shelf_empty_record(
+        self,
+        *,
+        scope: str,
+        scope_id: str,
+        project_id: str | None = None,
+        created_at: float = 0.0,
+        updated_at: float = 0.0,
+        revision: int = 0,
+    ) -> dict:
+        return {
+            "version": 1,
+            "scope": scope,
+            "scope_id": scope_id,
+            "project_id": project_id,
+            "items": [],
+            "open": False,
+            "revision": int(revision or 0),
+            "created_at": float(created_at or 0.0),
+            "updated_at": float(updated_at or 0.0),
+        }
+
+    def _hydrate_citation_shelf_row(
+        self,
+        row: sqlite3.Row | None,
+        *,
+        scope: str,
+        scope_id: str,
+        project_id: str | None = None,
+    ) -> dict:
+        if not row:
+            return self._citation_shelf_empty_record(scope=scope, scope_id=scope_id, project_id=project_id)
+        try:
+            items = json.loads(row["items_json"] or "[]")
+        except Exception:
+            items = []
+        if not isinstance(items, list):
+            items = []
+        return {
+            "version": 1,
+            "scope": str(row["scope"] or scope),
+            "scope_id": str(row["scope_id"] or scope_id),
+            "project_id": project_id,
+            "items": [item for item in items if isinstance(item, dict)][:120],
+            "open": bool(int(row["open"] or 0)),
+            "revision": int(row["revision"] or 0),
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
+    def get_citation_shelf(
+        self,
+        *,
+        conv_id: str | None = None,
+        project_id: str | None = None,
+        scope: str = "project",
+    ) -> dict | None:
+        with self._connect() as conn:
+            resolved = self._resolve_citation_shelf_scope(
+                conn,
+                conv_id=conv_id,
+                project_id=project_id,
+                scope=scope,
+            )
+            if resolved is None:
+                return None
+            scope_norm, scope_id, resolved_project_id = resolved
+            row = conn.execute(
+                """
+                SELECT scope, scope_id, items_json, open, revision, created_at, updated_at
+                FROM citation_shelves
+                WHERE scope = ? AND scope_id = ?
+                """,
+                (scope_norm, scope_id),
+            ).fetchone()
+        return self._hydrate_citation_shelf_row(
+            row,
+            scope=scope_norm,
+            scope_id=scope_id,
+            project_id=resolved_project_id,
+        )
+
+    def save_citation_shelf(
+        self,
+        *,
+        items: list[dict],
+        open: bool = False,
+        conv_id: str | None = None,
+        project_id: str | None = None,
+        scope: str = "project",
+    ) -> dict | None:
+        normalized_items = [dict(item) for item in list(items or []) if isinstance(item, dict)][:120]
+        try:
+            items_json = json.dumps(normalized_items, ensure_ascii=False, default=str)
+        except Exception:
+            normalized_items = []
+            items_json = "[]"
+        open_int = 1 if bool(open) else 0
+        now = time.time()
+        with self._connect() as conn:
+            resolved = self._resolve_citation_shelf_scope(
+                conn,
+                conv_id=conv_id,
+                project_id=project_id,
+                scope=scope,
+            )
+            if resolved is None:
+                return None
+            scope_norm, scope_id, resolved_project_id = resolved
+            row = conn.execute(
+                """
+                SELECT scope, scope_id, items_json, open, revision, created_at, updated_at
+                FROM citation_shelves
+                WHERE scope = ? AND scope_id = ?
+                """,
+                (scope_norm, scope_id),
+            ).fetchone()
+            if row and str(row["items_json"] or "[]") == items_json and int(row["open"] or 0) == open_int:
+                return self._hydrate_citation_shelf_row(
+                    row,
+                    scope=scope_norm,
+                    scope_id=scope_id,
+                    project_id=resolved_project_id,
+                )
+            created_at = float(row["created_at"] or now) if row else now
+            revision = int(row["revision"] or 0) + 1 if row else 1
+            conn.execute(
+                """
+                INSERT INTO citation_shelves (scope, scope_id, items_json, open, revision, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(scope, scope_id)
+                DO UPDATE SET
+                  items_json = excluded.items_json,
+                  open = excluded.open,
+                  revision = excluded.revision,
+                  updated_at = excluded.updated_at
+                """,
+                (scope_norm, scope_id, items_json, open_int, revision, created_at, now),
+            )
+        return {
+            "version": 1,
+            "scope": scope_norm,
+            "scope_id": scope_id,
+            "project_id": resolved_project_id,
+            "items": normalized_items,
+            "open": bool(open_int),
+            "revision": revision,
+            "created_at": created_at,
+            "updated_at": now,
+        }
+
+    def delete_citation_shelf(
+        self,
+        *,
+        conv_id: str | None = None,
+        project_id: str | None = None,
+        scope: str = "project",
+    ) -> dict | None:
+        with self._connect() as conn:
+            resolved = self._resolve_citation_shelf_scope(
+                conn,
+                conv_id=conv_id,
+                project_id=project_id,
+                scope=scope,
+            )
+            if resolved is None:
+                return None
+            scope_norm, scope_id, resolved_project_id = resolved
+            conn.execute(
+                "DELETE FROM citation_shelves WHERE scope = ? AND scope_id = ?",
+                (scope_norm, scope_id),
+            )
+        return self._citation_shelf_empty_record(
+            scope=scope_norm,
+            scope_id=scope_id,
+            project_id=resolved_project_id,
+        )
 
     def get_messages(self, conv_id: str, limit: int | None = None) -> list[dict]:
         sql = "SELECT id, role, content, attachments_json, meta_json, created_at FROM messages WHERE conv_id = ? ORDER BY id ASC"

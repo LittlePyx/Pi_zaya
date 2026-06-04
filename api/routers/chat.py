@@ -91,6 +91,13 @@ class ConversationReaderStatePatchBody(BaseModel):
     state: dict[str, Any] = Field(default_factory=dict)
 
 
+class CitationShelfBody(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    open: bool = False
+    scope: str | None = None
+    project_id: str | None = None
+
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 IMAGE_MIME_TO_EXT = {
     "image/png": ".png",
@@ -902,6 +909,59 @@ def rename_project(project_id: str, body: RenameProjectBody):
 def delete_project(project_id: str):
     get_chat_store().delete_project(project_id)
     return {"ok": True}
+
+
+@router.get("/chat/citation-shelf")
+def get_citation_shelf(
+    conv_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    scope: str = Query("project"),
+):
+    record = get_chat_store().get_citation_shelf(
+        conv_id=conv_id,
+        project_id=project_id,
+        scope=scope,
+    )
+    if record is None:
+        raise HTTPException(404, "conversation not found")
+    return record
+
+
+@router.patch("/chat/citation-shelf")
+def save_citation_shelf(
+    body: CitationShelfBody,
+    conv_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    scope: str = Query("project"),
+):
+    resolved_scope = str(body.scope or scope or "project").strip() or "project"
+    resolved_project_id = body.project_id if body.project_id is not None else project_id
+    record = get_chat_store().save_citation_shelf(
+        conv_id=conv_id,
+        project_id=resolved_project_id,
+        scope=resolved_scope,
+        items=body.items,
+        open=body.open,
+    )
+    if record is None:
+        raise HTTPException(404, "conversation not found")
+    return record
+
+
+@router.delete("/chat/citation-shelf")
+def delete_citation_shelf(
+    conv_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    scope: str = Query("project"),
+):
+    record = get_chat_store().delete_citation_shelf(
+        conv_id=conv_id,
+        project_id=project_id,
+        scope=scope,
+    )
+    if record is None:
+        raise HTTPException(404, "conversation not found")
+    return record
 
 
 @router.get("/conversations")

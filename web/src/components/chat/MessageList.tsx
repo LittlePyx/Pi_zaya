@@ -42,7 +42,7 @@ import {
   type CiteShelfItem,
 } from './citationState'
 import { RefsPanel } from '../refs/RefsPanel'
-import type { ChatImageAttachment, Message } from '../../api/chat'
+import { chatApi, type ChatImageAttachment, type Message } from '../../api/chat'
 import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact, type ShelfMetadataRepairItem } from '../../api/references'
 import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
@@ -63,6 +63,7 @@ const SHELF_SCHEMA_VERSION = 4
 const SHELF_SAVED_SCHEMA_VERSION = 1
 const SHELF_SAVED_MAX_ITEMS = 16
 const SHELF_SAVED_SUFFIX = ':saved_snapshots'
+const SHELF_BACKEND_PERSIST_MS = 320
 const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
 const SHELF_AUTO_REPAIR_RETRY_MS = 15000
 const SHELF_METADATA_HYDRATE_BATCH_SIZE = 8
@@ -4385,6 +4386,12 @@ function sameShelfItems(a: CiteShelfItem[], b: CiteShelfItem[]): boolean {
   return true
 }
 
+function shelfItemsForBackend(items: CiteShelfItem[]): Array<Record<string, unknown>> {
+  return dedupeShelfItems(items || [])
+    .slice(0, SHELF_MAX_ITEMS)
+    .map((item) => ({ ...(item as unknown as Record<string, unknown>) }))
+}
+
 function persistShelfSnapshot(
   storageKey: string,
   payload: { open: boolean; items: CiteShelfItem[] },
@@ -4741,14 +4748,20 @@ export function MessageList({
   const S = useT()
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
+  const persistShelfBackendTimerRef = useRef<number | null>(null)
   const activeStorageKeyRef = useRef(shelfStorageKey(activeConvId))
   const shelfRevisionByKeyRef = useRef<Record<string, number>>({})
+  const shelfBackendRevisionByKeyRef = useRef<Record<string, number>>({})
+  const shelfBackendHydratedKeysRef = useRef(new Set<string>())
+  const shelfBackendHydrateSeqRef = useRef(0)
+  const shelfStateTouchedAtRef = useRef(Date.now())
   const latestShelfStateRef = useRef<{ convId?: string | null; open: boolean; items: CiteShelfItem[] }>({
     convId: activeConvId,
     open: false,
     items: [],
   })
   const flushShelfSnapshotRef = useRef<(() => void) | null>(null)
+  const flushShelfBackendRef = useRef<(() => void) | null>(null)
   const shelfAutoRepairTimerRef = useRef<number | null>(null)
   const shelfAutoRepairingKeySetRef = useRef(new Set<string>())
   const shelfAutoRepairFingerprintsRef = useRef<Record<string, string>>({})
@@ -4762,6 +4775,26 @@ export function MessageList({
   const setShelfAutoRepairingKeySet = useCallback((nextSet: Set<string>) => {
     shelfAutoRepairingKeySetRef.current = nextSet
     setShelfAutoRepairingKeys(Array.from(nextSet))
+  }, [])
+
+  const saveShelfBackendNow = useCallback((state: { convId?: string | null; open: boolean; items: CiteShelfItem[] }) => {
+    const storageKey = shelfStorageKey(state.convId)
+    if (!shelfBackendHydratedKeysRef.current.has(storageKey)) return
+    const items = shelfItemsForBackend(state.items)
+    void chatApi.saveCitationShelf({
+      convId: state.convId || undefined,
+      scope: 'project',
+      open: state.open,
+      items,
+    })
+      .then((record) => {
+        const latestKey = shelfStorageKey(state.convId)
+        shelfBackendRevisionByKeyRef.current[latestKey] = Math.max(0, Number(record.revision || 0))
+        shelfBackendHydratedKeysRef.current.add(latestKey)
+      })
+      .catch(() => {
+        // Local shelf storage remains the immediate fallback when the API is unavailable.
+      })
   }, [])
 
   useEffect(() => {
@@ -4801,6 +4834,9 @@ export function MessageList({
       }
       if (shelfSummaryBackfillTimerRef.current !== null) {
         window.clearTimeout(shelfSummaryBackfillTimerRef.current)
+      }
+      if (persistShelfBackendTimerRef.current !== null) {
+        window.clearTimeout(persistShelfBackendTimerRef.current)
       }
     }
   }, [])
@@ -5015,10 +5051,16 @@ export function MessageList({
     const nextStorageKey = shelfStorageKey(activeConvId)
     const nextSavedStorageKey = shelfSavedStorageKey(activeConvId)
     const prevStorageKey = activeStorageKeyRef.current
+    flushShelfBackendRef.current?.()
     if (persistShelfTimerRef.current !== null) {
       window.clearTimeout(persistShelfTimerRef.current)
       persistShelfTimerRef.current = null
     }
+    if (persistShelfBackendTimerRef.current !== null) {
+      window.clearTimeout(persistShelfBackendTimerRef.current)
+      persistShelfBackendTimerRef.current = null
+    }
+    shelfBackendHydratedKeysRef.current.delete(nextStorageKey)
     if (shelfAutoRepairTimerRef.current !== null) {
       window.clearTimeout(shelfAutoRepairTimerRef.current)
       shelfAutoRepairTimerRef.current = null
@@ -5076,6 +5118,87 @@ export function MessageList({
 
   useEffect(() => {
     const storageKey = shelfStorageKey(activeConvId)
+    const requestSeq = shelfBackendHydrateSeqRef.current + 1
+    shelfBackendHydrateSeqRef.current = requestSeq
+    let cancelled = false
+    let requestStartedAt = Date.now()
+    const timer = window.setTimeout(() => {
+      requestStartedAt = Date.now()
+      chatApi.getCitationShelf({ convId: activeConvId || undefined, scope: 'project' })
+        .then((record) => {
+          if (cancelled || shelfBackendHydrateSeqRef.current !== requestSeq) return
+          const latest = latestShelfStateRef.current
+          if (shelfStorageKey(latest.convId) !== storageKey) return
+          const backendRevision = Math.max(0, Number(record.revision || 0))
+          shelfBackendRevisionByKeyRef.current[storageKey] = backendRevision
+          shelfBackendHydratedKeysRef.current.add(storageKey)
+
+          const backendItems = restoreShelfItems(Array.isArray(record.items) ? record.items : [])
+          const currentItems = dedupeShelfItems(latest.items || []).slice(0, SHELF_MAX_ITEMS)
+          const rawBackendUpdatedAt = Number(record.updated_at || 0)
+          const backendUpdatedAtMs = rawBackendUpdatedAt > 1000000000000
+            ? rawBackendUpdatedAt
+            : rawBackendUpdatedAt * 1000
+          const localSnapshot = readShelfSnapshot(storageKey)
+          const localUpdatedAtMs = Number(localSnapshot?.updatedAt || 0)
+          const stateChangedAfterRequest = shelfStateTouchedAtRef.current > requestStartedAt + 10
+          const localLooksNewer = localUpdatedAtMs > backendUpdatedAtMs + 500
+
+          let nextItems: CiteShelfItem[]
+          let nextOpen = Boolean(record.open)
+          let shouldSaveBackend = false
+
+          if (backendRevision <= 0) {
+            nextItems = currentItems.length > 0 ? currentItems : backendItems
+            nextOpen = latest.open || Boolean(record.open)
+            shouldSaveBackend = nextItems.length > 0 || nextOpen
+          } else if (backendItems.length <= 0 && currentItems.length > 0) {
+            if (stateChangedAfterRequest || localLooksNewer) {
+              nextItems = currentItems
+              nextOpen = latest.open
+              shouldSaveBackend = true
+            } else {
+              nextItems = []
+              nextOpen = Boolean(record.open)
+            }
+          } else if (currentItems.length <= 0) {
+            nextItems = backendItems
+            nextOpen = Boolean(record.open)
+          } else if (backendUpdatedAtMs > localUpdatedAtMs + 500 && !stateChangedAfterRequest) {
+            nextItems = backendItems
+            nextOpen = Boolean(record.open)
+          } else {
+            nextItems = dedupeShelfItems([...currentItems, ...backendItems]).slice(0, SHELF_MAX_ITEMS)
+            nextOpen = latest.open || Boolean(record.open)
+            shouldSaveBackend = !sameShelfItems(nextItems, backendItems) || nextOpen !== Boolean(record.open)
+          }
+
+          if (!sameShelfItems(currentItems, nextItems)) {
+            setShelfItems(nextItems)
+            setFocusedShelfKey((current) => (
+              current && nextItems.some((item) => item.key === current) ? current : ''
+            ))
+          }
+          if (latest.open !== nextOpen) {
+            setShelfOpen(nextOpen)
+          }
+          if (shouldSaveBackend) {
+            saveShelfBackendNow({ convId: latest.convId, open: nextOpen, items: nextItems })
+          }
+        })
+        .catch(() => {
+          if (cancelled || shelfBackendHydrateSeqRef.current !== requestSeq) return
+          shelfBackendHydratedKeysRef.current.delete(storageKey)
+        })
+    }, 0)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [activeConvId, saveShelfBackendNow])
+
+  useEffect(() => {
+    const storageKey = shelfStorageKey(activeConvId)
     const savedStorageKey = shelfSavedStorageKey(activeConvId)
     const onStorage = (event: StorageEvent) => {
       if (event.key === savedStorageKey) {
@@ -5118,6 +5241,7 @@ export function MessageList({
   }, [activeConvId])
 
   useLayoutEffect(() => {
+    shelfStateTouchedAtRef.current = Date.now()
     latestShelfStateRef.current = { convId: activeConvId, open: shelfOpen, items: shelfItems }
   }, [activeConvId, shelfItems, shelfOpen])
 
@@ -5138,13 +5262,24 @@ export function MessageList({
       shelfRevisionByKeyRef.current[storageKey] = nextRevision
       activeStorageKeyRef.current = storageKey
     }
+    flushShelfBackendRef.current = () => {
+      if (persistShelfBackendTimerRef.current !== null) {
+        window.clearTimeout(persistShelfBackendTimerRef.current)
+        persistShelfBackendTimerRef.current = null
+      }
+      saveShelfBackendNow(latestShelfStateRef.current)
+    }
     return () => {
       if (flushShelfSnapshotRef.current) {
         flushShelfSnapshotRef.current()
       }
+      if (flushShelfBackendRef.current) {
+        flushShelfBackendRef.current()
+      }
       flushShelfSnapshotRef.current = null
+      flushShelfBackendRef.current = null
     }
-  }, [])
+  }, [saveShelfBackendNow])
 
   useEffect(() => {
     setSelectedSavedSnapshotId((current) => {
@@ -5159,12 +5294,17 @@ export function MessageList({
         window.clearTimeout(persistShelfTimerRef.current)
         persistShelfTimerRef.current = null
       }
+      if (persistShelfBackendTimerRef.current !== null) {
+        window.clearTimeout(persistShelfBackendTimerRef.current)
+        persistShelfBackendTimerRef.current = null
+      }
     }
   }, [])
 
   useEffect(() => {
     const flushShelfSnapshot = () => {
       flushShelfSnapshotRef.current?.()
+      flushShelfBackendRef.current?.()
     }
     window.addEventListener('pagehide', flushShelfSnapshot)
     window.addEventListener('beforeunload', flushShelfSnapshot)
@@ -5207,6 +5347,31 @@ export function MessageList({
       }
     }
   }, [activeConvId, shelfItems, shelfOpen])
+
+  useEffect(() => {
+    const storageKey = shelfStorageKey(activeConvId)
+    if (!shelfBackendHydratedKeysRef.current.has(storageKey)) return
+    if (persistShelfBackendTimerRef.current !== null) {
+      window.clearTimeout(persistShelfBackendTimerRef.current)
+      persistShelfBackendTimerRef.current = null
+    }
+    persistShelfBackendTimerRef.current = window.setTimeout(() => {
+      const latest = latestShelfStateRef.current
+      const latestStorageKey = shelfStorageKey(latest.convId)
+      if (latestStorageKey !== storageKey) {
+        persistShelfBackendTimerRef.current = null
+        return
+      }
+      saveShelfBackendNow(latest)
+      persistShelfBackendTimerRef.current = null
+    }, SHELF_BACKEND_PERSIST_MS)
+    return () => {
+      if (persistShelfBackendTimerRef.current !== null) {
+        window.clearTimeout(persistShelfBackendTimerRef.current)
+        persistShelfBackendTimerRef.current = null
+      }
+    }
+  }, [activeConvId, saveShelfBackendNow, shelfItems, shelfOpen])
 
   const rows = useMemo(() => {
     const out: Array<

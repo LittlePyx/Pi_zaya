@@ -380,6 +380,29 @@ export interface ChatImageAttachment {
   url?: string
 }
 
+export interface CitationShelfRecord {
+  version: number
+  scope: string
+  scope_id: string
+  project_id?: string | null
+  items: Array<Record<string, unknown>>
+  open: boolean
+  revision: number
+  created_at: number
+  updated_at: number
+}
+
+export interface CitationShelfRequest {
+  convId?: string | null
+  projectId?: string | null
+  scope?: string
+}
+
+export interface CitationShelfSaveBody extends CitationShelfRequest {
+  items: Array<Record<string, unknown>>
+  open?: boolean
+}
+
 export interface ChatUploadItem {
   kind: 'pdf' | 'image' | 'unknown'
   status: 'saved' | 'duplicate' | 'error' | 'unsupported'
@@ -397,6 +420,18 @@ export interface ChatUploadItem {
   ingest_job_id?: string
   md_path?: string
   attachment?: ChatImageAttachment
+}
+
+function citationShelfUrl(opts?: CitationShelfRequest): string {
+  const params = new URLSearchParams()
+  const convId = String(opts?.convId || '').trim()
+  const projectId = String(opts?.projectId || '').trim()
+  const scope = String(opts?.scope || 'project').trim()
+  if (convId) params.set('conv_id', convId)
+  if (projectId) params.set('project_id', projectId)
+  if (scope) params.set('scope', scope)
+  const query = params.toString()
+  return `/api/chat/citation-shelf${query ? `?${query}` : ''}`
 }
 
 export const chatApi = {
@@ -471,6 +506,17 @@ export const chatApi = {
     api.post<{ item: ChatUploadItem }>('/api/chat/uploads/quality/retry', { job_id: jobId }),
   cancelUploadJob: (jobId: string) =>
     api.post<{ item: ChatUploadItem }>('/api/chat/uploads/cancel', { job_id: jobId }),
+  getCitationShelf: (opts?: CitationShelfRequest) =>
+    api.get<CitationShelfRecord>(citationShelfUrl(opts)),
+  saveCitationShelf: (body: CitationShelfSaveBody) =>
+    api.patch<CitationShelfRecord>(citationShelfUrl(body), {
+      items: body.items,
+      open: Boolean(body.open),
+      scope: body.scope || 'project',
+      project_id: body.projectId ?? null,
+    }),
+  deleteCitationShelf: (opts?: CitationShelfRequest) =>
+    api.delete<CitationShelfRecord>(citationShelfUrl(opts)),
   getRefsWithMeta,
   getRefs: async (convId: string) =>
     (await getRefsWithMeta(convId)).data,
