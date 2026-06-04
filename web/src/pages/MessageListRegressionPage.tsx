@@ -1346,6 +1346,7 @@ export default function MessageListRegressionPage() {
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <MessageList
             activeConvId={`message-list-regression:${scenario}`}
+            shelfProjectId="message-list-regression-project"
             messages={regressionMessages}
             refs={regressionRefs}
             onOpenReader={(nextPayload) => setPayload(nextPayload)}

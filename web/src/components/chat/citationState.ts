@@ -1751,7 +1751,15 @@ export function citeMetricSummary(detail: CiteDetail): string[] {
   return items
 }
 
-export function shelfStorageKey(convId?: string | null): string {
+export function shelfProjectScopeId(projectId?: string | null): string {
+  return String(projectId || '').trim() || '__default__'
+}
+
+export function shelfStorageKey(projectId?: string | null): string {
+  return `kb_cite_shelf:project:${shelfProjectScopeId(projectId)}`
+}
+
+export function legacyConversationShelfStorageKey(convId?: string | null): string {
   return `kb_cite_shelf:${String(convId || 'default')}`
 }
 

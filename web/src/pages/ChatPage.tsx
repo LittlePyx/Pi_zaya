@@ -8,7 +8,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
-import type { CiteDetail } from '../components/chat/citationState'
+import { shelfProjectScopeId, type CiteDetail } from '../components/chat/citationState'
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
 import {
   READER_CITATION_SHELF_EVENT,
@@ -135,6 +135,7 @@ export default function ChatPage() {
   const generation = useChatStore((s) => s.generation)
   const refs = useChatStore((s) => s.refs)
   const activeConvId = useChatStore((s) => s.activeConvId)
+  const activeProjectId = useChatStore((s) => s.activeProjectId)
   const activeConversation = useChatStore((s) => s.activeConversation)
   const guideBindings = useChatStore((s) => s.guideBindings)
   const uploadItems = useChatStore((s) => s.uploadItems)
@@ -190,6 +191,9 @@ export default function ChatPage() {
   const rightDockWidthLiveRef = useRef(rightDockWidth)
   const rightDockResizePreviewWidthRef = useRef(rightDockWidth)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
+  const shelfProjectId = activeConversation?.project_id ?? activeProjectId ?? null
+  const shelfProjectScope = shelfProjectScopeId(shelfProjectId)
+  const previousShelfProjectScopeRef = useRef(shelfProjectScope)
 
   const nextEventToken = () => {
     timelineJumpTokenRef.current += 1
@@ -218,6 +222,8 @@ export default function ChatPage() {
   }
 
   useEffect(() => {
+    const projectChanged = previousShelfProjectScopeRef.current !== shelfProjectScope
+    previousShelfProjectScopeRef.current = shelfProjectScope
     setTimelineOpen(true)
     clearTimelineSelection()
     setReaderOpen(false)
@@ -226,11 +232,15 @@ export default function ChatPage() {
     readerPayloadByFeedbackKeyRef.current = {}
     readerLocateSourceRepairStreamRef.current?.abort()
     readerLocateSourceRepairStreamRef.current = null
-    setCitationShelfOpen(false)
-    setCitationShelfCount(0)
-    setRightDockPanel('timeline')
+    if (projectChanged) {
+      setCitationShelfOpen(false)
+      setCitationShelfCount(0)
+      setRightDockPanel('timeline')
+    } else {
+      setRightDockPanel((current) => (current === 'reader' ? 'timeline' : current))
+    }
     setAppendSignal(null)
-  }, [activeConvId])
+  }, [activeConvId, shelfProjectScope])
 
   useEffect(() => () => {
     Object.values(dismissTimerRef.current).forEach((timer) => window.clearTimeout(timer))
@@ -683,6 +693,7 @@ export default function ChatPage() {
         state: {
           sourcePath,
           conversationId: activeConvId || '',
+          projectId: shelfProjectId || '',
           highlights: activeReaderSessionHighlightsRef.current,
           evidenceNotes: activeReaderSessionHighlightsRef.current,
         },
@@ -712,6 +723,7 @@ export default function ChatPage() {
     S.reader_window_blocked,
     S.side_dock_reader,
     activeConvId,
+    shelfProjectId,
   ])
 
   const handleCitationShelfOpenChange = useCallback((open: boolean) => {
@@ -930,6 +942,7 @@ export default function ChatPage() {
       text,
       sourcePath,
       conversationId: activeConvId || payload.conversationId || '',
+      projectId: shelfProjectId || payload.projectId || '',
       createdAt: Number(payload.createdAt || Date.now()),
     }
     window.dispatchEvent(new CustomEvent(READER_SELECTION_SHELF_EVENT, { detail }))
@@ -938,7 +951,7 @@ export default function ChatPage() {
     setRightDockPanel('shelf')
     setRightDockCollapsed(false)
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, activeConvId])
+  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId])
 
   const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
     if (!detail) return
@@ -946,6 +959,7 @@ export default function ChatPage() {
       type: 'reader-citation-shelf',
       detail: detail as unknown as Record<string, unknown>,
       conversationId: activeConvId || '',
+      projectId: shelfProjectId || '',
       createdAt: Date.now(),
     }
     window.dispatchEvent(new CustomEvent(READER_CITATION_SHELF_EVENT, { detail: payload }))
@@ -954,7 +968,7 @@ export default function ChatPage() {
     setRightDockPanel('shelf')
     setRightDockCollapsed(false)
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, activeConvId])
+  }, [S.reader_added_to_shelf, activeConvId, shelfProjectId])
 
   const openReaderCitationShelf = useCallback(() => {
     setOpenShelfSignal((value) => value + 1)
@@ -1419,6 +1433,7 @@ export default function ChatPage() {
                 ) : (
                   <MessageList
                     activeConvId={activeConvId}
+                    shelfProjectId={shelfProjectId}
                     messages={visibleMessages}
                     refs={deferredRefs}
                     generationPartial={generation?.partial}

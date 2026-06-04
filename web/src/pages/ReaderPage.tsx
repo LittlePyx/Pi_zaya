@@ -251,6 +251,11 @@ export default function ReaderPage() {
   const payload = useMemo(() => normalizeReaderPayload(session), [session])
   const payloadSourcePath = String(payload?.sourcePath || '').trim()
   const sessionConversationId = String(session?.conversation_id || linkedConversationIdFromSearch(location.search)).trim()
+  const sessionProjectId = String(
+    (session?.state && typeof session.state === 'object' ? (session.state as Record<string, unknown>).projectId || (session.state as Record<string, unknown>).project_id : '')
+    || (session?.payload && typeof session.payload === 'object' ? (session.payload as Record<string, unknown>).projectId || (session.payload as Record<string, unknown>).project_id : '')
+    || '',
+  ).trim()
   const title = String(session?.title || payload?.sourceName || payload?.sourcePath || S.side_dock_reader || 'Reader').trim()
 
   useEffect(() => {
@@ -403,6 +408,7 @@ export default function ReaderPage() {
       sourcePath,
       sourceName: selection.sourceName || payload?.sourceName || title,
       conversationId: session?.conversation_id || selection.conversationId || '',
+      projectId: sessionProjectId || selection.projectId || '',
       createdAt: Number(selection.createdAt || Date.now()),
     }
     if (typeof BroadcastChannel !== 'undefined') {
@@ -414,7 +420,7 @@ export default function ReaderPage() {
       channel.close()
     }
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, payload?.sourceName, payload?.sourcePath, session?.conversation_id, title])
+  }, [S.reader_added_to_shelf, payload?.sourceName, payload?.sourcePath, session?.conversation_id, sessionProjectId, title])
 
   const addCitationToShelf = useCallback((detail: CiteDetail) => {
     if (!detail) return
@@ -424,12 +430,13 @@ export default function ReaderPage() {
         type: 'reader-citation-shelf',
         detail: detail as unknown as Record<string, unknown>,
         conversationId: session?.conversation_id || sessionConversationId || '',
+        projectId: sessionProjectId,
         createdAt: Date.now(),
       })
       channel.close()
     }
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, session?.conversation_id, sessionConversationId])
+  }, [S.reader_added_to_shelf, session?.conversation_id, sessionConversationId, sessionProjectId])
 
   const openCitationShelf = useCallback(() => {
     if (sessionConversationId) {

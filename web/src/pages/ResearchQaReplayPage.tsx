@@ -453,6 +453,7 @@ export default function ResearchQaReplayPage() {
 
         <section className="min-h-[720px] rounded-[8px] border border-[var(--border)] bg-[var(--panel)]">
           <MessageList
+            shelfProjectId="research-qa-replay-project"
             messages={replayMessages}
             refs={replayRefs}
             onOpenReader={(nextPayload) => setPayload(nextPayload)}

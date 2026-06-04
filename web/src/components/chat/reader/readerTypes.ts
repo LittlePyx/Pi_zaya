@@ -131,11 +131,13 @@ export interface ReaderSelectionShelfPayload {
   startReadableIndex?: number
   endReadableIndex?: number
   conversationId?: string
+  projectId?: string
   createdAt?: number
 }
 
 export interface ReaderCitationShelfPayload {
   detail: Record<string, unknown>
   conversationId?: string
+  projectId?: string
   createdAt?: number
 }
