@@ -1,3 +1,4 @@
+import threading
 import time
 from pathlib import Path
 
@@ -103,6 +104,11 @@ def test_process_batch_vision_direct_parallel_preserves_page_order(tmp_path, mon
     doc = _DummyDoc(total_pages)
     converter = _make_converter(tmp_path)
     completion_order = []
+    started_pages = []
+    lock = threading.Lock()
+    all_started = threading.Event()
+    page_2_done = threading.Event()
+    page_1_done = threading.Event()
 
     monkeypatch.setenv("KB_PDF_LLM_PAGE_WORKERS", "3")
     monkeypatch.setattr(
@@ -114,9 +120,22 @@ def test_process_batch_vision_direct_parallel_preserves_page_order(tmp_path, mon
     monkeypatch.setattr(vision_direct_module, "fitz", _FakeFitz(total_pages))
 
     def _process_page(converter, *, page, page_index, total_pages, pdf_path, assets_dir, speed_mode, speed_config, dpi, mat, started_at=None):
-        delays = {0: 0.15, 1: 0.05, 2: 0.0}
-        time.sleep(delays[page_index])
-        completion_order.append(page_index)
+        with lock:
+            started_pages.append(page_index)
+            if len(started_pages) == total_pages:
+                all_started.set()
+        if not all_started.wait(timeout=5):
+            raise AssertionError("parallel vision-direct workers did not all start")
+        if page_index == 1 and not page_2_done.wait(timeout=5):
+            raise AssertionError("page 1 did not observe page 2 completion")
+        if page_index == 0 and not page_1_done.wait(timeout=5):
+            raise AssertionError("page 0 did not observe page 1 completion")
+        with lock:
+            completion_order.append(page_index)
+        if page_index == 2:
+            page_2_done.set()
+        if page_index == 1:
+            page_1_done.set()
         return f"MD_{page_index}"
 
     monkeypatch.setattr(vision_direct_module, "process_vision_direct_page", _process_page)
@@ -124,6 +143,7 @@ def test_process_batch_vision_direct_parallel_preserves_page_order(tmp_path, mon
     out = converter._process_batch_vision_direct(doc, pdf_path=Path("dummy.pdf"), assets_dir=tmp_path)
 
     assert out == ["MD_0", "MD_1", "MD_2"]
+    assert sorted(started_pages) == [0, 1, 2]
     assert completion_order == [2, 1, 0]
 
 

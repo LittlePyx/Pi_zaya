@@ -235,14 +235,20 @@ def test_paper_guide_failure_replay_pool_v1(case: dict, tmp_path: Path):
     )
     msg = rendered[-1]
 
-    # In render_packet_only mode, legacy projections must be stripped.
+    # In render_packet_only mode, heavy legacy text projections must be stripped.
+    # cite_details is intentionally kept as stable reference data so the UI can
+    # restore inline src chips after refreshes and paginated reloads.
     assert "rendered_body" not in msg
     assert "rendered_content" not in msg
     assert "copy_text" not in msg
     assert "copy_markdown" not in msg
-    assert "cite_details" not in msg
+    top_level_cite_details = msg.get("cite_details", [])
+    assert isinstance(top_level_cite_details, list)
 
     packet = (((msg.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
+    packet_cite_details = packet.get("cite_details", [])
+    assert isinstance(packet_cite_details, list)
+    assert top_level_cite_details == packet_cite_details
     rendered_body = str(packet.get("rendered_body") or "")
     rendered_content = str(packet.get("rendered_content") or "")
     copy_text = str(packet.get("copy_text") or "")

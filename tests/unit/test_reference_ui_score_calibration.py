@@ -14,6 +14,7 @@ def _disable_remote_summary_translation(monkeypatch):
     cache_clear = getattr(reference_ui._translate_summary_to_zh, "cache_clear", None)
     if callable(cache_clear):
         cache_clear()
+    monkeypatch.setenv("KB_REFS_CARD_LOCALE", "auto")
     monkeypatch.setenv("KB_CITE_SUMMARY_TRANSLATE_ZH", "0")
     yield
     cache_clear = getattr(reference_ui._translate_summary_to_zh, "cache_clear", None)
