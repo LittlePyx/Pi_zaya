@@ -1,6 +1,6 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { ApiOutlined } from '@ant-design/icons'
-import { Button, Drawer, Select, Segmented, Slider, Switch, Typography, message } from 'antd'
+import { Alert, Button, Drawer, Input, Select, Segmented, Slider, Switch, Typography, message } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { settingsApi } from '../../api/settings'
 import { useT } from '../../i18n'
@@ -43,14 +43,69 @@ function SettingsValue({ value, muted = false }: { value: ReactNode; muted?: boo
 export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const S = useT()
   const s = useSettingsStore()
+  const [textApiKey, setTextApiKey] = useState('')
+  const [textBaseUrl, setTextBaseUrl] = useState('')
+  const [textModel, setTextModel] = useState('')
+  const [visionApiKey, setVisionApiKey] = useState('')
+  const [visionBaseUrl, setVisionBaseUrl] = useState('')
+  const [visionModel, setVisionModel] = useState('')
+  const [savingConnection, setSavingConnection] = useState(false)
+  const [testingTarget, setTestingTarget] = useState<'text' | 'vision' | null>(null)
 
-  const testLlm = async () => {
-    const res = await settingsApi.testLlm()
-    message[res.ok ? 'success' : 'error'](
-      res.ok
-        ? S.settings_test_ok.replace('{reply}', String(res.reply || S.settings_test_default_reply))
-        : S.settings_test_failed.replace('{error}', String(res.error || S.settings_test_unknown_error)),
-    )
+  useEffect(() => {
+    if (!open) return
+    setTextApiKey('')
+    setVisionApiKey('')
+    setTextBaseUrl(s.textBaseUrl || '')
+    setTextModel(s.textModel || s.model || '')
+    setVisionBaseUrl(s.visionBaseUrl || '')
+    setVisionModel(s.visionModel || '')
+  }, [open, s.model, s.textBaseUrl, s.textModel, s.visionBaseUrl, s.visionModel])
+
+  const saveConnection = async () => {
+    setSavingConnection(true)
+    try {
+      await settingsApi.update({
+        ...(textApiKey.trim() ? { textApiKey: textApiKey.trim() } : {}),
+        textBaseUrl: textBaseUrl.trim(),
+        textModel: textModel.trim(),
+        ...(visionApiKey.trim() ? { visionApiKey: visionApiKey.trim() } : {}),
+        visionBaseUrl: visionBaseUrl.trim(),
+        visionModel: visionModel.trim(),
+      })
+      setTextApiKey('')
+      setVisionApiKey('')
+      await s.load()
+      message.success(S.settings_api_settings_saved)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_save_api_settings_failed)
+    } finally {
+      setSavingConnection(false)
+    }
+  }
+
+  const testLlm = async (target: 'text' | 'vision') => {
+    setTestingTarget(target)
+    try {
+      const res = await settingsApi.testLlm(target, target === 'text'
+        ? {
+            apiKey: textApiKey.trim(),
+            baseUrl: textBaseUrl.trim(),
+            model: textModel.trim(),
+          }
+        : {
+            apiKey: visionApiKey.trim(),
+            baseUrl: visionBaseUrl.trim(),
+            model: visionModel.trim(),
+          })
+      message[res.ok ? 'success' : 'error'](
+        res.ok
+          ? S.settings_test_ok.replace('{reply}', String(res.reply || S.settings_test_default_reply))
+          : S.settings_test_failed.replace('{error}', String(res.error || S.settings_test_unknown_error)),
+      )
+    } finally {
+      setTestingTarget(null)
+    }
   }
 
   return (
@@ -141,15 +196,105 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </SettingsSection>
 
         <SettingsSection title={S.settings_section_connection}>
-          <SettingsRow title={S.model_label} description={S.settings_model_desc}>
-            <SettingsValue value={s.model || S.model_not_configured} muted={!s.model} />
-          </SettingsRow>
-          <SettingsRow title={S.settings_api_key} description={S.settings_api_key_desc}>
-            <SettingsValue value={s.hasApiKey ? S.settings_api_key_ready : S.settings_api_key_missing} muted={!s.hasApiKey} />
-          </SettingsRow>
+          <div className="kb-settings-connection-alerts">
+            {!s.hasTextApiKey ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={S.settings_missing_text_api_title}
+                description={S.settings_missing_text_api_desc}
+              />
+            ) : null}
+            {s.hasTextApiKey && s.visionUsesTextFallback ? (
+              <Alert
+                type="info"
+                showIcon
+                message={S.settings_missing_vision_api_title}
+                description={S.settings_missing_vision_api_desc}
+              />
+            ) : null}
+          </div>
+          <div className="kb-settings-credential-grid">
+            <section className="kb-settings-credential">
+              <div className="kb-settings-credential-head">
+                <div>
+                  <Text className="kb-settings-credential-title">{S.settings_text_api_title}</Text>
+                  <Text className="kb-settings-credential-desc">{S.settings_text_api_desc}</Text>
+                </div>
+                <SettingsValue value={s.hasTextApiKey ? S.settings_api_key_ready : S.settings_api_key_missing} muted={!s.hasTextApiKey} />
+              </div>
+              <div className="kb-settings-credential-fields">
+                <Input.Password
+                  value={textApiKey}
+                  onChange={(event) => setTextApiKey(event.target.value)}
+                  placeholder={S.settings_api_key_placeholder}
+                  autoComplete="off"
+                />
+                <Input
+                  value={textBaseUrl}
+                  onChange={(event) => setTextBaseUrl(event.target.value)}
+                  placeholder={S.settings_base_url}
+                />
+                <Input
+                  value={textModel}
+                  onChange={(event) => setTextModel(event.target.value)}
+                  placeholder={S.settings_model_id}
+                />
+              </div>
+              <div className="kb-settings-credential-actions">
+                <Button
+                  icon={<ApiOutlined />}
+                  loading={testingTarget === 'text'}
+                  onClick={() => { void testLlm('text') }}
+                >
+                  {S.settings_test_text_connection}
+                </Button>
+              </div>
+            </section>
+
+            <section className="kb-settings-credential">
+              <div className="kb-settings-credential-head">
+                <div>
+                  <Text className="kb-settings-credential-title">{S.settings_vision_api_title}</Text>
+                  <Text className="kb-settings-credential-desc">{S.settings_vision_api_desc}</Text>
+                </div>
+                <SettingsValue
+                  value={s.visionUsesTextFallback ? S.settings_api_key_fallback : (s.hasVisionApiKey ? S.settings_api_key_ready : S.settings_api_key_missing)}
+                  muted={!s.hasVisionApiKey || s.visionUsesTextFallback}
+                />
+              </div>
+              <div className="kb-settings-credential-fields">
+                <Input.Password
+                  value={visionApiKey}
+                  onChange={(event) => setVisionApiKey(event.target.value)}
+                  placeholder={S.settings_api_key_placeholder}
+                  autoComplete="off"
+                />
+                <Input
+                  value={visionBaseUrl}
+                  onChange={(event) => setVisionBaseUrl(event.target.value)}
+                  placeholder={S.settings_base_url}
+                />
+                <Input
+                  value={visionModel}
+                  onChange={(event) => setVisionModel(event.target.value)}
+                  placeholder={S.settings_model_id}
+                />
+              </div>
+              <div className="kb-settings-credential-actions">
+                <Button
+                  icon={<ApiOutlined />}
+                  loading={testingTarget === 'vision'}
+                  onClick={() => { void testLlm('vision') }}
+                >
+                  {S.settings_test_vision_connection}
+                </Button>
+              </div>
+            </section>
+          </div>
           <div className="kb-settings-action-row">
-            <Button icon={<ApiOutlined />} onClick={() => { void testLlm() }}>
-              {S.settings_test_connection}
+            <Button type="primary" loading={savingConnection} onClick={() => { void saveConnection() }}>
+              {S.settings_save_api_settings}
             </Button>
           </div>
         </SettingsSection>

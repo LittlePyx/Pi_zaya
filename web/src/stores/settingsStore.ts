@@ -43,6 +43,14 @@ interface SettingsState {
   sidebarCollapsed: boolean
   model: string
   hasApiKey: boolean
+  textModel: string
+  textBaseUrl: string
+  hasTextApiKey: boolean
+  visionModel: string
+  visionBaseUrl: string
+  hasVisionApiKey: boolean
+  visionUsesTextFallback: boolean
+  autoRoute: boolean
   loaded: boolean
   load: () => Promise<void>
   update: (patch: SettingsPatch) => Promise<void>
@@ -67,6 +75,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   sidebarCollapsed: false,
   model: '',
   hasApiKey: false,
+  textModel: '',
+  textBaseUrl: '',
+  hasTextApiKey: false,
+  visionModel: '',
+  visionBaseUrl: '',
+  hasVisionApiKey: false,
+  visionUsesTextFallback: false,
+  autoRoute: false,
   loaded: false,
 
   load: async () => {
@@ -77,10 +93,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const nextUiLocale = ((p.ui_locale as 'zh' | 'en') || 'zh')
       const rawRefsCardLocale = String(p.refs_card_locale || 'auto')
       const nextRefsCardLocale = rawRefsCardLocale === 'zh' || rawRefsCardLocale === 'en' ? rawRefsCardLocale : 'auto'
+      const textStatus = data.connection?.text
+      const visionStatus = data.connection?.vision
+      const nextTextModel = String(textStatus?.model || data.model || '')
+      const nextTextBaseUrl = String(textStatus?.base_url || data.base_url || '')
+      const nextHasTextApiKey = Boolean(textStatus?.has_api_key ?? data.has_api_key)
+      const nextVisionModel = String(visionStatus?.model || nextTextModel || '')
+      const nextVisionBaseUrl = String(visionStatus?.base_url || nextTextBaseUrl || '')
+      const nextHasVisionApiKey = Boolean(visionStatus?.has_api_key ?? nextHasTextApiKey)
       persistTheme(nextTheme)
       set({
-        model: data.model,
-        hasApiKey: data.has_api_key,
+        model: nextTextModel,
+        hasApiKey: nextHasTextApiKey,
+        textModel: nextTextModel,
+        textBaseUrl: nextTextBaseUrl,
+        hasTextApiKey: nextHasTextApiKey,
+        visionModel: nextVisionModel,
+        visionBaseUrl: nextVisionBaseUrl,
+        hasVisionApiKey: nextHasVisionApiKey,
+        visionUsesTextFallback: Boolean(visionStatus?.uses_text_fallback),
+        autoRoute: Boolean(data.connection?.auto_route),
         topK: (p.top_k as number) || 6,
         temperature: (p.temperature as number) ?? 0.2,
         maxTokens: clampMaxTokens(p.max_tokens),
@@ -129,6 +161,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (patch.mdDir !== undefined) localPatch.mdDir = patch.mdDir
     if (patch.uiLocale !== undefined) localPatch.uiLocale = patch.uiLocale
     if (patch.sidebarCollapsed !== undefined) localPatch.sidebarCollapsed = patch.sidebarCollapsed
+    if (patch.textBaseUrl !== undefined) localPatch.textBaseUrl = patch.textBaseUrl
+    if (patch.textModel !== undefined) {
+      localPatch.textModel = patch.textModel
+      localPatch.model = patch.textModel
+    }
+    if (patch.textApiKey !== undefined && patch.textApiKey.trim()) {
+      localPatch.hasTextApiKey = true
+      localPatch.hasApiKey = true
+    }
+    if (patch.visionBaseUrl !== undefined) localPatch.visionBaseUrl = patch.visionBaseUrl
+    if (patch.visionModel !== undefined) localPatch.visionModel = patch.visionModel
+    if (patch.visionApiKey !== undefined && patch.visionApiKey.trim()) {
+      localPatch.hasVisionApiKey = true
+      localPatch.visionUsesTextFallback = false
+    }
     set(localPatch)
     await settingsApi.update(patchToSend).catch(() => {})
   },

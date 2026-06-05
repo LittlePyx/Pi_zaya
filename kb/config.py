@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,27 @@ def _clean_env_key(raw: str) -> str | None:
     return v or None
 
 
+def _load_runtime_prefs() -> dict:
+    prefs_path = Path(__file__).resolve().parent.parent / "user_prefs.json"
+    if not prefs_path.exists():
+        return {}
+    try:
+        data = json.loads(prefs_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _clean_pref_str(value: object) -> str | None:
+    raw = str(value or "").replace("\x00", "").strip()
+    return raw or None
+
+
+def _clean_base_url(value: object) -> str | None:
+    raw = _clean_pref_str(value)
+    return raw.rstrip("/") if raw else None
+
+
 @dataclass(frozen=True)
 class Settings:
     # Text model (cheaper, faster — e.g. DeepSeek).
@@ -40,6 +62,7 @@ class Settings:
     max_retries: int
     # Whether auto-routing is active (both text *and* vision keys are set).
     auto_route: bool = field(default=False)
+    vision_uses_text_fallback: bool = field(default=False)
     # Whether LLM-based query expansion is enabled for BM25 retrieval.
     query_expansion_enabled: bool = field(default=False)
 
@@ -64,13 +87,21 @@ def load_settings() -> Settings:
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
 
     _env = os.environ.get
+    prefs = _load_runtime_prefs()
+    stored_text_api_key = _clean_env_key(str(prefs.get("text_api_key") or ""))
+    stored_text_base_url = _clean_base_url(prefs.get("text_base_url"))
+    stored_text_model = _clean_pref_str(prefs.get("text_model"))
+    stored_vision_api_key = _clean_env_key(str(prefs.get("vision_api_key") or ""))
+    stored_vision_base_url = _clean_base_url(prefs.get("vision_base_url"))
+    stored_vision_model = _clean_pref_str(prefs.get("vision_model"))
 
     # --- text model ---------------------------------------------------
     # Prefer DeepSeek (cheapest / fastest for text).  Fall back to Qwen,
     # then OpenAI.
-    text_api_key = _clean_env_key(
+    env_text_api_key = _clean_env_key(
         _env("DEEPSEEK_API_KEY") or _env("QWEN_API_KEY") or _env("OPENAI_API_KEY") or ""
     )
+    text_api_key = env_text_api_key or stored_text_api_key
     if _env("DEEPSEEK_API_KEY"):
         text_base_url = (
             _env("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
@@ -91,16 +122,24 @@ def load_settings() -> Settings:
         text_model = (
             _env("QWEN_MODEL") or _env("OPENAI_MODEL") or "qwen3-vl-plus"
         ).strip()
+    elif stored_text_api_key:
+        text_base_url = (
+            stored_text_base_url or _env("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+        ).strip().rstrip("/")
+        text_model = (stored_text_model or _env("OPENAI_MODEL") or "gpt-4o").strip()
     else:
         text_base_url = (
-            _env("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            stored_text_base_url or _env("OPENAI_BASE_URL") or "https://api.openai.com/v1"
         ).strip().rstrip("/")
-        text_model = (_env("OPENAI_MODEL") or "gpt-4o").strip()
+        text_model = (stored_text_model or _env("OPENAI_MODEL") or "gpt-4o").strip()
 
     # --- vision model -------------------------------------------------
     # Qwen VL is the primary vision model.  DeepSeek does not support
     # image inputs through its API at time of writing.
-    vision_api_key = _clean_env_key(_env("QWEN_API_KEY") or "") or text_api_key
+    env_vision_api_key = _clean_env_key(_env("QWEN_API_KEY") or "")
+    dedicated_vision_api_key = env_vision_api_key or stored_vision_api_key
+    vision_api_key = dedicated_vision_api_key or text_api_key
+    vision_uses_text_fallback = not bool(dedicated_vision_api_key)
     if _env("QWEN_API_KEY"):
         vision_base_url = (
             _env("QWEN_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -108,6 +147,11 @@ def load_settings() -> Settings:
         vision_model = (
             _env("QWEN_MODEL") or _env("OPENAI_MODEL") or "qwen3-vl-plus"
         ).strip()
+    elif stored_vision_api_key:
+        vision_base_url = (
+            stored_vision_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        ).strip().rstrip("/")
+        vision_model = (stored_vision_model or "qwen3-vl-plus").strip()
     else:
         # No dedicated vision key — fall back to text model for everything.
         vision_base_url = text_base_url
@@ -127,6 +171,7 @@ def load_settings() -> Settings:
     auto_route = bool(
         text_api_key
         and vision_api_key
+        and not vision_uses_text_fallback
         and (text_api_key != vision_api_key or text_base_url != vision_base_url)
     )
     query_expansion_enabled = _env("KB_QUERY_EXPANSION_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -144,5 +189,6 @@ def load_settings() -> Settings:
         timeout_s=timeout_s,
         max_retries=max_retries,
         auto_route=auto_route,
+        vision_uses_text_fallback=vision_uses_text_fallback,
         query_expansion_enabled=query_expansion_enabled,
     )

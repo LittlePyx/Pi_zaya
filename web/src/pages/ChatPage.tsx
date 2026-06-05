@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { Button, message, Typography } from 'antd'
+import { Alert, Button, message, Typography } from 'antd'
 import { BookOutlined, ClockCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -39,6 +39,7 @@ const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
 const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
 const READER_STANDALONE_WINDOW_NAME = 'kb-reader-standalone'
+const OPEN_SETTINGS_EVENT = 'kb:open-settings'
 const showLegacyUiBlocks = false
 
 function uploadItemKey(item: ChatUploadItem) {
@@ -81,6 +82,11 @@ function loadStoredRightDockWidth() {
 function loadStoredRightDockCollapsed() {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY) === '1'
+}
+
+function isModelConnectionError(err: unknown) {
+  const text = err instanceof Error ? err.message : String(err || '')
+  return /api key|authentication|unauthorized|forbidden|401|403|connection|network|timeout|timed out|base_url|model/i.test(text)
 }
 
 function readerHighlightScopeKey(convId: string | null | undefined, sourcePath: string) {
@@ -194,6 +200,9 @@ export default function ChatPage() {
   const shelfProjectId = activeConversation?.project_id ?? activeProjectId ?? null
   const shelfProjectScope = shelfProjectScopeId(shelfProjectId)
   const previousShelfProjectScopeRef = useRef(shelfProjectScope)
+  const openApiSettings = useCallback(() => {
+    window.dispatchEvent(new Event(OPEN_SETTINGS_EVENT))
+  }, [])
 
   const nextEventToken = () => {
     timelineJumpTokenRef.current += 1
@@ -410,11 +419,29 @@ export default function ChatPage() {
   }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
 
   const onSend = (text: string) => {
-    sendMessage(text, {
+    if (settings.loaded && !settings.hasTextApiKey) {
+      message.warning(S.chat_api_missing_toast)
+      openApiSettings()
+      return
+    }
+    if (settings.loaded && pendingImages.length > 0 && !settings.hasVisionApiKey) {
+      message.warning(S.chat_vision_api_missing_toast)
+      openApiSettings()
+      return
+    }
+    void sendMessage(text, {
       topK: settings.topK,
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
       deepRead: true,
+    }).catch((err: unknown) => {
+      const fallback = err instanceof Error ? err.message : String(err || '')
+      if (isModelConnectionError(err)) {
+        message.error(S.chat_api_connection_failed.replace('{error}', fallback || S.settings_test_unknown_error))
+        openApiSettings()
+        return
+      }
+      message.error(fallback || S.upload_failed_generic)
     })
   }
 
@@ -1227,11 +1254,27 @@ export default function ChatPage() {
       appendSignal={appendSignal}
     />
   )
+  const connectionAlert = settings.loaded && !settings.hasTextApiKey ? (
+    <div className="kb-chat-connection-alert">
+      <Alert
+        type="warning"
+        showIcon
+        message={S.chat_api_missing_title}
+        description={S.chat_api_missing_desc}
+        action={(
+          <Button size="small" onClick={openApiSettings}>
+            {S.chat_open_api_settings}
+          </Button>
+        )}
+      />
+    </div>
+  ) : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!activeConvId && messages.length === 0 ? (
         <>
+          {connectionAlert}
           <div className="kb-empty-state flex flex-1 flex-col items-center justify-center gap-4 px-4">
             <div className="kb-empty-brand">
               <div className="kb-empty-logo-wrap flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
@@ -1249,6 +1292,7 @@ export default function ChatPage() {
         </>
       ) : (
         <>
+          {connectionAlert}
           {showLegacyUiBlocks ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/60 px-4 py-3">
               <div className="mx-auto flex max-w-5xl items-center gap-3">

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from api.routers import settings as settings_router
+from kb import config as config_module
 
 
 def test_update_settings_persists_sidebar_collapsed(monkeypatch):
@@ -21,3 +24,142 @@ def test_update_settings_persists_sidebar_collapsed(monkeypatch):
 
     assert settings_router.update_settings(settings_router.PrefsPatch(sidebar_collapsed=False)) == {"ok": True}
     assert stored["sidebar_collapsed"] is False
+
+
+def test_update_settings_persists_api_credentials_and_clears_cache(monkeypatch):
+    stored: dict[str, object] = {}
+    cleared = {"count": 0}
+
+    def load_prefs() -> dict[str, object]:
+        return dict(stored)
+
+    def save_prefs(data: dict[str, object]) -> None:
+        stored.clear()
+        stored.update(data)
+
+    def get_settings():
+        return None
+
+    def cache_clear() -> None:
+        cleared["count"] += 1
+
+    get_settings.cache_clear = cache_clear  # type: ignore[attr-defined]
+    monkeypatch.setattr(settings_router, "load_prefs", load_prefs)
+    monkeypatch.setattr(settings_router, "save_prefs", save_prefs)
+    monkeypatch.setattr(settings_router, "get_settings", get_settings)
+
+    assert settings_router.update_settings(settings_router.PrefsPatch(
+        text_api_key=' "sk-text" ',
+        text_base_url="https://text.example/v1/",
+        text_model="text-model",
+        vision_api_key="sk-vision",
+        vision_base_url="https://vision.example/v1/",
+        vision_model="vision-model",
+    )) == {"ok": True}
+
+    assert stored["text_api_key"] == "sk-text"
+    assert stored["text_base_url"] == "https://text.example/v1"
+    assert stored["text_model"] == "text-model"
+    assert stored["vision_api_key"] == "sk-vision"
+    assert stored["vision_base_url"] == "https://vision.example/v1"
+    assert stored["vision_model"] == "vision-model"
+    assert cleared["count"] == 1
+
+
+def test_get_settings_returns_text_and_vision_connection(monkeypatch):
+    settings = SimpleNamespace(
+        model="text-model",
+        base_url="https://text.example/v1",
+        api_key="sk-text",
+        text_api_key="sk-text",
+        text_base_url="https://text.example/v1",
+        text_model="text-model",
+        vision_api_key="sk-vision",
+        vision_base_url="https://vision.example/v1",
+        vision_model="vision-model",
+        vision_uses_text_fallback=False,
+        auto_route=True,
+        db_dir="db",
+    )
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(settings_router, "load_prefs", lambda: {"text_api_key": "sk-text", "theme": "light"})
+
+    payload = settings_router.get_all_settings()
+
+    assert payload["has_api_key"] is True
+    assert payload["connection"]["text"]["model"] == "text-model"
+    assert payload["connection"]["vision"]["model"] == "vision-model"
+    assert payload["connection"]["vision"]["uses_text_fallback"] is False
+    assert payload["connection"]["auto_route"] is True
+    assert payload["prefs"] == {"theme": "light"}
+
+
+def test_llm_connection_test_accepts_transient_overrides(monkeypatch):
+    settings = SimpleNamespace(
+        text_api_key="saved-text",
+        text_base_url="https://saved-text.example/v1",
+        text_model="saved-text-model",
+        vision_api_key="saved-vision",
+        vision_base_url="https://saved-vision.example/v1",
+        vision_model="saved-vision-model",
+        timeout_s=9.0,
+    )
+    observed: dict[str, object] = {}
+
+    def fake_test_chat_completion(**kwargs):
+        observed.update(kwargs)
+        return {"ok": True, "reply": "OK"}
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(settings_router, "_test_chat_completion", fake_test_chat_completion)
+
+    result = settings_router.test_llm(settings_router.ConnectionTestBody(
+        target="vision",
+        api_key=" transient-key ",
+        base_url="https://transient.example/v1/",
+        model="transient-model",
+    ))
+
+    assert result == {"ok": True, "reply": "OK"}
+    assert observed == {
+        "api_key": "transient-key",
+        "base_url": "https://transient.example/v1",
+        "model": "transient-model",
+        "timeout_s": 9.0,
+    }
+
+
+def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
+    for key in (
+        "DEEPSEEK_API_KEY",
+        "QWEN_API_KEY",
+        "OPENAI_API_KEY",
+        "DEEPSEEK_BASE_URL",
+        "QWEN_BASE_URL",
+        "OPENAI_BASE_URL",
+        "DEEPSEEK_MODEL",
+        "QWEN_MODEL",
+        "OPENAI_MODEL",
+    ):
+        monkeypatch.setenv(key, "")
+
+    monkeypatch.setattr(config_module, "_load_runtime_prefs", lambda: {
+        "text_api_key": "sk-text",
+        "text_base_url": "https://text.example/v1/",
+        "text_model": "text-model",
+        "vision_api_key": "sk-vision",
+        "vision_base_url": "https://vision.example/v1/",
+        "vision_model": "vision-model",
+    })
+
+    settings = config_module.load_settings()
+
+    assert settings.text_api_key == "sk-text"
+    assert settings.text_base_url == "https://text.example/v1"
+    assert settings.text_model == "text-model"
+    assert settings.vision_api_key == "sk-vision"
+    assert settings.vision_base_url == "https://vision.example/v1"
+    assert settings.vision_model == "vision-model"
+    assert settings.auto_route is True
+    assert settings.vision_uses_text_fallback is False

@@ -1,9 +1,23 @@
 import { api } from './client'
 
+export interface ConnectionProviderStatus {
+  has_api_key: boolean
+  base_url: string
+  model: string
+  uses_text_fallback?: boolean
+}
+
+export interface SettingsConnectionStatus {
+  text: ConnectionProviderStatus
+  vision: ConnectionProviderStatus
+  auto_route?: boolean
+}
+
 export interface SettingsPayload {
   model: string
   base_url: string
   has_api_key: boolean
+  connection?: SettingsConnectionStatus
   db_dir: string
   prefs: Record<string, unknown>
 }
@@ -24,11 +38,23 @@ export interface SettingsPatch {
   refsCardLocale?: 'auto' | 'zh' | 'en'
   uiLocale?: 'zh' | 'en'
   sidebarCollapsed?: boolean
+  textApiKey?: string
+  textBaseUrl?: string
+  textModel?: string
+  visionApiKey?: string
+  visionBaseUrl?: string
+  visionModel?: string
 }
 
 export interface PickDirResponse {
   ok: boolean
   path: string | null
+}
+
+export interface LlmTestOverrides {
+  apiKey?: string
+  baseUrl?: string
+  model?: string
 }
 
 function toServerPatch(patch: SettingsPatch) {
@@ -48,6 +74,12 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.refsCardLocale !== undefined) out.refs_card_locale = patch.refsCardLocale
   if (patch.uiLocale !== undefined) out.ui_locale = patch.uiLocale
   if (patch.sidebarCollapsed !== undefined) out.sidebar_collapsed = patch.sidebarCollapsed
+  if (patch.textApiKey !== undefined) out.text_api_key = patch.textApiKey
+  if (patch.textBaseUrl !== undefined) out.text_base_url = patch.textBaseUrl
+  if (patch.textModel !== undefined) out.text_model = patch.textModel
+  if (patch.visionApiKey !== undefined) out.vision_api_key = patch.visionApiKey
+  if (patch.visionBaseUrl !== undefined) out.vision_base_url = patch.visionBaseUrl
+  if (patch.visionModel !== undefined) out.vision_model = patch.visionModel
   return out
 }
 
@@ -60,6 +92,12 @@ export const settingsApi = {
       target,
       initial_dir: initialDir || '',
     }),
-  testLlm: () => api.post<{ ok: boolean; reply?: string; error?: string }>('/api/settings/test-llm'),
+  testLlm: (target: 'text' | 'vision' = 'text', overrides: LlmTestOverrides = {}) =>
+    api.post<{ ok: boolean; reply?: string; error?: string }>('/api/settings/test-llm', {
+      target,
+      api_key: overrides.apiKey || undefined,
+      base_url: overrides.baseUrl || undefined,
+      model: overrides.model || undefined,
+    }),
   health: () => api.get<{ status: string }>('/api/health'),
 }

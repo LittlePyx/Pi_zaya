@@ -11653,7 +11653,7 @@ button.kb-lib-quality-report-metric:disabled {
 }
 
 .kb-settings-drawer-root .ant-drawer-content-wrapper {
-  width: min(460px, 100vw) !important;
+  width: min(520px, 100vw) !important;
 }
 
 .kb-settings-drawer .ant-drawer-header {
@@ -11806,6 +11806,90 @@ button.kb-lib-quality-report-metric:disabled {
 
 .kb-settings-action-row .ant-btn {
   border-radius: 6px;
+}
+
+.kb-settings-connection-alerts {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.kb-settings-connection-alerts .ant-alert,
+.kb-chat-connection-alert .ant-alert {
+  border-radius: 8px;
+}
+
+.kb-settings-credential-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-settings-credential {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 98%, var(--bg));
+}
+
+.kb-settings-credential-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.kb-settings-credential-head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kb-settings-credential-title.ant-typography {
+  margin: 0;
+  color: color-mix(in srgb, var(--text-main) 92%, transparent);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.kb-settings-credential-desc.ant-typography {
+  margin: 0;
+  color: color-mix(in srgb, var(--muted-text) 82%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.kb-settings-credential-fields {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-settings-credential-fields .ant-input,
+.kb-settings-credential-fields .ant-input-affix-wrapper {
+  border-radius: 6px;
+}
+
+.kb-settings-credential-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.kb-settings-credential-actions .ant-btn {
+  border-radius: 6px;
+}
+
+.kb-chat-connection-alert {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg));
+  padding: 10px 16px;
+}
+
+.kb-chat-connection-alert .ant-alert {
+  max-width: 880px;
+  margin: 0 auto;
 }
 
 .kb-settings-advanced {

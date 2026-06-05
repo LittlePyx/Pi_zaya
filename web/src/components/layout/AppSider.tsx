@@ -42,6 +42,7 @@ const { Text } = Typography
 
 const SIDEBAR_WIDTH = 296
 const SIDEBAR_COLLAPSED_WIDTH = 68
+const OPEN_SETTINGS_EVENT = 'kb:open-settings'
 const LINKED_CONVERSATION_QUERY_KEYS = ['conversation', 'conversation_id', 'conv'] as const
 
 function linkedConversationIdFromSearch(search: string) {
@@ -365,6 +366,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [conversationTitle, setConversationTitle] = useState('')
   const [keyword, setKeyword] = useState('')
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
+
+  useEffect(() => {
+    const openSettings = () => setDrawerOpen(true)
+    window.addEventListener(OPEN_SETTINGS_EVENT, openSettings)
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, openSettings)
+  }, [])
 
   useEffect(() => {
     void loadSidebarData().catch((err: unknown) => {
