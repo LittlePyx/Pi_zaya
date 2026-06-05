@@ -218,9 +218,10 @@ def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
 
         def set_title_if_default(self, conv_id: str, title: str) -> None:
             self.titles.append((conv_id, title))
+            return True
 
         def get_conversation(self, conv_id: str) -> dict:
-            return {}
+            return {"title": "新会话 · 06/05 10:30"}
 
     fake_store = FakeStore()
     started_tasks: list[dict] = []
@@ -255,8 +256,71 @@ def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
     assert fake_store.messages[0][3]
     assert fake_store.messages[0][3][0]["name"] == "img.png"
     assert fake_store.messages[1][1] == "assistant"
+    assert fake_store.titles == [("conv-1", "图片提问 x1")]
+    assert response.json()["conversation_title"] == "图片提问 x1"
     assert started_tasks
     assert started_tasks[0]["image_attachments"][0]["name"] == "img.png"
+
+
+def test_generate_auto_titles_default_conversation(monkeypatch, tmp_path: Path):
+    from api.routers import generate as generate_router
+    from kb.chat_store import ChatStore
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("新会话 · 06/05 10:30")
+    started_tasks: list[dict] = []
+
+    class FakeSettings:
+        chat_db_path = tmp_path / "chat.sqlite3"
+        db_dir = tmp_path / "db"
+
+    monkeypatch.setattr(generate_router, "get_settings", lambda: FakeSettings())
+    monkeypatch.setattr(generate_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(generate_router, "_gen_start_task", lambda task: started_tasks.append(task) or True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/generate",
+        json={
+            "conv_id": conv_id,
+            "prompt": "帮我看看 SPAD 阵列为什么需要物理先验，重点看方法部分",
+        },
+    )
+
+    assert response.status_code == 200
+    title = store.get_conversation(conv_id)["title"]
+    assert title == "SPAD 阵列为什么需要物理先验"
+    assert response.json()["conversation_title"] == title
+    assert started_tasks
+
+
+def test_generate_does_not_auto_title_manual_conversation(monkeypatch, tmp_path: Path):
+    from api.routers import generate as generate_router
+    from kb.chat_store import ChatStore
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("Manual literature plan")
+
+    class FakeSettings:
+        chat_db_path = tmp_path / "chat.sqlite3"
+        db_dir = tmp_path / "db"
+
+    monkeypatch.setattr(generate_router, "get_settings", lambda: FakeSettings())
+    monkeypatch.setattr(generate_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(generate_router, "_gen_start_task", lambda task: True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/generate",
+        json={
+            "conv_id": conv_id,
+            "prompt": "summarize the evidence map for this paper",
+        },
+    )
+
+    assert response.status_code == 200
+    assert store.get_conversation(conv_id)["title"] == "Manual literature plan"
+    assert response.json()["conversation_title"] == "Manual literature plan"
 
 
 def test_generate_stream_exposes_answer_probe_fields(monkeypatch):

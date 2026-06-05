@@ -31,7 +31,7 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 
 class CreateConvBody(BaseModel):
-    title: str = "新对话"
+    title: str = "新会话"
     project_id: str | None = None
     mode: str = "normal"
     bound_source_path: str = ""

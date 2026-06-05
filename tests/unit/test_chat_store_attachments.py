@@ -32,14 +32,17 @@ def test_chat_store_persists_message_attachments(tmp_path: Path):
 def test_chat_store_default_title_updates_only_placeholders(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")
     draft_id = store.create_conversation("研究问答 · 06/05 14:20")
+    new_draft_id = store.create_conversation("新会话 · 06/05 14:21")
     guide_id = store.create_conversation("阅读指导 · Demo Paper", mode="paper_guide")
     named_id = store.create_conversation("User title")
 
-    store.set_title_if_default(draft_id, "first research question")
-    store.set_title_if_default(guide_id, "should not replace guide")
-    store.set_title_if_default(named_id, "should not replace user title")
+    assert store.set_title_if_default(draft_id, "first research question") is True
+    assert store.set_title_if_default(new_draft_id, "second research question") is True
+    assert store.set_title_if_default(guide_id, "should not replace guide") is False
+    assert store.set_title_if_default(named_id, "should not replace user title") is False
 
     assert store.get_conversation(draft_id)["title"] == "first research question"
+    assert store.get_conversation(new_draft_id)["title"] == "second research question"
     assert store.get_conversation(guide_id)["title"] == "阅读指导 · Demo Paper"
     assert store.get_conversation(named_id)["title"] == "User title"
 

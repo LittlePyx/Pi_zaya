@@ -11,7 +11,7 @@ DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
 
 
 _DEFAULT_CONVERSATION_TITLE_RE = re.compile(
-    r"^(?:新对话|New Chat|研究问答\s*[·:：-]\s*[\d:/\-\s]+|Research QA\s*[·:：-]\s*[\d:/\-\s]+)$",
+    r"^(?:新对话|新会话|New Chat|New conversation|(?:研究问答|新会话|Research QA|New conversation)\s*[·:：-]\s*[\d:/\-\s]+)$",
     flags=re.IGNORECASE,
 )
 
@@ -475,7 +475,7 @@ class ChatStore:
 
     def create_conversation(
         self,
-        title: str = "新对话",
+        title: str = "新会话",
         project_id: str | None = None,
         *,
         mode: str = "normal",
@@ -497,7 +497,7 @@ class ChatStore:
                 ") VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)",
                 (
                     conv_id,
-                    title.strip() or "新对话",
+                    title.strip() or "新会话",
                     now,
                     now,
                     project_id,
@@ -1633,19 +1633,19 @@ class ChatStore:
             }
         return out
 
-    def set_title_if_default(self, conv_id: str, new_title: str) -> None:
+    def set_title_if_default(self, conv_id: str, new_title: str) -> bool:
         new_title = (new_title or "").strip()
         if not new_title:
-            return
+            return False
         new_title = new_title.replace("\n", " ").strip()
         new_title = new_title[:80]
 
         with self._connect() as conn:
             row = conn.execute("SELECT title FROM conversations WHERE id = ?", (conv_id,)).fetchone()
             if not row:
-                return
+                return False
             if not _is_default_conversation_title(str(row["title"] or "")):
-                return
+                return False
             now = time.time()
             conn.execute(
                 "UPDATE conversations SET title = ?, updated_at = ?, archived = 0, archived_at = NULL WHERE id = ?",
@@ -1653,6 +1653,7 @@ class ChatStore:
             )
             project_id = self._touch_conversation_active(conn, conv_id, now)
             self._archive_excess_conversations(conn, project_id=project_id)
+        return True
 
     def set_title(self, conv_id: str, new_title: str) -> bool:
         cid = (conv_id or "").strip()

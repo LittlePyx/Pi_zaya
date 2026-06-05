@@ -122,8 +122,35 @@ function conversationDraftTimestamp() {
 }
 
 function buildDefaultConversationTitle(locale: string) {
-  const prefix = locale.toLowerCase().startsWith('zh') ? '研究问答' : 'Research QA'
+  const prefix = locale.toLowerCase().startsWith('zh') ? '新会话' : 'New conversation'
   return `${prefix} · ${conversationDraftTimestamp()}`
+}
+
+function patchConversationTitle(list: Conversation[], convId: string, title: string): Conversation[] {
+  if (!convId || !title) return list
+  let changed = false
+  const next = list.map((conversation) => {
+    if (String(conversation.id || '') !== convId || conversation.title === title) return conversation
+    changed = true
+    return { ...conversation, title }
+  })
+  return changed ? next : list
+}
+
+function patchProjectConversationTitle(
+  grouped: Record<string, Conversation[]>,
+  convId: string,
+  title: string,
+): Record<string, Conversation[]> {
+  if (!convId || !title) return grouped
+  let changed = false
+  const next: Record<string, Conversation[]> = {}
+  for (const [projectId, conversations] of Object.entries(grouped || {})) {
+    const patched = patchConversationTitle(conversations || [], convId, title)
+    next[projectId] = patched
+    if (patched !== conversations) changed = true
+  }
+  return changed ? next : grouped
 }
 
 function nowMs() {
@@ -1606,6 +1633,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       trace_id?: string
       user_msg_id: number
       assistant_msg_id: number
+      conversation_title?: string
     }>('/api/generate', {
       conv_id: convId,
       prompt: trimmedPrompt,
@@ -1618,15 +1646,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       max_tokens: opts.maxTokens,
       deep_read: opts.deepRead,
     })
+    const conversationTitle = String(res.conversation_title || '').trim()
+    const userMessage: Message = {
+      id: res.user_msg_id,
+      role: 'user',
+      content: userStoreText,
+      created_at: Date.now() / 1000,
+      attachments: pendingImages,
+    }
 
     set((state) => ({
-      messages: [...state.messages, {
-        id: res.user_msg_id,
-        role: 'user',
-        content: userStoreText,
-        created_at: Date.now() / 1000,
-        attachments: pendingImages,
-      }],
+      messages: [...state.messages, userMessage],
       pendingImages: [],
       uploadItems: state.uploadItems.filter((item) => item.kind !== 'image'),
       conversationLoading: false,
@@ -1638,15 +1668,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
         partial: '',
         done: false,
       },
+      activeConversation: conversationTitle && state.activeConversation?.id === convId
+        ? { ...state.activeConversation, title: conversationTitle }
+        : state.activeConversation,
+      rootConversations: conversationTitle
+        ? patchConversationTitle(state.rootConversations, convId!, conversationTitle)
+        : state.rootConversations,
+      projectConversations: conversationTitle
+        ? patchProjectConversationTitle(state.projectConversations, convId!, conversationTitle)
+        : state.projectConversations,
       conversationCacheById: convId
         ? upsertConversationViewCache(state.conversationCacheById, convId, {
-          messages: [...state.messages, {
-            id: res.user_msg_id,
-            role: 'user',
-            content: userStoreText,
-            created_at: Date.now() / 1000,
-            attachments: pendingImages,
-          }],
+          messages: [...state.messages, userMessage],
           refs: state.refs,
           messagesHasMoreBefore: state.messagesHasMoreBefore,
           oldestLoadedMessageId: state.oldestLoadedMessageId,
