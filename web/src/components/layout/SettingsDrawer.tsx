@@ -6,6 +6,7 @@ import { settingsApi } from '../../api/settings'
 import { useT } from '../../i18n'
 
 const { Text } = Typography
+type LocalTestResult = { ok: boolean; checked_at: number; error_type?: string; transient: boolean }
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -40,9 +41,20 @@ function SettingsValue({ value, muted = false }: { value: ReactNode; muted?: boo
   return <span className={`kb-settings-value ${muted ? 'is-muted' : ''}`}>{value}</span>
 }
 
+function formatCheckedAt(ts: number | undefined) {
+  if (!ts) return ''
+  try {
+    return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ''
+  }
+}
+
 export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const S = useT()
   const s = useSettingsStore()
+  const textReadiness = s.llmReadiness?.providers.text
+  const visionReadiness = s.llmReadiness?.providers.vision
   const [textApiKey, setTextApiKey] = useState('')
   const [textBaseUrl, setTextBaseUrl] = useState('')
   const [textModel, setTextModel] = useState('')
@@ -51,6 +63,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const [visionModel, setVisionModel] = useState('')
   const [savingConnection, setSavingConnection] = useState(false)
   const [testingTarget, setTestingTarget] = useState<'text' | 'vision' | null>(null)
+  const [localTestResults, setLocalTestResults] = useState<Record<'text' | 'vision', LocalTestResult | null>>({ text: null, vision: null })
 
   useEffect(() => {
     if (!open) return
@@ -60,6 +73,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
     setTextModel(s.textModel || s.model || '')
     setVisionBaseUrl(s.visionBaseUrl || '')
     setVisionModel(s.visionModel || '')
+    setLocalTestResults({ text: null, vision: null })
   }, [open, s.model, s.textBaseUrl, s.textModel, s.visionBaseUrl, s.visionModel])
 
   const saveConnection = async () => {
@@ -75,6 +89,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
       })
       setTextApiKey('')
       setVisionApiKey('')
+      setLocalTestResults({ text: null, vision: null })
       await s.load()
       message.success(S.settings_api_settings_saved)
     } catch (err) {
@@ -103,9 +118,61 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
           ? S.settings_test_ok.replace('{reply}', String(res.reply || S.settings_test_default_reply))
           : S.settings_test_failed.replace('{error}', String(res.error || S.settings_test_unknown_error)),
       )
+      setLocalTestResults((current) => ({
+        ...current,
+        [target]: {
+          ok: Boolean(res.ok),
+          checked_at: Number(res.checked_at || Date.now() / 1000),
+          error_type: String(res.error_type || ''),
+          transient: target === 'text'
+            ? Boolean(textApiKey.trim() || textBaseUrl.trim() !== s.textBaseUrl || textModel.trim() !== s.textModel)
+            : Boolean(visionApiKey.trim() || visionBaseUrl.trim() !== s.visionBaseUrl || visionModel.trim() !== s.visionModel),
+        },
+      }))
+      await s.refreshReadiness()
     } finally {
       setTestingTarget(null)
     }
+  }
+
+  const renderProviderState = (target: 'text' | 'vision') => {
+    const item = target === 'text' ? textReadiness : visionReadiness
+    if (!item) return null
+    const local = localTestResults[target]
+    const last = local || item.last_test || null
+    const effectiveSeverity = local ? (local.ok ? 'ok' : 'error') : item.severity
+    const effectiveStatus = local ? (local.ok ? 'ok' : 'failed') : item.status
+    const label = effectiveStatus === 'ok'
+      ? S.settings_ready_status_ok
+      : effectiveStatus === 'failed'
+        ? S.settings_ready_status_failed
+        : effectiveStatus === 'fallback'
+          ? S.settings_ready_status_fallback
+          : effectiveStatus === 'missing'
+            ? S.settings_ready_status_missing
+            : S.settings_ready_status_configured
+    const time = formatCheckedAt(last?.checked_at)
+    const detail = local
+      ? local.ok
+        ? (local.transient ? S.settings_last_test_unsaved_ok : S.settings_last_test_ok)
+          .replace('{time}', time || S.settings_last_test_unknown_time)
+        : (local.transient ? S.settings_last_test_unsaved_failed : S.settings_last_test_failed)
+          .replace('{time}', time || S.settings_last_test_unknown_time)
+          .replace('{type}', local.error_type || S.settings_test_unknown_error)
+      : last
+        ? last.ok
+          ? S.settings_last_test_ok.replace('{time}', time || S.settings_last_test_unknown_time)
+          : S.settings_last_test_failed
+            .replace('{time}', time || S.settings_last_test_unknown_time)
+            .replace('{type}', last.error_type || S.settings_test_unknown_error)
+        : S.settings_last_test_none
+    return (
+      <div className={`kb-settings-provider-state is-${effectiveSeverity}`}>
+        <span className="kb-settings-provider-dot" aria-hidden="true" />
+        <span>{label}</span>
+        <Text>{detail}</Text>
+      </div>
+    )
   }
 
   return (
@@ -223,6 +290,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
                 </div>
                 <SettingsValue value={s.hasTextApiKey ? S.settings_api_key_ready : S.settings_api_key_missing} muted={!s.hasTextApiKey} />
               </div>
+              {renderProviderState('text')}
               <div className="kb-settings-credential-fields">
                 <Input.Password
                   value={textApiKey}
@@ -263,6 +331,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
                   muted={!s.hasVisionApiKey || s.visionUsesTextFallback}
                 />
               </div>
+              {renderProviderState('vision')}
               <div className="kb-settings-credential-fields">
                 <Input.Password
                   value={visionApiKey}

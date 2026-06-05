@@ -67,6 +67,7 @@ def test_update_settings_persists_api_credentials_and_clears_cache(monkeypatch):
 
 
 def test_get_settings_returns_text_and_vision_connection(monkeypatch):
+    settings_router._LLM_TEST_RESULTS.clear()
     settings = SimpleNamespace(
         model="text-model",
         base_url="https://text.example/v1",
@@ -92,10 +93,13 @@ def test_get_settings_returns_text_and_vision_connection(monkeypatch):
     assert payload["connection"]["vision"]["model"] == "vision-model"
     assert payload["connection"]["vision"]["uses_text_fallback"] is False
     assert payload["connection"]["auto_route"] is True
+    assert payload["readiness"]["overall"]["status"] == "ok"
+    assert payload["readiness"]["providers"]["text"]["status"] == "configured"
     assert payload["prefs"] == {"theme": "light"}
 
 
 def test_llm_connection_test_accepts_transient_overrides(monkeypatch):
+    settings_router._LLM_TEST_RESULTS.clear()
     settings = SimpleNamespace(
         text_api_key="saved-text",
         text_base_url="https://saved-text.example/v1",
@@ -121,13 +125,68 @@ def test_llm_connection_test_accepts_transient_overrides(monkeypatch):
         model="transient-model",
     ))
 
-    assert result == {"ok": True, "reply": "OK"}
+    assert result["ok"] is True
+    assert result["reply"] == "OK"
+    assert isinstance(result["checked_at"], float)
     assert observed == {
         "api_key": "transient-key",
         "base_url": "https://transient.example/v1",
         "model": "transient-model",
         "timeout_s": 9.0,
     }
+
+
+def test_llm_readiness_reports_missing_text_key(monkeypatch):
+    settings_router._LLM_TEST_RESULTS.clear()
+    settings = SimpleNamespace(
+        text_api_key=None,
+        text_base_url="https://text.example/v1",
+        text_model="text-model",
+        vision_api_key=None,
+        vision_base_url="https://text.example/v1",
+        vision_model="text-model",
+        vision_uses_text_fallback=True,
+        auto_route=False,
+    )
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+
+    payload = settings_router.get_llm_readiness()
+
+    assert payload["overall"] == {"status": "error", "reason": "missing_api_key", "target": "text"}
+    assert payload["providers"]["text"]["status"] == "missing"
+    assert payload["providers"]["text"]["severity"] == "error"
+
+
+def test_llm_readiness_keeps_last_failed_test(monkeypatch):
+    settings_router._LLM_TEST_RESULTS.clear()
+    settings = SimpleNamespace(
+        text_api_key="saved-text",
+        text_base_url="https://saved-text.example/v1",
+        text_model="saved-text-model",
+        vision_api_key="saved-vision",
+        vision_base_url="https://saved-vision.example/v1",
+        vision_model="saved-vision-model",
+        vision_uses_text_fallback=False,
+        auto_route=True,
+        timeout_s=9.0,
+    )
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        settings_router,
+        "_test_chat_completion",
+        lambda **kwargs: {"ok": False, "error": "401 unauthorized"},
+    )
+
+    result = settings_router.test_llm(settings_router.ConnectionTestBody(target="text"))
+    payload = settings_router.get_llm_readiness()
+
+    assert result["ok"] is False
+    assert result["error_type"] == "auth"
+    assert payload["overall"] == {"status": "error", "reason": "auth", "target": "text"}
+    assert payload["providers"]["text"]["status"] == "failed"
+    assert payload["providers"]["text"]["last_test"]["error_type"] == "auth"
 
 
 def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):

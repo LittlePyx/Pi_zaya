@@ -13,11 +13,45 @@ export interface SettingsConnectionStatus {
   auto_route?: boolean
 }
 
+export type LlmReadinessTarget = 'text' | 'vision'
+export type LlmReadinessSeverity = 'ok' | 'warning' | 'error'
+export type LlmReadinessStatus = 'missing' | 'fallback' | 'configured' | 'ok' | 'failed'
+
+export interface LlmLastTest {
+  ok: boolean
+  checked_at: number
+  error?: string
+  error_type?: string
+  reply?: string
+}
+
+export interface LlmProviderReadiness {
+  target: LlmReadinessTarget
+  has_api_key: boolean
+  base_url: string
+  model: string
+  uses_text_fallback?: boolean
+  status: LlmReadinessStatus
+  severity: LlmReadinessSeverity
+  reason: string
+  last_test?: LlmLastTest | null
+}
+
+export interface LlmReadinessPayload {
+  providers: Record<LlmReadinessTarget, LlmProviderReadiness>
+  overall: {
+    status: LlmReadinessSeverity
+    reason: string
+    target?: LlmReadinessTarget | ''
+  }
+}
+
 export interface SettingsPayload {
   model: string
   base_url: string
   has_api_key: boolean
   connection?: SettingsConnectionStatus
+  readiness?: LlmReadinessPayload
   db_dir: string
   prefs: Record<string, unknown>
 }
@@ -93,11 +127,12 @@ export const settingsApi = {
       initial_dir: initialDir || '',
     }),
   testLlm: (target: 'text' | 'vision' = 'text', overrides: LlmTestOverrides = {}) =>
-    api.post<{ ok: boolean; reply?: string; error?: string }>('/api/settings/test-llm', {
+    api.post<{ ok: boolean; reply?: string; error?: string; error_type?: string; checked_at?: number }>('/api/settings/test-llm', {
       target,
       api_key: overrides.apiKey || undefined,
       base_url: overrides.baseUrl || undefined,
       model: overrides.model || undefined,
     }),
+  readiness: () => api.get<LlmReadinessPayload>('/api/settings/readiness'),
   health: () => api.get<{ status: string }>('/api/health'),
 }

@@ -28,6 +28,7 @@ import {
   CaretDownOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ApiOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useT } from '../../i18n'
@@ -355,6 +356,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const toggleTheme = useSettingsStore((s) => s.toggleTheme)
   const sidebarCollapsed = useSettingsStore((s) => s.sidebarCollapsed)
   const updateSettings = useSettingsStore((s) => s.update)
+  const llmReadiness = useSettingsStore((s) => s.llmReadiness)
+  const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
+  const visionUsesTextFallback = useSettingsStore((s) => s.visionUsesTextFallback)
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectModalOpen, setProjectModalOpen] = useState(false)
@@ -629,6 +633,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const sidebarToggleLabel = sidebarCollapsed
     ? (S.expand_sidebar || 'Expand sidebar')
     : (S.collapse_sidebar || 'Collapse sidebar')
+  const connectionStatus = llmReadiness?.overall.status || (!hasTextApiKey ? 'error' : (visionUsesTextFallback ? 'warning' : 'ok'))
+  const connectionLabel = connectionStatus === 'error'
+    ? S.connection_status_error
+    : connectionStatus === 'warning'
+      ? S.connection_status_warning
+      : S.connection_status_ok
 
   return (
     <Layout className="h-screen min-h-0 overflow-hidden">
@@ -718,6 +728,15 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 size="small"
                 icon={<SettingOutlined />}
                 aria-label={S.open_settings}
+                onClick={() => setDrawerOpen(true)}
+              />
+            </Tooltip>
+            <Tooltip title={connectionLabel} placement={sidebarCollapsed ? 'right' : 'top'}>
+              <Button
+                className={`kb-sider-icon-btn kb-sider-connection-btn is-${connectionStatus}`}
+                size="small"
+                icon={<ApiOutlined />}
+                aria-label={connectionLabel}
                 onClick={() => setDrawerOpen(true)}
               />
             </Tooltip>

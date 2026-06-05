@@ -88,6 +88,7 @@ const { Dragger } = Upload
 const FILE_VIRTUAL_THRESHOLD = 60
 const FILE_VIRTUAL_HEIGHT = 620
 const FILE_VIRTUAL_ROW_HEIGHT = 88
+const OPEN_SETTINGS_EVENT = 'kb:open-settings'
 const EMPTY_REF_SYNC_STATS: ReferenceSyncStats = {}
 
 type FileTabKey = 'pending' | 'converted' | 'all'
@@ -1177,6 +1178,8 @@ export default function LibraryPage() {
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const settingsPdfDir = useSettingsStore((s) => s.pdfDir)
   const settingsMdDir = useSettingsStore((s) => s.mdDir)
+  const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
+  const llmReadiness = useSettingsStore((s) => s.llmReadiness)
   const updateSettings = useSettingsStore((s) => s.update)
 
   const [scope, setScope] = useState('200')
@@ -1262,6 +1265,15 @@ export default function LibraryPage() {
 
   const uploadLocked = store.converting || Boolean(store.refSync?.running)
   const normalizedKeyword = fileKeyword.trim().toLowerCase()
+  const textModelReady = !settingsLoaded
+    || (hasTextApiKey && llmReadiness?.providers.text?.severity !== 'error')
+  const openApiSettings = useCallback(() => {
+    window.dispatchEvent(new Event(OPEN_SETTINGS_EVENT))
+  }, [])
+  const warnLlmFallback = useCallback((action: string) => {
+    message.warning(S.lib_llm_unavailable_fallback.replace('{action}', action))
+    openApiSettings()
+  }, [S.lib_llm_unavailable_fallback, openApiSettings])
 
   const dirDirty = useMemo(
     () =>
@@ -2352,14 +2364,15 @@ export default function LibraryPage() {
     })
   }
 
-  const inspectDraft = useCallback(async (key: string) => {
+  const inspectDraft = useCallback(async (key: string, opts?: { useLlm?: boolean }) => {
     const ready = await ensureDirsReady()
     if (!ready) return
     const target = uploadDrafts.find((x) => x.key === key)
     if (!target) return
+    const effectiveUseLlm = Boolean(opts?.useLlm ?? uploadUseLlm)
     setUploadDrafts((cur) => cur.map((x) => (x.key === key ? { ...x, status: 'inspecting', note: '' } : x)))
     try {
-      const res = await libraryApi.inspectUpload(target.file, uploadUseLlm)
+      const res = await libraryApi.inspectUpload(target.file, effectiveUseLlm)
       setUploadDrafts((cur) => cur.map((x) => {
         if (x.key !== key) return x
         return {
@@ -2389,16 +2402,28 @@ export default function LibraryPage() {
       message.info(S.lib_msg_select_scan)
       return
     }
+    const effectiveUseLlm = uploadUseLlm && textModelReady
+    if (uploadUseLlm && !textModelReady) {
+      warnLlmFallback(S.lib_upload_use_llm)
+    }
     setUploadInspecting(true)
     try {
       for (const x of selected) {
-        await inspectDraft(x.key)
+        await inspectDraft(x.key, { useLlm: effectiveUseLlm })
       }
       message.success(S.lib_msg_scanned_count.replace('{n}', String(selected.length)))
     } finally {
       setUploadInspecting(false)
     }
   }
+
+  const inspectSingleDraft = useCallback((key: string) => {
+    const effectiveUseLlm = uploadUseLlm && textModelReady
+    if (uploadUseLlm && !textModelReady) {
+      warnLlmFallback(S.lib_upload_use_llm)
+    }
+    void inspectDraft(key, { useLlm: effectiveUseLlm })
+  }, [S.lib_upload_use_llm, inspectDraft, textModelReady, uploadUseLlm, warnLlmFallback])
 
   useEffect(() => {
     if (uploadLocked || dirDirty || uploadInspecting || autoInspectingRef.current) return
@@ -2412,16 +2437,20 @@ export default function LibraryPage() {
 
     void (async () => {
       try {
+        const effectiveUseLlm = uploadUseLlm && textModelReady
+        if (uploadUseLlm && !textModelReady) {
+          warnLlmFallback(S.lib_upload_use_llm)
+        }
         for (const key of queuedKeys) {
           // Auto-fill suggested names for newly added upload drafts.
-          await inspectDraft(key)
+          await inspectDraft(key, { useLlm: effectiveUseLlm })
         }
       } finally {
         autoInspectingRef.current = false
         setUploadInspecting(false)
       }
     })()
-  }, [dirDirty, inspectDraft, uploadDrafts, uploadInspecting, uploadLocked])
+  }, [S.lib_upload_use_llm, dirDirty, inspectDraft, textModelReady, uploadDrafts, uploadInspecting, uploadLocked, uploadUseLlm, warnLlmFallback])
 
   useEffect(() => {
     setUploadDrafts((cur) => {
@@ -2516,7 +2545,11 @@ export default function LibraryPage() {
   const scanRenameSuggestions = async () => {
     setRenameLoading(true)
     try {
-      const res = await libraryApi.listRenameSuggestions(renameScope, true)
+      const effectiveUseLlm = textModelReady
+      if (!textModelReady) {
+        warnLlmFallback(S.lib_btn_rename_check)
+      }
+      const res = await libraryApi.listRenameSuggestions(renameScope, effectiveUseLlm)
       const items = Array.isArray(res.items) ? res.items : []
       setRenameItems(items)
       const selected: Record<string, boolean> = {}
@@ -2585,7 +2618,11 @@ export default function LibraryPage() {
     try {
       const overrides: Record<string, string> = {}
       for (const name of names) overrides[name] = String(renameOverrides[name] || '').trim()
-      const res = await libraryApi.applyRenameSuggestions(names, overrides, { useLlm: true, alsoMd: true })
+      const effectiveUseLlm = textModelReady
+      if (!textModelReady) {
+        warnLlmFallback(S.lib_btn_apply_rename)
+      }
+      const res = await libraryApi.applyRenameSuggestions(names, overrides, { useLlm: effectiveUseLlm, alsoMd: true })
       message[res.failed > 0 ? 'warning' : 'success'](S.lib_msg_rename_result.replace('{ok}', String(res.renamed)).replace('{skip}', String(res.skipped)).replace('{fail}', String(res.failed)))
       if (res.needs_reindex) message.info(S.lib_msg_rename_suggest_reindex)
       await store.loadFiles(scope)
@@ -4977,7 +5014,7 @@ export default function LibraryPage() {
                   <div className="flex flex-wrap items-center gap-2 pl-6">
                     <Text type="secondary" className="text-xs">{S.lib_upload_suggest_name}</Text>
                     <Input value={x.stem} onChange={(e) => setUploadDrafts((cur) => cur.map((t) => (t.key === x.key ? { ...t, stem: e.target.value } : t)))} className="w-[24rem] max-w-full" />
-                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { void inspectDraft(x.key) }}>{S.lib_btn_scan}</Button>
+                    <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'inspecting'} onClick={() => { inspectSingleDraft(x.key) }}>{S.lib_btn_scan}</Button>
                     <Button size="small" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, false) }}>{S.lib_btn_save}</Button>
                     <Button size="small" type="primary" disabled={uploadLocked || x.status === 'saving' || x.status === 'saved' || x.status === 'inspecting'} onClick={() => { void saveDraft(x.key, true) }}>{S.lib_btn_save_and_convert}</Button>
                   </div>

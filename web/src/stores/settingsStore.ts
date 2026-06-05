@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { settingsApi, type SettingsPatch } from '../api/settings'
+import { settingsApi, type LlmReadinessPayload, type SettingsPatch } from '../api/settings'
 
 const MAX_TOKENS_MIN = 512
 const MAX_TOKENS_MAX = 3072
@@ -51,8 +51,10 @@ interface SettingsState {
   hasVisionApiKey: boolean
   visionUsesTextFallback: boolean
   autoRoute: boolean
+  llmReadiness: LlmReadinessPayload | null
   loaded: boolean
   load: () => Promise<void>
+  refreshReadiness: () => Promise<void>
   update: (patch: SettingsPatch) => Promise<void>
   toggleTheme: () => void
 }
@@ -83,6 +85,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   hasVisionApiKey: false,
   visionUsesTextFallback: false,
   autoRoute: false,
+  llmReadiness: null,
   loaded: false,
 
   load: async () => {
@@ -113,6 +116,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         hasVisionApiKey: nextHasVisionApiKey,
         visionUsesTextFallback: Boolean(visionStatus?.uses_text_fallback),
         autoRoute: Boolean(data.connection?.auto_route),
+        llmReadiness: data.readiness || null,
         topK: (p.top_k as number) || 6,
         temperature: (p.temperature as number) ?? 0.2,
         maxTokens: clampMaxTokens(p.max_tokens),
@@ -133,6 +137,26 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       if (!String((p as Record<string, unknown>).ui_locale || '').trim()) {
         settingsApi.update({ uiLocale: nextUiLocale }).catch(() => {})
       }
+    } catch { /* ignore */ }
+  },
+
+  refreshReadiness: async () => {
+    try {
+      const readiness = await settingsApi.readiness()
+      const text = readiness.providers.text
+      const vision = readiness.providers.vision
+      set({
+        llmReadiness: readiness,
+        hasTextApiKey: Boolean(text?.has_api_key),
+        hasApiKey: Boolean(text?.has_api_key),
+        model: String(text?.model || ''),
+        textModel: String(text?.model || ''),
+        textBaseUrl: String(text?.base_url || ''),
+        hasVisionApiKey: Boolean(vision?.has_api_key),
+        visionModel: String(vision?.model || ''),
+        visionBaseUrl: String(vision?.base_url || ''),
+        visionUsesTextFallback: Boolean(vision?.uses_text_fallback),
+      })
     } catch { /* ignore */ }
   },
 

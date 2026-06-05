@@ -5681,6 +5681,30 @@ body.kb-reader-resizing .kb-reader-content {
   box-shadow: none;
 }
 
+.kb-sider-connection-btn.ant-btn {
+  position: relative;
+}
+
+.kb-sider-connection-btn.ant-btn::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--panel) 90%, transparent);
+  background: #2fa86a;
+}
+
+.kb-sider-connection-btn.is-warning.ant-btn::after {
+  background: #d9911b;
+}
+
+.kb-sider-connection-btn.is-error.ant-btn::after {
+  background: #d84c4c;
+}
+
 .kb-sider-search-row {
   width: 100%;
 }
@@ -11860,6 +11884,44 @@ button.kb-lib-quality-report-metric:disabled {
   color: color-mix(in srgb, var(--muted-text) 82%, transparent);
   font-size: 11px;
   line-height: 1.35;
+}
+
+.kb-settings-provider-state {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  color: color-mix(in srgb, var(--text-main) 78%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.kb-settings-provider-state .ant-typography {
+  margin: 0;
+  color: color-mix(in srgb, var(--muted-text) 84%, transparent);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-settings-provider-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted-text) 72%, transparent);
+}
+
+.kb-settings-provider-state.is-ok .kb-settings-provider-dot {
+  background: #2fa86a;
+}
+
+.kb-settings-provider-state.is-warning .kb-settings-provider-dot {
+  background: #d9911b;
+}
+
+.kb-settings-provider-state.is-error .kb-settings-provider-dot {
+  background: #d84c4c;
 }
 
 .kb-settings-credential-fields {

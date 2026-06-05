@@ -419,12 +419,19 @@ export default function ChatPage() {
   }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
 
   const onSend = (text: string) => {
-    if (settings.loaded && !settings.hasTextApiKey) {
+    const textReadiness = settings.llmReadiness?.providers.text
+    const visionReadiness = settings.llmReadiness?.providers.vision
+    const textBlocked = !settings.hasTextApiKey || textReadiness?.severity === 'error'
+    const visionBlocked = !settings.hasVisionApiKey
+      || settings.visionUsesTextFallback
+      || visionReadiness?.severity === 'error'
+      || visionReadiness?.status === 'fallback'
+    if (settings.loaded && textBlocked) {
       message.warning(S.chat_api_missing_toast)
       openApiSettings()
       return
     }
-    if (settings.loaded && pendingImages.length > 0 && !settings.hasVisionApiKey) {
+    if (settings.loaded && pendingImages.length > 0 && visionBlocked) {
       message.warning(S.chat_vision_api_missing_toast)
       openApiSettings()
       return
@@ -438,6 +445,7 @@ export default function ChatPage() {
       const fallback = err instanceof Error ? err.message : String(err || '')
       if (isModelConnectionError(err)) {
         message.error(S.chat_api_connection_failed.replace('{error}', fallback || S.settings_test_unknown_error))
+        void settings.refreshReadiness()
         openApiSettings()
         return
       }
@@ -1254,13 +1262,18 @@ export default function ChatPage() {
       appendSignal={appendSignal}
     />
   )
-  const connectionAlert = settings.loaded && !settings.hasTextApiKey ? (
+  const textReadiness = settings.llmReadiness?.providers.text
+  const showTextConnectionAlert = settings.loaded && (!settings.hasTextApiKey || textReadiness?.severity === 'error')
+  const textConnectionAlertDesc = textReadiness?.status === 'failed' && textReadiness.last_test?.error
+    ? S.chat_api_failed_desc.replace('{error}', textReadiness.last_test.error)
+    : S.chat_api_missing_desc
+  const connectionAlert = showTextConnectionAlert ? (
     <div className="kb-chat-connection-alert">
       <Alert
         type="warning"
         showIcon
         message={S.chat_api_missing_title}
-        description={S.chat_api_missing_desc}
+        description={textConnectionAlertDesc}
         action={(
           <Button size="small" onClick={openApiSettings}>
             {S.chat_open_api_settings}
