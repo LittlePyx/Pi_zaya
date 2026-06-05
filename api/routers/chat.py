@@ -96,7 +96,7 @@ class CitationShelfBody(BaseModel):
     open: bool = False
     scope: str | None = None
     project_id: str | None = None
-    allow_empty_overwrite: bool = True
+    allow_empty_overwrite: bool = False
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
@@ -1137,6 +1137,9 @@ def list_refs(conv_id: str):
 
 @router.patch("/conversations/{conv_id}/title")
 def update_title(conv_id: str, body: UpdateTitleBody):
+    title = str(body.title or "").replace("\n", " ").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
     ok = get_chat_store().set_title(conv_id, body.title)
     if not ok:
         raise HTTPException(404, "conversation not found")

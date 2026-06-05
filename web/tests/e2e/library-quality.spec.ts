@@ -1561,6 +1561,8 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-metadata-backfill-health')).toContainText('preheated')
   await expect(page.getByTestId('library-figure-assets-health')).toContainText('Figure assets')
   await expect(page.getByTestId('library-figure-assets-health')).toContainText('Not scanned')
+  const figureRefreshButton = page.getByTestId('library-figure-assets-health').getByRole('button', { name: 'Refresh flagged' })
+  await expect(figureRefreshButton).toBeDisabled()
   const figureScanRequest = page.waitForRequest('**/api/library/quality/figure-assets/scan')
   await page.getByTestId('library-figure-assets-health').getByRole('button', { name: 'Scan' }).click()
   await expect.poll(async () => {
@@ -1572,12 +1574,13 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(page.getByTestId('library-figure-assets-issues')).toContainText('duplicate_asset x2')
   await expect(page.getByTestId('library-figure-assets-list')).toContainText('Broken conversion')
   await expect(page.getByTestId('library-figure-assets-list')).toContainText('figure asset is missing')
+  await expect(figureRefreshButton).toBeEnabled()
   const figureRefreshRequest = page.waitForRequest('**/api/library/quality/figure-assets/refresh')
-  await page.getByTestId('library-figure-assets-health').getByRole('button', { name: 'Refresh flagged' }).click()
+  await figureRefreshButton.click()
   await expect.poll(async () => {
-    const payload = (await figureRefreshRequest).postDataJSON() as { sources?: Array<{ source_path?: string }> }
-    return payload.sources?.length || 0
-  }).toBe(2)
+    const payload = (await figureRefreshRequest).postDataJSON() as { limit?: number; sources?: Array<{ source_path?: string }> }
+    return `${payload.sources?.length || 0}:${payload.limit || 0}`
+  }).toBe('2:2')
   await expect(page.getByTestId('library-figure-assets-refresh-result')).toContainText('queued')
   await expect(page.getByTestId('library-figure-assets-refresh-result')).toContainText('2')
   await expect(page.getByTestId('library-quality-feature-health')).toContainText('Feature health')

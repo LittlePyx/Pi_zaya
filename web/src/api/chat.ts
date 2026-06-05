@@ -515,7 +515,7 @@ export const chatApi = {
       open: Boolean(body.open),
       scope: body.scope || 'project',
       project_id: body.projectId ?? null,
-      allow_empty_overwrite: body.allowEmptyOverwrite ?? true,
+      allow_empty_overwrite: body.allowEmptyOverwrite ?? false,
     }),
   deleteCitationShelf: (opts?: CitationShelfRequest) =>
     api.delete<CitationShelfRecord>(citationShelfUrl(opts)),

@@ -70,3 +70,18 @@ def test_citation_shelf_rejects_missing_conversation_scope(tmp_path: Path):
 
     assert store.get_citation_shelf(conv_id="missing") is None
     assert store.save_citation_shelf(conv_id="missing", items=[]) is None
+
+
+def test_citation_shelf_skips_items_without_identity(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("no project")
+
+    saved = store.save_citation_shelf(
+        conv_id=conv_id,
+        items=[{}, {"key": "   "}, {"key": "ref-3", "main": "Stable item"}],
+        open=True,
+    )
+
+    assert saved is not None
+    assert len(saved["items"]) == 1
+    assert saved["items"][0]["key"] == "ref-3"

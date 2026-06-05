@@ -3707,18 +3707,24 @@ export default function LibraryPage() {
   }
 
   const refreshFigureAssets = async () => {
+    if (!figureAssetScan) {
+      message.info('Run a figure asset scan before refreshing flagged sources')
+      return
+    }
+    const sourceItems = (figureAssetScan.items || []).filter((item) => Boolean(item.refresh_recommended))
+    const sources = sourceItems.map((item) => ({
+      source_path: item.md_path,
+      source_name: item.source_name || item.pdf_name,
+    })).filter((item) => item.source_path || item.source_name)
+    if (sources.length <= 0) {
+      message.info('No figure assets need refresh right now')
+      return
+    }
     setFigureAssetRefreshRunning(true)
     try {
-      const sourceItems = figureAssetScan
-        ? (figureAssetScan.items || []).filter((item) => Boolean(item.refresh_recommended))
-        : []
-      const sources = sourceItems.map((item) => ({
-        source_path: item.md_path,
-        source_name: item.source_name || item.pdf_name,
-      })).filter((item) => item.source_path || item.source_name)
       const res = await libraryApi.refreshFigureAssets({
         sources,
-        limit: Math.max(1000, sources.length || 0),
+        limit: Math.max(1, sources.length),
         speed_mode: CONVERT_MODE,
         replace: true,
         target_dpi: figureAssetScan?.target_dpi,
@@ -5626,7 +5632,7 @@ export default function LibraryPage() {
                 size="small"
                 className="kb-lib-quality-domain-action"
                 loading={figureAssetRefreshRunning}
-                disabled={figureAssetScanRunning || (figureAssetScan !== null && figureAssetRefreshableCount <= 0)}
+                disabled={figureAssetScanRunning || figureAssetScan === null || figureAssetRefreshableCount <= 0}
                 onClick={() => { void refreshFigureAssets() }}
               >
                 Refresh flagged

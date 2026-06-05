@@ -71,7 +71,8 @@ def _shelf_item_identity(item: dict) -> str:
     anchor = _shelf_first_text(item, "anchor", "anchorId", "anchor_id", limit=800).lower()
     if source or anchor:
         return f"source:{source}|{anchor}"
-    return f"key:{_shelf_first_text(item, 'key', limit=400)}"
+    key = _shelf_first_text(item, "key", limit=400)
+    return f"key:{key}" if key else ""
 
 
 def _normalize_citation_shelf_item(item: dict) -> dict:
@@ -920,7 +921,7 @@ class ChatStore:
         conv_id: str | None = None,
         project_id: str | None = None,
         scope: str = "project",
-        allow_empty_overwrite: bool = True,
+        allow_empty_overwrite: bool = False,
     ) -> dict | None:
         normalized_items = _normalize_citation_shelf_items(items)
         try:

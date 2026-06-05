@@ -92,7 +92,7 @@ def test_chat_citation_shelf_rejects_accidental_empty_overwrite(monkeypatch, tmp
 
     accidental_clear = client.patch(
         f"/api/chat/citation-shelf?conv_id={conv_b}",
-        json={"items": [], "open": False, "allow_empty_overwrite": False},
+        json={"items": [], "open": False},
     )
     assert accidental_clear.status_code == 200
     accidental_payload = accidental_clear.json()
@@ -105,3 +105,51 @@ def test_chat_citation_shelf_rejects_accidental_empty_overwrite(monkeypatch, tmp
     )
     assert explicit_clear.status_code == 200
     assert explicit_clear.json()["items"] == []
+
+
+def test_chat_citation_shelf_rejects_malformed_empty_items(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("a")
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+
+    client = TestClient(app)
+
+    saved = client.patch(
+        f"/api/chat/citation-shelf?conv_id={conv_id}",
+        json={
+            "items": [
+                {},
+                {"key": "   "},
+                {"key": "valid-ref", "main": "Stable reference item"},
+            ],
+            "open": True,
+        },
+    )
+
+    assert saved.status_code == 200
+    items = saved.json()["items"]
+    assert len(items) == 1
+    assert items[0]["key"] == "valid-ref"
+    assert items[0]["main"] == "Stable reference item"
+
+
+def test_conversation_title_update_rejects_blank_title(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("Draft")
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+
+    client = TestClient(app)
+
+    blank = client.patch(f"/api/conversations/{conv_id}/title", json={"title": " \n "})
+    assert blank.status_code == 400
+
+    missing = client.patch("/api/conversations/missing/title", json={"title": "Valid title"})
+    assert missing.status_code == 404
+
+    renamed = client.patch(f"/api/conversations/{conv_id}/title", json={"title": "Valid title"})
+    assert renamed.status_code == 200
+    assert store.get_conversation(conv_id)["title"] == "Valid title"
