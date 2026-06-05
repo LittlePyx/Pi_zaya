@@ -73,7 +73,7 @@ async function fulfillJson(route: Route, body: unknown) {
   })
 }
 
-async function installMockBackend(page: Page) {
+async function installMockBackend(page: Page, options: { messagesPageDelayMs?: number } = {}) {
   let renderPacketOnlyPageLoads = 0
 
   await page.route('**/api/settings', async (route) => {
@@ -133,6 +133,11 @@ async function installMockBackend(page: Page) {
   await page.route(`**/api/conversations/${CONV_ID}/messages_page**`, async (route) => {
     const url = new URL(route.request().url())
     if (url.searchParams.get('render_packet_only') === '1') renderPacketOnlyPageLoads += 1
+    if (options.messagesPageDelayMs && options.messagesPageDelayMs > 0) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, options.messagesPageDelayMs)
+      })
+    }
     await fulfillJson(route, {
       messages: [userMessage, assistantMessage],
       has_more_before: false,
@@ -212,4 +217,19 @@ test('paper guide src chips survive refresh when render packet only uses top-lev
   await page.reload()
   await openConversationAndExpectSrcChip(page)
   expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(2)
+})
+
+test('chat activity strip exposes slow conversation loading and opt-in perf status', async ({ page }) => {
+  await installMockBackend(page, { messagesPageDelayMs: 1000 })
+
+  await page.goto('/?debug=1')
+  await expect(page.getByTestId('chat-perf-panel')).toBeVisible()
+
+  const conversationRow = page.locator('.kb-conv-row', { hasText: conversation.title })
+  await expect(conversationRow).toBeVisible()
+  await conversationRow.click()
+
+  await expect(page.getByTestId('chat-activity-strip')).toBeVisible()
+  await expect(page.getByTestId('chat-activity-messages')).toBeVisible()
+  await expect(page.locator('body')).toContainText('The claim is supported by the fixture evidence')
 })

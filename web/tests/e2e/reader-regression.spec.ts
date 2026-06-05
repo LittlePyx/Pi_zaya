@@ -385,6 +385,7 @@ test('reader in-paper citations and reference entries open system-b cards', asyn
 test('reader figure and equation blocks can be added directly to the research basket', async ({ page }) => {
   await openHarness(page, 'strict-quote')
 
+  await page.locator('.katex-display').first().hover()
   const equationButton = page.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="equation"]').first()
   const figureButton = page.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="figure"]').first()
   await expect(equationButton).toBeVisible()

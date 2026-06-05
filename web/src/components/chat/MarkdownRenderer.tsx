@@ -1942,7 +1942,10 @@ function buildMarkdownComponents(
     p: ({ node, children }: { node?: unknown; children?: ReactNode }) => (
       <BlockquoteLocateContext.Consumer>
         {(insideBlockquote) => {
-          const readerAnchor = variant === 'reader' ? pickReaderAnchor(node, ['paragraph']) : null
+          const pickedReaderAnchor = variant === 'reader' ? pickReaderAnchor(node, ['paragraph']) : null
+          const readerAnchor = normalizeReaderAnchorKind(String(pickedReaderAnchor?.kind || '')) === 'paragraph'
+            ? pickedReaderAnchor
+            : null
           const attrs = variant === 'reader'
             ? readerAnchorAttrs(readerAnchor)
             : undefined
@@ -1955,19 +1958,6 @@ function buildMarkdownComponents(
           if (variant !== 'chat') {
             const text = plainText(content).replace(/\s+/g, ' ').trim()
             const isReferenceEntry = looksLikeBibliographyEntryText(text)
-            const equationShelfBtn = normalizeReaderAnchorKind(String(readerAnchor?.kind || '')) === 'equation'
-              ? renderReaderBlockShelfButton(readerAnchor, content)
-              : null
-            if (!isReferenceEntry && equationShelfBtn) {
-              return (
-                <p {...attrs} className="kb-md-equation-block kb-md-reader-block-action-host">
-                  <span className="kb-md-equation-inline">
-                    {content}
-                    <span className="kb-md-reader-block-shelf-tail">{equationShelfBtn}</span>
-                  </span>
-                </p>
-              )
-            }
             if (!isReferenceEntry) return <p {...attrs}>{content}</p>
             const refDetail = firstCitationDetailInNode(content, byAnchor) || firstReferenceEntryDetail(text, citationByNum)
             const refDetailForRow = refDetail
@@ -2084,23 +2074,16 @@ function buildMarkdownComponents(
       const displayMath = isDisplayMathClass(cls)
       if (!displayMath) return <div className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</div>
       if (variant === 'reader') {
-        const anchor = pickReaderAnchor(props.node, ['equation'])
-        const attrs = readerAnchorAttrs(anchor)
-        const shelfBtn = renderReaderBlockShelfButton(anchor, children)
         // Display equations are bound at runtime to visible .katex-display nodes.
         // Static line-based binding is too unstable here and can mis-assign them
         // to neighboring paragraph blocks in the browser render path.
         return (
           <div
-            className={`${cls || ''} kb-md-equation-block ${shelfBtn ? 'kb-md-reader-block-action-host' : ''}`.trim()}
+            className={`${cls || ''} kb-md-equation-block`.trim()}
             data-kb-display-equation="1"
             {...(rest as Record<string, unknown>)}
-            {...attrs}
           >
-            <span className="kb-md-equation-inline">
-              {children}
-              {shelfBtn ? <span className="kb-md-reader-block-shelf-tail">{shelfBtn}</span> : null}
-            </span>
+            <span className="kb-md-equation-inline">{children}</span>
           </div>
         )
       }
@@ -2124,20 +2107,13 @@ function buildMarkdownComponents(
       const displayMath = isDisplayMathClass(cls)
       if (!displayMath) return <span className={cls || undefined} {...(rest as Record<string, unknown>)}>{children}</span>
       if (variant === 'reader') {
-        const anchor = pickReaderAnchor(props.node, ['equation'])
-        const attrs = readerAnchorAttrs(anchor)
-        const shelfBtn = renderReaderBlockShelfButton(anchor, children)
         return (
           <span
-            className={`${cls || ''} kb-md-equation-block ${shelfBtn ? 'kb-md-reader-block-action-host' : ''}`.trim()}
+            className={`${cls || ''} kb-md-equation-block`.trim()}
             data-kb-display-equation="1"
             {...(rest as Record<string, unknown>)}
-            {...attrs}
           >
-            <span className="kb-md-equation-inline">
-              {children}
-              {shelfBtn ? <span className="kb-md-reader-block-shelf-tail">{shelfBtn}</span> : null}
-            </span>
+            <span className="kb-md-equation-inline">{children}</span>
           </span>
         )
       }

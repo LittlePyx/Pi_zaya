@@ -589,12 +589,79 @@ body.kb-reader-resizing .kb-reader-content {
 }
 
 .kb-markdown.kb-markdown-reader .kb-md-equation-inline {
-  padding-right: 4.9rem;
+  padding-right: 0;
 }
 
 .kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host {
   position: relative;
-  padding-right: 4.9rem;
+}
+
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host > .kb-md-equation-inline {
+  display: block;
+  width: 100%;
+}
+
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host .katex {
+  display: block;
+  width: 100%;
+  text-align: center;
+}
+
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host .katex-html {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host .katex-html > .tag {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+}
+
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host > .kb-md-reader-block-shelf-tail {
+  top: 0;
+  right: 0;
+  transform: translateY(-35%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host:hover > .kb-md-reader-block-shelf-tail,
+.kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host:focus-within > .kb-md-reader-block-shelf-tail {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.kb-markdown.kb-markdown-reader .kb-md-reader-block-shelf-equation .kb-md-reader-block-shelf-kind {
+  display: none;
+}
+
+.kb-markdown.kb-markdown-reader .kb-md-reader-block-shelf-equation {
+  width: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 0;
+}
+
+.kb-markdown.kb-markdown-reader .kb-md-reader-block-shelf-equation .kb-md-reader-block-shelf-text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 0;
+}
+
+.kb-markdown.kb-markdown-reader .kb-md-reader-block-shelf-equation .kb-md-reader-block-shelf-text::before {
+  content: "+";
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1;
 }
 
 .kb-markdown .kb-md-equation-inline :where(.katex-display) {
@@ -1858,6 +1925,18 @@ body.kb-reader-resizing .kb-reader-content {
   line-height: 1.52;
 }
 
+.kb-shelf-summary-preview {
+  display: -webkit-box;
+  max-height: 3.1em;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--text-main) 68%, transparent);
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .kb-shelf-summary-meta {
   margin-top: 2px;
   display: flex;
@@ -1955,6 +2034,25 @@ body.kb-reader-resizing .kb-reader-content {
 .kb-shelf-summary-toggle:hover {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--border));
   color: color-mix(in srgb, var(--text-main) 88%, transparent);
+}
+
+.kb-shelf-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  margin: 6px 0 0 26px;
+  border: 0;
+  background: transparent;
+  padding: 1px 0;
+  color: color-mix(in srgb, var(--accent) 76%, var(--text-main));
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.kb-shelf-detail-toggle:hover,
+.kb-shelf-detail-toggle:focus-visible {
+  text-decoration: underline;
 }
 
 .kb-shelf-summary-empty {
@@ -2114,6 +2212,33 @@ body.kb-reader-resizing .kb-reader-content {
   color: color-mix(in srgb, var(--text-main) 56%, transparent);
   font-size: 10.5px;
   line-height: 1.35;
+}
+
+.kb-shelf-background-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 70%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.kb-shelf-background-task span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-shelf-background-task .anticon {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--accent) 82%, var(--text-main));
 }
 
 .kb-shelf-readiness {
@@ -3328,6 +3453,7 @@ body.kb-reader-resizing .kb-reader-content {
 .kb-shelf-panel {
   width: 390px !important;
   max-width: 92vw !important;
+  z-index: 60;
   border-left: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   background: color-mix(in srgb, var(--panel) 98%, var(--bg));
   box-shadow: -18px 0 42px rgba(15, 23, 42, 0.055);
@@ -3336,6 +3462,7 @@ body.kb-reader-resizing .kb-reader-content {
 .kb-shelf-panel.kb-shelf-panel-docked {
   position: relative !important;
   inset: auto !important;
+  z-index: auto;
   display: flex;
   width: 100% !important;
   max-width: none !important;
@@ -3792,6 +3919,18 @@ body.kb-reader-resizing .kb-reader-content {
   border-top: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
 }
 
+.kb-shelf-summary-compact {
+  margin-top: 7px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.kb-shelf-summary-preview {
+  color: color-mix(in srgb, var(--text-main) 58%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .kb-shelf-summary-meta {
   gap: 5px;
 }
@@ -3828,6 +3967,12 @@ body.kb-reader-resizing .kb-reader-content {
   background: transparent;
   padding: 2px 0;
   color: color-mix(in srgb, var(--accent) 72%, var(--text-main));
+}
+
+.kb-shelf-detail-toggle {
+  margin-top: 6px;
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-main));
+  font-size: 10.5px;
 }
 
 .kb-shelf-empty {
@@ -6180,6 +6325,83 @@ body.kb-reader-resizing .kb-reader-content {
   background: color-mix(in srgb, var(--panel) 98%, var(--bg));
   box-shadow: none;
   overflow: hidden;
+}
+
+.kb-chat-activity-shell {
+  flex: 0 0 auto;
+  padding: 8px 16px 0;
+}
+
+.kb-chat-activity-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  max-width: 80rem;
+  min-height: 26px;
+  margin: 0 auto;
+}
+
+.kb-chat-activity-pill,
+.kb-chat-debug-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 24px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 96%, var(--bg));
+  color: color-mix(in srgb, var(--muted-text) 90%, transparent);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 620;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.kb-chat-activity-pill .anticon,
+.kb-chat-debug-strip .anticon {
+  flex: 0 0 auto;
+}
+
+.kb-chat-activity-pill > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kb-chat-activity-pill.is-active {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-main));
+}
+
+.kb-chat-activity-pill.is-warning {
+  border-color: color-mix(in srgb, #d08a2c 28%, var(--border));
+  color: color-mix(in srgb, #9a651d 82%, var(--text-main));
+}
+
+.kb-chat-activity-pill.is-ready {
+  border-color: color-mix(in srgb, #2f9e44 22%, var(--border));
+  color: color-mix(in srgb, #2d7c3f 82%, var(--text-main));
+}
+
+.kb-chat-activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.kb-chat-debug-strip {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 560;
+}
+
+.kb-chat-debug-strip span {
+  min-width: 0;
 }
 
 .kb-chat-meta-strip {

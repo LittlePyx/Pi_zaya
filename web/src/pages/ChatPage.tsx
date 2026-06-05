@@ -2,10 +2,10 @@
 
 import { startTransition, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Alert, Button, message, Typography } from 'antd'
-import { BookOutlined, ClockCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
+import { BookOutlined, BugOutlined, ClockCircleOutlined, LoadingOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { MessageList } from '../components/chat/MessageList'
+import { MessageList, type ShelfActivityState } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import { shelfProjectScopeId, type CiteDetail } from '../components/chat/citationState'
@@ -131,6 +131,93 @@ interface TimelineItem {
 
 type RightDockPanel = 'timeline' | 'shelf' | 'reader'
 
+interface RefsActivitySummary {
+  packCount: number
+  pendingPackCount: number
+  hitCount: number
+}
+
+interface ChatPerfSnapshot {
+  switchTotal: number
+  switchAvgMs: number
+  refsTotal: number
+  refsAvgMs: number
+  openPhases: number
+  messagePrep: number
+}
+
+interface ChatDebugApi {
+  getLogs?: () => unknown[]
+  summary?: () => Record<string, unknown>
+}
+
+interface ChatDebugWindow extends Window {
+  __kbSwitchPerf?: ChatDebugApi
+  __kbRefsPerf?: ChatDebugApi
+  __kbConversationOpenPerf?: ChatDebugApi
+  __kbMessageListPerf?: ChatDebugApi
+}
+
+function summarizeRefsActivity(refs: Record<string, unknown>): RefsActivitySummary {
+  const summary: RefsActivitySummary = { packCount: 0, pendingPackCount: 0, hitCount: 0 }
+  for (const value of Object.values(refs || {})) {
+    if (!value || typeof value !== 'object') continue
+    const rec = value as { hits?: unknown[]; enrichment_pending?: boolean; payload_mode?: string; display_state?: string }
+    const hits = Array.isArray(rec.hits) ? rec.hits : []
+    const mode = String(rec.payload_mode || '').trim().toLowerCase()
+    const displayState = String(rec.display_state || '').trim().toLowerCase()
+    summary.packCount += 1
+    summary.hitCount += hits.length
+    if (mode === 'pending' || displayState === 'pending' || Boolean(rec.enrichment_pending)) {
+      summary.pendingPackCount += 1
+    }
+  }
+  return summary
+}
+
+function loadChatDebugPanelEnabled() {
+  if (typeof window === 'undefined') return false
+  try {
+    const search = new URLSearchParams(window.location.search)
+    return search.get('debug') === '1'
+      || search.get('perf') === '1'
+      || window.localStorage.getItem('kb:chat-perf-panel') === '1'
+  } catch {
+    return false
+  }
+}
+
+function safeNumber(value: unknown) {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : 0
+}
+
+function safeLogCount(api?: ChatDebugApi) {
+  try {
+    const logs = api?.getLogs?.()
+    return Array.isArray(logs) ? logs.length : 0
+  } catch {
+    return 0
+  }
+}
+
+function collectChatPerfSnapshot(): ChatPerfSnapshot {
+  if (typeof window === 'undefined') {
+    return { switchTotal: 0, switchAvgMs: 0, refsTotal: 0, refsAvgMs: 0, openPhases: 0, messagePrep: 0 }
+  }
+  const w = window as ChatDebugWindow
+  const switchSummary = w.__kbSwitchPerf?.summary?.() || {}
+  const refsSummary = w.__kbRefsPerf?.summary?.() || {}
+  return {
+    switchTotal: safeNumber(switchSummary.total),
+    switchAvgMs: safeNumber(switchSummary.avgSuccessMs),
+    refsTotal: safeNumber(refsSummary.total),
+    refsAvgMs: safeNumber(refsSummary.avgFetchMs),
+    openPhases: safeLogCount(w.__kbConversationOpenPerf),
+    messagePrep: safeLogCount(w.__kbMessageListPerf),
+  }
+}
+
 export default function ChatPage() {
   const S = useT()
   const messages = useChatStore((s) => s.messages)
@@ -168,6 +255,9 @@ export default function ChatPage() {
   const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
   const [citationShelfOpen, setCitationShelfOpen] = useState(false)
   const [citationShelfCount, setCitationShelfCount] = useState(0)
+  const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
+  const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
+  const [debugSnapshot, setDebugSnapshot] = useState<ChatPerfSnapshot>(() => collectChatPerfSnapshot())
   const [openShelfSignal, setOpenShelfSignal] = useState(0)
   const [rightDockPanel, setRightDockPanel] = useState<RightDockPanel>('timeline')
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
@@ -203,6 +293,14 @@ export default function ChatPage() {
   const openApiSettings = useCallback(() => {
     window.dispatchEvent(new Event(OPEN_SETTINGS_EVENT))
   }, [])
+
+  useEffect(() => {
+    if (!debugPanelEnabled || typeof window === 'undefined') return undefined
+    const update = () => setDebugSnapshot(collectChatPerfSnapshot())
+    update()
+    const timer = window.setInterval(update, 1000)
+    return () => window.clearInterval(timer)
+  }, [debugPanelEnabled])
 
   const nextEventToken = () => {
     timelineJumpTokenRef.current += 1
@@ -778,6 +876,18 @@ export default function ChatPage() {
     }
   }, [desktopReaderEligible])
 
+  const handleShelfActivityChange = useCallback((state: ShelfActivityState) => {
+    setShelfActivity((current) => (
+      current.summary === state.summary
+        && current.repair === state.repair
+        && current.autoRepair === state.autoRepair
+        && current.background === state.background
+        && current.count === state.count
+        ? current
+        : state
+    ))
+  }, [])
+
   const activateDockPanel = useCallback((panel: RightDockPanel) => {
     setRightDockPanel(panel)
     setRightDockCollapsed(false)
@@ -1282,12 +1392,96 @@ export default function ChatPage() {
       />
     </div>
   ) : null
+  const refsActivity = useMemo(() => summarizeRefsActivity(deferredRefs), [deferredRefs])
+  const chatActivityItems = useMemo(() => {
+    const items: Array<{ key: string; label: string; tone: 'active' | 'ready' | 'warning' }> = []
+    if (conversationLoading || messagesLoadingMore) {
+      items.push({ key: 'messages', label: S.chat_activity_messages, tone: 'active' })
+    }
+    if (liveRunning) {
+      const stage = String(generation?.stage || '').trim()
+      items.push({
+        key: 'generation',
+        label: stage ? `${S.chat_activity_generation} · ${stage}` : S.chat_activity_generation,
+        tone: 'active',
+      })
+    }
+    if (uploading) {
+      items.push({ key: 'upload', label: S.chat_activity_upload, tone: 'active' })
+    }
+    if (refsActivity.pendingPackCount > 0) {
+      items.push({
+        key: 'refs',
+        label: S.chat_activity_refs.replace('{n}', String(refsActivity.pendingPackCount)),
+        tone: 'active',
+      })
+    }
+    if (shelfActivity.count > 0) {
+      items.push({
+        key: 'shelf',
+        label: S.chat_activity_shelf.replace('{n}', String(shelfActivity.count)),
+        tone: 'active',
+      })
+    }
+    if (readerOpen && activeConversation?.mode === 'paper_guide') {
+      items.push({ key: 'reader', label: S.chat_activity_reader, tone: 'ready' })
+    }
+    if (showTextConnectionAlert && items.length > 0) {
+      items.push({ key: 'api', label: S.chat_activity_api_attention, tone: 'warning' })
+    }
+    return items
+  }, [
+    S.chat_activity_api_attention,
+    S.chat_activity_generation,
+    S.chat_activity_messages,
+    S.chat_activity_reader,
+    S.chat_activity_refs,
+    S.chat_activity_shelf,
+    S.chat_activity_upload,
+    activeConversation?.mode,
+    conversationLoading,
+    generation?.stage,
+    liveRunning,
+    messagesLoadingMore,
+    readerOpen,
+    refsActivity.pendingPackCount,
+    shelfActivity.count,
+    showTextConnectionAlert,
+    uploading,
+  ])
+  const showActivityStrip = debugPanelEnabled || chatActivityItems.length > 0
+  const chatActivityStrip = showActivityStrip ? (
+    <div className="kb-chat-activity-shell">
+      <div className="kb-chat-activity-strip" data-testid="chat-activity-strip" aria-live="polite">
+        {chatActivityItems.map((item) => (
+          <span
+            key={item.key}
+            className={`kb-chat-activity-pill is-${item.tone}`}
+            data-testid={`chat-activity-${item.key}`}
+          >
+            {item.tone === 'active' ? <LoadingOutlined spin /> : <span className="kb-chat-activity-dot" aria-hidden="true" />}
+            <span>{item.label}</span>
+          </span>
+        ))}
+        {debugPanelEnabled ? (
+          <span className="kb-chat-debug-strip" data-testid="chat-perf-panel">
+            <BugOutlined />
+            <span>{S.chat_debug_switch.replace('{n}', String(debugSnapshot.switchTotal)).replace('{ms}', String(debugSnapshot.switchAvgMs))}</span>
+            <span>{S.chat_debug_refs.replace('{n}', String(debugSnapshot.refsTotal)).replace('{ms}', String(debugSnapshot.refsAvgMs))}</span>
+            <span>{S.chat_debug_open.replace('{n}', String(debugSnapshot.openPhases))}</span>
+            <span>{S.chat_debug_prep.replace('{n}', String(debugSnapshot.messagePrep))}</span>
+          </span>
+        ) : null}
+      </div>
+    </div>
+  ) : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       {!activeConvId && messages.length === 0 ? (
         <>
           {connectionAlert}
+          {chatActivityStrip}
           <div className="kb-empty-state flex flex-1 flex-col items-center justify-center gap-4 px-4">
             <div className="kb-empty-brand">
               <div className="kb-empty-logo-wrap flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
@@ -1306,6 +1500,7 @@ export default function ChatPage() {
       ) : (
         <>
           {connectionAlert}
+          {chatActivityStrip}
           {showLegacyUiBlocks ? (
             <div className="border-b border-[var(--border)] bg-[var(--panel)]/60 px-4 py-3">
               <div className="mx-auto flex max-w-5xl items-center gap-3">
@@ -1520,6 +1715,7 @@ export default function ChatPage() {
                     readerLocateResults={readerLocateResults}
                     onShelfOpenChange={handleCitationShelfOpenChange}
                     onShelfStateChange={handleCitationShelfStateChange}
+                    onShelfActivityChange={handleShelfActivityChange}
                     openShelfSignal={openShelfSignal}
                     shelfDockMode={showRightDock}
                     shelfPortalTarget={shelfDockTarget}

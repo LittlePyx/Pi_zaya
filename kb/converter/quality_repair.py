@@ -39,6 +39,44 @@ BODY_SECTION_HEADING_RE = re.compile(
     r"experiment(?:s|al)?|results?|discussion|conclusions?|implementation|analysis|system|structure)\b",
     re.IGNORECASE,
 )
+
+
+def _reference_map_missing_numbers(ref_map: dict[int, str]) -> list[int]:
+    refs: set[int] = set()
+    for raw_key, raw_value in (ref_map if isinstance(ref_map, dict) else {}).items():
+        try:
+            n = int(raw_key)
+        except Exception:
+            continue
+        if n <= 0 or not str(raw_value or "").strip():
+            continue
+        refs.add(n)
+    if len(refs) < 8:
+        return []
+    first = min(refs)
+    last = max(refs)
+    if first != 1 or last < 8:
+        return []
+    return sorted(int(n) for n in (set(range(first, last + 1)) - refs))
+
+
+def _reference_gap_is_material(ref_map: dict[int, str]) -> bool:
+    missing = _reference_map_missing_numbers(ref_map)
+    if not missing:
+        return False
+    last = 0
+    for raw_key in (ref_map if isinstance(ref_map, dict) else {}).keys():
+        try:
+            last = max(last, int(raw_key))
+        except Exception:
+            continue
+    if last < 8:
+        return False
+    # A small tail gap can come from intentionally omitted supplement-only refs.
+    # Interior gaps are almost always conversion damage.
+    return any(int(n) < last for n in missing)
+
+
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
@@ -1337,6 +1375,8 @@ def _reference_index_truncated(text: str, metrics: dict[str, Any]) -> bool:
         return False
     if extracted <= 0:
         return True
+    if _reference_gap_is_material(extract_references_map_from_md(text)):
+        return True
     expected = max(reference_lines, max_index)
     return extracted < max(5, int(expected * 0.55))
 
@@ -1995,9 +2035,18 @@ def _backfill_references_from_pdf_text(md_text: str, md_path: Path, source_pdf_p
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
     if not pdf_path:
         return text, False
-    before_extracted = len(extract_references_map_from_md(text))
+    before_map = extract_references_map_from_md(text)
+    before_extracted = len(before_map)
+    before_missing = set(_reference_map_missing_numbers(before_map))
     references_md, recovered_count = _extract_pdf_reference_markdown(pdf_path)
-    if not references_md or recovered_count < 5 or recovered_count < before_extracted:
+    recovered_map = extract_references_map_from_md(references_md)
+    recovered_missing = set(_reference_map_missing_numbers(recovered_map))
+    fills_existing_gap = bool(before_missing and len(recovered_missing) < len(before_missing))
+    if not references_md or recovered_count < 5:
+        return text, False
+    if recovered_count < before_extracted and not fills_existing_gap:
+        return text, False
+    if before_missing and not fills_existing_gap:
         return text, False
     references_md = _drop_leading_duplicate_reference_page_marker(
         references_md,

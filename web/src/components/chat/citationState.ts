@@ -1180,7 +1180,11 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'cardEvidence',
     'systemBTraceContext',
   ] as const) {
-    detail[key] = stripEvidenceMetadataPrefix(detail[key], detail)
+    if (key === 'summaryLine' && isArticleSummaryTextSource(detail.summarySource)) {
+      detail[key] = cleanCitationDisplayText(detail[key])
+    } else {
+      detail[key] = stripEvidenceMetadataPrefix(detail[key], detail)
+    }
   }
   if (!detail.doiUrl && detail.doi) {
     detail.doiUrl = doiUrlFrom(detail.doi)
@@ -1460,6 +1464,19 @@ function looksMetadataOnlyShelfSummary(value: string): boolean {
   return /仅检索到|暂无可用摘要|缺少可用摘要|建议.*DOI|metadata only|no abstract/i.test(text)
 }
 
+function isArticleSummaryTextSource(source: string): boolean {
+  return [
+    'abstract',
+    'fulltext',
+    'reference_primary_evidence',
+    'navigation',
+    'exact_anchor',
+    'section_intent_rescue',
+    'doc_list_seed',
+    'doc_list_prompt_aligned',
+  ].includes(String(source || '').trim().toLowerCase())
+}
+
 function deriveShelfSummary(detail: CiteDetail): { line: string; source: string } {
   const existing = trimShelfSummary(detail.summaryLine, 420)
   const existingSource = String(detail.summarySource || '').trim().toLowerCase()
@@ -1467,9 +1484,12 @@ function deriveShelfSummary(detail: CiteDetail): { line: string; source: string 
   const qualityOk = summaryQuality.ok === true || String(summaryQuality.status || '').trim().toLowerCase() === 'grounded'
   const inpaperContextSummary = detail.isInpaper && existingSource === 'citation_context'
   const metadataOnlyExisting = existingSource === 'metadata' && looksMetadataOnlyShelfSummary(existing)
+  const inpaperLowValueContext = detail.isInpaper
+    && !isArticleSummaryTextSource(existingSource)
+    && looksLowValueCitationContext(existing)
   if (
     existing
-    && !(detail.isInpaper && looksLowValueCitationContext(existing))
+    && !inpaperLowValueContext
     && !looksLowValueShelfSummary(existing)
     && !inpaperContextSummary
     && !metadataOnlyExisting
@@ -1482,7 +1502,7 @@ function deriveShelfSummary(detail: CiteDetail): { line: string; source: string 
   if (!detail.isInpaper && viewSummary && !looksLowValueShelfSummary(viewSummary)) {
     return { line: viewSummary, source: 'citation_card_view' }
   }
-  if (existing && !inpaperContextSummary && !metadataOnlyExisting && !(detail.isInpaper && looksLowValueCitationContext(existing)) && !looksLowValueShelfSummary(existing)) {
+  if (existing && !inpaperContextSummary && !metadataOnlyExisting && !inpaperLowValueContext && !looksLowValueShelfSummary(existing)) {
     return { line: existing, source: existingSource === 'metadata' ? 'fulltext' : (detail.summarySource || 'fulltext') }
   }
 

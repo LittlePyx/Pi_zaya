@@ -1,4 +1,5 @@
 from kb.converter.reference_markdown import (
+    fix_references_format,
     format_references_block,
     normalize_references_page_text,
 )
@@ -54,3 +55,33 @@ def test_format_references_block_does_not_treat_year_backref_line_as_new_referen
     assert "38(2):65-88, 2021." in out[0]
     assert not out[0].endswith("2021. 1")
     assert out[1].startswith("[51] Next Author")
+
+
+def test_references_format_keeps_standalone_numbered_url_entry_and_avoids_year_refs():
+    page_text = "\n".join(
+        [
+            "References",
+            "18.",
+            "Hirose, Y. et al. 5.6 A 400x400-pixel vertical avalanche",
+            "photodiodes image sensor. In 2019 IEEE International Solid-State Circuits Conference",
+            "(ISSCC), p. 104-106 (2019).",
+            "19.",
+            "S.r.l., M. P. D. Micro Photon Devices. http://www.micro-photon-",
+            "devices.com/.",
+            "20. Sun, Q. et al. End-to-End Learned SPAD Camera. ACM Trans. Graph. 39, 1-14 (2020).",
+            "48. Popescu, G. Large-scale phase retrieval. Light: Sci. Appl. 10,",
+            "175 (2021).",
+            "Acknowledgements",
+            "This section must not be appended to the final reference.",
+        ]
+    )
+
+    out = fix_references_format(normalize_references_page_text(page_text))
+
+    assert "[18] Hirose, Y. et al." in out
+    assert "[19] S.r.l., M. P. D. Micro Photon Devices. http://www.micro-photondevices.com/." in out
+    assert "[20] Sun, Q. et al." in out
+    assert "[48] Popescu, G. Large-scale phase retrieval. Light: Sci. Appl. 10, 175 (2021)." in out
+    assert "[2019]" not in out
+    assert "[175]" not in out
+    assert "Acknowledgements" not in out

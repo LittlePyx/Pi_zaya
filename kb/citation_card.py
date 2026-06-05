@@ -1175,6 +1175,7 @@ def _compose_system_b(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     if not warning and score < 0.58:
         warning = _card_label(locale, "warning_upstream_incomplete")
 
+    summary_quality = rec.get("summary_quality")
     return _finalize_card_output({
         "card_kind": "upstream_reference",
         "card_title": title,
@@ -1197,6 +1198,10 @@ def _compose_system_b(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
         "card_quality_flags": flags,
         "card_warning": warning,
         "card_flow": [],
+        "summary_line": _first_text(rec, "summary_line", max_len=900),
+        "summary_source": _first_text(rec, "summary_source", max_len=80),
+        "summary_provider": _first_text(rec, "summary_provider", max_len=80),
+        "summary_quality": dict(summary_quality) if isinstance(summary_quality, Mapping) else {},
         **trace,
     }, route="system_b", locale=locale)
 

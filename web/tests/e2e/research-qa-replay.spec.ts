@@ -52,7 +52,7 @@ async function addCitationToShelf(page: import('@playwright/test').Page, chip: i
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
   const closePopover = page.locator('.kb-cite-pop-close')
   if (await closePopover.count()) {
-    await closePopover.click()
+    await closePopover.click({ force: true })
   }
 }
 

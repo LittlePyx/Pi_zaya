@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
-import { CloseOutlined, DeleteOutlined, FileSearchOutlined, SaveOutlined } from '@ant-design/icons'
+import { CloseOutlined, DeleteOutlined, FileSearchOutlined, LoadingOutlined, SaveOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ConversionQualitySummary, LibrarySourceQualityItem } from '../../api/library'
@@ -57,6 +57,7 @@ interface Props {
   onSaveSnapshot: () => void
   onLoadSnapshot: () => void
   onDeleteSnapshot: () => void
+  onBackgroundActivityChange?: (busy: boolean) => void
 }
 
 const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
@@ -611,11 +612,13 @@ export function CiteShelf({
   onSaveSnapshot,
   onLoadSnapshot,
   onDeleteSnapshot,
+  onBackgroundActivityChange,
 }: Props) {
   const S = useT()
   const isDockPresentation = presentation === 'dock'
   const panelVisible = visible ?? open
   const [expandedSummaryKeys, setExpandedSummaryKeys] = useState<Record<string, boolean>>({})
+  const [expandedDetailKeys, setExpandedDetailKeys] = useState<Record<string, boolean>>({})
   const [selectedKeys, setSelectedKeys] = useState<Record<string, boolean>>({})
   const [searchText, setSearchText] = useState('')
   const [sortKey, setSortKey] = useState<'recent' | 'cited' | 'year' | 'impact'>('recent')
@@ -630,15 +633,57 @@ export function CiteShelf({
   const [copyState, setCopyState] = useState<'idle' | 'gbt' | 'bibtex' | 'error'>('idle')
   const [sourceQualityByPath, setSourceQualityByPath] = useState<SourceQualityByPath>({})
   const [sourceRepairingKey, setSourceRepairingKey] = useState('')
+  const [slowTaskVisible, setSlowTaskVisible] = useState(false)
   const copyStateTimerRef = useRef<number | null>(null)
   const sourceRepairStreamRef = useRef<AbortController | null>(null)
   const autoSourceRepairKeysRef = useRef<Record<string, boolean>>({})
+  const repairingKeySignature = useMemo(
+    () => repairingKeys.map((key) => String(key || '').trim()).filter(Boolean).join('|'),
+    [repairingKeys],
+  )
   const repairLoadingKeySet = useMemo(
     () => new Set([repairLoadingKey, ...repairingKeys].map((key) => String(key || '').trim()).filter(Boolean)),
     [repairLoadingKey, repairingKeys],
   )
   const activeConversationKey = String(activeConvId || '').trim()
   const activeSourceKey = normalizeSourceIdentity(activeSourcePath)
+  const shelfBackgroundBusy = Boolean(
+    summaryLoadingKey
+      || repairLoadingKey
+      || repairingKeySignature
+      || exportRepairingKind
+      || sourceRepairingKey,
+  )
+  const shelfBackgroundTaskLabel = exportRepairingKind
+    ? S.shelf_background_export
+    : (repairLoadingKey || repairingKeySignature || sourceRepairingKey)
+      ? S.shelf_background_metadata
+      : S.shelf_background_summary
+
+  useEffect(() => {
+    if (!panelVisible || !shelfBackgroundBusy) {
+      setSlowTaskVisible(false)
+      return undefined
+    }
+    const timer = window.setTimeout(() => setSlowTaskVisible(true), 900)
+    return () => window.clearTimeout(timer)
+  }, [
+    exportRepairingKind,
+    panelVisible,
+    repairLoadingKey,
+    repairingKeySignature,
+    shelfBackgroundBusy,
+    sourceRepairingKey,
+    summaryLoadingKey,
+  ])
+
+  useEffect(() => {
+    onBackgroundActivityChange?.(shelfBackgroundBusy)
+  }, [onBackgroundActivityChange, shelfBackgroundBusy])
+
+  useEffect(() => () => {
+    onBackgroundActivityChange?.(false)
+  }, [onBackgroundActivityChange])
 
   const sourceQualitySources = useMemo(() => {
     const seen = new Set<string>()
@@ -743,7 +788,7 @@ export function CiteShelf({
     push('origin', S.shelf_trace_origin, shelfOriginText || shelfKindText)
     push('source', S.shelf_trace_source, sourceLabel, sourcePath || sourceLabel)
     push('location', S.shelf_trace_location, location)
-    push('reference', S.shelf_trace_reference, [refLabel, anchor ? S.shelf_anchor.replace('{anchor}', anchor) : ''].filter(Boolean).join(' · '))
+    push('reference', S.shelf_trace_reference, refLabel, anchor ? S.shelf_anchor.replace('{anchor}', anchor) : refLabel)
     push('answer', S.shelf_trace_answer_head, answerParts.join(' · '))
     push('reason', S.shelf_trace_reason, item.whyLine || item.supportRelation || item.answerClaim || item.upstreamWorkRole)
     return rows
@@ -1599,6 +1644,17 @@ export function CiteShelf({
       if (!changed && Object.keys(next).length !== Object.keys(prev).length) changed = true
       return changed ? next : prev
     })
+    setExpandedDetailKeys((prev) => {
+      const next: Record<string, boolean> = {}
+      let changed = false
+      for (const [key, expanded] of Object.entries(prev)) {
+        if (!expanded) continue
+        if (validKeys.has(key)) next[key] = true
+        else changed = true
+      }
+      if (!changed && Object.keys(next).length !== Object.keys(prev).length) changed = true
+      return changed ? next : prev
+    })
     setEditingNoteKeys((prev) => {
       const next: Record<string, boolean> = {}
       let changed = false
@@ -1724,6 +1780,12 @@ export function CiteShelf({
                   <div className="kb-shelf-snapshot-diff">{snapshotDiff}</div>
                 ) : null}
               </>
+            ) : null}
+            {slowTaskVisible ? (
+              <div className="kb-shelf-background-task" data-testid="citation-shelf-background-task">
+                <LoadingOutlined spin />
+                <span>{shelfBackgroundTaskLabel}</span>
+              </div>
             ) : null}
             {items.length > 0 ? (
               <div
@@ -2021,11 +2083,11 @@ export function CiteShelf({
                       const noteText = String(item.note || '').trim()
                       const isFocused = item.key === focusedKey
                       const metrics = citeMetricSummary(item)
-                      const visibleMetrics = isFocused ? metrics : metrics.slice(0, 2)
                       const shelfSummary = shelfSummaryDisplay(item, cardView, S)
                       const shelfSummaryLine = shelfSummary.line
                       const shelfSummarySource = shelfSummary.sourceLabel
                       const shelfSummaryQuality = shelfSummary.quality
+                      const shelfSummaryLines = splitSummary(shelfSummaryLine)
                       const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
                       const itemSourceOpenQuality = sourceOpenQualityView(
                         item,
@@ -2040,12 +2102,17 @@ export function CiteShelf({
                       const shelfKind = normalizeShelfItemKind(item.shelfItemKind)
                       const shelfKindText = shelfItemKindLabel(shelfKind, S)
                       const shelfOriginText = shelfOriginLabel(item.shelfOrigin, S)
+                      const isDetailsExpanded = Boolean(expandedDetailKeys[item.key])
+                      const visibleMetrics = isDetailsExpanded ? metrics : metrics.slice(0, 2)
                       const rawItemSourceLabel = String(item.sourceName || basenameFromPath(item.sourcePath) || '').trim()
                       const itemLocationLabel = String(item.locationLabel || item.headingPath || '').trim()
                       const itemSourceLabel = rawItemSourceLabel && normalizeTitle(rawItemSourceLabel) === normalizeTitle(shelfTitle) && itemLocationLabel
                         ? itemLocationLabel
                         : rawItemSourceLabel
-                      const sourceTrail = isFocused ? sourceTrailRows(item, shelfKindText, shelfOriginText) : []
+                      const sourceTrail = isDetailsExpanded ? sourceTrailRows(item, shelfKindText, shelfOriginText) : []
+                      const showSourceOpenBadge = itemSourceOpenQuality.tone === 'review'
+                        || itemSourceOpenQuality.tone === 'missing'
+                        || itemSourceOpenQuality.label === S.shelf_source_open_repaired_reopen
                       const messageTargetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
                       const canOpenMessage = Boolean(onOpenMessage && Number.isFinite(messageTargetId) && messageTargetId > 0)
                       const shelfExcerpt = cleanCitationDisplayText(item.shelfExcerpt || '')
@@ -2164,11 +2231,6 @@ export function CiteShelf({
                               >
                                 {shelfKindText}
                               </span>
-                              {shelfOriginText ? (
-                                <span className="kb-shelf-origin" title={shelfOriginText}>
-                                  {shelfOriginText}
-                                </span>
-                              ) : null}
                               {visibleTraceLabels.map((label, idx) => (
                                 <span key={`${item.key}-trace-${idx}-${label}`} className="kb-shelf-origin" title={trace.debugTitle || undefined}>
                                   {label}
@@ -2177,7 +2239,7 @@ export function CiteShelf({
                               {duplicateCount > 1 ? (
                                 <span className="kb-shelf-dup">{S.shelf_dup.replace('{n}', String(duplicateCount))}</span>
                               ) : null}
-                              {itemSourceOpenQuality.tone !== 'ready' ? (
+                              {showSourceOpenBadge ? (
                                 <span
                                   className={`kb-shelf-source-open-quality is-${itemSourceOpenQuality.tone}`}
                                   data-testid="citation-shelf-source-open-quality"
@@ -2248,7 +2310,24 @@ export function CiteShelf({
                               )}
                             </div>
                           ) : null}
-                          {isFocused && sourceTrail.length > 0 ? (
+                          {isFocused && !isDetailsExpanded ? (
+                            <div
+                              className="kb-shelf-summary kb-shelf-summary-compact"
+                              data-testid="citation-shelf-summary"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              {summaryLoadingKey === item.key ? (
+                                <div className="kb-shelf-summary-text">{S.shelf_summary_loading}</div>
+                              ) : shelfSummaryLines.length > 0 ? (
+                                <div className="kb-shelf-summary-preview">
+                                  {shelfSummaryLines.slice(0, 2).join(' ')}
+                                </div>
+                              ) : (
+                                <div className="kb-shelf-summary-empty">{S.shelf_summary_empty}</div>
+                              )}
+                            </div>
+                          ) : null}
+                          {isDetailsExpanded && sourceTrail.length > 0 ? (
                             <div
                               className="kb-shelf-trace-detail"
                               data-testid="citation-shelf-source-trail"
@@ -2298,7 +2377,7 @@ export function CiteShelf({
                               </div>
                             </div>
                           ) : null}
-                          {isFocused && shelfExcerpt ? (
+                          {isDetailsExpanded && shelfExcerpt ? (
                             <div className="kb-shelf-excerpt" data-testid="citation-shelf-excerpt">
                               <div className="kb-shelf-excerpt-head">
                                 {shelfExcerptLabel || S.shelf_excerpt_head}
@@ -2317,7 +2396,21 @@ export function CiteShelf({
                               ))}
                             </div>
                           ) : null}
-                          {isFocused || item.doiUrl || !itemSourceLabel ? (
+                          {isFocused || isDetailsExpanded ? (
+                            <button
+                              type="button"
+                              className="kb-shelf-detail-toggle"
+                              data-testid="citation-shelf-detail-toggle"
+                              aria-expanded={isDetailsExpanded}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setExpandedDetailKeys((prev) => ({ ...prev, [item.key]: !isDetailsExpanded }))
+                              }}
+                            >
+                              {isDetailsExpanded ? S.shelf_hide_details : S.shelf_show_details}
+                            </button>
+                          ) : null}
+                          {isDetailsExpanded && (item.doiUrl || !itemSourceLabel) ? (
                             <div className="kb-shelf-doi">
                               {item.doiUrl ? (
                                 <a className="kb-shelf-doi-link" href={item.doiUrl} rel="noreferrer" target="_blank">
@@ -2328,7 +2421,7 @@ export function CiteShelf({
                               )}
                             </div>
                           ) : null}
-                          {isFocused ? (
+                          {isDetailsExpanded ? (
                             <div className="kb-shelf-summary" data-testid="citation-shelf-summary">
                               {summaryLoadingKey === item.key ? (
                                 <div className="kb-shelf-summary-text">{S.shelf_summary_loading}</div>
@@ -2346,7 +2439,7 @@ export function CiteShelf({
                                     </span>
                                   </div>
                                   {(() => {
-                                    const lines = splitSummary(shelfSummaryLine)
+                                    const lines = shelfSummaryLines
                                     const expanded = Boolean(expandedSummaryKeys[item.key])
                                     const visibleLines = expanded ? lines : lines.slice(0, 2)
                                     const canExpand = lines.length > 2

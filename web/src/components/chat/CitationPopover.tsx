@@ -14,6 +14,16 @@ import {
 import { useT } from '../../i18n'
 
 const SYSTEM_B_TRACE_ENABLED = false
+const SYSTEM_B_ARTICLE_OVERVIEW_SOURCES = new Set([
+  'abstract',
+  'fulltext',
+  'reference_primary_evidence',
+  'navigation',
+  'exact_anchor',
+  'section_intent_rescue',
+  'doc_list_seed',
+  'doc_list_prompt_aligned',
+])
 
 interface Props {
   detail: CiteDetail | null
@@ -150,8 +160,12 @@ function looksGenericSystemBTakeawayText(value: string): boolean {
     /作为当前论文引用的方法背景或实现依据/.test(text)
     || /帮助核对该方法线索从哪里来/.test(text)
     || /把回答中的说法追溯到当前论文引用的上游文献/.test(text)
+    || /参考文献条目.*(?:当前|本文).*Reader|本文引用.*参考文献条目|当前论文.*引用.*参考文献条目/.test(text)
+    || /(?:打开|当前|本文).*论文.*引用.*(?:上游|参考).*文献/.test(text)
     || /links? the answer back to an upstream reference/i.test(text)
     || /upstream reference cited by the current paper/i.test(text)
+    || /opened paper cites this upstream work as reference/i.test(text)
+    || /bibliography entry is linked from the opened Reader document/i.test(text)
   )
 }
 
@@ -282,12 +296,17 @@ export function CitationPopover({
       上游作用: S.cite_upstream_role,
       上游文献条目: S.cite_reference_entry,
       说明: S.cite_note,
+      'Missing reference entry': S.cite_missing_reference_entry,
     }
     return labels[text] || text
   }
   const localizeKnownBody = (value: string): string => {
     const text = compact(value)
     if (!text) return ''
+    const missingReferenceMatch = text.match(/^Reference \[(\d{1,4})]\s+is cited in the opened Reader document, but the converted References section does not contain a matching bibliography entry\.?$/i)
+    if (missingReferenceMatch) {
+      return S.cite_missing_reference_entry_body.replace('{n}', missingReferenceMatch[1])
+    }
     if (/前端缺少后端 cite_details/.test(text)) return S.cite_frontend_candidate_reason
     if (/前端根据本轮 References 临时补齐/.test(text)) return S.cite_candidate_support_default
     if (/这条引用只能作为候选依据/.test(text)) return S.cite_candidate_support_default
@@ -381,7 +400,7 @@ export function CitationPopover({
   const externalMetadataStatus = compact(detail.externalMetadataStatus).toLowerCase()
   const externalMetadataReason = compact(detail.externalMetadataReason)
   const externalTitle = compact(detail.externalTitle)
-  const cardQualityLabel = compact(detail.cardQualityLabel)
+  const cardQualityLabel = localizeKnownLabel(detail.cardQualityLabel)
   const cardQualityScore = Number(detail.cardQualityScore || 0)
   const cardQualityFlags = Array.isArray(detail.cardQualityFlags)
     ? detail.cardQualityFlags.map((item) => compact(item)).filter(Boolean)
@@ -409,7 +428,7 @@ export function CitationPopover({
     ? cardTakeaway
     : ''
   const systemAEvidencePreview = evidencePreview(systemAEvidenceText, systemATakeawayText ? 250 : 330)
-  const systemBExplicitReferenceText = cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry)
+  const systemBExplicitReferenceText = localizeKnownBody(cleanCitationDisplayText(referenceSection?.text || detail.cardReferenceEntry))
   const systemBReferenceText = systemBExplicitReferenceText || cleanCitationDisplayText(compact(detail.raw) || compact(detail.citeFmt))
   const systemBOverviewSource = compact(detail.summarySource).toLowerCase()
   const systemBContextSource = compact(detail.citationContextSource).toLowerCase()
@@ -437,16 +456,17 @@ export function CitationPopover({
     'reader_reference_link',
     'reader_references',
   ].includes(systemBOverviewSource)
+  const systemBOverviewSourceIsArticle = SYSTEM_B_ARTICLE_OVERVIEW_SOURCES.has(systemBOverviewSource)
   const systemBPaperOverviewText = isSystemB
     ? firstSystemBText([
       systemBOverviewSourceIsContext ? '' : detail.summaryLine,
-    ])
+    ], { allowCitationContext: systemBOverviewSourceIsArticle })
     : ''
   const systemBPaperOverviewPreview = evidencePreview(systemBPaperOverviewText, 360)
   const systemBPaperOverviewLabel = ((S as unknown as Record<string, string>).cite_paper_overview || 'Article overview')
   const systemBCitationContextText = ''
   const systemBCitationContextLabel = cardEvidenceLabel || S.cite_context
-  const systemBTakeawayText = isSystemB
+  const rawSystemBTakeawayText = isSystemB
     ? firstSystemBText([
       detail.cardContextSummary,
       contextSummarySection?.text || '',
@@ -458,6 +478,10 @@ export function CitationPopover({
       detail.systemBTraceContext,
       systemBContextSource === 'reader_references' ? '' : detail.citationContext,
     ], { allowCitationContext: true })
+    : ''
+  const localizedSystemBTakeawayText = localizeKnownBody(rawSystemBTakeawayText)
+  const systemBTakeawayText = localizedSystemBTakeawayText && !substantiallySame(localizedSystemBTakeawayText, systemBReferenceText)
+    ? localizedSystemBTakeawayText
     : ''
   const systemBTakeawayLabel = ((S as unknown as Record<string, string>).cite_current_paper_usage || S.cite_upstream_role)
   const systemBContextSummaryText = ''
@@ -508,7 +532,7 @@ export function CitationPopover({
     : (compact(detail.sourceName) || compact(display.source) || displayMain))
   const systemBTitleMissing = !cardTitle && !compact(detail.title)
   const systemBTitle = cardTitle || compact(detail.title) || S.cite_upstream_reference
-  const headerSubtitle = rawHeaderSubtitle && !substantiallySame(rawHeaderSubtitle, systemBTitle)
+  const headerSubtitle = !isSystemB && rawHeaderSubtitle && !substantiallySame(rawHeaderSubtitle, systemBTitle)
     ? rawHeaderSubtitle
     : ''
   const systemASub = [headingPath, pageLabel].filter(Boolean).join(' · ')
@@ -571,7 +595,7 @@ export function CitationPopover({
   const systemBLocationLabel = systemBReferenceRowLocation ? S.cite_reference_entry : S.cite_location_current
   const systemBLocationText = systemBReferenceRowLocation || systemBMeaningfulLocation
   const systemBLocationHint = ''
-  const showSystemBLocation = Boolean(isSystemB && systemBLocationText)
+  const showSystemBLocation = false
   const systemBSupportText = isSystemB
     && explicitSupportText
     && !substantiallySame(explicitSupportText, systemBCitationContextText)
@@ -588,15 +612,23 @@ export function CitationPopover({
   const showSystemBReference = Boolean(
     systemBReferenceText
     && (
-      !systemBPaperOverviewText
-      || systemBTitleMissing
+      systemBTitleMissing
       || cardQualityFlags.includes('missing_reference_title')
       || (cardQualityFlags.includes('reference_entry_only') && !hasSystemBHeaderIdentity)
+      || (!hasSystemBHeaderIdentity && !systemBPaperOverviewText)
     ),
   )
   const systemBReferencePreview = evidencePreview(systemBReferenceText, 260)
   const systemBReferenceLabel = ((S as unknown as Record<string, string>).cite_original_reference_entry || S.cite_reference_entry)
   const showSystemBOverviewLoading = Boolean(isSystemB && loading && !systemBPaperOverviewText)
+  const showSystemBOverviewUnavailable = Boolean(
+    isSystemB
+    && !loading
+    && detail.bibliometricsChecked
+    && !systemBPaperOverviewText
+    && !showSystemBReference
+    && (doiLabel || systemBTitle),
+  )
   const systemAMetaSource = display.source && !isOnlyPaperLabel(display.source, [systemATitle, sourcePaperText])
     ? display.source
     : ''
@@ -608,6 +640,7 @@ export function CitationPopover({
   const showMetrics = false
   const showCardQuality = Boolean(
     cardQualityLabel
+    && !cardQualityFlags.includes('missing_reference_entry')
     && (cardWarning || systemAHasReviewRisk || cardQualityScore < 0.62),
   )
   const showExternalMetadataWarning = externalMetadataStatus === 'candidate' || externalMetadataStatus === 'conflict'
@@ -656,13 +689,13 @@ export function CitationPopover({
     ? ([
         display.authors ? {
           key: 'authors',
-          label: S.cite_meta_author,
+          label: '',
           value: display.authors,
           tone: 'muted',
         } : null,
         display.venueYear ? {
           key: 'published',
-          label: S.cite_meta_published,
+          label: '',
           value: display.venueYear,
           tone: 'muted',
         } : null,
@@ -847,7 +880,12 @@ export function CitationPopover({
           ) : null}
           {showSystemBOverviewLoading ? (
             <div className="kb-cite-pop-sub kb-cite-pop-system-b-loading" data-testid="citation-popover-system-b-overview-loading">
-              {S.cite_loading}
+              {S.cite_loading_summary || S.cite_loading}
+            </div>
+          ) : null}
+          {showSystemBOverviewUnavailable ? (
+            <div className="kb-cite-pop-sub kb-cite-pop-system-b-empty" data-testid="citation-popover-system-b-overview-empty">
+              {S.cite_summary_unavailable}
             </div>
           ) : null}
           {systemBTakeawayText ? (

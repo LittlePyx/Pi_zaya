@@ -1955,8 +1955,116 @@ def _local_source_summary_meta(meta: dict | None) -> dict:
     return {}
 
 
-def _bibliometrics_accept_local_source_summary(meta: dict | None) -> bool:
+_LOCAL_SOURCE_SUMMARY_PROVIDERS = {"local_markdown"}
+_LOCAL_SOURCE_SUMMARY_GENERATIONS = {"extractive_local_markdown"}
+_UPSTREAM_REFERENCE_CONTEXT_SOURCES = {
+    "reader_reference_link",
+    "reader_references",
+    "reader_occurrence",
+    "reader_cross_reference",
+    "answer_context",
+    "answer_reference_mention",
+    "structured_reference_index",
+    "source_markdown",
+    "matched_ref_marker",
+}
+_UPSTREAM_CONTEXT_SUMMARY_SOURCES = _UPSTREAM_REFERENCE_CONTEXT_SOURCES | {
+    "citation_context",
+    "citation_card",
+    "citation_card_view",
+    "references_panel_hit",
+}
+
+
+def _truthy_bool(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def _bibliometrics_is_upstream_reference_context(meta: dict | None) -> bool:
     data = dict(meta or {})
+    if _truthy_bool(data.get("is_inpaper") if "is_inpaper" in data else data.get("isInpaper")):
+        return True
+    marker_values = [
+        data.get("summary_source"),
+        data.get("summarySource"),
+        data.get("citation_context_source"),
+        data.get("citationContextSource"),
+        data.get("evidence_source"),
+        data.get("evidenceSource"),
+        data.get("shelf_origin"),
+        data.get("shelfOrigin"),
+        data.get("binding_status"),
+        data.get("bindingStatus"),
+    ]
+    for value in marker_values:
+        marker = str(value or "").strip().lower()
+        if marker in _UPSTREAM_REFERENCE_CONTEXT_SOURCES or marker == "reader_reference":
+            return True
+    return False
+
+
+def _summary_is_local_source_summary(meta: dict | None) -> bool:
+    data = dict(meta or {})
+    provider = str(data.get("summary_provider") or data.get("summaryProvider") or "").strip().lower()
+    generation = str(data.get("summary_generation") or data.get("summaryGeneration") or "").strip().lower()
+    quality = data.get("summary_quality") or data.get("summaryQuality")
+    if isinstance(quality, dict):
+        provider = provider or str(quality.get("provider") or "").strip().lower()
+        generation = generation or str(quality.get("generation") or "").strip().lower()
+    return provider in _LOCAL_SOURCE_SUMMARY_PROVIDERS or generation in _LOCAL_SOURCE_SUMMARY_GENERATIONS
+
+
+def _summary_is_upstream_context_summary(meta: dict | None) -> bool:
+    data = dict(meta or {})
+    source = str(data.get("summary_source") or data.get("summarySource") or "").strip().lower()
+    quality = data.get("summary_quality") or data.get("summaryQuality")
+    if isinstance(quality, dict):
+        source = source or str(quality.get("source") or "").strip().lower()
+    if source in _UPSTREAM_CONTEXT_SUMMARY_SOURCES:
+        return True
+    summary = str(data.get("summary_line") or data.get("summaryLine") or "").strip()
+    return bool(
+        summary
+        and re.search(
+            r"opened paper cites|bibliography entry is linked|current paper cites|"
+            r"当前论文|本文引用|参考文献条目|上游文献",
+            summary,
+            flags=re.I,
+        )
+    )
+
+
+def _strip_misbound_local_source_summary(meta: dict | None) -> dict:
+    data = dict(meta or {})
+    if not _bibliometrics_is_upstream_reference_context(data):
+        return data
+    if not (_summary_is_local_source_summary(data) or _summary_is_upstream_context_summary(data)):
+        return data
+    for key in (
+        "summary_line",
+        "summaryLine",
+        "summary_source",
+        "summarySource",
+        "summary_provider",
+        "summaryProvider",
+        "summary_generation",
+        "summaryGeneration",
+        "summary_quality",
+        "summaryQuality",
+        "metadata_export_acceptance",
+        "metadataExportAcceptance",
+    ):
+        data.pop(key, None)
+    return data
+
+
+def _bibliometrics_accept_local_source_summary(meta: dict | None) -> bool:
+    data = _strip_misbound_local_source_summary(meta)
+    if _bibliometrics_is_upstream_reference_context(data):
+        return False
     summary = str(data.get("summary_line") or data.get("summaryLine") or "").strip()
     source = str(data.get("summary_source") or data.get("summarySource") or "").strip().lower()
     quality = data.get("summary_quality") or data.get("summaryQuality")
@@ -2356,9 +2464,9 @@ def _bibliometrics_summary_export_ready(acceptance: dict | None) -> bool:
 
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
-    meta = body.meta or {}
+    meta = _strip_misbound_local_source_summary(body.meta or {})
     settings = get_settings()
-    hydrated = hydrate_repaired_citation_metadata(meta, db_dir=settings.db_dir)
+    hydrated = _strip_misbound_local_source_summary(hydrate_repaired_citation_metadata(meta, db_dir=settings.db_dir))
     if _bibliometrics_accept_local_source_summary(hydrated):
         local_summary = _local_source_summary_meta(hydrated)
         if local_summary:
@@ -2379,7 +2487,7 @@ def get_bibliometrics(body: BibliometricsBody):
     enriched = enrich_citation_detail_meta(seed)
     if not isinstance(enriched, dict):
         enriched = {}
-    result = _bibliometrics_quality_contract({**seed, **enriched})
+    result = _bibliometrics_quality_contract(_strip_misbound_local_source_summary({**seed, **enriched}))
     if _bibliometrics_accept_local_source_summary(result):
         local_summary = _local_source_summary_meta(result)
         if local_summary:
@@ -2877,6 +2985,115 @@ def _resolve_reader_reference_entry(
     return None
 
 
+_READER_BODY_CITATION_RE = re.compile(
+    r"(?<!!)\[([Rr]?\d{1,4}(?:\s*[,，、;；\-–—−]\s*[Rr]?\d{1,4})*)\](?!\()",
+)
+
+
+def _reader_references_heading_line_index(lines: list[str]) -> int | None:
+    for idx, line in enumerate(lines):
+        text = str(line or "").strip()
+        if re.match(r"^#{1,6}\s*(?:references|bibliography|参考文献)\b", text, flags=re.I):
+            return idx
+    return None
+
+
+def _reader_first_body_heading_index(lines: list[str]) -> int:
+    for idx, line in enumerate(lines):
+        text = str(line or "").strip()
+        if re.match(r"^#{2,6}\s+\S", text):
+            return idx
+    return 0
+
+
+def _expand_reader_citation_body(body: str) -> list[int]:
+    matches = list(re.finditer(r"[Rr]?\d{1,4}", str(body or "")))
+    out: list[int] = []
+    idx = 0
+    while idx < len(matches):
+        current = matches[idx]
+        try:
+            start_num = int(re.sub(r"^[Rr]", "", current.group(0)))
+        except Exception:
+            idx += 1
+            continue
+        nxt = matches[idx + 1] if idx + 1 < len(matches) else None
+        if nxt is not None:
+            sep = str(body or "")[current.end():nxt.start()]
+            try:
+                end_num = int(re.sub(r"^[Rr]", "", nxt.group(0)))
+            except Exception:
+                end_num = 0
+            if re.fullmatch(r"\s*[-–—−]\s*", sep or "") and start_num > 0 and end_num >= start_num and (end_num - start_num) <= 64:
+                out.extend(range(start_num, end_num + 1))
+                idx += 2
+                continue
+        if start_num > 0:
+            out.append(start_num)
+        idx += 1
+    return out
+
+
+def _reader_body_cited_reference_numbers(md_text: str, *, known_ref_nums: set[int]) -> list[int]:
+    if not known_ref_nums:
+        return []
+    lines = str(md_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if not lines:
+        return []
+    start_idx = _reader_first_body_heading_index(lines)
+    refs_idx = _reader_references_heading_line_index(lines)
+    end_idx = refs_idx if refs_idx is not None and refs_idx > start_idx else len(lines)
+    body = "\n".join(lines[start_idx:end_idx])
+    if not body:
+        return []
+    max_known = max(known_ref_nums)
+    max_allowed = min(600, max_known + 5)
+    nums: set[int] = set()
+    for match in _READER_BODY_CITATION_RE.finditer(body):
+        for num in _expand_reader_citation_body(match.group(1)):
+            if 1 <= int(num) <= max_allowed:
+                nums.add(int(num))
+    return sorted(nums)
+
+
+def _compose_missing_reader_reference_card(rec: dict, *, ref_num: int, note: str) -> dict:
+    card = compose_citation_card(rec, locale=str(rec.get("render_locale") or ""))
+    flags = list(card.get("card_quality_flags") or [])
+    for flag in ("missing_reference_entry", "missing_reference_title", "reader_reference_gap"):
+        if flag not in flags:
+            flags.append(flag)
+    card["card_quality_flags"] = flags
+    card["card_quality_label"] = "Missing reference entry"
+    card["card_quality_score"] = 0.0
+    card["card_warning"] = ""
+    card["card_reference_label"] = "Missing reference entry"
+    card["card_reference_entry"] = note
+    card["bibliometrics_checked"] = True
+    card["metadata_quality"] = {
+        "contract_version": 1,
+        "ok": False,
+        "status": "missing_reference_entry",
+        "score": 0.0,
+        "issues": [
+            {
+                "code": "missing_reference_entry",
+                "label": "Reference entry was cited in text but missing from the converted bibliography.",
+                "field": "raw",
+                "severity": "error",
+            }
+        ],
+    }
+    card["metadata_export_acceptance"] = {
+        "export_ready": False,
+        "summary_export_ready": False,
+        "reason": "missing_reference_entry",
+    }
+    card["summary_line"] = ""
+    card["summary_source"] = ""
+    card["title"] = card.get("title") or f"Reference [{ref_num}]"
+    return card
+
+
 def _reader_reference_cite_details(
     md_text: str,
     *,
@@ -2893,7 +3110,10 @@ def _reader_reference_cite_details(
         f"{str(md_path)}|{doc_hash}".encode("utf-8", errors="ignore"),
     ).hexdigest()[:12]
     out: list[dict] = []
-    for ref_num in sorted(int(n) for n in ref_map.keys() if int(n) > 0)[:600]:
+    known_ref_nums = set(int(n) for n in ref_map.keys() if int(n) > 0)
+    cited_nums = set(_reader_body_cited_reference_numbers(md_text, known_ref_nums=known_ref_nums))
+    all_nums = sorted(known_ref_nums | (cited_nums - known_ref_nums))
+    for ref_num in all_nums[:600]:
         resolved = _resolve_reader_reference_entry(
             index_data,
             source_path=source_path,
@@ -2902,10 +3122,19 @@ def _reader_reference_cite_details(
         )
         ref = resolved.get("ref") if isinstance(resolved, dict) and isinstance(resolved.get("ref"), dict) else {}
         raw_ref = str(ref.get("raw") or ref_map.get(ref_num) or "").strip()
+        missing_reference_entry = not raw_ref
+        if missing_reference_entry and ref_num not in cited_nums:
+            continue
+        missing_note = (
+            f"Reference [{ref_num}] is cited in the opened Reader document, "
+            "but the converted References section does not contain a matching bibliography entry."
+        )
+        if missing_reference_entry:
+            raw_ref = missing_note
         if not raw_ref:
             continue
         anchor = f"kb-cite-reader-{anchor_sig}-{ref_num}"
-        context = f"The opened paper cites this upstream work as reference [{ref_num}]."
+        context = missing_note if missing_reference_entry else f"The opened paper cites this upstream work as reference [{ref_num}]."
         rec = {
             "num": ref_num,
             "display_num": ref_num,
@@ -2915,10 +3144,10 @@ def _reader_reference_cite_details(
             "source_path": str(source_path or md_path),
             "is_inpaper": True,
             "citation_route": "system_b",
-            "routing_reason": "reader_reference_index",
-            "routing_confidence": 1.0 if ref else 0.72,
-            "raw": raw_ref,
-            "cite_fmt": raw_ref,
+            "routing_reason": "reader_missing_reference_entry" if missing_reference_entry else "reader_reference_index",
+            "routing_confidence": 0.35 if missing_reference_entry else (1.0 if ref else 0.72),
+            "raw": "" if missing_reference_entry else raw_ref,
+            "cite_fmt": "" if missing_reference_entry else raw_ref,
             "title": str(ref.get("title") or "").strip(),
             "authors": str(ref.get("authors") or "").strip(),
             "venue": str(ref.get("venue") or "").strip(),
@@ -2931,20 +3160,24 @@ def _reader_reference_cite_details(
             "heading_path": "References",
             "location_label": f"{source_name} / References / [{ref_num}]",
             "evidence_quote": context,
-            "evidence_source": "reader_reference_link",
+            "evidence_source": "reader_missing_reference_entry" if missing_reference_entry else "reader_reference_link",
             "citation_context": context,
-            "citation_context_source": "reader_reference_link",
-            "summary_line": context,
-            "summary_source": "reader_reference_link",
+            "citation_context_source": "reader_missing_reference_entry" if missing_reference_entry else "reader_reference_link",
+            "summary_line": "" if missing_reference_entry else context,
+            "summary_source": "" if missing_reference_entry else "reader_reference_link",
             "answer_claim": context,
-            "support_relation": "This bibliography entry is linked from the opened Reader document.",
-            "binding_status": "reader_reference",
-            "binding_confidence": 1.0 if ref else 0.72,
-            "binding_reason": "Resolved from the opened paper's local reference list.",
-            "card_reference_entry": raw_ref,
+            "support_relation": missing_note if missing_reference_entry else "This bibliography entry is linked from the opened Reader document.",
+            "binding_status": "missing_reference_entry" if missing_reference_entry else "reader_reference",
+            "binding_confidence": 0.35 if missing_reference_entry else (1.0 if ref else 0.72),
+            "binding_reason": "Cited in text, but the bibliography entry is missing from the converted References section." if missing_reference_entry else "Resolved from the opened paper's local reference list.",
+            "card_reference_entry": "" if missing_reference_entry else raw_ref,
             "render_locale": str(load_prefs().get("ui_locale") or "").strip(),
         }
-        out.append(compose_citation_card(rec, locale=str(rec.get("render_locale") or "")))
+        if missing_reference_entry:
+            rec["title"] = f"Reference [{ref_num}]"
+            out.append(_compose_missing_reader_reference_card(rec, ref_num=ref_num, note=missing_note))
+        else:
+            out.append(compose_citation_card(rec, locale=str(rec.get("render_locale") or "")))
     return out
 
 

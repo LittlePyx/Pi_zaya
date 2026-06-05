@@ -7,20 +7,45 @@ from .text_utils import _normalize_text
 
 
 _REF_HEADING_RE = re.compile(r"^#+\s+References?\s*$|^References?\s*$", re.IGNORECASE)
-_REF_START_INLINE_RE = re.compile(r"^\[?\d+\]?[.)]?\s+")
+_REF_START_INLINE_RE = re.compile(r"^(?:\[\d{1,4}\]|\d{1,4}[.)])\s+")
 _REF_BACKREF_SUFFIX_RE = re.compile(
     r"(\b(?:19|20)\d{2}\.)(?:\s+\d{1,3}\s*(?:,\s*\d{1,3}){0,12})\s*$"
 )
 _YEAR_BACKREF_LINE_RE = re.compile(
     r"^(?P<year>(?:18|19|20)\d{2})\.\s+\d{1,3}(?:\s*,\s*\d{1,3}){0,12}\s*$"
 )
+_REF_SECTION_STOP_RE = re.compile(
+    r"^(?:Acknowledg(?:e)?ments?|Author contributions?|Competing interests?|"
+    r"Additional information|Supplementary information|Correspondence and requests|"
+    r"Data availability|Code availability|Ethics declarations?)$",
+    re.IGNORECASE,
+)
+_STANDALONE_REF_NUMBER_RE = re.compile(r"^\[?(\d{1,4})\]?[.)]\s*$")
+_INLINE_REF_START_RE = re.compile(r"^(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+(.+)$")
+_MID_REF_START_RE = re.compile(r"(?<!\S)(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+([A-Z][^.]{10,})")
+
+
+def _is_plausible_reference_number(value: str | int | None) -> bool:
+    try:
+        n = int(str(value or "").strip())
+    except Exception:
+        return False
+    if n <= 0:
+        return False
+    # Years inside titles/venues, e.g. "In 2019 IEEE ...", are not reference ids.
+    if 1800 <= n <= 2099:
+        return False
+    return n <= 999
 
 
 def _is_reference_start_line(text: str) -> bool:
     src = str(text or "").strip()
     if _YEAR_BACKREF_LINE_RE.match(src):
         return False
-    return bool(_REF_START_INLINE_RE.match(src))
+    match = _INLINE_REF_START_RE.match(src)
+    if not match:
+        return False
+    return _is_plausible_reference_number(match.group(1) or match.group(2))
 
 
 def _is_year_backref_continuation_line(text: str) -> bool:
@@ -73,6 +98,7 @@ def normalize_references_page_text(page_text: str) -> str:
     if heading_indices:
         raw_lines = raw_lines[int(heading_indices[0]) + 1 :]
 
+    reference_start_seen = 0
     for raw in raw_lines:
         line = _normalize_text(raw or "").strip()
         if not line:
@@ -80,6 +106,8 @@ def normalize_references_page_text(page_text: str) -> str:
             continue
         if _REF_HEADING_RE.match(line):
             continue
+        if _REF_SECTION_STOP_RE.match(line) and reference_start_seen >= 2:
+            break
         if re.fullmatch(r"\d{1,4}", line):
             continue
         if (
@@ -90,8 +118,12 @@ def normalize_references_page_text(page_text: str) -> str:
             continue
         if re.search(r"\bpage\s+\d+\s+of\s+\d+\b", line, flags=re.IGNORECASE):
             continue
-        if "www." in line.lower():
+        if re.fullmatch(r"www\.[^\s]+", line, flags=re.IGNORECASE):
             continue
+        if re.fullmatch(r"[A-Z][A-Z\s&,\-]{3,90}\s+www\.[^\s]+", line):
+            continue
+        if _is_reference_start_line(line) or _STANDALONE_REF_NUMBER_RE.match(line):
+            reference_start_seen += 1
         lines_out.append(line)
 
     while lines_out and not str(lines_out[0] or "").strip():
@@ -224,8 +256,8 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
             current_ref.append(stripped)
             continue
 
-        ref_match = re.match(r"^(\[?\d+\]?)[\.\s]+(.+)$", stripped)
-        if ref_match:
+        standalone_match = _STANDALONE_REF_NUMBER_RE.match(stripped)
+        if standalone_match and _is_plausible_reference_number(standalone_match.group(1)):
             if current_ref:
                 ref_text = _join_reference_fragments(current_ref)
                 if ref_text:
@@ -235,16 +267,31 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                 current_ref = []
                 current_ref_number = None
 
-            ref_content = ref_match.group(2).strip()
-            raw_num = str(ref_match.group(1) or "").strip().strip("[]")
-            try:
-                current_ref_number = int(raw_num)
-            except Exception:
+            current_ref_number = int(standalone_match.group(1))
+            continue
+
+        ref_match = _INLINE_REF_START_RE.match(stripped)
+        if ref_match and _is_plausible_reference_number(ref_match.group(1) or ref_match.group(2)):
+            if current_ref:
+                ref_text = _join_reference_fragments(current_ref)
+                if ref_text:
+                    out_num = int(current_ref_number or ref_num)
+                    formatted.append(format_single_reference(ref_text, out_num))
+                    ref_num = out_num + 1
+                current_ref = []
                 current_ref_number = None
+
+            ref_content = ref_match.group(3).strip()
+            current_ref_number = int(ref_match.group(1) or ref_match.group(2))
             if ref_content:
                 current_ref.append(ref_content)
         else:
-            mid_ref_match = re.search(r"\s+(\[?\d+\]?)[\.\s]+([A-Z][^.]{10,})", stripped)
+            mid_ref_match = None
+            for candidate in _MID_REF_START_RE.finditer(stripped):
+                raw_num = candidate.group(1) or candidate.group(2)
+                if _is_plausible_reference_number(raw_num):
+                    mid_ref_match = candidate
+                    break
             if mid_ref_match and current_ref:
                 before_ref = stripped[:mid_ref_match.start()].strip()
                 if before_ref:
@@ -255,12 +302,9 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                     formatted.append(format_single_reference(ref_text, out_num))
                     ref_num = out_num + 1
                 current_ref_number = None
-                raw_num = str(mid_ref_match.group(1) or "").strip().strip("[]")
-                try:
-                    current_ref_number = int(raw_num)
-                except Exception:
-                    current_ref_number = None
-                current_ref = [mid_ref_match.group(2).strip()]
+                raw_num = mid_ref_match.group(1) or mid_ref_match.group(2)
+                current_ref_number = int(raw_num)
+                current_ref = [mid_ref_match.group(3).strip()]
             else:
                 current_ref.append(stripped)
 

@@ -367,7 +367,7 @@ export const referencesApi = {
   bibliometricsCached: (meta: Record<string, unknown>) =>
     withCache(
       bibliometricsCache,
-      stableStringify(meta),
+      stableStringify({ bibliometrics_client_version: 2, meta }),
       () => api.post<Record<string, unknown>>('/api/references/bibliometrics', {
         meta,
       }),

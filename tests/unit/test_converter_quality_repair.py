@@ -865,6 +865,77 @@ def test_repair_markdown_text_backfills_truncated_references_from_pdf(tmp_path: 
     assert "[5] EPSILON" in repaired
 
 
+def test_repair_markdown_text_backfills_gapped_references_from_pdf(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Gapped Reference Paper.pdf"
+    recovered_refs = [
+        f"{idx}. REF{idx}, A. Recovered reference {idx}. Journal of Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+        for idx in range(1, 11)
+    ]
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "\n".join(["References", *recovered_refs]),
+        fontsize=10,
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Gapped Reference Paper.en.md"
+    original_refs = [
+        f"[{idx}] REF{idx}, A. Broken reference {idx}. Journal of Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+        for idx in [1, 2, 4, 5, 6, 7, 8, 9, 10]
+    ]
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Gapped Reference Paper",
+            "## Abstract",
+            "This paper cites a dense reference range [1-10].",
+            "## References",
+            *original_refs,
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(md_path, original, source_pdf_path=pdf_path)
+
+    repaired = str(result.get("repaired_text") or "")
+    assert result["changed"] is True
+    assert "reference_index_truncated" in result["issue_codes_before"]
+    assert "pdf_reference_backfill" in result["applied"]
+    assert "[3] REF3, A. Recovered reference 3." in repaired
+    assert "Broken reference" not in repaired
+
+
+def test_write_conversion_quality_result_flags_gapped_reference_index(tmp_path: Path):
+    md_path = tmp_path / "Gapped Reference Paper.en.md"
+    refs = [
+        f"[{idx}] REF{idx}, A. Reference {idx}. Journal of Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+        for idx in [1, 2, 4, 5, 6, 7, 8, 9, 10]
+    ]
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Gapped Reference Paper",
+                "## Abstract",
+                "This paper cites a dense reference range [1-10].",
+                "## References",
+                *refs,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path)
+
+    assert payload["source_quality"]["reference_index_truncated"] is True
+    assert "reference_index_truncated" in payload["repair_plan"]["issue_codes"]
+
+
 def test_write_conversion_quality_result_records_repair_trace(tmp_path: Path):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text(

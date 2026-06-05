@@ -16,6 +16,18 @@ export async function expectCitationShelfQuality(
   const shelf = page.getByTestId('citation-shelf')
   await expect(shelf).toHaveClass(/translate-x-0/)
 
+  const shelfItems = shelf.getByTestId('citation-shelf-item')
+  const shelfItemCount = await shelfItems.count()
+  for (let index = 0; index < shelfItemCount; index += 1) {
+    const item = shelfItems.nth(index)
+    await item.click()
+    const detailToggle = item.getByTestId('citation-shelf-detail-toggle')
+    if (await detailToggle.count()) {
+      const expanded = await detailToggle.getAttribute('aria-expanded')
+      if (expanded !== 'true') await detailToggle.click()
+    }
+  }
+
   const issues = await shelf.evaluate((node, qualityOptions) => {
     const root = node as HTMLElement
     const minItemsValue = qualityOptions.minItems ?? 1

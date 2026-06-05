@@ -128,6 +128,14 @@ async function mockProjectCitationShelf(page: Page, initialItems: Array<Record<s
   return patchPayloads
 }
 
+async function expandFocusedShelfDetails(page: Page) {
+  const toggle = page.getByTestId('citation-shelf-detail-toggle').first()
+  await expect(toggle).toBeVisible()
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
+    await toggle.click()
+  }
+}
+
 function shelfMetadataRepairFixture(items: Array<Record<string, unknown>>, ready: boolean) {
   const readyQuality = {
     contract_version: 1,
@@ -632,11 +640,14 @@ test('citation shelf item exposes source trail and can jump back to the answer',
   await expect(popover).toBeVisible()
   await popover.locator('.kb-cite-pop-add').click()
   await popover.locator('.kb-cite-pop-open-shelf').last().click()
-  await popover.locator('.kb-cite-pop-close').click()
+  await expect(popover).toBeHidden()
 
   const item = page.getByTestId('citation-shelf-item').first()
   await expect(item).toBeVisible()
   await item.click()
+  await expect(page.getByTestId('citation-shelf-source-trail')).toHaveCount(0)
+  await expect(page.getByTestId('citation-shelf-detail-toggle')).toHaveAttribute('aria-expanded', 'false')
+  await expandFocusedShelfDetails(page)
 
   const trail = page.getByTestId('citation-shelf-source-trail')
   await expect(trail).toBeVisible()
@@ -748,7 +759,7 @@ test('citation shelf reflects actual reader locate result after opening source',
   await popover.locator('.kb-cite-pop-open-shelf').last().click()
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
-  await popover.locator('.kb-cite-pop-close').click()
+  await expect(popover).toBeHidden()
 
   const locateQualityRequest = page.waitForRequest('**/api/library/quality/reader-locate')
   await page.getByTestId('citation-shelf-open-source').click()
@@ -971,7 +982,7 @@ test('citation shelf advances source repair run and refreshes repaired locate st
   await popover.locator('.kb-cite-pop-add').click()
   await popover.locator('.kb-cite-pop-open-shelf').last().click()
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
-  await popover.locator('.kb-cite-pop-close').click()
+  await expect(popover).toBeHidden()
 
   await page.getByTestId('citation-shelf-open-source').click()
   await expect.poll(() => repairCalls).toBeGreaterThan(0)
@@ -1066,6 +1077,7 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
   await expect(shelf).toHaveClass(/translate-x-0/)
   await expect.poll(() => bibliometricsRequests).toBeGreaterThan(1)
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('The missing cone problem')
+  await expandFocusedShelfDetails(page)
   await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
@@ -1156,6 +1168,7 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
   await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
   await expect(page.locator('.kb-shelf-item')).toContainText('Clean Card Title')
   await page.locator('.kb-shelf-item').first().click()
+  await expandFocusedShelfDetails(page)
   await expect(page.locator('.kb-shelf-summary')).toContainText('证据卡片')
   await expect(page.locator('.kb-shelf-summary')).toContainText('Polished card-view takeaway')
 })
@@ -1209,7 +1222,6 @@ test('citation shelf export auto-completes metadata before download', async ({ p
   const shelf = page.getByTestId('citation-shelf')
   await expect(shelf).toHaveClass(/translate-x-0/)
   await expect(shelf.getByTestId('citation-shelf-repair')).toBeVisible()
-  await popover.locator('.kb-cite-pop-close').click()
   await expect(popover).toBeHidden()
 
   await page.locator('.kb-shelf-advanced-toggle').click()
@@ -1233,6 +1245,7 @@ test('citation shelf export auto-completes metadata before download', async ({ p
     expect(bib).toContain('journal={IEEE Transactions on Acoustics, Speech, and Signal Processing}')
     expect(bib).toContain('doi={10.1109/tassp.1988.1164940}')
   }
+  await expandFocusedShelfDetails(page)
   await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
 })
@@ -1388,16 +1401,17 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   const shelf = page.getByTestId('citation-shelf')
   await expect(shelf).toHaveClass(/translate-x-0/)
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('The missing cone problem')
+  await expandFocusedShelfDetails(page)
   await expect(page.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
   await expect(page.getByTestId('citation-shelf-repair-impact')).toContainText('doi')
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
   await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
-  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-partial/)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
   const repairCountAfterAutoFill = repairRequestCount
 
-  await popover.locator('.kb-cite-pop-close').click()
+  await expect(popover).toBeHidden()
   await page.getByTestId('citation-shelf-open-source').click()
   const openPayload = page.getByTestId('message-list-open-payload')
   await expect(openPayload).toContainText(READER_REGRESSION_SOURCE_PATH)

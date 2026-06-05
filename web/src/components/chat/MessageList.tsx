@@ -95,6 +95,14 @@ interface MessageListDebugWindow extends Window {
   __kbMessageListPerf?: MessageListPrepPerfApi
 }
 
+export interface ShelfActivityState {
+  summary: boolean
+  repair: boolean
+  autoRepair: boolean
+  background: boolean
+  count: number
+}
+
 const messageListPrepPerfLog: MessageListPrepPerfEvent[] = []
 
 function messageListPerfNow() {
@@ -144,6 +152,7 @@ interface Props {
   onOpenReader?: (payload: ReaderOpenPayload) => void
   onShelfOpenChange?: (open: boolean) => void
   onShelfStateChange?: (state: { open: boolean; count: number }) => void
+  onShelfActivityChange?: (state: ShelfActivityState) => void
   closeShelfSignal?: number
   openShelfSignal?: number
   shelfDockMode?: boolean
@@ -4801,6 +4810,7 @@ export function MessageList({
   onOpenReader,
   onShelfOpenChange,
   onShelfStateChange,
+  onShelfActivityChange,
   closeShelfSignal = 0,
   openShelfSignal = 0,
   shelfDockMode = false,
@@ -4829,6 +4839,7 @@ export function MessageList({
   const [shelfSummaryLoadingKey, setShelfSummaryLoadingKey] = useState('')
   const [shelfRepairLoadingKey, setShelfRepairLoadingKey] = useState('')
   const [shelfAutoRepairingKeys, setShelfAutoRepairingKeys] = useState<string[]>([])
+  const [shelfBackgroundBusy, setShelfBackgroundBusy] = useState(false)
   const [shelfRepairImpact, setShelfRepairImpact] = useState<ShelfMetadataRepairImpact | null>(null)
   const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
   const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
@@ -4934,6 +4945,24 @@ export function MessageList({
   useEffect(() => {
     onShelfStateChange?.({ open: shelfOpen, count: shelfItems.length })
   }, [onShelfStateChange, shelfItems.length, shelfOpen])
+
+  useEffect(() => {
+    const summary = Boolean(shelfSummaryLoadingKey)
+    const repair = Boolean(shelfRepairLoadingKey)
+    const autoRepair = shelfAutoRepairingKeys.length > 0
+    const backgroundOnly = shelfBackgroundBusy && !summary && !repair && !autoRepair
+    onShelfActivityChange?.({
+      summary,
+      repair,
+      autoRepair,
+      background: shelfBackgroundBusy,
+      count: (summary ? 1 : 0) + (repair ? 1 : 0) + shelfAutoRepairingKeys.length + (backgroundOnly ? 1 : 0),
+    })
+  }, [onShelfActivityChange, shelfAutoRepairingKeys.length, shelfBackgroundBusy, shelfRepairLoadingKey, shelfSummaryLoadingKey])
+
+  useEffect(() => () => {
+    onShelfActivityChange?.({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
+  }, [onShelfActivityChange])
 
   useEffect(() => {
     if (closeShelfSignal <= 0) return
@@ -6121,6 +6150,21 @@ export function MessageList({
     }
   }
 
+  const closeCitationPopover = () => {
+    clearCitationHoverTimers()
+    setPopoverPinned(false)
+    setPopoverDetail(null)
+    setPopoverPos(null)
+    activePopoverRequestKeyRef.current = ''
+    setPopoverLoading(false)
+    setPopoverGuideLoading(false)
+  }
+
+  const openCitationShelfFromPopover = () => {
+    setShelfOpen(true)
+    closeCitationPopover()
+  }
+
   const addToShelf = (detail: CiteDetail) => {
     const item = toShelfItem(detail)
     const identity = shelfPaperIdentity(item)
@@ -6837,6 +6881,7 @@ export function MessageList({
       onSaveSnapshot={saveShelfSnapshot}
       onLoadSnapshot={loadShelfSnapshot}
       onDeleteSnapshot={deleteShelfSnapshot}
+      onBackgroundActivityChange={setShelfBackgroundBusy}
     />
   )
   const renderedShelfNode = shelfDockMode
@@ -8065,17 +8110,9 @@ export function MessageList({
           const identity = shelfPaperIdentity(popoverItem)
           return shelfItems.some((item) => item.key === popoverItem.key || shelfPaperIdentity(item) === identity)
         })())}
-        onClose={() => {
-          clearCitationHoverTimers()
-          setPopoverPinned(false)
-          setPopoverDetail(null)
-          setPopoverPos(null)
-          activePopoverRequestKeyRef.current = ''
-          setPopoverLoading(false)
-          setPopoverGuideLoading(false)
-        }}
+        onClose={closeCitationPopover}
         onAddToShelf={addToShelf}
-        onOpenShelf={() => setShelfOpen(true)}
+        onOpenShelf={openCitationShelfFromPopover}
         onOpenReader={openReaderFromDetail}
         onStartGuide={startPaperGuideFromDetail}
         onMouseEnter={keepCitationPreviewOpen}
