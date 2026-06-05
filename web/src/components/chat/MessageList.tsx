@@ -30,6 +30,7 @@ import {
   looksLowValueShelfSummary,
   mergeCiteMeta,
   normalizeCiteDetail,
+  normalizeShelfItemKind,
   normalizeShelfNote,
   normalizeShelfTags,
   legacyConversationShelfStorageKey,
@@ -3984,7 +3985,18 @@ function normalizeTitleLike(value: string): string {
     .trim()
 }
 
+function shelfKind(item: Pick<CiteShelfItem, 'shelfItemKind'>): string {
+  return normalizeShelfItemKind(String(item.shelfItemKind || ''))
+}
+
 function shelfPaperIdentity(item: CiteShelfItem): string {
+  if (shelfKind(item) === 'reader_selection') {
+    const source = String(item.sourcePath || item.sourceName || '').trim().toLowerCase()
+    const anchor = String(item.blockId || item.anchorId || item.anchor || '').trim().toLowerCase()
+    const excerpt = normalizeTitleLike(item.shelfExcerpt || item.evidenceQuote || item.raw || item.main)
+    const offsets = item as CiteShelfItem & { startOffset?: number; endOffset?: number }
+    return `reader-selection:${source}|${anchor}|${offsets.startOffset ?? ''}|${offsets.endOffset ?? ''}|${excerpt.slice(0, 160)}`
+  }
   const doi = normalizeDoiLike(item.doi || item.doiUrl)
   if (doi) return `doi:${doi}`
   const title = normalizeTitleLike(item.title || item.main)
@@ -3997,6 +4009,13 @@ function shelfSourceIdentity(item: Pick<CiteShelfItem, 'sourcePath' | 'sourceNam
   return String(item.sourcePath || item.sourceName || '')
     .trim()
     .toLowerCase()
+}
+
+function shouldMergeShelfItemsBySource(existing: CiteShelfItem, incoming: CiteShelfItem, sourceIdentity: string): boolean {
+  if (!sourceIdentity) return false
+  if (shelfKind(existing) === 'reader_selection') return false
+  if (shelfKind(incoming) === 'reader_selection') return false
+  return shelfSourceIdentity(existing) === sourceIdentity
 }
 
 function dedupeShelfItems(items: CiteShelfItem[]): CiteShelfItem[] {
@@ -6162,6 +6181,10 @@ export function MessageList({
           : {}
         if (String(data.type || '') !== 'reader-citation-shelf') return
         addReaderCitationToShelfRef.current(data)
+        const requestId = String(data.requestId || '').trim()
+        if (requestId) {
+          channel?.postMessage({ type: 'reader-citation-shelf-ack', requestId })
+        }
       }
     }
     return () => {
@@ -6185,7 +6208,7 @@ export function MessageList({
     const existingSnapshot = currentItems.find((entry) => (
       entry.key === item.key
       || shelfPaperIdentity(entry) === identity
-      || (sourceIdentity && shelfSourceIdentity(entry) === sourceIdentity)
+      || shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
     ))
     const summaryTarget = existingSnapshot ? mergeShelfItemWithLive(existingSnapshot, item) : item
     const focusKey = existingSnapshot?.key || summaryTarget.key
@@ -6193,7 +6216,7 @@ export function MessageList({
       const existing = current.find((entry) => (
         entry.key === item.key
         || shelfPaperIdentity(entry) === identity
-        || (sourceIdentity && shelfSourceIdentity(entry) === sourceIdentity)
+        || shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
       ))
       const mergedIncoming = existing ? mergeShelfItemWithLive(existing, item) : item
       const nextItem: CiteShelfItem = {
@@ -6219,7 +6242,7 @@ export function MessageList({
           entry.key !== item.key
           && entry.key !== existing?.key
           && shelfPaperIdentity(entry) !== identity
-          && (!sourceIdentity || shelfSourceIdentity(entry) !== sourceIdentity)
+          && !shouldMergeShelfItemsBySource(entry, item, sourceIdentity)
         )),
       ]
       return dedupeShelfItems(next).slice(0, SHELF_MAX_ITEMS)
@@ -6229,11 +6252,13 @@ export function MessageList({
     setFocusedShelfKey(focusKey)
     setShelfOpen(true)
     persistShelfLocalNow(nextItems, true)
-    fetchShelfSummaryForItem({
-      ...summaryTarget,
-      key: focusKey,
-      note: mergeSelectionNote(existingSnapshot?.note || summaryTarget.note, note),
-    }, { force: true })
+    window.setTimeout(() => {
+      fetchShelfSummaryForItem({
+        ...summaryTarget,
+        key: focusKey,
+        note: mergeSelectionNote(existingSnapshot?.note || summaryTarget.note, note),
+      }, { force: true })
+    }, 420)
   }
   const addReaderSelectionToShelfRef = useRef(addReaderSelectionToShelf)
   addReaderSelectionToShelfRef.current = addReaderSelectionToShelf
@@ -6254,6 +6279,10 @@ export function MessageList({
           : {}
         if (String(data.type || '') !== 'reader-selection-shelf') return
         addReaderSelectionToShelfRef.current(data)
+        const requestId = String(data.requestId || '').trim()
+        if (requestId) {
+          channel?.postMessage({ type: 'reader-selection-shelf-ack', requestId })
+        }
       }
     }
     return () => {

@@ -219,6 +219,7 @@ export const S = {
   reader_standalone_back: '返回',
   reader_standalone_back_to_session: '返回会话',
   reader_returned_to_session: '已切回原会话窗口，可以关闭当前阅读窗口。',
+  reader_shelf_save_failed: '已在当前页加入，但后端文献篮同步失败，请稍后重试。',
   reader_reload: '重新加载',
   reader_selection_copied: '选中文本已复制',
   reader_selection_ready: '已选中文本，可复制后继续提问',

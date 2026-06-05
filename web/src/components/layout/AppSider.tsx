@@ -35,7 +35,7 @@ import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { Conversation, Project } from '../../api/chat'
-import { READER_SESSION_NAV_CHANNEL } from '../chat/reader/readerTypes'
+import { CHAT_MAIN_WINDOW_NAME, READER_SESSION_NAV_CHANNEL } from '../chat/reader/readerTypes'
 import { SettingsDrawer } from './SettingsDrawer'
 
 const { Sider, Content } = Layout
@@ -372,6 +372,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.name !== CHAT_MAIN_WINDOW_NAME) {
+      window.name = CHAT_MAIN_WINDOW_NAME
+    }
+  }, [])
+
+  useEffect(() => {
     const openSettings = () => setDrawerOpen(true)
     window.addEventListener(OPEN_SETTINGS_EVENT, openSettings)
     return () => window.removeEventListener(OPEN_SETTINGS_EVENT, openSettings)
@@ -412,7 +419,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
     const handlePayload = (raw: unknown) => {
       const data = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {}
       if (String(data.type || '') !== 'reader-return-to-conversation') return
-      openLinkedConversation(String(data.conversationId || ''))
+      const conversationId = String(data.conversationId || '')
+      openLinkedConversation(conversationId)
+      const requestId = String(data.requestId || '').trim()
+      if (requestId && typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel(READER_SESSION_NAV_CHANNEL)
+        channel.postMessage({
+          type: 'reader-return-to-conversation-ack',
+          requestId,
+          conversationId,
+        })
+        channel.close()
+      }
     }
     const handleWindowMessage = (event: MessageEvent) => {
       if (event.origin && event.origin !== window.location.origin) return

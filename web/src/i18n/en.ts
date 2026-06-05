@@ -219,6 +219,7 @@ export const S = {
   reader_standalone_back: 'Back',
   reader_standalone_back_to_session: 'Back to session',
   reader_returned_to_session: 'Switched the original session window. You can close this reader window.',
+  reader_shelf_save_failed: 'Added locally, but backend basket sync failed. Please retry later.',
   reader_reload: 'Reload',
   reader_selection_copied: 'Selection copied',
   reader_selection_ready: 'Selection is ready to copy',

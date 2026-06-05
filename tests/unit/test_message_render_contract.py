@@ -74,4 +74,4 @@ def test_render_packet_projection_and_legacy_strip_share_contract_fields():
 
     assert "content" in rec
     assert "rendered_body" not in rec
-    assert "cite_details" not in rec
+    assert rec["cite_details"] == [{"num": 1, "anchor": "kb-cite-demo-1"}]

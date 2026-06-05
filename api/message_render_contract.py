@@ -11,7 +11,6 @@ LEGACY_RENDER_FIELDS = (
     "rendered_content",
     "copy_markdown",
     "copy_text",
-    "cite_details",
 )
 
 

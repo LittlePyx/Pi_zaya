@@ -435,6 +435,11 @@ function citationShelfUrl(opts?: CitationShelfRequest): string {
   return `/api/chat/citation-shelf${query ? `?${query}` : ''}`
 }
 
+function citationShelfItemsUrl(opts?: CitationShelfRequest): string {
+  const url = citationShelfUrl(opts)
+  return url.replace('/api/chat/citation-shelf', '/api/chat/citation-shelf/items')
+}
+
 export const chatApi = {
   listProjects: () =>
     api.get<Project[]>('/api/projects'),
@@ -516,6 +521,13 @@ export const chatApi = {
       scope: body.scope || 'project',
       project_id: body.projectId ?? null,
       allow_empty_overwrite: body.allowEmptyOverwrite ?? false,
+    }),
+  appendCitationShelfItem: (body: CitationShelfRequest & { item: Record<string, unknown>; open?: boolean }) =>
+    api.post<CitationShelfRecord>(citationShelfItemsUrl(body), {
+      item: body.item,
+      open: body.open ?? true,
+      scope: body.scope || 'project',
+      project_id: body.projectId ?? null,
     }),
   deleteCitationShelf: (opts?: CitationShelfRequest) =>
     api.delete<CitationShelfRecord>(citationShelfUrl(opts)),

@@ -2121,7 +2121,7 @@ def test_render_packet_only_rebuilds_legacy_answer_markdown_citations_when_conte
     persisted_packet = ((((persisted.get("meta") or {}).get("render_cache") or {}).get("render_packet") or {}))
 
     assert "rendered_body" not in msg
-    assert "cite_details" not in msg
+    assert len(msg.get("cite_details") or []) == 2
     assert "](#kb-cite-" in str(packet.get("rendered_body") or "")
     assert "](#kb-cite-" in str(packet.get("rendered_content") or "")
     assert len(packet.get("cite_details") or []) == 2
@@ -2346,7 +2346,7 @@ def test_render_packet_only_env_strips_legacy_render_fields(monkeypatch):
     assert "rendered_content" not in msg
     assert "copy_text" not in msg
     assert "copy_markdown" not in msg
-    assert "cite_details" not in msg
+    assert isinstance(msg.get("cite_details"), list)
     assert "notice" not in msg
 
     packet = (((msg.get("meta") or {}).get("paper_guide_contracts") or {}).get("render_packet") or {})
@@ -2386,7 +2386,7 @@ def test_render_packet_only_flag_strips_legacy_render_fields(monkeypatch):
     assert "rendered_content" not in msg
     assert "copy_text" not in msg
     assert "copy_markdown" not in msg
-    assert "cite_details" not in msg
+    assert isinstance(msg.get("cite_details"), list)
     assert "notice" not in msg
 
 

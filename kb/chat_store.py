@@ -59,6 +59,24 @@ def _shelf_item_kind(item: dict) -> str:
 
 
 def _shelf_item_identity(item: dict) -> str:
+    kind = _shelf_item_kind(item)
+    if kind == "reader_selection":
+        source = _shelf_first_text(item, "sourcePath", "source_path", "sourceName", "source_name", limit=800).lower()
+        anchor = _shelf_first_text(item, "blockId", "block_id", "anchorId", "anchor_id", "anchor", limit=800).lower()
+        start = _shelf_first_text(item, "startOffset", "start_offset", "startReadableIndex", "start_readable_index", limit=80)
+        end = _shelf_first_text(item, "endOffset", "end_offset", "endReadableIndex", "end_readable_index", limit=80)
+        excerpt = _normalize_shelf_title(_shelf_first_text(
+            item,
+            "shelfExcerpt",
+            "shelf_excerpt",
+            "evidenceQuote",
+            "evidence_quote",
+            "raw",
+            "citeFmt",
+            "cite_fmt",
+            limit=500,
+        ))
+        return f"reader-selection:{source}|{anchor}|{start}|{end}|{excerpt[:160]}"
     doi = _normalize_shelf_doi(_shelf_first_text(item, "doi", "doiUrl", "doi_url", limit=400))
     if doi:
         return f"doi:{doi}"
@@ -990,6 +1008,101 @@ class ChatStore:
             "project_id": resolved_project_id,
             "items": normalized_items,
             "open": bool(open_int),
+            "revision": revision,
+            "created_at": created_at,
+            "updated_at": now,
+        }
+
+    def append_citation_shelf_item(
+        self,
+        *,
+        item: dict,
+        open: bool = True,
+        conv_id: str | None = None,
+        project_id: str | None = None,
+        scope: str = "project",
+    ) -> dict | None:
+        normalized_new = _normalize_citation_shelf_items([item])
+        if not normalized_new:
+            return self.get_citation_shelf(conv_id=conv_id, project_id=project_id, scope=scope)
+        new_item = normalized_new[0]
+        with self._connect() as conn:
+            resolved = self._resolve_citation_shelf_scope(
+                conn,
+                conv_id=conv_id,
+                project_id=project_id,
+                scope=scope,
+            )
+            if resolved is None:
+                return None
+            scope_norm, scope_id, resolved_project_id = resolved
+            row = conn.execute(
+                """
+                SELECT scope, scope_id, items_json, open, revision, created_at, updated_at
+                FROM citation_shelves
+                WHERE scope = ? AND scope_id = ?
+                """,
+                (scope_norm, scope_id),
+            ).fetchone()
+            current = self._hydrate_citation_shelf_row(
+                row,
+                scope=scope_norm,
+                scope_id=scope_id,
+                project_id=resolved_project_id,
+            )
+            current_items = [entry for entry in list(current.get("items") or []) if isinstance(entry, dict)]
+            new_identity = _shelf_item_identity(new_item)
+            existing_index = next(
+                (
+                    idx
+                    for idx, existing in enumerate(current_items)
+                    if new_identity and _shelf_item_identity(existing) == new_identity
+                ),
+                -1,
+            )
+            if existing_index >= 0:
+                existing_item = current_items[existing_index]
+                next_items = _normalize_citation_shelf_items([
+                    existing_item,
+                    *current_items[:existing_index],
+                    *current_items[existing_index + 1:],
+                ])
+            else:
+                next_items = _normalize_citation_shelf_items([new_item, *current_items])
+            next_open = bool(open or current.get("open"))
+            if next_items == list(current.get("items") or []) and next_open == bool(current.get("open")):
+                return current
+            now = time.time()
+            created_at = float(current.get("created_at") or now)
+            revision = int(current.get("revision") or 0) + 1
+            conn.execute(
+                """
+                INSERT INTO citation_shelves (scope, scope_id, items_json, open, revision, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(scope, scope_id)
+                DO UPDATE SET
+                  items_json = excluded.items_json,
+                  open = excluded.open,
+                  revision = excluded.revision,
+                  updated_at = excluded.updated_at
+                """,
+                (
+                    scope_norm,
+                    scope_id,
+                    json.dumps(next_items, ensure_ascii=False, default=str),
+                    1 if next_open else 0,
+                    revision,
+                    created_at,
+                    now,
+                ),
+            )
+        return {
+            "version": 1,
+            "scope": scope_norm,
+            "scope_id": scope_id,
+            "project_id": resolved_project_id,
+            "items": next_items,
+            "open": next_open,
             "revision": revision,
             "created_at": created_at,
             "updated_at": now,

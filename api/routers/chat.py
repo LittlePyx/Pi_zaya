@@ -99,6 +99,13 @@ class CitationShelfBody(BaseModel):
     allow_empty_overwrite: bool = False
 
 
+class CitationShelfAppendBody(BaseModel):
+    item: dict[str, Any] = Field(default_factory=dict)
+    open: bool = True
+    scope: str | None = None
+    project_id: str | None = None
+
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 IMAGE_MIME_TO_EXT = {
     "image/png": ".png",
@@ -944,6 +951,27 @@ def save_citation_shelf(
         items=body.items,
         open=body.open,
         allow_empty_overwrite=body.allow_empty_overwrite,
+    )
+    if record is None:
+        raise HTTPException(404, "conversation not found")
+    return record
+
+
+@router.post("/chat/citation-shelf/items")
+def append_citation_shelf_item(
+    body: CitationShelfAppendBody,
+    conv_id: str | None = Query(None),
+    project_id: str | None = Query(None),
+    scope: str = Query("project"),
+):
+    resolved_scope = str(body.scope or scope or "project").strip() or "project"
+    resolved_project_id = body.project_id if body.project_id is not None else project_id
+    record = get_chat_store().append_citation_shelf_item(
+        conv_id=conv_id,
+        project_id=resolved_project_id,
+        scope=resolved_scope,
+        item=body.item,
+        open=body.open,
     )
     if record is None:
         raise HTTPException(404, "conversation not found")

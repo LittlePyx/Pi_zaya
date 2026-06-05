@@ -114,6 +114,7 @@ export const READER_CITATION_SHELF_EVENT = 'kb:reader-citation-shelf'
 export const READER_CITATION_SHELF_CHANNEL = 'kb:reader-citation-shelf'
 export const READER_SESSION_SYNC_CHANNEL = 'kb:reader-session-sync'
 export const READER_SESSION_NAV_CHANNEL = 'kb:reader-session-nav'
+export const CHAT_MAIN_WINDOW_NAME = 'kb-chat-main'
 
 export interface ReaderSelectionShelfPayload {
   text: string

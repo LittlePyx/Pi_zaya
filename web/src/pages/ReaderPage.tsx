@@ -13,6 +13,7 @@ import type {
   ReaderSessionHighlight,
 } from '../components/chat/reader/readerTypes'
 import {
+  CHAT_MAIN_WINDOW_NAME,
   READER_CITATION_SHELF_CHANNEL,
   READER_SELECTION_SHELF_CHANNEL,
   READER_SESSION_NAV_CHANNEL,
@@ -34,6 +35,30 @@ function linkedConversationIdFromSearch(search: string) {
 
 function stringField(rec: Record<string, unknown>, key: string) {
   return String(rec[key] || '').trim()
+}
+
+function readerNavRequestId() {
+  return `reader-nav-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function conversationUrl(conversationId: string) {
+  const params = new URLSearchParams()
+  if (conversationId) params.set('conversation', conversationId)
+  const url = new URL('/', window.location.origin)
+  const search = params.toString()
+  if (search) url.search = search
+  return url.toString()
+}
+
+function readerSelectionShelfKey(selection: ReaderSelectionShelfPayload) {
+  return [
+    'reader-selection',
+    selection.sourcePath,
+    selection.blockId || selection.anchorId || '',
+    selection.startOffset ?? '',
+    selection.endOffset ?? '',
+    String(selection.text || '').slice(0, 80),
+  ].join(':')
 }
 
 function numberField(rec: Record<string, unknown>, key: string) {
@@ -338,38 +363,99 @@ export default function ReaderPage() {
     publishState({ highlights: sessionHighlights, evidenceNotes: sessionHighlights, updatedAt: Date.now() })
   }, [payloadSourcePath, publishState, sessionHighlights])
 
-  const goBack = useCallback(() => {
-    if (sessionConversationId) {
-      flushPendingState()
-      const navPayload = {
-        type: 'reader-return-to-conversation',
-        conversationId: sessionConversationId,
-        sessionId,
-        sourcePath: payloadSourcePath,
-      }
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel(READER_SESSION_NAV_CHANNEL)
-        channel.postMessage(navPayload)
-        channel.close()
-      }
-      if (window.opener && !window.opener.closed) {
-        try {
-          window.opener.postMessage(navPayload, window.location.origin)
-          window.opener.focus()
-        } catch {
-          // Fall back to BroadcastChannel; the reader window can still close itself.
+  const returnToConversationWindow = useCallback((opts?: { closeReader?: boolean; openMainWindow?: boolean }) => {
+    if (!sessionConversationId) return false
+    flushPendingState()
+    const requestId = readerNavRequestId()
+    const navPayload = {
+      type: 'reader-return-to-conversation',
+      requestId,
+      conversationId: sessionConversationId,
+      sessionId,
+      sourcePath: payloadSourcePath,
+    }
+    let channel: BroadcastChannel | null = null
+    let acknowledged = false
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(READER_SESSION_NAV_CHANNEL)
+      channel.onmessage = (event) => {
+        const data = (event?.data && typeof event.data === 'object')
+          ? event.data as Record<string, unknown>
+          : {}
+        if (
+          String(data.type || '') === 'reader-return-to-conversation-ack'
+          && String(data.requestId || '') === requestId
+        ) {
+          acknowledged = true
+          channel?.close()
+          channel = null
+          if (opts?.closeReader) {
+            window.setTimeout(() => window.close(), 60)
+          }
         }
+      }
+      channel.postMessage(navPayload)
+    }
+    if (window.opener && !window.opener.closed) {
+      try {
+        window.opener.postMessage(navPayload, window.location.origin)
+        window.opener.focus()
+      } catch {
+        // BroadcastChannel remains the fallback when direct opener messaging is unavailable.
+      }
+      if (opts?.closeReader) {
         window.setTimeout(() => window.close(), 80)
         window.setTimeout(() => {
           if (!window.closed) {
             message.info(S.reader_returned_to_session || 'Switched the original session window. You can close this reader window.')
           }
         }, 220)
+      }
+      return true
+    }
+
+    if (opts?.openMainWindow !== false) {
+      window.setTimeout(() => {
+        if (acknowledged) return
+        try {
+          const target = window.open(conversationUrl(sessionConversationId), CHAT_MAIN_WINDOW_NAME)
+          if (target) {
+            target.focus()
+            if (opts?.closeReader) {
+              window.setTimeout(() => window.close(), 80)
+            }
+            window.setTimeout(() => {
+              channel?.close()
+            }, 800)
+            return
+          }
+        } catch {
+          // If focusing the named chat window is blocked, keep the reader open with a clear hint.
+        }
+        channel?.close()
+        if (opts?.closeReader) {
+          message.info(S.reader_returned_to_session || 'Switched the original session window. You can close this reader window.')
+        }
+      }, 180)
+      return true
+    }
+
+    window.setTimeout(() => {
+      channel?.close()
+      if (!acknowledged && opts?.closeReader) {
+        message.info(S.reader_returned_to_session || 'Switched the original session window. You can close this reader window.')
+      }
+    }, 360)
+    return acknowledged
+  }, [S.reader_returned_to_session, flushPendingState, payloadSourcePath, sessionConversationId, sessionId])
+
+  const goBack = useCallback(() => {
+    if (sessionConversationId) {
+      if (returnToConversationWindow({ closeReader: true, openMainWindow: true })) return
+      if (typeof BroadcastChannel !== 'undefined') {
         return
       }
-      const params = new URLSearchParams()
-      params.set('conversation', sessionConversationId)
-      navigate({ pathname: '/', search: `?${params.toString()}` })
+      message.info(S.reader_returned_to_session || 'Switched the original session window. You can close this reader window.')
       return
     }
     if (window.opener && window.history.length <= 1) {
@@ -377,7 +463,22 @@ export default function ReaderPage() {
       return
     }
     navigate('/')
-  }, [S.reader_returned_to_session, flushPendingState, navigate, payloadSourcePath, sessionConversationId, sessionId])
+  }, [S.reader_returned_to_session, navigate, returnToConversationWindow, sessionConversationId])
+
+  const persistReaderShelfItem = useCallback((item: Record<string, unknown>) => {
+    if (!item || Object.keys(item).length <= 0) return
+    const convId = String(session?.conversation_id || sessionConversationId || '').trim()
+    const projectId = String(sessionProjectId || '').trim()
+    void chatApi.appendCitationShelfItem({
+      convId: convId || undefined,
+      projectId: projectId || undefined,
+      scope: 'project',
+      item,
+      open: true,
+    }).catch(() => {
+      message.warning(S.reader_shelf_save_failed || 'Saved locally; backend basket sync failed.')
+    })
+  }, [S.reader_shelf_save_failed, session?.conversation_id, sessionConversationId, sessionProjectId])
 
   const appendSelection = useCallback((text: string) => {
     const raw = String(text || '').trim()
@@ -412,22 +513,62 @@ export default function ReaderPage() {
       createdAt: Number(selection.createdAt || Date.now()),
     }
     if (typeof BroadcastChannel !== 'undefined') {
+      const requestId = readerNavRequestId()
       const channel = new BroadcastChannel(READER_SELECTION_SHELF_CHANNEL)
       channel.postMessage({
         type: 'reader-selection-shelf',
+        requestId,
         ...next,
       })
       channel.close()
     }
+    persistReaderShelfItem({
+      key: readerSelectionShelfKey(next),
+      main: next.sourceName || title,
+      title: next.sourceName || title,
+      sourcePath,
+      source_path: sourcePath,
+      sourceName: next.sourceName || payload?.sourceName || title,
+      source_name: next.sourceName || payload?.sourceName || title,
+      headingPath: next.headingPath || '',
+      heading_path: next.headingPath || '',
+      blockId: next.blockId || '',
+      block_id: next.blockId || '',
+      anchorId: next.anchorId || '',
+      anchor_id: next.anchorId || '',
+      anchorKind: next.anchorKind || '',
+      anchor_kind: next.anchorKind || '',
+      raw: text,
+      citeFmt: text,
+      cite_fmt: text,
+      evidenceQuote: text,
+      evidence_quote: text,
+      evidenceSource: 'reader_selection',
+      evidence_source: 'reader_selection',
+      shelfItemKind: 'reader_selection',
+      shelf_item_kind: 'reader_selection',
+      shelfOrigin: 'reader_selection',
+      shelf_origin: 'reader_selection',
+      shelfExcerpt: text,
+      shelf_excerpt: text,
+      shelfExcerptLabel: 'Selected text',
+      shelf_excerpt_label: 'Selected text',
+      traceConvId: next.conversationId || '',
+      trace_conv_id: next.conversationId || '',
+      projectId: next.projectId || '',
+      project_id: next.projectId || '',
+    })
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, payload?.sourceName, payload?.sourcePath, session?.conversation_id, sessionProjectId, title])
+  }, [S.reader_added_to_shelf, payload?.sourceName, payload?.sourcePath, persistReaderShelfItem, session?.conversation_id, sessionProjectId, title])
 
   const addCitationToShelf = useCallback((detail: CiteDetail) => {
     if (!detail) return
     if (typeof BroadcastChannel !== 'undefined') {
+      const requestId = readerNavRequestId()
       const channel = new BroadcastChannel(READER_CITATION_SHELF_CHANNEL)
       channel.postMessage({
         type: 'reader-citation-shelf',
+        requestId,
         detail: detail as unknown as Record<string, unknown>,
         conversationId: session?.conversation_id || sessionConversationId || '',
         projectId: sessionProjectId,
@@ -435,30 +576,15 @@ export default function ReaderPage() {
       })
       channel.close()
     }
+    persistReaderShelfItem(detail as unknown as Record<string, unknown>)
     message.success(S.reader_added_to_shelf || 'Added to citation shelf')
-  }, [S.reader_added_to_shelf, session?.conversation_id, sessionConversationId, sessionProjectId])
+  }, [S.reader_added_to_shelf, persistReaderShelfItem, session?.conversation_id, sessionConversationId, sessionProjectId])
 
   const openCitationShelf = useCallback(() => {
     if (sessionConversationId) {
-      const navPayload = {
-        type: 'reader-return-to-conversation',
-        conversationId: sessionConversationId,
-        sessionId,
-        sourcePath: payloadSourcePath,
-      }
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel(READER_SESSION_NAV_CHANNEL)
-        channel.postMessage(navPayload)
-        channel.close()
-      }
-      try {
-        window.opener?.postMessage(navPayload, window.location.origin)
-        window.opener?.focus()
-      } catch {
-        // Returning to the session is best-effort for standalone reader windows.
-      }
+      returnToConversationWindow({ closeReader: false, openMainWindow: true })
     }
-  }, [payloadSourcePath, sessionConversationId, sessionId])
+  }, [returnToConversationWindow, sessionConversationId])
 
   const addSessionHighlight = useCallback((highlight: ReaderSessionHighlight) => {
     setSessionHighlights((current) => {
