@@ -122,6 +122,8 @@ def test_auto_snapshot_defaults_to_production_and_rate_limits(monkeypatch, tmp_p
     monkeypatch.delenv("KB_AUTO_BACKUP", raising=False)
     monkeypatch.setenv("KB_AUTO_BACKUP_MIN_INTERVAL_S", "999")
     maintenance._AUTO_BACKUP_LAST.clear()
+    ticks = iter([5.0, 6.0, 7.0])
+    monkeypatch.setattr(maintenance.time, "monotonic", lambda: next(ticks))
     settings = _settings(tmp_path)
 
     dev_settings = SimpleNamespace(**settings.__dict__)

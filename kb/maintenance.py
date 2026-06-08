@@ -524,9 +524,10 @@ def create_auto_snapshot(
 
     with _AUTO_BACKUP_LOCK:
         now = time.monotonic()
+        has_last = action_key in _AUTO_BACKUP_LAST
         last = float(_AUTO_BACKUP_LAST.get(action_key) or 0.0)
         remaining = min_interval_s - max(0.0, now - last)
-        if min_interval_s > 0 and remaining > 0:
+        if has_last and min_interval_s > 0 and remaining > 0:
             payload.update({
                 "reason": "rate_limited",
                 "retry_after_s": round(remaining, 3),
