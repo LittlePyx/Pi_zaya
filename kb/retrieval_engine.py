@@ -35,7 +35,7 @@ from .source_filters import is_excluded_source_path
 from .store import compute_file_sha1
 from .tokenize import tokenize
 
-# These callbacks are injected by app.py so this module can reuse the shared runtime cache.
+# These callbacks are injected by the API/runtime layer to reuse the shared cache.
 _CACHE_GET: Callable[[str, str], Any] = lambda _bucket, _key: None
 _CACHE_SET: Callable[..., None] = lambda _bucket, _key, _val, **_kw: None
 

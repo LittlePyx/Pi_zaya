@@ -270,7 +270,7 @@ def _render_app_title() -> None:
 
 def _normalize_math_markdown(text: str) -> str:
     """
-    Make math rendering more stable in Streamlit markdown.
+    Make math rendering more stable in rendered markdown.
 
     Goals:
     - Inline math: $...$

@@ -10,7 +10,7 @@ class _MissingStreamlit:
     def __getattr__(self, name: str) -> Any:
         raise RuntimeError(
             "Streamlit is only available for the legacy UI. "
-            "Install requirements-legacy.txt before using Streamlit modules."
+            "The product runtime is FastAPI + React; archived legacy notes live under docs/legacy/."
         )
 
 

@@ -401,7 +401,7 @@ def build_base_name(
 
 def copy_upload_to_dir(uploaded_file: Any, dst_dir: Path) -> Path:
     """
-    Streamlit uploaded_file has .name and .getbuffer().
+    Uploaded-file objects commonly expose .name and .getbuffer().
     Save to a tmp name to allow user to edit metadata before final rename.
     """
     ensure_dir(dst_dir)

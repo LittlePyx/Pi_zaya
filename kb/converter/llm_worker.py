@@ -114,7 +114,7 @@ class LLMWorker:
             self._llm_gate = self._get_or_create_shared_llm_gate(8)
             self._llm_max_inflight = int(self._llm_gate.get_limit())
         # Small in-memory caches to avoid repeated calls for identical snippets.
-        # These caches live per Streamlit process and reset on restart.
+        # These caches live per backend process and reset on restart.
         self._cache_confirm_heading: dict[str, dict] = {}
         self._cache_repair_math: dict[str, str] = {}
         self._cache_page_ocr = self._shared_page_ocr_cache

@@ -179,7 +179,7 @@ class ChatStore:
         self._init_db()
 
     def _connect(self, *, timeout_s: float | None = None) -> sqlite3.Connection:
-        # WAL helps concurrent reads while Streamlit reruns.
+        # WAL helps concurrent reads while API and background tasks overlap.
         try:
             timeout_final = float(timeout_s if timeout_s is not None else 30.0)
         except Exception:

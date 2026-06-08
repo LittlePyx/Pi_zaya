@@ -2447,7 +2447,7 @@ def _paper_guide_fallback_deepread_hits(
     )
 
 
-# Backward-compat for long-lived Streamlit processes that loaded older runtime_state.
+# Backward-compat for long-lived local processes that loaded older runtime_state.
 if not hasattr(RUNTIME, "BG_LOCK"):
     RUNTIME.BG_LOCK = threading.Lock()
 if not hasattr(RUNTIME, "BG_STATE"):
