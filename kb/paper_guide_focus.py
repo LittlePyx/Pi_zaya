@@ -157,7 +157,7 @@ def _extract_paper_guide_abstract_excerpt(text: str, *, max_chars: int = 560) ->
             if ("@" in first) or ("$^{" in first):
                 body_lines = body_lines[1:]
                 continue
-            if (len(first) <= 96) and (not re.search(r"[.!?銆傦紱;]$", first)):
+            if (len(first) <= 96) and (not re.search(r"[.!?。；;]$", first)):
                 body_lines = body_lines[1:]
                 continue
             break
@@ -1539,8 +1539,8 @@ def _repair_paper_guide_focus_answer_legacy1(
         addition = "Implementation detail: " + detail
         if addition in text:
             return text
-        if re.search(r"(?im)^(Evidence|渚濇嵁)\s*[:锛歖", text):
-            return re.sub(r"(?im)^((?:Evidence|渚濇嵁)\s*[:锛歖\s*)", r"\1\n- " + addition + "\n", text, count=1)
+        if re.search(r"(?im)^(Evidence|依据)\s*[:：]", text):
+            return re.sub(r"(?im)^((?:Evidence|依据)\s*[:：]\s*)", r"\1\n- " + addition + "\n", text, count=1)
         return f"{text}\n\n{addition}".strip()
     return text
 

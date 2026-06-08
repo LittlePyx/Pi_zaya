@@ -638,7 +638,6 @@ def _normalize_equation_source_notes(md: str) -> str:
             if m_eq and m_label and (
                 ("open/page" in ll)
                 or ("参考定位" in l)
-                or ("鍙傝€冨畾浣" in l)
                 or ("#1" in l)
             ):
                 label = _clean_label(m_label.group(1))

@@ -12,9 +12,9 @@ from kb.paper_guide_provenance import _extract_figure_number
 from kb.source_blocks import normalize_inline_markdown, normalize_match_text
 
 _INLINE_REF_PATTERNS = (
-    r"\[(\d{1,4}(?:\s*(?:[\-鈥撯€斺垝,])\s*\d{1,4})*)\]",
-    r"\$\^\{(\d{1,4}(?:\s*(?:[\-鈥撯€斺垝,])\s*\d{1,4})*)\}\$",
-    r"\^\{(\d{1,4}(?:\s*(?:[\-鈥撯€斺垝,])\s*\d{1,4})*)\}",
+    r"\[(\d{1,4}(?:\s*(?:[\-\u2013\u2014\u2015,])\s*\d{1,4})*)\]",
+    r"\$\^\{(\d{1,4}(?:\s*(?:[\-\u2013\u2014\u2015,])\s*\d{1,4})*)\}\$",
+    r"\^\{(\d{1,4}(?:\s*(?:[\-\u2013\u2014\u2015,])\s*\d{1,4})*)\}",
 )
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=(?:[A-Z0-9\[]|Fig(?:ure)?\.?\s*\d+|[a-z]\)))")
 _CLAUSE_PUNCT_RE = re.compile(r"[.;!?]")
