@@ -718,12 +718,20 @@ export function normalizeShelfNote(value: unknown): string {
   return text.slice(0, 1200)
 }
 
-function normalizeDoiLike(value: unknown): string {
+export function normalizeDoiLike(value: unknown): string {
   const raw = String(value || '').trim().toLowerCase()
   if (!raw) return ''
   return raw
     .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
     .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
+    .trim()
+}
+
+function normalizeShelfIdentityTitle(value: unknown): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
+    .replace(/\s+/g, ' ')
     .trim()
 }
 
@@ -738,6 +746,19 @@ function extractDoiLike(value: unknown): string {
 function doiUrlFrom(value: unknown): string {
   const doi = normalizeDoiLike(value)
   return doi ? `https://doi.org/${doi}` : ''
+}
+
+export function shelfItemPaperIdentity(item: CiteShelfItem): string {
+  const doiKey = normalizeDoiLike(item.doi || item.doiUrl)
+  if (doiKey) return `doi:${doiKey}`
+  const titleKey = normalizeShelfIdentityTitle(item.title || item.main)
+  const year = /^\d{4}$/.test(String(item.year || '').trim()) ? String(item.year).trim() : ''
+  if (titleKey) return `title:${titleKey}|${year}`
+  return `key:${item.key}`
+}
+
+export function shelfItemDoiExportValue(item: CiteShelfItem): string {
+  return normalizeDoiLike(item.doi || item.doiUrl) || String(item.doi || item.doiUrl || '').trim()
 }
 
 function metadataQualityOk(value: unknown): boolean {

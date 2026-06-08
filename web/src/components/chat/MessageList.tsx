@@ -59,6 +59,13 @@ import {
   getMessageRenderPacket,
   type MessageRenderPacketLite,
 } from './messageRenderPacket'
+import {
+  buildSelectedResearchContextPack,
+  buildSelectedResearchContextPackFromItems,
+  normalizeSelectedResearchContextPack,
+  type SelectedResearchContextPack,
+  type SelectedResearchContextItem,
+} from './researchContextPack'
 
 const { Text } = Typography
 const SHELF_MAX_ITEMS = 120
@@ -162,6 +169,9 @@ interface Props {
   sourceQualityRefreshToken?: number
   paperGuideSourcePath?: string
   paperGuideSourceName?: string
+  selectedResearchContextKeys?: Record<string, boolean>
+  onResearchContextPackChange?: (pack: SelectedResearchContextPack | null) => void
+  onResearchContextFollowUp?: (pack: SelectedResearchContextPack, promptText: string) => void
 }
 
 interface RefUiMetaLite {
@@ -3725,6 +3735,17 @@ function getMessageResearchTrace(message: Message): Record<string, unknown> | nu
   return traceId ? { trace_id: traceId } : null
 }
 
+function getAssistantSelectedResearchContext(message: Message): SelectedResearchContextPack | null {
+  const meta = asTraceRecord(message.meta)
+  const contracts = asTraceRecord(meta.paper_guide_contracts)
+  return normalizeSelectedResearchContextPack(contracts.selected_research_context)
+}
+
+function getUserPromptResearchContext(message: Message): SelectedResearchContextPack | null {
+  const meta = asTraceRecord(message.meta)
+  return normalizeSelectedResearchContextPack(meta.prompt_context)
+}
+
 function traceNum(value: unknown): number {
   const n = Number(value)
   return Number.isFinite(n) ? n : 0
@@ -3748,6 +3769,135 @@ function traceSourceLabels(items: unknown): string[] {
     if (out.length >= 3) break
   }
   return out
+}
+
+function contextItemTitle(item: SelectedResearchContextItem, fallback: string): string {
+  return String(item.title || item.excerpt || item.summary || fallback || '').trim()
+}
+
+function contextItemMeta(item: SelectedResearchContextItem): string {
+  return [
+    item.authors,
+    item.year,
+    item.sourceName,
+    item.refNum ? `[${item.refNum}]` : '',
+  ].filter(Boolean).join(' · ')
+}
+
+function ResearchContextReceipt({
+  pack,
+  onOpenReader,
+  onFollowUp,
+  S,
+}: {
+  pack?: SelectedResearchContextPack | null
+  onOpenReader?: (payload: ReaderOpenPayload) => void
+  onFollowUp?: (pack: SelectedResearchContextPack, item: SelectedResearchContextItem) => void
+  S: Record<string, string>
+}) {
+  const [expanded, setExpanded] = useState(false)
+  if (!pack || pack.items.length <= 0) return null
+  const preview = pack.items
+    .slice(0, 2)
+    .map((item) => contextItemTitle(item, S.default_source_fallback || 'Untitled'))
+    .filter(Boolean)
+    .join(' / ')
+  return (
+    <div className={`kb-research-context-receipt ${expanded ? 'is-expanded' : ''}`} data-testid="research-context-receipt">
+      <button
+        type="button"
+        className="kb-research-context-receipt-head"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        data-testid="research-context-receipt-toggle"
+      >
+        <span className="kb-research-context-receipt-title">
+          {(S.research_context_receipt_title || 'Used research context').replace('{n}', String(pack.items.length))}
+        </span>
+        <span className="kb-research-context-receipt-preview">
+          {preview || (S.research_context_receipt_preview || 'Selected excerpts from the research basket')}
+        </span>
+        <span className="kb-research-context-receipt-toggle-text">
+          {expanded ? (S.research_context_receipt_collapse || 'Collapse') : (S.research_context_receipt_expand || 'Details')}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="kb-research-context-receipt-list">
+          {pack.items.map((item, idx) => {
+            const title = contextItemTitle(item, S.default_source_fallback || 'Untitled')
+            const meta = contextItemMeta(item)
+            const location = String(item.locationLabel || '').trim()
+            const body = String(item.summary || item.excerpt || '').trim()
+            const secondary = item.summary && item.excerpt && item.summary !== item.excerpt ? item.excerpt : ''
+            const canOpen = Boolean(onOpenReader && item.sourcePath)
+            const canFollowUp = Boolean(onFollowUp)
+            return (
+              <div className="kb-research-context-receipt-item" key={`${item.key || title}-${idx}`} data-testid="research-context-receipt-item">
+                <div className="kb-research-context-receipt-item-main">
+                  <div className="kb-research-context-receipt-item-title">{title}</div>
+                  {meta ? <div className="kb-research-context-receipt-item-meta">{meta}</div> : null}
+                  {location ? (
+                    <div className="kb-research-context-receipt-location">
+                      <span>{S.research_context_receipt_location || 'Location'}</span>
+                      <strong>{location}</strong>
+                    </div>
+                  ) : null}
+                  {body ? (
+                    <div className="kb-research-context-receipt-body">
+                      {body}
+                    </div>
+                  ) : null}
+                  {secondary ? (
+                    <div className="kb-research-context-receipt-excerpt">
+                      {secondary}
+                    </div>
+                  ) : null}
+                  {item.note ? (
+                    <div className="kb-research-context-receipt-note">
+                      <span>{S.research_context_receipt_note || 'Note'}</span>
+                      {item.note}
+                    </div>
+                  ) : null}
+                  {item.doi ? <div className="kb-research-context-receipt-doi">DOI {item.doi}</div> : null}
+                </div>
+                {canOpen || canFollowUp ? (
+                  <div className="kb-research-context-receipt-actions">
+                    {canFollowUp ? (
+                      <button
+                        type="button"
+                        className="kb-research-context-receipt-follow"
+                        data-testid="research-context-receipt-followup"
+                        onClick={() => onFollowUp?.(pack, item)}
+                      >
+                        {S.research_context_receipt_followup || 'Ask follow-up'}
+                      </button>
+                    ) : null}
+                    {canOpen ? (
+                      <button
+                        type="button"
+                        className="kb-research-context-receipt-open"
+                        onClick={() => {
+                          onOpenReader?.({
+                            sourcePath: item.sourcePath,
+                            sourceName: item.sourceName || pack.guideSourceName || item.sourcePath.split(/[\\/]/).pop() || '',
+                            headingPath: location,
+                            snippet: item.excerpt || item.summary || title,
+                            highlightSnippet: item.excerpt || item.summary || title,
+                          })
+                        }}
+                      >
+                        {S.research_context_receipt_open || 'Open'}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 function ResearchTracePanel({ trace }: { trace?: Record<string, unknown> | null }) {
@@ -4820,6 +4970,9 @@ export function MessageList({
   sourceQualityRefreshToken = 0,
   paperGuideSourcePath,
   paperGuideSourceName,
+  selectedResearchContextKeys = {},
+  onResearchContextPackChange,
+  onResearchContextFollowUp,
 }: Props) {
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -5596,6 +5749,26 @@ export function MessageList({
       if (message.role !== 'assistant') continue
       answerOrder += 1
       out.set(message.id, { answerOrder, userMsgId: lastUserMsgId })
+    }
+    return out
+  }, [messages])
+
+  const selectedResearchContextByAssistantId = useMemo(() => {
+    const out = new Map<number, SelectedResearchContextPack>()
+    let pendingUserContext: SelectedResearchContextPack | null = null
+    for (const message of messages) {
+      if (message.role === 'user') {
+        pendingUserContext = getUserPromptResearchContext(message)
+        continue
+      }
+      if (message.role !== 'assistant') continue
+      const assistantContext = getAssistantSelectedResearchContext(message)
+      if (assistantContext) {
+        out.set(Number(message.id), assistantContext)
+      } else if (pendingUserContext) {
+        out.set(Number(message.id), pendingUserContext)
+      }
+      pendingUserContext = null
     }
     return out
   }, [messages])
@@ -6752,15 +6925,16 @@ export function MessageList({
   const saveShelfSnapshot = () => {
     const currentItems = dedupeShelfItems(shelfItems).slice(0, SHELF_MAX_ITEMS)
     if (currentItems.length <= 0) {
-      message.info('Shelf is empty; cannot save snapshot')
+      message.info(S.shelf_version_empty || 'Shelf is empty; cannot save local version')
       return
     }
     const now = Date.now()
     const d = new Date(now)
     const pad = (value: number) => String(value).padStart(2, '0')
+    const versionTime = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
     const entry: ShelfSavedSnapshot = {
       id: `s_${now.toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
-      name: `Snapshot ${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      name: (S.shelf_version_name || 'Version {time}').replace('{time}', versionTime),
       createdAt: now,
       items: currentItems.map((item) => ({ ...item })),
     }
@@ -6770,7 +6944,7 @@ export function MessageList({
       return next
     })
     setSelectedSavedSnapshotId(entry.id)
-    message.success('Shelf snapshot saved')
+    message.success(S.shelf_version_saved || 'Saved to this browser')
   }
 
   const loadShelfSnapshot = () => {
@@ -6780,7 +6954,7 @@ export function MessageList({
     setFocusedShelfKey('')
     setShelfSummaryLoadingKey('')
     setShelfRepairLoadingKey('')
-    message.success(`Loaded snapshot: ${selectedSavedSnapshot.name}`)
+    message.success((S.shelf_version_loaded || 'Restored local version: {name}').replace('{name}', selectedSavedSnapshot.name))
   }
 
   const deleteShelfSnapshot = () => {
@@ -6792,8 +6966,43 @@ export function MessageList({
       return next
     })
     setSelectedSavedSnapshotId((current) => (current === selectedSavedSnapshot.id ? '' : current))
-    message.success(`Deleted snapshot: ${removedName}`)
+    message.success((S.shelf_version_deleted || 'Deleted local version: {name}').replace('{name}', removedName))
   }
+
+  const useSelectedShelfItemsAsContext = useCallback((items: CiteShelfItem[]) => {
+    const pack = buildSelectedResearchContextPack(items, {
+      conversationId: activeConvId || '',
+      guideSourcePath: paperGuideSourcePath || '',
+      guideSourceName: paperGuideSourceName || '',
+    })
+    if (!pack) {
+      message.info(S.research_context_empty_toast || 'No usable context in the selected items')
+      return
+    }
+    onResearchContextPackChange?.(pack)
+    message.success(
+      (S.research_context_selected_toast || 'Added {n} selected items to the next answer context')
+      .replace('{n}', String(pack.items.length)),
+    )
+  }, [S, activeConvId, onResearchContextPackChange, paperGuideSourceName, paperGuideSourcePath])
+
+  const useReceiptItemAsFollowUp = useCallback((sourcePack: SelectedResearchContextPack, item: SelectedResearchContextItem) => {
+    if (!onResearchContextFollowUp) return
+    const pack = buildSelectedResearchContextPackFromItems([item], {
+      conversationId: activeConvId || sourcePack.conversationId || '',
+      guideSourcePath: sourcePack.guideSourcePath || paperGuideSourcePath || '',
+      guideSourceName: sourcePack.guideSourceName || paperGuideSourceName || '',
+    })
+    if (!pack) {
+      message.info(S.research_context_empty_toast || 'No usable context in this item')
+      return
+    }
+    const title = contextItemTitle(item, S.default_source_fallback || 'Untitled')
+    const promptText = (S.research_context_followup_prompt || 'Continue with this selected context: {title}\n\n')
+      .replace('{title}', title)
+    onResearchContextFollowUp(pack, promptText)
+    message.success(S.research_context_followup_toast || 'Ready for a follow-up question')
+  }, [S, activeConvId, onResearchContextFollowUp, paperGuideSourceName, paperGuideSourcePath])
 
   const shelfNode = (
     <CiteShelf
@@ -6810,6 +7019,7 @@ export function MessageList({
       repairLoadingKey={shelfRepairLoadingKey}
       repairingKeys={shelfAutoRepairingKeys}
       repairImpact={shelfRepairImpact}
+      activeContextKeys={selectedResearchContextKeys}
       snapshots={savedShelfSnapshots}
       selectedSnapshotId={selectedSavedSnapshotId}
       snapshotDiff={selectedSnapshotDiff}
@@ -6822,6 +7032,7 @@ export function MessageList({
         openReaderFromDetail(item as unknown as CiteDetail)
       }}
       onOpenMessage={openMessageFromShelfItem}
+      onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}
       onRemove={(key) => {
         const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
         if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)
@@ -6912,6 +7123,9 @@ export function MessageList({
             const isUser = message.role === 'user'
             const trace = assistantTraceByMsgId.get(message.id)
             const researchTrace = !isUser ? getMessageResearchTrace(message) : null
+            const selectedResearchContextPack = !isUser
+              ? selectedResearchContextByAssistantId.get(Number(message.id)) || null
+              : null
             const renderPacket = !isUser ? getMessageRenderPacket(message) : null
             const citeDetails = getMessageCiteDetailRecords(message)
               .map(normalizeCiteDetail)
@@ -7963,6 +8177,12 @@ export function MessageList({
                           const heading = String(picked.headingPath || '').trim()
                           return heading ? `\u5b9a\u4f4d\u5230\u539f\u6587\uff1a${heading}` : '\u5b9a\u4f4d\u5230\u539f\u6587'
                         }) : undefined}
+                      />
+                      <ResearchContextReceipt
+                        pack={selectedResearchContextPack}
+                        onOpenReader={onOpenReader}
+                        onFollowUp={onResearchContextFollowUp ? useReceiptItemAsFollowUp : undefined}
+                        S={S}
                       />
                       {unlinkedReferenceViews.length > 0 ? (
                         <div className="kb-unlinked-ref-strip" data-testid={`unlinked-reference-candidates-${message.id}`}>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import time
 from pathlib import Path
 from typing import Literal
@@ -10,13 +11,18 @@ from openai import OpenAI
 from pydantic import BaseModel
 
 from api.deps import get_settings, load_prefs, save_prefs
+from api.security import auth_token_configured
 from kb.file_ops import _pick_directory_dialog
+from kb.maintenance import latest_restore_review_state
 
 router = APIRouter(prefix="/api", tags=["settings"])
 _PATH_PREF_KEYS = {"pdf_dir", "md_dir"}
 _API_KEY_PREF_KEYS = {"text_api_key", "vision_api_key"}
 _LLM_PREF_KEYS = {"text_base_url", "text_model", "vision_base_url", "vision_model"}
+_BOOL_PREF_KEYS = {"auto_backup_enabled"}
 _LLM_TEST_RESULTS: dict[str, dict] = {}
+_RESTORE_NOTICE_WINDOW_S = 7 * 24 * 60 * 60
+_RESTORE_FAILURE_NOTICE_WINDOW_S = 24 * 60 * 60
 
 
 def _classify_connection_error(error: object) -> str:
@@ -47,6 +53,15 @@ def _normalize_pref_value(key: str, value):
         if key.endswith("_base_url"):
             raw = raw.rstrip("/")
         return raw
+    if key in _BOOL_PREF_KEYS:
+        if isinstance(value, bool):
+            return value
+        raw = str(value or "").strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        raise HTTPException(400, f"{key} must be a boolean")
     if key not in _PATH_PREF_KEYS:
         return value
     raw = str(value or "").strip()
@@ -163,6 +178,243 @@ def _readiness_payload(s) -> dict:
     return {"providers": {"text": text, "vision": vision}, "overall": overall}
 
 
+def _readiness_status(items: list[dict]) -> str:
+    severities = {str(item.get("severity") or "") for item in items}
+    if "error" in severities:
+        return "error"
+    if "warning" in severities:
+        return "warning"
+    return "ok"
+
+
+def _readiness_item(
+    key: str,
+    *,
+    severity: Literal["ok", "warning", "error"],
+    label: str,
+    detail: str = "",
+    action: str = "",
+) -> dict:
+    return {
+        "key": key,
+        "status": severity,
+        "severity": severity,
+        "label": label,
+        "detail": detail,
+        "action": action,
+    }
+
+
+def _check_directory(key: str, label: str, path_value: object) -> dict:
+    path = Path(str(path_value)).expanduser()
+    if path.exists() and path.is_dir():
+        return _readiness_item(key, severity="ok", label=label, detail=str(path))
+    parent = path.parent
+    if parent.exists() and os.access(parent, os.W_OK):
+        return _readiness_item(
+            key,
+            severity="warning",
+            label=label,
+            detail=f"Directory does not exist yet: {path}",
+            action="create_directory",
+        )
+    return _readiness_item(
+        key,
+        severity="error",
+        label=label,
+        detail=f"Directory parent is not writable or missing: {parent}",
+        action="fix_path",
+    )
+
+
+def _check_file_parent(key: str, label: str, path_value: object) -> dict:
+    path = Path(str(path_value)).expanduser()
+    parent = path.parent
+    if parent.exists() and os.access(parent, os.W_OK):
+        return _readiness_item(key, severity="ok", label=label, detail=str(path))
+    return _readiness_item(
+        key,
+        severity="error",
+        label=label,
+        detail=f"Parent directory is not writable or missing: {parent}",
+        action="fix_path",
+    )
+
+
+def _restore_event_age_s(event: dict | None) -> float | None:
+    if not isinstance(event, dict):
+        return None
+    try:
+        created_at = float(event.get("created_at") or 0.0)
+    except Exception:
+        return None
+    if created_at <= 0:
+        return None
+    return max(0.0, time.time() - created_at)
+
+
+def _public_restore_event(event: dict | None) -> dict | None:
+    if not isinstance(event, dict):
+        return None
+    errors = [str(item) for item in list(event.get("errors") or [])[:3] if str(item or "").strip()]
+    warnings = [str(item) for item in list(event.get("warnings") or [])[:3] if str(item or "").strip()]
+    try:
+        created_at = float(event.get("created_at") or 0.0)
+    except Exception:
+        created_at = 0.0
+    raw_components = event.get("components")
+    components = dict(raw_components) if isinstance(raw_components, dict) else {}
+    return {
+        "event": str(event.get("event") or ""),
+        "status": str(event.get("status") or ""),
+        "backup": str(event.get("backup") or ""),
+        "created_at": created_at,
+        "ok": bool(event.get("ok")),
+        "restart_required": bool(event.get("restart_required")),
+        "components": components,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+def _restore_readiness_item(event: dict | None, *, acknowledged: bool = False) -> dict | None:
+    if not isinstance(event, dict):
+        return None
+    status = str(event.get("status") or "").strip().lower()
+    age_s = _restore_event_age_s(event)
+    backup = str(event.get("backup") or "selected backup")
+    if status == "restored":
+        if acknowledged:
+            return None
+        if age_s is not None and age_s > _RESTORE_NOTICE_WINDOW_S:
+            return None
+        return _readiness_item(
+            "recent_restore",
+            severity="warning",
+            label="Recent restore",
+            detail=(
+                f"Backup {backup} was restored recently. Restart the API, then verify API keys, "
+                "the knowledge-base index, chat history, and library data."
+            ),
+            action="restart_and_check",
+        )
+    if status in {"failed", "blocked", "dry_run_failed"}:
+        if age_s is not None and age_s > _RESTORE_FAILURE_NOTICE_WINDOW_S:
+            return None
+        return _readiness_item(
+            "recent_restore",
+            severity="warning",
+            label="Recent restore",
+            detail=f"The latest restore attempt for {backup} ended as {status}. Inspect the restore audit before launch.",
+            action="inspect_restore_audit",
+        )
+    return None
+
+
+def _production_readiness_payload(s) -> dict:
+    items: list[dict] = []
+    llm = _readiness_payload(s)
+    text_ready = llm["providers"]["text"]
+    vision_ready = llm["providers"]["vision"]
+    items.append(_readiness_item(
+        "text_llm",
+        severity=text_ready["severity"],
+        label="Text model",
+        detail=text_ready["reason"],
+        action="configure_text_api_key" if text_ready["severity"] == "error" else "",
+    ))
+    items.append(_readiness_item(
+        "vision_llm",
+        severity=vision_ready["severity"],
+        label="Vision model",
+        detail=vision_ready["reason"],
+        action="configure_vision_api_key" if vision_ready["severity"] == "error" else "",
+    ))
+    items.append(_check_directory("db_dir", "Knowledge base directory", getattr(s, "db_dir", "")))
+    items.append(_check_file_parent("chat_db", "Chat database", getattr(s, "chat_db_path", "")))
+    items.append(_check_file_parent("library_db", "Library database", getattr(s, "library_db_path", "")))
+
+    auth_required = bool(getattr(s, "auth_required", False))
+    production = bool(getattr(s, "production", False))
+    if auth_required and not auth_token_configured(s):
+        items.append(_readiness_item(
+            "api_auth",
+            severity="error",
+            label="API access protection",
+            detail="Auth is required but no KB_ACCESS_TOKEN or KB_ACCESS_TOKEN_SHA256 is configured.",
+            action="set_access_token",
+        ))
+    elif auth_required:
+        items.append(_readiness_item("api_auth", severity="ok", label="API access protection", detail="Enabled"))
+    else:
+        items.append(_readiness_item(
+            "api_auth",
+            severity="warning" if production else "ok",
+            label="API access protection",
+            detail="Disabled",
+            action="enable_auth" if production else "",
+        ))
+
+    raw_origins = (os.environ.get("KB_API_ALLOW_ORIGINS") or os.environ.get("KB_CORS_ALLOW_ORIGINS") or "").strip()
+    if production and raw_origins == "*":
+        items.append(_readiness_item(
+            "cors",
+            severity="error",
+            label="CORS origins",
+            detail="Wildcard CORS is unsafe in production.",
+            action="set_allowed_origins",
+        ))
+    else:
+        items.append(_readiness_item("cors", severity="ok", label="CORS origins", detail=raw_origins or "local defaults"))
+
+    root = Path(__file__).resolve().parents[2]
+    dist_index = root / "web" / "dist" / "index.html"
+    if dist_index.exists():
+        items.append(_readiness_item("frontend_build", severity="ok", label="Frontend build", detail=str(dist_index)))
+    else:
+        items.append(_readiness_item(
+            "frontend_build",
+            severity="error" if production else "warning",
+            label="Frontend build",
+            detail="web/dist/index.html is missing.",
+            action="run_npm_build",
+        ))
+
+    try:
+        restore_state = latest_restore_review_state()
+    except Exception:
+        restore_state = {}
+    latest_restore = restore_state.get("restore") if isinstance(restore_state, dict) else None
+    acknowledgement = restore_state.get("acknowledgement") if isinstance(restore_state, dict) else None
+    restore_acknowledged = bool(restore_state.get("acknowledged")) if isinstance(restore_state, dict) else False
+    if not isinstance(latest_restore, dict):
+        latest_restore = None
+    if not isinstance(acknowledgement, dict):
+        acknowledgement = None
+    restore_item = _restore_readiness_item(latest_restore, acknowledged=restore_acknowledged)
+    if restore_item:
+        items.append(restore_item)
+
+    status = _readiness_status(items)
+    return {
+        "status": status,
+        "env": str(getattr(s, "app_env", "development") or "development"),
+        "production": production,
+        "auth_required": auth_required,
+        "items": items,
+        "llm": llm,
+        "restore": {
+            "latest": _public_restore_event(latest_restore),
+            "acknowledgement": _public_restore_event(acknowledgement),
+            "acknowledged": restore_acknowledged,
+        },
+    }
+
+
+def production_readiness_payload(s) -> dict:
+    return _production_readiness_payload(s)
+
+
 @router.get("/settings")
 def get_all_settings():
     s = get_settings()
@@ -173,6 +425,7 @@ def get_all_settings():
         "has_api_key": bool(s.api_key),
         "connection": _connection_status(s),
         "readiness": _readiness_payload(s),
+        "app_readiness": _production_readiness_payload(s),
         "db_dir": str(s.db_dir),
         "prefs": _public_prefs(prefs),
     }
@@ -181,6 +434,11 @@ def get_all_settings():
 @router.get("/settings/readiness")
 def get_llm_readiness():
     return _readiness_payload(get_settings())
+
+
+@router.get("/readiness")
+def get_readiness():
+    return production_readiness_payload(get_settings())
 
 
 class PrefsPatch(BaseModel):
@@ -205,6 +463,7 @@ class PrefsPatch(BaseModel):
     vision_api_key: str | None = None
     vision_base_url: str | None = None
     vision_model: str | None = None
+    auto_backup_enabled: bool | None = None
 
 
 @router.patch("/settings")
@@ -323,4 +582,13 @@ def test_llm(body: ConnectionTestBody | None = None):
 
 @router.get("/health")
 def health():
-    return {"status": "ok"}
+    s = get_settings()
+    return {
+        "status": "ok",
+        "env": str(getattr(s, "app_env", "development") or "development"),
+        "production": bool(getattr(s, "production", False)),
+        "auth": {
+            "required": bool(getattr(s, "auth_required", False)),
+            "configured": auth_token_configured(s),
+        },
+    }

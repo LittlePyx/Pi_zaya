@@ -23,11 +23,25 @@ from api.routers.library import (
     save_pdf_to_library,
 )
 from kb.file_ops import _path_exists
+from kb.maintenance import create_auto_snapshot
 from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
 from kb.task_runtime import kickoff_paper_guide_prefetch
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+
+def _dangerous_auto_snapshot(action: str, *, label: str = "", metadata: dict | None = None) -> dict:
+    snapshot = create_auto_snapshot(
+        get_settings(),
+        action=action,
+        label=label,
+        metadata=metadata or {},
+    )
+    if bool(snapshot.get("block_operation")):
+        detail = str(snapshot.get("error") or snapshot.get("reason") or "automatic backup failed")
+        raise HTTPException(503, f"automatic backup failed before {action}: {detail}")
+    return snapshot
 
 
 class CreateConvBody(BaseModel):
@@ -88,6 +102,10 @@ class ReaderSessionStatePatchBody(BaseModel):
 
 
 class ConversationReaderStatePatchBody(BaseModel):
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationResearchStatePatchBody(BaseModel):
     state: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -894,6 +912,22 @@ def patch_conversation_reader_state(
     return record
 
 
+@router.get("/conversations/{conv_id}/research-state")
+def get_conversation_research_state(conv_id: str):
+    record = get_chat_store().get_conversation_research_state(conv_id)
+    if record is None:
+        raise HTTPException(404, "conversation not found")
+    return record
+
+
+@router.patch("/conversations/{conv_id}/research-state")
+def patch_conversation_research_state(conv_id: str, body: ConversationResearchStatePatchBody):
+    record = get_chat_store().patch_conversation_research_state(conv_id, body.state)
+    if record is None:
+        raise HTTPException(404, "conversation not found")
+    return record
+
+
 @router.get("/projects")
 def list_projects():
     return get_chat_store().list_projects()
@@ -915,8 +949,13 @@ def rename_project(project_id: str, body: RenameProjectBody):
 
 @router.delete("/projects/{project_id}")
 def delete_project(project_id: str):
+    auto_backup = _dangerous_auto_snapshot(
+        "chat_project_delete",
+        label=project_id,
+        metadata={"project_id": project_id},
+    )
     get_chat_store().delete_project(project_id)
-    return {"ok": True}
+    return {"ok": True, "auto_backup": auto_backup}
 
 
 @router.get("/chat/citation-shelf")
@@ -984,6 +1023,11 @@ def delete_citation_shelf(
     project_id: str | None = Query(None),
     scope: str = Query("project"),
 ):
+    auto_backup = _dangerous_auto_snapshot(
+        "chat_citation_shelf_delete",
+        label=str(scope or "project"),
+        metadata={"conv_id": conv_id or "", "project_id": project_id or "", "scope": scope},
+    )
     record = get_chat_store().delete_citation_shelf(
         conv_id=conv_id,
         project_id=project_id,
@@ -991,6 +1035,7 @@ def delete_citation_shelf(
     )
     if record is None:
         raise HTTPException(404, "conversation not found")
+    record["auto_backup"] = auto_backup
     return record
 
 
@@ -1078,8 +1123,13 @@ def _merge_cached_reference_render_payload(conv_id: str, refs_by_user: dict) -> 
 
 @router.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: str):
+    auto_backup = _dangerous_auto_snapshot(
+        "chat_conversation_delete",
+        label=conv_id,
+        metadata={"conv_id": conv_id},
+    )
     get_chat_store().delete_conversation(conv_id)
-    return {"ok": True}
+    return {"ok": True, "auto_backup": auto_backup}
 
 
 @router.get("/conversations/{conv_id}/messages")
@@ -1152,10 +1202,15 @@ def update_message(msg_id: int, body: UpdateMsgBody):
 
 @router.delete("/messages/{msg_id}")
 def delete_message(msg_id: int):
+    auto_backup = _dangerous_auto_snapshot(
+        "chat_message_delete",
+        label=str(msg_id),
+        metadata={"message_id": int(msg_id)},
+    )
     ok = get_chat_store().delete_message(msg_id)
     if not ok:
         raise HTTPException(404, "message not found")
-    return {"ok": True}
+    return {"ok": True, "auto_backup": auto_backup}
 
 
 @router.get("/conversations/{conv_id}/refs")

@@ -18,6 +18,7 @@ function parseScenario(input: string | null): ReaderRegressionScenario {
   if (raw === 'evidence-nav') return 'evidence-nav'
   if (raw === 'duplicate-sections') return 'duplicate-sections'
   if (raw === 'duplicate-images') return 'duplicate-images'
+  if (raw === 'image-anchor-mismatch') return 'image-anchor-mismatch'
   if (raw === 'candidate-fallback') return 'candidate-fallback'
   if (raw === 'strict-missing-exact') return 'strict-missing-exact'
   if (raw === 'discussion-only') return 'discussion-only'

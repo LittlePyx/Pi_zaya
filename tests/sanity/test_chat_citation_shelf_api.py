@@ -240,3 +240,47 @@ def test_conversation_title_update_rejects_blank_title(monkeypatch, tmp_path: Pa
     renamed = client.patch(f"/api/conversations/{conv_id}/title", json={"title": "Valid title"})
     assert renamed.status_code == 200
     assert store.get_conversation(conv_id)["title"] == "Valid title"
+
+
+def test_conversation_research_state_api_roundtrip(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("research state")
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+
+    client = TestClient(app)
+
+    empty = client.get(f"/api/conversations/{conv_id}/research-state")
+    assert empty.status_code == 200
+    assert empty.json()["state"] == {}
+
+    saved = client.patch(
+        f"/api/conversations/{conv_id}/research-state",
+        json={
+            "state": {
+                "selected_research_context": {
+                    "version": 1,
+                    "id": "ctx-api",
+                    "source": "citation_shelf",
+                    "items": [{"key": "ref-api", "title": "API reference"}],
+                }
+            }
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["state"]["selected_research_context"]["id"] == "ctx-api"
+
+    loaded = client.get(f"/api/conversations/{conv_id}/research-state")
+    assert loaded.status_code == 200
+    assert loaded.json()["state"]["selected_research_context"]["items"][0]["key"] == "ref-api"
+
+    cleared = client.patch(
+        f"/api/conversations/{conv_id}/research-state",
+        json={"state": {"selected_research_context": None}},
+    )
+    assert cleared.status_code == 200
+    assert "selected_research_context" not in cleared.json()["state"]
+
+    missing = client.get("/api/conversations/missing/research-state")
+    assert missing.status_code == 404

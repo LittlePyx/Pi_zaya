@@ -73,7 +73,7 @@ async function fulfillJson(route: Route, body: unknown) {
   })
 }
 
-async function installMockBackend(page: Page, options: { messagesPageDelayMs?: number } = {}) {
+async function installMockBackend(page: Page, options: { messagesPageDelayMs?: number; hideConversationFromList?: boolean } = {}) {
   let renderPacketOnlyPageLoads = 0
 
   await page.route('**/api/settings', async (route) => {
@@ -123,7 +123,7 @@ async function installMockBackend(page: Page, options: { messagesPageDelayMs?: n
   })
 
   await page.route(/\/api\/conversations(?:\?.*)?$/, async (route) => {
-    await fulfillJson(route, [conversation])
+    await fulfillJson(route, options.hideConversationFromList ? [] : [conversation])
   })
 
   await page.route(`**/api/conversations/${CONV_ID}`, async (route) => {
@@ -217,6 +217,19 @@ test('paper guide src chips survive refresh when render packet only uses top-lev
   await page.reload()
   await openConversationAndExpectSrcChip(page)
   expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(2)
+})
+
+test('paper guide src chips survive direct URL restore without sidebar conversation cache', async ({ page }) => {
+  const backend = await installMockBackend(page, { hideConversationFromList: true })
+
+  await page.goto(`/?conversation=${CONV_ID}`)
+  await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-conversation-id', CONV_ID)
+  await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-mode', 'paper_guide')
+  await expect(page.locator('body')).toContainText('The claim is supported by the fixture evidence')
+  const chip = page.locator('.kb-cite-chip').first()
+  await expect(chip).toBeVisible()
+  await expect(chip).toHaveText('1')
+  expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(1)
 })
 
 test('chat activity strip exposes slow conversation loading and opt-in perf status', async ({ page }) => {

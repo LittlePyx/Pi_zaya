@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import JSONResponse
 
-from api.routers import chat, generate, library, references, settings
+from api.routers import auth, chat, generate, library, maintenance, references, settings
+from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
 
 app = FastAPI(title="Pi-zaya API")
 
@@ -37,8 +39,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def api_access_guard(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS" or not path.startswith("/api") or is_public_api_path(path):
+        return await call_next(request)
+    s = auth_settings()
+    if not bool(getattr(s, "auth_required", False)):
+        return await call_next(request)
+    if not auth_token_configured(s):
+        return JSONResponse(
+            {"detail": "API access token is not configured"},
+            status_code=503,
+        )
+    if request_is_authenticated(request, settings=s):
+        return await call_next(request)
+    return JSONResponse(
+        {"detail": "Authentication required"},
+        status_code=401,
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+app.include_router(auth.router)
 app.include_router(chat.router)
 app.include_router(generate.router)
 app.include_router(library.router)
+app.include_router(maintenance.router)
 app.include_router(references.router)
 app.include_router(settings.router)

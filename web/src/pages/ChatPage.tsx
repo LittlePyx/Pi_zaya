@@ -8,17 +8,24 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList, type ShelfActivityState } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
-import { shelfProjectScopeId, type CiteDetail } from '../components/chat/citationState'
+import type { CiteDetail } from '../components/chat/citationState'
 import { sameHighlightTarget } from '../components/chat/reader/readerDomUtils'
 import {
   READER_CITATION_SHELF_EVENT,
   READER_SELECTION_SHELF_EVENT,
   READER_SESSION_SYNC_CHANNEL,
+  READER_STANDALONE_WINDOW_NAME,
   type ReaderLocateResult,
   type ReaderOpenPayload,
   type ReaderSelectionShelfPayload,
   type ReaderSessionHighlight,
 } from '../components/chat/reader/readerTypes'
+import { buildResearchContext } from '../components/chat/researchContext'
+import {
+  normalizeSelectedResearchContextPack,
+  type SelectedResearchContextPack,
+} from '../components/chat/researchContextPack'
+import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
 import { chatApi, type ChatUploadItem, type Message } from '../api/chat'
 import { libraryApi } from '../api/library'
 import { useT } from '../i18n'
@@ -37,9 +44,9 @@ const DESKTOP_DOCK_COLLAPSED_WIDTH = 48
 const DESKTOP_DOCK_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
 const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
+const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-context:v1'
+const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
-const READER_STANDALONE_WINDOW_NAME = 'kb-reader-standalone'
-const OPEN_SETTINGS_EVENT = 'kb:open-settings'
 const showLegacyUiBlocks = false
 
 function uploadItemKey(item: ChatUploadItem) {
@@ -82,6 +89,52 @@ function loadStoredRightDockWidth() {
 function loadStoredRightDockCollapsed() {
   if (typeof window === 'undefined') return false
   return window.localStorage.getItem(RIGHT_DOCK_COLLAPSED_STORAGE_KEY) === '1'
+}
+
+function selectedResearchContextStorageKey(conversationId?: string | null, shelfScope?: string | null) {
+  const conv = String(conversationId || '').trim()
+  if (!conv) return ''
+  const scope = String(shelfScope || '__default__').trim() || '__default__'
+  return `${SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX}:${encodeURIComponent(conv)}:${encodeURIComponent(scope)}`
+}
+
+function loadStoredSelectedResearchContext(storageKey: string): SelectedResearchContextPack | null {
+  if (!storageKey || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return null
+    const pack = normalizeSelectedResearchContextPack(JSON.parse(raw))
+    if (!pack) {
+      window.localStorage.removeItem(storageKey)
+      return null
+    }
+    return pack
+  } catch {
+    try {
+      window.localStorage.removeItem(storageKey)
+    } catch {
+      // Best-effort cleanup only.
+    }
+    return null
+  }
+}
+
+function saveStoredSelectedResearchContext(storageKey: string, pack: SelectedResearchContextPack | null) {
+  if (!storageKey || typeof window === 'undefined') return
+  try {
+    if (!pack) {
+      window.localStorage.removeItem(storageKey)
+      return
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(pack))
+  } catch {
+    // Storage can fail in private mode or under quota pressure; the in-memory state still works.
+  }
+}
+
+function selectedResearchContextFromState(state: Record<string, unknown> | undefined | null): SelectedResearchContextPack | null {
+  const raw = state && typeof state === 'object' ? state[SELECTED_RESEARCH_CONTEXT_STATE_KEY] : null
+  return normalizeSelectedResearchContextPack(raw)
 }
 
 function isModelConnectionError(err: unknown) {
@@ -255,6 +308,8 @@ export default function ChatPage() {
   const [sourceQualityRefreshToken, setSourceQualityRefreshToken] = useState(0)
   const [citationShelfOpen, setCitationShelfOpen] = useState(false)
   const [citationShelfCount, setCitationShelfCount] = useState(0)
+  const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
+  const [selectedResearchContextLoadedKey, setSelectedResearchContextLoadedKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
   const [debugSnapshot, setDebugSnapshot] = useState<ChatPerfSnapshot>(() => collectChatPerfSnapshot())
@@ -284,15 +339,107 @@ export default function ChatPage() {
   const rightDockResizeRef = useRef<{ startX: number; startWidth: number } | null>(null)
   const rightDockActivePointerIdRef = useRef<number | null>(null)
   const rightDockResizeFocusRestoreRef = useRef<HTMLElement | null>(null)
+  const selectedResearchContextLoadSeqRef = useRef(0)
   const rightDockWidthLiveRef = useRef(rightDockWidth)
   const rightDockResizePreviewWidthRef = useRef(rightDockWidth)
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
-  const shelfProjectId = activeConversation?.project_id ?? activeProjectId ?? null
-  const shelfProjectScope = shelfProjectScopeId(shelfProjectId)
+  const activeGuideBinding = useMemo(() => {
+    const convId = String(activeConvId || '').trim()
+    return convId ? guideBindings?.[convId] : undefined
+  }, [activeConvId, guideBindings])
+  const researchContext = useMemo(() => buildResearchContext({
+    activeConvId,
+    activeProjectId,
+    activeConversation,
+    guideBinding: activeGuideBinding,
+    readerOpen,
+    readerPayload,
+    settingsLoaded: settings.loaded,
+    hasTextApiKey: settings.hasTextApiKey,
+    hasVisionApiKey: settings.hasVisionApiKey,
+    visionUsesTextFallback: settings.visionUsesTextFallback,
+    readiness: settings.llmReadiness,
+    pendingImageCount: pendingImages.length,
+  }), [
+    activeConvId,
+    activeConversation,
+    activeGuideBinding,
+    activeProjectId,
+    pendingImages.length,
+    readerOpen,
+    readerPayload,
+    settings.hasTextApiKey,
+    settings.hasVisionApiKey,
+    settings.loaded,
+    settings.llmReadiness,
+    settings.visionUsesTextFallback,
+  ])
+  const shelfProjectId = researchContext.shelfProjectId || null
+  const shelfProjectScope = researchContext.shelfScope
+  const selectedResearchContextDraftKey = useMemo(
+    () => selectedResearchContextStorageKey(activeConvId, shelfProjectScope),
+    [activeConvId, shelfProjectScope],
+  )
   const previousShelfProjectScopeRef = useRef(shelfProjectScope)
-  const openApiSettings = useCallback(() => {
-    window.dispatchEvent(new Event(OPEN_SETTINGS_EVENT))
+  const selectedResearchContextKeys = useMemo(() => {
+    const out: Record<string, boolean> = {}
+    for (const item of selectedResearchContext?.items || []) {
+      if (item.key) out[item.key] = true
+    }
+    return out
+  }, [selectedResearchContext])
+  const handleResearchContextPackChange = useCallback((pack: SelectedResearchContextPack | null) => {
+    setSelectedResearchContext(pack)
   }, [])
+  const openApiSettings = useCallback((target: ApiSettingsTarget | '' = '') => {
+    dispatchOpenSettings(target)
+  }, [])
+
+  useEffect(() => {
+    const draftKey = selectedResearchContextDraftKey
+    const convId = String(activeConvId || '').trim()
+    const loadSeq = selectedResearchContextLoadSeqRef.current + 1
+    selectedResearchContextLoadSeqRef.current = loadSeq
+    const localPack = loadStoredSelectedResearchContext(draftKey)
+    setSelectedResearchContextLoadedKey('')
+    setSelectedResearchContext(localPack)
+    if (!draftKey || !convId) {
+      setSelectedResearchContextLoadedKey(draftKey)
+      return undefined
+    }
+    let cancelled = false
+    void chatApi.getConversationResearchState(convId).then((record) => {
+      if (cancelled || selectedResearchContextLoadSeqRef.current !== loadSeq) return
+      const backendPack = selectedResearchContextFromState(record?.state)
+      const nextPack = backendPack || localPack
+      setSelectedResearchContext(nextPack)
+      if (backendPack) {
+        saveStoredSelectedResearchContext(draftKey, backendPack)
+      }
+      setSelectedResearchContextLoadedKey(draftKey)
+    }).catch(() => {
+      if (cancelled || selectedResearchContextLoadSeqRef.current !== loadSeq) return
+      setSelectedResearchContextLoadedKey(draftKey)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [activeConvId, selectedResearchContextDraftKey])
+
+  useEffect(() => {
+    if (selectedResearchContextLoadedKey !== selectedResearchContextDraftKey) return
+    saveStoredSelectedResearchContext(selectedResearchContextDraftKey, selectedResearchContext)
+    const convId = String(activeConvId || '').trim()
+    if (!convId) return undefined
+    const timer = window.setTimeout(() => {
+      void chatApi.patchConversationResearchState(convId, {
+        [SELECTED_RESEARCH_CONTEXT_STATE_KEY]: selectedResearchContext || null,
+      }).catch(() => {
+        // The local draft remains the fallback if the backend is temporarily unavailable.
+      })
+    }, 160)
+    return () => window.clearTimeout(timer)
+  }, [activeConvId, selectedResearchContext, selectedResearchContextDraftKey, selectedResearchContextLoadedKey])
 
   useEffect(() => {
     if (!debugPanelEnabled || typeof window === 'undefined') return undefined
@@ -302,10 +449,18 @@ export default function ChatPage() {
     return () => window.clearInterval(timer)
   }, [debugPanelEnabled])
 
-  const nextEventToken = () => {
+  const nextEventToken = useCallback(() => {
     timelineJumpTokenRef.current += 1
     return timelineJumpTokenRef.current
-  }
+  }, [])
+
+  const handleResearchContextFollowUp = useCallback((pack: SelectedResearchContextPack, promptText: string) => {
+    setSelectedResearchContext(pack)
+    setAppendSignal({
+      token: nextEventToken(),
+      text: promptText,
+    })
+  }, [nextEventToken])
 
   const nextReaderLocateRequestId = useCallback(() => {
     readerLocateRequestRef.current += 1
@@ -517,34 +672,34 @@ export default function ChatPage() {
   }, [dismissUploadItem, S.upload_pdf_cancelled, S.upload_pdf_duplicate, S.upload_pdf_error, S.upload_pdf_ready, uploadItems])
 
   const onSend = (text: string) => {
-    const textReadiness = settings.llmReadiness?.providers.text
-    const visionReadiness = settings.llmReadiness?.providers.vision
-    const textBlocked = !settings.hasTextApiKey || textReadiness?.severity === 'error'
-    const visionBlocked = !settings.hasVisionApiKey
-      || settings.visionUsesTextFallback
-      || visionReadiness?.severity === 'error'
-      || visionReadiness?.status === 'fallback'
-    if (settings.loaded && textBlocked) {
+    if (researchContext.api.sendBlockTarget === 'text') {
       message.warning(S.chat_api_missing_toast)
-      openApiSettings()
+      openApiSettings('text')
       return
     }
-    if (settings.loaded && pendingImages.length > 0 && visionBlocked) {
+    if (researchContext.api.sendBlockTarget === 'vision') {
       message.warning(S.chat_vision_api_missing_toast)
-      openApiSettings()
+      openApiSettings('vision')
       return
     }
+    const contextPackForSend = selectedResearchContext
     void sendMessage(text, {
       topK: settings.topK,
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
       deepRead: true,
+      promptContext: contextPackForSend,
+    }).then(() => {
+      if (!contextPackForSend) return
+      setSelectedResearchContext((current) => (
+        current?.id === contextPackForSend.id ? null : current
+      ))
     }).catch((err: unknown) => {
       const fallback = err instanceof Error ? err.message : String(err || '')
       if (isModelConnectionError(err)) {
         message.error(S.chat_api_connection_failed.replace('{error}', fallback || S.settings_test_unknown_error))
         void settings.refreshReadiness()
-        openApiSettings()
+        openApiSettings('text')
         return
       }
       message.error(fallback || S.upload_failed_generic)
@@ -657,12 +812,10 @@ export default function ChatPage() {
     return map
   }, [timelineItems])
   const effectiveGuide = useMemo(() => {
-    const convId = String(activeConvId || '').trim()
-    const localGuide = convId ? guideBindings?.[convId] : undefined
-    const sourcePath = String(activeConversation?.bound_source_path || localGuide?.sourcePath || '').trim()
-    const sourceName = String(activeConversation?.bound_source_name || localGuide?.sourceName || '').trim()
+    const sourcePath = researchContext.guideSource.sourcePath
+    const sourceName = researchContext.guideSource.sourceName
     return { sourcePath, sourceName }
-  }, [activeConvId, activeConversation?.bound_source_name, activeConversation?.bound_source_path, guideBindings])
+  }, [researchContext.guideSource.sourceName, researchContext.guideSource.sourcePath])
 
   const jumpToTimelineItem = (item: TimelineItem) => {
     if (liveRunning) {
@@ -1276,7 +1429,7 @@ export default function ChatPage() {
   }
 
   const timelineUiReady = !conversationLoading && timelineItems.length > 0
-  const dockTimelineAvailable = timelineUiReady
+  const dockTimelineAvailable = timelineUiReady && timelineItems.length > 1
   const dockShelfAvailable = citationShelfOpen || citationShelfCount > 0
   const dockReaderAvailable = readerOpen
   const showRightDock = desktopReaderEligible && (dockTimelineAvailable || dockShelfAvailable || dockReaderAvailable)
@@ -1301,12 +1454,10 @@ export default function ChatPage() {
   const rightDockExpanded = showRightDock && !rightDockCollapsed
   const showDesktopTimeline = false
   const showInlineTimelineToggle = timelineUiReady && !desktopReaderEligible
-  const showConversationMeta = !conversationLoading && (timelineUiReady || activeConversation?.mode === 'paper_guide')
-  const hideConversationMetaOnDesktop = showRightDock && activeConversation?.mode !== 'paper_guide'
-  const guideSourceLabel = String(activeConversation?.bound_source_name || '').trim()
-    || String(activeConversation?.bound_source_path || '').trim()
-    || S.guide_unbound
-  const guideSourceReady = Boolean(activeConversation?.bound_source_ready)
+  const showConversationMeta = !conversationLoading && (timelineUiReady || researchContext.mode === 'paper_guide')
+  const hideConversationMetaOnDesktop = showRightDock && researchContext.mode !== 'paper_guide'
+  const guideSourceLabel = researchContext.guideSource.label || S.guide_unbound
+  const guideSourceReady = researchContext.guideSource.ready
   const guideStatusLabel = guideSourceReady ? S.timeline_guide_ready : S.timeline_guide_pending
   const beginRightDockResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!rightDockExpanded || !event.isPrimary) return
@@ -1356,36 +1507,66 @@ export default function ChatPage() {
     event.preventDefault()
   }
   const chatComposer = (
-    <ChatInput
-      onSend={onSend}
-      onStop={cancelGen}
-      onUpload={onUpload}
-      onRetryUploadItem={onRetryUpload}
-      onCancelUploadItem={onCancelUpload}
-      onRemoveImage={removePendingImage}
-      onDismissUploadItem={dismissUploadItem}
-      onStartGuideFromUpload={onStartGuideFromUpload}
-      uploadItems={uploadItems}
-      pendingImages={pendingImages}
-      uploading={uploading}
-      generating={!!generation}
-      appendSignal={appendSignal}
-    />
+    <>
+      {selectedResearchContext ? (
+        <div className="kb-chat-context-pack-wrap" data-testid="chat-context-pack">
+          <div className="kb-chat-context-pack">
+            <div className="kb-chat-context-pack-main">
+              <span className="kb-chat-context-pack-label">
+                {S.research_context_pack_label || 'Next answer context'}
+              </span>
+              <span className="kb-chat-context-pack-text">
+                {(S.research_context_pack_summary || '{n} excerpts · ~{tokens} tokens')
+                  .replace('{n}', String(selectedResearchContext.items.length))
+                  .replace('{tokens}', String(selectedResearchContext.tokenEstimate))}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="kb-chat-context-pack-clear"
+              onClick={() => setSelectedResearchContext(null)}
+              data-testid="chat-context-pack-clear"
+            >
+              {S.research_context_pack_clear || 'Clear'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      <ChatInput
+        onSend={onSend}
+        onStop={cancelGen}
+        onUpload={onUpload}
+        onRetryUploadItem={onRetryUpload}
+        onCancelUploadItem={onCancelUpload}
+        onRemoveImage={removePendingImage}
+        onDismissUploadItem={dismissUploadItem}
+        onStartGuideFromUpload={onStartGuideFromUpload}
+        uploadItems={uploadItems}
+        pendingImages={pendingImages}
+        uploading={uploading}
+        generating={!!generation}
+        appendSignal={appendSignal}
+      />
+    </>
   )
-  const textReadiness = settings.llmReadiness?.providers.text
-  const showTextConnectionAlert = settings.loaded && (!settings.hasTextApiKey || textReadiness?.severity === 'error')
-  const textConnectionAlertDesc = textReadiness?.status === 'failed' && textReadiness.last_test?.error
-    ? S.chat_api_failed_desc.replace('{error}', textReadiness.last_test.error)
-    : S.chat_api_missing_desc
-  const connectionAlert = showTextConnectionAlert ? (
+  const apiConnectionAlertTarget = researchContext.api.connectionAlertTarget
+  const apiConnectionProvider = apiConnectionAlertTarget === 'vision'
+    ? researchContext.api.vision
+    : researchContext.api.text
+  const apiConnectionAlertDesc = apiConnectionAlertTarget === 'vision'
+    ? S.settings_missing_vision_api_desc
+    : apiConnectionProvider.status === 'failed' && (apiConnectionProvider.lastError || apiConnectionProvider.reason)
+      ? S.chat_api_failed_desc.replace('{error}', apiConnectionProvider.lastError || apiConnectionProvider.reason)
+      : S.chat_api_missing_desc
+  const connectionAlert = apiConnectionAlertTarget ? (
     <div className="kb-chat-connection-alert">
       <Alert
         type="warning"
         showIcon
-        message={S.chat_api_missing_title}
-        description={textConnectionAlertDesc}
+        message={apiConnectionAlertTarget === 'vision' ? S.settings_missing_vision_api_title : S.chat_api_missing_title}
+        description={apiConnectionAlertDesc}
         action={(
-          <Button size="small" onClick={openApiSettings}>
+          <Button size="small" onClick={() => openApiSettings(apiConnectionAlertTarget)}>
             {S.chat_open_api_settings}
           </Button>
         )}
@@ -1423,10 +1604,10 @@ export default function ChatPage() {
         tone: 'active',
       })
     }
-    if (readerOpen && activeConversation?.mode === 'paper_guide') {
+    if (researchContext.reader.open && researchContext.mode === 'paper_guide') {
       items.push({ key: 'reader', label: S.chat_activity_reader, tone: 'ready' })
     }
-    if (showTextConnectionAlert && items.length > 0) {
+    if (apiConnectionAlertTarget && items.length > 0) {
       items.push({ key: 'api', label: S.chat_activity_api_attention, tone: 'warning' })
     }
     return items
@@ -1438,15 +1619,15 @@ export default function ChatPage() {
     S.chat_activity_refs,
     S.chat_activity_shelf,
     S.chat_activity_upload,
-    activeConversation?.mode,
     conversationLoading,
     generation?.stage,
     liveRunning,
     messagesLoadingMore,
-    readerOpen,
+    researchContext.mode,
+    researchContext.reader.open,
     refsActivity.pendingPackCount,
     shelfActivity.count,
-    showTextConnectionAlert,
+    apiConnectionAlertTarget,
     uploading,
   ])
   const showActivityStrip = debugPanelEnabled || chatActivityItems.length > 0
@@ -1475,9 +1656,23 @@ export default function ChatPage() {
       </div>
     </div>
   ) : null
+  const researchContextAttrs = {
+    'data-research-conversation-id': researchContext.conversationId,
+    'data-research-project-id': researchContext.projectId,
+    'data-research-mode': researchContext.mode,
+    'data-research-task-mode': researchContext.taskMode,
+    'data-research-source-kind': researchContext.activeSource.kind,
+    'data-research-source-ready': researchContext.activeSource.ready ? '1' : '0',
+    'data-research-reader-linked': researchContext.reader.linkedToConversation ? '1' : '0',
+    'data-research-shelf-scope': researchContext.shelfScope,
+    'data-research-api-text': researchContext.api.text.status,
+    'data-research-api-vision': researchContext.api.vision.status,
+    'data-research-api-block-target': researchContext.api.sendBlockTarget,
+  } as const
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      <div data-testid="research-context-state" hidden {...researchContextAttrs} />
       {!activeConvId && messages.length === 0 ? (
         <>
           {connectionAlert}
@@ -1567,7 +1762,11 @@ export default function ChatPage() {
             <div className={`px-4 pb-2 pt-3 ${hideConversationMetaOnDesktop ? 'lg:hidden' : ''}`}>
               <div className="mx-auto max-w-7xl">
                 <section className="kb-chat-meta-shell">
-                  <div className="kb-chat-meta-strip">
+                  <div
+                    className="kb-chat-meta-strip"
+                    data-testid="research-context-strip"
+                    {...researchContextAttrs}
+                  >
                     {timelineItems.length > 0 ? (
                       <div className="kb-chat-meta-inline-block">
                         <span className="kb-chat-meta-label">{S.timeline_label}</span>
@@ -1584,7 +1783,7 @@ export default function ChatPage() {
                         ) : null}
                       </div>
                     ) : null}
-                    {activeConversation?.mode === 'paper_guide' ? (
+                    {researchContext.mode === 'paper_guide' ? (
                       <div className="kb-chat-meta-inline-block kb-chat-meta-inline-guide">
                         <span className="kb-chat-meta-label">{S.timeline_guide_label}</span>
                         <span className="kb-chat-meta-source" title={guideSourceLabel}>{guideSourceLabel}</span>
@@ -1723,6 +1922,9 @@ export default function ChatPage() {
                     sourceQualityRefreshToken={sourceQualityRefreshToken}
                     paperGuideSourcePath={effectiveGuide.sourcePath}
                     paperGuideSourceName={effectiveGuide.sourceName}
+                    selectedResearchContextKeys={selectedResearchContextKeys}
+                    onResearchContextPackChange={handleResearchContextPackChange}
+                    onResearchContextFollowUp={handleResearchContextFollowUp}
                   />
                 )}
               </div>
@@ -1757,7 +1959,10 @@ export default function ChatPage() {
                   transition: rightDockResizing ? 'none' : DESKTOP_DOCK_WIDTH_TRANSITION,
                 }}
               >
-                <div className="kb-chat-side-tabs" role="tablist" aria-label="Research side workspace">
+                <div className="kb-chat-side-workspace-head">
+                  <span>{S.side_dock_workspace || 'Research workspace'}</span>
+                </div>
+                <div className="kb-chat-side-tabs" role="tablist" aria-label={S.side_dock_workspace || 'Research side workspace'}>
                   <button
                     type="button"
                     className="kb-chat-side-collapse-btn"
@@ -1767,19 +1972,6 @@ export default function ChatPage() {
                   >
                     {rightDockCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
                   </button>
-                  {dockTimelineAvailable ? (
-                    <button
-                      type="button"
-                      role="tab"
-                      aria-selected={activeRightDockPanel === 'timeline'}
-                      className={`kb-chat-side-tab ${activeRightDockPanel === 'timeline' ? 'is-active' : ''}`}
-                      onClick={() => activateDockPanel('timeline')}
-                    >
-                      <ClockCircleOutlined />
-                      <span>{S.timeline_label}</span>
-                      <strong>{timelineItems.length}</strong>
-                    </button>
-                  ) : null}
                   <button
                     type="button"
                     role="tab"
@@ -1788,7 +1980,7 @@ export default function ChatPage() {
                     onClick={() => activateDockPanel('shelf')}
                   >
                     <BookOutlined />
-                    <span>{S.shelf_title}</span>
+                    <span>{S.side_dock_basket || S.shelf_title}</span>
                     {citationShelfCount > 0 ? <strong>{citationShelfCount}</strong> : null}
                   </button>
                   {dockReaderAvailable ? (
@@ -1800,7 +1992,20 @@ export default function ChatPage() {
                       onClick={() => activateDockPanel('reader')}
                     >
                       <ReadOutlined />
-                      <span>{S.side_dock_reader || 'Reader'}</span>
+                      <span>{S.side_dock_reader_locate || S.side_dock_reader || 'Reader'}</span>
+                    </button>
+                  ) : null}
+                  {dockTimelineAvailable ? (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={activeRightDockPanel === 'timeline'}
+                      className={`kb-chat-side-tab ${activeRightDockPanel === 'timeline' ? 'is-active' : ''}`}
+                      onClick={() => activateDockPanel('timeline')}
+                    >
+                      <ClockCircleOutlined />
+                      <span>{S.side_dock_path || S.timeline_label}</span>
+                      <strong>{timelineItems.length}</strong>
                     </button>
                   ) : null}
                 </div>
@@ -1809,7 +2014,7 @@ export default function ChatPage() {
                     <section className={`kb-chat-side-panel kb-chat-side-timeline ${activeRightDockPanel === 'timeline' ? 'is-active' : ''}`}>
                       <div className="kb-chat-side-panel-head">
                         <div>
-                          <div className="kb-chat-side-panel-title">{S.timeline_label}</div>
+                          <div className="kb-chat-side-panel-title">{S.side_dock_path_title || S.timeline_label}</div>
                           <div className="kb-chat-side-panel-subtitle">{S.timeline_badge.replace('{n}', String(timelineItems.length))}</div>
                         </div>
                       </div>

@@ -1561,11 +1561,12 @@ function buildMarkdownComponents(
   const renderReaderBlockShelfButton = (
     anchor: ReaderAnchorToken | null,
     fallback: ReactNode | string,
+    fallbackKind?: 'figure' | 'equation' | 'table',
   ) => {
-    if (variant !== 'reader' || !onReaderBlockAddToShelf || !anchor) return null
-    const kind = normalizeReaderAnchorKind(anchor.kind)
+    if (variant !== 'reader' || !onReaderBlockAddToShelf) return null
+    const kind = normalizeReaderAnchorKind(anchor?.kind || fallbackKind || '')
     if (!['figure', 'equation', 'table'].includes(kind)) return null
-    let text = String(anchor.text || '').replace(/\s+/g, ' ').trim()
+    let text = String(anchor?.text || '').replace(/\s+/g, ' ').trim()
     if (!text) {
       text = typeof fallback === 'string'
         ? String(fallback || '').replace(/\s+/g, ' ').trim()
@@ -1593,9 +1594,9 @@ function buildMarkdownComponents(
           event.stopPropagation()
           onReaderBlockAddToShelf({
             text: excerpt,
-            headingPath: anchor.headingPath,
-            blockId: anchor.blockId,
-            anchorId: anchor.anchorId,
+            headingPath: anchor?.headingPath,
+            blockId: anchor?.blockId,
+            anchorId: anchor?.anchorId,
             anchorKind: kind,
           })
         }}
@@ -1745,8 +1746,13 @@ function buildMarkdownComponents(
         })
         : null
       const shelfBtn = renderReaderBlockShelfButton(anchor, children)
+      const tableClass = [
+        'kb-table-wrap',
+        locateBtn || shelfBtn ? 'kb-md-table-action-host' : '',
+        shelfBtn ? 'kb-md-reader-block-action-host' : '',
+      ].filter(Boolean).join(' ')
       return (
-        <div className={`kb-table-wrap ${locateBtn || shelfBtn ? 'kb-md-table-action-host' : ''}`.trim()}>
+        <div className={tableClass}>
           <table {...attrs}>{children}</table>
           {locateBtn ? <span className="kb-md-table-tail">{locateBtn}</span> : null}
           {shelfBtn ? <span className="kb-md-reader-block-shelf-tail">{shelfBtn}</span> : null}
@@ -1899,11 +1905,14 @@ function buildMarkdownComponents(
           meta: { kind: 'figure', order: nextLocateRenderOrder() },
         })
         : null
-      const anchor = variant === 'reader' ? pickReaderAnchor(node, ['figure']) : null
+      const pickedAnchor = variant === 'reader' ? pickReaderAnchor(node, ['figure']) : null
+      const anchor = normalizeReaderAnchorKind(String(pickedAnchor?.kind || '')) === 'figure'
+        ? pickedAnchor
+        : null
       const attrs = variant === 'reader'
         ? readerAnchorAttrs(anchor)
         : undefined
-      const shelfBtn = renderReaderBlockShelfButton(anchor, figureSnippet)
+      const shelfBtn = renderReaderBlockShelfButton(anchor, figureSnippet, 'figure')
       const imageAlt = String(alt || 'figure')
       const imageTitle = S?.reader_expand_image || 'Expand image'
       const imageNode = (
@@ -2000,7 +2009,7 @@ function buildMarkdownComponents(
                 {canAddRef ? (
                   <button
                     type="button"
-                    className="kb-md-reference-entry-action"
+                    className="kb-md-reader-block-shelf kb-md-reference-entry-action"
                     aria-label={addTitle}
                     title={addTitle}
                     onClick={(event) => {

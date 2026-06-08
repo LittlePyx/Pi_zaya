@@ -638,12 +638,9 @@ export function CitationPopover({
   ].filter(Boolean) as Array<{ label: string; value: string }>
   const showMetaGrid = false
   const showMetrics = false
-  const showCardQuality = Boolean(
-    cardQualityLabel
-    && !cardQualityFlags.includes('missing_reference_entry')
-    && (cardWarning || systemAHasReviewRisk || cardQualityScore < 0.62),
-  )
-  const showExternalMetadataWarning = externalMetadataStatus === 'candidate' || externalMetadataStatus === 'conflict'
+  const showCardQuality = false
+  const showCardWarning = Boolean(cardWarning && cardQualityFlags.includes('missing_reference_entry'))
+  const showExternalMetadataWarning = externalMetadataStatus === 'conflict'
   const externalMetadataWarningText = showExternalMetadataWarning
     ? (externalMetadataReason || S.cite_external_metadata_warning)
     : ''
@@ -804,7 +801,7 @@ export function CitationPopover({
           {cardQualityScore > 0 ? <span className="kb-cite-pop-quality-score">{Math.round(cardQualityScore * 100)}%</span> : null}
         </div>
       ) : null}
-      {cardWarning ? (
+      {showCardWarning ? (
         <div className="kb-cite-pop-warning" data-testid="citation-popover-card-warning">
           {cardWarning}
         </div>

@@ -862,9 +862,7 @@ export function scrollReaderTargetIntoView(
       top: Math.max(0, Math.min(maxScrollTop, nextTop)),
       behavior: 'auto',
     })
-    if (root.scrollHeight <= root.clientHeight + 2) {
-      target.scrollIntoView({ block: 'center', inline: 'nearest' })
-    }
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     return
   }
 
@@ -876,9 +874,7 @@ export function scrollReaderTargetIntoView(
       top: Math.max(0, Math.min(maxScrollTop, nextTop)),
       behavior: 'auto',
     })
-    if (root.scrollHeight <= root.clientHeight + 2) {
-      target.scrollIntoView({ block: 'center', inline: 'nearest' })
-    }
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     return
   }
 

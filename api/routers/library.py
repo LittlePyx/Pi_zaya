@@ -69,6 +69,7 @@ from kb.converter.figure_assets import (
 )
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.library_store import LibraryStore
+from kb.maintenance import create_auto_snapshot
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
 from kb.reference_sync import start_reference_sync
 from kb.store import compute_doc_id, doc_chunks_path, load_docs_index
@@ -77,6 +78,19 @@ router = APIRouter(prefix="/api/library", tags=["library"])
 _RENAME_SUGGEST_CACHE: dict[str, dict] = {}
 _CONVERSION_QUALITY_CACHE: dict[str, tuple[int, int, int, int, dict]] = {}
 _RESEARCH_QA_EVAL_ROOT = Path("test_results") / "research_qa_eval"
+
+
+def _dangerous_auto_snapshot(action: str, *, label: str = "", metadata: dict | None = None) -> dict:
+    snapshot = create_auto_snapshot(
+        get_settings(),
+        action=action,
+        label=label,
+        metadata=metadata or {},
+    )
+    if bool(snapshot.get("block_operation")):
+        detail = str(snapshot.get("error") or snapshot.get("reason") or "automatic backup failed")
+        raise HTTPException(503, f"automatic backup failed before {action}: {detail}")
+    return snapshot
 
 
 def _suggestion_basis_meta(suggestion: PdfMetaSuggestion, *, venue: str, year: str, title: str) -> dict:
@@ -5232,6 +5246,11 @@ def apply_rename_suggestions(body: RenameApplyBody):
     if not names:
         raise HTTPException(400, "pdf_names required")
 
+    auto_backup = _dangerous_auto_snapshot(
+        "library_rename_apply",
+        label=str(len(names)),
+        metadata={"count": len(names), "also_md": bool(body.also_md)},
+    )
     items: list[dict] = []
     renamed = 0
     failed = 0
@@ -5268,6 +5287,7 @@ def apply_rename_suggestions(body: RenameApplyBody):
         "skipped": int(skipped),
         "failed": int(failed),
         "needs_reindex": bool(renamed > 0),
+        "auto_backup": auto_backup,
         "items": items,
     }
 
@@ -5284,6 +5304,15 @@ def convert_pending(body: ConvertPendingBody):
     limit = max(0, int(body.limit or 0))
     no_llm = bool(body.no_llm) or (str(body.speed_mode or "").strip().lower() == "no_llm")
     replace = bool(body.replace)
+    auto_backup = (
+        _dangerous_auto_snapshot(
+            "library_convert_pending_replace",
+            label=str(limit or "all"),
+            metadata={"limit": limit, "speed_mode": str(body.speed_mode or ""), "replace": replace},
+        )
+        if replace
+        else None
+    )
 
     enqueued = 0
     skipped_busy = 0
@@ -5318,6 +5347,7 @@ def convert_pending(body: ConvertPendingBody):
         "enqueued": int(enqueued),
         "skipped_busy": int(skipped_busy),
         "pending_total": int(pending_total),
+        "auto_backup": auto_backup,
     }
 
 
@@ -5402,6 +5432,15 @@ def start_convert(body: ConvertBody):
     md_d.mkdir(parents=True, exist_ok=True)
     pdf_path = pdf_d / body.pdf_name
     no_llm = bool(body.no_llm) or (str(body.speed_mode or "").strip().lower() == "no_llm")
+    auto_backup = (
+        _dangerous_auto_snapshot(
+            "library_convert_replace",
+            label=Path(str(body.pdf_name or "")).stem,
+            metadata={"pdf_name": str(body.pdf_name or ""), "speed_mode": str(body.speed_mode or ""), "replace": bool(body.replace)},
+        )
+        if bool(body.replace)
+        else None
+    )
     task = _build_bg_task(
         pdf_path=pdf_path,
         out_root=md_d,
@@ -5411,7 +5450,7 @@ def start_convert(body: ConvertBody):
         speed_mode=body.speed_mode,
     )
     _bg_enqueue(task)
-    return {"ok": True, "task_id": task.get("_tid", "")}
+    return {"ok": True, "task_id": task.get("_tid", ""), "auto_backup": auto_backup}
 
 
 @router.get("/convert/status")
@@ -5733,7 +5772,14 @@ def advance_quality_repair_run(run_id: str, body: QualityRepairRunAdvanceBody = 
         or phase in {"reindex_pending", "reindex_failed", "source_reconversion_queued"}
     )
     if should_reindex:
+        auto_backup = _dangerous_auto_snapshot(
+            "library_quality_repair_reindex",
+            label=run_id,
+            metadata={"repair_run_id": run_id},
+        )
         result = _run_library_reindex()
+        if isinstance(result, dict):
+            result["auto_backup"] = auto_backup
         ok = bool(result.get("ok"))
         verification_patch = _quality_repair_run_verification_patch(current, body=body) if ok else {}
         row = _quality_repair_run_update_record(
@@ -6131,7 +6177,13 @@ def conversion_quality_batch(body: QualityConversionBatchBody):
         limit = 1000
     limit = max(1, min(limit, 5000))
     targets = discover_quality_markdown_files(md_d, limit=limit)
+    auto_backup = None
     if bool(body.repair):
+        auto_backup = _dangerous_auto_snapshot(
+            "library_conversion_quality_repair",
+            label=str(len(targets)),
+            metadata={"target_count": len(targets), "rebuild_indices": bool(body.rebuild_indices)},
+        )
         stats = repair_quality_targets(
             targets,
             pdf_root=pdf_d,
@@ -6153,6 +6205,7 @@ def conversion_quality_batch(body: QualityConversionBatchBody):
         "target_count": len(targets),
         "limit": limit,
         "needs_reindex": needs_reindex,
+        "auto_backup": auto_backup,
         **stats,
     }
 
@@ -6247,6 +6300,17 @@ def refresh_figure_assets(body: FigureAssetRefreshBody):
     scan_errors = list(scan.get("errors") or [])
     if scan_errors:
         errors.extend(scan_errors[: max(0, 20 - len(errors))])
+    auto_backup = None
+    if replace and int(scan.get("refresh_recommended") or 0) > 0:
+        auto_backup = _dangerous_auto_snapshot(
+            "library_figure_assets_refresh",
+            label=str(int(scan.get("refresh_recommended") or 0)),
+            metadata={
+                "requested": len(targets),
+                "refresh_recommended": int(scan.get("refresh_recommended") or 0),
+                "target_dpi": int(scan.get("target_dpi") or body.target_dpi or 0),
+            },
+        )
 
     snap = _bg_snapshot()
     task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
@@ -6357,6 +6421,7 @@ def refresh_figure_assets(body: FigureAssetRefreshBody):
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
         "errors": errors[:20],
+        "auto_backup": auto_backup,
         "items": items,
     }
 
@@ -6455,6 +6520,18 @@ def repair_library_quality(body: QualityRepairBody):
     repaired = 0
     skipped_busy = 0
     failed = sum(1 for item in items if not bool(item.get("ok")))
+    auto_backup = None
+    if targets:
+        auto_backup = _dangerous_auto_snapshot(
+            "library_quality_repair",
+            label=str(len(targets)),
+            metadata={
+                "target_count": len(targets),
+                "replace": replace,
+                "md_autofix": bool(body.md_autofix),
+                "speed_mode": speed_mode,
+            },
+        )
     seen_target_paths: set[str] = set()
     for target in targets:
         pdf_path_raw = str(target.get("pdf_path") or "").strip()
@@ -6865,6 +6942,7 @@ def repair_library_quality(body: QualityRepairBody):
         "impact": impact,
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
+        "auto_backup": auto_backup,
         "items": items,
     }
 
@@ -6883,6 +6961,12 @@ def delete_library_file(body: DeleteLibraryFileBody):
     snap = _bg_snapshot()
     if _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name):
         raise HTTPException(409, "file is currently converting")
+
+    auto_backup = _dangerous_auto_snapshot(
+        "library_file_delete",
+        label=pdf_path.stem,
+        metadata={"pdf_name": pdf_name, "also_md": bool(body.also_md), "remove_queued": bool(body.remove_queued)},
+    )
 
     removed_queued = 0
     if bool(body.remove_queued):
@@ -6926,6 +7010,7 @@ def delete_library_file(body: DeleteLibraryFileBody):
         "removed_queued": int(removed_queued),
         "warnings": warnings,
         "needs_reindex": bool(pdf_ok),
+        "auto_backup": auto_backup,
     }
 
 
@@ -6989,6 +7074,18 @@ def batch_update_library_meta(body: BatchUpdateLibraryMetaBody):
             raise HTTPException(400, f"invalid pdf_name: {pdf_name}")
         paths.append((_pdf_dir() / pdf_name).expanduser())
 
+    auto_backup = _dangerous_auto_snapshot(
+        "library_meta_batch_update",
+        label=str(len(pdf_names) + len(sha1s)),
+        metadata={
+            "requested": len(pdf_names) + len(sha1s),
+            "apply_paper_category": bool(body.apply_paper_category),
+            "apply_reading_status": bool(body.apply_reading_status),
+            "add_tag_count": len(list(body.add_tags or [])),
+            "remove_tag_count": len(list(body.remove_tags or [])),
+        },
+    )
+
     payloads = _library_store().batch_update_paper_user_meta(
         sha1s=sha1s,
         paths=paths,
@@ -7004,6 +7101,7 @@ def batch_update_library_meta(body: BatchUpdateLibraryMetaBody):
         "ok": True,
         "requested": len(pdf_names) + len(sha1s),
         "updated": len(payloads),
+        "auto_backup": auto_backup,
         "items": [
             {
                 "name": Path(str(payload.get("path") or "")).name,
@@ -7193,4 +7291,8 @@ def _run_library_reindex() -> dict:
 
 @router.post("/reindex")
 def reindex():
-    return _run_library_reindex()
+    auto_backup = _dangerous_auto_snapshot("library_reindex", label="manual")
+    result = _run_library_reindex()
+    if isinstance(result, dict):
+        result["auto_backup"] = auto_backup
+    return result

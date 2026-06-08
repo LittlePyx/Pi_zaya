@@ -37,13 +37,13 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import type { Conversation, Project } from '../../api/chat'
 import { CHAT_MAIN_WINDOW_NAME, READER_SESSION_NAV_CHANNEL } from '../chat/reader/readerTypes'
 import { SettingsDrawer } from './SettingsDrawer'
+import { OPEN_SETTINGS_EVENT, apiSettingsTargetFromUnknown, type ApiSettingsTarget } from './settingsEvents'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
 
 const SIDEBAR_WIDTH = 296
 const SIDEBAR_COLLAPSED_WIDTH = 68
-const OPEN_SETTINGS_EVENT = 'kb:open-settings'
 const LINKED_CONVERSATION_QUERY_KEYS = ['conversation', 'conversation_id', 'conv'] as const
 
 function linkedConversationIdFromSearch(search: string) {
@@ -55,9 +55,11 @@ function linkedConversationIdFromSearch(search: string) {
   return ''
 }
 
-function clearLinkedConversationSearch(search: string) {
+function conversationSearch(search: string, conversationId?: string | null) {
   const params = new URLSearchParams(search)
   for (const key of LINKED_CONVERSATION_QUERY_KEYS) params.delete(key)
+  const convId = String(conversationId || '').trim()
+  if (convId) params.set('conversation', convId)
   const next = params.toString()
   return next ? `?${next}` : ''
 }
@@ -357,6 +359,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const sidebarCollapsed = useSettingsStore((s) => s.sidebarCollapsed)
   const updateSettings = useSettingsStore((s) => s.update)
   const llmReadiness = useSettingsStore((s) => s.llmReadiness)
+  const appReadiness = useSettingsStore((s) => s.appReadiness)
+  const settingsLoaded = useSettingsStore((s) => s.loaded)
+  const refreshAppReadiness = useSettingsStore((s) => s.refreshAppReadiness)
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
   const visionUsesTextFallback = useSettingsStore((s) => s.visionUsesTextFallback)
 
@@ -370,6 +375,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [conversationTitle, setConversationTitle] = useState('')
   const [keyword, setKeyword] = useState('')
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
+  const [settingsFocusTarget, setSettingsFocusTarget] = useState<ApiSettingsTarget | ''>('')
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -379,7 +385,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    const openSettings = () => setDrawerOpen(true)
+    const openSettings = (event: Event) => {
+      const detail = event instanceof CustomEvent ? event.detail as { target?: unknown } : {}
+      setSettingsFocusTarget(apiSettingsTargetFromUnknown(detail?.target))
+      setDrawerOpen(true)
+    }
     window.addEventListener(OPEN_SETTINGS_EVENT, openSettings)
     return () => window.removeEventListener(OPEN_SETTINGS_EVENT, openSettings)
   }, [])
@@ -391,21 +401,36 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, [S.sidebar_load_failed, loadSidebarData])
 
   useEffect(() => {
+    if (!settingsLoaded || appReadiness) return
+    void refreshAppReadiness()
+  }, [appReadiness, refreshAppReadiness, settingsLoaded])
+
+  useEffect(() => {
     if (loc.pathname !== '/') return
     const linkedConversationId = linkedConversationIdFromSearch(loc.search)
     if (!linkedConversationId) return
-    void selectConv(linkedConversationId)
-    const nextSearch = clearLinkedConversationSearch(loc.search)
+    if (activeConvId !== linkedConversationId) {
+      void selectConv(linkedConversationId)
+    }
+    const nextSearch = conversationSearch(loc.search, linkedConversationId)
     if (nextSearch !== loc.search) {
       nav({ pathname: '/', search: nextSearch }, { replace: true })
     }
-  }, [loc.pathname, loc.search, nav, selectConv])
+  }, [activeConvId, loc.pathname, loc.search, nav, selectConv])
+
+  useEffect(() => {
+    if (loc.pathname !== '/' || !activeConvId) return
+    const linkedConversationId = linkedConversationIdFromSearch(loc.search)
+    if (linkedConversationId) return
+    nav({ pathname: '/', search: conversationSearch(loc.search, activeConvId) }, { replace: true })
+  }, [activeConvId, loc.pathname, loc.search, nav])
 
   const openLinkedConversation = useCallback((conversationId: string) => {
     const cid = String(conversationId || '').trim()
     if (!cid) return
-    if (loc.pathname !== '/') {
-      nav('/', { replace: false })
+    const nextSearch = conversationSearch(loc.search, cid)
+    if (loc.pathname !== '/' || loc.search !== nextSearch) {
+      nav({ pathname: '/', search: nextSearch }, { replace: false })
     }
     void selectConv(cid)
     try {
@@ -413,7 +438,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     } catch {
       // Browser focus can be denied; selecting the conversation is enough.
     }
-  }, [loc.pathname, nav, selectConv])
+  }, [loc.pathname, loc.search, nav, selectConv])
 
   useEffect(() => {
     const handlePayload = (raw: unknown) => {
@@ -535,7 +560,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           if (includeLibrary) {
             nav('/library')
             if (delayMs > 0) await sleep(delayMs)
-            nav('/')
+            nav({ pathname: '/', search: conversationSearch(loc.search, convId) })
           }
           if (delayMs > 0) await sleep(delayMs)
         }
@@ -578,7 +603,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         w.__kbDebug = next
       }
     }
-  }, [allConversationIds, nav, selectConv])
+  }, [allConversationIds, loc.search, nav, selectConv])
 
   const toggleProjectCollapsed = useCallback((projectId: string) => {
     setCollapsedProjects((cur) => ({ ...cur, [projectId]: !cur[projectId] }))
@@ -589,18 +614,24 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, [sidebarCollapsed, updateSettings])
 
   const openConversation = useCallback((conversationId: string) => {
-    nav('/')
-    void selectConv(conversationId)
-  }, [nav, selectConv])
+    const cid = String(conversationId || '').trim()
+    if (!cid) return
+    nav({ pathname: '/', search: conversationSearch(loc.search, cid) })
+    void selectConv(cid)
+  }, [loc.search, nav, selectConv])
 
   const startNewConversation = useCallback(async () => {
-    await createConv()
-    nav('/')
-  }, [createConv, nav])
+    const cid = await createConv()
+    nav({ pathname: '/', search: conversationSearch(loc.search, cid) })
+  }, [createConv, loc.search, nav])
 
   const removeConversation = useCallback(async (conversationId: string) => {
+    const wasActive = String(conversationId || '').trim() === String(activeConvId || '').trim()
     await deleteConv(conversationId)
-  }, [deleteConv])
+    if (wasActive) {
+      nav({ pathname: '/', search: conversationSearch(loc.search, '') }, { replace: true })
+    }
+  }, [activeConvId, deleteConv, loc.search, nav])
 
   const chooseProject = useCallback((projectId: string | null) => {
     selectProject(projectId)
@@ -657,6 +688,22 @@ export function AppLayout({ children }: { children: ReactNode }) {
     : connectionStatus === 'warning'
       ? S.connection_status_warning
       : S.connection_status_ok
+  const openSettingsDrawer = (target: ApiSettingsTarget | '' = '') => {
+    setSettingsFocusTarget(target)
+    setDrawerOpen(true)
+  }
+  const openConnectionSettings = () => {
+    const target = apiSettingsTargetFromUnknown(llmReadiness?.overall.target)
+      || (!hasTextApiKey ? 'text' : visionUsesTextFallback ? 'vision' : '')
+    openSettingsDrawer(target)
+  }
+  const releaseItems = appReadiness?.items || []
+  const releaseBlocking = releaseItems.filter((item) => item.severity === 'error').length
+  const releaseWarnings = releaseItems.filter((item) => item.severity === 'warning').length
+  const showReleaseBanner = Boolean(appReadiness?.production && appReadiness.status !== 'ok')
+  const releaseBannerTitle = appReadiness?.status === 'error'
+    ? S.release_banner_blocked_title
+    : S.release_banner_warning_title
 
   return (
     <Layout className="h-screen min-h-0 overflow-hidden">
@@ -699,7 +746,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           selectedKeys={[menuKey]}
           className="kb-sider-menu !bg-transparent !border-none"
           items={[
-            { key: 'chat', icon: <MessageOutlined />, label: S.chat, onClick: () => nav('/') },
+            { key: 'chat', icon: <MessageOutlined />, label: S.chat, onClick: () => nav({ pathname: '/', search: conversationSearch(loc.search, activeConvId) }) },
             { key: 'library', icon: <BookOutlined />, label: S.page_library, onClick: () => nav('/library') },
           ]}
         />
@@ -746,7 +793,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 size="small"
                 icon={<SettingOutlined />}
                 aria-label={S.open_settings}
-                onClick={() => setDrawerOpen(true)}
+                onClick={() => openSettingsDrawer()}
               />
             </Tooltip>
             <Tooltip title={connectionLabel} placement={sidebarCollapsed ? 'right' : 'top'}>
@@ -755,10 +802,25 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 size="small"
                 icon={<ApiOutlined />}
                 aria-label={connectionLabel}
-                onClick={() => setDrawerOpen(true)}
+                onClick={openConnectionSettings}
               />
             </Tooltip>
           </div>
+          {showReleaseBanner ? (
+            <div className={`kb-release-banner is-${appReadiness?.status || 'warning'}`} data-testid="release-readiness-banner">
+              <div className="kb-release-banner-main">
+                <span className="kb-release-banner-title">{releaseBannerTitle}</span>
+                <span className="kb-release-banner-desc">
+                  {S.release_banner_desc
+                    .replace('{blocking}', String(releaseBlocking))
+                    .replace('{warnings}', String(releaseWarnings))}
+                </span>
+              </div>
+              <Button size="small" onClick={() => openSettingsDrawer()}>
+                {S.release_banner_review}
+              </Button>
+            </div>
+          ) : null}
           <div className="kb-sider-search-row mt-1">
             <Input
               className="kb-sider-search-input"
@@ -833,7 +895,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <SettingsDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <SettingsDrawer
+          open={drawerOpen}
+          focusTarget={settingsFocusTarget}
+          onClose={() => setDrawerOpen(false)}
+        />
 
         <Modal
           title={projectModalMode === 'create' ? S.new_project : S.rename_project}
@@ -874,7 +940,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </Modal>
       </Sider>
 
-      <Content className={`${loc.pathname === '/' ? 'overflow-hidden' : 'overflow-auto'} min-h-0 bg-[var(--bg)]`}>
+      <Content className={`kb-app-content relative ${loc.pathname === '/' ? 'overflow-hidden' : 'overflow-auto'} min-h-0 bg-[var(--bg)]`}>
         {children}
       </Content>
     </Layout>

@@ -126,6 +126,92 @@ def _conversation_title_candidate(prompt: str, *, image_count: int = 0, current_
 
 router = APIRouter(prefix="/api/generate", tags=["generate"])
 
+_PROMPT_CONTEXT_MAX_ITEMS = 8
+_PROMPT_CONTEXT_MAX_TEXT = 900
+_PROMPT_CONTEXT_MAX_TOTAL = 4200
+
+
+def _clip_prompt_context_text(value, max_chars: int = _PROMPT_CONTEXT_MAX_TEXT) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[: max(0, max_chars - 3)].rstrip() + "..."
+
+
+def _sanitize_prompt_context(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    raw_items = value.get("items")
+    if not isinstance(raw_items, list):
+        return {}
+    items: list[dict] = []
+    total_chars = 0
+    allowed_text_fields = {
+        "title": 240,
+        "sourceName": 240,
+        "sourcePath": 520,
+        "locationLabel": 240,
+        "doi": 180,
+        "authors": 240,
+        "year": 24,
+        "summary": 900,
+        "excerpt": 900,
+        "note": 520,
+        "kind": 40,
+        "key": 160,
+    }
+    for raw in raw_items[:_PROMPT_CONTEXT_MAX_ITEMS]:
+        if not isinstance(raw, dict):
+            continue
+        item: dict = {}
+        for field, limit in allowed_text_fields.items():
+            text = _clip_prompt_context_text(raw.get(field), limit)
+            if text:
+                item[field] = text
+        try:
+            ref_num = int(raw.get("refNum") or 0)
+        except Exception:
+            ref_num = 0
+        if ref_num > 0:
+            item["refNum"] = ref_num
+        if not any(str(item.get(k) or "").strip() for k in ("title", "summary", "excerpt", "note")):
+            continue
+        for field in ("title", "summary", "excerpt", "note"):
+            total_chars += len(str(item.get(field) or ""))
+        if total_chars > _PROMPT_CONTEXT_MAX_TOTAL:
+            overflow = total_chars - _PROMPT_CONTEXT_MAX_TOTAL
+            for field in ("note", "excerpt", "summary"):
+                text = str(item.get(field) or "")
+                if not text or overflow <= 0:
+                    continue
+                keep = max(0, len(text) - overflow)
+                item[field] = (text[: max(0, keep - 3)].rstrip() + "...") if keep > 8 else text[:keep]
+                overflow = max(0, overflow - (len(text) - len(str(item.get(field) or ""))))
+            total_chars = _PROMPT_CONTEXT_MAX_TOTAL
+        items.append(item)
+        if total_chars >= _PROMPT_CONTEXT_MAX_TOTAL:
+            break
+    if not items:
+        return {}
+    token_estimate = max(1, min(1600, int(value.get("tokenEstimate") or ((total_chars + 3) // 4))))
+    return {
+        "version": 1,
+        "source": "citation_shelf",
+        "id": _clip_prompt_context_text(value.get("id"), 120),
+        "createdAt": value.get("createdAt") if isinstance(value.get("createdAt"), (int, float)) else None,
+        "conversationId": _clip_prompt_context_text(value.get("conversationId"), 120),
+        "guideSourcePath": _clip_prompt_context_text(value.get("guideSourcePath"), 520),
+        "guideSourceName": _clip_prompt_context_text(value.get("guideSourceName"), 240),
+        "itemCount": len(items),
+        "tokenEstimate": token_estimate,
+        "items": items,
+    }
+
 
 class GenerateBody(BaseModel):
     conv_id: str
@@ -138,6 +224,7 @@ class GenerateBody(BaseModel):
     preferred_sources: list[str] = Field(default_factory=list)
     source_lock_path: str = ""
     source_lock_name: str = ""
+    prompt_context: dict | None = None
 
 
 @router.post("")
@@ -151,12 +238,19 @@ def start_generation(body: GenerateBody):
     prompt = str(body.prompt or "").strip()
     max_tokens = max(256, min(4096, int(body.max_tokens or 1216)))
     image_attachments = [_normalize_chat_image_attachment(it) for it in list(body.image_attachments or []) if isinstance(it, dict)]
+    prompt_context = _sanitize_prompt_context(body.prompt_context)
     if (not prompt) and (not image_attachments):
         raise HTTPException(400, "prompt or image_attachments required")
     conv_meta = chat_store.get_conversation(body.conv_id) or {}
 
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
-    user_msg_id = chat_store.append_message(body.conv_id, "user", user_store_text, attachments=image_attachments)
+    user_msg_id = chat_store.append_message(
+        body.conv_id,
+        "user",
+        user_store_text,
+        attachments=image_attachments,
+        meta={"prompt_context": prompt_context} if prompt_context else None,
+    )
     assistant_msg_id = chat_store.append_message(
         body.conv_id,
         "assistant",
@@ -201,6 +295,7 @@ def start_generation(body: GenerateBody):
         "prompt": prompt,
         "prompt_sig": hashlib.sha1(prompt.encode("utf-8", "ignore")).hexdigest()[:12] if prompt else "",
         "image_attachments": image_attachments,
+        "selected_research_context": prompt_context,
         "preferred_sources": preferred_sources,
         "paper_guide_mode": conv_mode == "paper_guide",
         "paper_guide_bound_source_path": bound_source_path,

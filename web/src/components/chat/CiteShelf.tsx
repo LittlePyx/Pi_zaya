@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
-import { CloseOutlined, DeleteOutlined, FileSearchOutlined, LoadingOutlined, SaveOutlined } from '@ant-design/icons'
+import { CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSearchOutlined, LoadingOutlined, SaveOutlined, SearchOutlined, SlidersOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ConversionQualitySummary, LibrarySourceQualityItem } from '../../api/library'
@@ -10,15 +10,17 @@ import {
   citationCardView,
   citationDisplay,
   citationFormats,
-  citeMetricSummary,
   cleanCitationDisplayText,
   isLikelyWeakCitationTitle,
   looksLowValueShelfSummary,
+  normalizeDoiLike,
   normalizeShelfItemKind,
   normalizeShelfTags,
   shelfItemKindLabel,
+  shelfItemDoiExportValue,
   shelfItemHasConflictingVenueSignals,
   shelfItemNeedsMetadataRepair,
+  shelfItemPaperIdentity,
   shelfOriginLabel,
   strictRepairMerge,
   summarySourceLabel,
@@ -43,11 +45,13 @@ interface Props {
   repairLoadingKey: string
   repairImpact: ShelfMetadataRepairImpact | null
   repairingKeys?: string[]
+  activeContextKeys?: Record<string, boolean>
   onToggle: () => void
   onClear: () => void
   onSelect: (item: CiteShelfItem) => void
   onOpenSource?: (item: CiteShelfItem) => void
   onOpenMessage?: (item: CiteShelfItem) => void
+  onUseSelectedAsContext?: (items: CiteShelfItem[]) => void
   onRemove: (key: string) => void
   onUpdateTags: (key: string, tags: string[]) => void
   onUpdateNote: (key: string, note: string) => void
@@ -65,9 +69,12 @@ const TAG_PRESETS = ['baseline', 'idea', 'related-work'] as const
 type GroupMode = 'none' | 'tag' | 'source' | 'kind'
 type ScopeFilter = 'all' | 'conversation' | 'paper'
 type SourceQualityByPath = Record<string, LibrarySourceQualityItem>
-type ShelfExportKind = 'bib' | 'csv' | 'ris'
+type ShelfExportKind = 'bib' | 'csv' | 'md' | 'ris'
+type ShelfExportScope = 'selected' | 'visible' | 'all'
 type ShelfExportOptions = { skipPreflight?: boolean; onlyMetadataReady?: boolean; autoRepair?: boolean }
+type ShelfExportRequest = { kind: ShelfExportKind; scope: ShelfExportScope }
 type SourceOpenQualityTone = 'ready' | 'partial' | 'review' | 'missing'
+type ShelfCardSurface = 'reference' | 'citation' | 'figure' | 'table' | 'equation' | 'selection' | 'excerpt'
 
 interface SourceOpenQualityView {
   status: 'ready' | 'partial' | 'repairing' | 'missing' | 'verified' | 'degraded' | 'failed'
@@ -78,6 +85,17 @@ interface SourceOpenQualityView {
   canOpen: boolean
   strictLocate: boolean
   repairable: boolean
+}
+
+interface ShelfCardPresentation {
+  surface: ShelfCardSurface
+  title: string
+  sourceLabel: string
+  excerpt: string
+  excerptLabel: string
+  showAuthors: boolean
+  showArticleSummary: boolean
+  showExcerptInDetails: boolean
 }
 
 const GROUP_MODE_LABEL = (S: Record<string, string>): Record<GroupMode, string> => ({
@@ -102,14 +120,6 @@ const basenameFromPath = (value: string): string => {
   return text.split(/[\\/]/).filter(Boolean).pop() || text
 }
 
-const normalizeDoiLike = (value: string): string =>
-  String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-    .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
-    .trim()
-
 const normalizeTitle = (value: string): string =>
   String(value || '')
     .toLowerCase()
@@ -117,17 +127,41 @@ const normalizeTitle = (value: string): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
-const paperIdentity = (item: CiteShelfItem): string => {
-  const doiKey = normalizeDoiLike(item.doi || item.doiUrl)
-  if (doiKey) return `doi:${doiKey}`
-  const titleKey = normalizeTitle(item.title || item.main)
-  const year = /^\d{4}$/.test(String(item.year || '').trim()) ? String(item.year).trim() : ''
-  if (titleKey) return `title:${titleKey}|${year}`
-  return `key:${item.key}`
+const citeVenueYearParts = (
+  item: CiteShelfItem,
+  display = citationDisplay(item),
+): string[] => {
+  const venue = cleanCitationDisplayText(display.venue || item.venue || item.openalexVenue || item.externalVenue || '')
+  const rawYear = cleanCitationDisplayText(item.year || item.externalYear || item.libraryMatchYear || '')
+  const year = rawYear.match(/\b(?:19|20)\d{2}\b/)?.[0] || rawYear
+  return [venue, year].filter(Boolean)
 }
 
-const doiExportValue = (item: CiteShelfItem): string =>
-  normalizeDoiLike(item.doi || item.doiUrl) || String(item.doi || item.doiUrl || '').trim()
+const metricLabel = (prefix: string, value: string): string => {
+  const text = cleanCitationDisplayText(value)
+  if (!text) return ''
+  return text.toLowerCase().startsWith(prefix.toLowerCase()) ? text : `${prefix} ${text}`
+}
+
+const citeImpactMetrics = (item: CiteShelfItem): string[] => [
+  metricLabel('IF', item.journalIf),
+  metricLabel('JCR', item.journalQuartile),
+].filter(Boolean)
+
+const uniqueCitationMetrics = (...groups: string[][]): string[] => {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const group of groups) {
+    for (const value of group) {
+      const text = cleanCitationDisplayText(value)
+      const key = text.replace(/\s+/g, '').toLowerCase()
+      if (!text || seen.has(key)) continue
+      seen.add(key)
+      out.push(text)
+    }
+  }
+  return out
+}
 
 const hasCompleteCitationIdentity = (
   item: CiteShelfItem,
@@ -598,11 +632,13 @@ export function CiteShelf({
   repairLoadingKey,
   repairImpact,
   repairingKeys = [],
+  activeContextKeys = {},
   onToggle,
   onClear,
   onSelect,
   onOpenSource,
   onOpenMessage,
+  onUseSelectedAsContext,
   onRemove,
   onUpdateTags,
   onUpdateNote,
@@ -626,7 +662,11 @@ export function CiteShelf({
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>('all')
   const [tagFilter, setTagFilter] = useState<string>('all')
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
-  const [preflightExportKind, setPreflightExportKind] = useState<ShelfExportKind | ''>('')
+  const [organizeOpen, setOrganizeOpen] = useState(false)
+  const [batchOrganizeOpen, setBatchOrganizeOpen] = useState(false)
+  const [preflightExportRequest, setPreflightExportRequest] = useState<ShelfExportRequest | null>(null)
+  const [exportPanelOpen, setExportPanelOpen] = useState(false)
+  const [exportScope, setExportScope] = useState<ShelfExportScope>('all')
   const [exportRepairingKind, setExportRepairingKind] = useState<ShelfExportKind | ''>('')
   const [batchTagInput, setBatchTagInput] = useState('')
   const [editingNoteKeys, setEditingNoteKeys] = useState<Record<string, boolean>>({})
@@ -637,6 +677,7 @@ export function CiteShelf({
   const copyStateTimerRef = useRef<number | null>(null)
   const sourceRepairStreamRef = useRef<AbortController | null>(null)
   const autoSourceRepairKeysRef = useRef<Record<string, boolean>>({})
+  const shelfPanelRef = useRef<HTMLElement | null>(null)
   const repairingKeySignature = useMemo(
     () => repairingKeys.map((key) => String(key || '').trim()).filter(Boolean).join('|'),
     [repairingKeys],
@@ -733,24 +774,104 @@ export function CiteShelf({
     return (chunks.length > 0 ? chunks : [normalized]).slice(0, 4)
   }
 
-  const sourceTraceLabel = (item: CiteShelfItem): { labels: string[]; debugTitle: string } => {
-    const labels: string[] = []
-    const answerOrder = Number(item.traceAssistantOrder || 0)
-    if (Number.isFinite(answerOrder) && answerOrder > 0) {
-      labels.push(S.shelf_answer.replace('{n}', String(answerOrder)))
-    }
-    const num = Number(item.num || 0)
-    if (Number.isFinite(num) && num > 0) labels.push(S.shelf_ref_num.replace('{n}', String(num)))
-    const anchor = String(item.anchor || '').trim()
-    const debugTitle = anchor ? S.shelf_anchor.replace('{anchor}', anchor) : ''
-    return { labels, debugTitle }
+  const compactCardText = (value: string, limit = 220): string => {
+    const text = cleanCitationDisplayText(value).replace(/\s+/g, ' ').trim()
+    if (!text) return ''
+    if (text.length <= limit) return text
+    return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}...`
   }
 
-  const sourceTrailRows = (
+  const headingTail = (value: string): string => {
+    const parts = String(value || '')
+      .split('/')
+      .map((part) => cleanCitationDisplayText(part))
+      .filter(Boolean)
+    return parts[parts.length - 1] || ''
+  }
+
+  const readerSurfaceFromAnchor = (item: CiteShelfItem, shelfKind: string): ShelfCardSurface => {
+    if (shelfKind === 'reference') return 'reference'
+    if (shelfKind === 'excerpt') return 'excerpt'
+    if (shelfKind !== 'reader_selection') return 'citation'
+    const anchorKind = String(item.anchorKind || '').trim().toLowerCase()
+    if (anchorKind === 'figure' || anchorKind === 'table' || anchorKind === 'equation') return anchorKind
+    return 'selection'
+  }
+
+  const surfaceLabel = (surface: ShelfCardSurface, shelfKindText: string): string => {
+    if (surface === 'figure') return S.cite_anchor_figure || S.locate_badge_fig || 'Figure'
+    if (surface === 'table') return S.cite_anchor_table || 'Table'
+    if (surface === 'equation') return S.cite_anchor_equation || S.locate_badge_eq || 'Equation'
+    if (surface === 'selection') return S.shelf_type_reader_selection || shelfKindText
+    if (surface === 'reference') return S.shelf_type_reference || shelfKindText
+    if (surface === 'excerpt') return S.shelf_type_excerpt || shelfKindText
+    return S.shelf_type_citation || shelfKindText
+  }
+
+  const readerBlockTitle = (
+    surface: ShelfCardSurface,
+    excerpt: string,
     item: CiteShelfItem,
+    fallbackTitle: string,
     shelfKindText: string,
-    shelfOriginText: string,
-  ): Array<{ id: string; label: string; value: string; title?: string }> => {
+  ): string => {
+    const label = surfaceLabel(surface, shelfKindText)
+    if (surface === 'equation') {
+      const heading = headingTail(item.headingPath || item.locationLabel || '')
+      return heading ? `${label} / ${heading}` : label
+    }
+    const text = compactCardText(excerpt || item.evidenceQuote || item.raw || '', surface === 'table' ? 92 : 118)
+    if (text) return text
+    const heading = headingTail(item.headingPath || item.locationLabel || '')
+    if (heading) return `${label} / ${heading}`
+    return fallbackTitle || label
+  }
+
+  const shelfCardPresentation = (
+    item: CiteShelfItem,
+    opts: {
+      cardView: ReturnType<typeof citationCardView>
+      display: ReturnType<typeof citationDisplay>
+      shelfKind: string
+      shelfKindText: string
+      rawSourceLabel: string
+      itemLocationLabel: string
+      shelfExcerpt: string
+      shelfExcerptLabel: string
+    },
+  ): ShelfCardPresentation => {
+    const surface = readerSurfaceFromAnchor(item, opts.shelfKind)
+    const isReaderBlock = surface === 'figure' || surface === 'table' || surface === 'equation' || surface === 'selection'
+    const fallbackTitle = cleanCitationDisplayText(String(opts.cardView.header.title || opts.display.main || item.main || item.title || '')).trim()
+    const title = isReaderBlock
+      ? readerBlockTitle(surface, opts.shelfExcerpt, item, fallbackTitle, opts.shelfKindText)
+      : fallbackTitle || opts.shelfKindText
+    const sourceLabel = (() => {
+      const source = opts.rawSourceLabel
+      if (!source) return opts.itemLocationLabel
+      if (isReaderBlock) {
+        const locationTail = headingTail(opts.itemLocationLabel)
+        return [source, locationTail && normalizeTitle(locationTail) !== normalizeTitle(source) ? locationTail : '']
+          .filter(Boolean)
+          .join(' / ')
+      }
+      return source && normalizeTitle(source) === normalizeTitle(title) && opts.itemLocationLabel
+        ? opts.itemLocationLabel
+        : source
+    })()
+    return {
+      surface,
+      title,
+      sourceLabel,
+      excerpt: opts.shelfExcerpt,
+      excerptLabel: opts.shelfExcerptLabel,
+      showAuthors: !isReaderBlock,
+      showArticleSummary: !isReaderBlock,
+      showExcerptInDetails: Boolean(opts.shelfExcerpt),
+    }
+  }
+
+  const sourceTrailRows = (item: CiteShelfItem): Array<{ id: string; label: string; value: string; title?: string }> => {
     const rows: Array<{ id: string; label: string; value: string; title?: string }> = []
     const push = (id: string, label: string, rawValue: string, title = '') => {
       const value = cleanCitationDisplayText(rawValue || '')
@@ -767,30 +888,20 @@ export function CiteShelf({
         ? `p. ${pageStart}-${pageEnd}`
         : `p. ${pageStart}`
       : ''
-    const location = String(item.locationLabel || '').trim()
-      || [item.headingPath, pageLabel].map((part) => String(part || '').trim()).filter(Boolean).join(' · ')
-    const answerParts: string[] = []
-    const answerOrder = Number(item.traceAssistantOrder || 0)
-    const assistantMsgId = Number(item.traceAssistantMsgId || 0)
-    const userMsgId = Number(item.traceUserMsgId || 0)
-    if (Number.isFinite(answerOrder) && answerOrder > 0) {
-      answerParts.push(S.shelf_answer.replace('{n}', String(answerOrder)))
-    }
-    if (Number.isFinite(assistantMsgId) && assistantMsgId > 0) {
-      answerParts.push(S.shelf_trace_message.replace('{n}', String(assistantMsgId)))
-    } else if (Number.isFinite(userMsgId) && userMsgId > 0) {
-      answerParts.push(S.shelf_trace_message.replace('{n}', String(userMsgId)))
-    }
+    const rawLocation = String(item.locationLabel || '').trim()
+      || [item.headingPath, pageLabel].map((part) => String(part || '').trim()).filter(Boolean).join(' / ')
+    const normalizedSourceLabel = normalizeTitle(sourceLabel)
+    const normalizedLocation = normalizeTitle(rawLocation)
+    const location = normalizedSourceLabel && normalizedLocation.startsWith(normalizedSourceLabel)
+      ? rawLocation.slice(sourceLabel.length).replace(/^(?:\s*[/\\]\s*)+/, '').trim()
+      : rawLocation
     const refNum = Number(item.num || 0)
     const refLabel = Number.isFinite(refNum) && refNum > 0 ? S.shelf_ref_num.replace('{n}', String(refNum)) : ''
     const anchor = String(item.anchor || '').trim()
 
-    push('origin', S.shelf_trace_origin, shelfOriginText || shelfKindText)
     push('source', S.shelf_trace_source, sourceLabel, sourcePath || sourceLabel)
     push('location', S.shelf_trace_location, location)
     push('reference', S.shelf_trace_reference, refLabel, anchor ? S.shelf_anchor.replace('{anchor}', anchor) : refLabel)
-    push('answer', S.shelf_trace_answer_head, answerParts.join(' · '))
-    push('reason', S.shelf_trace_reason, item.whyLine || item.supportRelation || item.answerClaim || item.upstreamWorkRole)
     return rows
   }
 
@@ -905,7 +1016,7 @@ export function CiteShelf({
   const duplicateCountByIdentity = useMemo(() => {
     const counter: Record<string, number> = {}
     for (const item of items) {
-      const key = paperIdentity(item)
+      const key = shelfItemPaperIdentity(item)
       counter[key] = (counter[key] || 0) + 1
     }
     return counter
@@ -938,7 +1049,7 @@ export function CiteShelf({
     for (const item of items) {
       const display = citationDisplay(item)
       const needsMetadataReview = shelfItemNeedsMetadataRepair(item, display)
-      const isDuplicate = (duplicateCountByIdentity[paperIdentity(item)] || 0) > 1
+      const isDuplicate = (duplicateCountByIdentity[shelfItemPaperIdentity(item)] || 0) > 1
       const summaryDisplay = shelfSummaryDisplay(item, citationCardView(item), S)
       const hasSummary = Boolean(summaryDisplay.line)
       const summaryView = summaryDisplay.quality
@@ -1068,15 +1179,6 @@ export function CiteShelf({
     () => items.filter((item) => Boolean(selectedKeys[item.key])),
     [items, selectedKeys],
   )
-  const selectedMetadataReviewItems = useMemo(
-    () => selectedItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item))),
-    [selectedItems],
-  )
-  const selectedMetadataReviewCount = selectedMetadataReviewItems.length
-  const selectedMetadataReviewKeySet = useMemo(
-    () => new Set(selectedMetadataReviewItems.map((item) => item.key)),
-    [selectedMetadataReviewItems],
-  )
   const selectedReviewSources = useMemo(() => {
     const seen = new Set<string>()
     const out: Array<{ source_path: string; source_name: string }> = []
@@ -1133,21 +1235,50 @@ export function CiteShelf({
     [selectedKeys, visibleItems],
   )
   const advancedFilterActive = (groupMode !== 'none') || (tagFilter !== 'all') || (scopeFilter !== 'all')
+  const defaultExportScope: ShelfExportScope = selectedCount > 0
+    ? 'selected'
+    : (advancedFilterActive || searchText.trim()) && visibleItems.length > 0
+      ? 'visible'
+      : 'all'
+  const activeExportScope: ShelfExportScope = exportScope === 'selected' && selectedCount <= 0
+    ? defaultExportScope
+    : exportScope
+  const exportItemsByScope = useCallback((scope: ShelfExportScope): CiteShelfItem[] => {
+    if (scope === 'selected') return selectedItems
+    if (scope === 'visible') return visibleItems
+    return items
+  }, [items, selectedItems, visibleItems])
+  const exportTargetItems = useMemo(
+    () => exportItemsByScope(activeExportScope),
+    [activeExportScope, exportItemsByScope],
+  )
+  const exportTargetCount = exportTargetItems.length
+  const exportScopeLabel = (scope: ShelfExportScope): string => {
+    if (scope === 'selected') return S.shelf_export_scope_selected.replace('{n}', String(selectedCount))
+    if (scope === 'visible') return S.shelf_export_scope_visible.replace('{n}', String(visibleItems.length))
+    return S.shelf_export_scope_all.replace('{n}', String(items.length))
+  }
+  const preflightExportItems = preflightExportRequest ? exportItemsByScope(preflightExportRequest.scope) : []
+  const preflightMetadataReviewItems = preflightExportItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
+  const preflightMetadataReviewCount = preflightMetadataReviewItems.length
+  const organizeReviewCount = shelfReadiness.metadataReview
+    + shelfReadiness.sourceOpenReview
+  const organizeStatusLabel = slowTaskVisible
+    ? (S.shelf_organize_processing || 'Updating')
+    : organizeReviewCount > 0
+      ? (S.shelf_organize_review || '{n} to review').replace('{n}', String(organizeReviewCount))
+      : (S.shelf_organize_ready || 'Ready')
   const snapshotOptions = useMemo(
-    () => snapshots.map((item) => {
-      const created = Number(item.createdAt || 0)
-      const labelTime = Number.isFinite(created) && created > 0
-        ? new Date(created).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
-        : ''
-      return {
-        value: item.id,
-        label: labelTime ? `${item.name} · ${labelTime}` : item.name,
-      }
-    }),
+    () => snapshots.map((item) => ({
+      value: item.id,
+      label: item.name,
+    })),
     [snapshots],
   )
   const hasSnapshotChoices = snapshotOptions.length > 0 || Boolean(selectedSnapshotId)
   const showSnapshotTools = hasSnapshotChoices || Boolean(snapshotDiff)
+  const showOrganizeToggle = items.length > 0 || showSnapshotTools || slowTaskVisible
+  const showOrganizeDetails = showSnapshotTools || slowTaskVisible || shelfReadiness.status !== 'ready' || Boolean(repairImpact)
 
   const setTransientCopyState = (next: 'gbt' | 'bibtex' | 'error') => {
     setCopyState(next)
@@ -1180,14 +1311,74 @@ export function CiteShelf({
     if (!ok) throw new Error('clipboard-copy-failed')
   }
 
-  const copySelectedAs = async (kind: 'gbt' | 'bibtex') => {
-    if (selectedItems.length <= 0) return
-    const text = selectedItems.map((item) => citationFormats(item)[kind]).join('\n\n')
+  const exportFormatLabel = (kind: ShelfExportKind | 'gbt' | 'bibtex'): string => {
+    if (kind === 'gbt') return 'GB/T'
+    if (kind === 'bibtex' || kind === 'bib') return 'BibTeX'
+    if (kind === 'ris') return 'RIS'
+    if (kind === 'md') return 'Markdown'
+    return 'CSV'
+  }
+
+  const markdownForExportItems = (exportItems: CiteShelfItem[]): string => exportItems.map((item, index) => {
+    const card = citationCardView(item)
+    const title = cleanCitationDisplayText(card.header.title || item.title || item.main || `${S.shelf_export_reference_fallback} ${index + 1}`)
+    const authors = cleanCitationDisplayText(item.authors || '')
+    const year = cleanCitationDisplayText(item.year || '')
+    const venue = cleanCitationDisplayText(item.venue || '')
+    const doi = shelfItemDoiExportValue(item)
+    const source = cleanCitationDisplayText(item.sourceName || item.sourcePath || '')
+    const summary = cleanCitationDisplayText(shelfSummaryDisplay(item, card, S).line || card.summary || '')
+    const excerpt = cleanCitationDisplayText(item.shelfExcerpt || item.evidenceQuote || item.cardEvidence || '')
+    const note = cleanCitationDisplayText(item.note || '')
+    const tags = normalizeShelfTags(item.tags)
+    const lines = [
+      `## ${index + 1}. ${title}`,
+      '',
+      citationFormats(item).gbt,
+    ]
+    const meta = [
+      authors ? `${S.shelf_export_md_authors}: ${authors}` : '',
+      year ? `${S.shelf_export_md_year}: ${year}` : '',
+      venue ? `${S.shelf_export_md_venue}: ${venue}` : '',
+      doi ? `DOI: ${doi}` : '',
+      source ? `${S.shelf_export_md_source}: ${source}` : '',
+      tags.length > 0 ? `${S.shelf_export_md_tags}: ${tags.join(', ')}` : '',
+    ].filter(Boolean)
+    if (meta.length > 0) {
+      lines.push('', ...meta)
+    }
+    if (summary) {
+      lines.push('', `### ${S.shelf_summary_head}`, summary)
+    }
+    if (excerpt) {
+      lines.push('', `### ${S.shelf_export_md_excerpt}`, `> ${excerpt.replace(/\n+/g, '\n> ')}`)
+    }
+    if (note) {
+      lines.push('', `### ${S.shelf_note_head}`, note)
+    }
+    return lines.join('\n').trim()
+  }).join('\n\n')
+
+  const copyShelfItemsAs = async (scope: ShelfExportScope, kind: 'gbt' | 'bibtex' | 'md') => {
+    const copyItems = exportItemsByScope(scope)
+    if (copyItems.length <= 0) {
+      message.warning(S.shelf_export_no_items)
+      return
+    }
+    const text = kind === 'md'
+      ? markdownForExportItems(copyItems)
+      : copyItems.map((item) => citationFormats(item)[kind]).join('\n\n')
     try {
       await writeClipboard(text)
-      setTransientCopyState(kind)
+      if (scope === 'selected' && (kind === 'gbt' || kind === 'bibtex')) setTransientCopyState(kind)
+      message.success(
+        S.shelf_export_copied
+          .replace('{format}', exportFormatLabel(kind))
+          .replace('{n}', String(copyItems.length)),
+      )
     } catch {
-      setTransientCopyState('error')
+      if (scope === 'selected' && (kind === 'gbt' || kind === 'bibtex')) setTransientCopyState('error')
+      message.error(S.shelf_copy_error)
     }
   }
 
@@ -1433,16 +1624,23 @@ export function CiteShelf({
     }
   }
 
-  const exportSelectedAs = async (kind: ShelfExportKind, options: ShelfExportOptions = {}) => {
-    if (selectedItems.length <= 0) return
+  const exportShelfItemsAs = async (scope: ShelfExportScope, kind: ShelfExportKind, options: ShelfExportOptions = {}) => {
+    const targetItems = exportItemsByScope(scope)
+    if (targetItems.length <= 0) {
+      message.warning(S.shelf_export_no_items)
+      return
+    }
     if (exportRepairingKind) return
-    if (selectedMetadataReviewCount > 0 && !options.skipPreflight) {
-      setPreflightExportKind(kind)
+    const reviewItems = targetItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
+    const reviewKeySet = new Set(reviewItems.map((item) => item.key))
+    if (reviewItems.length > 0 && !options.skipPreflight) {
+      setPreflightExportRequest({ kind, scope })
+      setExportPanelOpen(true)
       return
     }
     let exportItems = options.onlyMetadataReady
-      ? selectedItems.filter((item) => !selectedMetadataReviewKeySet.has(item.key))
-      : selectedItems
+      ? targetItems.filter((item) => !reviewKeySet.has(item.key))
+      : targetItems
     if (exportItems.length <= 0) {
       message.warning(S.shelf_export_preflight_no_healthy)
       return
@@ -1451,7 +1649,7 @@ export function CiteShelf({
       exportItems = await repairMetadataBeforeExport(kind, exportItems)
     }
     try {
-      const base = `cite_shelf_selected_${nowStamp()}`
+      const base = `cite_shelf_${scope}_${nowStamp()}`
       if (kind === 'bib') {
         const bib = exportItems.map((item) => citationFormats(item).bibtex).join('\n\n').trim()
         if (!bib) return
@@ -1464,6 +1662,13 @@ export function CiteShelf({
         if (!ris) return
         downloadTextFile(`${base}.ris`, ris, 'application/x-research-info-systems;charset=utf-8')
         message.success(S.shelf_export_ris.replace('{n}', String(exportItems.length)))
+        return
+      }
+      if (kind === 'md') {
+        const md = markdownForExportItems(exportItems).trim()
+        if (!md) return
+        downloadTextFile(`${base}.md`, md, 'text/markdown;charset=utf-8')
+        message.success(S.shelf_export_markdown.replace('{n}', String(exportItems.length)))
         return
       }
       const headers = [
@@ -1518,7 +1723,7 @@ export function CiteShelf({
         item.authors,
         item.year,
         item.venue,
-        doiExportValue(item),
+        shelfItemDoiExportValue(item),
         item.sourceName || item.sourcePath,
         sourceQuality?.status || '',
         (sourceQuality?.issues || []).map((issue) => issue.label || issue.code).filter(Boolean).join('; '),
@@ -1563,6 +1768,15 @@ export function CiteShelf({
     } catch {
       message.error(S.shelf_export_failed)
     }
+  }
+
+  const exportActiveScopeAs = async (kind: ShelfExportKind, options: ShelfExportOptions = {}) => {
+    await exportShelfItemsAs(activeExportScope, kind, options)
+  }
+
+  const openSelectedExportPanel = () => {
+    setExportScope('selected')
+    setExportPanelOpen(true)
   }
 
   const toggleSelect = (key: string, checked: boolean) => {
@@ -1619,6 +1833,40 @@ export function CiteShelf({
       onUpdateTags(item.key, nextTags)
     }
   }
+
+  const collapseItemDetails = useCallback(() => {
+    setExpandedDetailKeys({})
+    setExpandedSummaryKeys({})
+    setEditingNoteKeys({})
+  }, [])
+
+  const toggleItemDetails = useCallback((item: CiteShelfItem) => {
+    onSelect(item)
+    setExpandedSummaryKeys({})
+    setExpandedDetailKeys((prev) => (prev[item.key] ? {} : { [item.key]: true }))
+  }, [onSelect])
+
+  useEffect(() => {
+    const hasExpanded = Object.values(expandedDetailKeys).some(Boolean)
+    if (!hasExpanded) return undefined
+
+    const onDocumentClick = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof Element)) return
+      if (target.closest('.kb-shelf-item')) return
+
+      const panel = shelfPanelRef.current
+      if (panel?.contains(target)) {
+        const interactive = target.closest('button, input, textarea, select, a, .ant-select, .ant-dropdown, .ant-picker-dropdown, [role="button"], [role="listbox"], [role="menu"]')
+        if (interactive) return
+      }
+
+      collapseItemDetails()
+    }
+
+    document.addEventListener('click', onDocumentClick)
+    return () => document.removeEventListener('click', onDocumentClick)
+  }, [collapseItemDetails, expandedDetailKeys])
 
   useEffect(() => {
     const validKeys = new Set(items.map((item) => item.key))
@@ -1680,9 +1928,17 @@ export function CiteShelf({
   }, [activeConversationKey, activeSourceKey, scopeFilter])
 
   useEffect(() => {
-    if (selectedMetadataReviewCount > 0) return
-    setPreflightExportKind('')
-  }, [selectedMetadataReviewCount])
+    if (selectedCount <= 0) setBatchOrganizeOpen(false)
+  }, [selectedCount])
+
+  useEffect(() => {
+    if (!preflightExportRequest) return
+    const reviewCount = exportItemsByScope(preflightExportRequest.scope)
+      .filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
+      .length
+    if (reviewCount > 0) return
+    setPreflightExportRequest(null)
+  }, [exportItemsByScope, preflightExportRequest])
 
   useEffect(() => {
     return () => {
@@ -1707,6 +1963,7 @@ export function CiteShelf({
         </button>
       ) : null}
       <aside
+        ref={shelfPanelRef}
         className={isDockPresentation
           ? `kb-shelf-panel kb-shelf-panel-docked ${panelVisible ? 'is-visible' : 'is-hidden'}`
           : `kb-shelf-panel fixed right-0 top-0 z-40 h-full w-[360px] max-w-[92vw] transition-transform duration-300 ${open ? 'translate-x-0' : 'translate-x-full'}`}
@@ -1722,15 +1979,6 @@ export function CiteShelf({
                 </div>
               </div>
               <div className="kb-shelf-head-actions">
-                <Button
-                  size="small"
-                  icon={<SaveOutlined />}
-                  onClick={onSaveSnapshot}
-                  disabled={items.length === 0}
-                  aria-label={S.shelf_save_snapshot}
-                  title={S.shelf_save_snapshot}
-                  data-testid="citation-shelf-save-snapshot"
-                />
                 <Button
                   size="small"
                   icon={<DeleteOutlined />}
@@ -1750,14 +1998,191 @@ export function CiteShelf({
                 />
               </div>
             </div>
-            {showSnapshotTools ? (
-              <>
-                {hasSnapshotChoices ? (
-                  <div
-                    className="kb-shelf-snapshot-row"
-                    onClick={(event) => event.stopPropagation()}
+            {showOrganizeToggle || items.length > 0 ? (
+              <div className="kb-shelf-status-actions">
+                {showOrganizeToggle ? (
+                  <button
+                    type="button"
+                    className={`kb-shelf-organize-toggle ${organizeOpen ? 'is-open' : ''} ${organizeReviewCount > 0 || slowTaskVisible ? 'is-review' : ''}`}
+                    onClick={() => {
+                      setOrganizeOpen((prev) => {
+                        const next = !prev
+                        if (next) setExportPanelOpen(false)
+                        return next
+                      })
+                    }}
+                    aria-expanded={organizeOpen}
+                    aria-label={`${S.shelf_organize_toggle || 'Status'}: ${organizeStatusLabel}`}
+                    data-testid="citation-shelf-organize-toggle"
                   >
-                    <>
+                    <span className="kb-shelf-organize-status">{organizeStatusLabel}</span>
+                    {showOrganizeDetails ? <DownOutlined className="kb-shelf-organize-chevron" aria-hidden="true" /> : null}
+                  </button>
+                ) : null}
+                {items.length > 0 ? (
+                  <div className="kb-shelf-primary-actions">
+                    <button
+                      type="button"
+                      className="kb-shelf-command"
+                      onClick={() => {
+                        onSaveSnapshot()
+                        setOrganizeOpen(true)
+                        setExportPanelOpen(false)
+                      }}
+                      disabled={items.length === 0}
+                      aria-label={S.shelf_save_snapshot}
+                      title={S.shelf_save_snapshot_tip || S.shelf_save_snapshot}
+                      data-testid="citation-shelf-save-snapshot"
+                    >
+                      <SaveOutlined />
+                      {S.shelf_save_snapshot}
+                    </button>
+                    <span className="kb-shelf-command-divider" aria-hidden="true" />
+                    <button
+                      type="button"
+                      className={`kb-shelf-command ${exportPanelOpen ? 'is-active' : ''}`}
+                      onClick={() => {
+                        setExportPanelOpen((prev) => {
+                          const next = !prev
+                          if (next) setOrganizeOpen(false)
+                          return next
+                        })
+                      }}
+                      disabled={items.length === 0}
+                      aria-expanded={exportPanelOpen}
+                      aria-label={S.shelf_export_toggle}
+                      title={S.shelf_export_toggle}
+                      data-testid="citation-shelf-export-toggle"
+                    >
+                      <DownloadOutlined />
+                      {S.shelf_export_toggle}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {exportPanelOpen && items.length > 0 ? (
+              <div className="kb-shelf-export-panel" data-testid="citation-shelf-export-panel">
+                <div className="kb-shelf-export-scope-row">
+                  <span>{S.shelf_export_scope}</span>
+                  <div className="kb-shelf-export-scope-segments">
+                    {selectedCount > 0 ? (
+                      <button
+                        type="button"
+                        className={`kb-shelf-export-scope ${activeExportScope === 'selected' ? 'is-active' : ''}`}
+                        onClick={() => setExportScope('selected')}
+                        data-testid="citation-shelf-export-scope-selected"
+                      >
+                        {exportScopeLabel('selected')}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`kb-shelf-export-scope ${activeExportScope === 'visible' ? 'is-active' : ''}`}
+                      onClick={() => setExportScope('visible')}
+                      disabled={visibleItems.length <= 0}
+                      data-testid="citation-shelf-export-scope-visible"
+                    >
+                      {exportScopeLabel('visible')}
+                    </button>
+                    <button
+                      type="button"
+                      className={`kb-shelf-export-scope ${activeExportScope === 'all' ? 'is-active' : ''}`}
+                      onClick={() => setExportScope('all')}
+                      data-testid="citation-shelf-export-scope-all"
+                    >
+                      {exportScopeLabel('all')}
+                    </button>
+                  </div>
+                </div>
+                <div className="kb-shelf-export-command-row">
+                  <span>{S.shelf_export_download_label || 'Download'}</span>
+                  <button
+                    type="button"
+                    className="kb-shelf-export-command"
+                    onClick={() => void exportActiveScopeAs('bib')}
+                    disabled={exportTargetCount <= 0 || Boolean(exportRepairingKind && exportRepairingKind !== 'bib')}
+                    data-testid="citation-shelf-export-main-bib"
+                  >
+                    {S.shelf_export_bib_btn}
+                  </button>
+                  <button
+                    type="button"
+                    className="kb-shelf-export-command"
+                    onClick={() => void exportActiveScopeAs('ris')}
+                    disabled={exportTargetCount <= 0 || Boolean(exportRepairingKind && exportRepairingKind !== 'ris')}
+                    data-testid="citation-shelf-export-main-ris"
+                  >
+                    {S.shelf_export_ris_btn}
+                  </button>
+                  <button
+                    type="button"
+                    className="kb-shelf-export-command"
+                    onClick={() => void exportActiveScopeAs('md')}
+                    disabled={exportTargetCount <= 0 || Boolean(exportRepairingKind && exportRepairingKind !== 'md')}
+                    data-testid="citation-shelf-export-main-md"
+                  >
+                    {S.shelf_export_markdown_btn}
+                  </button>
+                </div>
+                <div className="kb-shelf-export-command-row">
+                  <span>{S.shelf_export_copy_label || 'Copy'}</span>
+                  <button type="button" className="kb-shelf-export-command" onClick={() => void copyShelfItemsAs(activeExportScope, 'bibtex')} data-testid="citation-shelf-export-copy-bibtex">
+                    {S.shelf_export_copy_bibtex}
+                  </button>
+                  <button type="button" className="kb-shelf-export-command" onClick={() => void copyShelfItemsAs(activeExportScope, 'gbt')} data-testid="citation-shelf-export-copy-gbt">
+                    {S.shelf_export_copy_gbt}
+                  </button>
+                  <button type="button" className="kb-shelf-export-command" onClick={() => void copyShelfItemsAs(activeExportScope, 'md')} data-testid="citation-shelf-export-copy-md">
+                    {S.shelf_export_copy_markdown}
+                  </button>
+                  <button type="button" className="kb-shelf-export-command" onClick={() => void exportActiveScopeAs('csv')} disabled={Boolean(exportRepairingKind)} data-testid="citation-shelf-export-main-csv">
+                    {S.shelf_export_csv_btn}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {preflightExportRequest && preflightMetadataReviewCount > 0 ? (
+              <div className="kb-shelf-export-preflight" data-testid="citation-shelf-export-preflight">
+                <div className="kb-shelf-export-preflight-copy">
+                  <strong>{S.shelf_export_preflight_title}</strong>
+                  <span>{S.shelf_export_preflight_body.replace('{n}', String(preflightMetadataReviewCount))}</span>
+                </div>
+                <div className="kb-shelf-export-preflight-actions">
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      void exportShelfItemsAs(preflightExportRequest.scope, preflightExportRequest.kind, { skipPreflight: true, onlyMetadataReady: true })
+                      setPreflightExportRequest(null)
+                    }}
+                    disabled={Boolean(exportRepairingKind)}
+                    data-testid="citation-shelf-export-preflight-healthy"
+                  >
+                    {S.shelf_export_preflight_healthy}
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={async () => {
+                      await exportShelfItemsAs(preflightExportRequest.scope, preflightExportRequest.kind, { skipPreflight: true, autoRepair: true })
+                      setPreflightExportRequest(null)
+                    }}
+                    loading={Boolean(exportRepairingKind)}
+                    data-testid="citation-shelf-export-preflight-continue"
+                  >
+                    {S.shelf_export_preflight_autofill}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            {organizeOpen && showSnapshotTools ? (
+              <div className="kb-shelf-version-panel" data-testid="citation-shelf-version-panel">
+                <div className="kb-shelf-version-row">
+                  <span className="kb-shelf-version-label">{S.shelf_version_title}</span>
+                  {hasSnapshotChoices ? (
+                    <div
+                      className="kb-shelf-snapshot-row"
+                      onClick={(event) => event.stopPropagation()}
+                    >
                       <Select
                         size="small"
                         value={selectedSnapshotId || undefined}
@@ -1767,29 +2192,29 @@ export function CiteShelf({
                         options={snapshotOptions}
                         onChange={(value) => onSelectSnapshot(String(value || ''))}
                       />
-                      <Button size="small" onClick={onLoadSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-load-snapshot">
+                      <button type="button" className="kb-shelf-version-command" onClick={onLoadSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-load-snapshot">
                         {S.shelf_load}
-                      </Button>
-                      <Button size="small" onClick={onDeleteSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-delete-snapshot">
+                      </button>
+                      <button type="button" className="kb-shelf-version-command" onClick={onDeleteSnapshot} disabled={!selectedSnapshotId} data-testid="citation-shelf-delete-snapshot">
                         {S.shelf_delete}
-                      </Button>
-                    </>
-                  </div>
-                ) : null}
-                {snapshotDiff ? (
-                  <div className="kb-shelf-snapshot-diff">{snapshotDiff}</div>
-                ) : null}
-              </>
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="kb-shelf-version-hint">
+                  {snapshotDiff || S.shelf_version_hint}
+                </div>
+              </div>
             ) : null}
-            {slowTaskVisible ? (
+            {organizeOpen && slowTaskVisible ? (
               <div className="kb-shelf-background-task" data-testid="citation-shelf-background-task">
                 <LoadingOutlined spin />
                 <span>{shelfBackgroundTaskLabel}</span>
               </div>
             ) : null}
-            {items.length > 0 ? (
+            {organizeOpen && items.length > 0 ? (
               <div
-                className={`kb-shelf-readiness is-${shelfReadiness.status}`}
+                className={`kb-shelf-readiness is-${shelfReadiness.status} ${showOrganizeDetails ? '' : 'is-quiet'}`}
                 data-testid="citation-shelf-readiness"
               >
                 <div className="kb-shelf-readiness-main">
@@ -1803,23 +2228,14 @@ export function CiteShelf({
                       .replace('{ready}', String(shelfReadiness.metadataReadyItems))
                       .replace('{total}', String(shelfReadiness.total))}
                   </span>
-                  <span className={`kb-shelf-readiness-chip ${shelfReadiness.sourceOpenReview > 0 ? 'is-review' : ''}`}>
-                    {shelfReadiness.sourceOpenReview > 0
-                      ? S.shelf_readiness_source_open_review.replace('{n}', String(shelfReadiness.sourceOpenReview))
-                      : S.shelf_readiness_source_open_ready.replace('{n}', String(shelfReadiness.sourceOpenable))}
-                  </span>
-                  {shelfReadiness.summaryReview > 0 ? (
-                    <span className="kb-shelf-readiness-chip is-review">
-                      {S.shelf_readiness_summary_review.replace('{n}', String(shelfReadiness.summaryReview))}
-                    </span>
-                  ) : (
-                    <span className="kb-shelf-readiness-chip">
-                      {S.shelf_readiness_summary_grounded.replace('{n}', `${shelfReadiness.summaryRate}%`)}
-                    </span>
-                  )}
                   {shelfReadiness.metadataReview > 0 ? (
                     <span className="kb-shelf-readiness-chip is-review">
                       {S.shelf_readiness_meta.replace('{n}', String(shelfReadiness.metadataReview))}
+                    </span>
+                  ) : null}
+                  {shelfReadiness.sourceOpenReview > 0 ? (
+                    <span className="kb-shelf-readiness-chip is-review">
+                      {S.shelf_readiness_source_open_review.replace('{n}', String(shelfReadiness.sourceOpenReview))}
                     </span>
                   ) : null}
                   {shelfReadiness.duplicateItems > 0 ? (
@@ -1827,126 +2243,92 @@ export function CiteShelf({
                       {S.shelf_readiness_dups.replace('{n}', String(shelfReadiness.duplicateItems))}
                     </span>
                   ) : null}
-                  {shelfReadiness.sourceOpenPartial > 0 ? (
-                    <span className="kb-shelf-readiness-chip is-calibrating">
-                      {S.shelf_readiness_source_open_partial.replace('{n}', String(shelfReadiness.sourceOpenPartial))}
-                    </span>
-                  ) : null}
                 </div>
                 {repairImpact ? (
                   <div className="kb-shelf-repair-impact" data-testid="citation-shelf-repair-impact">
                     <span>{S.shelf_repair_impact_changed.replace('{n}', String(repairImpact.changed))}</span>
-                    {repairImpact.score_delta ? <span>Q{repairImpact.before_avg_score} -&gt; Q{repairImpact.after_avg_score}</span> : null}
-                    {(repairImpact.changed_fields || []).slice(0, 3).map((field) => (
-                      <span key={`field-${field.name}`}>{field.name} x{field.count}</span>
-                    ))}
                   </div>
                 ) : null}
               </div>
             ) : null}
             {selectedCount > 0 ? (
-              <>
-                <div className="kb-shelf-batch-row">
+              <div className="kb-shelf-batch-row">
+                <div className="kb-shelf-batch-head">
                   <span className="kb-shelf-batch-count" data-testid="citation-shelf-batch-count">{S.shelf_batch_count.replace('{n}', String(selectedCount))}</span>
-                  <Button size="small" onClick={removeSelected} data-testid="citation-shelf-batch-remove">
-                    {S.shelf_batch_remove}
-                  </Button>
-                  <Button size="small" onClick={() => void copySelectedAs('gbt')} data-testid="citation-shelf-copy-gbt">
-                    {copyState === 'gbt' ? S.shelf_copied_gbt : S.shelf_copy_gbt}
-                  </Button>
-                  <Button size="small" onClick={() => void copySelectedAs('bibtex')} data-testid="citation-shelf-copy-bibtex">
-                    {copyState === 'bibtex' ? S.shelf_copied_bibtex : S.shelf_copy_bibtex}
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => void exportSelectedAs('bib')}
-                    loading={exportRepairingKind === 'bib'}
-                    disabled={Boolean(exportRepairingKind && exportRepairingKind !== 'bib')}
-                    data-testid="citation-shelf-export-bib"
-                  >
-                    {S.shelf_export_bib_btn}
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => void exportSelectedAs('ris')}
-                    loading={exportRepairingKind === 'ris'}
-                    disabled={Boolean(exportRepairingKind && exportRepairingKind !== 'ris')}
-                    data-testid="citation-shelf-export-ris"
-                  >
-                    {S.shelf_export_ris_btn}
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => void exportSelectedAs('csv')}
-                    loading={exportRepairingKind === 'csv'}
-                    disabled={Boolean(exportRepairingKind && exportRepairingKind !== 'csv')}
-                    data-testid="citation-shelf-export-csv"
-                  >
-                    {S.shelf_export_csv_btn}
-                  </Button>
-                  <div className="flex min-w-[170px] items-center gap-1" onClick={(event) => event.stopPropagation()}>
-                    <Select
-                      size="small"
-                      value={batchTagInput || undefined}
-                      placeholder={S.shelf_batch_tag_placeholder}
-                      style={{ minWidth: 124 }}
-                      showSearch
-                      onChange={(value) => {
-                        setBatchTagInput(value)
-                        applyTagToSelected(value)
-                      }}
-                      options={[...TAG_PRESETS, ...allTags]
-                        .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
-                        .map((tag) => ({ value: tag, label: tag }))}
-                    />
-                    <Button
-                      size="small"
-                      onClick={() => {
-                        if (!batchTagInput.trim()) return
-                        removeTagFromSelected(batchTagInput)
-                        setBatchTagInput('')
-                      }}
+                  <div className="kb-shelf-batch-head-actions">
+                    <button
+                      type="button"
+                      className={`kb-shelf-batch-command ${batchOrganizeOpen ? 'is-primary' : ''}`}
+                      onClick={() => setBatchOrganizeOpen((prev) => !prev)}
+                      aria-expanded={batchOrganizeOpen}
+                      data-testid="citation-shelf-batch-organize"
                     >
-                      {S.shelf_remove_tag}
-                    </Button>
+                      {S.shelf_batch_organize || 'Organize'}
+                    </button>
+                    <button type="button" className="kb-shelf-clear-select" onClick={clearSelected} data-testid="citation-shelf-clear-selection">
+                      {S.shelf_clear_selection}
+                    </button>
                   </div>
-                  <button type="button" className="kb-shelf-clear-select" onClick={clearSelected}>
-                    {S.shelf_clear_selection}
+                </div>
+                <div className="kb-shelf-batch-actions">
+                  {onUseSelectedAsContext ? (
+                    <button
+                      type="button"
+                      className="kb-shelf-batch-command is-primary"
+                      onClick={() => onUseSelectedAsContext(selectedItems)}
+                      data-testid="citation-shelf-use-context"
+                    >
+                      {S.shelf_use_as_context || 'Use as context'}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="kb-shelf-batch-command"
+                    onClick={openSelectedExportPanel}
+                    aria-expanded={exportPanelOpen && activeExportScope === 'selected'}
+                    data-testid="citation-shelf-export-selected"
+                  >
+                    <DownloadOutlined aria-hidden="true" />
+                    {S.shelf_export_toggle}
                   </button>
                 </div>
-                {preflightExportKind && selectedMetadataReviewCount > 0 ? (
-                  <div className="kb-shelf-export-preflight" data-testid="citation-shelf-export-preflight">
-                    <div className="kb-shelf-export-preflight-copy">
-                      <strong>{S.shelf_export_preflight_title}</strong>
-                      <span>{S.shelf_export_preflight_body.replace('{n}', String(selectedMetadataReviewCount))}</span>
+                {batchOrganizeOpen ? (
+                  <div className="kb-shelf-batch-organize-panel" data-testid="citation-shelf-batch-organize-panel">
+                    <div className="kb-shelf-batch-tag" onClick={(event) => event.stopPropagation()}>
+                      <span className="kb-shelf-batch-label">{S.shelf_batch_tag_label || 'Tags'}</span>
+                      <div className="kb-shelf-batch-tag-controls">
+                        <Select
+                          size="small"
+                          value={batchTagInput || undefined}
+                          placeholder={S.shelf_batch_tag_placeholder}
+                          showSearch
+                          onChange={(value) => {
+                            setBatchTagInput(value)
+                            applyTagToSelected(value)
+                          }}
+                          options={[...TAG_PRESETS, ...allTags]
+                            .filter((tag, idx, arr) => arr.findIndex((x) => x.toLowerCase() === tag.toLowerCase()) === idx)
+                            .map((tag) => ({ value: tag, label: tag }))}
+                        />
+                        <button
+                          type="button"
+                          className="kb-shelf-batch-command"
+                          onClick={() => {
+                            if (!batchTagInput.trim()) return
+                            removeTagFromSelected(batchTagInput)
+                            setBatchTagInput('')
+                          }}
+                        >
+                          {S.shelf_remove_tag}
+                        </button>
+                      </div>
                     </div>
-                    <div className="kb-shelf-export-preflight-actions">
-                      <Button
-                        size="small"
-                        onClick={() => {
-                          void exportSelectedAs(preflightExportKind, { skipPreflight: true, onlyMetadataReady: true })
-                          setPreflightExportKind('')
-                        }}
-                        disabled={Boolean(exportRepairingKind)}
-                        data-testid="citation-shelf-export-preflight-healthy"
-                      >
-                        {S.shelf_export_preflight_healthy}
-                      </Button>
-                      <Button
-                        size="small"
-                        onClick={async () => {
-                          await exportSelectedAs(preflightExportKind, { skipPreflight: true, autoRepair: true })
-                          setPreflightExportKind('')
-                        }}
-                        loading={Boolean(exportRepairingKind)}
-                        data-testid="citation-shelf-export-preflight-continue"
-                      >
-                        {S.shelf_export_preflight_autofill}
-                      </Button>
-                    </div>
+                    <button type="button" className="kb-shelf-batch-command is-danger" onClick={removeSelected} data-testid="citation-shelf-batch-remove">
+                      {S.shelf_batch_remove}
+                    </button>
                   </div>
                 ) : null}
-              </>
+              </div>
             ) : null}
           </div>
           <div className="kb-shelf-scroll flex-1 overflow-y-auto px-3 py-3">
@@ -1954,72 +2336,125 @@ export function CiteShelf({
               <div className="kb-shelf-toolbar-wrap">
                 <div className="kb-shelf-toolbar">
                   <div className="kb-shelf-toolbar-main">
-                  <Input
-                    allowClear
-                    placeholder={S.shelf_search_placeholder}
-                    value={searchText}
-                    onChange={(event) => setSearchText(event.target.value)}
-                    className="kb-shelf-search"
-                    data-testid="citation-shelf-search"
-                  />
-                  <Select
-                    value={sortKey}
-                    onChange={(value) => setSortKey(value)}
-                    className="kb-shelf-sort"
-                    options={[
-                      { value: 'recent', label: S.shelf_sort_recent },
-                      { value: 'cited', label: S.shelf_sort_cited },
-                      { value: 'year', label: S.shelf_sort_year },
-                      { value: 'impact', label: S.shelf_sort_impact },
-                    ]}
-                  />
-                  <button
-                    type="button"
-                    className={`kb-shelf-advanced-toggle ${advancedFiltersOpen ? 'is-open' : ''} ${advancedFilterActive ? 'is-active' : ''}`}
-                    onClick={() => setAdvancedFiltersOpen((prev) => !prev)}
-                  >
-                    {advancedFiltersOpen ? S.shelf_advanced_collapse : S.shelf_advanced_filter}
-                  </button>
+                    <Input
+                      allowClear
+                      placeholder={S.shelf_search_placeholder}
+                      prefix={<SearchOutlined aria-hidden="true" />}
+                      value={searchText}
+                      onChange={(event) => setSearchText(event.target.value)}
+                      className="kb-shelf-search"
+                      data-testid="citation-shelf-search"
+                    />
+                    <div className="kb-shelf-toolbar-controls">
+                      <Select
+                        value={sortKey}
+                        onChange={(value) => setSortKey(value)}
+                        className="kb-shelf-sort"
+                        popupMatchSelectWidth={false}
+                        suffixIcon={<DownOutlined />}
+                        options={[
+                          { value: 'recent', label: S.shelf_sort_recent },
+                          { value: 'cited', label: S.shelf_sort_cited },
+                          { value: 'year', label: S.shelf_sort_year },
+                          { value: 'impact', label: S.shelf_sort_impact },
+                        ]}
+                      />
+                      <button
+                        type="button"
+                        className={`kb-shelf-advanced-toggle ${advancedFiltersOpen ? 'is-open' : ''} ${advancedFilterActive ? 'is-active' : ''}`}
+                        onClick={() => setAdvancedFiltersOpen((prev) => !prev)}
+                        aria-expanded={advancedFiltersOpen}
+                      >
+                        <SlidersOutlined aria-hidden="true" />
+                        <span>{advancedFiltersOpen ? S.shelf_advanced_collapse : S.shelf_advanced_filter}</span>
+                        {advancedFilterActive ? <strong aria-hidden="true" /> : null}
+                      </button>
+                    </div>
                   </div>
                   {advancedFiltersOpen ? (
-                    <div className="kb-shelf-filters">
-                  <Select
-                    value={groupMode}
-                    onChange={(value) => setGroupMode(value as GroupMode)}
-                    className="kb-shelf-sort"
-                    options={[
-                      { value: 'none', label: S.shelf_group_none },
-                      { value: 'tag', label: S.shelf_group_tag },
-                      { value: 'source', label: S.shelf_group_source },
-                      { value: 'kind', label: S.shelf_group_type },
-                    ]}
-                  />
-                  <Select
-                    value={scopeFilter}
-                    onChange={(value) => setScopeFilter(value as ScopeFilter)}
-                    className="kb-shelf-sort"
-                    data-testid="citation-shelf-scope-filter"
-                    options={[
-                      { value: 'all', label: S.shelf_scope_all_project },
-                      { value: 'conversation', label: S.shelf_scope_current_conversation, disabled: !activeConversationKey },
-                      { value: 'paper', label: S.shelf_scope_current_paper, disabled: !activeSourceKey },
-                    ]}
-                  />
-                  <Select
-                    allowClear
-                    value={tagFilter === 'all' ? undefined : tagFilter}
-                    onChange={(value) => setTagFilter(value || 'all')}
-                    className="kb-shelf-sort"
-                    placeholder={S.shelf_tag_filter_placeholder}
-                    options={allTags.map((tag) => ({ value: tag, label: tag }))}
-                  />
-                  <Button size="small" onClick={addVisibleToSelection} disabled={visibleItems.length <= 0} data-testid="citation-shelf-add-visible">
-                    {S.shelf_add_to_queue}
-                  </Button>
-                  <Button size="small" onClick={removeVisibleFromSelection} disabled={visibleSelectedCount <= 0} data-testid="citation-shelf-remove-visible">
-                    {S.shelf_remove_from_queue}
-                  </Button>
-                </div>
+                    <div className="kb-shelf-filters" data-testid="citation-shelf-advanced-panel">
+                      <div className="kb-shelf-filter-row">
+                        <span className="kb-shelf-filter-label">{S.shelf_filter_group_label || 'Group'}</span>
+                        <div className="kb-shelf-filter-segments" role="group" aria-label={S.shelf_filter_group_label || 'Group'}>
+                          {([
+                            ['none', S.shelf_group_short_none || S.shelf_group_none],
+                            ['tag', S.shelf_group_short_tag || S.shelf_group_tag],
+                            ['source', S.shelf_group_short_source || S.shelf_group_source],
+                            ['kind', S.shelf_group_short_type || S.shelf_group_type],
+                          ] as Array<[GroupMode, string]>).map(([value, label]) => (
+                            <button
+                              key={value}
+                              type="button"
+                              className={`kb-shelf-segment ${groupMode === value ? 'is-active' : ''}`}
+                              aria-pressed={groupMode === value}
+                              onClick={() => setGroupMode(value)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="kb-shelf-filter-row">
+                        <span className="kb-shelf-filter-label">{S.shelf_filter_scope_label || 'Scope'}</span>
+                        <div
+                          className="kb-shelf-filter-segments"
+                          role="group"
+                          aria-label={S.shelf_filter_scope_label || 'Scope'}
+                          data-testid="citation-shelf-scope-filter"
+                        >
+                          {([
+                            ['all', S.shelf_scope_short_all || S.shelf_scope_all_project, false],
+                            ['conversation', S.shelf_scope_short_conversation || S.shelf_scope_current_conversation, !activeConversationKey],
+                            ['paper', S.shelf_scope_short_paper || S.shelf_scope_current_paper, !activeSourceKey],
+                          ] as Array<[ScopeFilter, string, boolean]>).map(([value, label, disabled]) => (
+                            <button
+                              key={value}
+                              type="button"
+                              className={`kb-shelf-segment ${scopeFilter === value ? 'is-active' : ''}`}
+                              aria-pressed={scopeFilter === value}
+                              disabled={disabled}
+                              data-testid={`citation-shelf-scope-${value}`}
+                              onClick={() => setScopeFilter(value)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="kb-shelf-filter-row is-tag">
+                        <span className="kb-shelf-filter-label">{S.shelf_filter_tag_label || 'Tag'}</span>
+                        <div className="kb-shelf-filter-tag-line">
+                          <Select
+                            allowClear
+                            value={tagFilter === 'all' ? undefined : tagFilter}
+                            onChange={(value) => setTagFilter(value || 'all')}
+                            className="kb-shelf-tag-filter"
+                            placeholder={S.shelf_tag_filter_placeholder}
+                            options={allTags.map((tag) => ({ value: tag, label: tag }))}
+                          />
+                          <div className="kb-shelf-filter-actions">
+                            <button
+                              type="button"
+                              className="kb-shelf-filter-action"
+                              onClick={addVisibleToSelection}
+                              disabled={visibleItems.length <= 0}
+                              data-testid="citation-shelf-add-visible"
+                            >
+                              {S.shelf_add_to_queue}
+                            </button>
+                            <button
+                              type="button"
+                              className="kb-shelf-filter-action"
+                              onClick={removeVisibleFromSelection}
+                              disabled={visibleSelectedCount <= 0}
+                              data-testid="citation-shelf-remove-visible"
+                            >
+                              {S.shelf_remove_from_queue}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   ) : null}
                   {!advancedFiltersOpen && advancedFilterActive ? (
                     <div className="kb-shelf-filter-pills">
@@ -2068,53 +2503,28 @@ export function CiteShelf({
                   <div key={group.key} className="space-y-2">
                     {groupMode !== 'none' ? (
                       <div className="kb-shelf-group-title">
-                        {group.label} · {group.items.length}
+                        {group.label} ({group.items.length})
                       </div>
                     ) : null}
                     {group.items.map((item) => {
                       const display = citationDisplay(item)
                       const cardView = citationCardView(item)
-                      const shelfTitle = String(cardView.header.title || display.main || item.main || '').trim()
-                      const duplicateCount = duplicateCountByIdentity[paperIdentity(item)] || 0
-                      const trace = sourceTraceLabel(item)
-                      const visibleTraceLabels = trace.labels.length > 1 ? trace.labels.slice(1) : trace.labels
+                      const shelfKind = normalizeShelfItemKind(item.shelfItemKind)
+                      const shelfKindText = shelfItemKindLabel(shelfKind, S)
+                      const shelfOriginText = shelfOriginLabel(item.shelfOrigin, S)
+                      const isDetailsExpanded = Boolean(expandedDetailKeys[item.key])
+                      const duplicateCount = duplicateCountByIdentity[shelfItemPaperIdentity(item)] || 0
                       const itemTags = normalizeShelfTags(item.tags)
                       const quality = qualityHints(item, display)
                       const noteText = String(item.note || '').trim()
                       const isFocused = item.key === focusedKey
-                      const metrics = citeMetricSummary(item)
                       const shelfSummary = shelfSummaryDisplay(item, cardView, S)
                       const shelfSummaryLine = shelfSummary.line
                       const shelfSummarySource = shelfSummary.sourceLabel
                       const shelfSummaryQuality = shelfSummary.quality
                       const shelfSummaryLines = splitSummary(shelfSummaryLine)
-                      const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
-                      const itemSourceOpenQuality = sourceOpenQualityView(
-                        item,
-                        itemSourceQuality,
-                        S,
-                        readerLocateResults[item.key],
-                      )
-                      const noteEditing = Boolean(editingNoteKeys[item.key] && isFocused)
-                      const visibleQualityChips = isFocused ? quality.chips.slice(0, 3) : quality.chips.slice(0, 1)
-                      const showQuality = Boolean(quality.needsRepair || isFocused)
-                      const libraryMatch = libraryMatchView(item)
-                      const shelfKind = normalizeShelfItemKind(item.shelfItemKind)
-                      const shelfKindText = shelfItemKindLabel(shelfKind, S)
-                      const shelfOriginText = shelfOriginLabel(item.shelfOrigin, S)
-                      const isDetailsExpanded = Boolean(expandedDetailKeys[item.key])
-                      const visibleMetrics = isDetailsExpanded ? metrics : metrics.slice(0, 2)
                       const rawItemSourceLabel = String(item.sourceName || basenameFromPath(item.sourcePath) || '').trim()
                       const itemLocationLabel = String(item.locationLabel || item.headingPath || '').trim()
-                      const itemSourceLabel = rawItemSourceLabel && normalizeTitle(rawItemSourceLabel) === normalizeTitle(shelfTitle) && itemLocationLabel
-                        ? itemLocationLabel
-                        : rawItemSourceLabel
-                      const sourceTrail = isDetailsExpanded ? sourceTrailRows(item, shelfKindText, shelfOriginText) : []
-                      const showSourceOpenBadge = itemSourceOpenQuality.tone === 'review'
-                        || itemSourceOpenQuality.tone === 'missing'
-                        || itemSourceOpenQuality.label === S.shelf_source_open_repaired_reopen
-                      const messageTargetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
-                      const canOpenMessage = Boolean(onOpenMessage && Number.isFinite(messageTargetId) && messageTargetId > 0)
                       const shelfExcerpt = cleanCitationDisplayText(item.shelfExcerpt || '')
                       const rawShelfExcerptLabel = String(item.shelfExcerptLabel || '').trim()
                       const shelfExcerptLabel = rawShelfExcerptLabel === 'Reference entry'
@@ -2124,21 +2534,58 @@ export function CiteShelf({
                           : rawShelfExcerptLabel === 'Excerpt'
                             ? S.shelf_excerpt_head
                             : rawShelfExcerptLabel || S.shelf_excerpt_head
+                      const shelfCard = shelfCardPresentation(item, {
+                        cardView,
+                        display,
+                        shelfKind,
+                        shelfKindText,
+                        rawSourceLabel: rawItemSourceLabel,
+                        itemLocationLabel,
+                        shelfExcerpt,
+                        shelfExcerptLabel,
+                      })
+                      const shelfTitle = shelfCard.title
+                      const publicationParts = shelfCard.showArticleSummary
+                        ? uniqueCitationMetrics(citeVenueYearParts(item, display), citeImpactMetrics(item))
+                        : []
+                      const itemSourceLabel = shelfCard.sourceLabel
+                      const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
+                      const itemSourceOpenQuality = sourceOpenQualityView(
+                        item,
+                        itemSourceQuality,
+                        S,
+                        readerLocateResults[item.key],
+                      )
+                      const noteEditing = Boolean(editingNoteKeys[item.key] && isDetailsExpanded)
+                      const visibleQualityChips = isFocused ? quality.chips.slice(0, 3) : quality.chips.slice(0, 1)
+                      const showQuality = organizeOpen && shelfCard.showArticleSummary && Boolean(quality.needsRepair || isFocused)
+                      const libraryMatch = libraryMatchView(item)
+                      const sourceTrail = organizeOpen && isDetailsExpanded ? sourceTrailRows(item) : []
+                      const showSourceOpenBadge = organizeOpen && isDetailsExpanded && (itemSourceOpenQuality.tone === 'review'
+                        || itemSourceOpenQuality.tone === 'missing'
+                        || itemSourceOpenQuality.label === S.shelf_source_open_repaired_reopen)
+                      const showLibraryMatch = organizeOpen && isDetailsExpanded && shelfCard.showArticleSummary
+                      const messageTargetId = Number(item.traceAssistantMsgId || item.traceUserMsgId || 0)
+                      const canOpenMessage = Boolean(onOpenMessage && Number.isFinite(messageTargetId) && messageTargetId > 0)
+                      const isContextActive = Boolean(activeContextKeys[item.key])
+                      const isItemSelected = Boolean(selectedKeys[item.key])
 
                       return (
                         <div
                           key={item.key}
-                          className={`kb-shelf-item ${
+                          className={`kb-shelf-item is-${shelfCard.surface} ${
                             isFocused
                               ? 'kb-shelf-item-active'
                               : ''
-                          }`}
+                          } ${isContextActive ? 'is-context' : ''} ${isDetailsExpanded ? 'is-expanded' : ''}`}
                           data-testid="citation-shelf-item"
-                          onClick={() => onSelect(item)}
+                          aria-expanded={isDetailsExpanded}
+                          aria-label={`${shelfTitle} ${isDetailsExpanded ? S.shelf_hide_details : S.shelf_show_details}`}
+                          onClick={() => toggleItemDetails(item)}
                           onKeyDown={(event) => {
                             if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault()
-                              onSelect(item)
+                              toggleItemDetails(item)
                             }
                           }}
                           role="button"
@@ -2149,20 +2596,30 @@ export function CiteShelf({
                               aria-label={`select-${item.key}`}
                               type="checkbox"
                               className="kb-shelf-check"
-                              checked={Boolean(selectedKeys[item.key])}
+                              checked={isItemSelected}
+                              readOnly
                               onChange={(event) => {
                                 event.stopPropagation()
-                                toggleSelect(item.key, event.target.checked)
                               }}
-                              onClick={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                toggleSelect(item.key, !isItemSelected)
+                              }}
                             />
                             <div className="kb-shelf-item-main">
                               <div className="kb-shelf-item-title" data-testid="citation-shelf-item-title">{shelfTitle}</div>
-                              {display.authors ? (
+                              {shelfCard.showAuthors && display.authors ? (
                                 <div className="kb-shelf-item-authors">{display.authors}</div>
                               ) : null}
-                              {itemSourceLabel ? (
-                                <div className="kb-shelf-item-source" data-testid="citation-shelf-item-source">{itemSourceLabel}</div>
+                              {publicationParts.length > 0 ? (
+                                <div className="kb-shelf-item-venue" data-testid="citation-shelf-item-venue">
+                                  {publicationParts.map((part, index) => (
+                                    <span key={`${item.key}-pub-${part}`} className="kb-shelf-item-venue-part">
+                                      {index > 0 ? <span className="kb-shelf-item-venue-separator">·</span> : null}
+                                      {part}
+                                    </span>
+                                  ))}
+                                </div>
                               ) : null}
                             </div>
                             <div className="kb-shelf-item-actions">
@@ -2220,7 +2677,7 @@ export function CiteShelf({
                               ) : null}
                             </div>
                           ) : null}
-                          {quality.tip && (isFocused || quality.needsRepair) ? (
+                          {organizeOpen && shelfCard.showArticleSummary && quality.tip && (isFocused || quality.needsRepair) ? (
                             <div className="kb-shelf-quality-tip">{quality.tip}</div>
                           ) : null}
                           <div className="kb-shelf-meta-row">
@@ -2231,11 +2688,6 @@ export function CiteShelf({
                               >
                                 {shelfKindText}
                               </span>
-                              {visibleTraceLabels.map((label, idx) => (
-                                <span key={`${item.key}-trace-${idx}-${label}`} className="kb-shelf-origin" title={trace.debugTitle || undefined}>
-                                  {label}
-                                </span>
-                              ))}
                               {duplicateCount > 1 ? (
                                 <span className="kb-shelf-dup">{S.shelf_dup.replace('{n}', String(duplicateCount))}</span>
                               ) : null}
@@ -2248,13 +2700,18 @@ export function CiteShelf({
                                   {itemSourceOpenQuality.label}
                                 </span>
                               ) : null}
-                              {libraryMatch ? (
+                              {showLibraryMatch && libraryMatch ? (
                                 <span
                                   className={`kb-shelf-library-match is-${libraryMatch.tone}`}
                                   data-testid="citation-shelf-library-match"
                                   title={libraryMatch.title}
                                 >
                                   {libraryMatch.label}
+                                </span>
+                              ) : null}
+                              {isContextActive ? (
+                                <span className="kb-shelf-context-badge" data-testid="citation-shelf-context-badge">
+                                  {S.shelf_context_badge || 'Context'}
                                 </span>
                               ) : null}
                               {itemTags.map((tag) => (
@@ -2264,7 +2721,7 @@ export function CiteShelf({
                               ))}
                             </div>
                           </div>
-                          {(isFocused || noteText) ? (
+                          {(noteText || noteEditing) ? (
                             <div
                               className={`kb-shelf-note ${noteEditing ? '' : 'kb-shelf-note-compact'}`}
                               onClick={(event) => event.stopPropagation()}
@@ -2297,7 +2754,7 @@ export function CiteShelf({
                                       {noteText}
                                     </div>
                                   ) : null}
-                                  {isFocused ? (
+                                  {noteText ? (
                                     <button
                                       type="button"
                                       className="kb-shelf-note-link"
@@ -2310,118 +2767,7 @@ export function CiteShelf({
                               )}
                             </div>
                           ) : null}
-                          {isFocused && !isDetailsExpanded ? (
-                            <div
-                              className="kb-shelf-summary kb-shelf-summary-compact"
-                              data-testid="citation-shelf-summary"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              {summaryLoadingKey === item.key ? (
-                                <div className="kb-shelf-summary-text">{S.shelf_summary_loading}</div>
-                              ) : shelfSummaryLines.length > 0 ? (
-                                <div className="kb-shelf-summary-preview">
-                                  {shelfSummaryLines.slice(0, 2).join(' ')}
-                                </div>
-                              ) : (
-                                <div className="kb-shelf-summary-empty">{S.shelf_summary_empty}</div>
-                              )}
-                            </div>
-                          ) : null}
-                          {isDetailsExpanded && sourceTrail.length > 0 ? (
-                            <div
-                              className="kb-shelf-trace-detail"
-                              data-testid="citation-shelf-source-trail"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              <div className="kb-shelf-trace-head">{S.shelf_trace_head}</div>
-                              <div className="kb-shelf-trace-rows">
-                                {sourceTrail.map((row) => (
-                                  <div
-                                    key={`${item.key}-trail-${row.id}`}
-                                    className="kb-shelf-trace-row"
-                                    data-testid={`citation-shelf-trace-row-${row.id}`}
-                                    title={row.title}
-                                  >
-                                    <span className="kb-shelf-trace-label">{row.label}</span>
-                                    <span className="kb-shelf-trace-value">{row.value}</span>
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="kb-shelf-trace-actions">
-                                {item.sourcePath && onOpenSource ? (
-                                  <button
-                                    type="button"
-                                    className="kb-shelf-trace-action"
-                                    data-testid="citation-shelf-trail-open-source"
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      onOpenSource(item)
-                                    }}
-                                  >
-                                    {S.shelf_open_source}
-                                  </button>
-                                ) : null}
-                                {canOpenMessage && onOpenMessage ? (
-                                  <button
-                                    type="button"
-                                    className="kb-shelf-trace-action"
-                                    data-testid="citation-shelf-trail-open-message"
-                                    onClick={(event) => {
-                                      event.stopPropagation()
-                                      onOpenMessage(item)
-                                    }}
-                                  >
-                                    {item.traceAssistantMsgId ? S.shelf_open_answer : S.shelf_open_message}
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
-                          ) : null}
-                          {isDetailsExpanded && shelfExcerpt ? (
-                            <div className="kb-shelf-excerpt" data-testid="citation-shelf-excerpt">
-                              <div className="kb-shelf-excerpt-head">
-                                {shelfExcerptLabel || S.shelf_excerpt_head}
-                              </div>
-                              <div className="kb-shelf-excerpt-text">
-                                {shelfExcerpt}
-                              </div>
-                            </div>
-                          ) : null}
-                          {visibleMetrics.length > 0 ? (
-                            <div className="kb-shelf-metrics">
-                              {visibleMetrics.map((metric) => (
-                                <span key={metric} className="kb-shelf-metric">
-                                  {metric}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          {isFocused || isDetailsExpanded ? (
-                            <button
-                              type="button"
-                              className="kb-shelf-detail-toggle"
-                              data-testid="citation-shelf-detail-toggle"
-                              aria-expanded={isDetailsExpanded}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                setExpandedDetailKeys((prev) => ({ ...prev, [item.key]: !isDetailsExpanded }))
-                              }}
-                            >
-                              {isDetailsExpanded ? S.shelf_hide_details : S.shelf_show_details}
-                            </button>
-                          ) : null}
-                          {isDetailsExpanded && (item.doiUrl || !itemSourceLabel) ? (
-                            <div className="kb-shelf-doi">
-                              {item.doiUrl ? (
-                                <a className="kb-shelf-doi-link" href={item.doiUrl} rel="noreferrer" target="_blank">
-                                  {item.doi || item.doiUrl}
-                                </a>
-                              ) : (
-                                <span className="kb-shelf-doi-empty">{S.shelf_no_doi_link}</span>
-                              )}
-                            </div>
-                          ) : null}
-                          {isDetailsExpanded ? (
+                          {isDetailsExpanded && shelfCard.showArticleSummary ? (
                             <div className="kb-shelf-summary" data-testid="citation-shelf-summary">
                               {summaryLoadingKey === item.key ? (
                                 <div className="kb-shelf-summary-text">{S.shelf_summary_loading}</div>
@@ -2429,8 +2775,9 @@ export function CiteShelf({
                                 <>
                                   <div className="kb-shelf-summary-meta">
                                     <span className="kb-shelf-summary-head">{S.shelf_summary_head}</span>
-                                    <span className="kb-shelf-summary-sep" aria-hidden="true">·</span>
-                                    <span className="kb-shelf-summary-source">{shelfSummarySource}</span>
+                                    {shelfSummarySource ? (
+                                      <span className="kb-shelf-summary-source">/ {shelfSummarySource}</span>
+                                    ) : null}
                                     <span
                                       className={`kb-shelf-summary-quality is-${shelfSummaryQuality.tone}`}
                                       data-testid="citation-shelf-summary-quality"
@@ -2469,6 +2816,87 @@ export function CiteShelf({
                               ) : (
                                 <div className="kb-shelf-summary-empty">{S.shelf_summary_empty}</div>
                               )}
+                            </div>
+                          ) : null}
+                          {isDetailsExpanded && shelfCard.showExcerptInDetails && shelfCard.excerpt ? (
+                            <div className="kb-shelf-excerpt" data-testid="citation-shelf-excerpt">
+                              <div className="kb-shelf-excerpt-head">
+                                {shelfCard.excerptLabel || S.shelf_excerpt_head}
+                              </div>
+                              <div className="kb-shelf-excerpt-text">
+                                {shelfCard.excerpt}
+                              </div>
+                            </div>
+                          ) : null}
+                          {isDetailsExpanded && shelfCard.showArticleSummary && (item.doiUrl || !itemSourceLabel) ? (
+                            <div className="kb-shelf-doi">
+                              {item.doiUrl ? (
+                                <a
+                                  className="kb-shelf-doi-link"
+                                  href={item.doiUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  {item.doi || item.doiUrl}
+                                </a>
+                              ) : (
+                                <span className="kb-shelf-doi-empty">{S.shelf_no_doi_link}</span>
+                              )}
+                            </div>
+                          ) : null}
+                          {isDetailsExpanded && sourceTrail.length > 0 ? (
+                            <div
+                              className="kb-shelf-trace-detail"
+                              data-testid="citation-shelf-source-trail"
+                            >
+                              <div className="kb-shelf-trace-head">{S.shelf_provenance_head || S.shelf_trace_head}</div>
+                              <div className="kb-shelf-trace-rows">
+                                {sourceTrail.map((row) => (
+                                  <div
+                                    key={`${item.key}-trail-${row.id}`}
+                                    className="kb-shelf-trace-row"
+                                    data-testid={`citation-shelf-trace-row-${row.id}`}
+                                    title={row.title}
+                                  >
+                                    <span className="kb-shelf-trace-label">{row.label}</span>
+                                    <span
+                                      className="kb-shelf-trace-value"
+                                      data-testid={row.id === 'source' ? 'citation-shelf-item-source' : undefined}
+                                    >
+                                      {row.value}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="kb-shelf-trace-actions">
+                                {item.sourcePath && onOpenSource ? (
+                                  <button
+                                    type="button"
+                                    className="kb-shelf-trace-action"
+                                    data-testid="citation-shelf-trail-open-source"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      onOpenSource(item)
+                                    }}
+                                  >
+                                    {S.shelf_open_source}
+                                  </button>
+                                ) : null}
+                                {canOpenMessage && onOpenMessage ? (
+                                  <button
+                                    type="button"
+                                    className="kb-shelf-trace-action"
+                                    data-testid="citation-shelf-trail-open-message"
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      onOpenMessage(item)
+                                    }}
+                                  >
+                                    {item.traceAssistantMsgId ? S.shelf_open_answer : S.shelf_open_message}
+                                  </button>
+                                ) : null}
+                              </div>
                             </div>
                           ) : null}
                         </div>

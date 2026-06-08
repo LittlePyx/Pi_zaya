@@ -1918,12 +1918,37 @@ def _local_summary_excerpt(text: str, *, max_len: int = 420) -> str:
     return _compact_reader_open_text(summary, max_len=max_len)
 
 
+def _resolve_local_summary_md_path(source_path: str) -> Path | None:
+    raw = str(source_path or "").strip()
+    if not raw:
+        return None
+    src = Path(raw).expanduser()
+    if src.suffix.lower().endswith(".md"):
+        try:
+            if not (src.exists() and src.is_file()):
+                return None
+            resolved = src.resolve(strict=False)
+        except Exception:
+            return None
+        roots = list(_reference_asset_roots())
+        try:
+            project_root = _project_root()
+            if project_root not in roots:
+                roots.append(project_root)
+        except Exception:
+            pass
+        if not _path_within_roots(resolved, roots):
+            return None
+        return resolved
+    return _resolve_reader_md_path(raw)
+
+
 def _local_source_summary_meta(meta: dict | None) -> dict:
     data = dict(meta or {})
     source_path = str(data.get("source_path") or data.get("sourcePath") or "").strip()
     if not source_path:
         return {}
-    md_path = _resolve_reader_md_path(source_path)
+    md_path = _resolve_local_summary_md_path(source_path)
     if md_path is None:
         return {}
     try:
@@ -2862,6 +2887,13 @@ def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Pa
     if not text:
         return text
 
+    def _asset_cache_version(path: Path) -> str:
+        try:
+            stat = path.stat()
+            return f"{int(stat.st_mtime_ns)}-{int(stat.st_size)}"
+        except Exception:
+            return ""
+
     def _replace(m: re.Match[str]) -> str:
         alt = str(m.group(1) or "")
         raw = str(m.group(2) or "").strip()
@@ -2881,7 +2913,9 @@ def _rewrite_md_asset_links(md_text: str, *, md_path: Path, asset_roots: list[Pa
                 return m.group(0)
             if not _path_within_roots(cand, asset_roots):
                 return m.group(0)
-            asset_url = f"/api/references/asset?path={quote(str(cand), safe='')}"
+            version = _asset_cache_version(cand)
+            version_part = f"&v={quote(version, safe='')}" if version else ""
+            asset_url = f"/api/references/asset?path={quote(str(cand), safe='')}{version_part}"
             return f"![{alt}]({asset_url})"
         except Exception:
             return m.group(0)
@@ -3302,4 +3336,9 @@ def get_reference_asset(path: str):
     if not _path_within_roots(resolved, _reference_asset_roots()):
         raise HTTPException(404, "asset not found")
     media_type = str(mimetypes.guess_type(str(resolved))[0] or "application/octet-stream")
-    return FileResponse(str(resolved), media_type=media_type, filename=resolved.name)
+    return FileResponse(
+        str(resolved),
+        media_type=media_type,
+        filename=resolved.name,
+        headers={"Cache-Control": "no-cache, max-age=0", "Pragma": "no-cache"},
+    )

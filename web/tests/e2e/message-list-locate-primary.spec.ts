@@ -129,7 +129,15 @@ async function mockProjectCitationShelf(page: Page, initialItems: Array<Record<s
 }
 
 async function expandFocusedShelfDetails(page: Page) {
-  const toggle = page.getByTestId('citation-shelf-detail-toggle').first()
+  const item = page.getByTestId('citation-shelf-item').first()
+  await expect(item).toBeVisible()
+  if ((await item.getAttribute('aria-expanded')) !== 'true') {
+    await item.getByTestId('citation-shelf-item-title').click()
+  }
+}
+
+async function openShelfOrganizeTools(page: Page) {
+  const toggle = page.getByTestId('citation-shelf-organize-toggle')
   await expect(toggle).toBeVisible()
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') {
     await toggle.click()
@@ -215,6 +223,9 @@ function shelfMetadataRepairFixture(items: Array<Record<string, unknown>>, ready
             year: '1988',
             doi: '10.1109/TASSP.1988.1164940',
             doi_url: 'https://doi.org/10.1109/TASSP.1988.1164940',
+            journal_if: '1.2',
+            journal_quartile: 'Q3',
+            journal_if_source: 'fixture',
             summary_line: 'The abstract explains how missing spatial frequencies create low-pass distortion in optical serial sectioning microscopy.',
             summary_source: 'abstract',
             summary_provider: 'crossref',
@@ -519,6 +530,8 @@ test('system A citation popover shows source location, evidence quote, and opens
   await expect(page.getByTestId('citation-popover-system-a-claim')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-a-support')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-binding-status')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-card-quality')).toHaveCount(0)
+  await expect(page.getByTestId('citation-popover-card-warning')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-a-source')).toHaveCount(0)
   await expect(page.getByTestId('citation-popover-system-a-anchor-kind')).toHaveCount(0)
   await expect(popover).toContainText('Fixture Paper')
@@ -644,10 +657,11 @@ test('citation shelf item exposes source trail and can jump back to the answer',
 
   const item = page.getByTestId('citation-shelf-item').first()
   await expect(item).toBeVisible()
-  await item.click()
+  await expect(item).toHaveAttribute('aria-expanded', 'false')
   await expect(page.getByTestId('citation-shelf-source-trail')).toHaveCount(0)
-  await expect(page.getByTestId('citation-shelf-detail-toggle')).toHaveAttribute('aria-expanded', 'false')
   await expandFocusedShelfDetails(page)
+  await expect(page.getByTestId('citation-shelf-source-trail')).toHaveCount(0)
+  await openShelfOrganizeTools(page)
 
   const trail = page.getByTestId('citation-shelf-source-trail')
   await expect(trail).toBeVisible()
@@ -660,9 +674,15 @@ test('citation shelf item exposes source trail and can jump back to the answer',
   await page.getByTestId('citation-shelf-trail-open-message').click()
   await expect(page.locator('[data-msg-id="1"]')).toHaveClass(/is-shelf-jump/)
 
+  await item.getByTestId('citation-shelf-item-title').click()
+  await expect(item).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByTestId('citation-shelf-source-trail')).toHaveCount(0)
+  await item.getByTestId('citation-shelf-item-title').click()
+  await expect(item).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByTestId('citation-shelf-source-trail')).toBeVisible()
+
   await page.locator('.kb-shelf-advanced-toggle').click()
-  await page.getByTestId('citation-shelf-scope-filter').click()
-  await page.locator('.ant-select-item-option').filter({ hasText: /当前文献|Current paper/ }).click()
+  await page.getByTestId('citation-shelf-scope-paper').click()
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
 })
 
@@ -773,8 +793,9 @@ test('citation shelf reflects actual reader locate result after opening source',
 
   await page.locator('.kb-shelf-advanced-toggle').click()
   await page.getByTestId('citation-shelf-add-visible').click()
+  await page.getByTestId('citation-shelf-export-selected').click()
   const csvDownloadPromise = page.waitForEvent('download')
-  await page.getByTestId('citation-shelf-export-csv').click()
+  await page.getByTestId('citation-shelf-export-main-csv').click()
   if (await page.getByTestId('citation-shelf-export-preflight').isVisible().catch(() => false)) {
     await page.getByTestId('citation-shelf-export-preflight-continue').click()
   }
@@ -984,9 +1005,12 @@ test('citation shelf advances source repair run and refreshes repaired locate st
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
   await expect(popover).toBeHidden()
 
+  await openShelfOrganizeTools(page)
+  await expandFocusedShelfDetails(page)
   await page.getByTestId('citation-shelf-open-source').click()
   await expect.poll(() => repairCalls).toBeGreaterThan(0)
   await expect.poll(() => advanceCalls).toBeGreaterThan(0)
+  await expandFocusedShelfDetails(page)
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toContainText('已修复，重新校验')
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveClass(/is-partial/)
 })
@@ -1040,6 +1064,9 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
         year: '1988',
         doi: '10.1109/TASSP.1988.1164940',
         doi_url: 'https://doi.org/10.1109/TASSP.1988.1164940',
+        journal_if: '1.2',
+        journal_quartile: 'Q3',
+        journal_if_source: 'fixture',
         summary_line: 'The abstract explains how missing spatial frequencies create low-pass distortion in optical serial sectioning microscopy.',
         summary_source: 'abstract',
         summary_provider: 'crossref',
@@ -1077,8 +1104,15 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
   await expect(shelf).toHaveClass(/translate-x-0/)
   await expect.poll(() => bibliometricsRequests).toBeGreaterThan(1)
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('The missing cone problem')
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('IEEE Transactions on Acoustics, Speech, and Signal Processing')
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('1988')
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('IF 1.2')
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('JCR Q3')
   await expandFocusedShelfDetails(page)
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('IF 1.2')
+  await expect(page.getByTestId('citation-shelf-item-venue')).toContainText('JCR Q3')
   await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
+  await openShelfOrganizeTools(page)
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
@@ -1221,13 +1255,15 @@ test('citation shelf export auto-completes metadata before download', async ({ p
 
   const shelf = page.getByTestId('citation-shelf')
   await expect(shelf).toHaveClass(/translate-x-0/)
+  await openShelfOrganizeTools(page)
   await expect(shelf.getByTestId('citation-shelf-repair')).toBeVisible()
   await expect(popover).toBeHidden()
 
   await page.locator('.kb-shelf-advanced-toggle').click()
   await page.getByTestId('citation-shelf-add-visible').click()
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
-  await page.getByTestId('citation-shelf-export-bib').click()
+  await page.getByTestId('citation-shelf-export-selected').click()
+  await page.getByTestId('citation-shelf-export-main-bib').click()
   await expect(page.getByTestId('citation-shelf-export-preflight')).toBeVisible()
 
   const exportRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
@@ -1364,6 +1400,9 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
             year: '1988',
             doi: '10.1109/TASSP.1988.1164940',
             doi_url: 'https://doi.org/10.1109/TASSP.1988.1164940',
+            journal_if: '1.2',
+            journal_quartile: 'Q3',
+            journal_if_source: 'fixture',
             summary_line: 'The abstract explains how missing spatial frequencies create low-pass distortion in optical serial sectioning microscopy.',
             summary_source: 'abstract',
             summary_provider: 'crossref',
@@ -1403,8 +1442,9 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('The missing cone problem')
   await expandFocusedShelfDetails(page)
   await expect(page.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
+  await openShelfOrganizeTools(page)
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/1\/1/)
-  await expect(page.getByTestId('citation-shelf-repair-impact')).toContainText('doi')
+  await expect(page.getByTestId('citation-shelf-repair-impact')).toContainText(/已自动补全|Auto-completed/)
   await expect(shelf.locator('.kb-shelf-quality-chip')).toHaveCount(0)
   await expect(shelf.getByTestId('citation-shelf-repair')).toHaveCount(0)
   await expect(page.getByTestId('citation-shelf-summary-quality')).toContainText(/Q94/)
@@ -1421,9 +1461,10 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   await page.getByTestId('citation-shelf-add-visible').click()
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
+  await page.getByTestId('citation-shelf-export-selected').click()
 
   const bibDownloadPromise = page.waitForEvent('download')
-  await page.getByTestId('citation-shelf-export-bib').click()
+  await page.getByTestId('citation-shelf-export-main-bib').click()
   const bibDownload = await bibDownloadPromise
   expect(bibDownload.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.bib$/)
   const bibPath = await bibDownload.path()
@@ -1437,7 +1478,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   }
 
   const risDownloadPromise = page.waitForEvent('download')
-  await page.getByTestId('citation-shelf-export-ris').click()
+  await page.getByTestId('citation-shelf-export-main-ris').click()
   const risDownload = await risDownloadPromise
   expect(risDownload.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.ris$/)
   const risPath = await risDownload.path()
@@ -1454,7 +1495,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
   }
 
   const csvDownloadPromise = page.waitForEvent('download')
-  await page.getByTestId('citation-shelf-export-csv').click()
+  await page.getByTestId('citation-shelf-export-main-csv').click()
   const csvDownload = await csvDownloadPromise
   expect(csvDownload.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.csv$/)
   const csvPath = await csvDownload.path()
@@ -1470,6 +1511,22 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
     expect(csv).toContain('10.1109/tassp.1988.1164940')
     expect(csv).toContain('partial,section')
     expect(csv).toContain('abstract,crossref,grounded,94')
+  }
+
+  if (!(await page.getByTestId('citation-shelf-export-panel').isVisible().catch(() => false))) {
+    await page.getByTestId('citation-shelf-export-toggle').click()
+  }
+  await page.getByTestId('citation-shelf-export-scope-all').click()
+  const mdDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-main-md').click()
+  const mdDownload = await mdDownloadPromise
+  expect(mdDownload.suggestedFilename()).toMatch(/^cite_shelf_all_\d{8}_\d{4}\.md$/)
+  const mdPath = await mdDownload.path()
+  expect(mdPath, 'Markdown export should produce a downloadable file').not.toBeNull()
+  if (mdPath) {
+    const md = await readFile(mdPath, 'utf8')
+    expect(md).toContain('## 1. The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
+    expect(md).toContain('DOI: 10.1109/tassp.1988.1164940')
   }
   expect(repairRequestCount).toBe(repairCountAfterAutoFill)
 })

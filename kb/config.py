@@ -43,6 +43,19 @@ def _clean_base_url(value: object) -> str | None:
     return raw.rstrip("/") if raw else None
 
 
+def _clean_pref_bool(value: object) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raw = str(value).strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 @dataclass(frozen=True)
 class Settings:
     # Text model (cheaper, faster — e.g. DeepSeek).
@@ -65,6 +78,14 @@ class Settings:
     vision_uses_text_fallback: bool = field(default=False)
     # Whether LLM-based query expansion is enabled for BM25 retrieval.
     query_expansion_enabled: bool = field(default=False)
+    # Runtime environment and API access protection.
+    app_env: str = field(default="development")
+    production: bool = field(default=False)
+    access_token: str | None = field(default=None, repr=False)
+    access_token_sha256: str | None = field(default=None, repr=False)
+    auth_required: bool = field(default=False)
+    auth_cookie_secure: bool = field(default=False)
+    auto_backup_enabled: bool | None = field(default=None)
 
     # ------------------------------------------------------------------
     # Backward-compatible accessors (so existing callers that read
@@ -94,6 +115,7 @@ def load_settings() -> Settings:
     stored_vision_api_key = _clean_env_key(str(prefs.get("vision_api_key") or ""))
     stored_vision_base_url = _clean_base_url(prefs.get("vision_base_url"))
     stored_vision_model = _clean_pref_str(prefs.get("vision_model"))
+    stored_auto_backup_enabled = _clean_pref_bool(prefs.get("auto_backup_enabled"))
 
     # --- text model ---------------------------------------------------
     # Prefer DeepSeek (cheapest / fastest for text).  Fall back to Qwen,
@@ -175,6 +197,24 @@ def load_settings() -> Settings:
         and (text_api_key != vision_api_key or text_base_url != vision_base_url)
     )
     query_expansion_enabled = _env("KB_QUERY_EXPANSION_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+    app_env = (_env("KB_APP_ENV") or _env("KB_ENV") or "development").strip().lower() or "development"
+    production = app_env in {"prod", "production"}
+    access_token = _clean_env_key(
+        _env("KB_ACCESS_TOKEN") or _env("KB_API_TOKEN") or _env("KB_AUTH_TOKEN") or ""
+    )
+    access_token_sha256 = _clean_env_key(
+        _env("KB_ACCESS_TOKEN_SHA256") or _env("KB_API_TOKEN_SHA256") or _env("KB_AUTH_TOKEN_SHA256") or ""
+    )
+    auth_raw = _env("KB_REQUIRE_AUTH")
+    if auth_raw is None or str(auth_raw).strip() == "":
+        auth_required = production or bool(access_token or access_token_sha256)
+    else:
+        auth_required = str(auth_raw).strip().lower() in {"1", "true", "yes", "on"}
+    cookie_secure_raw = _env("KB_AUTH_COOKIE_SECURE")
+    if cookie_secure_raw is None or str(cookie_secure_raw).strip() == "":
+        auth_cookie_secure = production
+    else:
+        auth_cookie_secure = str(cookie_secure_raw).strip().lower() in {"1", "true", "yes", "on"}
 
     return Settings(
         text_api_key=text_api_key,
@@ -191,4 +231,11 @@ def load_settings() -> Settings:
         auto_route=auto_route,
         vision_uses_text_fallback=vision_uses_text_fallback,
         query_expansion_enabled=query_expansion_enabled,
+        app_env=app_env,
+        production=production,
+        access_token=access_token,
+        access_token_sha256=access_token_sha256,
+        auth_required=auth_required,
+        auth_cookie_secure=auth_cookie_secure,
+        auto_backup_enabled=stored_auto_backup_enabled,
     )

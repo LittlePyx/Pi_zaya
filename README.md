@@ -93,6 +93,9 @@ python server.py
 
 然后访问：`http://localhost:8000`
 
+正式上线请先按 `.env.production.example` 配置访问令牌、CORS、数据库路径和模型 Key，并参考
+`docs/DEPLOYMENT.md` 完成 readiness 检查。
+
 ## 4. 标准使用流程（给终端用户）
 
 1. 打开「文献管理」。
@@ -134,6 +137,16 @@ python server.py
 
 ## 7. 常用环境变量
 
+生产上线：
+
+- `KB_ENV` / `KB_APP_ENV`（设为 `production` 后 readiness 更严格，且默认要求鉴权）
+- `KB_ACCESS_TOKEN` 或 `KB_ACCESS_TOKEN_SHA256`
+- `KB_REQUIRE_AUTH`
+- `KB_AUTH_COOKIE_SECURE`
+- `KB_API_ALLOW_ORIGINS`
+- `KB_STARTUP_PREFLIGHT`
+- `KB_STARTUP_STRICT`
+
 模型：
 
 - `QWEN_API_KEY`
@@ -149,10 +162,25 @@ python server.py
 - `KB_DB_DIR`
 - `KB_CHAT_DB`
 - `KB_LIBRARY_DB`
+- `KB_BACKUP_DIR`
+- `KB_DIAGNOSTICS_DIR`
+- `KB_AUTO_BACKUP`（生产环境默认开启；高风险删除、覆盖转换、修复、重建索引前自动快照；未显式设置时可在高级设置中切换）
+- `KB_AUTO_BACKUP_MIN_INTERVAL_S`（同类自动快照限频秒数）
+- `KB_AUTO_BACKUP_STRICT`（设为 `1` 时，快照失败会阻止高风险操作）
+- `KB_BACKUP_KEEP_N`（旧备份清理时默认保留的数量）
+- `KB_RESTORE_AUDIT_PATH`（恢复审计日志路径）
 
 引用同步：
 
 - `KB_CROSSREF_BUDGET_S`（Crossref 后台同步预算秒数）
+
+上线检查：
+
+```powershell
+python tools\check_production_readiness.py --base-url http://127.0.0.1:8000 --token $env:KB_ACCESS_TOKEN
+```
+
+维护面板支持诊断包、手动备份、备份校验、恢复预演、受控恢复和旧备份清理。正式恢复前请先运行恢复预演，确认报告没有阻塞项；执行恢复后需要重启服务。
 
 ## 8. 开发者补充
 

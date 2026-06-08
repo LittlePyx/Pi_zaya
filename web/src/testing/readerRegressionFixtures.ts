@@ -6,6 +6,7 @@ export type ReaderRegressionScenario =
   | 'evidence-nav'
   | 'duplicate-sections'
   | 'duplicate-images'
+  | 'image-anchor-mismatch'
   | 'candidate-fallback'
   | 'strict-missing-exact'
   | 'discussion-only'
@@ -75,6 +76,11 @@ export const readerRegressionMarkdown = [
   '',
   FUTURE_WORK_P1,
   '',
+  '| Metric | Value |',
+  '| --- | --- |',
+  '| PSNR | 32.4 dB |',
+  '| SSIM | 0.91 |',
+  '',
 ].join('\n')
 
 export const readerRegressionBlocks: ReaderDocBlock[] = [
@@ -96,6 +102,7 @@ export const readerRegressionBlocks: ReaderDocBlock[] = [
   { doc_id: 'fixture-doc', block_id: 'p-limitations-1', anchor_id: 'a-p-limitations-1', kind: 'paragraph', heading_path: 'Fixture Paper / 5. Limitations', text: LIMITATIONS_P1, line_start: 37, line_end: 37 },
   { doc_id: 'fixture-doc', block_id: 'h-future-work', anchor_id: 'a-h-future-work', kind: 'heading', heading_path: 'Fixture Paper / 6. Future Work', text: '6. Future Work', line_start: 39, line_end: 39 },
   { doc_id: 'fixture-doc', block_id: 'p-future-work-1', anchor_id: 'a-p-future-work-1', kind: 'paragraph', heading_path: 'Fixture Paper / 6. Future Work', text: FUTURE_WORK_P1, line_start: 41, line_end: 41 },
+  { doc_id: 'fixture-doc', block_id: 'tbl-results', anchor_id: 'a-tbl-results', kind: 'table', heading_path: 'Fixture Paper / 6. Future Work', text: 'Metric Value PSNR 32.4 dB SSIM 0.91', number: 1, line_start: 43, line_end: 46 },
 ]
 
 export const readerRegressionAnchors: ReaderDocAnchor[] = readerRegressionBlocks.map((block) => ({
@@ -135,6 +142,34 @@ const readerRegressionDuplicateImageMarkdown = [
   '*Figure 1. SCI system pipeline.*',
   '',
 ].join('\n')
+
+const readerRegressionImageAnchorMismatchMarkdown = [
+  '# Anchor Mismatch Fixture',
+  '',
+  '## Figure Section',
+  '',
+  `![Figure 9](${FIGURE_DATA_URI})`,
+  '',
+  '*Figure 9. This image line intentionally overlaps a paragraph anchor in the fixture.*',
+  '',
+].join('\n')
+
+const readerRegressionImageAnchorMismatchBlocks: ReaderDocBlock[] = [
+  { doc_id: 'fixture-doc', block_id: 'h-mismatch', anchor_id: 'a-h-mismatch', kind: 'heading', heading_path: 'Anchor Mismatch Fixture / Figure Section', text: 'Figure Section', line_start: 3, line_end: 3 },
+  { doc_id: 'fixture-doc', block_id: 'p-image-line', anchor_id: 'a-p-image-line', kind: 'paragraph', heading_path: 'Anchor Mismatch Fixture / Figure Section', text: 'Figure 9', line_start: 5, line_end: 5 },
+  { doc_id: 'fixture-doc', block_id: 'fig-9', anchor_id: 'a-fig-9', kind: 'figure', heading_path: 'Anchor Mismatch Fixture / Figure Section / Figure 9', text: 'Figure 9. This image line intentionally overlaps a paragraph anchor in the fixture.', number: 9, line_start: 7, line_end: 7 },
+]
+
+const readerRegressionImageAnchorMismatchAnchors: ReaderDocAnchor[] = readerRegressionImageAnchorMismatchBlocks.map((block) => ({
+  anchor_id: block.anchor_id,
+  block_id: block.block_id,
+  kind: block.kind,
+  heading_path: block.heading_path,
+  text: block.text,
+  line_start: block.line_start,
+  line_end: block.line_end,
+  number: block.number,
+}))
 
 const readerRegressionRenderPolishMarkdown = [
   '# Render Polish Fixture',
@@ -323,6 +358,17 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
       blocks: [] as ReaderDocBlock[],
     }
   }
+  if (scenario === 'image-anchor-mismatch') {
+    return {
+      ok: true,
+      source_path: READER_REGRESSION_SOURCE_PATH,
+      source_name: READER_REGRESSION_SOURCE_NAME,
+      md_path: 'fixture-image-anchor-mismatch.md',
+      markdown: readerRegressionImageAnchorMismatchMarkdown,
+      anchors: readerRegressionImageAnchorMismatchAnchors,
+      blocks: readerRegressionImageAnchorMismatchBlocks,
+    }
+  }
   return readerRegressionDocResponse
 }
 
@@ -356,6 +402,17 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
       headingPath: 'Fixture Paper / 2. Method',
       snippet: 'Figure 1 shows the SCI system pipeline.',
       highlightSnippet: 'Figure 1 shows the SCI system pipeline.',
+      strictLocate: false,
+    }
+  }
+
+  if (scenario === 'image-anchor-mismatch') {
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Anchor Mismatch Fixture / Figure Section',
+      snippet: 'Figure 9',
+      highlightSnippet: 'Figure 9',
       strictLocate: false,
     }
   }

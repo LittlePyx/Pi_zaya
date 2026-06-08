@@ -82,14 +82,15 @@ import {
   type WorkbenchMetricItem,
   type WorkbenchTone,
 } from '../components/library/WorkbenchPrimitives'
+import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 
 const { Text } = Typography
 const { Dragger } = Upload
 const FILE_VIRTUAL_THRESHOLD = 60
 const FILE_VIRTUAL_HEIGHT = 620
 const FILE_VIRTUAL_ROW_HEIGHT = 88
-const OPEN_SETTINGS_EVENT = 'kb:open-settings'
 const EMPTY_REF_SYNC_STATS: ReferenceSyncStats = {}
+const INTERNAL_ROUTES_ENABLED = import.meta.env.DEV || import.meta.env.VITE_ENABLE_INTERNAL_ROUTES === '1'
 
 type FileTabKey = 'pending' | 'converted' | 'all'
 type LibraryBrowseMode = 'list' | 'categories' | 'tags'
@@ -1268,7 +1269,7 @@ export default function LibraryPage() {
   const textModelReady = !settingsLoaded
     || (hasTextApiKey && llmReadiness?.providers.text?.severity !== 'error')
   const openApiSettings = useCallback(() => {
-    window.dispatchEvent(new Event(OPEN_SETTINGS_EVENT))
+    dispatchOpenSettings('text')
   }, [])
   const warnLlmFallback = useCallback((action: string) => {
     message.warning(S.lib_llm_unavailable_fallback.replace('{action}', action))
@@ -1742,33 +1743,38 @@ export default function LibraryPage() {
           ? 'warning'
           : 'good'
   const qualityCenterStatusLabel = qualityCenterTone === 'processing'
-    ? 'Processing'
+    ? S.lib_quality_center_status_processing
     : qualityCenterTone === 'good'
-      ? 'Usable'
+      ? S.lib_quality_center_status_ready
       : qualityCenterTone === 'error'
-        ? 'Needs repair'
-        : 'Needs attention'
+        ? S.lib_quality_center_status_repair
+        : S.lib_quality_center_status_attention
   const qualityCenterSummary = qualityCenterTone === 'good'
-    ? `Library is ready for Q&A. ${qualityReportStats.good}/${qualityReportStats.assessed || qualityReportStats.converted} assessed papers look usable.`
+    ? S.lib_quality_center_summary_ready
+      .replace('{ready}', String(qualityReportStats.good))
+      .replace('{total}', String(qualityReportStats.assessed || qualityReportStats.converted))
     : qualityCenterTone === 'processing'
-      ? 'Quality tasks are running in the background. Keep working; details are available when needed.'
-      : `${qualityReportStats.review} papers may affect answers, ${qualitySourceReadinessStats.blocked} sources are blocked, and ${qualityCenterFailureCount} QA cases need attention.`
+      ? S.lib_quality_center_summary_running
+      : S.lib_quality_center_summary_review
+        .replace('{review}', String(qualityReportStats.review))
+        .replace('{blocked}', String(qualitySourceReadinessStats.blocked))
+        .replace('{cases}', String(qualityCenterFailureCount))
   const qualityCenterNextAction = qualityCenterTone === 'good'
-    ? 'No urgent action'
+    ? S.lib_quality_center_action_none
     : qualityCenterTone === 'processing'
-      ? 'Monitor running tasks'
+      ? S.lib_quality_center_action_monitor
       : qualityRepairRecommendedNames.length > 0
-        ? `Repair ${qualityRepairRecommendedNames.length} high-priority papers`
+        ? S.lib_quality_center_action_repair.replace('{n}', String(qualityRepairRecommendedNames.length))
         : qualityCenterMetadataRemaining > 0
-          ? `Preheat ${qualityCenterMetadataRemaining} literature metadata records`
+          ? S.lib_quality_center_action_metadata.replace('{n}', String(qualityCenterMetadataRemaining))
           : qualityReportStats.review > 0
-            ? 'Focus review papers'
-            : 'Open diagnostics'
+            ? S.lib_quality_center_action_review
+            : S.lib_quality_center_action_open
   const qualityCenterSignals = [
-    { key: 'usable', label: 'Usable papers', value: `${qualityReportStats.good}/${qualityReportStats.assessed || qualityReportStats.converted || 0}` },
-    { key: 'risk', label: 'User-facing risks', value: String(qualityCenterProblemCount) },
-    { key: 'locate', label: 'Reader/source blocked', value: String(qualitySourceReadinessStats.blocked) },
-    { key: 'metadata', label: 'Metadata remaining', value: String(qualityCenterMetadataRemaining) },
+    { key: 'usable', label: S.lib_quality_center_signal_usable, value: `${qualityReportStats.good}/${qualityReportStats.assessed || qualityReportStats.converted || 0}` },
+    { key: 'risk', label: S.lib_quality_center_signal_attention, value: String(qualityCenterProblemCount) },
+    { key: 'locate', label: S.lib_quality_center_signal_locate, value: String(qualitySourceReadinessStats.blocked) },
+    { key: 'metadata', label: S.lib_quality_center_signal_metadata, value: String(qualityCenterMetadataRemaining) },
   ]
   const renameOnlyDiff = true
   const renameVisible = useMemo(() => (renameOnlyDiff ? renameItems.filter((x) => x.diff) : renameItems), [renameOnlyDiff, renameItems])
@@ -2951,6 +2957,10 @@ export default function LibraryPage() {
       return
     }
     saveResearchQaReplayFailureCase(item)
+    if (!INTERNAL_ROUTES_ENABLED) {
+      void openQualityArtifact('research_qa', 'report')
+      return
+    }
     nav(`/__research_qa_replay__?case=${encodeURIComponent(caseId)}&source=quality`)
   }
 
@@ -3619,6 +3629,10 @@ export default function LibraryPage() {
       if (firstTarget) {
         const failureCase = qualityFailureCases.find((row) => normalizeTextValue(row.id) === firstTarget)
         if (failureCase) saveResearchQaReplayFailureCase(failureCase)
+        if (!INTERNAL_ROUTES_ENABLED) {
+          await openQualityArtifact(stageKey === 'citations' || stageKey === 'shelf' ? 'citation_cards' : 'research_qa', 'report')
+          return
+        }
         nav(`/__research_qa_replay__?case=${encodeURIComponent(firstTarget)}&source=quality-history`)
         return
       }
@@ -5230,7 +5244,7 @@ export default function LibraryPage() {
                 data-testid="library-quality-center-toggle"
                 onClick={() => setQualityCenterOpen((value) => !value)}
               >
-                {qualityCenterOpen ? 'Hide diagnostics' : 'Open Quality Center'}
+                {qualityCenterOpen ? S.lib_quality_center_toggle_hide : S.lib_quality_center_toggle_show}
               </Button>
               {qualityReportStats.review > 0 ? (
                 <Button
@@ -6352,7 +6366,7 @@ export default function LibraryPage() {
                   data-testid="library-quality-issues-filter"
                   onClick={() => setOnlyQualityIssues((value) => !value)}
                 >
-                  Quality review {qualityReviewCount}
+                  {S.lib_quality_quick_filter_review.replace('{n}', String(qualityReviewCount))}
                 </button>
                 {qualityHistoryFocusNames.length > 0 ? (
                   <button

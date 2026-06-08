@@ -1,12 +1,20 @@
-import { type ReactNode, useEffect, useState } from 'react'
-import { ApiOutlined } from '@ant-design/icons'
-import { Alert, Button, Drawer, Input, Select, Segmented, Slider, Switch, Typography, message } from 'antd'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { ApiOutlined, ReloadOutlined } from '@ant-design/icons'
+import { Alert, Button, Drawer, Input, Popconfirm, Select, Segmented, Slider, Switch, Typography, message } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { settingsApi } from '../../api/settings'
+import { maintenanceApi, type MaintenanceStatus } from '../../api/maintenance'
 import { useT } from '../../i18n'
+import type { ApiSettingsTarget } from './settingsEvents'
 
 const { Text } = Typography
 type LocalTestResult = { ok: boolean; checked_at: number; error_type?: string; transient: boolean }
+
+function appReadinessActionLabel(S: Record<string, string>, action: string | undefined) {
+  const clean = String(action || '').trim()
+  if (!clean) return ''
+  return S[`settings_release_action_${clean}`] || clean.replace(/_/g, ' ')
+}
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -41,6 +49,36 @@ function SettingsValue({ value, muted = false }: { value: ReactNode; muted?: boo
   return <span className={`kb-settings-value ${muted ? 'is-muted' : ''}`}>{value}</span>
 }
 
+function SettingsStatusCard({
+  tone,
+  title,
+  status,
+  description,
+  children,
+}: {
+  tone: 'ok' | 'warn' | 'error'
+  title: string
+  status: string
+  description: ReactNode
+  children?: ReactNode
+}) {
+  return (
+    <div className={`kb-settings-status-card is-${tone}`}>
+      <div className="kb-settings-status-main">
+        <span className="kb-settings-status-dot" aria-hidden="true" />
+        <div className="kb-settings-status-copy">
+          <Text className="kb-settings-status-title">{title}</Text>
+          <Text className="kb-settings-status-desc">{description}</Text>
+        </div>
+      </div>
+      <div className="kb-settings-status-side">
+        <span className={`kb-settings-status-badge is-${tone}`}>{status}</span>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function formatCheckedAt(ts: number | undefined) {
   if (!ts) return ''
   try {
@@ -50,11 +88,23 @@ function formatCheckedAt(ts: number | undefined) {
   }
 }
 
-export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SettingsDrawer({
+  open,
+  focusTarget = '',
+  onClose,
+}: {
+  open: boolean
+  focusTarget?: ApiSettingsTarget | ''
+  onClose: () => void
+}) {
   const S = useT()
   const s = useSettingsStore()
+  const refreshReadinessStore = useSettingsStore((state) => state.refreshReadiness)
+  const refreshAppReadinessStore = useSettingsStore((state) => state.refreshAppReadiness)
   const textReadiness = s.llmReadiness?.providers.text
   const visionReadiness = s.llmReadiness?.providers.vision
+  const textCredentialRef = useRef<HTMLElement | null>(null)
+  const visionCredentialRef = useRef<HTMLElement | null>(null)
   const [textApiKey, setTextApiKey] = useState('')
   const [textBaseUrl, setTextBaseUrl] = useState('')
   const [textModel, setTextModel] = useState('')
@@ -64,6 +114,41 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const [savingConnection, setSavingConnection] = useState(false)
   const [testingTarget, setTestingTarget] = useState<'text' | 'vision' | null>(null)
   const [localTestResults, setLocalTestResults] = useState<Record<'text' | 'vision', LocalTestResult | null>>({ text: null, vision: null })
+  const [appReadinessLoading, setAppReadinessLoading] = useState(false)
+  const [appReadinessError, setAppReadinessError] = useState('')
+  const [maintenanceStatus, setMaintenanceStatus] = useState<MaintenanceStatus | null>(null)
+  const [maintenanceStatusLoading, setMaintenanceStatusLoading] = useState(false)
+  const [maintenanceStatusError, setMaintenanceStatusError] = useState('')
+  const [autoBackupSaving, setAutoBackupSaving] = useState(false)
+  const [restoreReviewAcking, setRestoreReviewAcking] = useState(false)
+  const [diagnosticsExporting, setDiagnosticsExporting] = useState(false)
+  const appReadiness = s.appReadiness
+
+  const refreshMaintenanceStatus = useCallback(async () => {
+    setMaintenanceStatusLoading(true)
+    setMaintenanceStatusError('')
+    try {
+      const payload = await maintenanceApi.status()
+      setMaintenanceStatus(payload)
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : S.settings_maintenance_status_failed
+      setMaintenanceStatusError(detail)
+    } finally {
+      setMaintenanceStatusLoading(false)
+    }
+  }, [S.settings_maintenance_status_failed])
+
+  const refreshAppReadiness = useCallback(async () => {
+    setAppReadinessLoading(true)
+    setAppReadinessError('')
+    try {
+      await refreshAppReadinessStore()
+    } catch (err) {
+      setAppReadinessError(err instanceof Error ? err.message : S.settings_release_check_failed)
+    } finally {
+      setAppReadinessLoading(false)
+    }
+  }, [S.settings_release_check_failed, refreshAppReadinessStore])
 
   useEffect(() => {
     if (!open) return
@@ -75,6 +160,25 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
     setVisionModel(s.visionModel || '')
     setLocalTestResults({ text: null, vision: null })
   }, [open, s.model, s.textBaseUrl, s.textModel, s.visionBaseUrl, s.visionModel])
+
+  useEffect(() => {
+    if (!open) return
+    void refreshAppReadiness()
+    void refreshMaintenanceStatus()
+    void refreshReadinessStore()
+  }, [open, refreshAppReadiness, refreshMaintenanceStatus, refreshReadinessStore])
+
+  useEffect(() => {
+    if (!open || !focusTarget || typeof window === 'undefined') return
+    const timer = window.setTimeout(() => {
+      const card = focusTarget === 'vision' ? visionCredentialRef.current : textCredentialRef.current
+      if (!card) return
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      const input = card.querySelector<HTMLInputElement>('input[type="password"]')
+      input?.focus({ preventScroll: true })
+    }, 120)
+    return () => window.clearTimeout(timer)
+  }, [focusTarget, open])
 
   const saveConnection = async () => {
     setSavingConnection(true)
@@ -130,9 +234,62 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         },
       }))
       await s.refreshReadiness()
+      await s.refreshAppReadiness()
     } finally {
       setTestingTarget(null)
     }
+  }
+
+  const exportDiagnostics = async () => {
+    setDiagnosticsExporting(true)
+    try {
+      await maintenanceApi.downloadDiagnostics()
+      message.success(S.settings_maintenance_diag_exported)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_maintenance_diag_failed)
+    } finally {
+      setDiagnosticsExporting(false)
+    }
+  }
+
+  const updateAutoBackup = async (enabled: boolean) => {
+    if (maintenanceStatus?.auto_backup?.locked) return
+    setAutoBackupSaving(true)
+    try {
+      await settingsApi.update({ autoBackupEnabled: enabled })
+      await s.load()
+      await refreshMaintenanceStatus()
+      message.success(enabled ? S.settings_auto_backup_enabled : S.settings_auto_backup_disabled)
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_auto_backup_update_failed)
+    } finally {
+      setAutoBackupSaving(false)
+    }
+  }
+
+  const acknowledgeRestoreReview = async () => {
+    setRestoreReviewAcking(true)
+    try {
+      const result = await maintenanceApi.acknowledgeRestoreReview()
+      if (result.ok) {
+        message.success(S.settings_restore_review_ack_done)
+        await refreshAppReadiness()
+      } else {
+        message.error(S.settings_restore_review_ack_failed)
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.settings_restore_review_ack_failed)
+    } finally {
+      setRestoreReviewAcking(false)
+    }
+  }
+
+  const refreshStatusOverview = async () => {
+    await Promise.all([
+      refreshAppReadiness(),
+      refreshMaintenanceStatus(),
+      refreshReadinessStore(),
+    ])
   }
 
   const renderProviderState = (target: 'text' | 'vision') => {
@@ -175,7 +332,99 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
     )
   }
 
+  const renderStatusOverview = () => {
+    const llmStatus = s.llmReadiness?.overall?.status || (s.hasTextApiKey ? 'warning' : 'error')
+    const apiTone = llmStatus === 'ok' ? 'ok' : llmStatus === 'warning' ? 'warn' : 'error'
+    const apiStatus = llmStatus === 'ok'
+      ? S.settings_status_ok
+      : llmStatus === 'warning'
+        ? S.settings_status_review
+        : S.settings_status_blocked
+    const apiDescription = apiTone === 'ok'
+      ? S.settings_api_status_ok_desc
+      : apiTone === 'warn'
+        ? S.settings_api_status_warn_desc
+        : S.settings_api_status_error_desc
+
+    const restoreItem = (appReadiness?.items || []).find((item) => item.key === 'recent_restore')
+    const restorePending = Boolean(restoreItem && appReadiness?.restore?.acknowledged !== true)
+    const restoreAction = appReadinessActionLabel(S, restoreItem?.action)
+    const restoreNoticeAction = restorePending && restoreItem?.action === 'restart_and_check' ? (
+      <Popconfirm
+        title={S.settings_restore_review_ack_confirm}
+        okText={S.confirm_ok}
+        cancelText={S.confirm_cancel}
+        onConfirm={() => { void acknowledgeRestoreReview() }}
+      >
+        <Button size="small" loading={restoreReviewAcking}>
+          {restoreAction || S.settings_release_action_restart_and_check}
+        </Button>
+      </Popconfirm>
+    ) : restorePending ? (
+      <Button size="small" loading={diagnosticsExporting} onClick={() => { void exportDiagnostics() }}>
+        {S.settings_maintenance_diag_export}
+      </Button>
+    ) : null
+
+    return (
+      <div className="kb-settings-status" data-testid="settings-release-readiness">
+        <div className="kb-settings-status-head">
+          <div className="kb-settings-maintenance-copy">
+            <Text className="kb-settings-maintenance-title">{S.settings_status_title}</Text>
+            <Text className="kb-settings-maintenance-desc">{S.settings_status_desc}</Text>
+          </div>
+          <Button
+            size="small"
+            icon={<ReloadOutlined />}
+            loading={appReadinessLoading}
+            onClick={() => { void refreshStatusOverview() }}
+          >
+            {S.settings_release_refresh}
+          </Button>
+        </div>
+        <div className="kb-settings-status-grid">
+          <SettingsStatusCard
+            tone={apiTone}
+            title={S.settings_api_status_title}
+            status={apiStatus}
+            description={apiDescription}
+          />
+        </div>
+        {restorePending ? (
+          <Alert
+            className="kb-settings-restore-notice"
+            type="warning"
+            showIcon
+            message={S.settings_restore_review_notice_title}
+            description={S.settings_restore_review_pending_desc}
+            action={restoreNoticeAction}
+          />
+        ) : null}
+        {appReadinessError ? (
+          <Alert
+            type="warning"
+            showIcon
+            message={S.settings_status_refresh_failed}
+            description={appReadinessError}
+          />
+        ) : null}
+      </div>
+    )
+  }
+
+  const autoBackupEnabled = Boolean(maintenanceStatus?.auto_backup?.enabled)
+  const autoBackupLocked = Boolean(
+    maintenanceStatus?.auto_backup?.locked || maintenanceStatus?.data_protection?.can_toggle === false,
+  )
+  const autoBackupDescription = maintenanceStatusError
+    ? S.settings_maintenance_status_failed
+    : autoBackupLocked
+      ? S.settings_auto_backup_locked_desc
+      : S.settings_auto_backup_desc
+  const autoBackupDisabled = autoBackupLocked || maintenanceStatusLoading || autoBackupSaving || Boolean(maintenanceStatusError)
+
   return (
+    <>
     <Drawer
       title={(
         <div className="kb-settings-title">
@@ -263,6 +512,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </SettingsSection>
 
         <SettingsSection title={S.settings_section_connection}>
+          {renderStatusOverview()}
           <div className="kb-settings-connection-alerts">
             {!s.hasTextApiKey ? (
               <Alert
@@ -282,7 +532,11 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             ) : null}
           </div>
           <div className="kb-settings-credential-grid">
-            <section className="kb-settings-credential">
+            <section
+              ref={textCredentialRef}
+              className={`kb-settings-credential ${focusTarget === 'text' ? 'is-targeted' : ''}`}
+              data-api-target="text"
+            >
               <div className="kb-settings-credential-head">
                 <div>
                   <Text className="kb-settings-credential-title">{S.settings_text_api_title}</Text>
@@ -297,6 +551,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
                   onChange={(event) => setTextApiKey(event.target.value)}
                   placeholder={S.settings_api_key_placeholder}
                   autoComplete="off"
+                  data-testid="settings-text-api-key"
                 />
                 <Input
                   value={textBaseUrl}
@@ -320,7 +575,11 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
               </div>
             </section>
 
-            <section className="kb-settings-credential">
+            <section
+              ref={visionCredentialRef}
+              className={`kb-settings-credential ${focusTarget === 'vision' ? 'is-targeted' : ''}`}
+              data-api-target="vision"
+            >
               <div className="kb-settings-credential-head">
                 <div>
                   <Text className="kb-settings-credential-title">{S.settings_vision_api_title}</Text>
@@ -338,6 +597,7 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
                   onChange={(event) => setVisionApiKey(event.target.value)}
                   placeholder={S.settings_api_key_placeholder}
                   autoComplete="off"
+                  data-testid="settings-vision-api-key"
                 />
                 <Input
                   value={visionBaseUrl}
@@ -374,6 +634,15 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
             <Text>{S.settings_advanced_desc}</Text>
           </summary>
           <div className="kb-settings-advanced-body">
+            <SettingsRow title={S.settings_auto_backup_title} description={autoBackupDescription}>
+              <Switch
+                data-testid="settings-auto-backup-switch"
+                checked={autoBackupEnabled}
+                disabled={autoBackupDisabled}
+                loading={maintenanceStatusLoading || autoBackupSaving}
+                onChange={(v) => { void updateAutoBackup(v) }}
+              />
+            </SettingsRow>
             <SettingsRow title={`${S.top_k}: ${s.topK}`} description={S.settings_top_k_desc}>
               <Slider min={2} max={20} value={s.topK} onChange={(v) => { void s.update({ topK: v }) }} />
             </SettingsRow>
@@ -390,5 +659,6 @@ export function SettingsDrawer({ open, onClose }: { open: boolean; onClose: () =
         </details>
       </div>
     </Drawer>
+    </>
   )
 }

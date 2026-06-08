@@ -262,6 +262,87 @@ def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
     assert started_tasks[0]["image_attachments"][0]["name"] == "img.png"
 
 
+def test_generate_accepts_selected_research_context(monkeypatch, tmp_path: Path):
+    from api.routers import generate as generate_router
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.messages: list[dict] = []
+
+        def append_message(
+            self,
+            conv_id: str,
+            role: str,
+            content: str,
+            attachments: list[dict] | None = None,
+            meta: dict | None = None,
+        ) -> int:
+            self.messages.append({
+                "conv_id": conv_id,
+                "role": role,
+                "content": content,
+                "attachments": attachments,
+                "meta": meta,
+            })
+            return len(self.messages)
+
+        def set_title_if_default(self, conv_id: str, title: str) -> None:
+            return False
+
+        def get_conversation(self, conv_id: str) -> dict:
+            return {"title": "Manual"}
+
+    fake_store = FakeStore()
+    started_tasks: list[dict] = []
+
+    class FakeSettings:
+        chat_db_path = tmp_path / "chat.sqlite3"
+        db_dir = tmp_path / "db"
+
+    monkeypatch.setattr(generate_router, "get_settings", lambda: FakeSettings())
+    monkeypatch.setattr(generate_router, "get_chat_store", lambda: fake_store)
+    monkeypatch.setattr(generate_router, "_gen_start_task", lambda task: started_tasks.append(task) or True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/generate",
+        json={
+            "conv_id": "conv-ctx",
+            "prompt": "Use my selected excerpts to compare the baseline.",
+            "prompt_context": {
+                "id": "ctx-1",
+                "source": "citation_shelf",
+                "tokenEstimate": 5000,
+                "items": [
+                    {
+                        "key": "r12",
+                        "kind": "reference",
+                        "title": "Sparse 3-D transform-domain filtering",
+                        "sourceName": "reader.pdf",
+                        "locationLabel": "References / [12]",
+                        "refNum": 12,
+                        "doi": "10.1109/tip.2007.901238",
+                        "summary": "A denoising baseline frequently used for comparison.",
+                        "excerpt": "x" * 1200,
+                    },
+                    {"key": "empty"},
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert started_tasks
+    selected = started_tasks[0]["selected_research_context"]
+    assert selected["source"] == "citation_shelf"
+    assert selected["itemCount"] == 1
+    assert selected["tokenEstimate"] == 1600
+    assert selected["items"][0]["refNum"] == 12
+    assert selected["items"][0]["title"] == "Sparse 3-D transform-domain filtering"
+    assert len(selected["items"][0]["excerpt"]) <= 900
+    assert fake_store.messages[0]["meta"]["prompt_context"]["itemCount"] == 1
+
+
 def test_generate_auto_titles_default_conversation(monkeypatch, tmp_path: Path):
     from api.routers import generate as generate_router
     from kb.chat_store import ChatStore
@@ -619,6 +700,7 @@ def test_references_asset_route_serves_md_assets_only(monkeypatch, tmp_path: Pat
     ok_resp = client.get("/api/references/asset", params={"path": str(in_root_asset)})
     assert ok_resp.status_code == 200
     assert ok_resp.headers["content-type"].startswith("image/png")
+    assert ok_resp.headers["cache-control"] == "no-cache, max-age=0"
 
     bad_resp = client.get("/api/references/asset", params={"path": str(out_root_asset)})
     assert bad_resp.status_code == 404
@@ -646,6 +728,7 @@ def test_references_reader_doc_rewrites_tmp_assets_and_serves(monkeypatch, tmp_p
     assert doc_resp.status_code == 200
     markdown = str(doc_resp.json().get("markdown") or "")
     assert "/api/references/asset?path=" in markdown
+    assert "&v=" in markdown
 
     m = re.search(r"\((/api/references/asset\?path=[^)]+)\)", markdown)
     assert m is not None
@@ -653,6 +736,7 @@ def test_references_reader_doc_rewrites_tmp_assets_and_serves(monkeypatch, tmp_p
     asset_resp = client.get(asset_url)
     assert asset_resp.status_code == 200
     assert asset_resp.headers["content-type"].startswith("image/png")
+    assert asset_resp.headers["cache-control"] == "no-cache, max-age=0"
 
 
 def test_references_reader_doc_rejects_markdown_outside_allowed_roots(monkeypatch, tmp_path: Path):

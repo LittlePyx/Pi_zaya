@@ -79,7 +79,7 @@ def resolve_figure_asset_dpi(converter, *, base_dpi: int | float | None = None) 
 
 
 def figure_asset_needs_refresh(path: Path, *, clip_rect, dpi: int | float) -> bool:
-    """Detect old low-DPI figure assets so reconversion can upgrade them in place."""
+    """Detect stale figure assets so reconversion can upgrade them in place."""
     try:
         if (not path.exists()) or path.stat().st_size < 256:
             return True
@@ -102,7 +102,10 @@ def figure_asset_needs_refresh(path: Path, *, clip_rect, dpi: int | float) -> bo
     except Exception:
         return False
 
-    return actual_w < expected_w * 0.9 or actual_h < expected_h * 0.9
+    # Old assets can be the right general size but still use a stale, too-tight
+    # crop.  A narrow tolerance catches small crop-box expansions while still
+    # ignoring harmless one-pixel rounding differences.
+    return actual_w < expected_w * 0.98 or actual_h < expected_h * 0.98
 
 
 def _load_json(path: Path) -> Any:
@@ -316,9 +319,15 @@ def _image_content_stats(path: Path) -> dict[str, float]:
         from PIL import Image
 
         with Image.open(path) as img:
-            gray = img.convert("L")
+            gray_full = img.convert("L")
+            width, height = int(gray_full.width), int(gray_full.height)
+            gray = gray_full.copy()
             gray.thumbnail((96, 96))
             pixels = list(gray.getdata())
+            edge_rows = max(1, min(8, height))
+            band_rows = max(edge_rows, min(32, max(1, int(round(height * 0.025)))))
+            top_edge_pixels = list(gray_full.crop((0, 0, width, edge_rows)).getdata()) if width > 0 else []
+            top_band_pixels = list(gray_full.crop((0, 0, width, band_rows)).getdata()) if width > 0 else []
     except Exception:
         return {}
     if not pixels:
@@ -326,10 +335,23 @@ def _image_content_stats(path: Path) -> dict[str, float]:
     total = float(len(pixels))
     non_white = sum(1 for value in pixels if int(value) < 245)
     dark = sum(1 for value in pixels if int(value) < 220)
-    return {
+    stats = {
         "non_white_ratio": float(non_white) / total,
         "dark_ratio": float(dark) / total,
     }
+    if top_edge_pixels:
+        edge_total = float(len(top_edge_pixels))
+        stats["top_edge_non_white_ratio"] = (
+            float(sum(1 for value in top_edge_pixels if int(value) < 245)) / edge_total
+        )
+        stats["top_edge_dark_ratio"] = float(sum(1 for value in top_edge_pixels if int(value) < 220)) / edge_total
+    if top_band_pixels:
+        band_total = float(len(top_band_pixels))
+        stats["top_band_non_white_ratio"] = (
+            float(sum(1 for value in top_band_pixels if int(value) < 245)) / band_total
+        )
+        stats["top_band_dark_ratio"] = float(sum(1 for value in top_band_pixels if int(value) < 220)) / band_total
+    return stats
 
 
 def _sha1_file(path: Path) -> str:
@@ -450,6 +472,46 @@ def _is_suspicious_crop(
     if actual_w * actual_h >= 4096 and content_stats and non_white_ratio < 0.002:
         return True, "figure crop is nearly blank", extra
 
+    return False, "", extra
+
+
+def _is_top_edge_clipped(
+    row: Mapping[str, Any],
+    *,
+    content_stats: Mapping[str, float],
+) -> tuple[bool, str, dict[str, Any]]:
+    crop = _float_list(row.get("crop_bbox"))
+    bbox = _float_list(row.get("bbox"))
+    extra: dict[str, Any] = {}
+    if len(crop) < 4 or len(bbox) < 4 or not content_stats:
+        return False, "", extra
+
+    crop_w = max(0.0, float(crop[2]) - float(crop[0]))
+    crop_h = max(0.0, float(crop[3]) - float(crop[1]))
+    top_pad = max(0.0, float(bbox[1]) - float(crop[1]))
+    if crop_w <= 0.0 or crop_h <= 0.0:
+        return False, "", extra
+
+    # Crops clamped by the physical page top cannot gain more margin.
+    if float(crop[1]) <= 1.0:
+        return False, "", extra
+
+    required_top_pad = max(7.5, min(18.0, crop_h * 0.03))
+    edge_dark = float(content_stats.get("top_edge_dark_ratio") or 0.0)
+    edge_non_white = float(content_stats.get("top_edge_non_white_ratio") or 0.0)
+    band_dark = float(content_stats.get("top_band_dark_ratio") or 0.0)
+
+    extra.update(
+        {
+            "top_padding_pt": round(top_pad, 2),
+            "required_top_padding_pt": round(required_top_pad, 2),
+            "top_edge_non_white_ratio": round(edge_non_white, 6),
+            "top_edge_dark_ratio": round(edge_dark, 6),
+            "top_band_dark_ratio": round(band_dark, 6),
+        }
+    )
+    if top_pad < required_top_pad and (edge_dark >= 0.02 or edge_non_white >= 0.05):
+        return True, "figure crop has dark content touching the top edge and too little top padding", extra
     return False, "", extra
 
 
@@ -596,6 +658,21 @@ def scan_figure_asset_quality(
             )
             detail["issue_codes"].append("suspicious_crop")
 
+        top_clipped, reason, extra = _is_top_edge_clipped(row, content_stats=content_stats)
+        if top_clipped:
+            add_issue(
+                _issue(
+                    code="top_edge_clipped",
+                    severity="warning",
+                    row=row,
+                    message=reason,
+                    actual=actual,
+                    expected=expected,
+                    extra=extra,
+                )
+            )
+            detail["issue_codes"].append("top_edge_clipped")
+
         if not _is_alias_asset(asset_name):
             digest = _sha1_file(asset_path)
             if digest:
@@ -631,7 +708,14 @@ def scan_figure_asset_quality(
     status = "good"
     if issues:
         status = "error" if int(severity_counts.get("error") or 0) > 0 else "warning"
-    refresh_codes = {"missing_asset", "invalid_image", "low_resolution", "duplicate_asset", "suspicious_crop"}
+    refresh_codes = {
+        "missing_asset",
+        "invalid_image",
+        "low_resolution",
+        "duplicate_asset",
+        "suspicious_crop",
+        "top_edge_clipped",
+    }
     source_pdf = Path(source_pdf_path).expanduser() if source_pdf_path else None
     return {
         "ok": True,

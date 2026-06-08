@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { settingsApi, type LlmReadinessPayload, type SettingsPatch } from '../api/settings'
+import { settingsApi, type AppReadinessPayload, type LlmReadinessPayload, type SettingsPatch } from '../api/settings'
 
 const MAX_TOKENS_MIN = 512
 const MAX_TOKENS_MAX = 3072
@@ -52,9 +52,11 @@ interface SettingsState {
   visionUsesTextFallback: boolean
   autoRoute: boolean
   llmReadiness: LlmReadinessPayload | null
+  appReadiness: AppReadinessPayload | null
   loaded: boolean
   load: () => Promise<void>
   refreshReadiness: () => Promise<void>
+  refreshAppReadiness: () => Promise<void>
   update: (patch: SettingsPatch) => Promise<void>
   toggleTheme: () => void
 }
@@ -86,6 +88,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   visionUsesTextFallback: false,
   autoRoute: false,
   llmReadiness: null,
+  appReadiness: null,
   loaded: false,
 
   load: async () => {
@@ -117,6 +120,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         visionUsesTextFallback: Boolean(visionStatus?.uses_text_fallback),
         autoRoute: Boolean(data.connection?.auto_route),
         llmReadiness: data.readiness || null,
+        appReadiness: data.app_readiness || null,
         topK: (p.top_k as number) || 6,
         temperature: (p.temperature as number) ?? 0.2,
         maxTokens: clampMaxTokens(p.max_tokens),
@@ -157,6 +161,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         visionBaseUrl: String(vision?.base_url || ''),
         visionUsesTextFallback: Boolean(vision?.uses_text_fallback),
       })
+    } catch { /* ignore */ }
+  },
+
+  refreshAppReadiness: async () => {
+    try {
+      const appReadiness = await settingsApi.appReadiness()
+      set({ appReadiness })
     } catch { /* ignore */ }
   },
 

@@ -41,6 +41,8 @@ async function openHarness(page: Page, scenario: ReaderRegressionScenario) {
     ? 'Citation Fixture'
     : scenario === 'render-polish'
       ? 'Render Polish Fixture'
+      : scenario === 'image-anchor-mismatch'
+        ? 'Anchor Mismatch Fixture'
       : 'Fixture Paper'
   await expect(page.getByTestId('reader-content')).toContainText(expectedTitle)
 }
@@ -314,6 +316,31 @@ test('duplicate section alternatives collapse to distinct visible entries', asyn
 test('reader suppresses repeated identical figure assets in the same document render', async ({ page }) => {
   await openHarness(page, 'duplicate-images')
   await expect(page.locator('.kb-md-image')).toHaveCount(1)
+  const figureShell = page.locator('.kb-md-figure-shell').first()
+  const figureTail = figureShell.locator('> .kb-md-reader-block-shelf-tail')
+  const figureButton = figureShell.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="figure"]')
+  await expect(figureButton).toHaveCount(1)
+  await expect(figureTail).toHaveCSS('opacity', '0')
+  await figureShell.hover()
+  await expect(figureTail).toHaveCSS('opacity', '1')
+
+  await figureButton.click()
+  await expect(page.getByTestId('reader-selection-shelf-count')).toHaveText('1 selections')
+  await expect(page.getByTestId('reader-selection-shelf-kind-0')).toHaveText('figure')
+  await expect(page.getByTestId('reader-selection-shelf-list')).toContainText('Figure 1')
+})
+
+test('reader image shelf button survives non-figure anchor mismatch', async ({ page }) => {
+  await openHarness(page, 'image-anchor-mismatch')
+  const image = page.locator('.kb-md-image')
+  await expect(image).toHaveCount(1)
+  const figureShell = page.locator('.kb-md-figure-shell')
+  const figureTail = figureShell.locator('> .kb-md-reader-block-shelf-tail')
+  const figureButton = figureShell.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="figure"]')
+  await expect(figureButton).toHaveCount(1)
+  await expect(figureTail).toHaveCSS('opacity', '0')
+  await figureShell.hover()
+  await expect(figureTail).toHaveCSS('opacity', '1')
 })
 
 test('reader normalizes glued microsecond latex units before KaTeX render', async ({ page }) => {
@@ -356,7 +383,11 @@ test('reader in-paper citations and reference entries open system-b cards', asyn
   await expect(citeChips.nth(5)).toHaveText('[4]')
   await expect(page.locator('.kb-md-reference-entry')).toHaveCount(4)
   await expect(page.locator('.kb-md-reference-entry .kb-cite-chip-sysb')).toHaveCount(0)
-  await expect(page.locator('.kb-md-reference-entry-action')).toHaveCount(4)
+  const referenceActions = page.locator('.kb-md-reference-entry-action')
+  await expect(referenceActions).toHaveCount(4)
+  await expect(referenceActions.first()).toHaveCSS('opacity', '0')
+  await page.locator('.kb-md-reference-entry').first().hover()
+  await expect(referenceActions.first()).toHaveCSS('opacity', '1')
 
   await citeChips.first().click()
   const popover = page.locator('.kb-cite-pop')
@@ -382,24 +413,41 @@ test('reader in-paper citations and reference entries open system-b cards', asyn
   await expect(page.getByTestId('reader-citation-shelf-count')).toHaveText('1 citation refs')
 })
 
-test('reader figure and equation blocks can be added directly to the research basket', async ({ page }) => {
+test('reader figure, equation, and table blocks can be added directly to the research basket', async ({ page }) => {
   await openHarness(page, 'strict-quote')
 
   await page.locator('.katex-display').first().hover()
   const equationButton = page.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="equation"]').first()
-  const figureButton = page.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="figure"]').first()
+  const figureShell = page.locator('.kb-md-figure-shell').first()
+  const figureTail = figureShell.locator('> .kb-md-reader-block-shelf-tail')
+  const figureButton = figureShell.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="figure"]')
+  const tableWrap = page.locator('.kb-md-table-action-host').first()
+  const tableTail = tableWrap.locator('> .kb-md-reader-block-shelf-tail')
+  const tableButton = tableWrap.locator('[data-testid="reader-block-shelf"][data-kb-reader-block-kind="table"]')
   await expect(equationButton).toBeVisible()
   await expect(figureButton).toBeVisible()
+  await expect(figureTail).toHaveCSS('opacity', '0')
+  await expect(tableButton).toHaveCount(1)
+  await expect(tableTail).toHaveCSS('opacity', '0')
 
   await equationButton.click()
   await expect(page.getByTestId('reader-selection-shelf-count')).toHaveText('1 selections')
   await expect(page.getByTestId('reader-selection-shelf-kind-0')).toHaveText('equation')
   await expect(page.getByTestId('reader-selection-shelf-list')).toContainText('C(r)')
 
+  await figureShell.hover()
+  await expect(figureTail).toHaveCSS('opacity', '1')
   await figureButton.click()
   await expect(page.getByTestId('reader-selection-shelf-count')).toHaveText('2 selections')
   await expect(page.getByTestId('reader-selection-shelf-kind-0')).toHaveText('figure')
   await expect(page.getByTestId('reader-selection-shelf-list')).toContainText('Figure 1. SCI system pipeline.')
+
+  await tableWrap.hover()
+  await expect(tableTail).toHaveCSS('opacity', '1')
+  await tableButton.click()
+  await expect(page.getByTestId('reader-selection-shelf-count')).toHaveText('3 selections')
+  await expect(page.getByTestId('reader-selection-shelf-kind-0')).toHaveText('table')
+  await expect(page.getByTestId('reader-selection-shelf-list')).toContainText('PSNR')
 })
 
 test('equation and figure fixtures resolve through the same structured target contract', async ({ page }) => {

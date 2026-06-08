@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, authFetch } from './client'
 
 const citationMetaCache = new Map<string, Promise<Record<string, unknown>>>()
 const bibliometricsCache = new Map<string, Promise<Record<string, unknown>>>()
@@ -318,7 +318,7 @@ export const referencesApi = {
     const ctrl = new AbortController()
     ;(async () => {
       try {
-        const res = await fetch('/api/references/sync/status', { signal: ctrl.signal })
+        const res = await authFetch('/api/references/sync/status', { signal: ctrl.signal })
         const reader = res.body!.getReader()
         const decoder = new TextDecoder()
         let buf = ''

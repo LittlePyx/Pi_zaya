@@ -17,6 +17,7 @@ import {
   READER_CITATION_SHELF_CHANNEL,
   READER_SELECTION_SHELF_CHANNEL,
   READER_SESSION_NAV_CHANNEL,
+  READER_STANDALONE_WINDOW_NAME,
   READER_SESSION_SYNC_CHANNEL,
 } from '../components/chat/reader/readerTypes'
 import type { CiteDetail } from '../components/chat/citationState'
@@ -219,6 +220,13 @@ export default function ReaderPage() {
   const broadcastRef = useRef<BroadcastChannel | null>(null)
   const pendingStateRef = useRef<Record<string, unknown>>({})
   const saveTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.name !== READER_STANDALONE_WINDOW_NAME) {
+      window.name = READER_STANDALONE_WINDOW_NAME
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false

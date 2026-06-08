@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 
 from api.routers import settings as settings_router
@@ -24,6 +25,26 @@ def test_update_settings_persists_sidebar_collapsed(monkeypatch):
 
     assert settings_router.update_settings(settings_router.PrefsPatch(sidebar_collapsed=False)) == {"ok": True}
     assert stored["sidebar_collapsed"] is False
+
+
+def test_update_settings_persists_auto_backup_preference(monkeypatch):
+    stored: dict[str, object] = {}
+
+    def load_prefs() -> dict[str, object]:
+        return dict(stored)
+
+    def save_prefs(data: dict[str, object]) -> None:
+        stored.clear()
+        stored.update(data)
+
+    monkeypatch.setattr(settings_router, "load_prefs", load_prefs)
+    monkeypatch.setattr(settings_router, "save_prefs", save_prefs)
+
+    assert settings_router.update_settings(settings_router.PrefsPatch(auto_backup_enabled=True)) == {"ok": True}
+    assert stored["auto_backup_enabled"] is True
+
+    assert settings_router.update_settings(settings_router.PrefsPatch(auto_backup_enabled=False)) == {"ok": True}
+    assert stored["auto_backup_enabled"] is False
 
 
 def test_update_settings_persists_api_credentials_and_clears_cache(monkeypatch):
@@ -189,6 +210,101 @@ def test_llm_readiness_keeps_last_failed_test(monkeypatch):
     assert payload["providers"]["text"]["last_test"]["error_type"] == "auth"
 
 
+def test_app_readiness_warns_after_recent_restore(monkeypatch, tmp_path):
+    settings_router._LLM_TEST_RESULTS.clear()
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    settings = SimpleNamespace(
+        app_env="development",
+        production=False,
+        auth_required=False,
+        text_api_key="sk-text",
+        text_base_url="https://text.example/v1",
+        text_model="text-model",
+        vision_api_key="sk-vision",
+        vision_base_url="https://vision.example/v1",
+        vision_model="vision-model",
+        vision_uses_text_fallback=False,
+        auto_route=True,
+        db_dir=db_dir,
+        chat_db_path=tmp_path / "chat.sqlite3",
+        library_db_path=tmp_path / "library.sqlite3",
+    )
+    restore_event = {
+        "event": "restore",
+        "status": "restored",
+        "backup": "backup-recent.zip",
+        "created_at": time.time(),
+        "ok": True,
+        "restart_required": True,
+        "components": {"chat": True, "library": True, "db": True},
+        "restored": [{"target": str(tmp_path / "chat.sqlite3")}],
+        "pre_restore_backup": {"path": str(tmp_path / "backup.zip")},
+    }
+    monkeypatch.setattr(settings_router, "latest_restore_review_state", lambda: {
+        "restore": restore_event,
+        "acknowledgement": None,
+        "acknowledged": False,
+    })
+
+    payload = settings_router.production_readiness_payload(settings)
+    item = next(item for item in payload["items"] if item["key"] == "recent_restore")
+
+    assert item["severity"] == "warning"
+    assert item["action"] == "restart_and_check"
+    assert payload["restore"]["latest"]["backup"] == "backup-recent.zip"
+    assert payload["restore"]["acknowledged"] is False
+    assert "restored" not in payload["restore"]["latest"]
+    assert "pre_restore_backup" not in payload["restore"]["latest"]
+
+
+def test_app_readiness_omits_recent_restore_after_acknowledgement(monkeypatch, tmp_path):
+    settings_router._LLM_TEST_RESULTS.clear()
+    db_dir = tmp_path / "db"
+    db_dir.mkdir()
+    settings = SimpleNamespace(
+        app_env="development",
+        production=False,
+        auth_required=False,
+        text_api_key="sk-text",
+        text_base_url="https://text.example/v1",
+        text_model="text-model",
+        vision_api_key="sk-vision",
+        vision_base_url="https://vision.example/v1",
+        vision_model="vision-model",
+        vision_uses_text_fallback=False,
+        auto_route=True,
+        db_dir=db_dir,
+        chat_db_path=tmp_path / "chat.sqlite3",
+        library_db_path=tmp_path / "library.sqlite3",
+    )
+    restore_event = {
+        "event": "restore",
+        "status": "restored",
+        "backup": "backup-recent.zip",
+        "created_at": time.time(),
+        "ok": True,
+        "restart_required": True,
+    }
+    monkeypatch.setattr(settings_router, "latest_restore_review_state", lambda: {
+        "restore": restore_event,
+        "acknowledgement": {
+            "event": "restore_review_acknowledged",
+            "status": "acknowledged",
+            "backup": "backup-recent.zip",
+            "created_at": time.time(),
+            "ok": True,
+            "restore_created_at": restore_event["created_at"],
+        },
+        "acknowledged": True,
+    })
+
+    payload = settings_router.production_readiness_payload(settings)
+
+    assert all(item["key"] != "recent_restore" for item in payload["items"])
+    assert payload["restore"]["acknowledged"] is True
+
+
 def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
     for key in (
         "DEEPSEEK_API_KEY",
@@ -210,6 +326,7 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
         "vision_api_key": "sk-vision",
         "vision_base_url": "https://vision.example/v1/",
         "vision_model": "vision-model",
+        "auto_backup_enabled": True,
     })
 
     settings = config_module.load_settings()
@@ -222,3 +339,4 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
     assert settings.vision_model == "vision-model"
     assert settings.auto_route is True
     assert settings.vision_uses_text_fallback is False
+    assert settings.auto_backup_enabled is True

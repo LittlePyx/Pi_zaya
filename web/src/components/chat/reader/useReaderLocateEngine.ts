@@ -140,6 +140,14 @@ export function useReaderLocateEngine({
         if (hit) break
       }
     }
+    const scrollTarget = inlineFormulaTarget || focusedBlock
+    const raf = window.requestAnimationFrame(() => {
+      if (!root.isConnected || !scrollTarget.isConnected) return
+      scrollReaderTargetIntoView(root, scrollTarget)
+    })
+    return () => {
+      window.cancelAnimationFrame(raf)
+    }
   }, [
     open,
     drawerReady,
@@ -313,13 +321,17 @@ export function useReaderLocateEngine({
         if (cancelled || userInterruptedAutoScroll) return
         scrollReaderTargetIntoView(root, target, { force })
       }
+      run()
       const first = window.requestAnimationFrame(() => {
         run()
         const second = window.requestAnimationFrame(run)
         scrollRafIds.push(second)
       })
       scrollRafIds.push(first)
-      ;[120, 320, 720].forEach((delay) => {
+      const retryDelays = force
+        ? [120, 320, 720, 1200, 1800, 2600]
+        : [120, 320, 720]
+      retryDelays.forEach((delay) => {
         const timer = window.setTimeout(run, delay)
         scrollTimerIds.push(timer)
       })

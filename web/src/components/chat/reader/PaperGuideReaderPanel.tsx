@@ -42,6 +42,7 @@ interface ReaderHighlightActionState {
 interface PaperGuideReaderPanelProps {
   metaLocationText: string
   activeHeadingPath: string
+  evidenceFocusText: string
   locateBadges: ReaderMetaBadge[]
   statusTextCompact: string
   statusTextFull: string
@@ -106,6 +107,7 @@ interface PaperGuideReaderPanelProps {
 export function PaperGuideReaderPanel({
   metaLocationText,
   activeHeadingPath,
+  evidenceFocusText,
   locateBadges,
   statusTextCompact,
   statusTextFull,
@@ -184,6 +186,12 @@ export function PaperGuideReaderPanel({
         >
           {metaLocationText}
         </div>
+        {evidenceFocusText ? (
+          <div className="kb-reader-evidence-focus" data-testid="reader-evidence-focus">
+            <span>{S.reader_evidence_focus_head || 'Evidence to verify'}</span>
+            <strong>{evidenceFocusText}</strong>
+          </div>
+        ) : null}
         {hasOutline || visibleLocateBadges.length > 0 || statusTextCompact || selectionText || hasDistinctAlternatives ? (
           <div className="kb-reader-meta-side">
             {canReturnToEvidence ? (

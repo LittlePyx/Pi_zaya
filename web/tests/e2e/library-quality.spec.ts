@@ -1539,10 +1539,11 @@ test('library page surfaces conversion quality and filters review items', async 
 
   await expect(page.getByTestId('library-file-row')).toHaveCount(4)
   await expect(page.getByTestId('library-quality-report')).toBeVisible()
-  await expect(page.getByTestId('library-quality-center-summary')).toContainText('Needs repair')
-  await expect(page.getByTestId('library-quality-center-summary')).toContainText('User-facing risks')
+  await expect(page.getByTestId('library-quality-center-summary')).toContainText(/需处理|Needs action/)
+  await expect(page.getByTestId('library-quality-center-summary')).toContainText(/待处理项|Attention items/)
   await expect(page.getByTestId('library-quality-center-details')).toHaveCount(0)
   await expect(page.getByTestId('library-quality-domains')).toHaveCount(0)
+  await expect(page.getByTestId('library-quality-center-toggle')).toContainText(/查看维护项|View maintenance/)
   await page.getByTestId('library-quality-center-toggle').click()
   await expect(page.getByTestId('library-quality-center-details')).toBeVisible()
   await expect(page.getByTestId('library-quality-report-review')).toContainText('2')

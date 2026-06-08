@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, authFetch } from './client'
 
 export interface Conversation {
   id: string
@@ -269,6 +269,13 @@ export interface ConversationReaderStateRecord {
   updated_at?: number
 }
 
+export interface ConversationResearchStateRecord {
+  conv_id: string
+  state: Record<string, unknown>
+  created_at?: number
+  updated_at?: number
+}
+
 export interface MessageProvenanceSegment {
   segment_id: string
   segment_index?: number
@@ -344,7 +351,7 @@ async function getRefsWithMeta(convId: string): Promise<RefsResponseWithMeta> {
   const startedAt = refsNowMs()
   let res: Response
   try {
-    res = await fetch(`/api/references/conversation/${convId}`)
+    res = await authFetch(`/api/references/conversation/${convId}`)
   } catch {
     throw new Error(
       'Cannot connect to backend. Ensure the backend is running and Vite proxy /api targets the correct port.',
@@ -500,7 +507,7 @@ export const chatApi = {
     fd.append('quick_ingest', String(opts?.quickIngest ?? true))
     fd.append('speed_mode', opts?.speedMode ?? 'balanced')
     if (opts?.convId) fd.append('conv_id', String(opts.convId))
-    const res = await fetch('/api/chat/uploads', { method: 'POST', body: fd })
+    const res = await authFetch('/api/chat/uploads', { method: 'POST', body: fd })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return res.json() as Promise<{ items: ChatUploadItem[] }>
   },
@@ -553,6 +560,10 @@ export const chatApi = {
       bound_source_name: guide.bound_source_name,
       bound_source_ready: guide.bound_source_ready,
     }),
+  getConversationResearchState: (convId: string) =>
+    api.get<ConversationResearchStateRecord>(`/api/conversations/${encodeURIComponent(convId)}/research-state`),
+  patchConversationResearchState: (convId: string, state: Record<string, unknown>) =>
+    api.patch<ConversationResearchStateRecord>(`/api/conversations/${encodeURIComponent(convId)}/research-state`, { state }),
   createReaderSession: <T extends MessageProvenanceReaderOpen>(
     payload: T,
     opts?: {

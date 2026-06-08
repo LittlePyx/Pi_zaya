@@ -455,8 +455,9 @@ test('research QA replay citation shelf workflow: snapshots and CSV export work'
   await expect(page.getByTestId('citation-shelf-readiness')).toContainText(/2\/2/)
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
 
+  await page.getByTestId('citation-shelf-export-selected').click()
   const downloadPromise = page.waitForEvent('download')
-  await page.getByTestId('citation-shelf-export-csv').click()
+  await page.getByTestId('citation-shelf-export-main-csv').click()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toMatch(/^cite_shelf_selected_\d{8}_\d{4}\.csv$/)
   const downloadPath = await download.path()

@@ -9,7 +9,7 @@ import {
   type Project,
   type RefsResponseMeta,
 } from '../api/chat'
-import { api } from '../api/client'
+import { api, authFetch } from '../api/client'
 import { S as zh } from '../i18n/zh'
 import { S as en } from '../i18n/en'
 import { useSettingsStore } from './settingsStore'
@@ -1015,7 +1015,7 @@ interface ChatState {
   removePendingImage: (key: string) => void
   dismissUploadItem: (key: string) => void
   sendMessage: (prompt: string, opts: {
-    topK: number; temperature: number; maxTokens: number; deepRead: boolean
+    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown
   }) => Promise<void>
   cancelGeneration: () => void
   clearGeneration: () => void
@@ -1202,13 +1202,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const fetchStartedAt = nowMs()
     try {
-      const [conv, pageResult] = await Promise.all([
-        cachedConv ? Promise.resolve(cachedConv) : chatApi.getConversation(convId).catch(() => null),
-        getMessagesPageWithFallback(convId, {
-          limit: MESSAGE_PAGE_SIZE,
-          renderPacketOnly: cachedConv?.mode === 'paper_guide' ? true : undefined,
-        }),
-      ])
+      const conv = cachedConv || await chatApi.getConversation(convId).catch(() => null)
+      const paperGuideMode = (conv || cachedConv)?.mode === 'paper_guide'
+      const pageResult = await getMessagesPageWithFallback(convId, {
+        limit: MESSAGE_PAGE_SIZE,
+        renderPacketOnly: paperGuideMode ? true : undefined,
+      })
       pushConversationOpenPhase({
         ts: Date.now(),
         convId,
@@ -1645,6 +1644,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       temperature: opts.temperature,
       max_tokens: opts.maxTokens,
       deep_read: opts.deepRead,
+      prompt_context: opts.promptContext || undefined,
     })
     const conversationTitle = String(res.conversation_title || '').trim()
     const userMessage: Message = {
@@ -1653,6 +1653,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: userStoreText,
       created_at: Date.now() / 1000,
       attachments: pendingImages,
+      meta: opts.promptContext ? { prompt_context: opts.promptContext } : undefined,
     }
 
     set((state) => ({
@@ -1700,7 +1701,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ sseController: ctrl })
 
     try {
-      const sseRes = await fetch(`/api/generate/${res.session_id}/stream`, {
+      const sseRes = await authFetch(`/api/generate/${res.session_id}/stream`, {
         signal: ctrl.signal,
       })
       const reader = sseRes.body!.getReader()

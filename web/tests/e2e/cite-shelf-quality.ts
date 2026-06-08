@@ -15,16 +15,35 @@ export async function expectCitationShelfQuality(
   const minItems = options.minItems ?? 1
   const shelf = page.getByTestId('citation-shelf')
   await expect(shelf).toHaveClass(/translate-x-0/)
+  const organizeToggle = shelf.getByTestId('citation-shelf-organize-toggle')
+  if (await organizeToggle.count()) {
+    if ((await organizeToggle.getAttribute('aria-expanded')) !== 'true') {
+      await organizeToggle.click()
+    }
+  }
 
   const shelfItems = shelf.getByTestId('citation-shelf-item')
   const shelfItemCount = await shelfItems.count()
-  for (let index = 0; index < shelfItemCount; index += 1) {
-    const item = shelfItems.nth(index)
-    await item.click()
-    const detailToggle = item.getByTestId('citation-shelf-detail-toggle')
-    if (await detailToggle.count()) {
-      const expanded = await detailToggle.getAttribute('aria-expanded')
-      if (expanded !== 'true') await detailToggle.click()
+  if (shelfItemCount > 0) {
+    const minDoiLinks = options.minDoiLinks ?? 0
+    let foundExpandedTarget = false
+    for (let index = 0; index < shelfItemCount; index += 1) {
+      const item = shelfItems.nth(index)
+      if ((await item.getAttribute('aria-expanded')) !== 'true') {
+        await item.getByTestId('citation-shelf-item-title').click()
+      }
+      const hasSummary = await shelf.getByTestId('citation-shelf-summary').count()
+      const hasEnoughDoi = minDoiLinks <= 0 || (await shelf.locator('.kb-shelf-doi-link').count()) >= minDoiLinks
+      if (hasSummary > 0 && hasEnoughDoi) {
+        foundExpandedTarget = true
+        break
+      }
+    }
+    if (!foundExpandedTarget) {
+      const item = shelfItems.first()
+      if ((await item.getAttribute('aria-expanded')) !== 'true') {
+        await item.getByTestId('citation-shelf-item-title').click()
+      }
     }
   }
 
@@ -52,6 +71,10 @@ export async function expectCitationShelfQuality(
       '待复查',
       '待核对',
     ]
+    const summaryPendingPhrases = [
+      '文献摘要待补',
+      'Article summary pending',
+    ]
     const out: string[] = []
     const textOf = (el: Element | null) => String(el?.textContent || '').replace(/\s+/g, ' ').trim()
     const hasBadPhrase = (value: string) => badPhrases.find((phrase) => value.includes(phrase)) || ''
@@ -72,6 +95,7 @@ export async function expectCitationShelfQuality(
       '.kb-shelf-toolbar-main .ant-btn',
       '.kb-shelf-advanced-toggle',
       '.kb-shelf-item-title',
+      '.kb-shelf-item-venue',
       '.kb-shelf-item-source',
       '.kb-shelf-source-open',
       '.kb-shelf-source-open-quality',
@@ -97,10 +121,11 @@ export async function expectCitationShelfQuality(
       const title = textOf(item.querySelector('[data-testid="citation-shelf-item-title"]'))
       const source = textOf(item.querySelector('[data-testid="citation-shelf-item-source"]'))
       const doi = textOf(item.querySelector('.kb-shelf-doi'))
+      const expanded = item.getAttribute('aria-expanded') === 'true'
       if (title.length < 8) out.push(`item ${index + 1} title too short: ${title}`)
       const badTitlePhrase = hasBadPhrase(title)
       if (badTitlePhrase) out.push(`item ${index + 1} title contains ${badTitlePhrase}`)
-      if (!source && !doi) out.push(`item ${index + 1} lacks source or DOI line`)
+      if (expanded && !source && !doi) out.push(`item ${index + 1} lacks source or DOI line`)
       const reviewText = textOf(item.querySelector('.kb-shelf-quality-chips'))
       const reviewPhrase = hasReviewPhrase(reviewText)
       if (qualityOptions.maxReviewItems === 0 && reviewPhrase) {
@@ -130,10 +155,18 @@ export async function expectCitationShelfQuality(
 
     const summary = root.querySelector('[data-testid="citation-shelf-summary"]')
     const summaryText = textOf(summary)
+    const summaryPending = summaryPendingPhrases.some((phrase) => summaryText.includes(phrase))
     if (!summary) out.push('focused item does not show a summary panel')
-    else if (summaryText.length < 24) out.push(`focused summary too short: ${summaryText}`)
+    else if (summaryPending) {
+      const hasUsableFallback = Boolean(
+        textOf(root.querySelector('.kb-shelf-doi-link'))
+        || textOf(root.querySelector('[data-testid="citation-shelf-source-trail"]')).length > 16
+        || textOf(root.querySelector('[data-testid="citation-shelf-excerpt"]')).length > 16,
+      )
+      if (!hasUsableFallback) out.push(`focused summary pending and lacks DOI/source fallback: ${summaryText}`)
+    } else if (summaryText.length < 24) out.push(`focused summary too short: ${summaryText}`)
     const summarySource = textOf(root.querySelector('.kb-shelf-summary-source'))
-    if (summary && summarySource.length < 2) out.push('focused summary lacks source chip')
+    if (summary && !summaryPending && summarySource.length < 2) out.push('focused summary lacks source chip')
 
     return out
   }, { ...options, minItems })

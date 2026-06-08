@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, authFetch } from './client'
 
 export interface ConvertActiveTask {
   task_id: string
@@ -1138,14 +1138,14 @@ export const libraryApi = {
     const fd = new FormData()
     fd.append('file', file)
     if (baseName) fd.append('base_name', baseName)
-    const res = await fetch('/api/library/upload', { method: 'POST', body: fd })
+    const res = await authFetch('/api/library/upload', { method: 'POST', body: fd })
     return res.json()
   },
   inspectUpload: async (file: File, useLlm = true) => {
     const fd = new FormData()
     fd.append('file', file)
     fd.append('use_llm', String(useLlm))
-    const res = await fetch('/api/library/upload/inspect', { method: 'POST', body: fd })
+    const res = await authFetch('/api/library/upload/inspect', { method: 'POST', body: fd })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return res.json() as Promise<UploadInspectResponse>
   },
@@ -1159,7 +1159,7 @@ export const libraryApi = {
     fd.append('convert_now', String(Boolean(opts?.convertNow)))
     fd.append('speed_mode', String(opts?.speedMode || 'balanced'))
     fd.append('allow_duplicate', String(Boolean(opts?.allowDuplicate)))
-    const res = await fetch('/api/library/upload/commit', { method: 'POST', body: fd })
+    const res = await authFetch('/api/library/upload/commit', { method: 'POST', body: fd })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return res.json() as Promise<UploadCommitResponse>
   },
@@ -1257,7 +1257,7 @@ export const libraryApi = {
     const ctrl = new AbortController()
     ;(async () => {
       try {
-        const res = await fetch('/api/library/convert/status', { signal: ctrl.signal })
+        const res = await authFetch('/api/library/convert/status', { signal: ctrl.signal })
         const reader = res.body!.getReader()
         const decoder = new TextDecoder()
         let buf = ''

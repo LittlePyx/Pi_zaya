@@ -46,12 +46,66 @@ export interface LlmReadinessPayload {
   }
 }
 
+export type AppReadinessSeverity = 'ok' | 'warning' | 'error'
+
+export interface AppReadinessItem {
+  key: string
+  status: AppReadinessSeverity
+  severity: AppReadinessSeverity
+  label: string
+  detail?: string
+  action?: string
+}
+
+export interface AppReadinessPayload {
+  status: AppReadinessSeverity
+  env: string
+  production: boolean
+  auth_required: boolean
+  items: AppReadinessItem[]
+  llm?: LlmReadinessPayload
+  restore?: {
+    acknowledged?: boolean
+    latest?: {
+      event?: string
+      status?: string
+      backup?: string
+      created_at?: number
+      ok?: boolean
+      restart_required?: boolean
+      components?: Record<string, boolean>
+      errors?: string[]
+      warnings?: string[]
+    } | null
+    acknowledgement?: {
+      event?: string
+      status?: string
+      backup?: string
+      created_at?: number
+      ok?: boolean
+      restart_required?: boolean
+      components?: Record<string, boolean>
+      errors?: string[]
+      warnings?: string[]
+    } | null
+  }
+}
+
+export interface AuthStatusPayload {
+  required: boolean
+  configured: boolean
+  authenticated: boolean
+  env: string
+  production: boolean
+}
+
 export interface SettingsPayload {
   model: string
   base_url: string
   has_api_key: boolean
   connection?: SettingsConnectionStatus
   readiness?: LlmReadinessPayload
+  app_readiness?: AppReadinessPayload
   db_dir: string
   prefs: Record<string, unknown>
 }
@@ -78,6 +132,7 @@ export interface SettingsPatch {
   visionApiKey?: string
   visionBaseUrl?: string
   visionModel?: string
+  autoBackupEnabled?: boolean
 }
 
 export interface PickDirResponse {
@@ -114,6 +169,7 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.visionApiKey !== undefined) out.vision_api_key = patch.visionApiKey
   if (patch.visionBaseUrl !== undefined) out.vision_base_url = patch.visionBaseUrl
   if (patch.visionModel !== undefined) out.vision_model = patch.visionModel
+  if (patch.autoBackupEnabled !== undefined) out.auto_backup_enabled = patch.autoBackupEnabled
   return out
 }
 
@@ -134,5 +190,9 @@ export const settingsApi = {
       model: overrides.model || undefined,
     }),
   readiness: () => api.get<LlmReadinessPayload>('/api/settings/readiness'),
-  health: () => api.get<{ status: string }>('/api/health'),
+  appReadiness: () => api.get<AppReadinessPayload>('/api/readiness'),
+  health: () => api.get<{ status: string; env?: string; production?: boolean; auth?: { required: boolean; configured: boolean } }>('/api/health'),
+  authStatus: () => api.get<AuthStatusPayload>('/api/auth/status'),
+  authLogin: (token: string) => api.post<{ ok: boolean } & AuthStatusPayload>('/api/auth/login', { token }),
+  authLogout: () => api.post<{ ok: boolean }>('/api/auth/logout'),
 }

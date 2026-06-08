@@ -1831,6 +1831,69 @@ def _build_generation_messages(*, system: str, hist: list[dict], user_content: s
     return _generation_build_messages(system=system, hist=hist, user_content=user_content)
 
 
+def _selected_research_context_items(value) -> list[dict]:
+    if not isinstance(value, dict):
+        return []
+    raw_items = value.get("items")
+    if not isinstance(raw_items, list):
+        return []
+    out: list[dict] = []
+    for raw in raw_items[:8]:
+        if not isinstance(raw, dict):
+            continue
+        title = str(raw.get("title") or "").strip()
+        summary = str(raw.get("summary") or "").strip()
+        excerpt = str(raw.get("excerpt") or "").strip()
+        note = str(raw.get("note") or "").strip()
+        if not any((title, summary, excerpt, note)):
+            continue
+        out.append(dict(raw))
+    return out
+
+
+def _format_selected_research_context_block(value) -> str:
+    items = _selected_research_context_items(value)
+    if not items:
+        return ""
+    lines: list[str] = []
+    for idx, item in enumerate(items, start=1):
+        title = str(item.get("title") or "").strip() or "Untitled excerpt"
+        kind = str(item.get("kind") or "").strip()
+        source_name = str(item.get("sourceName") or "").strip()
+        location = str(item.get("locationLabel") or "").strip()
+        doi = str(item.get("doi") or "").strip()
+        ref_num = item.get("refNum")
+        head_bits = [f"[SHELF-{idx}]"]
+        if kind:
+            head_bits.append(kind)
+        head_bits.append(title[:260])
+        lines.append(" ".join(head_bits))
+        meta_bits = []
+        if source_name:
+            meta_bits.append(f"source={source_name[:220]}")
+        if location:
+            meta_bits.append(f"location={location[:220]}")
+        if ref_num:
+            meta_bits.append(f"ref={ref_num}")
+        if doi:
+            meta_bits.append(f"doi={doi[:180]}")
+        if meta_bits:
+            lines.append("  " + "; ".join(meta_bits))
+        summary = str(item.get("summary") or "").strip()
+        excerpt = str(item.get("excerpt") or "").strip()
+        note = str(item.get("note") or "").strip()
+        if summary:
+            lines.append(f"  summary: {summary[:900]}")
+        if excerpt:
+            lines.append(f"  excerpt: {excerpt[:900]}")
+        if note:
+            lines.append(f"  user_note: {note[:520]}")
+    block = "\n".join(lines).strip()
+    if len(block) > 5200:
+        block = block[:5199].rstrip() + "..."
+    return block
+
+
 def _build_paper_guide_direct_answer_override(
     *,
     paper_guide_mode: bool,
@@ -2554,6 +2617,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     try:
         conv_id = str(task.get("conv_id") or "")
         prompt = str(task.get("prompt") or "").strip()
+        selected_research_context = task.get("selected_research_context") if isinstance(task.get("selected_research_context"), dict) else {}
+        selected_research_context_items = _selected_research_context_items(selected_research_context)
+        selected_research_context_block = _format_selected_research_context_block(selected_research_context)
         raw_image_atts = task.get("image_attachments") or []
         chat_db = Path(str(task.get("chat_db") or "")).expanduser()
         db_dir = Path(str(task.get("db_dir") or "")).expanduser()
@@ -2627,6 +2693,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "answer_output_mode": str(answer_output_mode or ""),
                 "paper_guide_bound_source": paper_guide_bound_source_name or paper_guide_bound_source_path,
                 "image_attachment_count": int(len(raw_image_atts or [])) if isinstance(raw_image_atts, list) else 0,
+                "selected_research_context_count": int(len(selected_research_context_items)),
             },
         )
 
@@ -2669,7 +2736,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             except Exception:
                 pass
 
-        quick_answer = _quick_answer_for_prompt(prompt) if prompt else None
+        quick_answer = _quick_answer_for_prompt(prompt) if prompt and not selected_research_context_block else None
         image_first_prompt = bool(image_attachments) and _should_prioritize_attached_image(prompt)
         bypass_kb = bool(prompt) and (_should_bypass_kb_retrieval(prompt) or image_first_prompt)
         if quick_answer is not None:
@@ -2723,6 +2790,12 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         except Exception:
             cur_user_msg_id = 0
         retrieval_prompt = str(prompt or "").strip()
+        if selected_research_context_block:
+            retrieval_prompt = (
+                f"{retrieval_prompt}\n\n"
+                "User-selected research basket excerpts for this turn:\n"
+                f"{selected_research_context_block}"
+            ).strip()
         allow_implicit_source_hints = _should_apply_implicit_source_hints(
             prompt=retrieval_prompt,
             paper_guide_mode=bool(paper_guide_mode),
@@ -3802,6 +3875,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         user = str(prompt_bundle.get("user") or "")
         prompt_for_user = str(prompt_bundle.get("prompt_for_user") or prompt or "[Image attachment only request]")
         paper_guide_contract_enabled = bool(prompt_bundle.get("paper_guide_contract_enabled"))
+        if selected_research_context_block:
+            user = (
+                f"{user.rstrip()}\n\n"
+                "USER-SELECTED RESEARCH BASKET CONTEXT:\n"
+                "The user explicitly selected these excerpts for this turn. Use them as supplemental working context; "
+                "do not invent bibliographic facts beyond the fields shown, and keep citations/evidence grounded in available sources.\n"
+                f"{selected_research_context_block}"
+            ).strip()
         history = chat_store.get_messages(conv_id)
         try:
             cur_user_msg_id = int(task.get("user_msg_id") or 0)
@@ -3963,6 +4044,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         answer = str(finalize_state.get("answer") or "")
         paper_guide_support_resolution = list(finalize_state.get("paper_guide_support_resolution") or [])
         paper_guide_contracts = dict(finalize_state.get("paper_guide_contracts") or {})
+        if selected_research_context_items:
+            paper_guide_contracts["selected_research_context"] = dict(selected_research_context or {})
         doc_list_rendered_payload = None
         doc_list_rendered_payload_sig = ""
         if prompt_multi_paper_list:

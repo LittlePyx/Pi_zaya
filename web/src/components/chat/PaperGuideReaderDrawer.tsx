@@ -241,6 +241,13 @@ function locateResultBadge(
   return null
 }
 
+function compactReaderEvidenceText(value: string, limit = 180): string {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  if (text.length <= limit) return text
+  return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}...`
+}
+
 export function PaperGuideReaderDrawer({
   open,
   payload,
@@ -407,10 +414,7 @@ export function PaperGuideReaderDrawer({
     documentOverride,
   })
 
-  const title = useMemo(
-    () => resolvedName || sourceName || 'Document reader',
-    [resolvedName, sourceName],
-  )
+  const title = resolvedName || sourceName || 'Document reader'
   const requestedCandidateIdentity = useMemo(() => candidateIdentityKey({
     headingPath: primaryHeadingPath,
     snippet: primaryFocusSnippet,
@@ -428,7 +432,7 @@ export function PaperGuideReaderDrawer({
     primaryAnchorKind,
     primaryAnchorNumber,
   ])
-  const visibleCandidateOptions = useMemo(() => {
+  const visibleCandidateOptions = (() => {
     const rawList = Array.isArray(payload?.visibleAlternatives) && payload.visibleAlternatives.length > 0
       ? payload.visibleAlternatives
       : alternatives
@@ -457,7 +461,7 @@ export function PaperGuideReaderDrawer({
       })
     }
     return out
-  }, [payload, alternatives, title])
+  })()
   const evidenceAlternatives = useMemo(() => {
     const rawList = Array.isArray(payload?.evidenceAlternatives)
       ? payload.evidenceAlternatives
@@ -489,15 +493,14 @@ export function PaperGuideReaderDrawer({
   ), [evidenceAlternatives])
 
   const activeAlt = alternatives[activeAltIndex] || null
-  const activeCandidateDistinctKey = useMemo(() => {
-    if (!activeAlt) return ''
-    return candidateVisibilityKey(activeAlt, title) || candidateIdentityKey(activeAlt)
-  }, [activeAlt, title])
+  const activeCandidateDistinctKey = activeAlt
+    ? candidateVisibilityKey(activeAlt, title) || candidateIdentityKey(activeAlt)
+    : ''
   const requestedAltIndex = useMemo(() => {
     const hintIndex = Number(payload?.initialAltIndex || 0)
     return Number.isFinite(hintIndex) ? Math.max(0, Math.min(alternatives.length - 1, Math.floor(hintIndex))) : 0
   }, [payload, alternatives.length])
-  const candidateOptions = useMemo(() => {
+  const candidateOptions = (() => {
     const describeCandidateRole = (
       candidate: ReaderLocateCandidate | null | undefined,
     ): { roleLabel?: string; roleTone?: LocateBadgeTone } => {
@@ -565,25 +568,12 @@ export function PaperGuideReaderDrawer({
         roleTone: role.roleTone,
       },
     ]
-  }, [
-    visibleCandidateOptions,
-    alternatives,
-    activeAlt,
-    activeAltIndex,
-    activeCandidateDistinctKey,
-    requestedCandidateIdentity,
-    evidenceCandidateIdentitySet,
-    strictLocate,
-    altChangeSource,
-    requestedAltIndex,
-    title,
-    S,
-  ])
-  const hasDistinctAlternatives = useMemo(() => {
+  })()
+  const hasDistinctAlternatives = (() => {
     if (candidateOptions.length <= 1) return false
     const distinct = new Set(candidateOptions.map((item) => item.distinctKey).filter(Boolean))
     return distinct.size > 1
-  }, [candidateOptions])
+  })()
   const activeHeadingPath = String(activeAlt?.headingPath || primaryHeadingPath).trim()
   const activeFocusSnippet = String(activeAlt?.snippet || primaryFocusSnippet).trim()
   const activeHighlightSnippet = String(activeAlt?.highlightSnippet || primaryHighlightSnippet || activeFocusSnippet).trim()
@@ -708,6 +698,7 @@ export function PaperGuideReaderDrawer({
 
   const sourceTitleAttr = String(sourcePath || sourceName || title || '').trim()
   const metaLocationText = activeHeadingPath || (S.reader_document_start || 'Document start')
+  const evidenceFocusText = compactReaderEvidenceText(activeHighlightSnippet || activeFocusSnippet)
   const bindingStatusText = expectsEquationBinding && !equationBindingReady
     ? `${S.reader_binding_equations || 'Binding equations'}${equationBindingBoundCount > 0 ? ` (${equationBindingBoundCount})` : ''}`
     : ''
@@ -816,7 +807,7 @@ export function PaperGuideReaderDrawer({
       }
       return merged
     })
-  }, [])
+  }, [setCitationPopoverDetail])
 
   const showReaderCitation = useCallback((detail: CiteDetail, event: MouseEvent<HTMLElement>) => {
     const itemKey = toShelfItem(detail).key
@@ -850,14 +841,14 @@ export function PaperGuideReaderDrawer({
           setCitationPopoverLoading(false)
         }
       })
-  }, [mergeReaderCitationMeta])
+  }, [mergeReaderCitationMeta, setCitationPopoverDetail, setCitationPopoverLoading, setCitationPopoverPos])
 
   const closeReaderCitationPopover = useCallback(() => {
     setCitationPopoverDetail(null)
     setCitationPopoverPos(null)
     setCitationPopoverLoading(false)
     activeCitationRequestKeyRef.current = ''
-  }, [])
+  }, [setCitationPopoverDetail, setCitationPopoverLoading, setCitationPopoverPos])
 
   const addReaderCitationToShelf = useCallback((detail: CiteDetail) => {
     onAddCitationToShelf?.(detail)
@@ -867,7 +858,7 @@ export function PaperGuideReaderDrawer({
       next.add(key)
       return next
     })
-  }, [onAddCitationToShelf])
+  }, [onAddCitationToShelf, setReaderCitationShelfKeys])
 
   const addReaderBlockToShelf = useCallback((block: ReaderBlockShelfPayload) => {
     const text = String(block?.text || '').trim()
@@ -1018,7 +1009,7 @@ export function PaperGuideReaderDrawer({
     }
     setHighlightBubble(null)
     return true
-  }, [onAddSessionHighlight, onRemoveSessionHighlight])
+  }, [onAddSessionHighlight, onRemoveSessionHighlight, setHighlightBubble])
 
   const undoHighlightAction = useCallback((specificAction?: HighlightUndoAction): boolean => {
     let action = specificAction || highlightUndoStackRef.current.pop()
@@ -1073,7 +1064,7 @@ export function PaperGuideReaderDrawer({
       return
     }
     message.success(S.reader_highlight_removed || 'Highlight removed')
-  }, [S, onAddSessionHighlight, onRemoveSessionHighlight, sessionHighlights, undoHighlightAction])
+  }, [S, onAddSessionHighlight, onRemoveSessionHighlight, sessionHighlights, setHighlightBubble, undoHighlightAction])
 
   const {
     outlineItems,
@@ -1151,7 +1142,7 @@ export function PaperGuideReaderDrawer({
     onUpdateSessionHighlight(updated)
     message.success(S.reader_feedback_saved || 'Evidence note updated')
     setHighlightBubble(null)
-  }, [S.reader_feedback_saved, activeHighlightAction, enrichSessionHighlight, onUpdateSessionHighlight])
+  }, [S.reader_feedback_saved, activeHighlightAction, enrichSessionHighlight, onUpdateSessionHighlight, setHighlightBubble])
 
   const appendActiveHighlight = () => {
     const item = activeHighlightAction
@@ -1341,6 +1332,7 @@ export function PaperGuideReaderDrawer({
     <PaperGuideReaderPanel
       metaLocationText={metaLocationText}
       activeHeadingPath={activeHeadingPath}
+      evidenceFocusText={evidenceFocusText}
       locateBadges={locateBadges}
       statusTextCompact={statusTextCompact}
       statusTextFull={statusTextFull}
