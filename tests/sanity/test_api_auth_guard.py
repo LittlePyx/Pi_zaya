@@ -46,6 +46,15 @@ def test_api_guard_accepts_access_token_header(monkeypatch):
     assert res.json()["overall"]["status"] in {"ok", "warning", "error"}
 
 
+def test_api_guard_rejects_access_token_query_parameter(monkeypatch):
+    _set_auth_env(monkeypatch)
+    client = TestClient(app)
+
+    res = client.get("/api/settings/readiness?access_token=secret-token")
+
+    assert res.status_code == 401
+
+
 def test_auth_login_sets_cookie_for_subsequent_api_calls(monkeypatch):
     _set_auth_env(monkeypatch)
     client = TestClient(app)

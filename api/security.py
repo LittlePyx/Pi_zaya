@@ -47,7 +47,7 @@ def access_token_from_request(request: Request) -> str:
     token = str(request.cookies.get(AUTH_COOKIE_NAME) or "").strip()
     if token:
         return token
-    return str(request.query_params.get("access_token") or "").strip()
+    return ""
 
 
 def request_is_authenticated(request: Request, settings: Settings | None = None) -> bool:
