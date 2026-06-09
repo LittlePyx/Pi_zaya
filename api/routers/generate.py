@@ -18,6 +18,17 @@ from kb.task_runtime import (
 )
 
 
+def _normalize_query_scope(value: object) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    if raw in {"current", "paper", "current_paper", "source", "reader"}:
+        return "current_paper"
+    if raw in {"basket", "shelf", "citation_shelf", "selected"}:
+        return "basket"
+    if raw in {"library", "all", "all_library", "full_library"}:
+        return "library"
+    return ""
+
+
 def _strip_internal_structured_markers(text: str) -> str:
     """Final safety net: never leak internal grounding markers in /api/generate output.
 
@@ -224,6 +235,7 @@ class GenerateBody(BaseModel):
     preferred_sources: list[str] = Field(default_factory=list)
     source_lock_path: str = ""
     source_lock_name: str = ""
+    query_scope: str = ""
     prompt_context: dict | None = None
 
 
@@ -239,17 +251,23 @@ def start_generation(body: GenerateBody):
     max_tokens = max(256, min(4096, int(body.max_tokens or 1216)))
     image_attachments = [_normalize_chat_image_attachment(it) for it in list(body.image_attachments or []) if isinstance(it, dict)]
     prompt_context = _sanitize_prompt_context(body.prompt_context)
+    query_scope = _normalize_query_scope(body.query_scope)
     if (not prompt) and (not image_attachments):
         raise HTTPException(400, "prompt or image_attachments required")
     conv_meta = chat_store.get_conversation(body.conv_id) or {}
 
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
+    user_meta: dict[str, object] = {}
+    if prompt_context:
+        user_meta["prompt_context"] = prompt_context
+    if query_scope:
+        user_meta["query_scope"] = query_scope
     user_msg_id = chat_store.append_message(
         body.conv_id,
         "user",
         user_store_text,
         attachments=image_attachments,
-        meta={"prompt_context": prompt_context} if prompt_context else None,
+        meta=user_meta or None,
     )
     assistant_msg_id = chat_store.append_message(
         body.conv_id,
@@ -296,6 +314,7 @@ def start_generation(body: GenerateBody):
         "prompt_sig": hashlib.sha1(prompt.encode("utf-8", "ignore")).hexdigest()[:12] if prompt else "",
         "image_attachments": image_attachments,
         "selected_research_context": prompt_context,
+        "query_scope": query_scope,
         "preferred_sources": preferred_sources,
         "paper_guide_mode": conv_mode == "paper_guide",
         "paper_guide_bound_source_path": bound_source_path,

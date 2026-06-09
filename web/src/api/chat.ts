@@ -276,6 +276,8 @@ export interface ConversationResearchStateRecord {
   updated_at?: number
 }
 
+export type QueryScope = 'current_paper' | 'basket' | 'library'
+
 export interface MessageProvenanceSegment {
   segment_id: string
   segment_index?: number

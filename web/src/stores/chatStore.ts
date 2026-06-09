@@ -4,6 +4,7 @@ import {
   type ChatImageAttachment,
   type ChatUploadItem,
   type Conversation,
+  type QueryScope,
   type Message,
   type MessagePage,
   type Project,
@@ -1015,7 +1016,7 @@ interface ChatState {
   removePendingImage: (key: string) => void
   dismissUploadItem: (key: string) => void
   sendMessage: (prompt: string, opts: {
-    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown
+    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope
   }) => Promise<void>
   cancelGeneration: () => void
   clearGeneration: () => void
@@ -1640,6 +1641,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       preferred_sources: preferredSourcesFinal,
       source_lock_path: boundSourcePath,
       source_lock_name: boundSourceName,
+      query_scope: opts.queryScope || undefined,
       top_k: opts.topK,
       temperature: opts.temperature,
       max_tokens: opts.maxTokens,
@@ -1653,7 +1655,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: userStoreText,
       created_at: Date.now() / 1000,
       attachments: pendingImages,
-      meta: opts.promptContext ? { prompt_context: opts.promptContext } : undefined,
+      meta: {
+        ...(opts.promptContext ? { prompt_context: opts.promptContext } : {}),
+        ...(opts.queryScope ? { query_scope: opts.queryScope } : {}),
+      },
     }
 
     set((state) => ({

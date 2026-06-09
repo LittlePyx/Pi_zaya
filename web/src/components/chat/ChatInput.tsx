@@ -9,8 +9,9 @@ import {
 } from 'react'
 import { Button, Input, Tag, message } from 'antd'
 import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
-import type { ChatImageAttachment, ChatUploadItem } from '../../api/chat'
+import type { ChatImageAttachment, ChatUploadItem, QueryScope } from '../../api/chat'
 import { useT } from '../../i18n'
+import { ChatScopeControl } from './ChatScopeControl'
 
 const { TextArea } = Input
 
@@ -28,6 +29,9 @@ interface Props {
   uploading: boolean
   generating: boolean
   appendSignal?: { token: number; text: string } | null
+  queryScope: QueryScope
+  queryScopeOptions: Array<{ value: QueryScope; disabled?: boolean }>
+  onQueryScopeChange: (scope: QueryScope) => void
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
@@ -153,6 +157,9 @@ export function ChatInput({
   uploading,
   generating,
   appendSignal,
+  queryScope,
+  queryScopeOptions,
+  onQueryScopeChange,
 }: Props) {
   const S = useT()
   const [text, setText] = useState('')
@@ -422,6 +429,7 @@ export function ChatInput({
                 >
                   {S.upload_file_btn}
                 </Button>
+                <ChatScopeControl value={queryScope} options={queryScopeOptions} onChange={onQueryScopeChange} />
               </div>
               <div className="kb-chat-toolbar-right">
                 {generating ? (

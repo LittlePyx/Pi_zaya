@@ -29,6 +29,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   ApiOutlined,
+  CloudDownloadOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useT } from '../../i18n'
@@ -37,7 +38,12 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import type { Conversation, Project } from '../../api/chat'
 import { CHAT_MAIN_WINDOW_NAME, READER_SESSION_NAV_CHANNEL } from '../chat/reader/readerTypes'
 import { SettingsDrawer } from './SettingsDrawer'
-import { OPEN_SETTINGS_EVENT, apiSettingsTargetFromUnknown, type ApiSettingsTarget } from './settingsEvents'
+import {
+  OPEN_SETTINGS_EVENT,
+  apiSettingsTargetFromUnknown,
+  settingsFocusTargetFromUnknown,
+  type SettingsFocusTarget,
+} from './settingsEvents'
 
 const { Sider, Content } = Layout
 const { Text } = Typography
@@ -360,8 +366,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const updateSettings = useSettingsStore((s) => s.update)
   const llmReadiness = useSettingsStore((s) => s.llmReadiness)
   const appReadiness = useSettingsStore((s) => s.appReadiness)
+  const appUpdate = useSettingsStore((s) => s.appUpdate)
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const refreshAppReadiness = useSettingsStore((s) => s.refreshAppReadiness)
+  const refreshAppUpdate = useSettingsStore((s) => s.refreshAppUpdate)
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
   const visionUsesTextFallback = useSettingsStore((s) => s.visionUsesTextFallback)
 
@@ -375,7 +383,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [conversationTitle, setConversationTitle] = useState('')
   const [keyword, setKeyword] = useState('')
   const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
-  const [settingsFocusTarget, setSettingsFocusTarget] = useState<ApiSettingsTarget | ''>('')
+  const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | ''>('')
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -387,7 +395,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     const openSettings = (event: Event) => {
       const detail = event instanceof CustomEvent ? event.detail as { target?: unknown } : {}
-      setSettingsFocusTarget(apiSettingsTargetFromUnknown(detail?.target))
+      setSettingsFocusTarget(settingsFocusTargetFromUnknown(detail?.target))
       setDrawerOpen(true)
     }
     window.addEventListener(OPEN_SETTINGS_EVENT, openSettings)
@@ -404,6 +412,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (!settingsLoaded || appReadiness) return
     void refreshAppReadiness()
   }, [appReadiness, refreshAppReadiness, settingsLoaded])
+
+  useEffect(() => {
+    if (!settingsLoaded) return
+    void refreshAppUpdate({ auto: true }).catch(() => {})
+  }, [refreshAppUpdate, settingsLoaded])
 
   useEffect(() => {
     if (loc.pathname !== '/') return
@@ -688,7 +701,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     : connectionStatus === 'warning'
       ? S.connection_status_warning
       : S.connection_status_ok
-  const openSettingsDrawer = (target: ApiSettingsTarget | '' = '') => {
+  const openSettingsDrawer = (target: SettingsFocusTarget | '' = '') => {
     setSettingsFocusTarget(target)
     setDrawerOpen(true)
   }
@@ -704,6 +717,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const releaseBannerTitle = appReadiness?.status === 'error'
     ? S.release_banner_blocked_title
     : S.release_banner_warning_title
+  const showUpdateBanner = Boolean(appUpdate?.update_available)
 
   return (
     <Layout className="h-screen min-h-0 overflow-hidden">
@@ -806,6 +820,20 @@ export function AppLayout({ children }: { children: ReactNode }) {
               />
             </Tooltip>
           </div>
+          {showUpdateBanner ? (
+            <div className="kb-release-banner is-update" data-testid="app-update-banner">
+              <CloudDownloadOutlined className="kb-release-banner-icon" />
+              <div className="kb-release-banner-main">
+                <span className="kb-release-banner-title">{S.update_banner_title}</span>
+                <span className="kb-release-banner-desc">
+                  {S.update_banner_desc.replace('{version}', appUpdate?.latest?.tag_name || '')}
+                </span>
+              </div>
+              <Button size="small" onClick={() => openSettingsDrawer('updates')}>
+                {S.update_banner_review}
+              </Button>
+            </div>
+          ) : null}
           {showReleaseBanner ? (
             <div className={`kb-release-banner is-${appReadiness?.status || 'warning'}`} data-testid="release-readiness-banner">
               <div className="kb-release-banner-main">

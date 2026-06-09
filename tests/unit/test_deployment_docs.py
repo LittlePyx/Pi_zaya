@@ -27,6 +27,9 @@ def test_production_env_template_keeps_required_release_keys() -> None:
         "KB_AUTO_BACKUP_STRICT",
         "KB_BACKUP_KEEP_N",
         "KB_RESTORE_AUDIT_PATH",
+        "KB_UPDATE_CHECK_ENABLED=1",
+        "KB_UPDATE_REPO=LittlePyx/Pi_zaya",
+        "KB_UPDATE_GITHUB_TOKEN",
         "DEEPSEEK_API_KEY",
         "QWEN_API_KEY",
         "KB_PDF_FIGURE_DPI=320",
@@ -62,6 +65,10 @@ def test_deployment_runbook_documents_readiness_and_fastapi_react_path() -> None
         "KB_AUTO_BACKUP_STRICT",
         "KB_BACKUP_KEEP_N",
         "KB_RESTORE_AUDIT_PATH",
+        "KB_UPDATE_CHECK_ENABLED",
+        "KB_UPDATE_REPO",
+        "KB_UPDATE_GITHUB_TOKEN",
+        "/api/app/update-check",
         "src",
     ]
     for needle in required:

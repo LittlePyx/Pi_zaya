@@ -9233,6 +9233,59 @@ textarea.kb-chat-textarea:focus {
   background: transparent;
 }
 
+.kb-chat-scope-control {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 86%, var(--bg));
+  padding: 2px 3px 2px 8px;
+}
+
+.kb-chat-scope-label {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--muted-text) 82%, var(--text-main));
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.kb-chat-scope-control .ant-segmented {
+  background: transparent;
+  color: color-mix(in srgb, var(--muted-text) 90%, var(--text-main));
+  padding: 0;
+}
+
+.kb-chat-scope-control .ant-segmented-group {
+  align-items: center;
+  gap: 1px;
+}
+
+.kb-chat-scope-control .ant-segmented-item {
+  min-height: 26px;
+  border-radius: 6px;
+}
+
+.kb-chat-scope-control .ant-segmented-item-label {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+.kb-chat-scope-control .ant-segmented-thumb,
+.kb-chat-scope-control .ant-segmented-item-selected {
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow: none;
+}
+
+.kb-chat-scope-control .ant-segmented-item-selected {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-main));
+}
+
 .kb-send-btn.ant-btn {
   height: 31px;
   min-width: 74px;
@@ -9275,11 +9328,29 @@ textarea.kb-chat-textarea:focus {
 
   .kb-chat-toolbar-left {
     width: 100%;
+    flex-wrap: wrap;
   }
 
   .kb-chat-toolbar-right {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .kb-chat-scope-control {
+    flex: 1 1 240px;
+    justify-content: space-between;
+  }
+
+  .kb-chat-scope-control .ant-segmented {
+    flex: 1 1 auto;
+  }
+
+  .kb-chat-scope-control .ant-segmented-group {
+    width: 100%;
+  }
+
+  .kb-chat-scope-control .ant-segmented-item {
+    flex: 1 1 0;
   }
 }
 
@@ -13882,6 +13953,17 @@ button.kb-lib-quality-report-metric:disabled {
   background: color-mix(in srgb, #dc2626 7%, var(--panel));
 }
 
+.kb-release-banner.is-update {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+
+.kb-release-banner-icon {
+  color: color-mix(in srgb, var(--accent) 72%, var(--text-main));
+  font-size: 13px;
+}
+
 .kb-release-banner-main {
   min-width: 0;
   display: grid;
@@ -15019,6 +15101,105 @@ button.kb-lib-quality-report-metric:disabled {
 
 .dark .kb-settings-status-badge.is-error {
   color: #f09a9a;
+}
+
+.kb-settings-update-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-settings-update-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  color: color-mix(in srgb, var(--muted-text) 78%, transparent);
+  font-size: 11.5px;
+}
+
+.kb-settings-update-meta strong {
+  color: color-mix(in srgb, var(--text-main) 82%, transparent);
+  font-weight: 640;
+}
+
+.kb-settings-update-note.ant-typography {
+  color: color-mix(in srgb, var(--muted-text) 80%, transparent);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.kb-settings-update-check-options {
+  justify-self: start;
+  color: color-mix(in srgb, var(--muted-text) 78%, transparent);
+  font-size: 11.5px;
+}
+
+.kb-settings-update-check-options > summary {
+  cursor: pointer;
+  list-style: none;
+  width: fit-content;
+  color: color-mix(in srgb, var(--muted-text) 82%, transparent);
+  font-weight: 620;
+}
+
+.kb-settings-update-check-options > summary::-webkit-details-marker {
+  display: none;
+}
+
+.kb-settings-update-check-options-body {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  max-width: 520px;
+  padding-top: 6px;
+}
+
+.kb-settings-update-check-options-body .ant-btn-link {
+  height: auto;
+  padding: 0;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.kb-settings-update-details {
+  border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 97%, var(--bg));
+}
+
+.kb-settings-update-details > summary {
+  cursor: pointer;
+  list-style: none;
+  color: color-mix(in srgb, var(--text-main) 86%, transparent);
+  font-size: 12px;
+  font-weight: 680;
+  padding: 10px 12px;
+}
+
+.kb-settings-update-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.kb-settings-update-details-body {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+  padding: 11px 12px 12px;
+}
+
+.kb-settings-update-notes,
+.kb-settings-update-commands {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 46%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg) 72%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 86%, transparent);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  padding: 10px;
 }
 
 .kb-settings-credential-grid {

@@ -1894,6 +1894,54 @@ def _format_selected_research_context_block(value) -> str:
     return block
 
 
+def _normalize_query_scope(value: object) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    if raw in {"current", "paper", "current_paper", "source", "reader"}:
+        return "current_paper"
+    if raw in {"basket", "shelf", "citation_shelf", "selected"}:
+        return "basket"
+    if raw in {"library", "all", "all_library", "full_library"}:
+        return "library"
+    return ""
+
+
+def _effective_query_scope(*, requested: object, paper_guide_mode: bool, has_current_paper: bool, has_basket: bool) -> str:
+    scope = _normalize_query_scope(requested)
+    if scope == "current_paper" and not has_current_paper:
+        scope = ""
+    if scope == "basket" and not has_basket:
+        scope = ""
+    if scope:
+        return scope
+    if has_current_paper and paper_guide_mode:
+        return "current_paper"
+    return "library"
+
+
+def _query_scope_prompt_block(*, scope: str, selected_count: int, current_source_name: str, current_source_path: str) -> str:
+    label = str(current_source_name or "").strip() or str(current_source_path or "").strip()
+    if scope == "current_paper":
+        source_part = f" Current paper: {label}." if label else ""
+        return (
+            "QUERY SCOPE: Current paper.\n"
+            f"- Answer inside the currently opened/bound paper.{source_part}\n"
+            "- Use other library snippets only when the user explicitly asks for outside papers or background."
+        )
+    if scope == "basket":
+        return (
+            "QUERY SCOPE: Research basket.\n"
+            f"- The user selected {max(0, int(selected_count or 0))} basket item(s) for this turn.\n"
+            "- Treat the selected basket excerpts as the primary working set.\n"
+            "- If retrieved library snippets add context, keep them secondary and do not override the selected excerpts without evidence."
+        )
+    return (
+        "QUERY SCOPE: Full library.\n"
+        "- Search and synthesize across the whole indexed literature library.\n"
+        "- When multiple papers are relevant, organize the answer by paper and explain why each paper matches.\n"
+        "- Pair important claims with exact retrieved evidence or location markers; say clearly when the library lacks direct support."
+    )
+
+
 def _build_paper_guide_direct_answer_override(
     *,
     paper_guide_mode: bool,
@@ -2656,6 +2704,20 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         paper_guide_bound_source_path = str(task.get("paper_guide_bound_source_path") or "").strip()
         paper_guide_bound_source_name = str(task.get("paper_guide_bound_source_name") or "").strip()
         paper_guide_bound_source_ready = bool(task.get("paper_guide_bound_source_ready"))
+        requested_query_scope = _normalize_query_scope(task.get("query_scope"))
+        effective_query_scope = _effective_query_scope(
+            requested=requested_query_scope,
+            paper_guide_mode=paper_guide_mode,
+            has_current_paper=bool(paper_guide_bound_source_ready and (paper_guide_bound_source_path or paper_guide_bound_source_name)),
+            has_basket=bool(selected_research_context_items),
+        )
+        paper_guide_source_scoped = bool(paper_guide_mode and effective_query_scope == "current_paper")
+        query_scope_block = _query_scope_prompt_block(
+            scope=effective_query_scope,
+            selected_count=len(selected_research_context_items),
+            current_source_name=paper_guide_bound_source_name,
+            current_source_path=paper_guide_bound_source_path,
+        )
         research_trace = _trace_new(
             session_id=session_id,
             task_id=task_id,
@@ -2691,6 +2753,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "answer_intent": str(answer_intent or ""),
                 "answer_depth": str(answer_depth or ""),
                 "answer_output_mode": str(answer_output_mode or ""),
+                "query_scope": str(effective_query_scope or ""),
+                "requested_query_scope": str(requested_query_scope or ""),
                 "paper_guide_bound_source": paper_guide_bound_source_name or paper_guide_bound_source_path,
                 "image_attachment_count": int(len(raw_image_atts or [])) if isinstance(raw_image_atts, list) else 0,
                 "selected_research_context_count": int(len(selected_research_context_items)),
@@ -2725,7 +2789,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             raise RuntimeError("invalid task")
         if _gen_should_cancel(session_id, task_id):
             raise RuntimeError("canceled")
-        if paper_guide_mode and paper_guide_bound_source_ready and paper_guide_bound_source_path:
+        if paper_guide_source_scoped and paper_guide_bound_source_path:
             try:
                 kickoff_paper_guide_prefetch(
                     source_path=paper_guide_bound_source_path,
@@ -2790,6 +2854,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         except Exception:
             cur_user_msg_id = 0
         retrieval_prompt = str(prompt or "").strip()
+        if query_scope_block:
+            retrieval_prompt = f"{retrieval_prompt}\n\n{query_scope_block}".strip()
         if selected_research_context_block:
             retrieval_prompt = (
                 f"{retrieval_prompt}\n\n"
@@ -2798,7 +2864,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             ).strip()
         allow_implicit_source_hints = _should_apply_implicit_source_hints(
             prompt=retrieval_prompt,
-            paper_guide_mode=bool(paper_guide_mode),
+            paper_guide_mode=bool(paper_guide_source_scoped),
         )
         preferred_source_hints: list[str] = []
         if isinstance(preferred_sources_raw, list):
@@ -2811,7 +2877,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 preferred_source_hints.append(cand)
                 if len(preferred_source_hints) >= 6:
                     break
-        if paper_guide_mode:
+        if paper_guide_source_scoped:
             for cand in (paper_guide_bound_source_path, paper_guide_bound_source_name):
                 cand_norm = str(cand or "").strip()
                 if (not cand_norm) or (cand_norm in preferred_source_hints):
@@ -2822,15 +2888,17 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         prompt_multi_source_synthesis = bool(
             prompt_likely_multi_paper_synthesis(prompt or retrieval_prompt or "")
             or len(preferred_source_hints) >= 3
+            or effective_query_scope == "library"
+            or (effective_query_scope == "basket" and len(selected_research_context_items) > 1)
         )
-        if (not paper_guide_mode) and preferred_source_hints:
+        if (not paper_guide_source_scoped) and preferred_source_hints:
             retrieval_prompt = _apply_preferred_source_hints(
                 retrieval_prompt,
                 preferred_source_hints,
                 limit=6 if prompt_multi_source_synthesis else 3,
             )
         inferred_source_hint = ""
-        if paper_guide_mode and paper_guide_bound_source_ready and preferred_source_hints:
+        if paper_guide_source_scoped and preferred_source_hints:
             retrieval_prompt = _apply_bound_source_hints(retrieval_prompt, preferred_source_hints, limit=2)
         if allow_implicit_source_hints and retrieval_prompt and _needs_conversational_source_hint(retrieval_prompt):
             inferred_source_hint = _pick_recent_source_hint(
@@ -2850,7 +2918,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     retrieval_prompt = _augment_prompt_with_source_hint(retrieval_prompt, h)
         paper_guide_debug: dict[str, object] = {}
         paper_guide_prompt_family = ""
-        if paper_guide_mode and paper_guide_bound_source_ready:
+        if paper_guide_source_scoped:
             paper_guide_prompt_family = _paper_guide_prompt_family(prompt, intent=answer_intent)
             retrieval_prompt = _augment_paper_guide_retrieval_prompt(
                 retrieval_prompt,
@@ -2863,6 +2931,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "answer_intent": str(answer_intent or ""),
                 "output_mode": str(answer_output_mode or ""),
                 "bound_source_ready": bool(paper_guide_bound_source_ready),
+                "query_scope": str(effective_query_scope or ""),
             }
             _gen_update_task(
                 session_id,
@@ -2888,12 +2957,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         refs_seed_docs_for_display: list[dict] = []
         refs_unscoped_hits_raw: list[dict] = []
         paper_guide_cross_paper_refs = bool(
-            paper_guide_mode
+            paper_guide_source_scoped
             and paper_guide_bound_source_ready
             and _paper_guide_requests_cross_paper_refs(prompt or retrieval_prompt or "")
         )
         refs_async_will_run = False
         refs_async_seed_docs: list[dict] = []
+        prompt_multi_paper_list = False
+        seed_refs_should_stay_pending = False
         if prompt and (not bypass_kb):
             _gen_update_task(session_id, task_id, stage="retrieve")
             t_ret0 = time.perf_counter()
@@ -2910,7 +2981,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     bound_source_path=paper_guide_bound_source_path,
                     bound_source_name=paper_guide_bound_source_name,
                 )
-            if paper_guide_mode and paper_guide_bound_source_ready and (paper_guide_bound_source_path or paper_guide_bound_source_name):
+            if paper_guide_source_scoped and (paper_guide_bound_source_path or paper_guide_bound_source_name):
                 scoped_hits = _filter_hits_for_paper_guide(
                     hits_raw,
                     bound_source_path=paper_guide_bound_source_path,
@@ -3211,7 +3282,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 except Exception:
                     pass
             answer_hit_limit = max(1, min(int(top_k), 4))
-            guide_strict_mode = bool(paper_guide_mode and paper_guide_bound_source_ready)
+            guide_strict_mode = bool(paper_guide_source_scoped and paper_guide_bound_source_ready)
             answer_doc_cap = max(
                 answer_hit_limit,
                 min(
@@ -3259,7 +3330,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             # deferred to async so it does not block first answer latency.
             _perf_log("gen.answer_refs_enrich", elapsed=0.0, docs=len(answer_grouped_docs), mode="async_only")
 
-            prompt_multi_paper_list = bool(prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or ""))
+            prompt_multi_paper_list = bool(
+                effective_query_scope == "library"
+                or prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or "")
+            )
             try:
                 refs_async_enabled = bool(int(str(os.environ.get("KB_REFS_ASYNC_ENRICH", "1") or "1")))
             except Exception:
@@ -3270,7 +3344,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 refs_async_in_paper_guide = False
             allow_refs_async = _should_allow_refs_async_enrich(
                 refs_async_enabled=refs_async_enabled,
-                paper_guide_mode=paper_guide_mode,
+                paper_guide_mode=bool(paper_guide_source_scoped),
                 refs_async_in_paper_guide=refs_async_in_paper_guide,
                 paper_guide_cross_paper_refs=paper_guide_cross_paper_refs,
             )
@@ -3548,9 +3622,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                                 used_query=str(used_query or ""),
                                 used_translation=bool(used_translation),
                                 doc_list=list(authoritative_doc_list or []),
-                                guide_mode=bool(paper_guide_mode),
-                                guide_source_path=str(paper_guide_bound_source_path or ""),
-                                guide_source_name=str(paper_guide_bound_source_name or ""),
+                                guide_mode=bool(paper_guide_source_scoped),
+                                guide_source_path=str(paper_guide_bound_source_path or "") if paper_guide_source_scoped else "",
+                                guide_source_name=str(paper_guide_bound_source_name or "") if paper_guide_source_scoped else "",
                             )
                         else:
                             rendered_payload, rendered_payload_sig = _build_precomputed_refs_render_payload(
@@ -3561,9 +3635,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                                 scores=list(scores_raw or []),
                                 used_query=str(used_query or ""),
                                 used_translation=bool(used_translation),
-                                guide_mode=bool(paper_guide_mode),
-                                guide_source_path=str(paper_guide_bound_source_path or ""),
-                                guide_source_name=str(paper_guide_bound_source_name or ""),
+                                guide_mode=bool(paper_guide_source_scoped),
+                                guide_source_path=str(paper_guide_bound_source_path or "") if paper_guide_source_scoped else "",
+                                guide_source_name=str(paper_guide_bound_source_name or "") if paper_guide_source_scoped else "",
                                 library_db_path=getattr(settings_obj, "library_db_path", None),
                             )
                     except Exception as exc:
@@ -3669,7 +3743,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 else (
                     5
                     if (
-                        paper_guide_mode
+                        paper_guide_source_scoped
                         and paper_guide_prompt_family in {"overview", "compare", "reproduce", "strength_limits", "figure_walkthrough", "citation_lookup"}
                     )
                     else 4
@@ -3682,7 +3756,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             grouped_docs=list(grouped_docs or []),
             heading_hits=list(hits or []),
         )
-        if paper_guide_mode and paper_guide_bound_source_ready:
+        if paper_guide_source_scoped and paper_guide_bound_source_ready:
             heading_hits_for_answer = list(grouped_docs or []) if paper_guide_cross_paper_refs else list(hits or [])
             if not paper_guide_cross_paper_refs:
                 raw_block_hits_for_answer = [
@@ -3722,11 +3796,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             prompt,
             answer_output_mode_hint=answer_output_mode_hint,
             answer_mode_hint=answer_mode_hint,
-            paper_guide_mode=paper_guide_mode,
+            paper_guide_mode=bool(paper_guide_source_scoped),
             intent=answer_intent,
             anchor_grounded=anchor_grounded_answer,
         )
-        if paper_guide_mode:
+        if paper_guide_source_scoped:
             answer_output_mode = _stabilize_paper_guide_output_mode(
                 answer_output_mode,
                 prompt=prompt,
@@ -3752,7 +3826,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         )
         paper_guide_context_records = _build_paper_guide_context_records(
             answer_hits,
-            paper_guide_mode=paper_guide_mode,
+            paper_guide_mode=bool(paper_guide_source_scoped),
         )
         ctx_parts = list(paper_guide_context_records.get("ctx_parts") or [])
         doc_first_idx = dict(paper_guide_context_records.get("doc_first_idx") or {})
@@ -3795,8 +3869,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         )
         ctx = "\n\n---\n\n".join(ctx_parts)
         paper_guide_prompt_context = _prepare_paper_guide_prompt_context(
-            paper_guide_mode=paper_guide_mode,
-            paper_guide_bound_source_ready=paper_guide_bound_source_ready,
+            paper_guide_mode=bool(paper_guide_source_scoped),
+            paper_guide_bound_source_ready=bool(paper_guide_source_scoped and paper_guide_bound_source_ready),
             answer_hits=answer_hits,
             paper_guide_evidence_cards=paper_guide_evidence_cards,
             prompt=prompt,
@@ -3828,11 +3902,19 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "citation_plan_budget": dict(citation_plan.get("budget") or {}) if isinstance(citation_plan.get("budget"), dict) else {},
             },
         )
-        if prompt_explicitly_requests_multi_paper_list(prompt or retrieval_prompt or "") and refs_seed_docs_for_display:
+        if prompt_multi_paper_list and refs_seed_docs_for_display:
             paper_guide_contracts_seed["doc_list_seed"] = [dict(item) for item in list(refs_seed_docs_for_display or []) if isinstance(item, dict)]
         paper_guide_support_resolution: list[dict] = []
-        paper_guide_direct_source_path = str(paper_guide_prompt_context.get("paper_guide_direct_source_path") or paper_guide_bound_source_path or "")
-        paper_guide_focus_source_path = str(paper_guide_prompt_context.get("paper_guide_focus_source_path") or paper_guide_bound_source_path or "")
+        paper_guide_direct_source_path = (
+            str(paper_guide_prompt_context.get("paper_guide_direct_source_path") or paper_guide_bound_source_path or "")
+            if paper_guide_source_scoped
+            else ""
+        )
+        paper_guide_focus_source_path = (
+            str(paper_guide_prompt_context.get("paper_guide_focus_source_path") or paper_guide_bound_source_path or "")
+            if paper_guide_source_scoped
+            else ""
+        )
         if paper_guide_mode:
             paper_guide_debug.update(
                 {
@@ -3852,8 +3934,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         prompt_bundle = _build_generation_prompt_bundle(
             prompt=prompt,
             ctx=ctx,
-            paper_guide_mode=paper_guide_mode,
-            paper_guide_bound_source_ready=paper_guide_bound_source_ready,
+            paper_guide_mode=bool(paper_guide_source_scoped),
+            paper_guide_bound_source_ready=bool(paper_guide_source_scoped and paper_guide_bound_source_ready),
             paper_guide_prompt_family=paper_guide_prompt_family,
             answer_intent=answer_intent,
             answer_depth=answer_depth,
@@ -3875,6 +3957,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         user = str(prompt_bundle.get("user") or "")
         prompt_for_user = str(prompt_bundle.get("prompt_for_user") or prompt or "[Image attachment only request]")
         paper_guide_contract_enabled = bool(prompt_bundle.get("paper_guide_contract_enabled"))
+        if query_scope_block:
+            user = f"{user.rstrip()}\n\n{query_scope_block}".strip()
         if selected_research_context_block:
             user = (
                 f"{user.rstrip()}\n\n"
@@ -3904,7 +3988,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         messages = _build_generation_messages(system=system, hist=hist, user_content=user_content)
         ds = DeepSeekChat(settings_obj)
         direct_answer_override = _build_paper_guide_direct_answer_override(
-            paper_guide_mode=paper_guide_mode,
+            paper_guide_mode=bool(paper_guide_source_scoped),
             prompt_family=paper_guide_prompt_family,
             prompt_for_user=prompt_for_user,
             paper_guide_focus_source_path=paper_guide_focus_source_path,
@@ -3961,7 +4045,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     not streamed
                     or _looks_like_incomplete_stream_partial(
                         partial,
-                        paper_guide_mode=bool(paper_guide_mode),
+                        paper_guide_mode=bool(paper_guide_source_scoped),
                         prompt_family=paper_guide_prompt_family,
                         has_hits=bool(answer_hits),
                     )
@@ -4026,7 +4110,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer_intent=answer_intent,
             answer_depth=answer_depth,
             answer_output_mode=answer_output_mode,
-            paper_guide_mode=paper_guide_mode,
+            paper_guide_mode=bool(paper_guide_source_scoped),
             paper_guide_contract_enabled=paper_guide_contract_enabled,
             paper_guide_prompt_family=paper_guide_prompt_family,
             paper_guide_special_focus_block=paper_guide_special_focus_block,
@@ -4089,9 +4173,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         used_query=str(used_query or ""),
                         used_translation=bool(used_translation),
                         doc_list=list(doc_list_contract or []),
-                        guide_mode=bool(paper_guide_mode),
-                        guide_source_path=str(paper_guide_bound_source_path or ""),
-                        guide_source_name=str(paper_guide_bound_source_name or ""),
+                        guide_mode=bool(paper_guide_source_scoped),
+                        guide_source_path=str(paper_guide_bound_source_path or "") if paper_guide_source_scoped else "",
+                        guide_source_name=str(paper_guide_bound_source_name or "") if paper_guide_source_scoped else "",
                     )
                 except Exception:
                     doc_list_rendered_payload = None
@@ -4209,9 +4293,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         scores=list(scores_raw or []),
                         used_query=str(used_query or ""),
                         used_translation=bool(used_translation),
-                        guide_mode=bool(paper_guide_mode),
-                        guide_source_path=str(paper_guide_bound_source_path or ""),
-                        guide_source_name=str(paper_guide_bound_source_name or ""),
+                        guide_mode=bool(paper_guide_source_scoped),
+                        guide_source_path=str(paper_guide_bound_source_path or "") if paper_guide_source_scoped else "",
+                        guide_source_name=str(paper_guide_bound_source_name or "") if paper_guide_source_scoped else "",
                         library_db_path=getattr(settings_obj, "library_db_path", None),
                     )
                     _trace_event(
@@ -4277,9 +4361,9 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         used_query=str(used_query or ""),
                         used_translation=bool(used_translation),
                         doc_list=list(doc_list_contract or []),
-                        guide_mode=bool(paper_guide_mode),
-                        guide_source_path=str(paper_guide_bound_source_path or ""),
-                        guide_source_name=str(paper_guide_bound_source_name or ""),
+                        guide_mode=bool(paper_guide_source_scoped),
+                        guide_source_path=str(paper_guide_bound_source_path or "") if paper_guide_source_scoped else "",
+                        guide_source_name=str(paper_guide_bound_source_name or "") if paper_guide_source_scoped else "",
                     )
                 if isinstance(rendered_payload, dict) and rendered_payload and str(rendered_payload_sig or "").strip():
                     ready_seed_hits = _set_refs_hit_pack_state(

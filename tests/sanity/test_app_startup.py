@@ -9,7 +9,7 @@ def test_imports():
         from kb.chat_store import ChatStore  # noqa: F401
         from kb.library_store import LibraryStore  # noqa: F401
         from kb.llm import DeepSeekChat  # noqa: F401
-        import app  # noqa: F401
+        from api.main import app  # noqa: F401
     except ImportError as e:
         pytest.fail(f"Failed to import core modules: {e}")
     except Exception as e:

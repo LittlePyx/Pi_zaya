@@ -45,6 +45,7 @@ import {
   type CiteShelfItem,
 } from './citationState'
 import { RefsPanel } from '../refs/RefsPanel'
+import { hasRefsPanelContent } from '../refs/refsPanelDisplay'
 import { chatApi, type ChatImageAttachment, type Message } from '../../api/chat'
 import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact, type ShelfMetadataRepairItem } from '../../api/references'
 import { useT } from '../../i18n'
@@ -647,23 +648,12 @@ function buildGuideLocateCandidates(
   return out.slice(0, GUIDE_LOCATE_CANDIDATE_LIMIT)
 }
 
-function hasRenderableRefs(refs: Record<string, unknown>, msgId: number) {
-  const entry = refs[String(msgId)] as {
-    hits?: Array<{ meta?: Record<string, unknown> }>
-    display_state?: string
-    guide_filter?: { hidden_self_source?: boolean; filtered_hit_count?: number }
-  } | undefined
-  if (!entry) return false
-  const displayState = String(entry.display_state || '').trim().toLowerCase()
-  if (displayState === 'pending' || displayState === 'ready' || displayState === 'hidden_by_guide' || displayState === 'suppressed') {
-    return true
-  }
-  if (displayState === 'empty') {
-    return false
-  }
-  const hits = Array.isArray(entry.hits) ? entry.hits : []
-  const filteredCount = Number((entry.guide_filter || {}).filtered_hit_count || 0)
-  return hits.length > 0 || Boolean((entry.guide_filter || {}).hidden_self_source) || filteredCount > 0
+function hasRenderableRefsForGuide(
+  refs: Record<string, unknown>,
+  msgId: number,
+  opts: { activeSourcePath?: string; activeSourceName?: string },
+) {
+  return hasRefsPanelContent(refs, msgId, opts)
 }
 
 function toPositiveInt(input: unknown): number {
@@ -3771,6 +3761,28 @@ function traceSourceLabels(items: unknown): string[] {
   return out
 }
 
+interface ResearchTraceDebugWindow extends Window {
+  __KB_SHOW_RESEARCH_TRACE__?: boolean
+}
+
+function shouldShowResearchTracePanel(): boolean {
+  if (typeof window === 'undefined') return false
+  const w = window as ResearchTraceDebugWindow
+  if (w.__KB_SHOW_RESEARCH_TRACE__) return true
+  const enabledValues = new Set(['1', 'true', 'yes', 'on', 'debug'])
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const queryValue = String(params.get('debug_trace') || params.get('kb_trace') || '').trim().toLowerCase()
+    if (enabledValues.has(queryValue)) return true
+  } catch { /* ignore */ }
+  try {
+    const stored = String(window.localStorage.getItem('kb_debug_trace') || '').trim().toLowerCase()
+    return enabledValues.has(stored)
+  } catch {
+    return false
+  }
+}
+
 function contextItemTitle(item: SelectedResearchContextItem, fallback: string): string {
   return String(item.title || item.excerpt || item.summary || fallback || '').trim()
 }
@@ -3901,6 +3913,7 @@ function ResearchContextReceipt({
 }
 
 function ResearchTracePanel({ trace }: { trace?: Record<string, unknown> | null }) {
+  if (!shouldShowResearchTracePanel()) return null
   const tr = asTraceRecord(trace)
   const traceId = String(tr.trace_id || '').trim()
   const timings = asTraceRecord(tr.timings_ms)
@@ -5718,6 +5731,10 @@ export function MessageList({
     > = []
     let lastUserMsgId = 0
     const renderedRefs = new Set<number>()
+    const refsPanelFilter = {
+      activeSourcePath: paperGuideSourcePath,
+      activeSourceName: paperGuideSourceName,
+    }
 
     for (const message of messages) {
       out.push({ kind: 'message', message })
@@ -5725,17 +5742,17 @@ export function MessageList({
         lastUserMsgId = message.id
         continue
       }
-      if (lastUserMsgId > 0 && !renderedRefs.has(lastUserMsgId) && hasRenderableRefs(refs, lastUserMsgId)) {
+      if (lastUserMsgId > 0 && !renderedRefs.has(lastUserMsgId) && hasRenderableRefsForGuide(refs, lastUserMsgId, refsPanelFilter)) {
         out.push({ kind: 'refs', userMsgId: lastUserMsgId })
         renderedRefs.add(lastUserMsgId)
       }
     }
-    if (lastUserMsgId > 0 && !renderedRefs.has(lastUserMsgId) && hasRenderableRefs(refs, lastUserMsgId)) {
+    if (lastUserMsgId > 0 && !renderedRefs.has(lastUserMsgId) && hasRenderableRefsForGuide(refs, lastUserMsgId, refsPanelFilter)) {
       out.push({ kind: 'refs', userMsgId: lastUserMsgId })
     }
 
     return out
-  }, [messages, refs])
+  }, [messages, paperGuideSourceName, paperGuideSourcePath, refs])
 
   const assistantTraceByMsgId = useMemo(() => {
     const out = new Map<number, { answerOrder: number; userMsgId: number }>()
@@ -6925,7 +6942,7 @@ export function MessageList({
   const saveShelfSnapshot = () => {
     const currentItems = dedupeShelfItems(shelfItems).slice(0, SHELF_MAX_ITEMS)
     if (currentItems.length <= 0) {
-      message.info(S.shelf_version_empty || 'Shelf is empty; cannot save local version')
+      message.info(S.shelf_version_empty || 'Shelf is empty; cannot save local snapshot')
       return
     }
     const now = Date.now()
@@ -6954,7 +6971,7 @@ export function MessageList({
     setFocusedShelfKey('')
     setShelfSummaryLoadingKey('')
     setShelfRepairLoadingKey('')
-    message.success((S.shelf_version_loaded || 'Restored local version: {name}').replace('{name}', selectedSavedSnapshot.name))
+    message.success((S.shelf_version_loaded || 'Restored local snapshot: {name}').replace('{name}', selectedSavedSnapshot.name))
   }
 
   const deleteShelfSnapshot = () => {
@@ -6966,7 +6983,7 @@ export function MessageList({
       return next
     })
     setSelectedSavedSnapshotId((current) => (current === selectedSavedSnapshot.id ? '' : current))
-    message.success((S.shelf_version_deleted || 'Deleted local version: {name}').replace('{name}', removedName))
+    message.success((S.shelf_version_deleted || 'Deleted local snapshot: {name}').replace('{name}', removedName))
   }
 
   const useSelectedShelfItemsAsContext = useCallback((items: CiteShelfItem[]) => {
@@ -7113,6 +7130,8 @@ export function MessageList({
                       refs={refs}
                       msgId={row.userMsgId}
                       onOpenReader={onOpenReader}
+                      activeSourcePath={paperGuideSourcePath}
+                      activeSourceName={paperGuideSourceName}
                     />
                   </div>
                 </div>
@@ -7708,6 +7727,14 @@ export function MessageList({
               || provenanceLocateEntries.length > 0
               || locateCandidates.length > 0
             )
+            const hasInlineLocateSurface = Boolean(enableLocateUi && (
+              guideInlineTextTailLocate
+              || strictStructuredInlineLocate
+              || (!guideSourcePath && !suppressLooseInlineLocate)
+            ))
+            const showProvenanceLocateChips = Boolean(onOpenReader)
+              && provenanceLocateEntries.length > 0
+              && !hasInlineLocateSurface
             const resolveCache = new Map<string, LocateCandidate[]>()
             const usedCount = new Map<string, number>()
             const resolveLocateCandidates = (snippet: string, limit = 4) => {
@@ -8230,7 +8257,7 @@ export function MessageList({
                           </div>
                         </div>
                       ) : null}
-                      {Boolean(onOpenReader) && provenanceLocateEntries.length > 0 ? (
+                      {showProvenanceLocateChips ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {provenanceLocateEntries.map((entry, idx) => {
                             const heading = String(entry.primary?.headingPath || '').trim()

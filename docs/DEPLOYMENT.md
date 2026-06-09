@@ -45,12 +45,16 @@ Required production settings:
 - `KB_DB_DIR`, `KB_CHAT_DB`, `KB_LIBRARY_DB`
 - `KB_BACKUP_DIR`, `KB_DIAGNOSTICS_DIR`
 - `KB_AUTO_BACKUP=1`
+- `KB_UPDATE_CHECK_ENABLED=1` and `KB_UPDATE_REPO=LittlePyx/Pi_zaya` when users should see GitHub Release update reminders
+- `KB_UPDATE_GITHUB_TOKEN` with read-only repository access when the deployment should avoid GitHub's anonymous API limit
 - At least one text model key: `DEEPSEEK_API_KEY`, `QWEN_API_KEY`, or `OPENAI_API_KEY`
 - A dedicated vision key, usually `QWEN_API_KEY`, for image/table/figure-heavy workflows
 
 For local HTTP testing, keep `KB_AUTH_COOKIE_SECURE=0`. Behind HTTPS, set `KB_AUTH_COOKIE_SECURE=1`.
 
 Set `KB_STARTUP_STRICT=1` in deployment scripts when startup should stop immediately on blocking readiness errors.
+
+Use GitHub Releases as the stable update source. Set `KB_APP_VERSION` to the shipped release tag, for example `v1.2.0`; the app checks `/api/app/update-check` quietly on a browser-side cooldown, the backend caches GitHub's latest release for `KB_UPDATE_CHECK_TTL_S`, and the Settings UI only shows the cached result unless the user explicitly checks again. For offline or private-network deployments, set `KB_UPDATE_CHECK_ENABLED=0`.
 
 ## 3. Start
 
@@ -102,11 +106,12 @@ Before announcing a release:
 
 1. Open the app and confirm the login gate appears when auth is enabled.
 2. Log in with `KB_ACCESS_TOKEN`.
-3. Open Settings -> Connection and confirm release readiness is `OK`.
-4. Upload or select a small known PDF.
-5. Run conversion and update the knowledge base.
-6. Ask one short question and verify `src` citation chips persist after refresh.
-7. Open Reader from the answer and verify references, figures, tables, and basket actions still work.
+3. Open Settings -> Version & updates and confirm update checks behave as expected.
+4. Open Settings -> Connection and confirm release readiness is `OK`.
+5. Upload or select a small known PDF.
+6. Run conversion and update the knowledge base.
+7. Ask one short question and verify `src` citation chips persist after refresh.
+8. Open Reader from the answer and verify references, figures, tables, and basket actions still work.
 
 ## 6. Backup and Restore
 
@@ -164,7 +169,7 @@ Restore by stopping the server, copying the saved files back, then running the r
 ## 7. Upgrade Flow
 
 ```powershell
-git pull
+git pull --ff-only
 pip install -r requirements.txt
 cd web
 npm ci

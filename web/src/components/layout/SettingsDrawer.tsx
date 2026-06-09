@@ -5,7 +5,8 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { settingsApi } from '../../api/settings'
 import { maintenanceApi, type MaintenanceStatus } from '../../api/maintenance'
 import { useT } from '../../i18n'
-import type { ApiSettingsTarget } from './settingsEvents'
+import type { SettingsFocusTarget } from './settingsEvents'
+import { SettingsUpdatePanel } from './SettingsUpdatePanel'
 
 const { Text } = Typography
 type LocalTestResult = { ok: boolean; checked_at: number; error_type?: string; transient: boolean }
@@ -94,15 +95,17 @@ export function SettingsDrawer({
   onClose,
 }: {
   open: boolean
-  focusTarget?: ApiSettingsTarget | ''
+  focusTarget?: SettingsFocusTarget | ''
   onClose: () => void
 }) {
   const S = useT()
   const s = useSettingsStore()
   const refreshReadinessStore = useSettingsStore((state) => state.refreshReadiness)
   const refreshAppReadinessStore = useSettingsStore((state) => state.refreshAppReadiness)
+  const refreshAppUpdateStore = useSettingsStore((state) => state.refreshAppUpdate)
   const textReadiness = s.llmReadiness?.providers.text
   const visionReadiness = s.llmReadiness?.providers.vision
+  const updateSectionRef = useRef<HTMLDivElement | null>(null)
   const textCredentialRef = useRef<HTMLElement | null>(null)
   const visionCredentialRef = useRef<HTMLElement | null>(null)
   const [textApiKey, setTextApiKey] = useState('')
@@ -116,6 +119,8 @@ export function SettingsDrawer({
   const [localTestResults, setLocalTestResults] = useState<Record<'text' | 'vision', LocalTestResult | null>>({ text: null, vision: null })
   const [appReadinessLoading, setAppReadinessLoading] = useState(false)
   const [appReadinessError, setAppReadinessError] = useState('')
+  const [appUpdateLoading, setAppUpdateLoading] = useState(false)
+  const [appUpdateError, setAppUpdateError] = useState('')
   const [maintenanceStatus, setMaintenanceStatus] = useState<MaintenanceStatus | null>(null)
   const [maintenanceStatusLoading, setMaintenanceStatusLoading] = useState(false)
   const [maintenanceStatusError, setMaintenanceStatusError] = useState('')
@@ -123,6 +128,7 @@ export function SettingsDrawer({
   const [restoreReviewAcking, setRestoreReviewAcking] = useState(false)
   const [diagnosticsExporting, setDiagnosticsExporting] = useState(false)
   const appReadiness = s.appReadiness
+  const appUpdate = s.appUpdate
 
   const refreshMaintenanceStatus = useCallback(async () => {
     setMaintenanceStatusLoading(true)
@@ -150,6 +156,18 @@ export function SettingsDrawer({
     }
   }, [S.settings_release_check_failed, refreshAppReadinessStore])
 
+  const refreshAppUpdate = useCallback(async (options?: Parameters<typeof refreshAppUpdateStore>[0]) => {
+    setAppUpdateLoading(true)
+    setAppUpdateError('')
+    try {
+      await refreshAppUpdateStore(options)
+    } catch (err) {
+      setAppUpdateError(err instanceof Error ? err.message : S.settings_update_check_failed)
+    } finally {
+      setAppUpdateLoading(false)
+    }
+  }, [S.settings_update_check_failed, refreshAppUpdateStore])
+
   useEffect(() => {
     if (!open) return
     setTextApiKey('')
@@ -169,8 +187,17 @@ export function SettingsDrawer({
   }, [open, refreshAppReadiness, refreshMaintenanceStatus, refreshReadinessStore])
 
   useEffect(() => {
+    if (!open || appUpdate) return
+    void refreshAppUpdate({ cacheOnly: true })
+  }, [appUpdate, open, refreshAppUpdate])
+
+  useEffect(() => {
     if (!open || !focusTarget || typeof window === 'undefined') return
     const timer = window.setTimeout(() => {
+      if (focusTarget === 'updates') {
+        updateSectionRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        return
+      }
       const card = focusTarget === 'vision' ? visionCredentialRef.current : textCredentialRef.current
       if (!card) return
       card.scrollIntoView({ block: 'center', behavior: 'smooth' })
@@ -463,6 +490,14 @@ export function SettingsDrawer({
             />
           </SettingsRow>
         </SettingsSection>
+
+        <SettingsUpdatePanel
+          appUpdate={appUpdate}
+          error={appUpdateError}
+          loading={appUpdateLoading}
+          sectionRef={updateSectionRef}
+          onRefresh={() => { void refreshAppUpdate({ refresh: true }) }}
+        />
 
         <SettingsSection title={S.settings_section_answer}>
           <SettingsRow title={S.answer_mode_hint} description={S.settings_answer_mode_desc}>

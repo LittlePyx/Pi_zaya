@@ -174,6 +174,15 @@ python server.py
 
 - `KB_CROSSREF_BUDGET_S`（Crossref 后台同步预算秒数）
 
+版本更新：
+
+- `KB_APP_VERSION`（当前部署版本；建议与 GitHub Release tag 对齐）
+- `KB_BUILD_COMMIT` / `KB_BUILD_TIME`（构建信息，可选）
+- `KB_UPDATE_CHECK_ENABLED`（是否启用 GitHub Release 更新提醒，默认开启；前端会低频静默检查，设置页只展示结果和手动检查）
+- `KB_UPDATE_REPO`（默认 `LittlePyx/Pi_zaya`）
+- `KB_UPDATE_GITHUB_TOKEN`（可选；用于提高 GitHub API 限额，推荐只给 Release/Contents 只读权限）
+- `KB_UPDATE_CHECK_TTL_S` / `KB_UPDATE_CHECK_TIMEOUT_S`（检查缓存和超时）
+
 上线检查：
 
 ```powershell

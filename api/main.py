@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
+from api.routers import app as app_router
 from api.routers import auth, chat, generate, library, maintenance, references, settings
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
 
@@ -63,6 +64,7 @@ async def api_access_guard(request: Request, call_next):
 
 
 app.include_router(auth.router)
+app.include_router(app_router.router)
 app.include_router(chat.router)
 app.include_router(generate.router)
 app.include_router(library.router)

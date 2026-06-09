@@ -26,7 +26,7 @@ import {
   type SelectedResearchContextPack,
 } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
-import { chatApi, type ChatUploadItem, type Message } from '../api/chat'
+import { chatApi, type ChatUploadItem, type Message, type QueryScope } from '../api/chat'
 import { libraryApi } from '../api/library'
 import { useT } from '../i18n'
 
@@ -48,6 +48,12 @@ const SELECTED_RESEARCH_CONTEXT_STORAGE_PREFIX = 'kb:chat:selected-research-cont
 const SELECTED_RESEARCH_CONTEXT_STATE_KEY = 'selected_research_context'
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
 const showLegacyUiBlocks = false
+
+function resolveQueryScope(scope: QueryScope, opts: { hasCurrentPaper: boolean; hasBasket: boolean }): QueryScope {
+  if (scope === 'current_paper' && !opts.hasCurrentPaper) return 'library'
+  if (scope === 'basket' && !opts.hasBasket) return opts.hasCurrentPaper ? 'current_paper' : 'library'
+  return scope
+}
 
 function uploadItemKey(item: ChatUploadItem) {
   if (item.kind === 'pdf' && item.ingest_job_id) {
@@ -309,6 +315,7 @@ export default function ChatPage() {
   const [citationShelfOpen, setCitationShelfOpen] = useState(false)
   const [citationShelfCount, setCitationShelfCount] = useState(0)
   const [selectedResearchContext, setSelectedResearchContext] = useState<SelectedResearchContextPack | null>(null)
+  const [queryScope, setQueryScope] = useState<QueryScope>('library')
   const [selectedResearchContextLoadedKey, setSelectedResearchContextLoadedKey] = useState('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
@@ -390,6 +397,7 @@ export default function ChatPage() {
   }, [selectedResearchContext])
   const handleResearchContextPackChange = useCallback((pack: SelectedResearchContextPack | null) => {
     setSelectedResearchContext(pack)
+    if (pack?.items?.length) setQueryScope('basket')
   }, [])
   const openApiSettings = useCallback((target: ApiSettingsTarget | '' = '') => {
     dispatchOpenSettings(target)
@@ -403,6 +411,7 @@ export default function ChatPage() {
     const localPack = loadStoredSelectedResearchContext(draftKey)
     setSelectedResearchContextLoadedKey('')
     setSelectedResearchContext(localPack)
+    if (localPack?.items?.length) setQueryScope('basket')
     if (!draftKey || !convId) {
       setSelectedResearchContextLoadedKey(draftKey)
       return undefined
@@ -413,6 +422,7 @@ export default function ChatPage() {
       const backendPack = selectedResearchContextFromState(record?.state)
       const nextPack = backendPack || localPack
       setSelectedResearchContext(nextPack)
+      if (nextPack?.items?.length) setQueryScope('basket')
       if (backendPack) {
         saveStoredSelectedResearchContext(draftKey, backendPack)
       }
@@ -503,6 +513,15 @@ export default function ChatPage() {
     }
     setAppendSignal(null)
   }, [activeConvId, shelfProjectScope])
+
+  useEffect(() => {
+    const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
+    const hasBasket = Boolean(selectedResearchContext?.items?.length)
+    setQueryScope((current) => {
+      if (current === 'library') return current
+      return resolveQueryScope(current, { hasCurrentPaper, hasBasket })
+    })
+  }, [researchContext.activeSource.ready, selectedResearchContext])
 
   useEffect(() => () => {
     Object.values(dismissTimerRef.current).forEach((timer) => window.clearTimeout(timer))
@@ -682,13 +701,17 @@ export default function ChatPage() {
       openApiSettings('vision')
       return
     }
-    const contextPackForSend = selectedResearchContext
+    const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
+    const hasBasket = Boolean(selectedResearchContext?.items?.length)
+    const resolvedScope = resolveQueryScope(queryScope, { hasCurrentPaper, hasBasket })
+    const contextPackForSend = resolvedScope === 'basket' ? selectedResearchContext : null
     void sendMessage(text, {
       topK: settings.topK,
       temperature: settings.temperature,
       maxTokens: settings.maxTokens,
       deepRead: true,
       promptContext: contextPackForSend,
+      queryScope: resolvedScope,
     }).then(() => {
       if (!contextPackForSend) return
       setSelectedResearchContext((current) => (
@@ -1546,6 +1569,16 @@ export default function ChatPage() {
         uploading={uploading}
         generating={!!generation}
         appendSignal={appendSignal}
+        queryScope={resolveQueryScope(queryScope, {
+          hasCurrentPaper: Boolean(researchContext.activeSource.ready),
+          hasBasket: Boolean(selectedResearchContext?.items?.length),
+        })}
+        queryScopeOptions={[
+          { value: 'current_paper', disabled: !researchContext.activeSource.ready },
+          { value: 'basket', disabled: !selectedResearchContext?.items?.length },
+          { value: 'library' },
+        ]}
+        onQueryScopeChange={setQueryScope}
       />
     </>
   )

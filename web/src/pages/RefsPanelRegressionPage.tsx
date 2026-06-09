@@ -6,6 +6,17 @@ import {
   READER_REGRESSION_SOURCE_PATH,
 } from '../testing/readerRegressionFixtures'
 
+const REFS_PANEL_SCENARIOS = new Set([
+  'guide-filter-note',
+  'negative-suppressed',
+  'section-target',
+  'auto-citation-meta',
+  'dedupe-active-source',
+  'polish-status',
+  'card-view-contract',
+  'pending-with-hits',
+])
+
 const REFS_PANEL_PAYLOAD: Record<string, unknown> = {
   7: {
     prompt: 'Where is Equation (1) introduced in the paper?',
@@ -295,6 +306,71 @@ const REFS_PANEL_AUTO_CITATION_META_PAYLOAD: Record<string, unknown> = {
   },
 }
 
+const REFS_PANEL_DEDUPE_ACTIVE_SOURCE_PAYLOAD: Record<string, unknown> = {
+  7: {
+    prompt: 'What should I read next after the active paper?',
+    display_state: 'ready',
+    hits: [
+      {
+        meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Fixture Paper / Introduction',
+          score: 9.9,
+          summary_line: 'This is the active reading-guide paper and should not appear as a reference card.',
+          why_line: 'The user is already reading this paper.',
+        },
+      },
+      {
+        meta: {
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: READER_REGRESSION_SOURCE_NAME,
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          heading_path: 'Fixture Paper / Results',
+          score: 9.4,
+          summary_line: 'A second hit from the active paper should also be hidden.',
+          why_line: 'It duplicates the selected reading-guide source.',
+        },
+      },
+      {
+        meta: {
+          source_path: 'F:\\library\\Related Work.en.md',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'Related Work.pdf',
+          source_path: 'F:\\library\\Related Work.en.md',
+          heading_path: 'Related Work / Method',
+          score: 8.2,
+          summary_line: 'This related paper gives background context for the active paper.',
+          why_line: 'It is an external source and should remain visible.',
+        },
+      },
+      {
+        meta: {
+          source_path: 'F:\\library\\Related Work.pdf',
+          ref_pack_state: 'ready',
+        },
+        ui_meta: {
+          display_name: 'Related Work.pdf',
+          source_path: 'F:\\library\\Related Work.pdf',
+          heading_path: 'Related Work / Discussion',
+          score: 7.8,
+          summary_line: 'A second section from the same related paper should be merged into one card.',
+          why_line: 'It has the same document identity as the previous related hit.',
+        },
+      },
+    ],
+  },
+}
+
 const REFS_PANEL_POLISH_STATUS_PAYLOAD: Record<string, unknown> = {
   7: {
     prompt: 'Which papers help me understand single-pixel imaging reconstruction quality?',
@@ -406,38 +482,20 @@ export default function RefsPanelRegressionPage() {
     if (typeof window === 'undefined') return ''
     return new URLSearchParams(window.location.search).get('scenario') || ''
   })().trim().toLowerCase()
-  const scenario = scenarioParam === 'guide-filter-note'
-    ? 'guide-filter-note'
-    : scenarioParam === 'negative-suppressed'
-      ? 'negative-suppressed'
-      : scenarioParam === 'section-target'
-        ? 'section-target'
-        : scenarioParam === 'auto-citation-meta'
-          ? 'auto-citation-meta'
-          : scenarioParam === 'polish-status'
-            ? 'polish-status'
-            : scenarioParam === 'card-view-contract'
-              ? 'card-view-contract'
-              : scenarioParam === 'pending-with-hits'
-                ? 'pending-with-hits'
-        : 'rich-reader-open'
+  const scenario = REFS_PANEL_SCENARIOS.has(scenarioParam) ? scenarioParam : 'rich-reader-open'
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
 
-  const refs = scenario === 'guide-filter-note'
-    ? REFS_PANEL_GUIDE_FILTER_ONLY_PAYLOAD
-    : scenario === 'negative-suppressed'
-      ? REFS_PANEL_NEGATIVE_SUPPRESSED_PAYLOAD
-      : scenario === 'section-target'
-        ? REFS_PANEL_SECTION_TARGET_PAYLOAD
-        : scenario === 'auto-citation-meta'
-          ? REFS_PANEL_AUTO_CITATION_META_PAYLOAD
-          : scenario === 'polish-status'
-            ? REFS_PANEL_POLISH_STATUS_PAYLOAD
-            : scenario === 'card-view-contract'
-              ? REFS_PANEL_CARD_VIEW_PAYLOAD
-              : scenario === 'pending-with-hits'
-                ? REFS_PANEL_PENDING_WITH_HITS_PAYLOAD
-      : REFS_PANEL_PAYLOAD
+  const refsByScenario: Record<string, Record<string, unknown>> = {
+    'guide-filter-note': REFS_PANEL_GUIDE_FILTER_ONLY_PAYLOAD,
+    'negative-suppressed': REFS_PANEL_NEGATIVE_SUPPRESSED_PAYLOAD,
+    'section-target': REFS_PANEL_SECTION_TARGET_PAYLOAD,
+    'auto-citation-meta': REFS_PANEL_AUTO_CITATION_META_PAYLOAD,
+    'dedupe-active-source': REFS_PANEL_DEDUPE_ACTIVE_SOURCE_PAYLOAD,
+    'polish-status': REFS_PANEL_POLISH_STATUS_PAYLOAD,
+    'card-view-contract': REFS_PANEL_CARD_VIEW_PAYLOAD,
+    'pending-with-hits': REFS_PANEL_PENDING_WITH_HITS_PAYLOAD,
+  }
+  const refs = refsByScenario[scenario] || REFS_PANEL_PAYLOAD
 
   return (
     <div className="min-h-screen bg-[var(--bg)] px-6 py-6">
@@ -456,6 +514,8 @@ export default function RefsPanelRegressionPage() {
             refs={refs}
             msgId={7}
             onOpenReader={(nextPayload) => setPayload(nextPayload)}
+            activeSourcePath={scenario === 'dedupe-active-source' ? READER_REGRESSION_SOURCE_PATH : undefined}
+            activeSourceName={scenario === 'dedupe-active-source' ? READER_REGRESSION_SOURCE_NAME : undefined}
           />
         </div>
 

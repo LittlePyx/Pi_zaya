@@ -13,6 +13,11 @@ import {
   citeMetricSummary,
   type CiteDetail,
 } from '../chat/citationState'
+import {
+  prepareRefsPanelHits,
+  type RefsPanelRefEntry as RefEntry,
+  type RefsPanelRefUiMeta as RefUiMeta,
+} from './refsPanelDisplay'
 
 const { Link, Text } = Typography
 const expandedRefsPanelKeys = new Set<string>()
@@ -20,41 +25,6 @@ const expandedRefsPanelKeys = new Set<string>()
 
 function refsPanelExpansionKey(msgId: number) {
   return String(Number(msgId || 0) || 0)
-}
-
-interface RefUiMeta {
-  display_name?: string
-  heading_path?: string
-  section_label?: string
-  subsection_label?: string
-  page_start?: number
-  page_end?: number
-  score?: number | null
-  score_pending?: boolean
-  summary_line?: string
-  summary_kind?: string
-  summary_label?: string
-  summary_title?: string
-  summary_generation?: string
-  summary_basis?: string
-  polish_status?: string
-  polish_source?: string
-  polish_detail?: string
-  summary_polish_status?: string
-  why_polish_status?: string
-  why_line?: string
-  why_generation?: string
-  why_basis?: string
-  semantic_badges?: Array<{
-    text?: string
-    score?: number
-  }>
-  can_open?: boolean
-  citation_meta?: Record<string, unknown>
-  source_path?: string
-  reader_open?: Partial<ReaderOpenPayload>
-  card_view?: RefCardView
-  cardView?: RefCardView
 }
 
 interface RefCardViewSection {
@@ -81,33 +51,12 @@ interface RefCardView {
   quality?: Record<string, unknown>
 }
 
-interface RefHit {
-  text?: string
-  meta?: {
-    source_path?: string
-    ref_pack_state?: string
-  }
-  ui_meta?: RefUiMeta
-}
-
-interface RefEntry {
-  prompt?: string
-  hits?: RefHit[]
-  display_state?: string
-  suppression_reason?: string
-  suggestion?: string
-  guide_filter?: {
-    active?: boolean
-    hidden_self_source?: boolean
-    filtered_hit_count?: number
-    guide_source_name?: string
-  }
-}
-
 interface Props {
   refs: Record<string, unknown>
   msgId: number
   onOpenReader?: (payload: ReaderOpenPayload) => void
+  activeSourcePath?: string
+  activeSourceName?: string
 }
 
 
@@ -154,127 +103,6 @@ function shouldShowSemanticBadge(text: string) {
     'cross-encoder',
   ]
   return !blocked.some((token) => low.includes(token))
-}
-
-function normalizeRefFocusText(input: unknown) {
-  return String(input || '')
-    .toLowerCase()
-    .replace(/\.en\.md$/g, ' ')
-    .replace(/\.md$|\.pdf$/g, ' ')
-    .replace(/[_/\\]+/g, ' ')
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function promptFocusTerms(prompt: string) {
-  const text = String(prompt || '').trim()
-  if (!text) return [] as string[]
-  const out: string[] = []
-  const seen = new Set<string>()
-  const push = (raw: string) => {
-    const norm = normalizeRefFocusText(raw)
-    if (!norm || norm.length < 3 || seen.has(norm)) return
-    seen.add(norm)
-    out.push(norm)
-  }
-  for (const m of text.matchAll(/[“"'‘’]([^“"'‘’]{2,80})[“"'‘’]/g)) {
-    push(String(m[1] || ''))
-  }
-  const stop = new Set([
-    'the', 'and', 'for', 'with', 'from', 'into', 'using', 'about', 'where', 'which', 'what',
-    'that', 'this', 'these', 'those', 'paper', 'papers', 'library', 'source', 'sources',
-    'section', 'please', 'point', 'directly', 'most', 'does', 'do', 'did', 'discuss', 'discusses',
-    'mentioned', 'mention', 'other', 'besides', 'find', 'show', 'explain',
-  ])
-  for (const m of text.matchAll(/\b[A-Za-z][A-Za-z0-9_-]{1,40}\b/g)) {
-    const raw = String(m[0] || '').trim()
-    const low = raw.toLowerCase()
-    if (stop.has(low)) continue
-    const hasSignal = /[A-Z]/.test(raw.slice(1)) || raw === raw.toUpperCase() || /\d/.test(raw) || raw.includes('-')
-    if (!hasSignal) continue
-    push(raw)
-  }
-  return out.slice(0, 8)
-}
-
-function promptNeedsStrictRefEvidence(prompt: string) {
-  const low = String(prompt || '').toLowerCase()
-  if (!low) return false
-  const patterns = [
-    'where is', 'where was', 'where are', 'discuss', 'mention', 'point me',
-    'which paper', 'which papers', 'what other papers', 'besides this paper',
-    '哪篇', '哪些论文', '提到', '哪里', '定位',
-  ]
-  return patterns.some((pattern) => low.includes(pattern))
-}
-
-function hitIdentityTerms(hit: RefHit) {
-  const ui = hit.ui_meta || {}
-  const meta = hit.meta || {}
-  const values = [
-    String(ui.display_name || ''),
-    String(ui.source_path || ''),
-    String(meta.source_path || ''),
-  ]
-  const out = new Set<string>()
-  for (const raw of values) {
-    const norm = normalizeRefFocusText(raw)
-    if (!norm) continue
-    out.add(norm)
-    for (const token of norm.split(' ')) {
-      if (token.length >= 3) out.add(token)
-    }
-  }
-  return out
-}
-
-function hitSurfaceText(hit: RefHit) {
-  const ui = hit.ui_meta || {}
-  const readerOpen = (ui.reader_open && typeof ui.reader_open === 'object') ? ui.reader_open : {}
-  const parts = [
-    String(hit.text || ''),
-    String(ui.heading_path || ''),
-    String(ui.summary_line || ''),
-    String(readerOpen.snippet || ''),
-    String(readerOpen.highlightSnippet || ''),
-  ]
-  return normalizeRefFocusText(parts.filter(Boolean).join(' '))
-}
-
-function nonSourceFocusMatchCount(prompt: string, hit: RefHit) {
-  const focusTerms = promptFocusTerms(prompt)
-  if (!focusTerms.length) return 0
-  const surface = hitSurfaceText(hit)
-  if (!surface) return 0
-  const identities = hitIdentityTerms(hit)
-  let count = 0
-  for (const term of focusTerms) {
-    if (!surface.includes(term)) continue
-    const isIdentity = Array.from(identities).some((ident) => term === ident || term.includes(ident) || ident.includes(term))
-    if (!isIdentity) count += 1
-  }
-  return count
-}
-
-function looksNegativeReasonText(text: string) {
-  const low = String(text || '').toLowerCase()
-  if (!low) return false
-  return [
-    'not mentioned',
-    'not discuss',
-    'not discussed',
-    'not stated',
-    'no external paper matched',
-    'no papers in your library',
-    'cannot point',
-    '未提及',
-    '未提到',
-    '没有提到',
-    '没有命中',
-    '无法定位',
-    '不能指向',
-  ].some((token) => low.includes(token))
 }
 
 function normalizePolishStatus(input: unknown) {
@@ -328,30 +156,7 @@ function polishStatusLabel(status: string, S: ReturnType<typeof useT>) {
   return ''
 }
 
-function shouldSuppressRefHitCard(prompt: string, hit: RefHit) {
-  if (!promptNeedsStrictRefEvidence(prompt)) return false
-  const ui = hit.ui_meta || {}
-  const why = String(ui.why_line || '').trim()
-  const summary = String(ui.summary_line || '').trim()
-  const focusTerms = promptFocusTerms(prompt)
-  const nonSourceMatches = nonSourceFocusMatchCount(prompt, hit)
-  if (focusTerms.length > 1 && nonSourceMatches <= 0) {
-    return true
-  }
-  if (looksNegativeReasonText(why) && nonSourceMatches <= 0) {
-    return true
-  }
-  if (looksNegativeReasonText(summary) && nonSourceMatches <= 0) {
-    return true
-  }
-  return false
-}
-
-
-
-
-
-export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
+export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeSourceName }: Props) {
   const S = useT()
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const nav = useNavigate()
@@ -360,25 +165,26 @@ export function RefsPanel({ refs, msgId, onOpenReader }: Props) {
     expandedRefsPanelKeys.has(expansionKey) ? ['refs'] : []
   ))
   const entry = refs[String(msgId)] as RefEntry | undefined
-  const prompt = String(entry?.prompt || '').trim()
   const displayState = String(entry?.display_state || '').trim().toLowerCase()
   const suppressionReason = String(entry?.suppression_reason || '').trim().toLowerCase()
   const hasBackendDisplayState = Boolean(displayState)
   const suggestionText = String(entry?.suggestion || '').trim()
-  const rawHits = entry?.hits
-  const hits = useMemo(() => (Array.isArray(rawHits) ? rawHits : []), [rawHits])
-  const visibleHits = useMemo(
-    () => (hasBackendDisplayState ? hits : hits.filter((hit) => !shouldSuppressRefHitCard(prompt, hit))),
-    [hasBackendDisplayState, hits, prompt],
+  const rawHitCount = Array.isArray(entry?.hits) ? entry.hits.length : 0
+  const preparedHits = useMemo(
+    () => prepareRefsPanelHits(entry, { activeSourcePath, activeSourceName }),
+    [activeSourceName, activeSourcePath, entry],
   )
-  const suppressedHitCount = Math.max(0, hits.length - visibleHits.length)
+  const visibleHits = preparedHits.hits
+  const suppressedHitCount = preparedHits.suppressedHitCount
+  const hiddenActiveSourceCount = preparedHits.hiddenActiveSourceCount
   const guideFilter = entry?.guide_filter || {}
   const pendingCount = visibleHits.filter((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending').length
   const hasPending = displayState === 'pending' || pendingCount > 0
   const filteredSelfCount = positiveNumber(guideFilter.filtered_hit_count)
-  const shouldShowGuideFilterNote = !hasPending && (
+  const isActiveSourceFilteredOnly = hiddenActiveSourceCount > 0 && visibleHits.length === 0 && Boolean(String(activeSourcePath || activeSourceName || '').trim())
+  const shouldShowGuideFilterNote = !isActiveSourceFilteredOnly && !hasPending && (
     displayState === 'hidden_by_guide'
-    || ((!hasBackendDisplayState) && hits.length === 0 && Boolean(guideFilter.hidden_self_source))
+    || ((!hasBackendDisplayState) && rawHitCount === 0 && Boolean(guideFilter.hidden_self_source))
   )
   const shouldShowNegativeSuppressedNote = !hasPending && (
     displayState === 'suppressed'

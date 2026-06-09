@@ -309,6 +309,7 @@ def test_generate_accepts_selected_research_context(monkeypatch, tmp_path: Path)
         json={
             "conv_id": "conv-ctx",
             "prompt": "Use my selected excerpts to compare the baseline.",
+            "query_scope": "basket",
             "prompt_context": {
                 "id": "ctx-1",
                 "source": "citation_shelf",
@@ -340,7 +341,9 @@ def test_generate_accepts_selected_research_context(monkeypatch, tmp_path: Path)
     assert selected["items"][0]["refNum"] == 12
     assert selected["items"][0]["title"] == "Sparse 3-D transform-domain filtering"
     assert len(selected["items"][0]["excerpt"]) <= 900
+    assert started_tasks[0]["query_scope"] == "basket"
     assert fake_store.messages[0]["meta"]["prompt_context"]["itemCount"] == 1
+    assert fake_store.messages[0]["meta"]["query_scope"] == "basket"
 
 
 def test_generate_auto_titles_default_conversation(monkeypatch, tmp_path: Path):
