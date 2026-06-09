@@ -89,6 +89,14 @@ function formatCheckedAt(ts: number | undefined) {
   }
 }
 
+function isNoCachedUpdate(payload: { status?: string; error?: string } | null | undefined) {
+  return Boolean(
+    payload
+    && String(payload.status || '').trim().toLowerCase() === 'unknown'
+    && String(payload.error || '').toLowerCase().includes('cached update'),
+  )
+}
+
 export function SettingsDrawer({
   open,
   focusTarget = '',
@@ -187,8 +195,14 @@ export function SettingsDrawer({
   }, [open, refreshAppReadiness, refreshMaintenanceStatus, refreshReadinessStore])
 
   useEffect(() => {
-    if (!open || appUpdate) return
-    void refreshAppUpdate({ cacheOnly: true })
+    if (!open) return
+    if (!appUpdate) {
+      void refreshAppUpdate({ cacheOnly: true })
+      return
+    }
+    if (isNoCachedUpdate(appUpdate)) {
+      void refreshAppUpdate({ auto: true })
+    }
   }, [appUpdate, open, refreshAppUpdate])
 
   useEffect(() => {

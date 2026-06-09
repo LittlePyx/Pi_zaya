@@ -133,6 +133,7 @@ export const S = {
   settings_update_status_checking: '检查中',
   settings_update_status_idle: '未检查',
   settings_update_status_unknown: '需配置版本',
+  settings_update_status_no_release: '未发布',
   settings_update_current_desc: '当前版本 {current} 已是最新。',
   settings_update_available_desc: '当前版本 {current}；GitHub 最新发布为 {latest}。',
   settings_update_idle_desc: 'Pi_zaya 会低频静默检查更新；需要时也可以手动检查。',

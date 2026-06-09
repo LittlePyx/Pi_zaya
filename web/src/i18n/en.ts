@@ -133,6 +133,7 @@ export const S = {
   settings_update_status_checking: 'Checking',
   settings_update_status_idle: 'Not checked',
   settings_update_status_unknown: 'Needs version',
+  settings_update_status_no_release: 'No release',
   settings_update_current_desc: 'Current version {current} is up to date.',
   settings_update_available_desc: 'Current version {current}; latest release {latest} is available.',
   settings_update_idle_desc: 'Pi_zaya checks for updates quietly and infrequently. You can check manually when you need to.',

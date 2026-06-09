@@ -90,6 +90,7 @@ export function SettingsUpdatePanel({
   const checkedAt = formatDateTime(appUpdate?.checked_at)
   const rawError = String(error || appUpdate?.error || '')
   const isRateLimited = rawError.toLowerCase().includes('rate limit')
+  const noRelease = rawError.toLowerCase().includes('release')
   const retryAfter = formatDateTime(appUpdate?.retry_after || retryAfterFromError(rawError))
   const retryAfterText = retryAfter
     ? S.settings_update_retry_after.replace('{time}', retryAfter)
@@ -109,6 +110,8 @@ export function SettingsUpdatePanel({
       ? S.settings_update_status_disabled
       : hasUpdate
         ? S.settings_update_status_available
+        : noRelease
+          ? S.settings_update_status_no_release
         : versionUnknown
           ? S.settings_update_status_unknown
           : unavailable
@@ -125,16 +128,16 @@ export function SettingsUpdatePanel({
       : versionUnknown
         ? S.settings_update_unknown_desc
         : unavailable
-          ? isRateLimited
+          ? noRelease
+            ? S.settings_update_no_release_hint
+            : isRateLimited
             ? S.settings_update_rate_limit_desc.replace('{time}', retryAfterText)
             : rawError
             ? S.settings_update_unavailable_with_error_desc.replace('{error}', rawError)
             : S.settings_update_unavailable_desc
           : S.settings_update_current_desc.replace('{current}', currentVersion)
-  const errorText = rawError && !noCachedCheck && !isRateLimited
-    ? rawError.toLowerCase().includes('release')
-      ? S.settings_update_no_release_hint
-      : rawError.toLowerCase().includes('comparable')
+  const errorText = rawError && !noCachedCheck && !isRateLimited && !noRelease
+    ? rawError.toLowerCase().includes('comparable')
         ? S.settings_update_version_hint
         : S.settings_update_error_hint
     : ''

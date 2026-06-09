@@ -77,13 +77,21 @@ function shouldDiscardCachedAppUpdate(payload: AppUpdateCheckPayload): boolean {
   const status = String(payload.status || '').trim().toLowerCase()
   const checkedAtMs = appUpdateCheckedAtMs(payload)
   const ageMs = checkedAtMs > 0 ? now - checkedAtMs : Number.POSITIVE_INFINITY
-  if (status === 'unknown' && String(payload.error || '').toLowerCase().includes('cached update')) return true
+  if (isNoCachedAppUpdate(payload)) return true
   if (status === 'unavailable') {
     const retryAfterMs = appUpdateRetryAfterMs(payload)
     if (retryAfterMs > 0) return now >= retryAfterMs
     return ageMs > APP_UPDATE_ERROR_PAYLOAD_TTL_MS
   }
   return ageMs > APP_UPDATE_PAYLOAD_TTL_MS
+}
+
+function isNoCachedAppUpdate(payload: AppUpdateCheckPayload | null | undefined): boolean {
+  return Boolean(
+    payload
+    && String(payload.status || '').trim().toLowerCase() === 'unknown'
+    && String(payload.error || '').toLowerCase().includes('cached update'),
+  )
 }
 
 function readCachedAppUpdate(): AppUpdateCheckPayload | null {
@@ -104,6 +112,10 @@ function readCachedAppUpdate(): AppUpdateCheckPayload | null {
 
 function persistAppUpdate(payload: AppUpdateCheckPayload) {
   try {
+    if (isNoCachedAppUpdate(payload)) {
+      window.localStorage.removeItem(APP_UPDATE_PAYLOAD_STORAGE_KEY)
+      return
+    }
     window.localStorage.setItem(APP_UPDATE_PAYLOAD_STORAGE_KEY, JSON.stringify(payload))
   } catch { /* ignore */ }
 }
@@ -275,11 +287,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   refreshAppUpdate: async (input = {}) => {
     const options = normalizeUpdateInput(input)
-    if (options.auto && shouldSkipAutoUpdateCheck()) {
+    const currentUpdate = get().appUpdate
+    const hasUsableUpdateState = Boolean(
+      currentUpdate
+      && !isNoCachedAppUpdate(currentUpdate)
+      && !shouldDiscardCachedAppUpdate(currentUpdate),
+    )
+    if (options.auto && shouldSkipAutoUpdateCheck() && hasUsableUpdateState) {
       return
-    }
-    if (options.auto) {
-      writeStoredNumber(APP_UPDATE_AUTO_STORAGE_KEY, Date.now())
     }
     const requestOptions = {
       refresh: Boolean(options.refresh),
@@ -295,6 +310,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           appUpdateInFlight = null
         }))
     const appUpdate = await request
+    if (options.auto && !isNoCachedAppUpdate(appUpdate)) {
+      writeStoredNumber(APP_UPDATE_AUTO_STORAGE_KEY, Date.now())
+    }
     persistAppUpdate(appUpdate)
     set({ appUpdate })
   },
