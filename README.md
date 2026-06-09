@@ -23,7 +23,7 @@ Windows 下可直接用脚本：
 - `run_new.ps1` 默认不会自动安装依赖，需要时加 `-InstallBackendDeps` / `-InstallFrontendDeps`。
 - `run_new.ps1` 默认开启后端 `uvicorn --reload`；若你想用单进程模式，可加 `-NoBackendReload`。
 - `run_new.ps1` 默认端口：后端 `8000`，前端 `5173`。
-- 旧版 Streamlit 入口已移除，开发和验收都以 FastAPI + React 为准；历史材料已归档在 `docs/legacy/`。
+- 旧版 Streamlit 入口和历史归档已从主枝清理，开发和验收都以 FastAPI + React 为准。
 
 ## 2. 你能做什么
 
@@ -196,7 +196,7 @@ python tools\check_production_readiness.py --base-url http://127.0.0.1:8000 --to
 - 前端目录：`web/`
 - API 入口：`api/main.py`
 - 生产启动文件：`server.py`
-- 历史归档：`docs/legacy/`
+- 旧版 Streamlit 入口不再随主枝发布。
 
 ## 9. 稳定性基线（推荐）
 
