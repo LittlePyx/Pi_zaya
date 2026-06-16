@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from api import deps
 from api.main import app
+from api.routers import user_issues as user_issues_router
 
 
 def _clear_settings_cache() -> None:
@@ -53,6 +57,37 @@ def test_api_guard_rejects_access_token_query_parameter(monkeypatch):
     res = client.get("/api/settings/readiness?access_token=secret-token")
 
     assert res.status_code == 401
+
+
+def test_user_issue_ingest_uses_own_token_when_api_auth_is_required(monkeypatch, tmp_path: Path):
+    _set_auth_env(monkeypatch)
+    monkeypatch.setattr(
+        user_issues_router,
+        "get_settings",
+        lambda: SimpleNamespace(
+            user_issues_db_path=tmp_path / "collector.sqlite3",
+            user_issues_ingest_token="collect-secret",
+        ),
+    )
+    client = TestClient(app)
+    body = {
+        "schema": "pi-zaya.user_issue.v1",
+        "client": {"installation_id": "client-a"},
+        "issue": {"fingerprint": "smoke", "summary": "Collector smoke test"},
+    }
+
+    denied = client.post("/api/user-issues/ingest", json=body)
+    assert denied.status_code == 401
+    assert denied.json()["detail"] == "invalid user issue ingest token"
+
+    accepted = client.post(
+        "/api/user-issues/ingest",
+        json=body,
+        headers={"Authorization": "Bearer collect-secret"},
+    )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["ok"] is True
 
 
 def test_auth_login_sets_cookie_for_subsequent_api_calls(monkeypatch):

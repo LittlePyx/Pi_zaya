@@ -73,4 +73,5 @@ def is_public_api_path(path: str) -> bool:
         "/api/auth/status",
         "/api/auth/login",
         "/api/auth/logout",
+        "/api/user-issues/ingest",
     }
