@@ -1058,7 +1058,7 @@ export default function LibraryPage() {
       + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
       + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
       + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
-    const metadataReady = statusReady || numericStat(refSyncStats, 'refs_metadata_ready')
+    const metadataReady = Math.max(statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
     const network = numericStat(refSyncStats, 'crossref_network_attempts')
     const elapsed = numericStat(refSyncStats, 'elapsed_s')
     return [
@@ -1069,19 +1069,17 @@ export default function LibraryPage() {
     ]
   }, [S, refSyncStats, store.refSync?.docsDone, store.refSync?.docsTotal])
   const refSyncQueueItems = useMemo<WorkbenchMetricItem[]>(() => {
-    const autoFill = numericStat(refSyncStats, 'refs_action_auto_backfill')
-      || numericStat(refSyncStats, 'refs_missing_reason_doi_sparse_refreshable')
+    const onlineReady = numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
     const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
       || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
         + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))
-    const retryRepair = numericStat(refSyncStats, 'refs_action_retry_or_source_repair')
-      || (numericStat(refSyncStats, 'refs_missing_reason_title_lookup_retryable')
-        + numericStat(refSyncStats, 'refs_missing_reason_truncated_reference')
+    const manualRepair = numericStat(refSyncStats, 'refs_action_source_repair')
+      || (numericStat(refSyncStats, 'refs_missing_reason_truncated_reference')
         + numericStat(refSyncStats, 'refs_missing_reason_low_confidence_match'))
     return [
-      { key: 'auto_fill', label: S.lib_refsync_metric_auto_fill, value: autoFill, tone: autoFill > 0 ? 'info' : 'good' },
+      { key: 'online_ready', label: S.lib_refsync_metric_online_ready, value: onlineReady, tone: onlineReady > 0 ? 'good' : 'info' },
       { key: 'non_article', label: S.lib_refsync_metric_non_article, value: nonArticle, tone: nonArticle > 0 ? 'good' : 'info' },
-      { key: 'retry_repair', label: S.lib_refsync_metric_retry_repair, value: retryRepair, tone: retryRepair > 0 ? 'warn' : 'good' },
+      { key: 'manual_repair', label: S.lib_refsync_metric_manual_repair, value: manualRepair, tone: manualRepair > 0 ? 'warn' : 'good' },
     ]
   }, [S, refSyncStats])
   const refSyncDisplayMessage = useMemo(() => {
@@ -1093,22 +1091,20 @@ export default function LibraryPage() {
         + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
         + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
         + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
-      const metadataReady = statusReady || numericStat(refSyncStats, 'refs_metadata_ready')
-      const autoFill = numericStat(refSyncStats, 'refs_action_auto_backfill')
-        || numericStat(refSyncStats, 'refs_missing_reason_doi_sparse_refreshable')
+      const metadataReady = Math.max(statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
+      const onlineReady = numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
       const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
         || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
           + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))
-      const retryRepair = numericStat(refSyncStats, 'refs_action_retry_or_source_repair')
-        || (numericStat(refSyncStats, 'refs_missing_reason_title_lookup_retryable')
-          + numericStat(refSyncStats, 'refs_missing_reason_truncated_reference')
+      const manualRepair = numericStat(refSyncStats, 'refs_action_source_repair')
+        || (numericStat(refSyncStats, 'refs_missing_reason_truncated_reference')
           + numericStat(refSyncStats, 'refs_missing_reason_low_confidence_match'))
       return S.lib_refsync_done_summary
         .replace('{ready}', String(metadataReady))
         .replace('{refsTotal}', String(refsTotal))
-        .replace('{autoFill}', String(autoFill))
+        .replace('{onlineReady}', String(onlineReady))
         .replace('{nonArticle}', String(nonArticle))
-        .replace('{retryRepair}', String(retryRepair))
+        .replace('{manualRepair}', String(manualRepair))
     }
     return store.refSync.message || S.lib_refsync_waiting
   }, [S, refSyncStats, store.refSync])

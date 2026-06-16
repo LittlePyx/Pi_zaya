@@ -84,6 +84,19 @@ def test_reference_metadata_classification_splits_actionable_reasons():
     )
     assert crossref["metadata_status"] == "crossref_enriched"
 
+    source_mapped = ref_index.classify_reference_metadata(
+        {
+            "raw": "[1] Gehm M, Brady D. Single-shot compressive spectral imaging. Optics Express, 2007.",
+            "title": "Single-shot compressive spectral imaging",
+            "authors": "Gehm M, Brady D",
+            "year": "2007",
+            "match_method": "source_work_reference_order_exact",
+        }
+    )
+    assert source_mapped["metadata_status"] == "crossref_enriched"
+    assert source_mapped["metadata_ready"] is True
+    assert source_mapped["metadata_action"] == "none"
+
     sparse = ref_index.classify_reference_metadata(
         {
             "raw": "[2] Boyd et al. Alternating direction method of multipliers. 2011. doi:10.1561/2200000016",
@@ -919,7 +932,7 @@ def test_build_reference_index_supplements_sparse_source_reference_mapping(tmp_p
     assert bool(doc.get("crossref_enriched")) is True
 
 
-def test_build_reference_index_marks_sparse_source_reference_docs_for_retry(tmp_path, monkeypatch):
+def test_build_reference_index_counts_source_reference_with_raw_metadata_as_ready(tmp_path, monkeypatch):
     src_root = tmp_path / "src"
     db_dir = tmp_path / "db"
     src_root.mkdir()
@@ -955,7 +968,7 @@ def test_build_reference_index_marks_sparse_source_reference_docs_for_retry(tmp_
     )
     monkeypatch.setattr(ref_index, "_lookup_crossref_meta_for_entry", lambda *args, **kwargs: (None, ""))
 
-    ref_index.build_reference_index(
+    stats = ref_index.build_reference_index(
         src_root=src_root,
         db_dir=db_dir,
         incremental=False,
@@ -964,7 +977,13 @@ def test_build_reference_index_marks_sparse_source_reference_docs_for_retry(tmp_
 
     data = ref_index.load_reference_index(db_dir)
     doc = next(iter((data.get("docs") or {}).values()))
-    assert bool(doc.get("crossref_enriched")) is False
+    ref = (doc.get("refs") or {}).get("1") or {}
+    assert bool(doc.get("crossref_enriched")) is True
+    assert ref.get("metadata_status") == "crossref_enriched"
+    assert ref.get("metadata_ready") is True
+    assert ref.get("metadata_action") == "none"
+    assert stats["refs_metadata_ready"] == 1
+    assert stats["refs_action_retry_or_source_repair"] == 0
 
 
 def test_build_reference_index_incremental_rebuilds_stale_crossref_enriched_doc(tmp_path, monkeypatch):

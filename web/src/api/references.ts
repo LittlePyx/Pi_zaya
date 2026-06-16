@@ -255,6 +255,8 @@ export type ReferenceSyncStatKey =
   | 'refs_missing_reason_truncated_reference'
   | 'refs_missing_reason_low_confidence_match'
   | 'refs_action_auto_backfill'
+  | 'refs_action_retry'
+  | 'refs_action_source_repair'
   | 'refs_action_non_article_ok'
   | 'refs_action_retry_or_source_repair'
   | 'crossref_network_attempts'

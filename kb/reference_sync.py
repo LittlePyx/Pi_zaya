@@ -48,15 +48,25 @@ def _set_state_if_current(run_id: int, **patch: Any) -> bool:
 def _fmt_done_message(stats: dict[str, Any]) -> str:
     docs = int(stats.get("docs_indexed", 0) or 0)
     refs = int(stats.get("refs_total", 0) or 0)
-    ready = int(stats.get("refs_metadata_ready", 0) or 0)
-    auto_backfill = int(stats.get("refs_action_auto_backfill", 0) or 0)
-    non_article_ok = int(stats.get("refs_action_non_article_ok", 0) or 0)
-    retry_repair = int(stats.get("refs_action_retry_or_source_repair", 0) or 0)
+    ready = max(
+        int(stats.get("refs_metadata_ready", 0) or 0),
+        int(stats.get("refs_metadata_status_complete", 0) or 0)
+        + int(stats.get("refs_metadata_status_crossref_enriched", 0) or 0)
+        + int(stats.get("refs_metadata_status_non_article_source_ok", 0) or 0)
+        + int(stats.get("refs_metadata_status_no_doi_expected", 0) or 0),
+    )
+    online_ready = int(stats.get("refs_metadata_status_crossref_enriched", 0) or 0)
+    non_article_ok = max(
+        int(stats.get("refs_action_non_article_ok", 0) or 0),
+        int(stats.get("refs_metadata_status_non_article_source_ok", 0) or 0)
+        + int(stats.get("refs_metadata_status_no_doi_expected", 0) or 0),
+    )
+    manual_repair = int(stats.get("refs_action_source_repair", 0) or 0)
     attempts = int(stats.get("crossref_network_attempts", 0) or 0)
     return (
         f"参考文献索引已更新：文档 {docs}，条目 {refs}，"
-        f"元数据就绪 {ready}/{refs}，可自动补 {auto_backfill}，"
-        f"非期刊来源 {non_article_ok}，需重试/源头修复 {retry_repair}，联网查询 {attempts}。"
+        f"元数据就绪 {ready}/{refs}，联网补齐 {online_ready}，"
+        f"非期刊/免 DOI {non_article_ok}，待人工处理 {manual_repair}，联网查询 {attempts}。"
     )
 
 

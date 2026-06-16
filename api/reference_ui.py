@@ -246,7 +246,12 @@ def _fallback_ref_ui_summary_line(
                     allow_llm_translate=allow_llm_translate,
                 )
             )
-    picked = _pick_ref_card_summary_fallback(prompt=prompt, title=title, candidates=candidates)
+    picked = _pick_ref_card_summary_fallback(
+        prompt=prompt,
+        title=title,
+        candidates=candidates,
+        allow_llm_select=allow_llm_translate,
+    )
     if picked:
         return picked
 
@@ -261,7 +266,12 @@ def _fallback_ref_ui_summary_line(
         prefer_zh=prefer_zh,
         allow_llm_translate=allow_llm_translate,
     )
-    citation_summary = _pick_ref_card_summary_fallback(prompt=prompt, title=title, candidates=citation_candidates)
+    citation_summary = _pick_ref_card_summary_fallback(
+        prompt=prompt,
+        title=title,
+        candidates=citation_candidates,
+        allow_llm_select=allow_llm_translate,
+    )
     if citation_summary:
         return citation_summary
 
@@ -279,7 +289,12 @@ def _fallback_ref_ui_summary_line(
                     allow_llm_translate=allow_llm_translate,
                 )
             )
-    picked = _pick_ref_card_summary_fallback(prompt=prompt, title=title, candidates=candidates)
+    picked = _pick_ref_card_summary_fallback(
+        prompt=prompt,
+        title=title,
+        candidates=candidates,
+        allow_llm_select=allow_llm_translate,
+    )
     if picked:
         return picked
     return ""
@@ -2385,7 +2400,13 @@ def _llm_select_best_evidence_candidate(
     return ""
 
 
-def _pick_ref_card_summary_fallback(*, prompt: str, title: str, candidates: list[str]) -> str:
+def _pick_ref_card_summary_fallback(
+    *,
+    prompt: str,
+    title: str,
+    candidates: list[str],
+    allow_llm_select: bool = True,
+) -> str:
     ranked: list[tuple[float, str]] = []
     for raw in candidates or []:
         heading, body = _split_ref_summary_heading_and_body(str(raw or ""))
@@ -2442,7 +2463,7 @@ def _pick_ref_card_summary_fallback(*, prompt: str, title: str, candidates: list
         for score, candidate in ranked[:3]
         if score >= max(1.6, best_score - 0.55)
     ]
-    if len(close_candidates) >= 2 and _refs_card_polish_llm_enabled():
+    if allow_llm_select and len(close_candidates) >= 2 and _refs_card_polish_llm_enabled():
         llm_pick = _llm_select_best_evidence_candidate(
             prompt=prompt,
             title=title,
@@ -7151,11 +7172,8 @@ def _select_primary_ref_evidence(
     )
     block_prompt_aligned_candidate: dict = {}
     if allow_summary_block_rescue and source_path:
-        needs_block_rescue = bool(
-            (not meta_prompt_aligned_candidate)
-            or (not summary_line)
-            or (bool(str(anchor_target_kind or "").strip()) and anchor_target_number > 0)
-            or (
+        current_summary_needs_block_rescue = bool(
+            (
                 summary_source == "fallback"
                 and _looks_focus_prefixed_ref_summary(prompt, summary_line)
             )
@@ -7163,6 +7181,48 @@ def _select_primary_ref_evidence(
                 prompt=prompt,
                 title=display_name,
                 summary_line=summary_line,
+            )
+        )
+        meta_candidate_heading_path = _sanitize_heading_path_ui(
+            str((meta_prompt_aligned_candidate or {}).get("heading_path") or "").strip(),
+            prompt=prompt,
+            source_path=source_path,
+        )
+        meta_candidate_rebinds_heading = bool(
+            meta_candidate_heading_path
+            and meta_candidate_heading_path != heading_path
+        )
+        meta_prompt_score = (
+            _rank_prompt_aligned_ref_summary_candidate(
+                meta_prompt_aligned_candidate,
+                prompt=prompt,
+                source_path=source_path,
+                title=candidate_title,
+                anchor_target_kind=anchor_target_kind,
+                anchor_target_number=anchor_target_number,
+            )[0]
+            if meta_prompt_aligned_candidate
+            else -1000.0
+        )
+        has_meta_prompt_aligned_candidate = bool(
+            meta_prompt_aligned_candidate
+            and meta_prompt_score >= 2.0
+            and ((not current_summary_needs_block_rescue) or meta_candidate_rebinds_heading)
+        )
+        needs_block_rescue = bool(
+            (bool(str(anchor_target_kind or "").strip()) and anchor_target_number > 0)
+            or (
+                (not has_meta_prompt_aligned_candidate)
+                and (not summary_line)
+            )
+            or (
+                (not has_meta_prompt_aligned_candidate)
+                and summary_source == "fallback"
+                and _looks_focus_prefixed_ref_summary(prompt, summary_line)
+            )
+            or (
+                (not has_meta_prompt_aligned_candidate)
+                and current_summary_needs_block_rescue
             )
         )
         if needs_block_rescue:

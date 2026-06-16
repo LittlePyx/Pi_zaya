@@ -784,6 +784,8 @@ def _reference_match_method_has_external_resolution(match_method: str, doi: str 
     if _clean_doi_for_url(str(doi or "")):
         return True
     tokens = {p.strip().lower() for p in str(match_method or "").split("+") if p.strip()}
+    if any(token.startswith("source_work_reference") for token in tokens):
+        return True
     return bool(tokens.intersection({"bibliographic", "title", "doi", "doi_backfill"}))
 
 
@@ -1292,6 +1294,8 @@ def _reference_has_external_metadata(rec: Mapping[str, Any], match_method: str, 
     if bool(rec.get("crossref_ok")):
         return True
     tokens = {p.strip().lower() for p in str(match_method or "").split("+") if p.strip()}
+    if any(token.startswith("source_work_reference") for token in tokens):
+        return True
     return bool(tokens.intersection({"bibliographic", "title", "doi", "doi_backfill", "shelf_metadata_repair"}))
 
 
@@ -1341,8 +1345,14 @@ def classify_reference_metadata(
     ready = False
 
     core_complete = bool(doi and has_title and has_authors and has_venue and has_year)
+    external_ready = bool(external_metadata and has_title and has_year and (has_authors or has_venue))
     if core_complete:
         status = "crossref_enriched" if external_metadata else "complete"
+        reason = ""
+        action = "none"
+        ready = True
+    elif external_ready:
+        status = "crossref_enriched"
         reason = ""
         action = "none"
         ready = True
@@ -2908,11 +2918,13 @@ def build_reference_index(
         for rv in refs.values():
             if not isinstance(rv, dict):
                 continue
+            classification = classify_reference_metadata(rv, enable_title_lookup=bool(enable_title_lookup))
             doi = str(rv.get("doi") or "").strip()
             title = str(rv.get("title") or "").strip()
             authors = str(rv.get("authors") or "").strip()
             venue = str(rv.get("venue") or "").strip()
-            crossref_ok = bool(rv.get("crossref_ok"))
+            mm = str(rv.get("match_method") or "").strip()
+            crossref_ok = bool(rv.get("crossref_ok") or _reference_match_method_has_external_resolution(mm, doi))
             if doi:
                 refs_with_doi += 1
             if title:
@@ -2921,19 +2933,18 @@ def build_reference_index(
                 refs_with_authors += 1
             if venue:
                 refs_with_venue += 1
-            if doi and title and authors and venue:
+            metadata_ready = bool(classification.get("metadata_ready"))
+            if metadata_ready:
                 refs_metadata_ready += 1
-            if (not doi) and (not crossref_ok):
+            if (not metadata_ready) and (not doi) and (not crossref_ok):
                 refs_unresolved += 1
             if crossref_ok:
                 refs_crossref_ok += 1
-            mm = str(rv.get("match_method") or "").strip()
             if mm.startswith("source_work_reference"):
                 refs_source_map_ok += 1
-            classification = classify_reference_metadata(rv, enable_title_lookup=bool(enable_title_lookup))
-            status = str(rv.get("metadata_status") or classification.get("metadata_status") or "").strip()
-            reason = str(rv.get("missing_reason") or classification.get("missing_reason") or "").strip()
-            action = str(rv.get("metadata_action") or classification.get("metadata_action") or "").strip()
+            status = str(classification.get("metadata_status") or rv.get("metadata_status") or "").strip()
+            reason = str(classification.get("missing_reason") or rv.get("missing_reason") or "").strip()
+            action = str(classification.get("metadata_action") or rv.get("metadata_action") or "").strip()
             if status in REFERENCE_METADATA_STATUS_CODES:
                 _stat_inc(crossref_stats, f"refs_metadata_status_{status}")
             if reason in REFERENCE_MISSING_REASON_CODES:

@@ -445,6 +445,76 @@ def _fix_split_numbered_headings(md: str) -> str:
     return "\n".join(out)
 
 
+def _repair_split_roman_section_headings(md: str) -> str:
+    if not md:
+        return md
+    lines = md.splitlines()
+    out: list[str] = []
+    i = 0
+    in_fence = False
+    in_math = False
+    page_marker_re = re.compile(r"^<!--\s*kb_page:\s*\d{1,5}\s*-->$", re.IGNORECASE)
+    bare_roman_heading_re = re.compile(r"^(#{1,6})\s+([IVXLC]+)\.\s*$", re.IGNORECASE)
+
+    def _looks_like_roman_heading_tail(text: str) -> bool:
+        st = _normalize_text(text or "").strip()
+        if not st or len(st) > 80:
+            return False
+        if re.match(r"^#{1,6}\s+", st) or st.startswith(("![", "|", "$$", "```")):
+            return False
+        if _is_common_section_heading(st):
+            return True
+        if re.fullmatch(r"[A-Z][A-Z0-9 /&,\-]{2,79}", st):
+            words = re.findall(r"[A-Z]{3,}", st)
+            return bool(words)
+        return False
+
+    while i < len(lines):
+        line = lines[i]
+        st = str(line or "").strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            out.append(line)
+            i += 1
+            continue
+        if st == "$$":
+            in_math = not in_math
+            out.append(line)
+            i += 1
+            continue
+        if in_fence or in_math:
+            out.append(line)
+            i += 1
+            continue
+
+        match = bare_roman_heading_re.match(st)
+        if not match:
+            out.append(line)
+            i += 1
+            continue
+
+        skipped: list[str] = []
+        tail_idx = -1
+        for j in range(i + 1, min(len(lines), i + 8)):
+            nxt = str(lines[j] or "").strip()
+            if not nxt or page_marker_re.match(nxt):
+                skipped.append(lines[j])
+                continue
+            if _looks_like_roman_heading_tail(nxt):
+                tail_idx = j
+            break
+        if tail_idx < 0:
+            out.append(line)
+            i += 1
+            continue
+
+        out.append(f"{match.group(1)} {match.group(2).upper()}. {str(lines[tail_idx] or '').strip()}")
+        out.extend(skipped)
+        i = tail_idx + 1
+
+    return "\n".join(out)
+
+
 def _looks_like_promotable_numbered_heading_line(line: str) -> bool:
     t = _normalize_text(line or "").strip()
     if not t:
@@ -2640,6 +2710,7 @@ def postprocess_markdown(md: str) -> str:
     md = _normalize_math_for_typora(md)
     md = _cleanup_stray_latex_in_text(md)
     md = _fix_split_numbered_headings(md)
+    md = _repair_split_roman_section_headings(md)
     md = _promote_document_title_line(md)
     md = _promote_bare_numbered_headings(md)
     md = _unwrap_math_wrapped_headings(md)
@@ -2677,4 +2748,3 @@ def postprocess_markdown(md: str) -> str:
     md = _fix_known_safe_ocr_terms(md)
     md = _split_inline_heading_markers(md)
     return md
-

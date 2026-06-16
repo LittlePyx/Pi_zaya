@@ -71,9 +71,9 @@ class Settings:
     db_dir: Path
     chat_db_path: Path
     library_db_path: Path
-    user_issues_db_path: Path
     timeout_s: float
     max_retries: int
+    user_issues_db_path: Path = field(default_factory=lambda: Path("user_issues.sqlite3"))
     # Whether auto-routing is active (both text *and* vision keys are set).
     auto_route: bool = field(default=False)
     vision_uses_text_fallback: bool = field(default=False)
