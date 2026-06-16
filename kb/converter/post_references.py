@@ -4,8 +4,11 @@ import re
 
 from .post_heading_rules import _parse_appendix_heading_level
 from .reference_markdown import (
+    _format_author_year_references_block,
+    _is_plausible_reference_number,
     _is_year_backref_continuation_line,
     _join_reference_fragments,
+    _reference_lines_look_author_year,
     _strip_reference_backref_suffix,
 )
 
@@ -135,6 +138,8 @@ def _format_references(md: str) -> str:
             return False
         m = re.match(r"^(\d{1,4})\.\s+(.+)$", t)
         if not m:
+            return False
+        if not _is_plausible_reference_number(m.group(1)):
             return False
         if _is_year_backref_continuation_line(t):
             return False
@@ -344,6 +349,14 @@ def _format_references(md: str) -> str:
             return "\n".join(head + [""] + body_tail)
         return "\n".join(head)
 
+    author_year_ref_lines = list(enumerate(tail))
+    if _reference_lines_look_author_year(author_year_ref_lines):
+        author_year_refs = _format_author_year_references_block(author_year_ref_lines)
+        out_author_year = head + [""] + author_year_refs
+        if body_tail:
+            out_author_year.extend([""] + body_tail)
+        return "\n".join(out_author_year)
+
     # Normalize superscript-citation wrappers before reference parsing.
     blob = _unwrap_sup_cites(blob)
 
@@ -372,8 +385,12 @@ def _format_references(md: str) -> str:
         if _is_year_backref_continuation_line(st):
             norm_blob_lines.append(st)
             continue
-        st = re.sub(r"^\s*(\d+)\]\s*", r"[\1] ", st)
-        st = re.sub(r"^\s*(\d+)\.\s+", r"[\1] ", st)
+        bracket_match = re.match(r"^\s*(\d+)\]\s*", st)
+        if bracket_match and _is_plausible_reference_number(bracket_match.group(1)):
+            st = re.sub(r"^\s*(\d+)\]\s*", r"[\1] ", st)
+        dot_match = re.match(r"^\s*(\d+)\.\s+", st)
+        if dot_match and _is_plausible_reference_number(dot_match.group(1)):
+            st = re.sub(r"^\s*(\d+)\.\s+", r"[\1] ", st)
         norm_blob_lines.append(st)
     blob = "\n".join(norm_blob_lines)
 
@@ -623,7 +640,7 @@ def _format_references(md: str) -> str:
         except Exception:
             unknown.append(e)
             continue
-        if n <= 0 or n > 2000:
+        if not _is_plausible_reference_number(n):
             unknown.append(e)
             continue
         parsed.append((n, e))

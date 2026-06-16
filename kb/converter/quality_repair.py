@@ -15,7 +15,12 @@ from .post_processing import postprocess_markdown
 from .post_references import _is_post_references_resume_heading_line
 from .quality_acceptance import summarize_conversion_quality
 from .quality_compare import compare_markdown_quality
-from .reference_markdown import fix_references_format, normalize_references_page_text
+from .reference_markdown import (
+    fix_references_format,
+    normalize_references_page_text,
+    _is_plausible_reference_number,
+    _looks_like_author_year_reference_text,
+)
 from .reference_page_vl import reference_markdown_entry_count
 from .tables import normalize_markdown_table_block
 from kb.reference_index import extract_references_map_from_md
@@ -88,6 +93,10 @@ SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD = 0.32
 PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS = 1200
 PAGE_ALIGNMENT_BEAM_SIZE = 300
 PAGE_ALIGNMENT_BEAM_PER_MATCH = 80
+LEADING_PAGE_ALIGNMENT_MAX_OFFSET = 900
+LEADING_PAGE_ALIGNMENT_WINDOW_CHARS = 3200
+LEADING_PAGE_DROP_MAX_PREVIOUS_COVERAGE = 0.50
+LEADING_PAGE_DROP_MIN_COVERAGE_MARGIN = 0.12
 PAGE_ALIGNMENT_STOP_WORDS = {
     "the", "of", "and", "in", "to", "for", "with", "on", "by", "from", "that", "this",
     "these", "those", "using", "used", "into", "such", "which", "were", "their", "have",
@@ -1499,6 +1508,8 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                 page_text = str(doc.load_page(page_index).get_text("text") or "")
             except Exception:
                 page_text = ""
+            if marker_pages and page_no < min(marker_pages) and _pdf_page_looks_like_download_landing_page(page_text):
+                continue
             page_tokens = _rare_source_tokens(page_text)
             if len(page_tokens) < SOURCE_PAGE_MIN_RARE_TOKENS:
                 continue
@@ -2113,6 +2124,97 @@ def _select_page_alignment_offsets(
     return offsets
 
 
+def _source_page_token_coverage(page_text: str, segment_text: str) -> float:
+    source_tokens = _rare_source_tokens(page_text)
+    if not source_tokens:
+        return 0.0
+    segment_tokens = _rare_source_tokens(segment_text)
+    if not segment_tokens:
+        return 0.0
+    return len(source_tokens.intersection(segment_tokens)) / max(1, len(source_tokens))
+
+
+def _pdf_page_looks_like_download_landing_page(page_text: str) -> bool:
+    text = _clean_pdf_page_block_text(page_text)
+    if not text:
+        return False
+    low = text.lower()
+    signals = 0
+    for pattern in (
+        "latest updates",
+        "pdf download",
+        "total citations",
+        "total downloads",
+        "citation in bibtex",
+        "open access support",
+        "dl.acm.org",
+    ):
+        if pattern in low:
+            signals += 1
+    if signals >= 2:
+        return True
+    return bool(signals >= 1 and "published" in low and ("doi" in low or "acm" in low))
+
+
+def _adjust_offsets_for_skipped_leading_pdf_pages(
+    md_text: str,
+    pdf_path: Path,
+    offsets: dict[int, int],
+) -> dict[int, int]:
+    """
+    Some publisher PDFs include a download/landing page before the actual paper.
+    If conversion intentionally starts at the article page, the alignment code may
+    still synthesize page 1 at offset 0 and then split the true first article page.
+    Prefer the first strongly matched later source page when it starts near the
+    beginning and earlier PDF pages only weakly match the Markdown head.
+    """
+    if fitz is None or not offsets:
+        return offsets
+    later = sorted((int(page), int(offset)) for page, offset in offsets.items() if int(page) > 1)
+    if not later:
+        return offsets
+    first_page, first_offset = later[0]
+    if first_page <= 1 or first_offset < 0 or first_offset > LEADING_PAGE_ALIGNMENT_MAX_OFFSET:
+        return offsets
+
+    head_len = max(LEADING_PAGE_ALIGNMENT_WINDOW_CHARS, first_offset + LEADING_PAGE_ALIGNMENT_WINDOW_CHARS)
+    head = str(md_text or "")[: min(len(str(md_text or "")), int(head_len))]
+    if len(_rare_source_tokens(head)) < 20:
+        return offsets
+
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception:
+        return offsets
+    try:
+        if first_page > len(doc):
+            return offsets
+        first_text = str(doc.load_page(first_page - 1).get_text("text") or "")
+        first_coverage = _source_page_token_coverage(first_text, head)
+        previous_coverages: list[float] = []
+        for page_index in range(0, max(0, first_page - 1)):
+            previous_text = str(doc.load_page(page_index).get_text("text") or "")
+            previous_coverages.append(_source_page_token_coverage(previous_text, head))
+    except Exception:
+        return offsets
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+    best_previous = max(previous_coverages, default=0.0)
+    if (
+        first_coverage >= SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD
+        and best_previous < LEADING_PAGE_DROP_MAX_PREVIOUS_COVERAGE
+        and (first_coverage - best_previous) >= LEADING_PAGE_DROP_MIN_COVERAGE_MARGIN
+    ):
+        adjusted = {int(page): int(offset) for page, offset in offsets.items() if int(page) >= first_page}
+        adjusted[first_page] = 0
+        return dict(sorted(adjusted.items(), key=lambda item: int(item[0])))
+    return offsets
+
+
 def _page_marker_offsets_from_pdf_text(
     md_text: str,
     pdf_path: Path,
@@ -2154,7 +2256,7 @@ def _page_marker_offsets_from_pdf_text(
 
             if len(current_offsets) > len(best_offsets):
                 best_offsets = current_offsets
-        offsets = best_offsets
+        offsets = _adjust_offsets_for_skipped_leading_pdf_pages(str(md_text or ""), path, best_offsets)
     finally:
         try:
             doc.close()
@@ -2305,7 +2407,7 @@ def _pdf_page_reference_start_numbers(text: str) -> list[int]:
             n = int(match.group(1) or match.group(2))
         except Exception:
             continue
-        if n > 0:
+        if _is_plausible_reference_number(n):
             numbers.append(n)
     return numbers
 
@@ -2322,7 +2424,8 @@ def _trim_pdf_page_text_to_first_reference(text: str) -> str:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = raw.split("\n")
     for idx, line in enumerate(lines):
-        if PDF_REFERENCE_START_LINE_RE.match(line or ""):
+        match = PDF_REFERENCE_START_LINE_RE.match(line or "")
+        if match and _is_plausible_reference_number(match.group(1) or match.group(2)):
             return "\n".join(lines[idx:]).strip()
     return raw.strip()
 
@@ -2695,6 +2798,8 @@ def _looks_markdown_reference_payload_line(line: str) -> bool:
     st = str(line or "").strip()
     if not st or PAGE_MARKER_RE.fullmatch(st):
         return False
+    if _looks_like_author_year_reference_text(st):
+        return True
     match = re.match(r"^\s*(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})[.)])\s+(.+)$", st)
     if not match:
         return False

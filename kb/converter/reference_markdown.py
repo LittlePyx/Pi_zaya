@@ -24,6 +24,9 @@ _REF_SECTION_STOP_RE = re.compile(
 _STANDALONE_REF_NUMBER_RE = re.compile(r"^\[?(\d{1,4})\]?[.)]\s*$")
 _INLINE_REF_START_RE = re.compile(r"^(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+(.+)$")
 _MID_REF_START_RE = re.compile(r"(?<!\S)(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+([A-Z][^.]{10,})")
+_AUTHOR_YEAR_RE = re.compile(r"\b(?:18|19|20)\d{2}[a-z]?\.\s+\S")
+_PAGE_MARKER_LINE_RE = re.compile(r"^<!--\s*kb_page:\s*\d+\s*-->$", re.IGNORECASE)
+_INLINE_PAGE_MARKER_RE = re.compile(r"(<!--\s*kb_page:\s*\d+\s*-->)", re.IGNORECASE)
 
 
 def _is_plausible_reference_number(value: str | int | None) -> bool:
@@ -47,6 +50,132 @@ def _is_reference_start_line(text: str) -> bool:
     if not match:
         return False
     return _is_plausible_reference_number(match.group(1) or match.group(2))
+
+
+def _looks_like_author_list_prefix(prefix: str) -> bool:
+    text = re.sub(r"\s+", " ", str(prefix or "")).strip(" ,;:")
+    if len(text) < 8 or len(text) > 360:
+        return False
+    low = text.lower()
+    if re.search(
+        r"\b(?:conference|proceedings?|transactions?|journal|volume|vol\.?|"
+        r"pages?|springer|wiley|ieee|acm|cvpr|iccv|eccv|siggraph)\b",
+        low,
+    ):
+        return False
+    words = re.findall(r"\b[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,}\b", text)
+    if len(words) < 2:
+        return False
+    name_word = r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,}"
+    starts_like_author_list = re.match(
+        rf"^{name_word}(?:\s+(?:[A-Z]\.?|{name_word})){{0,5}}(?:\s*,|\s+and\b)",
+        text,
+    )
+    return bool(starts_like_author_list and ("," in text or re.search(r"\band\b", text, flags=re.IGNORECASE)))
+
+
+def _looks_like_author_year_reference_text(text: str) -> bool:
+    src = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not src or _is_reference_start_line(src):
+        return False
+    match = _AUTHOR_YEAR_RE.search(src)
+    if not match:
+        return False
+    prefix = src[: int(match.start())]
+    return _looks_like_author_list_prefix(prefix)
+
+
+def _author_year_entry_start_offsets(text: str) -> list[int]:
+    src = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not src:
+        return []
+    name_word = r"[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'`.-]{1,}"
+    author_start_re = re.compile(
+        rf"{name_word}(?:\s+(?:[A-Z]\.?|{name_word})){{0,5}}(?:\s*,|\s+and\b)"
+    )
+    starts: list[int] = []
+    search_start = 0
+    for year_match in _AUTHOR_YEAR_RE.finditer(src):
+        best_start: int | None = None
+        for author_match in author_start_re.finditer(src[search_start : int(year_match.start())]):
+            candidate_start = search_start + int(author_match.start())
+            candidate_prefix = src[candidate_start : int(year_match.start())]
+            if _looks_like_author_list_prefix(candidate_prefix):
+                best_start = candidate_start
+                break
+        if best_start is not None and all(abs(best_start - existing) > 12 for existing in starts):
+            starts.append(best_start)
+        search_start = max(search_start, int(year_match.end()))
+    return sorted(starts)
+
+
+def _split_author_year_collapsed_line(text: str) -> list[str]:
+    src = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not src:
+        return []
+    starts = _author_year_entry_start_offsets(src)
+    if not starts:
+        return [src]
+    boundaries = list(starts)
+    if starts[0] > 0:
+        boundaries = [0, *boundaries]
+    out: list[str] = []
+    for idx, start in enumerate(boundaries):
+        end = boundaries[idx + 1] if idx + 1 < len(boundaries) else len(src)
+        part = src[max(0, start) : max(0, end)].strip(" ,;")
+        if part:
+            out.append(part)
+    return out
+
+
+def _line_looks_like_author_year_entry_start(line: str) -> bool:
+    text = re.sub(r"\s+", " ", str(line or "")).strip()
+    if not text:
+        return False
+    if _looks_like_author_year_reference_text(text):
+        return True
+    if _AUTHOR_YEAR_RE.search(text):
+        return False
+    return _looks_like_author_list_prefix(text)
+
+
+def _looks_like_reference_running_line(line: str) -> bool:
+    text = re.sub(r"\s+", " ", str(line or "")).strip()
+    if not text:
+        return False
+    if text == "•":
+        return True
+    if re.fullmatch(r"\d{1,5}:\d{1,5}", text):
+        return True
+    if re.match(r"^ACM Trans\. Graph\.,\s+Vol\.", text, flags=re.IGNORECASE):
+        return True
+    if re.match(r"^Publication date:", text, flags=re.IGNORECASE):
+        return True
+    return False
+
+
+def _reference_lines_look_author_year(ref_lines: list[tuple[int, str]]) -> bool:
+    lines = [
+        str(line or "").strip()
+        for _, line in list(ref_lines or [])
+        if str(line or "").strip()
+        and not _PAGE_MARKER_LINE_RE.match(str(line or "").strip())
+        and not _REF_HEADING_RE.match(str(line or "").strip())
+    ]
+    if not lines:
+        return False
+    numeric_starts = sum(1 for line in lines if _is_reference_start_line(line))
+    author_year_hits = 0
+    for idx, line in enumerate(lines):
+        if not _AUTHOR_YEAR_RE.search(line):
+            continue
+        if _looks_like_author_year_reference_text(line):
+            author_year_hits += max(1, len(_AUTHOR_YEAR_RE.findall(line)))
+            continue
+        window = _join_reference_fragments(lines[max(0, idx - 2) : idx + 1])
+        if _looks_like_author_year_reference_text(window):
+            author_year_hits += 1
+    return bool(author_year_hits >= 2 and numeric_starts < author_year_hits)
 
 
 def _is_year_backref_continuation_line(text: str) -> bool:
@@ -179,6 +308,9 @@ def fix_references_format(md: str) -> str:
 
 def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
     """Format a block of reference lines - ensure each reference is on a separate line with numbering."""
+    if _reference_lines_look_author_year(ref_lines):
+        return _format_author_year_references_block(ref_lines)
+
     formatted = []
     current_ref = []
     ref_num = 1
@@ -318,13 +450,82 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
     return formatted
 
 
+def _format_author_year_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
+    formatted: list[str] = []
+    current_ref: list[str] = []
+
+    def has_year(parts: list[str]) -> bool:
+        return bool(_AUTHOR_YEAR_RE.search(_join_reference_fragments(parts)))
+
+    def flush_current() -> None:
+        nonlocal current_ref
+        ref_text = _join_reference_fragments(current_ref)
+        current_ref = []
+        if ref_text and _looks_like_author_year_reference_text(ref_text):
+            formatted.append(ref_text)
+
+    for _, line in list(ref_lines or []):
+        stripped = str(line or "").strip()
+        if not stripped:
+            if current_ref and has_year(current_ref):
+                flush_current()
+            continue
+        if _PAGE_MARKER_LINE_RE.match(stripped):
+            if current_ref:
+                flush_current()
+            formatted.append(stripped)
+            continue
+        if _REF_HEADING_RE.match(stripped):
+            continue
+        if _looks_like_reference_running_line(stripped):
+            continue
+        if stripped.startswith("```"):
+            continue
+        if stripped == "$$":
+            continue
+        if stripped.startswith("$$") and stripped.endswith("$$") and len(stripped) > 4:
+            stripped = formula_to_plain_text(stripped[2:-2].strip())
+        elif stripped.startswith("$") and stripped.endswith("$") and stripped.count("$") == 2 and len(stripped) > 2:
+            stripped = formula_to_plain_text(stripped[1:-1].strip())
+        elif "$" in stripped:
+            stripped = re.sub(r"\$([^$]+)\$", lambda m: formula_to_plain_text(m.group(1)), stripped)
+            stripped = re.sub(r"\$\$([^$]+)\$\$", lambda m: formula_to_plain_text(m.group(1)), stripped)
+            stripped = stripped.replace("$", "").strip()
+        if not stripped:
+            continue
+
+        for piece in _INLINE_PAGE_MARKER_RE.split(stripped):
+            piece = str(piece or "").strip()
+            if not piece:
+                continue
+            if _PAGE_MARKER_LINE_RE.match(piece):
+                if current_ref:
+                    flush_current()
+                formatted.append(piece)
+                continue
+            for fragment in _split_author_year_collapsed_line(piece):
+                if not fragment:
+                    continue
+                if not current_ref and not _line_looks_like_author_year_entry_start(fragment):
+                    continue
+                if current_ref and has_year(current_ref) and _line_looks_like_author_year_entry_start(fragment):
+                    flush_current()
+                current_ref.append(fragment)
+
+    if current_ref:
+        flush_current()
+
+    return formatted
+
+
 def format_single_reference(text: str, num: int) -> str:
     """Format a single reference with proper numbering."""
     text = _join_reference_fragments([text])
     text = re.sub(r"\$([^$]+)\$", lambda m: formula_to_plain_text(m.group(1)), text)
     text = re.sub(r"\$\$([^$]+)\$\$", lambda m: formula_to_plain_text(m.group(1)), text)
 
-    if re.match(r"^\[?\d+\]?\s+", text):
+    leading_number = re.match(r"^\[?(\d+)\]?\s+", text)
+    if leading_number and _is_plausible_reference_number(leading_number.group(1)):
         return re.sub(r"^\[?(\d+)\]?\s+", r"[\1] ", text)
 
     return f"[{num}] {text}"

@@ -94,6 +94,36 @@ def test_repair_markdown_quality_fixes_safe_source_level_issues(tmp_path: Path):
     assert (tmp_path / "paper.en.md.bak").exists()
 
 
+def test_write_conversion_quality_result_accepts_author_year_references(tmp_path: Path):
+    md_path = tmp_path / "author_year.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Author Year Paper",
+                "",
+                "## Abstract",
+                "",
+                "This paper cites prior work by author and year.",
+                "",
+                "## References",
+                "",
+                "Kara-Ali Aliev, Artem Sevastopolsky, Maria Kolos, Dmitry Ulyanov, and Victor Lempitsky. 2020. Neural Point-Based Graphics.",
+                "Jonathan T Barron, Ben Mildenhall, Matthew Tancik, Peter Hedman, Ricardo Martin-Brualla, and Pratul P Srinivasan. 2021. Mip-nerf.",
+                "Olivia Wiles, Georgia Gkioxari, Richard Szeliski, and Justin Johnson. 2020. Synsin: End-to-end view synthesis from a single image.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path)
+
+    assert payload["metrics"]["reference_line_count"] == 3
+    assert payload["metrics"]["extracted_reference_count"] == 0
+    assert "missing_references" not in payload["repair_plan"]["issue_codes"]
+    assert payload["needs_reconvert"] is False
+
+
 def test_conversion_repair_strategy_marks_safe_known_issue():
     strategy = conversion_repair_strategy_for_issue("missing_captions")
 
@@ -734,6 +764,63 @@ def test_repair_markdown_text_realigns_collapsed_source_page_markers(tmp_path: P
     assert markers == [1, 2, 3]
     assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("bravo000")
     assert repaired.index("<!-- kb_page: 3 -->") < repaired.index("charlie000")
+
+
+def test_repair_markdown_text_keeps_article_page_numbers_when_pdf_cover_is_skipped(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "ACM Download Cover.pdf"
+    doc = fitz.open()
+    cover = doc.new_page()
+    cover.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "Latest updates https://dl.acm.org/doi/10.1145/3592433\n"
+        "PDF Download\n"
+        "3D Gaussian Splatting for Real-Time Radiance Field Rendering\n"
+        "Bernhard Kerbl Georgios Kopanas Thomas Leimkuehler George Drettakis\n"
+        "Published August 2023\n"
+        + " ".join(f"downloadcover{i:03d}" for i in range(90)),
+        fontsize=10,
+    )
+    page2_text = (
+        "3D Gaussian Splatting for Real-Time Radiance Field Rendering "
+        "Bernhard Kerbl Georgios Kopanas Thomas Leimkuehler George Drettakis "
+        + " ".join(f"articlealpha{i:03d}" for i in range(90))
+    )
+    page3_text = " ".join(f"articlebravo{i:03d}" for i in range(90))
+    for text in (page2_text, page3_text):
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "ACM Download Cover.en.md"
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# 3D Gaussian Splatting for Real-Time Radiance Field Rendering",
+            page2_text,
+            "<!-- kb_page: 2 -->",
+            page3_text,
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["source_page_marker_alignment"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    markers = [int(match.group(1)) for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", repaired)]
+    assert result["changed"] is True
+    assert "realign_page_markers_from_pdf" in result["applied"]
+    assert markers == [2, 3]
+    assert "<!-- kb_page: 1 -->" not in repaired
+    assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("articlealpha000")
+    assert repaired.index("<!-- kb_page: 3 -->") < repaired.index("articlebravo000")
 
 
 def test_repair_markdown_text_recovers_missing_caption_from_pdf_text(tmp_path: Path):
@@ -1402,6 +1489,56 @@ def test_repair_markdown_text_backfills_gapped_references_from_pdf(tmp_path: Pat
     assert "pdf_reference_backfill" in result["applied"]
     assert "[3] REF3, A. Recovered reference 3." in repaired
     assert "Broken reference" not in repaired
+
+
+def test_repair_markdown_text_does_not_backfill_author_year_pdf_references(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Author Year Paper.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "\n".join(
+            [
+                "REFERENCES",
+                "Kara-Ali Aliev, Artem Sevastopolsky, Maria Kolos, Dmitry Ulyanov, and Victor Lempitsky.",
+                "2020. Neural Point-Based Graphics. In Computer Vision - ECCV 2020. 696-712.",
+                "Jonathan T Barron, Ben Mildenhall, Matthew Tancik, Peter Hedman, Ricardo Martin-Brualla.",
+                "2021. Mip-nerf: A multiscale representation for anti-aliasing neural radiance fields.",
+                "Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P. Srinivasan, and Peter Hedman.",
+                "2022. Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields. CVPR.",
+            ]
+        ),
+        fontsize=10,
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Author Year Paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Author Year Paper",
+            "## Abstract",
+            "This paper uses author-year references rather than numeric references.",
+            "## References",
+            "Kara-Ali Aliev, Artem Sevastopolsky, Maria Kolos, Dmitry Ulyanov, and Victor Lempitsky.",
+            "2020. Neural Point-Based Graphics. In Computer Vision - ECCV 2020. 696-712.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["reference_index_truncated"],
+        source_pdf_path=pdf_path,
+    )
+
+    assert result["changed"] is False
+    assert "pdf_reference_backfill" not in result["applied"]
+    assert "[2020]" not in str(result.get("repaired_text") or "")
 
 
 def test_write_conversion_quality_result_flags_gapped_reference_index(tmp_path: Path):

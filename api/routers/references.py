@@ -28,7 +28,6 @@ from api.reference_ui import (
     ensure_source_citation_meta,
     open_reference_source,
 )
-from api.reference_card_locale import _ref_card_user_locale
 from api.reference_card_quality import refs_pack_has_full_llm_copy
 from api.reference_metadata_quality import (
     backfill_reference_metadata,
@@ -1731,12 +1730,7 @@ def _bibliometrics_requested_locale(body: BibliometricsBody, meta: dict | None) 
         if locale:
             return locale
 
-    return _ref_card_user_locale(
-        "",
-        str(data.get("title") or ""),
-        str(data.get("source_name") or data.get("sourceName") or ""),
-        str(data.get("summary_line") or data.get("summaryLine") or ""),
-    )
+    return ""
 
 
 def _shelf_repair_text(value) -> str:
@@ -2635,6 +2629,7 @@ def get_bibliometrics(body: BibliometricsBody):
         local_summary = _local_source_summary_meta({**dict(hydrated or {}), **dict(meta or {})}, target_locale=target_locale)
         if local_summary:
             hydrated = _bibliometrics_quality_contract({**dict(hydrated or {}), **local_summary})
+    hydrated = _attach_bibliometrics_summary_locale(_bibliometrics_quality_contract(hydrated))
     quality = hydrated.get("metadata_quality") if isinstance(hydrated.get("metadata_quality"), dict) else {}
     acceptance = (
         hydrated.get("metadata_export_acceptance")
@@ -2652,7 +2647,20 @@ def get_bibliometrics(body: BibliometricsBody):
     enriched = enrich_citation_detail_meta(seed)
     if not isinstance(enriched, dict):
         enriched = {}
-    result = _bibliometrics_quality_contract(_strip_misbound_local_source_summary({**seed, **enriched}))
+    merged_result = _strip_misbound_local_source_summary({**seed, **enriched})
+    if (
+        not isinstance(enriched.get("metadata_quality"), dict)
+        or enriched.get("metadata_quality") == seed.get("metadata_quality")
+    ):
+        merged_result.pop("metadata_quality", None)
+        merged_result.pop("metadataQuality", None)
+    if (
+        not isinstance(enriched.get("metadata_export_acceptance"), dict)
+        or enriched.get("metadata_export_acceptance") == seed.get("metadata_export_acceptance")
+    ):
+        merged_result.pop("metadata_export_acceptance", None)
+        merged_result.pop("metadataExportAcceptance", None)
+    result = _bibliometrics_quality_contract(merged_result)
     if (
         _bibliometrics_accept_local_source_summary(result)
         or not _bibliometrics_summary_matches_locale(result, target_locale)

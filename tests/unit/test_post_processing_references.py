@@ -283,6 +283,60 @@ IEEE Signal Processing Magazine, 38(2):65-88,
     assert "[2023]" not in refs
 
 
+def test_references_preserve_author_year_style_without_fake_year_markers():
+    src = """
+# Paper Title
+
+## References
+
+Kara-Ali Aliev, Artem Sevastopolsky, Maria Kolos, Dmitry Ulyanov, and Victor Lem-
+pitsky. 2020. Neural Point-Based Graphics. In Computer Vision - ECCV 2020. 696-712.
+Jonathan T Barron, Ben Mildenhall, Matthew Tancik, Peter Hedman, Ricardo Martin-
+Brualla, and Pratul P Srinivasan. 2021. Mip-nerf: A multiscale representation.
+Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P. Srinivasan, and Peter Hedman.
+2022. Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields. CVPR.
+
+<!-- kb_page: 14 -->
+
+3D Gaussian Splatting for Real-Time Radiance Field Rendering
+139:13
+Olivia Wiles, Georgia Gkioxari, Richard Szeliski, and Justin Johnson. 2020. Synsin:
+End-to-end view synthesis from a single image. In Proceedings of the IEEE/CVF
+Conference on Computer Vision and Pattern Recognition. 7467-7477.
+
+## A Details
+Appendix text must remain outside the references.
+"""
+    out = postprocess_markdown(src)
+    refs = _refs_tail(out)
+
+    assert refs
+    assert "Victor Lempitsky. 2020. Neural Point-Based Graphics." in refs
+    assert "Jonathan T Barron" in refs
+    assert "<!-- kb_page: 14 -->" in refs
+    assert "Olivia Wiles" in refs
+    assert "[2020]" not in refs
+    assert "[2021]" not in refs
+    assert "[2022]" not in refs
+    assert "## A Details" in out
+    assert out.index("Olivia Wiles") < out.index("## A Details")
+
+
+def test_references_keep_author_year_page_marker_on_own_line():
+    src = """
+## References
+
+Angtian Wang, Peng Wang, Jian Sun, Adam Kortylewski, and Alan Yuille. 2023. VoGE: A Differentiable Volume Renderer. <!-- kb_page: 14 --> Olivia Wiles, Georgia Gkioxari, Richard Szeliski, and Justin Johnson. 2020. Synsin: End-to-end view synthesis from a single image.
+"""
+    out = postprocess_markdown(src)
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+
+    assert "<!-- kb_page: 14 -->" in lines
+    marker_idx = lines.index("<!-- kb_page: 14 -->")
+    assert lines[marker_idx - 1].startswith("Angtian Wang")
+    assert lines[marker_idx + 1].startswith("Olivia Wiles")
+
+
 def test_references_drop_standalone_page_number_lines_inside_references():
     src = """
 ## References

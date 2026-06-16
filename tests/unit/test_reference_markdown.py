@@ -85,3 +85,29 @@ def test_references_format_keeps_standalone_numbered_url_entry_and_avoids_year_r
     assert "[2019]" not in out
     assert "[175]" not in out
     assert "Acknowledgements" not in out
+
+
+def test_references_format_preserves_author_year_references_without_fake_numbers():
+    page_text = "\n".join(
+        [
+            "REFERENCES",
+            "Kara-Ali Aliev, Artem Sevastopolsky, Maria Kolos, Dmitry Ulyanov, and Victor Lem-",
+            "pitsky. 2020. Neural Point-Based Graphics. In Computer Vision - ECCV 2020. 696-712.",
+            "Jonathan T Barron, Ben Mildenhall, Matthew Tancik, Peter Hedman, Ricardo Martin-",
+            "Brualla, and Pratul P Srinivasan. 2021. Mip-nerf: A multiscale representation.",
+            "Jonathan T. Barron, Ben Mildenhall, Dor Verbin, Pratul P. Srinivasan, and Peter Hedman.",
+            "2022. Mip-NeRF 360: Unbounded Anti-Aliased Neural Radiance Fields. CVPR.",
+        ]
+    )
+
+    out = fix_references_format(normalize_references_page_text(page_text))
+    ref_lines = [line.strip() for line in out.splitlines() if line.strip() and not line.startswith("#")]
+
+    assert len(ref_lines) == 3
+    assert ref_lines[0].startswith("Kara-Ali Aliev")
+    assert "Victor Lempitsky. 2020. Neural Point-Based Graphics." in ref_lines[0]
+    assert ref_lines[1].startswith("Jonathan T Barron")
+    assert ref_lines[2].startswith("Jonathan T. Barron")
+    assert "[2020]" not in out
+    assert "[2021]" not in out
+    assert "[2022]" not in out

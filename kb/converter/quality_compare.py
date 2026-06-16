@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .md_analyzer import MarkdownAnalyzer
+from .reference_markdown import _looks_like_author_year_reference_text
 
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$", flags=re.MULTILINE)
@@ -157,6 +158,9 @@ def summarize_markdown_quality(md_text: str) -> MarkdownQualitySummary:
         expanded_indices.update(_expand_citation_token(token))
 
     reference_numbers = [int(m.group(1)) for m in _REF_LINE_RE.finditer("\n".join(ref_lines))]
+    author_year_reference_count = sum(
+        1 for raw in ref_lines if _looks_like_author_year_reference_text((raw or "").strip())
+    )
     display_math_blocks = _count_display_math_blocks(text)
     inline_math = _INLINE_MATH_RE.findall(_strip_display_math_blocks(text))
 
@@ -192,7 +196,7 @@ def summarize_markdown_quality(md_text: str) -> MarkdownQualitySummary:
         display_math_block_count=display_math_blocks,
         inline_math_count=len(inline_math),
         references_heading_count=len(_REF_HEADING_RE.findall(text)),
-        reference_line_count=len(reference_numbers),
+        reference_line_count=max(len(reference_numbers), author_year_reference_count),
         max_reference_index=max(reference_numbers) if reference_numbers else 0,
         body_citation_marker_count=len(body_citation_markers),
         body_citation_range_count=body_citation_range_count,
