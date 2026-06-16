@@ -339,11 +339,12 @@ export function hasRefsPanelContent(
   if (!entry) return false
   const displayState = String(entry.display_state || '').trim().toLowerCase()
   if (displayState === 'empty') return false
+  if (displayState === 'suppressed') return false
   const { hits, suppressedHitCount, hiddenActiveSourceCount } = prepareRefsPanelHits(entry, opts)
   if (hits.length > 0) return true
   if (displayState === 'pending') return hiddenActiveSourceCount <= 0
   if (hiddenActiveSourceCount > 0 && String(opts?.activeSourcePath || opts?.activeSourceName || '').trim()) return false
-  if (displayState === 'suppressed' || suppressedHitCount > 0) return true
+  if (suppressedHitCount > 0) return false
   if (displayState === 'hidden_by_guide') return false
   const guideFilter = entry.guide_filter || {}
   const filteredCount = positiveNumber(guideFilter.filtered_hit_count)

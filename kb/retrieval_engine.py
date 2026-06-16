@@ -34,10 +34,11 @@ from .source_blocks import load_anchor_index_cached as _load_anchor_index_cached
 from .source_filters import is_excluded_source_path
 from .store import compute_file_sha1
 from .tokenize import tokenize
+from .runtime_cache import cache_get as _runtime_cache_get, cache_set as _runtime_cache_set
 
 # These callbacks are injected by the API/runtime layer to reuse the shared cache.
-_CACHE_GET: Callable[[str, str], Any] = lambda _bucket, _key: None
-_CACHE_SET: Callable[..., None] = lambda _bucket, _key, _val, **_kw: None
+_CACHE_GET: Callable[[str, str], Any] = _runtime_cache_get
+_CACHE_SET: Callable[..., None] = _runtime_cache_set
 
 
 def configure_cache(cache_get: Callable[[str, str], Any], cache_set: Callable[..., None]) -> None:

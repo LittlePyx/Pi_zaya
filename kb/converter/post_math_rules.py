@@ -13,6 +13,73 @@ from .post_references import (
 )
 from .text_utils import _normalize_text
 
+_BARE_LATEX_INLINE_EXPR_RE = re.compile(
+    r"\\(?:alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|chi|psi|omega|"
+    r"Theta|Sigma|hat|mathbf|boldsymbol)"
+    r"(?:\s*(?:[_^]\{[^{}\n]{1,60}\}|[_^][A-Za-z0-9]))?"
+    r"(?:\s*(?:[<>=]|\\leq|\\geq|\\neq|\\approx|\\in|\\notin)\s*"
+    r"(?:[-+]?\d+(?:\.\d+)?|[A-Za-z](?:[_^]\{[^{}\n]{1,60}\}|[_^][A-Za-z0-9])?|"
+    r"\\[A-Za-z]+(?:\{[^{}\n]{1,60}\})?|\[[^\]\n]{1,80}\]))+"
+)
+_STRAY_CITATION_DOLLAR_RE = re.compile(
+    r"(\[\s*\d{1,4}(?:\s*[,;\u2013-]\s*\d{1,4})*\s*\])\$\s*(?=(?:and|or|the|this|that|these|those|[A-Z]))"
+)
+_UNCLOSED_INLINE_MATH_SENTENCE_RE = re.compile(
+    r"\$(\\(?:alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|chi|psi|omega|"
+    r"Theta|Sigma|hat|mathbf|boldsymbol)[^$\n]{1,180}?)([.?!])(?=\s+[A-Z])"
+)
+
+
+def _wrap_bare_inline_latex_math_segment(segment: str) -> str:
+    if not segment:
+        return segment
+    text = str(segment)
+
+    text = re.sub(
+        r"\bloss\s*\(\s*c(?:dot|[.\u00b7\u22c5])\s*\)",
+        r"$\\operatorname{loss}(\\cdot)$",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    def _wrap_expr(match: re.Match) -> str:
+        expr = (match.group(0) or "").strip()
+        if not expr:
+            return match.group(0)
+        return f"${expr}$"
+
+    return _BARE_LATEX_INLINE_EXPR_RE.sub(_wrap_expr, text)
+
+
+def _wrap_bare_inline_latex_math_in_text(line: str) -> str:
+    if not line or ("\\" not in line and "cdot" not in line):
+        return line
+    parts = re.split(r"(\$[^$\n]*\$)", str(line))
+    if len(parts) <= 1:
+        return _wrap_bare_inline_latex_math_segment(str(line))
+    out: list[str] = []
+    for idx, part in enumerate(parts):
+        if idx % 2 == 1:
+            out.append(part)
+        else:
+            out.append(_wrap_bare_inline_latex_math_segment(part))
+    return "".join(out)
+
+
+def _close_unclosed_inline_math_before_sentence(text: str) -> str:
+    if not text or "$" not in text or "\\" not in text:
+        return text
+
+    def _repl(match: re.Match) -> str:
+        expr = (match.group(1) or "").strip()
+        punct = match.group(2) or "."
+        if not re.search(r"(?:\\in|\\leq|\\geq|\\neq|\\approx|[<>=_^]|\[[^\]]+\])", expr):
+            return match.group(0)
+        return f"${expr}${punct}"
+
+    return _UNCLOSED_INLINE_MATH_SENTENCE_RE.sub(_repl, text)
+
+
 def fix_math_markdown(md: str) -> str:
     """
     Deterministic (non-LLM) math cleanup for Markdown.
@@ -530,11 +597,16 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
         return md
     lines = md.splitlines()
     out: list[str] = []
+    in_fence = False
     in_math = False
     in_refs = False
     for ln in lines:
         s = ln.rstrip("\n")
         st = s.strip()
+        if re.match(r"^\s*```", s):
+            in_fence = not in_fence
+            out.append(s)
+            continue
         if st == "$$":
             in_math = not in_math
             out.append(s)
@@ -545,7 +617,7 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
             continue
         if in_refs and _is_post_references_resume_heading_line(st):
             in_refs = False
-        if in_refs or in_math:
+        if in_refs or in_math or in_fence:
             out.append(s)
             continue
         if re.match(r"^#{1,6}\s+", st) or re.match(r"^\s*!\[[^\]]*\]\([^)]+\)", st):
@@ -553,6 +625,8 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
             continue
 
         t = s
+        t = _close_unclosed_inline_math_before_sentence(t)
+        t = _STRAY_CITATION_DOLLAR_RE.sub(r"\1 ", t)
         # Some PDFs leak italic/emphasis markers as stray `$` in plain text, e.g.:
         #   $representation$[11, 34]$. Others ...$
         # These are not math; strip dollars when the line looks like prose/citations.
@@ -597,6 +671,7 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
             return m.group(0)
         t = re.sub(r"~?\\cite\{([^}]{1,120})\}", _cite_repl, t)
         t = re.sub(r"\$(\[[0-9,\s]+\])\$", r"\1", t)
+        t = _wrap_bare_inline_latex_math_in_text(t)
         out.append(t)
     return "\n".join(out)
 

@@ -7,10 +7,8 @@ import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
 import type {
-  ReaderSelectionShelfPayload,
   ReaderLocateCandidate,
   ReaderLocateClaimGroup,
-  ReaderCitationShelfPayload,
   ReaderLocateResult,
   ReaderLocateTarget,
   ReaderOpenPayload,
@@ -23,19 +21,13 @@ import {
 } from './reader/readerTypes'
 import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
-  isLikelyWeakCitationTitle,
-  buildCiteDetailFromMeta,
   citationDisplay,
   cleanCitationDisplayText,
-  looksLowValueShelfSummary,
   mergeCiteMeta,
   normalizeCiteDetail,
-  normalizeShelfItemKind,
   normalizeShelfNote,
   normalizeShelfTags,
-  legacyConversationShelfStorageKey,
   shelfProjectScopeId,
-  shelfItemMetadataQualityReady,
   shelfItemNeedsMetadataRepair,
   shelfItemRepairFingerprint,
   shelfStorageKey,
@@ -44,10 +36,56 @@ import {
   type CiteDetail,
   type CiteShelfItem,
 } from './citationState'
+import {
+  SHELF_MAX_ITEMS,
+  articleSummaryPatchFromMeta,
+  dedupeShelfItems,
+  looksLowValueShelfSummary,
+  mergeShelfItemWithLive,
+  preferRicherField,
+  sameShelfItem,
+  sameShelfItems,
+  shelfItemHasDisplayableArticleSummary,
+  shelfItemNeedsPersistedMetadataHydrate,
+  shelfItemNeedsSummaryBackfill,
+  shelfItemsForBackend,
+  shelfMetadataHydrateAttemptKey,
+  shelfPaperIdentity,
+  shelfRepairMetaFromEntry,
+  shelfRepairPayloads,
+  shelfSourceIdentity,
+  shelfSummaryBackfillAttemptKey,
+  shouldMergeShelfItemsBySource,
+  shouldRequestCitationCardPolish,
+  snapshotDiffCounts,
+} from './citeShelfRuntime'
+import {
+  SHELF_SAVED_MAX_ITEMS,
+  SHELF_SAVED_SUFFIX,
+  invalidateSavedShelfSnapshotCache,
+  invalidateShelfSnapshotCache,
+  legacyShelfStorageKeys,
+  migrateLegacySavedShelfSnapshots,
+  migrateLegacyShelfSnapshot,
+  persistSavedShelfSnapshots,
+  persistShelfSnapshot,
+  readSavedShelfSnapshots,
+  readShelfSnapshot,
+  restoreShelfItems,
+  shelfSavedStorageKey,
+  type ShelfSavedSnapshot,
+} from './citeShelfStorage'
+import {
+  citeDetailFromReaderSelection,
+  mergeSelectionNote,
+  normalizeReaderCitationShelfPayload,
+  normalizeReaderSelectionShelfPayload,
+  readerSelectionNote,
+} from './readerShelfPayload'
 import { RefsPanel } from '../refs/RefsPanel'
 import { hasRefsPanelContent } from '../refs/refsPanelDisplay'
-import { chatApi, type ChatImageAttachment, type Message } from '../../api/chat'
-import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact, type ShelfMetadataRepairItem } from '../../api/references'
+import { chatApi, type Message } from '../../api/chat'
+import { referencesApi, type ReaderDocAnchor, type ShelfMetadataRepairImpact } from '../../api/references'
 import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -63,17 +101,26 @@ import {
 import {
   buildSelectedResearchContextPack,
   buildSelectedResearchContextPackFromItems,
-  normalizeSelectedResearchContextPack,
   type SelectedResearchContextPack,
   type SelectedResearchContextItem,
 } from './researchContextPack'
+import {
+  messageListPerfNow,
+  pushMessageListPrepPerf,
+  type MessageListPrepPerfEvent,
+} from './messageListPerf'
+import {
+  contextItemTitle,
+  getAssistantSelectedResearchContext,
+  getMessageResearchTrace,
+  getUserPromptResearchContext,
+  imageAttachmentsOf,
+  isImageOnlyPlaceholder,
+} from './messageTraceUtils'
+import { ResearchTracePanel } from './ResearchTracePanel'
+import { ResearchContextReceipt } from './ResearchContextReceipt'
 
 const { Text } = Typography
-const SHELF_MAX_ITEMS = 120
-const SHELF_SCHEMA_VERSION = 4
-const SHELF_SAVED_SCHEMA_VERSION = 1
-const SHELF_SAVED_MAX_ITEMS = 16
-const SHELF_SAVED_SUFFIX = ':saved_snapshots'
 const SHELF_BACKEND_PERSIST_MS = 320
 const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
 const SHELF_AUTO_REPAIR_RETRY_MS = 15000
@@ -81,26 +128,31 @@ const SHELF_METADATA_HYDRATE_BATCH_SIZE = 8
 const SHELF_METADATA_HYDRATE_RETRY_MS = 15000
 const SHELF_SUMMARY_BACKFILL_BATCH_SIZE = 4
 const SHELF_SUMMARY_BACKFILL_RETRY_MS = 60000
-const MESSAGE_LIST_PREP_PERF_LIMIT = 180
 
-interface MessageListPrepPerfEvent {
-  ts: number
-  convId: string
-  messageCount: number
-  assistantCount: number
-  heavyCount: number
-  lightCount: number
-  cacheHits: number
-  durationMs: number
+function bibliometricsLocalePatch(): Record<string, string> {
+  const settings = useSettingsStore.getState()
+  const refsLocale = settings.refsCardLocale === 'zh' || settings.refsCardLocale === 'en'
+    ? settings.refsCardLocale
+    : 'auto'
+  const uiLocale = settings.uiLocale === 'en' ? 'en' : 'zh'
+  const targetLocale = refsLocale === 'auto' ? uiLocale : refsLocale
+  return {
+    refsCardLocale: refsLocale,
+    refs_card_locale: refsLocale,
+    uiLocale,
+    ui_locale: uiLocale,
+    targetLocale,
+    target_locale: targetLocale,
+    renderLocale: targetLocale,
+    render_locale: targetLocale,
+  }
 }
 
-interface MessageListPrepPerfApi {
-  getLogs: () => MessageListPrepPerfEvent[]
-  clear: () => void
-}
-
-interface MessageListDebugWindow extends Window {
-  __kbMessageListPerf?: MessageListPrepPerfApi
+function withBibliometricsLocale(meta: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...meta,
+    ...bibliometricsLocalePatch(),
+  }
 }
 
 export interface ShelfActivityState {
@@ -109,40 +161,6 @@ export interface ShelfActivityState {
   autoRepair: boolean
   background: boolean
   count: number
-}
-
-const messageListPrepPerfLog: MessageListPrepPerfEvent[] = []
-
-function messageListPerfNow() {
-  try {
-    return performance.now()
-  } catch {
-    return Date.now()
-  }
-}
-
-function ensureMessageListPerfApi() {
-  if (typeof window === 'undefined') return
-  const w = window as MessageListDebugWindow
-  if (w.__kbMessageListPerf) return
-  w.__kbMessageListPerf = {
-    getLogs: () => messageListPrepPerfLog.slice(),
-    clear: () => {
-      messageListPrepPerfLog.length = 0
-    },
-  }
-}
-
-function pushMessageListPrepPerf(event: MessageListPrepPerfEvent) {
-  messageListPrepPerfLog.push(event)
-  if (messageListPrepPerfLog.length > MESSAGE_LIST_PREP_PERF_LIMIT) {
-    messageListPrepPerfLog.splice(0, messageListPrepPerfLog.length - MESSAGE_LIST_PREP_PERF_LIMIT)
-  }
-  ensureMessageListPerfApi()
-}
-
-if (typeof window !== 'undefined') {
-  ensureMessageListPerfApi()
 }
 
 interface Props {
@@ -3701,1260 +3719,11 @@ function buildHeuristicReaderOpenPayload(
   }
 }
 
-function isImageOnlyPlaceholder(content: string) {
-  return /^\[Image attachment x\d+\]$/i.test(String(content || '').trim())
-}
-
-function imageAttachmentsOf(message: Message): ChatImageAttachment[] {
-  return Array.isArray(message.attachments)
-    ? message.attachments.filter((item): item is ChatImageAttachment => Boolean(item && item.path))
-    : []
-}
-
-function asTraceRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function getMessageResearchTrace(message: Message): Record<string, unknown> | null {
-  const meta = asTraceRecord(message.meta)
-  const trace = asTraceRecord(meta.research_trace)
-  if (Object.keys(trace).length > 0) return trace
-  const traceId = String(meta.trace_id || '').trim()
-  return traceId ? { trace_id: traceId } : null
-}
-
-function getAssistantSelectedResearchContext(message: Message): SelectedResearchContextPack | null {
-  const meta = asTraceRecord(message.meta)
-  const contracts = asTraceRecord(meta.paper_guide_contracts)
-  return normalizeSelectedResearchContextPack(contracts.selected_research_context)
-}
-
-function getUserPromptResearchContext(message: Message): SelectedResearchContextPack | null {
-  const meta = asTraceRecord(message.meta)
-  return normalizeSelectedResearchContextPack(meta.prompt_context)
-}
-
-function traceNum(value: unknown): number {
-  const n = Number(value)
-  return Number.isFinite(n) ? n : 0
-}
-
-function formatTraceMs(value: unknown): string {
-  const ms = traceNum(value)
-  if (ms <= 0) return '0ms'
-  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s`
-  return `${Math.round(ms)}ms`
-}
-
-function traceSourceLabels(items: unknown): string[] {
-  if (!Array.isArray(items)) return []
-  const out: string[] = []
-  for (const item of items) {
-    const rec = asTraceRecord(item)
-    const label = String(rec.source_name || rec.source_path || '').trim()
-    if (!label) continue
-    out.push(label)
-    if (out.length >= 3) break
-  }
-  return out
-}
-
-interface ResearchTraceDebugWindow extends Window {
-  __KB_SHOW_RESEARCH_TRACE__?: boolean
-}
-
-function shouldShowResearchTracePanel(): boolean {
-  if (typeof window === 'undefined') return false
-  const w = window as ResearchTraceDebugWindow
-  if (w.__KB_SHOW_RESEARCH_TRACE__) return true
-  const enabledValues = new Set(['1', 'true', 'yes', 'on', 'debug'])
-  try {
-    const params = new URLSearchParams(window.location.search)
-    const queryValue = String(params.get('debug_trace') || params.get('kb_trace') || '').trim().toLowerCase()
-    if (enabledValues.has(queryValue)) return true
-  } catch { /* ignore */ }
-  try {
-    const stored = String(window.localStorage.getItem('kb_debug_trace') || '').trim().toLowerCase()
-    return enabledValues.has(stored)
-  } catch {
-    return false
-  }
-}
-
-function contextItemTitle(item: SelectedResearchContextItem, fallback: string): string {
-  return String(item.title || item.excerpt || item.summary || fallback || '').trim()
-}
-
-function contextItemMeta(item: SelectedResearchContextItem): string {
-  return [
-    item.authors,
-    item.year,
-    item.sourceName,
-    item.refNum ? `[${item.refNum}]` : '',
-  ].filter(Boolean).join(' · ')
-}
-
-function ResearchContextReceipt({
-  pack,
-  onOpenReader,
-  onFollowUp,
-  S,
-}: {
-  pack?: SelectedResearchContextPack | null
-  onOpenReader?: (payload: ReaderOpenPayload) => void
-  onFollowUp?: (pack: SelectedResearchContextPack, item: SelectedResearchContextItem) => void
-  S: Record<string, string>
-}) {
-  const [expanded, setExpanded] = useState(false)
-  if (!pack || pack.items.length <= 0) return null
-  const preview = pack.items
-    .slice(0, 2)
-    .map((item) => contextItemTitle(item, S.default_source_fallback || 'Untitled'))
-    .filter(Boolean)
-    .join(' / ')
-  return (
-    <div className={`kb-research-context-receipt ${expanded ? 'is-expanded' : ''}`} data-testid="research-context-receipt">
-      <button
-        type="button"
-        className="kb-research-context-receipt-head"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
-        data-testid="research-context-receipt-toggle"
-      >
-        <span className="kb-research-context-receipt-title">
-          {(S.research_context_receipt_title || 'Used research context').replace('{n}', String(pack.items.length))}
-        </span>
-        <span className="kb-research-context-receipt-preview">
-          {preview || (S.research_context_receipt_preview || 'Selected excerpts from the research basket')}
-        </span>
-        <span className="kb-research-context-receipt-toggle-text">
-          {expanded ? (S.research_context_receipt_collapse || 'Collapse') : (S.research_context_receipt_expand || 'Details')}
-        </span>
-      </button>
-      {expanded ? (
-        <div className="kb-research-context-receipt-list">
-          {pack.items.map((item, idx) => {
-            const title = contextItemTitle(item, S.default_source_fallback || 'Untitled')
-            const meta = contextItemMeta(item)
-            const location = String(item.locationLabel || '').trim()
-            const body = String(item.summary || item.excerpt || '').trim()
-            const secondary = item.summary && item.excerpt && item.summary !== item.excerpt ? item.excerpt : ''
-            const canOpen = Boolean(onOpenReader && item.sourcePath)
-            const canFollowUp = Boolean(onFollowUp)
-            return (
-              <div className="kb-research-context-receipt-item" key={`${item.key || title}-${idx}`} data-testid="research-context-receipt-item">
-                <div className="kb-research-context-receipt-item-main">
-                  <div className="kb-research-context-receipt-item-title">{title}</div>
-                  {meta ? <div className="kb-research-context-receipt-item-meta">{meta}</div> : null}
-                  {location ? (
-                    <div className="kb-research-context-receipt-location">
-                      <span>{S.research_context_receipt_location || 'Location'}</span>
-                      <strong>{location}</strong>
-                    </div>
-                  ) : null}
-                  {body ? (
-                    <div className="kb-research-context-receipt-body">
-                      {body}
-                    </div>
-                  ) : null}
-                  {secondary ? (
-                    <div className="kb-research-context-receipt-excerpt">
-                      {secondary}
-                    </div>
-                  ) : null}
-                  {item.note ? (
-                    <div className="kb-research-context-receipt-note">
-                      <span>{S.research_context_receipt_note || 'Note'}</span>
-                      {item.note}
-                    </div>
-                  ) : null}
-                  {item.doi ? <div className="kb-research-context-receipt-doi">DOI {item.doi}</div> : null}
-                </div>
-                {canOpen || canFollowUp ? (
-                  <div className="kb-research-context-receipt-actions">
-                    {canFollowUp ? (
-                      <button
-                        type="button"
-                        className="kb-research-context-receipt-follow"
-                        data-testid="research-context-receipt-followup"
-                        onClick={() => onFollowUp?.(pack, item)}
-                      >
-                        {S.research_context_receipt_followup || 'Ask follow-up'}
-                      </button>
-                    ) : null}
-                    {canOpen ? (
-                      <button
-                        type="button"
-                        className="kb-research-context-receipt-open"
-                        onClick={() => {
-                          onOpenReader?.({
-                            sourcePath: item.sourcePath,
-                            sourceName: item.sourceName || pack.guideSourceName || item.sourcePath.split(/[\\/]/).pop() || '',
-                            headingPath: location,
-                            snippet: item.excerpt || item.summary || title,
-                            highlightSnippet: item.excerpt || item.summary || title,
-                          })
-                        }}
-                      >
-                        {S.research_context_receipt_open || 'Open'}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
-            )
-          })}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function ResearchTracePanel({ trace }: { trace?: Record<string, unknown> | null }) {
-  if (!shouldShowResearchTracePanel()) return null
-  const tr = asTraceRecord(trace)
-  const traceId = String(tr.trace_id || '').trim()
-  const timings = asTraceRecord(tr.timings_ms)
-  const retrieval = asTraceRecord(tr.retrieval)
-  const answer = asTraceRecord(tr.answer)
-  const refsTrace = asTraceRecord(tr.refs)
-  const citeSystems = asTraceRecord(tr.citation_systems)
-  if (!traceId && Object.keys(timings).length <= 0 && Object.keys(retrieval).length <= 0) {
-    return null
-  }
-  const topSources = traceSourceLabels(retrieval.top_hits)
-  const answerSources = traceSourceLabels(answer.answer_sources)
-  const refSources = traceSourceLabels(refsTrace.final_display_sources || refsTrace.seed_sources)
-  const evidenceMismatch = Boolean(refsTrace.primary_evidence_mismatch)
-  const evidenceHeading = String(refsTrace.primary_evidence_heading || '').trim()
-  const evidenceTerms = Array.isArray(refsTrace.primary_evidence_terms)
-    ? refsTrace.primary_evidence_terms.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
-    : []
-  const evidenceLabel = evidenceHeading ? (evidenceMismatch ? 'weak' : 'ok') : 'n/a'
-  const total = formatTraceMs(timings.total)
-  const status = String(tr.status || '').trim() || 'running'
-  return (
-    <details className="kb-research-trace">
-      <summary>
-        <span>Trace</span>
-        <span>{status}</span>
-        <span>{total}</span>
-      </summary>
-      <div className="kb-research-trace-grid">
-        <div><span>retrieve</span><strong>{formatTraceMs(timings.retrieve)}</strong></div>
-        <div><span>answer</span><strong>{formatTraceMs(timings.llm_answer)}</strong></div>
-        <div><span>refs</span><strong>{formatTraceMs(timings.refs_precompute)}</strong></div>
-        <div><span>hits</span><strong>{traceNum(retrieval.raw_hit_count)}</strong></div>
-        <div><span>answer docs</span><strong>{traceNum(answer.answer_hit_count)}</strong></div>
-        <div><span>cards</span><strong>{traceNum(refsTrace.final_display_count || refsTrace.seed_count)}</strong></div>
-        <div><span>System B</span><strong>{traceNum(citeSystems.system_b_validated_count || citeSystems.system_b_opportunity_count)}</strong></div>
-        <div className={evidenceMismatch ? 'is-warning' : ''}>
-          <span>evidence</span>
-          <strong title={evidenceTerms.join(', ') || evidenceHeading}>{evidenceLabel}</strong>
-        </div>
-        <div><span>refs async</span><strong>{refsTrace.async_will_run ? 'yes' : 'no'}</strong></div>
-      </div>
-      {topSources.length > 0 || answerSources.length > 0 || refSources.length > 0 ? (
-        <div className="kb-research-trace-sources">
-          {topSources.length > 0 ? <div><span>retrieved</span>{topSources.join(' / ')}</div> : null}
-          {answerSources.length > 0 ? <div><span>answer</span>{answerSources.join(' / ')}</div> : null}
-          {refSources.length > 0 ? <div><span>refs</span>{refSources.join(' / ')}</div> : null}
-        </div>
-      ) : null}
-      {traceId ? <div className="kb-research-trace-id">{traceId}</div> : null}
-    </details>
-  )
-}
-
 function AssistantAvatar() {
   return (
     <div className="kb-msg-avatar kb-msg-avatar-assistant">
       <img src="/pi_logo.png" alt="Pi assistant" className="h-5 w-5 object-contain" loading="lazy" />
     </div>
-  )
-}
-
-const shelfStorageFallback = new Map<string, string>()
-interface ShelfSnapshot {
-  version: number
-  revision: number
-  updatedAt: number
-  open: boolean
-  items: CiteShelfItem[]
-}
-interface ShelfSavedSnapshot {
-  id: string
-  name: string
-  createdAt: number
-  items: CiteShelfItem[]
-}
-interface ShelfSavedSnapshotPayload {
-  version: number
-  updatedAt: number
-  snapshots: ShelfSavedSnapshot[]
-}
-const shelfSnapshotMemory = new Map<string, ShelfSnapshot>()
-const shelfSavedSnapshotMemory = new Map<string, ShelfSavedSnapshotPayload>()
-
-function cloneShelfSnapshot(snapshot: ShelfSnapshot): ShelfSnapshot {
-  return {
-    version: Number(snapshot.version || 0),
-    revision: Number(snapshot.revision || 0),
-    updatedAt: Number(snapshot.updatedAt || 0),
-    open: Boolean(snapshot.open),
-    items: (snapshot.items || []).map((item) => ({ ...item })),
-  }
-}
-
-function cloneSavedSnapshot(snapshot: ShelfSavedSnapshot): ShelfSavedSnapshot {
-  return {
-    id: String(snapshot.id || ''),
-    name: String(snapshot.name || ''),
-    createdAt: Number(snapshot.createdAt || 0),
-    items: (snapshot.items || []).map((item) => ({ ...item })),
-  }
-}
-
-function cloneSavedSnapshotPayload(payload: ShelfSavedSnapshotPayload): ShelfSavedSnapshotPayload {
-  return {
-    version: Number(payload.version || 0),
-    updatedAt: Number(payload.updatedAt || 0),
-    snapshots: (payload.snapshots || []).map((entry) => cloneSavedSnapshot(entry)),
-  }
-}
-
-function listShelfStorages(): Storage[] {
-  const out: Storage[] = []
-  try {
-    out.push(window.localStorage)
-  } catch {
-    // ignore
-  }
-  try {
-    if (!out.includes(window.sessionStorage)) out.push(window.sessionStorage)
-  } catch {
-    // ignore
-  }
-  return out
-}
-
-function readShelfStorage(key: string): string {
-  for (const storage of listShelfStorages()) {
-    try {
-      const raw = storage.getItem(key)
-      if (typeof raw === 'string') {
-        shelfStorageFallback.set(key, raw)
-        return raw
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return shelfStorageFallback.get(key) || ''
-}
-
-function writeShelfStorage(key: string, payload: string) {
-  // Always keep in-memory raw snapshot first to survive temporary storage failures.
-  shelfStorageFallback.set(key, payload)
-  let wrote = false
-  for (const storage of listShelfStorages()) {
-    try {
-      storage.setItem(key, payload)
-      wrote = true
-    } catch {
-      // ignore
-    }
-  }
-  if (!wrote) return
-}
-
-function removeShelfStorage(key: string) {
-  shelfSnapshotMemory.delete(key)
-  for (const storage of listShelfStorages()) {
-    try {
-      storage.removeItem(key)
-    } catch {
-      // ignore
-    }
-  }
-  shelfStorageFallback.delete(key)
-}
-
-function shelfSavedStorageKey(projectId?: string | null): string {
-  return `${shelfStorageKey(projectId)}${SHELF_SAVED_SUFFIX}`
-}
-
-function legacyShelfStorageKeys(convId?: string | null): string[] {
-  const out = new Set<string>()
-  const cid = String(convId || '').trim()
-  if (cid) out.add(legacyConversationShelfStorageKey(cid))
-  else out.add(legacyConversationShelfStorageKey(null))
-  return Array.from(out)
-}
-
-function migrateLegacyShelfSnapshot(storageKey: string, legacyKeys: string[]): ShelfSnapshot | null {
-  const current = readShelfSnapshot(storageKey)
-  const legacySnapshots = legacyKeys
-    .filter((key) => key && key !== storageKey)
-    .map((key) => ({ key, snapshot: readShelfSnapshot(key) }))
-    .filter((entry): entry is { key: string; snapshot: ShelfSnapshot } => Boolean(entry.snapshot))
-  if (legacySnapshots.length <= 0) return current
-
-  const nextItems = dedupeShelfItems([
-    ...(current?.items || []),
-    ...legacySnapshots.flatMap((entry) => entry.snapshot.items || []),
-  ]).slice(0, SHELF_MAX_ITEMS)
-  const nextOpen = Boolean(current?.open || legacySnapshots.some((entry) => entry.snapshot.open))
-  const currentRevision = Number(current?.revision || 0)
-  persistShelfSnapshot(storageKey, { open: nextOpen, items: nextItems }, currentRevision)
-  for (const entry of legacySnapshots) removeShelfStorage(entry.key)
-  return readShelfSnapshot(storageKey)
-}
-
-function mergeSavedShelfSnapshots(current: ShelfSavedSnapshot[], incoming: ShelfSavedSnapshot[]): ShelfSavedSnapshot[] {
-  const seen = new Set<string>()
-  const out: ShelfSavedSnapshot[] = []
-  for (const entry of [...current, ...incoming]) {
-    const id = String(entry.id || '').trim()
-    if (!id || seen.has(id)) continue
-    out.push(cloneSavedSnapshot(entry))
-    seen.add(id)
-    if (out.length >= SHELF_SAVED_MAX_ITEMS) break
-  }
-  return out
-}
-
-function migrateLegacySavedShelfSnapshots(storageKey: string, legacyKeys: string[]): ShelfSavedSnapshot[] {
-  const current = readSavedShelfSnapshots(storageKey)
-  const legacySnapshots = legacyKeys
-    .filter((key) => key && key !== storageKey)
-    .flatMap((key) => readSavedShelfSnapshots(key))
-  if (legacySnapshots.length <= 0) return current
-  const merged = mergeSavedShelfSnapshots(current, legacySnapshots)
-  if (merged.length > 0) persistSavedShelfSnapshots(storageKey, merged)
-  for (const key of legacyKeys) {
-    if (key && key !== storageKey) removeSavedShelfStorage(key)
-  }
-  return merged
-}
-
-function normalizeDoiLike(value: string): string {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')
-    .replace(/^[\s"'`([{<]+|[\s"'`)\]}>.,;:]+$/g, '')
-    .trim()
-}
-
-function normalizeTitleLike(value: string): string {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function shelfKind(item: Pick<CiteShelfItem, 'shelfItemKind'>): string {
-  return normalizeShelfItemKind(String(item.shelfItemKind || ''))
-}
-
-function shelfPaperIdentity(item: CiteShelfItem): string {
-  if (shelfKind(item) === 'reader_selection') {
-    const source = String(item.sourcePath || item.sourceName || '').trim().toLowerCase()
-    const anchor = String(item.blockId || item.anchorId || item.anchor || '').trim().toLowerCase()
-    const excerpt = normalizeTitleLike(item.shelfExcerpt || item.evidenceQuote || item.raw || item.main)
-    const offsets = item as CiteShelfItem & { startOffset?: number; endOffset?: number }
-    return `reader-selection:${source}|${anchor}|${offsets.startOffset ?? ''}|${offsets.endOffset ?? ''}|${excerpt.slice(0, 160)}`
-  }
-  const doi = normalizeDoiLike(item.doi || item.doiUrl)
-  if (doi) return `doi:${doi}`
-  const title = normalizeTitleLike(item.title || item.main)
-  const year = /^\d{4}$/.test(String(item.year || '').trim()) ? String(item.year).trim() : ''
-  if (title) return `title:${title}|${year}`
-  return `key:${String(item.key || '').trim()}`
-}
-
-function shelfSourceIdentity(item: Pick<CiteShelfItem, 'sourcePath' | 'sourceName'>): string {
-  return String(item.sourcePath || item.sourceName || '')
-    .trim()
-    .toLowerCase()
-}
-
-function shouldMergeShelfItemsBySource(existing: CiteShelfItem, incoming: CiteShelfItem, sourceIdentity: string): boolean {
-  if (!sourceIdentity) return false
-  if (shelfKind(existing) === 'reader_selection') return false
-  if (shelfKind(incoming) === 'reader_selection') return false
-  return shelfSourceIdentity(existing) === sourceIdentity
-}
-
-function dedupeShelfItems(items: CiteShelfItem[]): CiteShelfItem[] {
-  const seen = new Set<string>()
-  const out: CiteShelfItem[] = []
-  for (const item of items || []) {
-    const key = shelfPaperIdentity(item)
-    if (!key || seen.has(key)) continue
-    seen.add(key)
-    out.push(item)
-    if (out.length >= SHELF_MAX_ITEMS) break
-  }
-  return out
-}
-
-function normalizeReaderSelectionShelfPayload(raw: unknown): ReaderSelectionShelfPayload | null {
-  const rec = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
-  const text = cleanCitationDisplayText(String(rec.text || '')).trim()
-  const sourcePath = String(rec.sourcePath || rec.source_path || '').trim()
-  if (!text || !sourcePath) return null
-  const numberField = (key: string): number | undefined => {
-    const value = Number(rec[key])
-    return Number.isFinite(value) ? value : undefined
-  }
-  return {
-    text,
-    sourcePath,
-    sourceName: String(rec.sourceName || rec.source_name || '').trim() || undefined,
-    headingPath: String(rec.headingPath || rec.heading_path || '').trim() || undefined,
-    blockId: String(rec.blockId || rec.block_id || '').trim() || undefined,
-    anchorId: String(rec.anchorId || rec.anchor_id || '').trim() || undefined,
-    anchorKind: String(rec.anchorKind || rec.anchor_kind || '').trim() || undefined,
-    startOffset: numberField('startOffset'),
-    endOffset: numberField('endOffset'),
-    occurrence: numberField('occurrence'),
-    readableIndex: numberField('readableIndex'),
-    documentOccurrence: numberField('documentOccurrence'),
-    startReadableIndex: numberField('startReadableIndex'),
-    endReadableIndex: numberField('endReadableIndex'),
-    conversationId: String(rec.conversationId || rec.conversation_id || '').trim() || undefined,
-    projectId: String(rec.projectId || rec.project_id || '').trim() || undefined,
-    createdAt: numberField('createdAt') || Date.now(),
-  }
-}
-
-function normalizeReaderCitationShelfPayload(raw: unknown): ReaderCitationShelfPayload | null {
-  const rec = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
-  const detailRaw = (rec.detail && typeof rec.detail === 'object')
-    ? rec.detail as Record<string, unknown>
-    : (rec.citationDetail && typeof rec.citationDetail === 'object')
-      ? rec.citationDetail as Record<string, unknown>
-      : null
-  if (!detailRaw) return null
-  const detail = normalizeCiteDetail(detailRaw)
-  if (!detail) return null
-  return {
-    detail: detail as unknown as Record<string, unknown>,
-    conversationId: String(rec.conversationId || rec.conversation_id || '').trim() || undefined,
-    projectId: String(rec.projectId || rec.project_id || '').trim() || undefined,
-    createdAt: Number.isFinite(Number(rec.createdAt)) ? Number(rec.createdAt) : Date.now(),
-  }
-}
-
-function readerSelectionShelfTitle(payload: ReaderSelectionShelfPayload): string {
-  const fallback = String(payload.sourcePath || '').split(/[\\/]/).pop() || 'Reader selection'
-  return cleanCitationDisplayText(String(payload.sourceName || fallback || 'Reader selection'))
-    .replace(/\.en\.md$/i, '')
-    .replace(/\.md$/i, '')
-    .replace(/\.pdf$/i, '')
-    .trim() || fallback
-}
-
-function readerSelectionAnchor(payload: ReaderSelectionShelfPayload): string {
-  return [
-    'reader-selection',
-    payload.sourcePath,
-    payload.blockId || payload.anchorId || '',
-    payload.startOffset ?? '',
-    payload.endOffset ?? '',
-  ].join(':')
-}
-
-function readerSelectionNote(
-  payload: ReaderSelectionShelfPayload,
-  labels: { shelf_reader_selection_selected?: string; shelf_reader_selection_source?: string },
-): string {
-  const heading = String(payload.headingPath || '').trim()
-  const source = readerSelectionShelfTitle(payload)
-  const selectedLabel = labels.shelf_reader_selection_selected || 'Selected text'
-  const sourceLabel = labels.shelf_reader_selection_source || 'Source'
-  const parts = [
-    `${sourceLabel}: ${heading ? `${source} / ${heading}` : source}`,
-    `${selectedLabel}: ${payload.text}`,
-  ]
-  return parts.filter(Boolean).join('\n')
-}
-
-function mergeSelectionNote(existing: string, next: string): string {
-  const current = normalizeShelfNote(existing)
-  const incoming = normalizeShelfNote(next)
-  if (!incoming) return current
-  if (!current) return incoming
-  if (current.includes(incoming)) return current
-  return `${current}\n\n${incoming}`.trim()
-}
-
-function citeDetailFromReaderSelection(
-  payload: ReaderSelectionShelfPayload,
-  activeConvId?: string | null,
-): CiteDetail | null {
-  const sourceName = String(payload.sourceName || '').trim()
-    || String(payload.sourcePath || '').split(/[\\/]/).pop()
-    || 'Reader selection'
-  const title = readerSelectionShelfTitle({ ...payload, sourceName })
-  const meta = {
-    anchor: readerSelectionAnchor(payload),
-    num: 0,
-    source_name: sourceName,
-    source_path: payload.sourcePath,
-    trace_conv_id: String(activeConvId || payload.conversationId || ''),
-    raw: payload.text,
-    cite_fmt: payload.text,
-    is_inpaper: false,
-    title,
-    heading_path: payload.headingPath || '',
-    evidence_quote: payload.text,
-    evidence_source: 'reader_selection',
-    citation_context: payload.text,
-    citation_context_source: 'reader_selection',
-    shelf_item_kind: 'reader_selection',
-    shelf_origin: 'reader_selection',
-    shelf_excerpt: payload.text,
-    location_label: payload.headingPath || '',
-    block_id: payload.blockId || '',
-    anchor_id: payload.anchorId || '',
-    anchor_kind: payload.anchorKind || '',
-    card_kind: 'reader_selection',
-    card_title: title,
-    card_subtitle: payload.headingPath || '',
-    card_claim: payload.text,
-    card_evidence: payload.text,
-  }
-  return buildCiteDetailFromMeta(meta, {
-    sourceName,
-    sourcePath: payload.sourcePath,
-    anchor: readerSelectionAnchor(payload),
-  })
-}
-
-function restoreShelfItems(rawItems: unknown[]): CiteShelfItem[] {
-  const seen = new Set<string>()
-  const seenIdentity = new Set<string>()
-  const out: CiteShelfItem[] = []
-  for (const raw of rawItems) {
-    if (!raw || typeof raw !== 'object') continue
-    const rec = raw as Record<string, unknown>
-    const detail = normalizeCiteDetail(rec)
-    if (!detail) continue
-    const base = toShelfItem(detail)
-    const key = String(rec.key || '').trim() || base.key
-    const main = String(rec.main || '').trim() || base.main
-    if (!key || seen.has(key)) continue
-    const identity = shelfPaperIdentity({ ...base, key, main })
-    if (seenIdentity.has(identity)) continue
-    seen.add(key)
-    seenIdentity.add(identity)
-    out.push({
-      ...base,
-      key,
-      main,
-      tags: normalizeShelfTags(rec.tags),
-      note: normalizeShelfNote(rec.note),
-    })
-    if (out.length >= SHELF_MAX_ITEMS) break
-  }
-  return out
-}
-
-function readShelfSnapshot(key: string, rawOverride?: string): ShelfSnapshot | null {
-  if (typeof rawOverride !== 'string') {
-    const mem = shelfSnapshotMemory.get(key)
-    if (mem) return cloneShelfSnapshot(mem)
-  }
-  const raw = typeof rawOverride === 'string' ? rawOverride : readShelfStorage(key)
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    const itemsRaw: unknown[] = Array.isArray(parsed?.items) ? parsed.items : []
-    const revision0 = Number(parsed?.revision || 0)
-    const updatedAt0 = Number(parsed?.updatedAt || 0)
-    const snapshot: ShelfSnapshot = {
-      version: Number(parsed?.version || 0) || 0,
-      revision: Number.isFinite(revision0) && revision0 > 0 ? Math.floor(revision0) : 0,
-      updatedAt: Number.isFinite(updatedAt0) && updatedAt0 > 0 ? Math.floor(updatedAt0) : 0,
-      open: Boolean(parsed?.open),
-      items: restoreShelfItems(itemsRaw),
-    }
-    shelfSnapshotMemory.set(key, snapshot)
-    return cloneShelfSnapshot(snapshot)
-  } catch {
-    // Corrupted payload: keep running and clear stale bad data.
-    shelfSnapshotMemory.delete(key)
-    removeShelfStorage(key)
-    return null
-  }
-}
-
-function removeSavedShelfStorage(key: string) {
-  shelfSavedSnapshotMemory.delete(key)
-  for (const storage of listShelfStorages()) {
-    try {
-      storage.removeItem(key)
-    } catch {
-      // ignore
-    }
-  }
-  shelfStorageFallback.delete(key)
-}
-
-function readSavedShelfSnapshots(storageKey: string, rawOverride?: string): ShelfSavedSnapshot[] {
-  if (typeof rawOverride !== 'string') {
-    const mem = shelfSavedSnapshotMemory.get(storageKey)
-    if (mem) return cloneSavedSnapshotPayload(mem).snapshots
-  }
-  const raw = typeof rawOverride === 'string' ? rawOverride : readShelfStorage(storageKey)
-  if (!raw) return []
-  try {
-    const parsed = JSON.parse(raw)
-    const snapshotsRaw: unknown[] = Array.isArray(parsed?.snapshots) ? parsed.snapshots : []
-    const seen = new Set<string>()
-    const snapshots: ShelfSavedSnapshot[] = []
-    for (const rawItem of snapshotsRaw) {
-      if (!rawItem || typeof rawItem !== 'object') continue
-      const rec = rawItem as Record<string, unknown>
-      const id = String(rec.id || '').trim()
-      if (!id || seen.has(id)) continue
-      const createdAt0 = Number(rec.createdAt || 0)
-      const createdAt = Number.isFinite(createdAt0) && createdAt0 > 0 ? Math.floor(createdAt0) : Date.now()
-      const name = String(rec.name || '').trim() || 'Untitled snapshot'
-      const itemsRaw: unknown[] = Array.isArray(rec.items) ? rec.items : []
-      snapshots.push({
-        id,
-        name,
-        createdAt,
-        items: restoreShelfItems(itemsRaw),
-      })
-      seen.add(id)
-      if (snapshots.length >= SHELF_SAVED_MAX_ITEMS) break
-    }
-    const payload: ShelfSavedSnapshotPayload = {
-      version: Number(parsed?.version || 0) || 0,
-      updatedAt: Number(parsed?.updatedAt || 0) || 0,
-      snapshots,
-    }
-    shelfSavedSnapshotMemory.set(storageKey, payload)
-    return cloneSavedSnapshotPayload(payload).snapshots
-  } catch {
-    removeSavedShelfStorage(storageKey)
-    return []
-  }
-}
-
-function persistSavedShelfSnapshots(storageKey: string, snapshots: ShelfSavedSnapshot[]) {
-  if (!Array.isArray(snapshots) || snapshots.length <= 0) {
-    removeSavedShelfStorage(storageKey)
-    return
-  }
-  const normalized = snapshots
-    .slice(0, SHELF_SAVED_MAX_ITEMS)
-    .map((entry) => ({
-      id: String(entry.id || '').trim(),
-      name: String(entry.name || '').trim() || 'Untitled snapshot',
-      createdAt: Number(entry.createdAt || 0) > 0 ? Number(entry.createdAt) : Date.now(),
-      items: dedupeShelfItems(entry.items || []).slice(0, SHELF_MAX_ITEMS).map((item) => ({ ...item })),
-    }))
-    .filter((entry) => Boolean(entry.id))
-  if (normalized.length <= 0) {
-    removeSavedShelfStorage(storageKey)
-    return
-  }
-  const payload: ShelfSavedSnapshotPayload = {
-    version: SHELF_SAVED_SCHEMA_VERSION,
-    updatedAt: Date.now(),
-    snapshots: normalized,
-  }
-  shelfSavedSnapshotMemory.set(storageKey, cloneSavedSnapshotPayload(payload))
-  writeShelfStorage(storageKey, JSON.stringify(payload))
-}
-
-function isWeakTitle(text: string): boolean {
-  const t = String(text || '').trim()
-  if (!t) return true
-  if (/\bIn\s+[A-Z]/.test(t)) return true
-  return isLikelyWeakCitationTitle(t)
-}
-
-function isWeakAuthors(text: string): boolean {
-  const t = String(text || '').trim()
-  if (!t) return true
-  if (/\b(?:journal|conference|proceedings|vol\.?|pp\.?)\b/i.test(t)) return true
-  const tokens = t.match(/[A-Za-z\u4e00-\u9fff]+/g) || []
-  return tokens.length <= 1
-}
-
-function isWeakVenue(text: string): boolean {
-  const t = String(text || '').trim()
-  if (!t) return true
-  const tokens = t.match(/[A-Za-z0-9\u4e00-\u9fff]+/g) || []
-  return tokens.length <= 1
-}
-
-function preferRicherField(field: 'title' | 'authors' | 'venue' | 'year' | 'main', current: string, incoming: string): string {
-  const cur = String(current || '').trim()
-  const inc = String(incoming || '').trim()
-  if (!cur) return inc
-  if (!inc) return cur
-  if (field === 'year') {
-    const curOk = /^\d{4}$/.test(cur)
-    const incOk = /^\d{4}$/.test(inc)
-    if (curOk && !incOk) return cur
-    if (!curOk && incOk) return inc
-    return cur
-  }
-  if (field === 'title') {
-    const curWeak = isWeakTitle(cur)
-    const incWeak = isWeakTitle(inc)
-    if (curWeak && !incWeak) return inc
-    if (!curWeak && incWeak) return cur
-  } else if (field === 'authors') {
-    const curWeak = isWeakAuthors(cur)
-    const incWeak = isWeakAuthors(inc)
-    if (curWeak && !incWeak) return inc
-    if (!curWeak && incWeak) return cur
-  } else if (field === 'venue') {
-    const curWeak = isWeakVenue(cur)
-    const incWeak = isWeakVenue(inc)
-    if (curWeak && !incWeak) return inc
-    if (!curWeak && incWeak) return cur
-  } else if (field === 'main') {
-    const curWeak = isWeakTitle(cur)
-    const incWeak = isWeakTitle(inc)
-    if (curWeak && !incWeak) return inc
-    if (!curWeak && incWeak) return cur
-  }
-  return inc.length > cur.length + 12 ? inc : cur
-}
-
-function sameTags(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) return false
-  }
-  return true
-}
-
-function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
-  return (
-    a.key === b.key
-    && a.main === b.main
-    && a.traceConvId === b.traceConvId
-    && a.traceAssistantMsgId === b.traceAssistantMsgId
-    && a.traceAssistantOrder === b.traceAssistantOrder
-    && a.traceUserMsgId === b.traceUserMsgId
-    && a.sourceName === b.sourceName
-    && a.sourcePath === b.sourcePath
-    && a.raw === b.raw
-    && a.citeFmt === b.citeFmt
-    && a.title === b.title
-    && a.authors === b.authors
-    && a.venue === b.venue
-    && a.year === b.year
-    && a.volume === b.volume
-    && a.issue === b.issue
-    && a.pages === b.pages
-    && a.doi === b.doi
-    && a.doiUrl === b.doiUrl
-    && a.citationCount === b.citationCount
-    && a.citationSource === b.citationSource
-    && a.journalIf === b.journalIf
-    && a.journalQuartile === b.journalQuartile
-    && a.journalIfSource === b.journalIfSource
-    && a.venueKind === b.venueKind
-    && a.venueVerifiedBy === b.venueVerifiedBy
-    && a.openalexVenue === b.openalexVenue
-    && a.conferenceTier === b.conferenceTier
-    && a.conferenceRankSource === b.conferenceRankSource
-    && a.conferenceCcf === b.conferenceCcf
-    && a.conferenceCcfSource === b.conferenceCcfSource
-    && a.conferenceName === b.conferenceName
-    && a.conferenceAcronym === b.conferenceAcronym
-    && a.num === b.num
-    && a.anchor === b.anchor
-    && a.bibliometricsChecked === b.bibliometricsChecked
-    && a.libraryMatchStatus === b.libraryMatchStatus
-    && a.libraryMatchConfidence === b.libraryMatchConfidence
-    && a.libraryMatchMethod === b.libraryMatchMethod
-    && a.libraryMatchReason === b.libraryMatchReason
-    && a.libraryMatchPath === b.libraryMatchPath
-    && a.libraryMatchSha1 === b.libraryMatchSha1
-    && a.libraryMatchTitle === b.libraryMatchTitle
-    && a.libraryMatchDoi === b.libraryMatchDoi
-    && a.libraryMatchYear === b.libraryMatchYear
-    && JSON.stringify(a.metadataQuality || null) === JSON.stringify(b.metadataQuality || null)
-    && a.metadataRepairStatus === b.metadataRepairStatus
-    && JSON.stringify(a.metadataRepairSources || []) === JSON.stringify(b.metadataRepairSources || [])
-    && JSON.stringify(a.metadataChangedFields || []) === JSON.stringify(b.metadataChangedFields || [])
-    && a.externalMetadataStatus === b.externalMetadataStatus
-    && a.externalMetadataReason === b.externalMetadataReason
-    && a.externalMatchMethod === b.externalMatchMethod
-    && a.externalMatchScore === b.externalMatchScore
-    && a.externalTitleSimilarity === b.externalTitleSimilarity
-    && a.externalTitle === b.externalTitle
-    && a.externalAuthors === b.externalAuthors
-    && a.externalVenue === b.externalVenue
-    && a.externalYear === b.externalYear
-    && a.externalDoi === b.externalDoi
-    && a.externalDoiUrl === b.externalDoiUrl
-    && a.summaryLine === b.summaryLine
-    && a.summarySource === b.summarySource
-    && a.summaryProvider === b.summaryProvider
-    && JSON.stringify(a.summaryQuality || null) === JSON.stringify(b.summaryQuality || null)
-    && a.shelfItemKind === b.shelfItemKind
-    && a.shelfOrigin === b.shelfOrigin
-    && a.shelfExcerpt === b.shelfExcerpt
-    && a.shelfExcerptLabel === b.shelfExcerptLabel
-    && a.answerClaim === b.answerClaim
-    && a.headingPath === b.headingPath
-    && a.evidenceQuote === b.evidenceQuote
-    && a.evidenceSource === b.evidenceSource
-    && a.citationContext === b.citationContext
-    && a.citationContextSource === b.citationContextSource
-    && a.upstreamWorkRole === b.upstreamWorkRole
-    && a.userQuestionRelation === b.userQuestionRelation
-    && a.locationLabel === b.locationLabel
-    && a.supportRelation === b.supportRelation
-    && a.whyLine === b.whyLine
-    && a.blockId === b.blockId
-    && a.anchorId === b.anchorId
-    && a.anchorKind === b.anchorKind
-    && a.pageStart === b.pageStart
-    && a.pageEnd === b.pageEnd
-    && a.score === b.score
-    && a.note === b.note
-    && sameTags(a.tags || [], b.tags || [])
-  )
-}
-
-function sameShelfItems(a: CiteShelfItem[], b: CiteShelfItem[]): boolean {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i += 1) {
-    if (!sameShelfItem(a[i], b[i])) return false
-  }
-  return true
-}
-
-function shelfItemsForBackend(items: CiteShelfItem[]): Array<Record<string, unknown>> {
-  return dedupeShelfItems(items || [])
-    .slice(0, SHELF_MAX_ITEMS)
-    .map((item) => ({ ...(item as unknown as Record<string, unknown>) }))
-}
-
-function persistShelfSnapshot(
-  storageKey: string,
-  payload: { open: boolean; items: CiteShelfItem[] },
-  currentRevision: number,
-): number {
-  const normalizedItems = payload.items.slice(0, SHELF_MAX_ITEMS)
-  const existing = readShelfSnapshot(storageKey)
-  if (existing && existing.open === payload.open && sameShelfItems(existing.items, normalizedItems)) {
-    return Math.max(currentRevision, existing.revision)
-  }
-  const nextRevision = Math.max(currentRevision, existing?.revision || 0) + 1
-  const snapshot: ShelfSnapshot = {
-    version: SHELF_SCHEMA_VERSION,
-    revision: nextRevision,
-    updatedAt: Date.now(),
-    open: payload.open,
-    items: normalizedItems,
-  }
-  shelfSnapshotMemory.set(storageKey, cloneShelfSnapshot(snapshot))
-  const raw = JSON.stringify(snapshot)
-  writeShelfStorage(storageKey, raw)
-  return nextRevision
-}
-
-function preferExistingText(current: string, incoming: string): string {
-  const cur = String(current || '').trim()
-  if (cur) return cur
-  return String(incoming || '').trim()
-}
-
-function preferPositiveNumber(current: number, incoming: number): number {
-  const cur = Number(current || 0)
-  if (Number.isFinite(cur) && cur > 0) return cur
-  const inc = Number(incoming || 0)
-  if (Number.isFinite(inc) && inc > 0) return inc
-  return 0
-}
-
-function preferStringArray(current: string[], incoming: string[], preferIncoming = false): string[] {
-  const cur = Array.isArray(current) ? current.map((item) => String(item || '').trim()).filter(Boolean) : []
-  const inc = Array.isArray(incoming) ? incoming.map((item) => String(item || '').trim()).filter(Boolean) : []
-  if (preferIncoming && inc.length > 0) return inc
-  return cur.length > 0 ? cur : inc
-}
-
-function metadataQualityRecordReady(value: unknown): boolean {
-  if (!value || typeof value !== 'object') return false
-  const rec = value as Record<string, unknown>
-  const status = String(rec.status || '').trim().toLowerCase()
-  return rec.ok === true || status === 'ready'
-}
-
-function preferMetadataQuality(
-  current: Record<string, unknown> | null,
-  incoming: Record<string, unknown> | null,
-): Record<string, unknown> | null {
-  const currentReady = metadataQualityRecordReady(current)
-  const incomingReady = metadataQualityRecordReady(incoming)
-  if (currentReady || !incomingReady) return current || incoming || null
-  return incoming
-}
-
-function shelfItemHasMetadataHydrationSeed(item: CiteShelfItem): boolean {
-  return Boolean(
-    item.raw
-    || item.citeFmt
-    || item.title
-    || item.doi
-    || item.doiUrl
-    || item.sourcePath
-    || item.sourceName
-  )
-}
-
-function shelfItemNeedsPersistedMetadataHydrate(item: CiteShelfItem): boolean {
-  if (!shelfItemHasMetadataHydrationSeed(item)) return false
-  if (shelfItemMetadataQualityReady(item)) return false
-  return shelfItemNeedsMetadataRepair(item) || !item.bibliometricsChecked || !item.metadataQuality
-}
-
-function shelfItemHasDisplayableArticleSummary(item: CiteShelfItem): boolean {
-  const summaryLine = String(item.summaryLine || '').trim()
-  if (!summaryLine || looksLowValueShelfSummary(summaryLine)) return false
-  const summarySource = String(item.summarySource || '').trim().toLowerCase()
-  const quality = item.summaryQuality || {}
-  const qualityOk = quality.ok === true || String(quality.status || '').trim().toLowerCase() === 'grounded'
-  const contextOnlySource = [
-    'citation_context',
-    'citation_card',
-    'citation_card_view',
-    'metadata',
-    'references_panel_hit',
-  ].includes(summarySource)
-  if (contextOnlySource) return false
-  const articleSummarySource = [
-    'abstract',
-    'fulltext',
-    'reference_primary_evidence',
-    'navigation',
-    'exact_anchor',
-    'section_intent_rescue',
-    'doc_list_seed',
-    'doc_list_prompt_aligned',
-  ].includes(summarySource)
-  return Boolean(articleSummarySource || (!item.isInpaper && qualityOk))
-}
-
-function shelfItemNeedsSummaryBackfill(item: CiteShelfItem): boolean {
-  if (!shelfItemHasMetadataHydrationSeed(item)) return false
-  return !shelfItemHasDisplayableArticleSummary(item)
-}
-
-function shelfMetadataHydrateAttemptKey(item: CiteShelfItem): string {
-  return [
-    item.key,
-    shelfItemRepairFingerprint(item),
-  ].join('|')
-}
-
-function shelfSummaryBackfillAttemptKey(item: CiteShelfItem): string {
-  const quality = item.summaryQuality || {}
-  return [
-    item.key,
-    shelfItemRepairFingerprint(item),
-    String(item.summaryLine || '').trim(),
-    String(item.summarySource || '').trim(),
-    String(quality.status || ''),
-  ].join('|')
-}
-
-function articleSummaryPatchFromMeta(meta: Record<string, unknown>): Partial<CiteShelfItem> {
-  const line = cleanCitationDisplayText(String(meta.summary_line || meta.summaryLine || '')).trim()
-  const source = String(meta.summary_source || meta.summarySource || '').trim()
-  const provider = String(meta.summary_provider || meta.summaryProvider || '').trim()
-  const sourceKey = source.toLowerCase()
-  if (!line || looksLowValueShelfSummary(line)) return {}
-  if ([
-    'citation_context',
-    'citation_card',
-    'citation_card_view',
-    'metadata',
-    'references_panel_hit',
-  ].includes(sourceKey)) {
-    return {}
-  }
-  const rawQuality = meta.summary_quality || meta.summaryQuality
-  const summaryQuality = rawQuality && typeof rawQuality === 'object'
-    ? rawQuality as Record<string, unknown>
-    : {
-      ok: true,
-      status: 'grounded',
-      source: source || 'abstract',
-      provider,
-      export_ready: true,
-    }
-  return {
-    summaryLine: line,
-    summarySource: source || 'abstract',
-    summaryProvider: provider,
-    summaryQuality,
-  }
-}
-
-function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteShelfItem {
-  const incomingMetadataReady = metadataQualityRecordReady(live.metadataQuality)
-  const currentMetadataReady = metadataQualityRecordReady(item.metadataQuality)
-  const metadataQuality = preferMetadataQuality(item.metadataQuality, live.metadataQuality)
-  const preferIncomingMetadata = incomingMetadataReady && !currentMetadataReady
-  const mergedLike = {
-    ...item,
-    traceConvId: preferExistingText(item.traceConvId, live.traceConvId),
-    traceAssistantMsgId: preferPositiveNumber(item.traceAssistantMsgId, live.traceAssistantMsgId),
-    traceAssistantOrder: preferPositiveNumber(item.traceAssistantOrder, live.traceAssistantOrder),
-    traceUserMsgId: preferPositiveNumber(item.traceUserMsgId, live.traceUserMsgId),
-    sourceName: preferExistingText(item.sourceName, live.sourceName),
-    sourcePath: preferExistingText(item.sourcePath, live.sourcePath),
-    raw: preferExistingText(item.raw, live.raw),
-    citeFmt: preferExistingText(item.citeFmt, live.citeFmt),
-    title: preferRicherField('title', item.title, live.title),
-    authors: preferRicherField('authors', item.authors, live.authors),
-    venue: preferRicherField('venue', item.venue, live.venue),
-    year: preferRicherField('year', item.year, live.year),
-    volume: preferExistingText(item.volume, live.volume),
-    issue: preferExistingText(item.issue, live.issue),
-    pages: preferExistingText(item.pages, live.pages),
-    doi: preferExistingText(item.doi, live.doi),
-    doiUrl: preferExistingText(item.doiUrl, live.doiUrl),
-    citationSource: preferExistingText(item.citationSource, live.citationSource),
-    venueKind: preferExistingText(item.venueKind, live.venueKind),
-    venueVerifiedBy: preferExistingText(item.venueVerifiedBy, live.venueVerifiedBy),
-    openalexVenue: preferExistingText(item.openalexVenue, live.openalexVenue),
-    journalIf: preferExistingText(item.journalIf, live.journalIf),
-    journalQuartile: preferExistingText(item.journalQuartile, live.journalQuartile),
-    journalIfSource: preferExistingText(item.journalIfSource, live.journalIfSource),
-    conferenceTier: preferExistingText(item.conferenceTier, live.conferenceTier),
-    conferenceRankSource: preferExistingText(item.conferenceRankSource, live.conferenceRankSource),
-    conferenceCcf: preferExistingText(item.conferenceCcf, live.conferenceCcf),
-    conferenceCcfSource: preferExistingText(item.conferenceCcfSource, live.conferenceCcfSource),
-    conferenceName: preferExistingText(item.conferenceName, live.conferenceName),
-    conferenceAcronym: preferExistingText(item.conferenceAcronym, live.conferenceAcronym),
-    summaryLine: preferRicherField('title', item.summaryLine, live.summaryLine),
-    summarySource: preferExistingText(item.summarySource, live.summarySource),
-    summaryProvider: preferExistingText(item.summaryProvider, live.summaryProvider),
-    summaryQuality: item.summaryQuality || live.summaryQuality,
-    shelfItemKind: preferExistingText(item.shelfItemKind, live.shelfItemKind),
-    shelfOrigin: preferExistingText(item.shelfOrigin, live.shelfOrigin),
-    shelfExcerpt: preferRicherField('title', item.shelfExcerpt, live.shelfExcerpt),
-    shelfExcerptLabel: preferExistingText(item.shelfExcerptLabel, live.shelfExcerptLabel),
-    metadataQuality,
-    metadataRepairStatus: preferIncomingMetadata
-      ? preferExistingText(live.metadataRepairStatus, item.metadataRepairStatus)
-      : preferExistingText(item.metadataRepairStatus, live.metadataRepairStatus),
-    metadataRepairSources: preferStringArray(item.metadataRepairSources, live.metadataRepairSources, preferIncomingMetadata),
-    metadataChangedFields: preferStringArray(item.metadataChangedFields, live.metadataChangedFields, preferIncomingMetadata),
-    externalMetadataStatus: preferExistingText(item.externalMetadataStatus, live.externalMetadataStatus),
-    externalMetadataReason: preferExistingText(item.externalMetadataReason, live.externalMetadataReason),
-    externalMatchMethod: preferExistingText(item.externalMatchMethod, live.externalMatchMethod),
-    externalMatchScore: preferPositiveNumber(item.externalMatchScore, live.externalMatchScore),
-    externalTitleSimilarity: preferPositiveNumber(item.externalTitleSimilarity, live.externalTitleSimilarity),
-    externalTitle: preferRicherField('title', item.externalTitle, live.externalTitle),
-    externalAuthors: preferRicherField('authors', item.externalAuthors, live.externalAuthors),
-    externalVenue: preferRicherField('venue', item.externalVenue, live.externalVenue),
-    externalYear: preferRicherField('year', item.externalYear, live.externalYear),
-    externalDoi: preferExistingText(item.externalDoi, live.externalDoi),
-    externalDoiUrl: preferExistingText(item.externalDoiUrl, live.externalDoiUrl),
-    answerClaim: preferRicherField('title', item.answerClaim, live.answerClaim),
-    headingPath: preferExistingText(item.headingPath, live.headingPath),
-    evidenceQuote: preferRicherField('title', item.evidenceQuote, live.evidenceQuote),
-    evidenceSource: preferExistingText(item.evidenceSource, live.evidenceSource),
-    citationContext: preferRicherField('title', item.citationContext, live.citationContext),
-    citationContextSource: preferExistingText(item.citationContextSource, live.citationContextSource),
-    upstreamWorkRole: preferExistingText(item.upstreamWorkRole, live.upstreamWorkRole),
-    userQuestionRelation: preferExistingText(item.userQuestionRelation, live.userQuestionRelation),
-    locationLabel: preferExistingText(item.locationLabel, live.locationLabel),
-    supportRelation: preferExistingText(item.supportRelation, live.supportRelation),
-    whyLine: preferExistingText(item.whyLine, live.whyLine),
-    blockId: preferExistingText(item.blockId, live.blockId),
-    anchorId: preferExistingText(item.anchorId, live.anchorId),
-    anchorKind: preferExistingText(item.anchorKind, live.anchorKind),
-    pageStart: preferPositiveNumber(item.pageStart, live.pageStart),
-    pageEnd: preferPositiveNumber(item.pageEnd, live.pageEnd),
-    score: preferPositiveNumber(item.score, live.score),
-    citationCount: preferPositiveNumber(item.citationCount, live.citationCount),
-    num: preferPositiveNumber(item.num, live.num),
-    bibliometricsChecked: Boolean(item.bibliometricsChecked || live.bibliometricsChecked),
-  }
-
-  const normalized = normalizeCiteDetail(mergedLike) || item
-  const autoMain = toShelfItem(normalized).main
-  return {
-    ...item,
-    ...normalized,
-    key: item.key,
-    main: preferRicherField('main', item.main, preferExistingText(live.main, autoMain)),
-    tags: normalizeShelfTags(item.tags),
-    note: normalizeShelfNote(item.note),
-  }
-}
-
-function snapshotDiffCounts(currentItems: CiteShelfItem[], baselineItems: CiteShelfItem[]): { added: number; removed: number } {
-  const current = new Set(currentItems.map((item) => shelfPaperIdentity(item)))
-  const baseline = new Set(baselineItems.map((item) => shelfPaperIdentity(item)))
-  let added = 0
-  let removed = 0
-  for (const id of current) {
-    if (!baseline.has(id)) added += 1
-  }
-  for (const id of baseline) {
-    if (!current.has(id)) removed += 1
-  }
-  return { added, removed }
-}
-
-function shelfRepairPayloads(item: CiteShelfItem): Array<Record<string, unknown>> {
-  const basePayload = item as unknown as Record<string, unknown>
-  return [
-    basePayload,
-    {
-      ...basePayload,
-      raw: '',
-      cite_fmt: '',
-      citeFmt: '',
-    },
-  ]
-}
-
-function shelfRepairMetaFromEntry(entry: ShelfMetadataRepairItem): Record<string, unknown> {
-  return {
-    ...(entry.meta || {}),
-    metadata_quality: entry.after || (entry.meta || {}).metadata_quality,
-    metadata_repair_status: entry.repair_status,
-    metadata_changed_fields: entry.changed_fields || [],
-    metadata_repair_sources: entry.repair_sources || [],
-  }
-}
-
-function shouldRequestCitationCardPolish(detail: CiteDetail): boolean {
-  const polishStatus = String(detail.citationCardPolishStatus || '').trim().toLowerCase()
-  if (['full', 'failed', 'disabled', 'empty'].includes(polishStatus)) return false
-  return Boolean(
-    detail.cardEvidence
-    || detail.evidenceQuote
-    || detail.citationContext
-    || detail.cardTakeaway
-    || detail.raw
-    || detail.citeFmt,
   )
 }
 
@@ -5547,7 +4316,7 @@ export function MessageList({
     const onStorage = (event: StorageEvent) => {
       if (event.key === savedStorageKey) {
         if (event.newValue === null) {
-          shelfSavedSnapshotMemory.delete(savedStorageKey)
+          invalidateSavedShelfSnapshotCache(savedStorageKey)
           setSavedShelfSnapshots([])
           setSelectedSavedSnapshotId('')
           return
@@ -5562,7 +4331,7 @@ export function MessageList({
       }
       if (event.key !== storageKey) return
       if (event.newValue === null) {
-        shelfSnapshotMemory.delete(storageKey)
+        invalidateShelfSnapshotCache(storageKey)
         skipShelfPersistOnceRef.current = true
         shelfRevisionByKeyRef.current[storageKey] = 0
         latestShelfStateRef.current = { convId: activeConvId, projectId: shelfScopeId, open: false, items: [] }
@@ -5872,7 +4641,7 @@ export function MessageList({
     const loadBibliometrics = options?.force
       ? referencesApi.bibliometrics
       : referencesApi.bibliometricsCached
-    loadBibliometrics(requestItem as unknown as Record<string, unknown>)
+    loadBibliometrics(withBibliometricsLocale(requestItem as unknown as Record<string, unknown>))
       .then((meta) => {
         if (!meta || Object.keys(meta).length === 0) return
         const articleSummaryPatch = articleSummaryPatchFromMeta(meta)
@@ -5923,7 +4692,7 @@ export function MessageList({
       setShelfSummaryLoadingKey((current) => current || targets[0]?.item.key || '')
 
       void Promise.all(targets.map(({ item }) => (
-        referencesApi.bibliometrics({
+        referencesApi.bibliometrics(withBibliometricsLocale({
           ...item,
           summaryLine: '',
           summarySource: '',
@@ -5933,7 +4702,7 @@ export function MessageList({
           summary_source: '',
           summary_provider: '',
           summary_quality: null,
-        } as unknown as Record<string, unknown>)
+        } as unknown as Record<string, unknown>))
           .catch(() => ({}))
           .then((meta) => ({ key: item.key, meta }))
       ))).then((results) => {
@@ -6013,7 +4782,7 @@ export function MessageList({
           .filter((meta) => meta && Object.keys(meta).length > 0)
       })
       .catch(() => Promise.all([
-        ...payloads.map((payload) => referencesApi.bibliometrics(payload).catch(() => ({}))),
+        ...payloads.map((payload) => referencesApi.bibliometrics(withBibliometricsLocale(payload)).catch(() => ({}))),
       ]))
 
     loadRepairCandidates
@@ -6119,7 +4888,7 @@ export function MessageList({
       }
       shelfMetadataHydrateInFlightRef.current = inFlight
       void Promise.all(targets.map(({ item }) => (
-        referencesApi.bibliometrics(item as unknown as Record<string, unknown>)
+        referencesApi.bibliometrics(withBibliometricsLocale(item as unknown as Record<string, unknown>))
           .catch(() => ({}))
           .then((meta) => ({ key: item.key, meta }))
       ))).then((results) => {
@@ -6273,8 +5042,8 @@ export function MessageList({
     }
     if (shouldFetchBibliometrics) {
       const loadBibliometrics = needsSummaryBackfill
-        ? referencesApi.bibliometrics(detail as unknown as Record<string, unknown>)
-        : referencesApi.bibliometricsCached(detail as unknown as Record<string, unknown>)
+        ? referencesApi.bibliometrics(withBibliometricsLocale(detail as unknown as Record<string, unknown>))
+        : referencesApi.bibliometricsCached(withBibliometricsLocale(detail as unknown as Record<string, unknown>))
       reqs.push(loadBibliometrics.catch(() => ({})))
     }
 

@@ -605,11 +605,6 @@ function deriveSystemATakeaway(
     return evidenceTakeaway
   }
 
-  const heading = trimTakeaway(detail.headingPath || '', 70)
-  if (heading && hasCjkText(heading) && evidence) {
-    const candidate = `这条证据对应“${heading.replace(/[。！？?]$/g, '')}”这一部分的关键表述。`
-    if (!looksLowValueTakeaway(candidate)) return candidate
-  }
   if (claim && hasCjkText(claim) && !looksLowValueTakeaway(claim)) return claim
   return ''
 }
@@ -1433,25 +1428,11 @@ function trimShelfSummary(value: string, maxLen = 220): string {
   return text
 }
 
-function appendUniqueSummaryLine(lines: string[], value: string): void {
-  const text = trimShelfSummary(value)
-  if (!text) return
-  const key = looseTokens(text).join(' ')
-  if (!key) return
-  for (const line of lines) {
-    const existingKey = looseTokens(line).join(' ')
-    if (existingKey === key || existingKey.includes(key) || key.includes(existingKey)) return
-  }
-  lines.push(text)
-}
-
 function trustedShelfSummarySource(source: string): boolean {
   const s = String(source || '').trim().toLowerCase()
   return [
     'abstract',
     'fulltext',
-    'citation_context',
-    'reference_primary_evidence',
     'navigation',
     'exact_anchor',
     'section_intent_rescue',
@@ -1489,7 +1470,6 @@ function isArticleSummaryTextSource(source: string): boolean {
   return [
     'abstract',
     'fulltext',
-    'reference_primary_evidence',
     'navigation',
     'exact_anchor',
     'section_intent_rescue',
@@ -1503,6 +1483,14 @@ function deriveShelfSummary(detail: CiteDetail): { line: string; source: string 
   const existingSource = String(detail.summarySource || '').trim().toLowerCase()
   const summaryQuality = detail.summaryQuality || {}
   const qualityOk = summaryQuality.ok === true || String(summaryQuality.status || '').trim().toLowerCase() === 'grounded'
+  const contextOnlyExisting = [
+    'citation_context',
+    'citation_card',
+    'citation_card_view',
+    'metadata',
+    'reference_primary_evidence',
+    'references_panel_hit',
+  ].includes(existingSource)
   const inpaperContextSummary = detail.isInpaper && existingSource === 'citation_context'
   const metadataOnlyExisting = existingSource === 'metadata' && looksMetadataOnlyShelfSummary(existing)
   const inpaperLowValueContext = detail.isInpaper
@@ -1514,28 +1502,24 @@ function deriveShelfSummary(detail: CiteDetail): { line: string; source: string 
     && !looksLowValueShelfSummary(existing)
     && !inpaperContextSummary
     && !metadataOnlyExisting
+    && !contextOnlyExisting
     && (trustedShelfSummarySource(existingSource) || qualityOk)
   ) {
     return { line: existing, source: detail.summarySource || 'fulltext' }
   }
 
-  const viewSummary = trimShelfSummary(citationCardView(detail).summary, 420)
-  if (!detail.isInpaper && viewSummary && !looksLowValueShelfSummary(viewSummary)) {
-    return { line: viewSummary, source: 'citation_card_view' }
-  }
-  if (existing && !inpaperContextSummary && !metadataOnlyExisting && !inpaperLowValueContext && !looksLowValueShelfSummary(existing)) {
-    return { line: existing, source: existingSource === 'metadata' ? 'fulltext' : (detail.summarySource || 'fulltext') }
-  }
-
-  const lines: string[] = []
-  if (detail.isInpaper) {
-    return { line: '', source: '' }
+  if (
+    existing
+    && !inpaperContextSummary
+    && !metadataOnlyExisting
+    && !inpaperLowValueContext
+    && !contextOnlyExisting
+    && !looksLowValueShelfSummary(existing)
+  ) {
+    return { line: existing, source: detail.summarySource || 'fulltext' }
   }
 
-  appendUniqueSummaryLine(lines, detail.cardTakeaway)
-  appendUniqueSummaryLine(lines, detail.answerClaim || detail.cardClaim)
-  appendUniqueSummaryLine(lines, detail.evidenceQuote || detail.cardEvidence)
-  return { line: lines.slice(0, 3).join(' '), source: lines.length > 0 ? 'citation_card' : '' }
+  return { line: '', source: '' }
 }
 
 export function toShelfItem(detail: CiteDetail): CiteShelfItem {

@@ -148,6 +148,38 @@ def test_extract_references_map_cleans_noise_on_early_heading_return():
     assert 2543 in out
 
 
+def test_extract_references_map_stops_at_plain_supplementary_material_heading():
+    md_text = (
+        "# Demo\n\n"
+        "## References\n"
+        "[40] Xin Yuan. Generalized alternating projection based total variation minimization for compressive sensing. "
+        "In 2016 IEEE International conference on image processing (ICIP), pages 2539-2543. IEEE, 2016.\n"
+        "[41] Xin Yuan, Yang Liu, Jinli Suo, and Qionghai Dai. Plug-and-play algorithms for large-scale snapshot "
+        "compressive imaging. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, "
+        "pages 1447-1457, 2020.\n"
+        "[42] Xin Yuan, David J Brady, and Aggelos K Katsaggelos. Snapshot compressive imaging: Theory, algorithms, "
+        "and applications. IEEE Signal Processing Magazine, 38(2):65-88, 2021.\n"
+        "[43] Xin Yuan, Yang Liu, Jinli Suo, Fredo Durand, and Qionghai Dai. Plug-and-play algorithms for video "
+        "snapshot compressive imaging. IEEE Transactions on Pattern Analysis and Machine Intelligence, "
+        "44(10):7093-7111, 2021.\n"
+        "[44] Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shechtman, and Oliver Wang. The unreasonable "
+        "effectiveness of deep features as a perceptual metric. In Proceedings of the IEEE conference on computer "
+        "vision and pattern recognition, pages 586-595, 2018.\n"
+        "\n"
+        "Supplementary Material\n"
+        "<!-- kb_page: 11 -->\n"
+        "In this supplementary material, additional experiments compare GAP-TV [40], PnP-FFDNet [41], "
+        "PnP-FastDVDNet [43] and EfficientSCI [31].\n"
+    )
+
+    out = ref_index.extract_references_map_from_md(md_text)
+
+    assert sorted(out.keys()) == [40, 41, 42, 43, 44]
+    assert "Plug-and-play algorithms for video snapshot" in out[43]
+    assert "EfficientSCI" not in out[43]
+    assert "Supplementary Material" not in out[44]
+
+
 def test_extract_references_map_does_not_use_body_fig_or_section_numbers_as_refs():
     md_text = (
         "# Demo\n\n"
@@ -237,6 +269,107 @@ def test_build_reference_index_persists_reference_catalog_and_quality_fields(tmp
     ref = (doc.get("refs") or {}).get("1") or {}
     assert float(ref.get("parse_confidence") or 0.0) > 0.0
     assert str(ref.get("tail_continuity_status") or "") == "gapped"
+
+
+def test_build_reference_index_keeps_non_article_entries_from_reference_section(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    md_path.write_text(
+        (
+            "# Demo\n\n"
+            "## References\n"
+            "[1] A. Author. First real reference entry. Journal of Testing, 2020.\n"
+            "[2] Wu, D. et al., Source data for \"Imaging biological tissue with high-throughput single-pixel "
+            "compressive holography\", Zenodo.\n"
+            "[3] Wu, D. et al. Step-by-step protocol for data acquisition and reconstruction of holographic images "
+            "in high-throughput single-pixel holography, Protocol Exchange.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: False)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+
+    ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=False,
+        enable_title_lookup=False,
+    )
+
+    data = ref_index.load_reference_index(db_dir)
+    doc = next(iter((data.get("docs") or {}).values()))
+    refs = doc.get("refs") or {}
+    assert sorted(int(k) for k in refs.keys()) == [1, 2, 3]
+    assert "Zenodo" in str((refs.get("2") or {}).get("raw") or "")
+    assert "Protocol Exchange" in str((refs.get("3") or {}).get("raw") or "")
+
+
+def test_build_reference_index_rebuilds_incremental_doc_when_refs_lag_catalog(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    md_path.write_text(
+        (
+            "# Demo\n\n"
+            "## References\n"
+            "[1] A. Author. First real reference entry. Journal of Testing, 2020.\n"
+            "[2] Wu, D. et al., Source data for \"Imaging biological tissue with high-throughput single-pixel "
+            "compressive holography\", Zenodo.\n"
+            "[3] C. Author. Third real reference entry. Conference on Validation, 2022.\n"
+        ),
+        encoding="utf-8",
+    )
+    src_key = ref_index._norm_source_key(str(md_path.resolve()))
+    sha1 = ref_index.compute_file_sha1(md_path)
+    (db_dir / ref_index.INDEX_FILE_NAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": 1,
+                "doc_count": 1,
+                "next_cursor": "",
+                "docs": {
+                    src_key: {
+                        "path": str(md_path.resolve()),
+                        "name": md_path.name,
+                        "stem": md_path.stem,
+                        "sha1": sha1,
+                        "reference_catalog_status": "continuous",
+                        "reference_catalog_ref_count": 3,
+                        "reference_catalog_missing_numbers": [],
+                        "refs": {
+                            "1": {"num": 1, "raw": "[1] A. Author. First real reference entry. Journal of Testing, 2020."},
+                            "3": {"num": 3, "raw": "[3] C. Author. Third real reference entry. Conference on Validation, 2022."},
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: False)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+
+    out = ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=True,
+        enable_title_lookup=False,
+    )
+
+    assert int(out.get("docs_updated") or 0) == 1
+    data = ref_index.load_reference_index(db_dir)
+    doc = next(iter((data.get("docs") or {}).values()))
+    refs = doc.get("refs") or {}
+    assert sorted(int(k) for k in refs.keys()) == [1, 2, 3]
+    assert "Zenodo" in str((refs.get("2") or {}).get("raw") or "")
 
 
 def test_cleanup_reference_number_noise_removes_large_gap_outlier():

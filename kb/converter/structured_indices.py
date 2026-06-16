@@ -11,6 +11,7 @@ from kb.inpaper_citation_grounding import parse_ref_num_set
 from kb.reference_index import (
     _fallback_title_from_raw_reference,
     build_reference_catalog_from_md,
+    extract_references_map_from_md,
     load_reference_catalog_for_md,
     reference_catalog_to_map,
 )
@@ -692,6 +693,42 @@ def _build_figure_index_payload(
     }
 
 
+def _reference_map_missing_numbers(ref_map: dict[int, str]) -> list[int]:
+    refs: set[int] = set()
+    for raw_key, raw_value in (ref_map if isinstance(ref_map, dict) else {}).items():
+        try:
+            n = int(raw_key)
+        except Exception:
+            continue
+        if n > 0 and str(raw_value or "").strip():
+            refs.add(n)
+    if len(refs) < 8:
+        return []
+    first = min(refs)
+    last = max(refs)
+    if first != 1 or last < 8:
+        return []
+    return sorted(set(range(first, last + 1)) - refs)
+
+
+def _reference_catalog_stale_for_markdown(catalog_map: dict[int, str], md_ref_map: dict[int, str]) -> bool:
+    if not md_ref_map:
+        return False
+    if not catalog_map:
+        return True
+    catalog_count = len(catalog_map)
+    md_count = len(md_ref_map)
+    if md_count >= catalog_count + 3:
+        return True
+    catalog_max = max(catalog_map.keys(), default=0)
+    md_max = max(md_ref_map.keys(), default=0)
+    if md_max > catalog_max and md_count >= catalog_count:
+        return True
+    catalog_missing = _reference_map_missing_numbers(catalog_map)
+    md_missing = _reference_map_missing_numbers(md_ref_map)
+    return bool(catalog_missing and len(md_missing) < len(catalog_missing))
+
+
 def _build_reference_index_payload(
     md_path: Path,
     md_text: str,
@@ -700,7 +737,8 @@ def _build_reference_index_payload(
 ) -> dict[str, Any]:
     catalog = load_reference_catalog_for_md(md_path)
     ref_map = reference_catalog_to_map(catalog)
-    if not ref_map:
+    md_ref_map = extract_references_map_from_md(md_text)
+    if _reference_catalog_stale_for_markdown(ref_map, md_ref_map):
         catalog = build_reference_catalog_from_md(
             md_text,
             source_path=str(md_path.resolve(strict=False)),

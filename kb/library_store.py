@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from typing import Iterable
 
-from kb.file_ops import _resolve_md_output_paths, _sha1_bytes
+from kb.file_ops import _resolve_md_output_paths
+from kb.store import compute_file_sha1
 from kb.prefs import load_prefs as _load_local_prefs
 
 
@@ -1481,7 +1482,7 @@ class LibraryStore:
         try:
             if not path_obj.exists() or not path_obj.is_file():
                 return None
-            sha1 = _sha1_bytes(path_obj.read_bytes())
+            sha1 = compute_file_sha1(path_obj)
             self.upsert(sha1, path_obj)
             return self.get_by_path(path_obj)
         except Exception:

@@ -175,7 +175,6 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     [activeSourceName, activeSourcePath, entry],
   )
   const visibleHits = preparedHits.hits
-  const suppressedHitCount = preparedHits.suppressedHitCount
   const hiddenActiveSourceCount = preparedHits.hiddenActiveSourceCount
   const guideFilter = entry?.guide_filter || {}
   const pendingCount = visibleHits.filter((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending').length
@@ -186,10 +185,7 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     displayState === 'hidden_by_guide'
     || ((!hasBackendDisplayState) && rawHitCount === 0 && Boolean(guideFilter.hidden_self_source))
   )
-  const shouldShowNegativeSuppressedNote = !hasPending && (
-    displayState === 'suppressed'
-    || ((!hasBackendDisplayState) && visibleHits.length === 0 && suppressedHitCount > 0)
-  )
+  const shouldShowNegativeSuppressedNote = false
   const shouldShowEmptyNote = !hasPending && displayState === 'empty'
   const suppressionNoteText = suppressionReason === 'focus_filter_removed_all'
     ? S.refs_suppressed_focus

@@ -149,6 +149,31 @@ $ments(see eq.(2)).$
     assert "ments (see eq.(2))." in out
 
 
+def test_wrap_bare_latex_inline_comparisons_in_prose():
+    src = r"""
+FFDNet is inferior when the noise level is low (e.g., \sigma \leq 25), but outperforms DnCNN as the noise level increases (e.g., \sigma > 25).
+The existing inline math $F(\cdot)$ should stay unchanged.
+"""
+    out = postprocess_markdown(src)
+    assert r"$\sigma \leq 25$" in out
+    assert r"$\sigma > 25$" in out
+    assert r"$F(\cdot)$" in out
+
+
+def test_fix_cdot_loss_ocr_and_stray_citation_dollar():
+    src = r"""
+where loss( cdot) denotes the loss function. loss( cdot) is used near $\hat{x}$.
+The methods use variances $\sigma \in [30,50,75]. The BSD68 dataset comes from BSD68 [110]$ and Set12. The first images are $256 \times 256$.
+"""
+    out = postprocess_markdown(src)
+    assert r"loss( cdot)" not in out
+    assert out.count(r"$\operatorname{loss}(\cdot)$") == 2
+    assert r"$\sigma \in [30,50,75]$." in out
+    assert "[110]$" not in out
+    assert "[110] and Set12" in out
+    assert r"$256 \times 256$" in out
+
+
 def test_caption_cleanup_keeps_repaired_ocr_words_as_separate_words():
     src = """
 **Figure 1.** Interferometric ISM (iISM) principle. FM fl ip mirror, EF emission fi lter, FC fi ber coupler, PM SMF polarization-maintaining single-mode fi ber. Side-by- side comparison. g Line pro fi les in the three con fi gurations.

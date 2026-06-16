@@ -76,7 +76,7 @@
         "min_captions": 3,
         "min_tables": 1,
         "min_display_math": 15,
-        "min_inline_math": 200,
+        "min_inline_math": 100,
         "min_references": 100,
         "min_reference_lines": 100,
         "min_body_citations": 100,
@@ -84,7 +84,14 @@
         "must_contain_text": [
           "Brief review of image denoising techniques",
           "image denoising",
+          "$\\sigma \\in [30,50,75]$",
+          "\\operatorname{loss}(\\cdot)",
+          "$\\sigma \\leq 25$",
           "## References"
+        ],
+        "must_not_contain_text": [
+          "loss( cdot)",
+          "[110]$"
         ]
       }
     },

@@ -294,6 +294,8 @@ export const S = {
   settings_maintenance_backup_cleanup_failed: '清理旧备份失败',
 
   // Sidebar / AppSider
+  brand_name: 'π-zaya',
+  brand_home_title: '您的学术文献助理',
   brand_subtitle: '文献工作台',
   conversation_count: '当前会话 {n} 条',
   new_project: '新建项目',
@@ -1141,7 +1143,7 @@ export const S = {
   lib_quality_center_status_attention: '需留意',
   lib_quality_center_summary_ready: '文库已可用于问答，{ready}/{total} 篇文献状态良好。',
   lib_quality_center_summary_running: '文库维护任务正在后台运行，可以继续使用。',
-  lib_quality_center_summary_review: '{review} 篇文献需要处理，{blocked} 个来源暂不可用，{cases} 个回归样本需要复查。',
+  lib_quality_center_summary_review: '{review} 篇文献需要处理，{blocked} 个来源暂不可用，{cases} 个回归样本需要复查，{domains} 个工作流检查需要复查。',
   lib_quality_center_action_none: '暂无操作',
   lib_quality_center_action_monitor: '查看进度',
   lib_quality_center_action_repair: '处理 {n} 篇重点文献',

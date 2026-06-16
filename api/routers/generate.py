@@ -254,7 +254,9 @@ def start_generation(body: GenerateBody):
     query_scope = _normalize_query_scope(body.query_scope)
     if (not prompt) and (not image_attachments):
         raise HTTPException(400, "prompt or image_attachments required")
-    conv_meta = chat_store.get_conversation(body.conv_id) or {}
+    conv_meta = chat_store.get_conversation(body.conv_id)
+    if conv_meta is None:
+        raise HTTPException(404, "conversation not found")
 
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
     user_meta: dict[str, object] = {}

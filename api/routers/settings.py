@@ -333,6 +333,7 @@ def _production_readiness_payload(s) -> dict:
     items.append(_check_directory("db_dir", "Knowledge base directory", getattr(s, "db_dir", "")))
     items.append(_check_file_parent("chat_db", "Chat database", getattr(s, "chat_db_path", "")))
     items.append(_check_file_parent("library_db", "Library database", getattr(s, "library_db_path", "")))
+    items.append(_check_file_parent("user_issues_db", "User issues database", getattr(s, "user_issues_db_path", "")))
 
     auth_required = bool(getattr(s, "auth_required", False))
     production = bool(getattr(s, "production", False))

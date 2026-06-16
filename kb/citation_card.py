@@ -783,11 +783,6 @@ def _system_a_takeaway(*, claim: str, evidence: str, heading: str, locale: str =
     if evidence_takeaway and not _looks_low_value_takeaway(evidence_takeaway):
         return evidence_takeaway
 
-    heading_clean = _clean_text(heading, max_len=120)
-    if _card_locale(locale) != "en" and _has_cjk(heading_clean) and evidence:
-        candidate = f"这条证据对应“{heading_clean}”这一部分的关键表述。"
-        if not _looks_low_value_takeaway(candidate):
-            return candidate
     return ""
 
 

@@ -187,6 +187,7 @@ class ChatStore:
         timeout_final = max(0.05, timeout_final)
         conn = sqlite3.connect(str(self._db_path), timeout=timeout_final, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON;")
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         try:

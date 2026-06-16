@@ -4532,6 +4532,7 @@ def _gen_start_task(task: dict) -> bool:
     tid = str(task.get("id") or "").strip()
     if (not sid) or (not tid):
         return False
+    RUNTIME.prune_generation_tasks(now=time.time())
     with RUNTIME.GEN_LOCK:
         cur = RUNTIME.GEN_TASKS.get(sid)
         if (
@@ -4578,6 +4579,20 @@ def _bg_remove_queued_tasks_for_pdf(pdf_path: Path) -> int:
     Returns removed count.
     """
     return bg_remove_queued_tasks_for_pdf(_BG_STATE, _BG_LOCK, pdf_path)
+
+
+def _safe_rmtree_child(path_obj: Path, root_obj: Path) -> None:
+    try:
+        root = Path(root_obj).expanduser().resolve()
+        target = Path(path_obj).expanduser().resolve()
+        target.relative_to(root)
+        if target == root:
+            return
+        import shutil
+
+        shutil.rmtree(target, ignore_errors=True)
+    except Exception:
+        return
 
 def _bg_cancel_all() -> None:
     bg_cancel_all(_BG_STATE, _BG_LOCK, "Canceling current background conversion")
@@ -4797,16 +4812,7 @@ def _bg_worker_loop() -> None:
         try:
             md_folder = out_root / pdf.stem
             if replace and md_folder.exists():
-                # Safety: only delete inside out_root
-                try:
-                    md_root = out_root.resolve()
-                    target = md_folder.resolve()
-                    if str(target).lower().startswith(str(md_root).lower()):
-                        import shutil
-
-                        shutil.rmtree(md_folder, ignore_errors=True)
-                except Exception:
-                    pass
+                _safe_rmtree_child(md_folder, out_root)
 
             last_page_done = 0
             last_page_total = 0
@@ -4830,15 +4836,7 @@ def _bg_worker_loop() -> None:
                 return bg_should_cancel(_BG_STATE, _BG_LOCK)
 
             def _clear_md_folder_for_retry() -> None:
-                try:
-                    md_root = out_root.resolve()
-                    target = md_folder.resolve()
-                    if str(target).lower().startswith(str(md_root).lower()):
-                        import shutil
-
-                        shutil.rmtree(md_folder, ignore_errors=True)
-                except Exception:
-                    pass
+                _safe_rmtree_child(md_folder, out_root)
 
             effective_speed_mode = speed_mode
             source_retry_done = False

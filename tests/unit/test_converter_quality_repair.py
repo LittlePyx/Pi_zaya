@@ -325,6 +325,249 @@ def test_repair_markdown_text_does_not_let_postprocess_restore_numeric_heading_j
     assert after.heading_level_jump_count == 0
 
 
+def test_conversion_quality_detects_collapsed_review_heading_hierarchy(tmp_path: Path):
+    md_path = tmp_path / "Brief review of image denoising techniques.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "",
+            "# Brief review of image denoising techniques",
+            "",
+            "## Abstract",
+            "",
+            "This brief review summarizes classical and deep learning denoising methods for image restoration.",
+            "",
+            "## Introduction",
+            "",
+            "The paper introduces image denoising before surveying many method families.",
+            "",
+            "### Image denoising problem statement",
+            "",
+            "Problem statement text.",
+            "",
+            "### Classical denoising method",
+            "",
+            "Classical method text.",
+            "",
+            "### Spatial domain filtering",
+            "",
+            "Spatial filtering text.",
+            "",
+            "### Variational denoising methods",
+            "",
+            "Variational method text.",
+            "",
+            "### Transform techniques in image denoising",
+            "",
+            "Transform technique text.",
+            "",
+            "### Transform domain filtering methods",
+            "",
+            "Transform filtering text.",
+            "",
+            "### Data adaptive transform",
+            "",
+            "Adaptive transform text.",
+            "",
+            "### CNN-based denoising methods",
+            "",
+            "CNN method text.",
+            "",
+            "### Experiments",
+            "",
+            "Experiment text.",
+            "",
+            "## References",
+            "",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path)
+
+    assert "collapsed_heading_hierarchy" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "autofix"
+
+
+def test_repair_markdown_text_promotes_collapsed_review_headings(tmp_path: Path):
+    md_path = tmp_path / "Brief review of image denoising techniques.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "",
+            "# Brief review of image denoising techniques",
+            "",
+            "## Abstract",
+            "",
+            "This brief review summarizes classical and deep learning denoising methods for image restoration.",
+            "",
+            "## Introduction",
+            "",
+            "Introductory text.",
+            "",
+            "### Image denoising problem statement",
+            "",
+            "Problem statement text.",
+            "",
+            "### Classical denoising method",
+            "",
+            "Classical method text.",
+            "",
+            "### Figure 1. Visual summary",
+            "",
+            "Caption-like heading should stay unchanged.",
+            "",
+            "### Spatial domain filtering",
+            "",
+            "Spatial filtering text.",
+            "",
+            "### Variational denoising methods",
+            "",
+            "Variational method text.",
+            "",
+            "### Transform techniques in image denoising",
+            "",
+            "Transform technique text.",
+            "",
+            "### Transform domain filtering methods",
+            "",
+            "Transform filtering text.",
+            "",
+            "### Data adaptive transform",
+            "",
+            "Adaptive transform text.",
+            "",
+            "### CNN-based denoising methods",
+            "",
+            "CNN method text.",
+            "",
+            "### Experiments",
+            "",
+            "Experiment text.",
+            "",
+            "## References",
+            "",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(md_path, original, issue_codes=["collapsed_heading_hierarchy"])
+
+    repaired = str(result.get("repaired_text") or "")
+    after = summarize_conversion_quality(md_path, repaired)
+    assert result["changed"] is True
+    assert result["applied"] == ["promote_collapsed_review_headings"]
+    assert "## Classical denoising method" in repaired
+    assert "## Transform techniques in image denoising" in repaired
+    assert "### Figure 1. Visual summary" in repaired
+    assert after.h2_count >= 8
+
+
+def test_conversion_quality_detects_stray_inline_math(tmp_path: Path):
+    md_path = tmp_path / "paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "",
+            "# Example paper",
+            "",
+            "## Abstract",
+            "",
+            r"where loss( cdot) denotes the loss function.",
+            "",
+            "## Results",
+            "",
+            r"The method is worse when the noise level is low (e.g., \sigma \leq 25).",
+            r"The BSD68 dataset comes from BSD68 [110]$ and Set12.",
+            "",
+            "## References",
+            "",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path)
+
+    assert "stray_inline_math" in report["repair_plan"]["issue_codes"]
+    assert report["repair_plan"]["action"] == "autofix"
+
+
+def test_repair_markdown_text_cleans_stray_inline_math_and_keeps_review_headings(tmp_path: Path):
+    md_path = tmp_path / "Brief review of image denoising techniques.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "",
+            "# Brief review of image denoising techniques",
+            "",
+            "## Abstract",
+            "",
+            "This brief review summarizes classical and deep learning denoising methods for image restoration.",
+            "",
+            "## Introduction",
+            "",
+            "Introductory text.",
+            "",
+            "### Image denoising problem statement",
+            "",
+            "Problem statement text.",
+            "",
+            "### Classical denoising method",
+            "",
+            "Classical method text.",
+            "",
+            "### Spatial domain filtering",
+            "",
+            "Spatial filtering text.",
+            "",
+            "### Variational denoising methods",
+            "",
+            "Variational method text.",
+            "",
+            "### Transform techniques in image denoising",
+            "",
+            "Transform technique text.",
+            "",
+            "### Transform domain filtering methods",
+            "",
+            "Transform filtering text.",
+            "",
+            "### Data adaptive transform",
+            "",
+            "Adaptive transform text.",
+            "",
+            "### CNN-based denoising methods",
+            "",
+            r"where loss( cdot) denotes the loss function.",
+            "",
+            "### Experiments",
+            "",
+            r"The noise level is low (e.g., \sigma \leq 25). BSD68 [110]$ and Set12 are used.",
+            "",
+            "## References",
+            "",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(md_path, original, issue_codes=["stray_inline_math"])
+
+    repaired = str(result.get("repaired_text") or "")
+    after = summarize_conversion_quality(md_path, repaired)
+    assert result["changed"] is True
+    assert result["unsafe"] is False
+    assert "postprocess_markdown" in result["applied"]
+    assert "promote_collapsed_review_headings" in result["applied"]
+    assert r"$\operatorname{loss}(\cdot)$" in repaired
+    assert r"$\sigma \leq 25$" in repaired
+    assert "[110]$" not in repaired
+    assert after.h2_count >= 8
+
+
 def test_repair_markdown_text_fixes_safe_issues_without_writing(tmp_path: Path):
     md_path = tmp_path / "paper.en.md"
     original = "\n".join(
@@ -403,6 +646,94 @@ def test_repair_markdown_text_recovers_real_page_markers_from_pdf(tmp_path: Path
     assert "<!-- kb_page: 2 -->" in repaired
     assert repaired.index("<!-- kb_page: 1 -->") < repaired.index("The first page describes")
     assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("The second page reports")
+
+
+def test_write_conversion_quality_result_flags_collapsed_source_page_markers(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Collapsed Anchors.pdf"
+    page_texts = [
+        " ".join(f"alpha{i:03d}" for i in range(90)),
+        " ".join(f"bravo{i:03d}" for i in range(90)),
+        " ".join(f"charlie{i:03d}" for i in range(90)),
+        " ".join(f"delta{i:03d}" for i in range(90)),
+    ]
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Collapsed Anchors.en.md"
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Collapsed Anchors",
+            "## Abstract",
+            "This paper studies deterministic page anchors in converted markdown.",
+            "## Body",
+            page_texts[0],
+            page_texts[1],
+            page_texts[2],
+            "<!-- kb_page: 4 -->",
+            page_texts[3],
+            "## References",
+            "[1] Ada Lovelace. Example Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    payload = write_conversion_quality_result(md_path, source_pdf_path=pdf_path)
+
+    assert payload["source_quality"]["source_page_anchor_issue_count"] >= 2
+    assert "source_page_marker_alignment" in payload["repair_plan"]["issue_codes"]
+    assert payload["repair_plan"]["action"] == "autofix"
+
+
+def test_repair_markdown_text_realigns_collapsed_source_page_markers(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Misaligned Anchors.pdf"
+    page_texts = [
+        " ".join(f"alpha{i:03d}" for i in range(90)),
+        " ".join(f"bravo{i:03d}" for i in range(90)),
+        " ".join(f"charlie{i:03d}" for i in range(90)),
+    ]
+    doc = fitz.open()
+    for text in page_texts:
+        page = doc.new_page()
+        page.insert_textbox(fitz.Rect(40, 60, 560, 760), text, fontsize=10)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Misaligned Anchors.en.md"
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Misaligned Anchors",
+            page_texts[0],
+            page_texts[1],
+            "<!-- kb_page: 2 -->",
+            page_texts[2],
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["source_page_marker_alignment"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    markers = [int(match.group(1)) for match in re.finditer(r"<!--\s*kb_page:\s*(\d+)\s*-->", repaired)]
+    assert result["changed"] is True
+    assert "realign_page_markers_from_pdf" in result["applied"]
+    assert markers == [1, 2, 3]
+    assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("bravo000")
+    assert repaired.index("<!-- kb_page: 3 -->") < repaired.index("charlie000")
 
 
 def test_repair_markdown_text_recovers_missing_caption_from_pdf_text(tmp_path: Path):
@@ -846,6 +1177,8 @@ def test_repair_markdown_text_backfills_truncated_references_from_pdf(tmp_path: 
             "[1] ALPHA, A. First broken reference. Journal, 1950, 1, 1-2.",
             "### RUNNING HEADER",
             "[2] This line should be replaced by the PDF reference backfill.",
+            "Supplementary Material",
+            "Supplementary details must remain after reference backfill.",
         ]
     )
     md_path.write_text(original, encoding="utf-8")
@@ -863,6 +1196,167 @@ def test_repair_markdown_text_backfills_truncated_references_from_pdf(tmp_path: 
     assert "Final body text should not be part" not in repaired
     assert "RUNNING HEADER" not in repaired
     assert "[5] EPSILON" in repaired
+    assert "Supplementary details must remain" in repaired
+
+
+def test_repair_markdown_text_backfills_references_without_pdf_heading(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Headingless Reference Paper.pdf"
+    doc = fitz.open()
+    page1 = doc.new_page()
+    page1.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "\n".join(
+            [
+                "Acknowledgements should not be part of the recovered references.",
+                "[1] ALPHA, A. First recovered reference. Journal, 1950, 1, 1-2.",
+                "[2] BETA, B. Second recovered reference. Journal, 1951, 2, 3-4.",
+                "[3] GAMMA, C. Third recovered reference. Journal, 1952, 3, 5-6.",
+                "[4] DELTA, D. Fourth recovered reference. Journal, 1953, 4, 7-8.",
+            ]
+        ),
+        fontsize=10,
+    )
+    page2 = doc.new_page()
+    page2.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "\n".join(
+            [
+                "[5] EPSILON, E. Fifth recovered reference. Journal, 1954, 5, 9-10.",
+                "[6] ZETA, Z. Sixth recovered reference. Journal, 1955, 6, 11-12.",
+                "[7] ETA, H. Seventh recovered reference. Journal, 1956, 7, 13-14.",
+                "Supplementary Materials",
+                "This same page supplement must not be included in the reference backfill.",
+            ]
+        ),
+        fontsize=10,
+    )
+    page3 = doc.new_page()
+    page3.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "Supplementary Materials\nThis page must not be included in the reference backfill.",
+        fontsize=10,
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Headingless Reference Paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Headingless Reference Paper",
+            "## Abstract",
+            "This paper has a stable abstract.",
+            "## References",
+            "[1] ALPHA, A. Broken reference. Journal, 1950, 1, 1-2.",
+            "[2] BETA, B. Broken reference. Journal, 1951, 2, 3-4.",
+            "[7] ETA, H. Broken reference. Journal, 1956, 7, 13-14.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["reference_index_truncated"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    assert result["changed"] is True
+    assert "pdf_reference_backfill" in result["applied"]
+    assert "Acknowledgements should not be part" not in repaired
+    assert "[3] GAMMA" in repaired
+    assert "[6] ZETA" in repaired
+    assert "Supplementary Materials" not in repaired
+
+
+def test_repair_markdown_text_backfills_two_column_numeric_pdf_references(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Two Column Reference Paper.pdf"
+    doc = fitz.open()
+    page1 = doc.new_page(width=612, height=792)
+    page1.insert_textbox(
+        fitz.Rect(45, 45, 294, 620),
+        "\n".join(
+            [
+                "Conclusion body must not be part of the recovered references.",
+                "6. METHODS",
+                "Methods body must remain before the references heading.",
+                "Funding. Support text must not become a reference.",
+                "REFERENCES",
+                "1. ALPHA, A. First recovered reference. Journal, 1950, 1-2.",
+            ]
+        ),
+        fontsize=10,
+    )
+    page1.insert_textbox(
+        fitz.Rect(318, 45, 567, 740),
+        "\n".join(
+            [
+                "2. BETA, B. Second recovered reference. Journal, 1951, 3-4.",
+                "3. GAMMA, C. Third recovered reference. Journal, 1952, 5-6.",
+                "4. DELTA, D. Fourth recovered reference. Journal, 1953, 7-8.",
+            ]
+        ),
+        fontsize=10,
+    )
+    page2 = doc.new_page(width=612, height=792)
+    page2.insert_textbox(
+        fitz.Rect(45, 45, 294, 200),
+        "\n".join(
+            [
+                "5. EPSILON, E. Fifth recovered reference. Journal, 1954, 9-10.",
+                "6. ZETA, Z. Sixth recovered reference. Journal, 1955, 11-12.",
+                "7. ETA, H. Seventh recovered reference. Journal, 1956, 13-14.",
+                "Research Article",
+                "Vol. 3, No. 2 / February 2016 / Optica",
+                "138",
+            ]
+        ),
+        fontsize=10,
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Two Column Reference Paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Two Column Reference Paper",
+            "## Abstract",
+            "This paper has a stable abstract.",
+            "Conclusion body must not be part of the recovered references.",
+            "Methods body must remain before the references heading.",
+            "5. EPSILON, E. Stray pre-heading reference. Journal, 1954, 9-10.",
+            "## References",
+            "[1] ALPHA, A. Broken reference. Journal, 1950, 1-2.",
+            "[2] BETA, B. Broken reference. Journal, 1951, 3-4.",
+            "[4] DELTA, D. Broken reference. Journal, 1953, 7-8.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["reference_index_truncated"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    assert result["changed"] is True
+    assert result["regression_reasons"] == []
+    assert "pdf_reference_backfill" in result["applied"]
+    assert "Conclusion body must not be part" in repaired
+    assert "Methods body must remain" in repaired
+    assert "Stray pre-heading reference" not in repaired
+    assert "[3] GAMMA" in repaired
+    assert "[7] ETA" in repaired
+    assert "Research Article" not in repaired
+    assert "Vol. 3, No. 2" not in repaired
 
 
 def test_repair_markdown_text_backfills_gapped_references_from_pdf(tmp_path: Path):

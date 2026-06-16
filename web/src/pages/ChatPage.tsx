@@ -1713,15 +1713,15 @@ export default function ChatPage() {
           <div className="kb-empty-state flex flex-1 flex-col items-center justify-center gap-4 px-4">
             <div className="kb-empty-brand">
               <div className="kb-empty-logo-wrap flex h-14 w-14 items-center justify-center overflow-hidden rounded-full">
-                <img src="/pi_logo.png" alt="Pi assistant" className="kb-empty-logo h-9 w-9 object-contain" loading="lazy" />
+                <img src="/pi_logo.png" alt="Pi_zaya logo" className="kb-empty-logo h-9 w-9 object-contain" loading="lazy" />
               </div>
-              <div className="kb-empty-typewriter" aria-label={S.brand_subtitle}>
-                {S.brand_subtitle}
+              <div className="kb-empty-copy">
+                <div className="kb-empty-product">{S.brand_name}</div>
+                <div className="kb-empty-typewriter" aria-label={S.brand_home_title}>
+                  {S.brand_home_title}
+                </div>
               </div>
             </div>
-            <Text type="secondary" className="max-w-xs text-center">
-              {S.no_msgs}
-            </Text>
           </div>
           {chatComposer}
         </>

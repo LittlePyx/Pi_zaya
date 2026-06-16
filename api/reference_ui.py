@@ -15,13 +15,19 @@ import re
 import requests
 import time
 
-from api.deps import load_prefs
 from api.reference_card_copy import (
     finalize_ref_card_copy as _finalize_ref_card_copy,
     looks_generic_ref_why_line as _card_copy_looks_generic_ref_why_line,
     looks_templated_ref_why_line as _card_copy_looks_templated_ref_why_line,
 )
 from api.reference_card_payload import build_ref_card_ui_payload as _build_ref_card_ui_payload
+from api.reference_card_locale import (
+    _prefer_zh_ref_card_locale,
+    _prompt_strongly_prefers_english,
+    _ref_card_user_locale,
+    _refs_card_locale_pref,
+    _refs_card_ui_locale_pref,
+)
 from api.reference_card_quality import (
     LLM_SUMMARY_GENERATIONS,
     LLM_WHY_GENERATIONS,
@@ -29,13 +35,38 @@ from api.reference_card_quality import (
     ref_card_polish_status,
     refs_pack_has_full_llm_copy,
 )
+from api.reference_focus_terms import (
+    _PROMPT_FOCUS_STOPWORDS,
+    _clean_refs_focus_phrase,
+    _focus_term_matches_surface,
+    _refs_exact_focus_match_count,
+    _refs_prompt_focus_alias_terms,
+    _refs_prompt_focus_terms,
+)
 from api.reference_intent import (
     refs_prompt_section_intent as _intent_prompt_section_intent,
     refs_prompt_topic_terms as _intent_prompt_topic_terms,
     refs_section_intent_heading_score as _intent_section_intent_heading_score,
     refs_section_intent_terms as _intent_section_intent_terms,
 )
-from kb.answer_contract import _prefer_zh_locale
+from api.reference_source_identity import (
+    _normalize_title_identity,
+    _same_source_identity,
+    _same_source_title_identity,
+    _source_filename,
+    _title_identity_keys,
+)
+from api.reference_ui_score import (
+    _MAX_REF_UI_GAP,
+    _MIN_COMPARE_DIRECT_HIT_SCORE,
+    _MIN_PENDING_SINGLE_PAPER_DIRECT_HIT_SCORE,
+    _MIN_REF_UI_SCORE,
+    _MIN_SINGLE_PAPER_DIRECT_HIT_SCORE,
+    _clamp_ui_score,
+    _effective_ui_score,
+    _should_force_keep_ref_hit,
+)
+from api.reference_value_utils import _non_negative_float, _positive_int
 from kb.config import load_settings
 from kb.citation_meta import (
     extract_first_doi,
@@ -85,198 +116,7 @@ from ui.refs_renderer import (
     fetch_crossref_meta,
 )
 
-_MIN_REF_UI_SCORE = 5.2
-_MAX_REF_UI_GAP = 1.8
-_MIN_SINGLE_PAPER_DIRECT_HIT_SCORE = 4.25
-_MIN_PENDING_SINGLE_PAPER_DIRECT_HIT_SCORE = 3.0
-_MIN_COMPARE_DIRECT_HIT_SCORE = 5.0
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _refs_card_locale_pref() -> str:
-    raw = str(os.environ.get("KB_REFS_CARD_LOCALE") or "").strip().lower()
-    if raw in {"zh", "en", "auto"}:
-        return raw
-    try:
-        prefs = load_prefs()
-    except Exception:
-        prefs = {}
-    raw = str((prefs or {}).get("refs_card_locale") or "").strip().lower()
-    if raw in {"zh", "en", "auto"}:
-        return raw
-    return "auto"
-
-
-def _refs_card_ui_locale_pref() -> str:
-    try:
-        prefs = load_prefs()
-    except Exception:
-        prefs = {}
-    raw = str((prefs or {}).get("ui_locale") or "").strip().lower()
-    return raw if raw in {"zh", "en"} else ""
-
-
-def _ref_card_user_locale(prompt: str = "", *fallback_texts: str) -> str:
-    pref = _refs_card_locale_pref()
-    if pref in {"zh", "en"}:
-        return pref
-
-    prompt_text = str(prompt or "").strip()
-    if prompt_text:
-        if _prefer_zh_locale(prompt_text):
-            return "zh"
-        if _prompt_strongly_prefers_english(prompt_text):
-            return "en"
-
-    ui_pref = _refs_card_ui_locale_pref()
-    if ui_pref in {"zh", "en"}:
-        return ui_pref
-
-    fallback_parts = [str(text or "").strip() for text in fallback_texts if str(text or "").strip()]
-    if fallback_parts:
-        return "zh" if _prefer_zh_locale(*fallback_parts) else "en"
-    return "en"
-
-
-def _prefer_zh_ref_card_locale(*texts: str) -> bool:
-    prompt = str(texts[0] or "") if texts else ""
-    fallback_texts = tuple(str(text or "") for text in texts[1:]) if len(texts) >= 2 else ()
-    return _ref_card_user_locale(prompt, *fallback_texts) == "zh"
-
-
-def _prompt_strongly_prefers_english(prompt: str) -> bool:
-    text = str(prompt or "").strip()
-    if not text:
-        return False
-    cjk = len(re.findall(r"[\u4e00-\u9fff]", text))
-    latin = len(re.findall(r"[A-Za-z]", text))
-    return cjk == 0 and latin >= 4
-
-
-def _source_filename(source_path: str) -> str:
-    s = str(source_path or "").strip()
-    if not s:
-        return ""
-    parts = re.split(r"[\\/]+", s)
-    return str(parts[-1] or "").strip() if parts else s
-
-
-def _source_identity_keys(source_path: str) -> set[str]:
-    raw = str(source_path or "").strip()
-    if not raw:
-        return set()
-    out: set[str] = set()
-    norm = raw.replace("\\", "/").strip().lower()
-    if norm:
-        out.add(norm)
-
-    name = _source_filename(raw).strip().lower()
-    if name:
-        out.add(name)
-        if name.endswith(".en.md"):
-            pdf_name = name[:-6] + ".pdf"
-            stem_name = name[:-6]
-            out.add(pdf_name)
-            out.add(stem_name)
-        elif name.endswith(".md"):
-            pdf_name = name[:-3] + ".pdf"
-            stem_name = name[:-3]
-            out.add(pdf_name)
-            out.add(stem_name)
-    return {item for item in out if item}
-
-
-def _same_source_identity(source_path: str, bound_source_path: str) -> bool:
-    left = _source_identity_keys(source_path)
-    right = _source_identity_keys(bound_source_path)
-    if not left or not right:
-        return False
-    return bool(left.intersection(right))
-
-
-def _normalize_title_identity(text: str) -> str:
-    raw = str(text or "").strip()
-    if not raw:
-        return ""
-    low = raw.lower()
-    if low.endswith(".en.md"):
-        raw = raw[:-6]
-    elif low.endswith(".md") or low.endswith(".pdf"):
-        raw = raw[:-3] if low.endswith(".md") else raw[:-4]
-    raw = re.sub(r"(19\d{2}|20\d{2})\s*-\s*", r"\1 - ", raw)
-    raw = re.sub(r"[_/\\]+", " ", raw)
-    raw = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", " ", raw)
-    raw = re.sub(r"\s+", " ", raw).strip().lower()
-    return raw
-
-
-def _title_identity_keys(source_like: str) -> set[str]:
-    raw = str(source_like or "").strip()
-    if not raw:
-        return set()
-    out: set[str] = set()
-
-    def _push(value: str):
-        norm = _normalize_title_identity(value)
-        if norm:
-            out.add(norm)
-
-    _push(raw)
-    name = _source_filename(raw)
-    if name:
-        _push(name)
-    _venue, _year, parsed_title = _parse_filename_meta(raw)
-    if parsed_title:
-        _push(parsed_title)
-    base = name or raw
-    m = re.search(r"(?:19\d{2}|20\d{2})\s*-\s*(.+)$", base)
-    if m:
-        _push(str(m.group(1) or "").strip())
-    return {item for item in out if item}
-
-
-def _same_source_title_identity(left_source: str, right_source: str) -> bool:
-    left = _title_identity_keys(left_source)
-    right = _title_identity_keys(right_source)
-    if not left or not right:
-        return False
-
-    def _first_identity_token(value: str) -> str:
-        stop = {
-            "the", "and", "for", "with", "from", "into", "using", "based", "towards",
-            "conference", "symposium", "workshop", "journal", "transactions", "letters",
-            "ieee", "cvpr", "iccv", "eccv", "neurips", "iclr", "icml",
-        }
-        tokens = [tok for tok in str(value or "").split() if tok]
-        for tok in tokens:
-            if re.fullmatch(r"(19\d{2}|20\d{2})", tok):
-                continue
-            if tok in stop:
-                continue
-            if len(tok) < 3:
-                continue
-            return tok
-        return tokens[0] if tokens else ""
-
-    if left.intersection(right):
-        return True
-    for a in left:
-        for b in right:
-            if min(len(a), len(b)) < 20:
-                continue
-            if (a in b) or (b in a):
-                return True
-            a_tokens = set(a.split())
-            b_tokens = set(b.split())
-            if len(a_tokens) < 4 or len(b_tokens) < 4:
-                continue
-            overlap = len(a_tokens.intersection(b_tokens))
-            smaller = min(len(a_tokens), len(b_tokens))
-            if smaller <= 0:
-                continue
-            if (overlap / float(smaller)) >= 0.75 and _first_identity_token(a) == _first_identity_token(b):
-                return True
-    return False
 
 
 def _hit_matches_guide_source(meta: dict, *, guide_source_path: str, guide_source_name: str) -> bool:
@@ -302,240 +142,6 @@ def _hit_matches_guide_source(meta: dict, *, guide_source_path: str, guide_sourc
     return False
 
 
-def _clamp_ui_score(score: float) -> float:
-    try:
-        v = float(score)
-    except Exception:
-        v = 0.0
-    return max(0.0, min(10.0, v))
-
-
-def _stable_score_micro_jitter(source_path: str) -> float:
-    """Small deterministic jitter to avoid repeated identical decimals (e.g. *.76)."""
-    s = str(source_path or "").strip()
-    if not s:
-        return 0.0
-    try:
-        h = hashlib.sha1(s.encode("utf-8", "ignore")).digest()
-        u = int.from_bytes(h[:2], "big") / 65535.0  # 0..1
-    except Exception:
-        return 0.0
-    return (u - 0.5) * 0.08  # about [-0.04, +0.04]
-
-
-def _calibrated_ui_score(meta: dict, rank: dict) -> float | None:
-    try:
-        llm_score = float(rank.get("llm", 0.0) or 0.0)
-    except Exception:
-        llm_score = 0.0
-    if llm_score <= 0:
-        return None
-
-    try:
-        bm25 = float(rank.get("bm25", 0.0) or 0.0)
-    except Exception:
-        bm25 = 0.0
-    try:
-        deep = float(rank.get("deep", 0.0) or 0.0)
-    except Exception:
-        deep = 0.0
-    try:
-        term_bonus = float(rank.get("term_bonus", 0.0) or 0.0)
-    except Exception:
-        term_bonus = 0.0
-    try:
-        semantic_score = float(rank.get("semantic_score", 0.0) or 0.0)
-    except Exception:
-        semantic_score = 0.0
-
-    llm_ui = llm_score / 10.0
-
-    # Build an evidence-driven UI component from retrieval signals.
-    # Use smooth transforms to keep score spread continuous and avoid repeated
-    # fixed decimal tails from a single signal source.
-    evidence_ui = 5.0
-    evidence_ui += 1.8 * math.tanh((bm25 - 2.5) / 3.0)
-    evidence_ui += 1.2 * math.tanh((deep - 1.5) / 4.0)
-    evidence_ui += 0.9 * math.tanh(term_bonus / 1.8)
-    if semantic_score > 0:
-        evidence_ui = (0.82 * evidence_ui) + (0.18 * _clamp_ui_score(semantic_score))
-    evidence_ui = _clamp_ui_score(evidence_ui)
-
-    # Blend LLM relevance with retrieval evidence.
-    ui = (0.64 * llm_ui) + (0.36 * evidence_ui)
-
-    if term_bonus < 0:
-        ui += 0.60 * term_bonus
-    elif term_bonus > 0:
-        ui += min(0.30, 0.12 * term_bonus)
-
-    if bm25 < 1.0:
-        ui -= 1.15
-    elif bm25 < 2.0:
-        ui -= 0.75
-    elif bm25 < 3.5:
-        ui -= 0.35
-
-    if deep <= 0:
-        ui -= 0.15
-
-    section = str(
-        meta.get("ref_section")
-        or ((meta.get("ref_pack") or {}).get("section") if isinstance(meta.get("ref_pack"), dict) else "")
-        or meta.get("ref_best_heading_path")
-        or meta.get("heading_path")
-        or ""
-    ).strip()
-    loc_quality = str(meta.get("ref_loc_quality") or "").strip().lower()
-    if not section:
-        ui -= 0.70
-    elif loc_quality != "high":
-        ui -= 0.25
-
-    # Add continuous spread from evidence.
-    try:
-        bm25_spread = max(-1.0, min(1.0, math.tanh((bm25 - 3.0) / 4.0)))
-    except Exception:
-        bm25_spread = 0.0
-    try:
-        deep_spread = max(-1.0, min(1.0, math.tanh((deep - 2.0) / 6.0)))
-    except Exception:
-        deep_spread = 0.0
-    ui += (0.14 * bm25_spread) + (0.12 * deep_spread)
-
-    # Deterministic micro-jitter by source to break exact ties.
-    ui += _stable_score_micro_jitter(str(meta.get("source_path") or ""))
-
-    # Do not allow weak lexical evidence to surface as "high relevance"
-    # just because the LLM was optimistic.
-    if term_bonus <= 0.0 and bm25 < 2.0:
-        ui = min(ui, 6.4)
-    if term_bonus <= 0.0 and bm25 < 1.0:
-        ui = min(ui, 5.8)
-    if term_bonus <= 0.0 and (not section):
-        ui = min(ui, 5.6)
-
-    return _clamp_ui_score(ui)
-
-
-def _failed_ref_fallback_ui_score(meta: dict, rank: dict) -> float | None:
-    if not isinstance(meta, dict):
-        return None
-    rank_d = rank if isinstance(rank, dict) else {}
-    try:
-        bm25 = float(rank_d.get("bm25", 0.0) or 0.0)
-    except Exception:
-        bm25 = 0.0
-    try:
-        deep = float(rank_d.get("deep", 0.0) or 0.0)
-    except Exception:
-        deep = 0.0
-    try:
-        term_bonus = float(rank_d.get("term_bonus", 0.0) or 0.0)
-    except Exception:
-        term_bonus = 0.0
-    try:
-        semantic_score = float(rank_d.get("semantic_score", 0.0) or 0.0)
-    except Exception:
-        semantic_score = 0.0
-
-    ui = 5.15
-    ui += 1.55 * math.tanh((bm25 - 3.0) / 4.0)
-    ui += 1.15 * math.tanh((deep - 8.0) / 16.0)
-    ui += 0.80 * math.tanh(term_bonus / 1.6)
-    if semantic_score > 0:
-        ui = (0.88 * ui) + (0.12 * _clamp_ui_score(semantic_score))
-
-    section = str(
-        meta.get("ref_section")
-        or ((meta.get("ref_pack") or {}).get("section") if isinstance(meta.get("ref_pack"), dict) else "")
-        or meta.get("ref_best_heading_path")
-        or meta.get("heading_path")
-        or ""
-    ).strip()
-    loc_quality = str(meta.get("ref_loc_quality") or "").strip().lower()
-    if not section:
-        ui -= 0.45
-    elif loc_quality and loc_quality != "high":
-        ui -= 0.15
-
-    try:
-        explicit_doc = float(meta.get("explicit_doc_match_score") or 0.0)
-    except Exception:
-        explicit_doc = 0.0
-    if explicit_doc > 0.0:
-        ui += min(0.75, 0.12 * explicit_doc)
-
-    return _clamp_ui_score(ui)
-
-def _effective_ui_score(hit: dict) -> tuple[float | None, bool]:
-    meta = (hit or {}).get("meta", {}) or {}
-    pack_state = str(meta.get("ref_pack_state") or "").strip().lower()
-    rank = meta.get("ref_rank") if isinstance(meta.get("ref_rank"), dict) else {}
-    if pack_state == "ready":
-        calibrated = _calibrated_ui_score(meta, rank)
-        if calibrated is not None:
-            return calibrated, False
-    if pack_state in {"failed", "none", ""}:
-        calibrated = _calibrated_ui_score(meta, rank)
-        if calibrated is not None and _has_failed_ref_ui_fallback_signal(meta, rank):
-            return calibrated, False
-        fallback = _failed_ref_fallback_ui_score(meta, rank)
-        if fallback is not None and _has_failed_ref_ui_fallback_signal(meta, rank):
-            return fallback, False
-    return None, pack_state == "pending"
-
-
-def _has_failed_ref_ui_fallback_signal(meta: dict, rank: dict | None = None) -> bool:
-    if not isinstance(meta, dict):
-        return False
-    rank_d = rank if isinstance(rank, dict) else {}
-    if str(meta.get("ref_best_heading_path") or "").strip():
-        return True
-    raw_locs = meta.get("ref_locs")
-    if isinstance(raw_locs, list) and raw_locs:
-        return True
-    for key in ("ref_show_snippets", "ref_snippets", "ref_overview_snippets"):
-        raw_arr = meta.get(key)
-        if isinstance(raw_arr, list) and any(str(item or "").strip() for item in raw_arr):
-            return True
-    try:
-        explicit_doc = float(meta.get("explicit_doc_match_score") or 0.0)
-    except Exception:
-        explicit_doc = 0.0
-    if explicit_doc >= 3.0:
-        return True
-    try:
-        score = float((rank_d or {}).get("score") or 0.0)
-    except Exception:
-        score = 0.0
-    return score >= 8.0
-
-
-def _should_force_keep_ref_hit(hit: dict) -> bool:
-    meta = (hit or {}).get("meta", {}) or {}
-    if not isinstance(meta, dict):
-        return False
-    if str(meta.get("ref_display_reason") or "").strip().lower() == "answer_hit_top":
-        return True
-    if str(meta.get("ref_pack_state") or "").strip().lower() == "pending":
-        return True
-    try:
-        explicit_doc = float(meta.get("explicit_doc_match_score") or 0.0)
-    except Exception:
-        explicit_doc = 0.0
-    if explicit_doc >= 6.0:
-        return True
-    if str(meta.get("anchor_target_kind") or "").strip():
-        try:
-            anchor_score = float(meta.get("anchor_match_score") or 0.0)
-        except Exception:
-            anchor_score = 0.0
-        if anchor_score > 0.0:
-            return True
-    return False
-
-
 def _display_source_name(source_path: str, pdf_path: Path | None, lib_store: LibraryStore | None) -> str:
     try:
         if pdf_path is not None and lib_store is not None:
@@ -554,22 +160,6 @@ def _display_source_name(source_path: str, pdf_path: Path | None, lib_store: Lib
     elif low.endswith(".md"):
         name = name[:-3] + ".pdf"
     return name or "unknown.pdf"
-
-
-def _positive_int(x) -> int:
-    try:
-        v = int(x)
-    except Exception:
-        return 0
-    return v if v > 0 else 0
-
-
-def _non_negative_float(x) -> float:
-    try:
-        v = float(x)
-    except Exception:
-        return 0.0
-    return v if v > 0.0 else 0.0
 
 
 def _anchor_kind_prefix(kind: str) -> str:
@@ -8086,282 +7676,6 @@ def _refs_has_decisive_raw_retrieval_leader(prompt: str, hits: list[dict]) -> bo
     top = _refs_hit_raw_retrieval_score(rows[0])
     second = _refs_hit_raw_retrieval_score(rows[1])
     return bool(top >= 10.0 and (top - second) >= 3.0)
-
-
-_PROMPT_FOCUS_STOPWORDS = {
-    "the", "and", "for", "with", "from", "into", "using", "about", "where", "which", "what",
-    "that", "this", "these", "those", "paper", "papers", "library", "source", "sources",
-    "section", "please", "point", "directly", "most", "does", "do", "did", "discuss", "discusses",
-    "mentioned", "mention", "other", "besides", "find", "show", "explain",
-}
-
-_PROMPT_FOCUS_GENERIC_MODIFIERS = {
-    "dynamic", "compressive", "physics", "physical", "single", "high", "low",
-    "based", "guided", "driven", "general", "specific", "direct", "directly",
-}
-
-_PROMPT_FOCUS_PHRASE_PATTERNS = (
-    re.compile(
-        r"\bwhere\s+(?:in\s+the\s+[^?.!,]{1,80}\s+)?is\s+(.+?)\s+(?:discussed|mentioned|defined|introduced)\b",
-        flags=re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:which|what)\s+(?:other\s+)?papers?[^?.!]{0,120}?\b(?:discuss(?:es|ed)?|mention(?:s|ed)?|cover(?:s|ed)?|address(?:es|ed)?|describe(?:s|d)?|use(?:s|d)?|introduce(?:s|d)?|define(?:s|d)?|compare(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
-        flags=re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bbesides\s+this\s+paper[^?.!]{0,120}?\b(?:discuss(?:es|ed)?|mention(?:s|ed)?|cover(?:s|ed)?|address(?:es|ed)?|describe(?:s|d)?|use(?:s|d)?|introduce(?:s|d)?|define(?:s|d)?|compare(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
-        flags=re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:which|what)\s+papers?[^?.!]{0,120}?\b(?:directly\s+|most\s+directly\s+)?(?:compare(?:s|d)?|define(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
-        flags=re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bbesides\s+this\s+paper[^?.!]{0,120}?\b(?:directly\s+|most\s+directly\s+)?(?:compare(?:s|d)?|define(?:s|d)?)\s+(.+?)(?:[?.!]|$)",
-        flags=re.IGNORECASE,
-    ),
-)
-
-
-_ZH_PROMPT_FOCUS_ALIASES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (("深度学习", "神经网络", "神经网路"), ("deep learning", "neural network")),
-    (("单像素成像", "单像素", "鬼成像"), ("single-pixel imaging", "single pixel imaging", "computational ghost imaging")),
-    (("硬件", "实验装置", "实验设置", "装置", "部件"), ("experimental setup", "setup", "hardware", "camera", "lens", "DMD")),
-    (("结构化探测", "结构化检测"), ("structured detection", "structured detector")),
-    (("激光扫描显微", "扫描显微"), ("laser scanning microscopy", "scanning microscopy")),
-    (("图像扫描显微",), ("image scanning microscopy", "ISM")),
-    (("共聚焦",), ("confocal", "confocal microscopy")),
-    (("权衡", "矛盾", "折中"), ("trade-off", "tradeoff")),
-    (("挑战", "局限"), ("challenge", "limitation")),
-)
-
-
-def _refs_prompt_focus_alias_terms(prompt: str) -> tuple[str, ...]:
-    text = str(prompt or "").strip()
-    if not text:
-        return ()
-    out: list[str] = []
-    seen: set[str] = set()
-
-    def _push(raw: str) -> None:
-        norm = _normalize_title_identity(raw)
-        if len(norm) < 3 or norm in seen:
-            return
-        seen.add(norm)
-        out.append(norm)
-
-    for triggers, aliases in _ZH_PROMPT_FOCUS_ALIASES:
-        if any(trigger and trigger in text for trigger in triggers):
-            for alias in aliases:
-                _push(alias)
-    if re.search(r"(?<![A-Za-z0-9])ISM(?![A-Za-z0-9])", text):
-        _push("image scanning microscopy")
-        _push("ISM")
-    return tuple(out)
-
-
-def _clean_refs_focus_phrase(raw: str) -> str:
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    text = re.sub(
-        r"\b(?:please\s+point\s+me(?:\s+to)?|point\s+me(?:\s+to)?|show\s+me|source\s+section(?:s)?|those\s+sources|source\s+too)\b.*$",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"^(?:the|a|an)\s+", "", text, flags=re.IGNORECASE)
-    text = text.strip(" \t\r\n\"'“”‘’.,;:!?()[]{}")
-    return text
-
-
-def _looks_informative_focus_phrase(raw: str) -> bool:
-    text = str(raw or "").strip()
-    if not text:
-        return False
-    tokens = [tok for tok in _normalize_title_identity(text).split() if tok and tok not in _PROMPT_FOCUS_STOPWORDS]
-    if not tokens:
-        return False
-    if len(tokens) >= 2:
-        return True
-    token = tokens[0]
-    return bool(len(token) >= 4 and (any(ch.isdigit() for ch in token) or "-" in token or token.isupper()))
-
-
-def _extract_prompt_focus_phrases(prompt: str) -> tuple[str, ...]:
-    text = str(prompt or "").strip()
-    if not text:
-        return ()
-    out: list[str] = []
-    seen: set[str] = set()
-
-    def _push(raw: str) -> None:
-        cleaned = _clean_refs_focus_phrase(raw)
-        if not _looks_informative_focus_phrase(cleaned):
-            return
-        norm = _normalize_title_identity(cleaned)
-        if len(norm) < 3 or norm in seen:
-            return
-        seen.add(norm)
-        out.append(norm)
-
-    for pattern in _PROMPT_FOCUS_PHRASE_PATTERNS:
-        m = pattern.search(text)
-        if not m:
-            continue
-        raw = str(m.group(1) or "")
-        _push(raw)
-        if _prompt_requests_compare(text):
-            for part in re.split(r"\b(?:and|vs\.?|versus)\b", raw, flags=re.IGNORECASE):
-                _push(part)
-    for m in re.finditer(
-        r"(?:比较|对比)(?:了)?\s*([^？?。.!]{2,140}?)(?:\s*(?:的)?(?:权衡|取舍|差异|区别|不同)|[？?。.!]|$)",
-        text,
-    ):
-        raw = re.sub(r"^(?:哪些|哪几篇|哪几篇文献|哪些文献|文献|论文)\s*", "", str(m.group(1) or "").strip())
-        _push(raw)
-        for part in re.split(r"\s*(?:和|与|及|以及|、|/|\bvs\.?\b|\bversus\b|\band\b)\s*", raw, flags=re.IGNORECASE):
-            _push(part)
-    return tuple(out[:4])
-
-
-def _prune_redundant_focus_terms(terms: list[str]) -> tuple[str, ...]:
-    items = [str(term or "").strip() for term in terms if str(term or "").strip()]
-    out: list[str] = []
-    for term in items:
-        if any(
-            term != other
-            and len(other) > len(term)
-            and term in other
-            and (not re.search(r"(?:\b(?:and|vs\.?|versus)\b|和|与|及|以及|、|/)", other, flags=re.IGNORECASE))
-            for other in items
-        ):
-            continue
-        out.append(term)
-    return tuple(out[:8])
-
-
-def _surface_has_focus_token_sequence(surface_tokens: list[str], term_tokens: list[str]) -> bool:
-    if (not surface_tokens) or (not term_tokens) or (len(term_tokens) > len(surface_tokens)):
-        return False
-    width = len(term_tokens)
-    for idx in range(len(surface_tokens) - width + 1):
-        if surface_tokens[idx : idx + width] == term_tokens:
-            return True
-    return False
-
-
-def _focus_term_adjacent_bigram_hits(surface: str, term_tokens: list[str]) -> int:
-    if (not surface) or len(term_tokens) < 2:
-        return 0
-    hits = 0
-    for idx in range(len(term_tokens) - 1):
-        phrase = f"{term_tokens[idx]} {term_tokens[idx + 1]}".strip()
-        if phrase and re.search(rf"\b{re.escape(phrase)}\b", surface, flags=re.I):
-            hits += 1
-    return hits
-
-
-def _focus_term_single_distinctive_token_fallback(term_tokens: list[str], surface_tokens: set[str]) -> bool:
-    if len(term_tokens) != 2 or (not surface_tokens):
-        return False
-    overlap = [tok for tok in term_tokens if tok in surface_tokens]
-    if len(overlap) != 1:
-        return False
-    matched = overlap[0]
-    unmatched = term_tokens[0] if matched == term_tokens[1] else term_tokens[1]
-    if len(matched) < 10:
-        return False
-    if matched in _PROMPT_FOCUS_GENERIC_MODIFIERS:
-        return False
-    return unmatched in _PROMPT_FOCUS_GENERIC_MODIFIERS
-
-
-def _focus_term_matches_surface(term: str, surface_text: str) -> bool:
-    norm_term = _normalize_title_identity(term)
-    surface = _normalize_title_identity(surface_text)
-    if not norm_term or not surface:
-        return False
-    if re.search(rf"\b{re.escape(norm_term)}\b", surface, flags=re.I):
-        return True
-    term_tokens = [
-        tok for tok in norm_term.split()
-        if tok and tok not in _PROMPT_FOCUS_STOPWORDS and len(tok) >= 4
-    ]
-    if not term_tokens:
-        return False
-    surface_tokens = [tok for tok in surface.split() if tok]
-    if not surface_tokens:
-        return False
-    surface_token_set = set(surface_tokens)
-    if len(term_tokens) == 1:
-        return bool(term_tokens[0] in surface_token_set)
-    if len(term_tokens) == 2:
-        if _surface_has_focus_token_sequence(surface_tokens, term_tokens):
-            return True
-        return _focus_term_single_distinctive_token_fallback(term_tokens, surface_token_set)
-    if not all(tok in surface_token_set for tok in term_tokens):
-        return False
-    if _surface_has_focus_token_sequence(surface_tokens, term_tokens):
-        return True
-    return _focus_term_adjacent_bigram_hits(surface, term_tokens) > 0
-
-
-def _refs_exact_focus_match_count(prompt: str, surface_text: str) -> int:
-    surface = _normalize_title_identity(surface_text)
-    if not surface:
-        return 0
-    count = 0
-    for term in _refs_prompt_focus_terms(prompt):
-        norm_term = _normalize_title_identity(term)
-        if norm_term and re.search(rf"\b{re.escape(norm_term)}\b", surface, flags=re.I):
-            count += 1
-    return count
-
-
-@lru_cache(maxsize=512)
-def _refs_prompt_focus_terms(prompt: str) -> tuple[str, ...]:
-    text = str(prompt or "").strip()
-    if not text:
-        return ()
-    out: list[str] = []
-    seen: set[str] = set()
-
-    def _push(raw: str) -> None:
-        cleaned = _clean_refs_focus_phrase(raw)
-        if not cleaned:
-            return
-        norm = _normalize_title_identity(cleaned)
-        if len(norm) < 3 or norm in seen:
-            return
-        seen.add(norm)
-        out.append(norm)
-
-    prompt_targets_sci = bool(_shared_prompt_targets_sci_topic(text))
-    if prompt_targets_sci:
-        _push("Snapshot Compressive Imaging")
-        _push("SCI")
-    for alias_term in _refs_prompt_focus_alias_terms(text):
-        _push(alias_term)
-    topic = _shared_extract_multi_paper_topic(text)
-    if topic and (not prompt_targets_sci):
-        _push(topic)
-
-    for quoted in re.findall(r"[\"']([^\"']{2,80})[\"']", text):
-        _push(quoted)
-    for token in re.findall(r"(?<![A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]{1,40}(?![A-Za-z0-9_-])", text):
-        raw = str(token or "").strip()
-        low = raw.lower()
-        if low in _PROMPT_FOCUS_STOPWORDS:
-            continue
-        has_case_signal = any(ch.isupper() for ch in raw[1:]) or raw.isupper() or any(ch.isdigit() for ch in raw) or ("-" in raw)
-        if not has_case_signal:
-            continue
-        _push(raw)
-    for phrase in _extract_prompt_focus_phrases(text):
-        _push(phrase)
-    return _prune_redundant_focus_terms(out)
 
 
 def _refs_hit_surface_text(hit: dict) -> str:

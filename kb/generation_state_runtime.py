@@ -30,6 +30,7 @@ def _gen_get_task(session_id: str) -> dict | None:
     sid = (session_id or "").strip()
     if not sid:
         return None
+    RUNTIME.prune_generation_tasks(now=time.time())
     with RUNTIME.GEN_LOCK:
         task = RUNTIME.GEN_TASKS.get(sid)
         return dict(task) if isinstance(task, dict) else None

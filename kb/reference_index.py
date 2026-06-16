@@ -38,6 +38,11 @@ _REF_START_BRACKET_RE = re.compile(r"^\[(\d{1,4})\]\s*(.*\S)?\s*$")
 _REF_START_DOT_RE = re.compile(r"^(\d{1,4})\.\s+(.*\S)?\s*$")
 _REF_ANY_START_RE = re.compile(r"(?:\[\d{1,4}\]|\d{1,4}\.)\s+")
 _REF_EMBED_BRACKET_SPLIT_RE = re.compile(r"\[\d{1,4}\]\s+")
+_POST_REFERENCES_PLAIN_STOP_RE = re.compile(
+    r"^(?:#{1,6}\s+)?(?:appendix|appendices|annex|"
+    r"supplementary(?:\s+materials?)?|supplemental(?:\s+(?:information|materials?))?)\b",
+    re.IGNORECASE,
+)
 _DOI_TRIM_RE = re.compile(r"^[ \t\r\n.,;:(){}\[\]<>]+|[ \t\r\n.,;:(){}\[\]<>]+$")
 _SOURCE_DOI_HTTP_RE = re.compile(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)", re.IGNORECASE)
 _SOURCE_DOI_RE = re.compile(r"\bdoi\s*:?\s*(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b", re.IGNORECASE)
@@ -74,6 +79,27 @@ _REFERENCE_PERIOD_ABBREVIATIONS = (
     "trans",
     "vol",
 )
+
+
+def _is_reference_map_post_references_stop_line(text: str) -> bool:
+    st = (text or "").strip()
+    if not st or _REF_HEAD_RE.match(st):
+        return False
+    if _POST_REFERENCES_PLAIN_STOP_RE.match(st):
+        return True
+    ref_start_match = bool(_REF_START_BRACKET_RE.match(st) or _REF_START_DOT_RE.match(st))
+    if ref_start_match:
+        return False
+    if re.search(r"\bsupplement(?:ary|al)\s+(?:information|materials?)\b", st, re.IGNORECASE):
+        return not re.search(r"\b(?:doi|arxiv|proc(?:eedings)?\.?)\b", st, re.IGNORECASE)
+    if re.match(
+        r"^[A-Z]\.\s+(?:appendix|additional|supplementary|supplemental|proof(?:s)?|derivation(?:s)?|"
+        r"implementation(?:\s+details?)?|experiment(?:s)?|results?|ablation(?:s)?|details?|extra)\b",
+        st,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
 
 
 def _to_os_path(path_like: str | Path) -> str:
@@ -306,6 +332,10 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
                 continue
             if re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", s, re.IGNORECASE):
                 continue
+
+            if (out or cur_n is not None) and _is_reference_map_post_references_stop_line(s):
+                _flush()
+                return _cleanup_reference_number_noise(out)
 
             if re.match(r"^#{1,6}\s+\S+", s) and (not _REF_HEAD_RE.match(s)):
                 if out:
@@ -1106,6 +1136,56 @@ def _doc_ref_quality_tuple(refs: dict[str, dict] | None) -> tuple[int, int, int,
 
 def _prefer_previous_doc_refs(prev_refs: dict[str, dict] | None, new_refs: dict[str, dict] | None) -> bool:
     return bool(_doc_ref_quality_tuple(prev_refs) > _doc_ref_quality_tuple(new_refs))
+
+
+def _reference_refs_missing_numbers(refs: dict[str, dict] | None) -> list[int]:
+    if not isinstance(refs, dict):
+        return []
+    nums: set[int] = set()
+    for key in refs.keys():
+        try:
+            n = int(str(key).strip())
+        except Exception:
+            continue
+        if n > 0:
+            nums.add(n)
+    if len(nums) < 2:
+        return []
+    first = min(nums)
+    last = max(nums)
+    if first != 1 or last <= first:
+        return []
+    return sorted(set(range(first, last + 1)) - nums)
+
+
+def _previous_doc_refs_stale_against_catalog(
+    prev_doc: dict[str, Any] | None,
+    prev_refs: dict[str, dict] | None,
+) -> bool:
+    if not isinstance(prev_doc, dict) or not isinstance(prev_refs, dict):
+        return False
+    try:
+        catalog_count = int(prev_doc.get("reference_catalog_ref_count") or 0)
+    except Exception:
+        catalog_count = 0
+    catalog_missing_raw = prev_doc.get("reference_catalog_missing_numbers")
+    catalog_missing: list[int] = []
+    if isinstance(catalog_missing_raw, list):
+        for item in catalog_missing_raw:
+            try:
+                n = int(item)
+            except Exception:
+                continue
+            if n > 0:
+                catalog_missing.append(n)
+    refs_missing = _reference_refs_missing_numbers(prev_refs)
+    if catalog_count > len(prev_refs):
+        return True
+    if (not catalog_missing) and refs_missing:
+        return True
+    if catalog_missing and refs_missing and len(refs_missing) > len(catalog_missing):
+        return True
+    return False
 
 
 def _clean_doi_for_url(doi: str) -> str:
@@ -2901,6 +2981,7 @@ def build_reference_index(
                 # Sparse-but-resolved docs are often already good enough and re-running can regress quality.
                 prev_needs_rebuild_for_enrich = bool(int(prev_unresolved) > 0)
             prev_crossref_retry_due = _doc_crossref_retry_due(prev_doc, now_ts=time.time())
+            prev_needs_rebuild_for_catalog = _previous_doc_refs_stale_against_catalog(prev_doc, prev_refs_obj)
             prev_has_quality_gate = bool(
                 isinstance(prev_doc, dict)
                 and isinstance(prev_doc.get("quality_gate"), dict)
@@ -2912,6 +2993,7 @@ def build_reference_index(
                 and str(prev_doc.get("sha1") or "") == str(sha1 or "")
                 and isinstance(prev_refs_obj, dict)
                 and ((not bool(quality_gate)) or prev_has_quality_gate)
+                and (not prev_needs_rebuild_for_catalog)
                 and (
                     (not need_crossref_enrich)
                     or (not prev_needs_rebuild_for_enrich)
@@ -3131,12 +3213,6 @@ def build_reference_index(
                 meta = None
                 doi_hint = extract_first_doi(raw)
                 promising_ref = bool(is_promising_reference_text(raw))
-    
-                # Skip obvious non-bibliographic list items (often numbered body text),
-                # but only when we do not have source-reference rows to anchor by number.
-                if (not promising_ref) and (not source_ref_rows):
-                    if (not str(doi_hint or "").strip()) and (len(raw.split()) >= 16):
-                        continue
     
                 if source_ref_rows:
                     mapped_by_number = False
@@ -3430,6 +3506,7 @@ def build_reference_index(
                 and isinstance(prev_doc, dict)
                 and str(prev_doc.get("sha1") or "") == str(sha1 or "")
                 and isinstance(prev_doc.get("refs"), dict)
+                and (not prev_needs_rebuild_for_catalog)
                 and _prefer_previous_doc_refs(prev_doc.get("refs"), refs_obj)
             ):
                 kept_doc = dict(prev_doc)
@@ -3508,4 +3585,3 @@ def build_reference_index(
         out_stats[f"refs_action_{action}"] = 0
     out_stats.update({k: int(v) for k, v in crossref_stats.items()})
     return out_stats
-

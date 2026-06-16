@@ -37,9 +37,12 @@ _ISSUE_LABELS = {
     "missing_abstract": "摘要标题缺失",
     "missing_page_markers": "页码锚点缺失",
     "page_marker_gaps": "页码锚点不连续",
+    "source_page_marker_alignment": "源 PDF 页码锚点错位",
     "missing_captions": "图题缺失",
     "unclosed_display_math": "公式块未闭合",
     "heading_level_jumps": "标题层级跳跃",
+    "collapsed_heading_hierarchy": "Heading hierarchy collapsed",
+    "stray_inline_math": "Stray inline math markup",
     "quality_scan_failed": "质量扫描失败",
 }
 

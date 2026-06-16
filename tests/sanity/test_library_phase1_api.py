@@ -733,6 +733,194 @@ def test_library_reader_locate_quality_events_feed_overview(monkeypatch, tmp_pat
     assert rows_payload["summary"]["summary"]["failed"] == 1
 
 
+def test_library_reader_locate_ignores_removed_source_events(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_reader_locate_events_path", lambda: tmp_path / "reader_locate_events.jsonl")
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(
+        library_router,
+        "_latest_research_qa_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "good",
+            "summary": {"total": 1, "passed": 1, "failed": 0},
+            "top_failures": [],
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_latest_citation_card_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "good",
+            "summary": {
+                "tracked_checks": 1,
+                "failed_checks": 0,
+                "citation_card_failed": 0,
+                "shelf_failed": 0,
+                "ref_card_failed": 0,
+                "system_b_failed": 0,
+                "shelf_item_count": 0,
+                "shelf_metadata_ready_count": 0,
+                "shelf_export_ready_count": 0,
+                "shelf_summary_export_ready_count": 0,
+                "shelf_doi_count": 0,
+                "shelf_source_clickable_count": 0,
+                "shelf_review_count": 0,
+            },
+            "top_failures": [],
+        },
+    )
+    monkeypatch.setattr(library_router, "_research_qa_rerun_history_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(library_router, "_latest_research_qa_failure_cases", lambda *args, **kwargs: [])
+
+    client = TestClient(app)
+    stale_response = client.post(
+        "/api/library/quality/reader-locate",
+        json={
+            "source_path": "Reference / 8 / Removed Source",
+            "source_name": "Removed Source",
+            "locate_feedback_key": "stale-cite",
+            "locate_request_id": 2,
+            "status": "failed",
+            "precision": "failed",
+            "ok": False,
+            "repairable": True,
+            "strict_locate": False,
+            "reason": "404 Not Found: {\"detail\":\"markdown not found for source\"}",
+            "heading_path": "文献篮 / 已确认文献",
+        },
+    )
+    assert stale_response.status_code == 200
+    assert stale_response.json()["item"]["source_available"] is False
+    assert stale_response.json()["item"]["recommended_action"] == "source_removed"
+
+    rows_response = client.get("/api/library/quality/reader-locate", params={"limit": 5})
+    assert rows_response.status_code == 200
+    rows_payload = rows_response.json()
+    assert rows_payload["items"] == []
+    assert rows_payload["summary"]["available"] is False
+    assert rows_payload["summary"]["summary"]["failed"] == 0
+
+    overview_response = client.get("/api/library/quality/overview", params={"scope": "all"})
+    assert overview_response.status_code == 200
+    overview = overview_response.json()
+    assert overview["reader_locate"]["available"] is False
+    assert overview["reader_locate"]["summary"]["failed"] == 0
+    priority_domains = {str(item.get("domain") or "") for item in list(overview.get("priority_actions") or [])}
+    assert "reader_locate" not in priority_domains
+
+
+def test_library_reader_locate_non_strict_fuzzy_match_is_informational(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf = pdf_dir / "source.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    md = md_dir / "source" / "source.en.md"
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Source",
+                "## Abstract",
+                "This source contains fuzzy but usable evidence [1].",
+                "## Discussion",
+                "The reader locate event found a nearby paragraph.",
+                "## References",
+                "[1] Reference.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_reader_locate_events_path", lambda: tmp_path / "reader_locate_events.jsonl")
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": "", "queue": []})
+    monkeypatch.setattr(
+        library_router,
+        "_latest_research_qa_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "good",
+            "summary": {"total": 1, "passed": 1, "failed": 0},
+            "top_failures": [],
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_latest_citation_card_quality_summary",
+        lambda: {
+            "available": True,
+            "status": "good",
+            "summary": {
+                "tracked_checks": 1,
+                "failed_checks": 0,
+                "citation_card_failed": 0,
+                "shelf_failed": 0,
+                "ref_card_failed": 0,
+                "system_b_failed": 0,
+                "shelf_item_count": 0,
+                "shelf_metadata_ready_count": 0,
+                "shelf_export_ready_count": 0,
+                "shelf_summary_export_ready_count": 0,
+                "shelf_doi_count": 0,
+                "shelf_source_clickable_count": 0,
+                "shelf_review_count": 0,
+            },
+            "top_failures": [],
+        },
+    )
+    monkeypatch.setattr(library_router, "_research_qa_rerun_history_rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(library_router, "_latest_research_qa_failure_cases", lambda *args, **kwargs: [])
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/reader-locate",
+        json={
+            "source_path": str(md),
+            "source_name": "source.en.md",
+            "locate_feedback_key": "fuzzy-cite",
+            "locate_request_id": 2,
+            "status": "fuzzy",
+            "precision": "fuzzy",
+            "ok": True,
+            "repairable": False,
+            "strict_locate": False,
+            "reason": "Reader locate matched.",
+            "heading_path": "Discussion",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["item"]["source_available"] is True
+
+    overview_response = client.get("/api/library/quality/overview", params={"scope": "all"})
+    assert overview_response.status_code == 200
+    overview = overview_response.json()
+    reader_locate = overview["reader_locate"]
+    assert reader_locate["available"] is True
+    assert reader_locate["status"] == "good"
+    assert reader_locate["summary"]["degraded"] == 1
+    assert reader_locate["recommended_sources"] == []
+    assert overview["domains"]["reader_locate"]["status"] == "good"
+    priority_domains = {str(item.get("domain") or "") for item in list(overview.get("priority_actions") or [])}
+    assert "reader_locate" not in priority_domains
+
+
 def test_library_reader_locate_repair_run_verifies_anchor_targets(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -2206,6 +2394,7 @@ def test_start_convert_route_infers_no_llm_from_mode(monkeypatch, tmp_path: Path
     md_dir = tmp_path / "md_output"
     pdf_dir.mkdir(parents=True, exist_ok=True)
     md_dir.mkdir(parents=True, exist_ok=True)
+    (pdf_dir / "z.pdf").write_bytes(b"%PDF-1.4 test")
 
     captured: dict = {}
     enqueued: list[dict] = []
@@ -2425,6 +2614,36 @@ def test_upload_inspect_route_returns_suggestion(monkeypatch, tmp_path: Path):
     meta = dict(payload.get("meta") or {})
     assert isinstance(meta.get("basis_label"), str)
     assert isinstance(meta.get("basis_detail"), str)
+
+
+def test_upload_inspect_route_rejects_oversized_pdf(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(
+            db_dir=str(tmp_path / "db"),
+            library_db_path=str(tmp_path / "library.db"),
+            max_pdf_upload_bytes=8,
+        ),
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/upload/inspect",
+        data={"use_llm": "false"},
+        files={"file": ("draft.pdf", b"%PDF-1.4 demo", "application/pdf")},
+    )
+
+    assert response.status_code == 413
 
 
 def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):

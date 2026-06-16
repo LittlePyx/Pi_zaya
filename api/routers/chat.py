@@ -15,6 +15,13 @@ from pydantic import BaseModel, Field
 
 from api.chat_render import enrich_messages_with_reference_render
 from api.deps import get_chat_store, get_settings
+from api.upload_limits import (
+    is_probably_pdf,
+    max_chat_upload_files,
+    max_image_upload_bytes,
+    max_pdf_upload_bytes,
+    read_upload_limited,
+)
 from api.routers.library import (
     _md_dir,
     auto_rename_saved_pdf_in_library,
@@ -135,6 +142,8 @@ IMAGE_MIME_TO_EXT = {
 }
 _CHAT_UPLOAD_JOB_LOCK = threading.Lock()
 _CHAT_UPLOAD_JOBS: dict[str, dict] = {}
+_CHAT_UPLOAD_JOB_TTL_S = 6 * 60 * 60
+_CHAT_UPLOAD_JOB_MAX_ITEMS = 300
 _CHAT_QUALITY_REFINE_LOCK = threading.Lock()
 _CHAT_QUALITY_REFINE_RUNNING: set[str] = set()
 
@@ -368,14 +377,53 @@ def _start_chat_pdf_quality_refine(job_id: str) -> None:
 
 def _set_chat_pdf_ingest_job(job_id: str, payload: dict) -> None:
     with _CHAT_UPLOAD_JOB_LOCK:
+        _prune_chat_upload_jobs_locked()
         current = dict(_CHAT_UPLOAD_JOBS.get(job_id) or {})
         current.update(payload or {})
         current["updated_at"] = time.time()
         _CHAT_UPLOAD_JOBS[job_id] = current
 
 
+def _chat_upload_job_running(record: dict) -> bool:
+    ingest_status = str(record.get("ingest_status") or "")
+    quality_status = str(record.get("quality_status") or "")
+    return ingest_status in {"processing", "renaming", "converting", "ingesting"} or quality_status in {"pending", "running"}
+
+
+def _prune_chat_upload_jobs_locked(*, now: float | None = None) -> int:
+    current_time = time.time() if now is None else float(now)
+    cutoff = current_time - _CHAT_UPLOAD_JOB_TTL_S
+    removed = 0
+    for job_id, rec in list(_CHAT_UPLOAD_JOBS.items()):
+        if not isinstance(rec, dict) or _chat_upload_job_running(rec):
+            continue
+        try:
+            ts = float(rec.get("updated_at") or rec.get("created_at") or current_time)
+        except Exception:
+            ts = current_time
+        if ts < cutoff:
+            _CHAT_UPLOAD_JOBS.pop(job_id, None)
+            removed += 1
+    if len(_CHAT_UPLOAD_JOBS) > _CHAT_UPLOAD_JOB_MAX_ITEMS:
+        candidates: list[tuple[float, str]] = []
+        for job_id, rec in _CHAT_UPLOAD_JOBS.items():
+            if not isinstance(rec, dict) or _chat_upload_job_running(rec):
+                continue
+            try:
+                ts = float(rec.get("updated_at") or rec.get("created_at") or current_time)
+            except Exception:
+                ts = current_time
+            candidates.append((ts, job_id))
+        overflow = len(_CHAT_UPLOAD_JOBS) - _CHAT_UPLOAD_JOB_MAX_ITEMS
+        for _ts, job_id in sorted(candidates)[: max(0, overflow)]:
+            _CHAT_UPLOAD_JOBS.pop(job_id, None)
+            removed += 1
+    return removed
+
+
 def _get_chat_pdf_ingest_job(job_id: str) -> dict | None:
     with _CHAT_UPLOAD_JOB_LOCK:
+        _prune_chat_upload_jobs_locked()
         rec = _CHAT_UPLOAD_JOBS.get(job_id)
         if not isinstance(rec, dict):
             return None
@@ -681,6 +729,7 @@ def get_chat_upload_status(job_ids: str = ""):
         return {"items": []}
     items: list[dict] = []
     with _CHAT_UPLOAD_JOB_LOCK:
+        _prune_chat_upload_jobs_locked()
         for job_id in wanted:
             rec = _CHAT_UPLOAD_JOBS.get(job_id)
             if not isinstance(rec, dict):
@@ -740,14 +789,36 @@ async def upload_chat_files(
     results: list[dict] = []
     seen_sha1: set[str] = set()
     conv_id_norm = str(conv_id or "").strip()
+    settings = get_settings()
+    uploads = list(files or [])
+    if len(uploads) > max_chat_upload_files(settings):
+        raise HTTPException(413, "too many uploaded files")
+    pdf_limit = max_pdf_upload_bytes(settings)
+    image_limit = max_image_upload_bytes(settings)
 
-    for up in list(files or []):
+    for up in uploads:
         raw_name = str(getattr(up, "filename", "") or "").strip()
         raw_mime = str(getattr(up, "content_type", "") or "").strip().lower()
+        suffix = Path(raw_name).suffix.lower()
+        claimed_pdf = bool((suffix == ".pdf") or (raw_mime == "application/pdf"))
+        claimed_image = bool(raw_mime.startswith("image/") or (suffix in IMAGE_EXTS))
+        read_limit = pdf_limit if claimed_pdf else (image_limit if claimed_image else max(pdf_limit, image_limit))
         try:
-            data = await up.read()
-        except Exception:
-            data = b""
+            data = await read_upload_limited(
+                up,
+                max_bytes=read_limit,
+                label=raw_name or "chat upload",
+            )
+        except HTTPException as exc:
+            if exc.status_code == 413:
+                raise
+            results.append({
+                "kind": "unknown",
+                "status": "error",
+                "name": raw_name or "upload",
+                "error": str(exc.detail or "failed to read upload"),
+            })
+            continue
         if not data:
             results.append({
                 "kind": "unknown",
@@ -768,8 +839,7 @@ async def upload_chat_files(
             continue
         seen_sha1.add(sha1)
 
-        suffix = Path(raw_name).suffix.lower()
-        is_pdf = bool((suffix == ".pdf") or (raw_mime == "application/pdf") or data.startswith(b"%PDF"))
+        is_pdf = bool(claimed_pdf or is_probably_pdf(data))
         is_image = bool(raw_mime.startswith("image/") or (suffix in IMAGE_EXTS))
 
         if is_image and (not is_pdf):
@@ -786,6 +856,15 @@ async def upload_chat_files(
             continue
 
         if is_pdf:
+            if not is_probably_pdf(data):
+                results.append({
+                    "kind": "pdf",
+                    "status": "error",
+                    "name": raw_name or "upload.pdf",
+                    "sha1": sha1,
+                    "error": "invalid PDF file",
+                })
+                continue
             try:
                 saved = save_pdf_to_library(file_name=raw_name or "upload.pdf", data=data, fast_mode=True)
                 result = {
@@ -1188,7 +1267,10 @@ def get_messages_page(conv_id: str, limit: int = 24, before_id: int | None = Non
 
 @router.post("/conversations/{conv_id}/messages")
 def append_message(conv_id: str, body: AppendMsgBody):
-    msg_id = get_chat_store().append_message(conv_id, body.role, body.content)
+    store = get_chat_store()
+    if store.get_conversation(conv_id) is None:
+        raise HTTPException(404, "conversation not found")
+    msg_id = store.append_message(conv_id, body.role, body.content)
     return {"id": msg_id}
 
 

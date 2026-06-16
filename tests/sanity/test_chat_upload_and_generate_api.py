@@ -108,6 +108,30 @@ def test_conversation_reader_state_persists_by_source(monkeypatch, tmp_path: Pat
     assert other.json()["state"] == {}
 
 
+def test_append_message_rejects_missing_conversation(monkeypatch):
+    from api.routers import chat as chat_router
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.append_calls = 0
+
+        def get_conversation(self, conv_id: str):
+            return None
+
+        def append_message(self, *args, **kwargs):
+            self.append_calls += 1
+            return 1
+
+    fake_store = FakeStore()
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: fake_store)
+
+    client = TestClient(app)
+    response = client.post("/api/conversations/missing/messages", json={"role": "user", "content": "hello"})
+
+    assert response.status_code == 404
+    assert fake_store.append_calls == 0
+
+
 def test_chat_uploads_route_handles_pdf_and_image(monkeypatch, tmp_path: Path):
     from api.routers import chat as chat_router
 
@@ -197,6 +221,30 @@ def test_chat_uploads_route_handles_pdf_and_image(monkeypatch, tmp_path: Path):
     assert image_response.headers["content-type"].startswith("image/png")
 
 
+def test_chat_uploads_reject_oversized_file(monkeypatch, tmp_path: Path):
+    from api.routers import chat as chat_router
+
+    monkeypatch.setattr(
+        chat_router,
+        "get_settings",
+        lambda: SimpleNamespace(
+            db_dir=tmp_path / "db",
+            max_pdf_upload_bytes=64,
+            max_image_upload_bytes=8,
+            max_chat_upload_files=4,
+        ),
+    )
+
+    client = TestClient(app)
+    response = client.post(
+      "/api/chat/uploads",
+      files=[("files", ("figure.png", b"123456789", "image/png"))],
+      data={"quick_ingest": "false"},
+    )
+
+    assert response.status_code == 413
+
+
 def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
     from api.routers import generate as generate_router
 
@@ -260,6 +308,37 @@ def test_generate_accepts_image_only(monkeypatch, tmp_path: Path):
     assert response.json()["conversation_title"] == "图片提问 x1"
     assert started_tasks
     assert started_tasks[0]["image_attachments"][0]["name"] == "img.png"
+
+
+def test_generate_rejects_missing_conversation_before_appending(monkeypatch, tmp_path: Path):
+    from api.routers import generate as generate_router
+
+    class FakeStore:
+        def __init__(self) -> None:
+            self.append_calls = 0
+
+        def get_conversation(self, conv_id: str):
+            return None
+
+        def append_message(self, *args, **kwargs):
+            self.append_calls += 1
+            return 1
+
+    fake_store = FakeStore()
+
+    class FakeSettings:
+        chat_db_path = tmp_path / "chat.sqlite3"
+        db_dir = tmp_path / "db"
+
+    monkeypatch.setattr(generate_router, "get_settings", lambda: FakeSettings())
+    monkeypatch.setattr(generate_router, "get_chat_store", lambda: fake_store)
+    monkeypatch.setattr(generate_router, "load_prefs", lambda: {})
+
+    client = TestClient(app)
+    response = client.post("/api/generate", json={"conv_id": "missing", "prompt": "hello"})
+
+    assert response.status_code == 404
+    assert fake_store.append_calls == 0
 
 
 def test_generate_accepts_selected_research_context(monkeypatch, tmp_path: Path):

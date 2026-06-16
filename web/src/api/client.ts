@@ -2,19 +2,16 @@ const BASE = ''
 export const ACCESS_TOKEN_STORAGE_KEY = 'kb_access_token'
 export const AUTH_REQUIRED_EVENT = 'kb:auth-required'
 
+let accessToken = ''
+
 export function getAccessToken(): string {
-  try {
-    return window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY) || ''
-  } catch {
-    return ''
-  }
+  return accessToken
 }
 
 export function setAccessToken(token: string) {
+  accessToken = token.trim()
   try {
-    const clean = token.trim()
-    if (clean) window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, clean)
-    else window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
+    window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY)
   } catch {
     /* ignore */
   }

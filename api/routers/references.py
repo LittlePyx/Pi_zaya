@@ -21,12 +21,14 @@ from api.reference_ui import (
     _filter_pending_refs_hits_by_prompt_focus,
     _refs_card_polish_llm_enabled,
     _refs_prompt_focus_terms,
+    _translate_summary_to_zh,
     build_doc_list_refs_payload,
     enrich_citation_detail_meta,
     enrich_refs_payload,
     ensure_source_citation_meta,
     open_reference_source,
 )
+from api.reference_card_locale import _ref_card_user_locale
 from api.reference_card_quality import refs_pack_has_full_llm_copy
 from api.reference_metadata_quality import (
     backfill_reference_metadata,
@@ -1673,6 +1675,9 @@ class CitationMetaBody(BaseModel):
 
 class BibliometricsBody(BaseModel):
     meta: dict
+    refs_card_locale: str | None = None
+    ui_locale: str | None = None
+    target_locale: str | None = None
 
 
 class ShelfMetadataRepairBody(BaseModel):
@@ -1692,6 +1697,46 @@ class CitationCardPolishBody(BaseModel):
 
 class ReaderDocBody(BaseModel):
     source_path: str
+
+
+def _bibliometrics_requested_locale(body: BibliometricsBody, meta: dict | None) -> str:
+    data = dict(meta or {})
+    for raw in (
+        body.target_locale,
+        data.get("target_locale"),
+        data.get("targetLocale"),
+        data.get("render_locale"),
+        data.get("renderLocale"),
+        data.get("locale"),
+    ):
+        locale = _normalize_ref_locale(raw)
+        if locale:
+            return locale
+
+    for raw in (
+        body.refs_card_locale,
+        data.get("refs_card_locale"),
+        data.get("refsCardLocale"),
+    ):
+        locale = _normalize_ref_locale(raw, allow_auto=True)
+        if locale in {"zh", "en"}:
+            return locale
+
+    for raw in (
+        body.ui_locale,
+        data.get("ui_locale"),
+        data.get("uiLocale"),
+    ):
+        locale = _normalize_ref_locale(raw)
+        if locale:
+            return locale
+
+    return _ref_card_user_locale(
+        "",
+        str(data.get("title") or ""),
+        str(data.get("source_name") or data.get("sourceName") or ""),
+        str(data.get("summary_line") or data.get("summaryLine") or ""),
+    )
 
 
 def _shelf_repair_text(value) -> str:
@@ -1918,6 +1963,42 @@ def _local_summary_excerpt(text: str, *, max_len: int = 420) -> str:
     return _compact_reader_open_text(summary, max_len=max_len)
 
 
+def _normalize_ref_locale(value: object, *, allow_auto: bool = False) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"zh", "cn", "zh-cn", "chinese"}:
+        return "zh"
+    if text in {"en", "en-us", "en-gb", "english"}:
+        return "en"
+    if allow_auto and text == "auto":
+        return "auto"
+    return ""
+
+
+def _local_summary_detect_locale(text: str) -> str:
+    raw = str(text or "")
+    if re.search(r"[\u4e00-\u9fff]", raw):
+        return "zh"
+    if re.search(r"[A-Za-z]", raw):
+        return "en"
+    return ""
+
+
+def _localize_local_summary(summary: str, *, target_locale: str) -> str:
+    target = _normalize_ref_locale(target_locale)
+    text = _compact_reader_open_text(summary, max_len=420)
+    if not text or not target:
+        return text
+    current = _local_summary_detect_locale(text)
+    if current == target:
+        return text
+    if target == "zh":
+        translated = _compact_reader_open_text(_translate_summary_to_zh(text), max_len=420)
+        return translated if _local_summary_detect_locale(translated) == "zh" else ""
+    if target == "en":
+        return text if current in {"", "en"} else ""
+    return text
+
+
 def _resolve_local_summary_md_path(source_path: str) -> Path | None:
     raw = str(source_path or "").strip()
     if not raw:
@@ -1943,7 +2024,7 @@ def _resolve_local_summary_md_path(source_path: str) -> Path | None:
     return _resolve_reader_md_path(raw)
 
 
-def _local_source_summary_meta(meta: dict | None) -> dict:
+def _local_source_summary_meta(meta: dict | None, *, target_locale: str = "") -> dict:
     data = dict(meta or {})
     source_path = str(data.get("source_path") or data.get("sourcePath") or "").strip()
     if not source_path:
@@ -1957,14 +2038,16 @@ def _local_source_summary_meta(meta: dict | None) -> dict:
         return {}
     for source, headings in _LOCAL_SUMMARY_SECTION_PRIORITY:
         section = _extract_local_summary_section(md_text, headings)
-        summary = _local_summary_excerpt(section)
+        summary = _localize_local_summary(_local_summary_excerpt(section), target_locale=target_locale)
         if not summary:
             continue
+        summary_locale = _local_summary_detect_locale(summary) or _normalize_ref_locale(target_locale)
         return {
             "summary_line": summary,
             "summary_source": source,
             "summary_provider": "local_markdown",
             "summary_generation": "extractive_local_markdown",
+            "summary_locale": summary_locale,
             "summary_quality": {
                 "contract_version": 1,
                 "ok": True,
@@ -1973,6 +2056,7 @@ def _local_source_summary_meta(meta: dict | None) -> dict:
                 "source": source,
                 "provider": "local_markdown",
                 "generation": "extractive_local_markdown",
+                "locale": summary_locale,
                 "issues": [],
                 "export_ready": True,
             },
@@ -2487,13 +2571,68 @@ def _bibliometrics_summary_export_ready(acceptance: dict | None) -> bool:
     return False
 
 
+def _bibliometrics_summary_locale(meta: dict | None) -> str:
+    data = dict(meta or {})
+    text_locale = _local_summary_detect_locale(str(data.get("summary_line") or data.get("summaryLine") or ""))
+    if text_locale:
+        return text_locale
+    quality = data.get("summary_quality") or data.get("summaryQuality")
+    for raw in (
+        data.get("summary_locale"),
+        data.get("summaryLocale"),
+        quality.get("locale") if isinstance(quality, dict) else "",
+    ):
+        locale = _normalize_ref_locale(raw)
+        if locale:
+            return locale
+    return ""
+
+
+def _bibliometrics_summary_matches_locale(meta: dict | None, target_locale: str) -> bool:
+    target = _normalize_ref_locale(target_locale)
+    if not target:
+        return True
+    summary = str((meta or {}).get("summary_line") or (meta or {}).get("summaryLine") or "").strip()
+    if not summary:
+        return False
+    return _bibliometrics_summary_locale(meta) == target
+
+
+def _bibliometrics_summary_has_locale_contract(meta: dict | None) -> bool:
+    data = dict(meta or {})
+    quality = data.get("summary_quality") or data.get("summaryQuality")
+    return bool(
+        _normalize_ref_locale(data.get("summary_locale") or data.get("summaryLocale"))
+        or (
+            isinstance(quality, dict)
+            and _normalize_ref_locale(quality.get("locale"))
+        )
+    )
+
+
+def _attach_bibliometrics_summary_locale(meta: dict | None) -> dict:
+    data = dict(meta or {})
+    locale = _bibliometrics_summary_locale(data)
+    if not locale:
+        return data
+    data["summary_locale"] = locale
+    quality = data.get("summary_quality") if isinstance(data.get("summary_quality"), dict) else {}
+    data["summary_quality"] = {**quality, "locale": locale}
+    return data
+
+
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     meta = _strip_misbound_local_source_summary(body.meta or {})
     settings = get_settings()
+    target_locale = _bibliometrics_requested_locale(body, meta)
     hydrated = _strip_misbound_local_source_summary(hydrate_repaired_citation_metadata(meta, db_dir=settings.db_dir))
-    if _bibliometrics_accept_local_source_summary(hydrated):
-        local_summary = _local_source_summary_meta(hydrated)
+    if (
+        _bibliometrics_accept_local_source_summary(hydrated)
+        or not _bibliometrics_summary_matches_locale(hydrated, target_locale)
+        or not _bibliometrics_summary_has_locale_contract(hydrated)
+    ):
+        local_summary = _local_source_summary_meta({**dict(hydrated or {}), **dict(meta or {})}, target_locale=target_locale)
         if local_summary:
             hydrated = _bibliometrics_quality_contract({**dict(hydrated or {}), **local_summary})
     quality = hydrated.get("metadata_quality") if isinstance(hydrated.get("metadata_quality"), dict) else {}
@@ -2506,15 +2645,20 @@ def get_bibliometrics(body: BibliometricsBody):
         bool(quality.get("ok"))
         and bool(acceptance.get("export_ready"))
         and _bibliometrics_summary_export_ready(acceptance)
+        and _bibliometrics_summary_matches_locale(hydrated, target_locale)
     ):
-        return _attach_library_match_contract(_bibliometrics_quality_contract(hydrated))
+        return _attach_library_match_contract(_attach_bibliometrics_summary_locale(_bibliometrics_quality_contract(hydrated)))
     seed = {**dict(meta or {}), **dict(hydrated or {})}
     enriched = enrich_citation_detail_meta(seed)
     if not isinstance(enriched, dict):
         enriched = {}
     result = _bibliometrics_quality_contract(_strip_misbound_local_source_summary({**seed, **enriched}))
-    if _bibliometrics_accept_local_source_summary(result):
-        local_summary = _local_source_summary_meta(result)
+    if (
+        _bibliometrics_accept_local_source_summary(result)
+        or not _bibliometrics_summary_matches_locale(result, target_locale)
+        or not _bibliometrics_summary_has_locale_contract(result)
+    ):
+        local_summary = _local_source_summary_meta(result, target_locale=target_locale)
         if local_summary:
             result = _bibliometrics_quality_contract({**result, **local_summary})
     acceptance = (
@@ -2523,8 +2667,8 @@ def get_bibliometrics(body: BibliometricsBody):
         else {}
     )
     if _bibliometrics_summary_export_ready(acceptance):
-        persist_repaired_citation_metadata(result, db_dir=settings.db_dir)
-    return _attach_library_match_contract(result)
+        persist_repaired_citation_metadata(_attach_bibliometrics_summary_locale(result), db_dir=settings.db_dir)
+    return _attach_library_match_contract(_attach_bibliometrics_summary_locale(result))
 
 
 @router.post("/shelf/metadata/repair")

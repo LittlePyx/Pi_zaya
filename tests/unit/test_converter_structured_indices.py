@@ -155,6 +155,46 @@ def test_rebuild_structured_indices_enriches_reference_index_from_catalog_metada
     assert ref["crossref_ok"] is True
 
 
+def test_rebuild_structured_indices_rebuilds_stale_reference_catalog(tmp_path: Path):
+    refs = [
+        f"[{idx}] Author {idx}. Complete recovered reference {idx}. Journal of Tests, 20{idx:02d}."
+        for idx in range(1, 11)
+    ]
+    md = "# Demo Paper\n\n## References\n\n" + "\n".join(refs) + "\n"
+    md_path = tmp_path / "output.md"
+    assets_dir = tmp_path / "assets"
+    stale_refs = [
+        {
+            "reference_number": idx,
+            "reference_text": f"[{idx}] Author {idx}. Stale reference {idx}. Journal, 20{idx:02d}.",
+            "reference_entry_id": f"ref_{idx:04d}",
+        }
+        for idx in [1, 2, 5, 6, 7, 8, 9, 10]
+    ]
+    (tmp_path / "reference_catalog.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "ref_count": len(stale_refs),
+                "tail_continuity_status": "gapped",
+                "missing_numbers": [3, 4],
+                "refs": stale_refs,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    out = rebuild_structured_indices_for_markdown(md_path, md_text=md, assets_dir=assets_dir)
+
+    ref_payload = out.get("reference_index") or {}
+    refs_out = ref_payload.get("references") or []
+    assert ref_payload["ref_count"] == 10
+    assert [int(item["ref_num"]) for item in refs_out] == list(range(1, 11))
+    assert "Complete recovered reference 3" in refs_out[2]["text"]
+
+
 def test_rebuild_structured_indices_emits_page_and_panel_clauses_for_fallback_figure_index(tmp_path: Path):
     md = """# Demo
 

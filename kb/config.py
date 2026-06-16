@@ -71,6 +71,7 @@ class Settings:
     db_dir: Path
     chat_db_path: Path
     library_db_path: Path
+    user_issues_db_path: Path
     timeout_s: float
     max_retries: int
     # Whether auto-routing is active (both text *and* vision keys are set).
@@ -86,6 +87,9 @@ class Settings:
     auth_required: bool = field(default=False)
     auth_cookie_secure: bool = field(default=False)
     auto_backup_enabled: bool | None = field(default=None)
+    max_pdf_upload_bytes: int = field(default=80 * 1024 * 1024)
+    max_image_upload_bytes: int = field(default=8 * 1024 * 1024)
+    max_chat_upload_files: int = field(default=12)
 
     # ------------------------------------------------------------------
     # Backward-compatible accessors (so existing callers that read
@@ -184,6 +188,7 @@ def load_settings() -> Settings:
     db_dir = Path(_env("KB_DB_DIR", str(here / "db"))).expanduser().resolve()
     chat_db_path = Path(_env("KB_CHAT_DB", str(here / "chat.sqlite3"))).expanduser().resolve()
     library_db_path = Path(_env("KB_LIBRARY_DB", str(here / "library.sqlite3"))).expanduser().resolve()
+    user_issues_db_path = Path(_env("KB_USER_ISSUES_DB", str(here / "user_issues.sqlite3"))).expanduser().resolve()
 
     timeout_s = float(_env("KB_LLM_TIMEOUT_S", _env("DEEPSEEK_TIMEOUT_S", "60")))
     max_retries = int(_env("KB_LLM_MAX_RETRIES", _env("DEEPSEEK_MAX_RETRIES", "2")))
@@ -215,6 +220,30 @@ def load_settings() -> Settings:
         auth_cookie_secure = production
     else:
         auth_cookie_secure = str(cookie_secure_raw).strip().lower() in {"1", "true", "yes", "on"}
+    try:
+        max_pdf_upload_bytes = max(
+            1,
+            int(
+                _env("KB_MAX_PDF_UPLOAD_BYTES")
+                or int(float(_env("KB_MAX_PDF_UPLOAD_MB", "80")) * 1024 * 1024)
+            ),
+        )
+    except Exception:
+        max_pdf_upload_bytes = 80 * 1024 * 1024
+    try:
+        max_image_upload_bytes = max(
+            1,
+            int(
+                _env("KB_MAX_IMAGE_UPLOAD_BYTES")
+                or int(float(_env("KB_MAX_IMAGE_UPLOAD_MB", "8")) * 1024 * 1024)
+            ),
+        )
+    except Exception:
+        max_image_upload_bytes = 8 * 1024 * 1024
+    try:
+        max_chat_upload_files = max(1, int(_env("KB_MAX_CHAT_UPLOAD_FILES", "12")))
+    except Exception:
+        max_chat_upload_files = 12
 
     return Settings(
         text_api_key=text_api_key,
@@ -226,6 +255,7 @@ def load_settings() -> Settings:
         db_dir=db_dir,
         chat_db_path=chat_db_path,
         library_db_path=library_db_path,
+        user_issues_db_path=user_issues_db_path,
         timeout_s=timeout_s,
         max_retries=max_retries,
         auto_route=auto_route,
@@ -238,4 +268,7 @@ def load_settings() -> Settings:
         auth_required=auth_required,
         auth_cookie_secure=auth_cookie_secure,
         auto_backup_enabled=stored_auto_backup_enabled,
+        max_pdf_upload_bytes=max_pdf_upload_bytes,
+        max_image_upload_bytes=max_image_upload_bytes,
+        max_chat_upload_files=max_chat_upload_files,
     )

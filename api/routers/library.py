@@ -17,7 +17,13 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 
 from api.deps import get_settings, load_prefs
+from api.library_path_utils import (
+    path_is_within as _library_path_is_within,
+    resolve_library_pdf_name_arg as _library_resolve_pdf_name_arg,
+    resolve_library_pdf_path_arg as _library_resolve_pdf_path_arg,
+)
 from api.sse import sse_generator, sse_response
+from api.upload_limits import ensure_pdf_upload, max_pdf_upload_bytes, read_upload_limited
 from kb.file_naming import (
     build_display_pdf_filename,
     build_storage_base_name,
@@ -72,12 +78,21 @@ from kb.library_store import LibraryStore
 from kb.maintenance import create_auto_snapshot
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
 from kb.reference_sync import start_reference_sync
-from kb.store import compute_doc_id, doc_chunks_path, load_docs_index
+from kb.store import compute_doc_id, compute_file_sha1, doc_chunks_path, load_docs_index
+from kb.user_issue_store import record_library_quality_issues
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 _RENAME_SUGGEST_CACHE: dict[str, dict] = {}
 _CONVERSION_QUALITY_CACHE: dict[str, tuple[int, int, int, int, dict]] = {}
 _RESEARCH_QA_EVAL_ROOT = Path("test_results") / "research_qa_eval"
+
+
+def _user_issues_db_path() -> Path:
+    settings = get_settings()
+    configured = getattr(settings, "user_issues_db_path", None)
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path(getattr(settings, "db_dir", Path.cwd() / "db")).expanduser().resolve().parent / "user_issues.sqlite3")
 
 
 def _dangerous_auto_snapshot(action: str, *, label: str = "", metadata: dict | None = None) -> dict:
@@ -611,37 +626,20 @@ def _clear_conversion_quality_cache(md_path: str | Path) -> None:
 
 
 def _path_is_within(path_obj: Path, roots: list[Path]) -> bool:
-    try:
-        path = Path(path_obj).expanduser().resolve(strict=False)
-    except Exception:
-        return False
-    for root in roots:
-        try:
-            root_resolved = Path(root).expanduser().resolve(strict=False)
-            path.relative_to(root_resolved)
-            return True
-        except Exception:
-            continue
-    return False
+    return _library_path_is_within(path_obj, roots)
 
 
 def _resolve_library_pdf_path_arg(path_raw: str) -> Path:
-    raw = str(path_raw or "").strip()
-    if not raw:
-        raise HTTPException(400, "path required")
-    pdf_d = _pdf_dir()
-    try:
-        candidate = Path(raw).expanduser()
-        if not candidate.is_absolute():
-            candidate = pdf_d / candidate
-        resolved = candidate.resolve(strict=False)
-    except Exception as exc:
-        raise HTTPException(400, f"invalid path: {exc}") from exc
-    if resolved.suffix.lower() != ".pdf":
-        raise HTTPException(400, "path must point to a PDF")
-    if not _path_is_within(resolved, [pdf_d]):
-        raise HTTPException(400, "path must be within the configured PDF directory")
-    return resolved
+    return _library_resolve_pdf_path_arg(path_raw, pdf_dir=_pdf_dir())
+
+
+def _resolve_library_pdf_name_arg(pdf_name: str, *, require_exists: bool = False) -> Path:
+    return _library_resolve_pdf_name_arg(
+        pdf_name,
+        pdf_dir=_pdf_dir(),
+        require_exists=require_exists,
+        is_file=_path_is_file,
+    )
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -1918,7 +1916,10 @@ def _reader_locate_recommended_action(row: dict) -> str:
     status = str((row or {}).get("status") or "").strip().lower()
     precision = str((row or {}).get("precision") or "").strip().lower()
     md_exists = bool((row or {}).get("md_exists"))
+    source_available = bool((row or {}).get("source_available", True))
     strict = bool((row or {}).get("strict_locate"))
+    if not source_available:
+        return "source_removed"
     if not md_exists:
         return "reconvert_source"
     if status == "failed" or precision == "failed":
@@ -1955,6 +1956,7 @@ def _normalize_reader_locate_event(row: dict) -> dict:
         "pdf_path": str(resolved.get("pdf_path") or ""),
         "md_path": str(resolved.get("md_path") or ""),
         "md_exists": bool(resolved.get("md_exists")),
+        "pdf_exists": bool(str(resolved.get("pdf_path") or "").strip() and _path_is_file(Path(str(resolved.get("pdf_path") or "")).expanduser())),
         "locate_feedback_key": _compact_text(row.get("locate_feedback_key"), limit=160),
         "locate_request_id": _safe_int(row.get("locate_request_id"), 0),
         "status": status,
@@ -1970,6 +1972,7 @@ def _normalize_reader_locate_event(row: dict) -> dict:
         "anchor_kind": _compact_text(row.get("anchor_kind"), limit=80),
         "heading_path": _compact_text(row.get("heading_path"), limit=300),
     }
+    out["source_available"] = bool(out["md_exists"] or out["pdf_exists"])
     if not out["source_path"] and not out["source_name"] and not out["locate_feedback_key"]:
         return {}
     out["source_key"] = _reader_locate_source_key(out)
@@ -1982,6 +1985,10 @@ def _reader_locate_event_rows(*, limit: int = 1000) -> list[dict]:
     latest_by_identity: dict[str, dict] = {}
     for raw in rows:
         row = _normalize_reader_locate_event(raw)
+        if not _reader_locate_source_available(row):
+            continue
+        if _reader_locate_event_stale_against_source(row):
+            continue
         identity = _reader_locate_identity(row)
         if not identity:
             continue
@@ -2009,8 +2016,46 @@ def _append_reader_locate_event(record: dict) -> dict:
     return row
 
 
+def _reader_locate_source_available(row: dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if "source_available" in row:
+        return bool(row.get("source_available"))
+    return bool(row.get("md_exists") or row.get("pdf_exists"))
+
+
+def _reader_locate_event_stale_against_source(row: dict) -> bool:
+    """Ignore locate events tied to block ids from an older Markdown build."""
+    if not isinstance(row, dict):
+        return False
+    created_at = _safe_int(row.get("created_at"), 0)
+    if created_at <= 0:
+        return False
+    target_ids = [
+        str(row.get("block_id") or "").strip(),
+        str(row.get("anchor_id") or "").strip(),
+    ]
+    target_ids = [value for value in target_ids if value]
+    if not target_ids:
+        return False
+    md_path_raw = str(row.get("md_path") or row.get("source_path") or "").strip()
+    if not md_path_raw:
+        return False
+    md_path = Path(md_path_raw).expanduser()
+    if not _path_is_file(md_path):
+        return False
+    md_mtime = _safe_int(_safe_mtime(md_path), 0)
+    if md_mtime <= created_at + 1:
+        return False
+    try:
+        text = md_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    return all(value not in text for value in target_ids)
+
+
 def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
-    items = list(rows or _reader_locate_event_rows(limit=1000))
+    items = [item for item in list(rows or _reader_locate_event_rows(limit=1000)) if _reader_locate_source_available(item)]
     if not items:
         return {
             "available": False,
@@ -2050,7 +2095,12 @@ def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
     source_stats: dict[str, dict] = {}
     for item in items:
         status = str(item.get("status") or "")
-        if status in _READER_LOCATE_DEGRADED_STATUSES or status == "failed":
+        problem = (
+            status == "failed"
+            or bool(item.get("repairable"))
+            or (bool(item.get("strict_locate")) and status not in _READER_LOCATE_GOOD_STATUSES)
+        )
+        if problem:
             reason = str(item.get("reason") or item.get("hint") or status).strip() or status
             reason_counter[reason] += 1
         source_key = _reader_locate_source_key(item)
@@ -2083,12 +2133,6 @@ def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
         if bool(item.get("strict_locate")) and status not in _READER_LOCATE_GOOD_STATUSES:
             cur["strict_miss"] = _safe_int(cur.get("strict_miss"), 0) + 1
         created_at = _safe_int(item.get("created_at"), 0)
-        problem = (
-            status == "failed"
-            or status in _READER_LOCATE_DEGRADED_STATUSES
-            or bool(item.get("repairable"))
-            or (bool(item.get("strict_locate")) and status not in _READER_LOCATE_GOOD_STATUSES)
-        )
         if problem:
             cur["recommended_action"] = str(item.get("recommended_action") or _reader_locate_recommended_action(item))
             if not str(cur.get("latest_reason") or "").strip():
@@ -2107,7 +2151,6 @@ def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
         item
         for item in source_stats.values()
         if _safe_int(item.get("failed"), 0) > 0
-        or _safe_int(item.get("degraded"), 0) > 0
         or _safe_int(item.get("repairable"), 0) > 0
         or _safe_int(item.get("strict_miss"), 0) > 0
     ]
@@ -2121,7 +2164,7 @@ def _reader_locate_quality_summary(rows: list[dict] | None = None) -> dict:
             str(item.get("source_name") or "").lower(),
         )
     )
-    status = "error" if failed > 0 or strict_miss > 0 else ("warning" if degraded > 0 or repairable > 0 else "good")
+    status = "error" if failed > 0 or strict_miss > 0 else ("warning" if repairable > 0 else "good")
     return {
         "available": True,
         "status": status,
@@ -2146,7 +2189,7 @@ def _reader_locate_all_event_rows(*, limit: int = 4000) -> list[dict]:
     out: list[dict] = []
     for raw in rows:
         row = _normalize_reader_locate_event(raw)
-        if row:
+        if row and _reader_locate_source_available(row) and not _reader_locate_event_stale_against_source(row):
             out.append(row)
     out.sort(key=lambda item: (_safe_int(item.get("created_at"), 0), str(item.get("id") or "")), reverse=True)
     return out
@@ -3575,17 +3618,7 @@ def _quality_priority_actions(
 
     qa_summary = research_qa.get("summary") if isinstance(research_qa.get("summary"), dict) else {}
     qa_failed = _safe_int(qa_summary.get("failed"), 0)
-    if not bool(research_qa.get("available")):
-        actions.append(
-            {
-                "domain": "research_qa",
-                "severity": "warning",
-                "label": "Run research QA regression",
-                "count": 0,
-                "detail": "No latest research QA artifact was found.",
-            }
-        )
-    elif qa_failed > 0:
+    if bool(research_qa.get("available")) and qa_failed > 0:
         actions.append(
             {
                 "domain": "research_qa",
@@ -3612,9 +3645,9 @@ def _quality_priority_actions(
     reader = reader_locate if isinstance(reader_locate, dict) else {}
     reader_summary = reader.get("summary") if isinstance(reader.get("summary"), dict) else {}
     reader_failed = _safe_int(reader_summary.get("failed"), 0)
-    reader_degraded = _safe_int(reader_summary.get("degraded"), 0)
+    reader_repairable = _safe_int(reader_summary.get("repairable"), 0)
     reader_strict_miss = _safe_int(reader_summary.get("strict_miss"), 0)
-    reader_problem_count = reader_failed + reader_degraded + reader_strict_miss
+    reader_problem_count = reader_failed + reader_repairable + reader_strict_miss
     if bool(reader.get("available")) and reader_problem_count > 0:
         recommended_sources = list(reader.get("recommended_sources") or [])
         first_source = recommended_sources[0] if recommended_sources and isinstance(recommended_sources[0], dict) else {}
@@ -4615,7 +4648,7 @@ def _existing_pdf_record(pdf_dir: Path, sha1: str, lib_store: LibraryStore | Non
 
     for existing in _list_pdf_paths_fast(pdf_dir):
         try:
-            if _sha1_bytes(existing.read_bytes()) == sha1:
+            if compute_file_sha1(existing) == sha1:
                 return {
                     "name": existing.name,
                     "path": str(existing),
@@ -4720,7 +4753,7 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
         return {"ok": False, "error": "pdf not found", "path": str(src_pdf), "name": src_pdf.name}
 
     try:
-        sha1 = _sha1_bytes(src_pdf.read_bytes())
+        sha1 = compute_file_sha1(src_pdf)
     except Exception:
         sha1 = ""
 
@@ -5103,9 +5136,16 @@ def library_quality_overview(scope: str = "all"):
     pdf_d.mkdir(parents=True, exist_ok=True)
     md_d.mkdir(parents=True, exist_ok=True)
     listing = _collect_library_files(pdf_dir=pdf_d, md_dir=md_d, scope=scope)
+    overview = _quality_overview_from_listing(listing)
+    issue_log: dict = {"ok": False, "recorded": 0}
+    try:
+        issue_log = record_library_quality_issues(_user_issues_db_path(), overview)
+    except Exception as exc:
+        issue_log = {"ok": False, "recorded": 0, "error": str(exc)[:240]}
     return {
         "ok": True,
-        **_quality_overview_from_listing(listing),
+        **overview,
+        "user_issue_log": issue_log,
     }
 
 
@@ -5240,9 +5280,16 @@ class RenameApplyBody(BaseModel):
 
 @router.post("/rename/apply")
 def apply_rename_suggestions(body: RenameApplyBody):
-    pdf_d = _pdf_dir()
-    names = [str(name or "").strip() for name in list(body.pdf_names or [])]
-    names = [name for name in names if name and (Path(name).name == name)]
+    names: list[str] = []
+    for raw_name in list(body.pdf_names or []):
+        name = str(raw_name or "").strip()
+        if not name:
+            continue
+        try:
+            _resolve_library_pdf_name_arg(name)
+        except HTTPException:
+            continue
+        names.append(name)
     if not names:
         raise HTTPException(400, "pdf_names required")
 
@@ -5256,7 +5303,7 @@ def apply_rename_suggestions(body: RenameApplyBody):
     failed = 0
     skipped = 0
     for name in names:
-        src_pdf = (pdf_d / name).expanduser()
+        src_pdf = _resolve_library_pdf_name_arg(name)
         if not _path_is_file(src_pdf):
             items.append({"name": name, "ok": False, "error": "pdf not found"})
             failed += 1
@@ -5353,7 +5400,16 @@ def convert_pending(body: ConvertPendingBody):
 
 @router.post("/upload")
 async def upload_pdf(file: UploadFile = File(...), base_name: str = Form("")):
-    data = await file.read()
+    data = await read_upload_limited(
+        file,
+        max_bytes=max_pdf_upload_bytes(get_settings()),
+        label="PDF upload",
+    )
+    ensure_pdf_upload(
+        data,
+        file_name=str(file.filename or "upload.pdf"),
+        content_type=str(file.content_type or ""),
+    )
     return save_pdf_to_library(
         file_name=str(file.filename or "upload.pdf"),
         data=data,
@@ -5363,9 +5419,16 @@ async def upload_pdf(file: UploadFile = File(...), base_name: str = Form("")):
 
 @router.post("/upload/inspect")
 async def inspect_upload_pdf(file: UploadFile = File(...), use_llm: bool = Form(True)):
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "empty file")
+    data = await read_upload_limited(
+        file,
+        max_bytes=max_pdf_upload_bytes(get_settings()),
+        label="PDF upload",
+    )
+    ensure_pdf_upload(
+        data,
+        file_name=str(file.filename or "upload.pdf"),
+        content_type=str(file.content_type or ""),
+    )
     return _inspect_pdf_upload(
         file_name=str(file.filename or "upload.pdf"),
         data=data,
@@ -5381,9 +5444,16 @@ async def commit_upload_pdf(
     speed_mode: str = Form("balanced"),
     allow_duplicate: bool = Form(False),
 ):
-    data = await file.read()
-    if not data:
-        raise HTTPException(400, "empty file")
+    data = await read_upload_limited(
+        file,
+        max_bytes=max_pdf_upload_bytes(get_settings()),
+        label="PDF upload",
+    )
+    ensure_pdf_upload(
+        data,
+        file_name=str(file.filename or "upload.pdf"),
+        content_type=str(file.content_type or ""),
+    )
     saved = save_pdf_to_library(
         file_name=str(file.filename or "upload.pdf"),
         data=data,
@@ -5427,10 +5497,11 @@ class ConvertBody(BaseModel):
 @router.post("/convert")
 def start_convert(body: ConvertBody):
     s = get_settings()
-    pdf_d = _pdf_dir()
     md_d = _md_dir()
     md_d.mkdir(parents=True, exist_ok=True)
-    pdf_path = pdf_d / body.pdf_name
+    pdf_path = _resolve_library_pdf_path_arg(body.pdf_name)
+    if not _path_is_file(pdf_path):
+        raise HTTPException(404, "pdf not found")
     no_llm = bool(body.no_llm) or (str(body.speed_mode or "").strip().lower() == "no_llm")
     auto_backup = (
         _dangerous_auto_snapshot(
@@ -5557,9 +5628,7 @@ def open_library_file(body: OpenLibraryFileBody):
         return {"ok": True, "target": "md_dir", "path": str(md_d)}
 
     pdf_name = str(body.pdf_name or "").strip()
-    if (not pdf_name) or (Path(pdf_name).name != pdf_name):
-        raise HTTPException(400, "invalid pdf_name")
-    pdf_path = (pdf_d / pdf_name).expanduser()
+    pdf_path = _resolve_library_pdf_name_arg(pdf_name)
 
     if target == "pdf":
         if not _path_is_file(pdf_path):
@@ -6256,10 +6325,11 @@ def refresh_figure_assets(body: FigureAssetRefreshBody):
 
     for raw_name in list(body.pdf_names or []):
         pdf_name = str(raw_name or "").strip()
-        if (not pdf_name) or Path(pdf_name).name != pdf_name:
+        try:
+            pdf_path = _resolve_library_pdf_name_arg(pdf_name)
+        except HTTPException:
             errors.append({"name": pdf_name, "error": "invalid pdf_name"})
             continue
-        pdf_path = (pdf_d / pdf_name).expanduser()
         if not _path_is_file(pdf_path):
             errors.append({"name": pdf_name, "error": "pdf not found"})
             continue
@@ -6461,7 +6531,9 @@ def repair_library_quality(body: QualityRepairBody):
         if not pdf_name:
             continue
         requested += 1
-        if Path(pdf_name).name != pdf_name:
+        try:
+            pdf_path = _resolve_library_pdf_name_arg(pdf_name)
+        except HTTPException:
             items.append({
                 "source_path": "",
                 "source_name": pdf_name,
@@ -6477,7 +6549,7 @@ def repair_library_quality(body: QualityRepairBody):
         targets.append({
             "source_path": "",
             "source_name": pdf_name,
-            "pdf_path": str((pdf_d / pdf_name).expanduser()),
+            "pdf_path": str(pdf_path),
             "md_path": "",
         })
 
@@ -6950,13 +7022,8 @@ def repair_library_quality(body: QualityRepairBody):
 @router.post("/file/delete")
 def delete_library_file(body: DeleteLibraryFileBody):
     pdf_name = str(body.pdf_name or "").strip()
-    if (not pdf_name) or (Path(pdf_name).name != pdf_name):
-        raise HTTPException(400, "invalid pdf_name")
-    pdf_d = _pdf_dir()
     md_d = _md_dir()
-    pdf_path = (pdf_d / pdf_name).expanduser()
-    if not _path_is_file(pdf_path):
-        raise HTTPException(404, "pdf not found")
+    pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
 
     snap = _bg_snapshot()
     if _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name):
@@ -7022,9 +7089,7 @@ def update_library_meta(body: UpdateLibraryMetaBody):
     resolved_path: Path | None = None
 
     if pdf_name:
-        if Path(pdf_name).name != pdf_name:
-            raise HTTPException(400, "invalid pdf_name")
-        resolved_path = (_pdf_dir() / pdf_name).expanduser()
+        resolved_path = _resolve_library_pdf_name_arg(pdf_name)
     elif path_raw:
         resolved_path = _resolve_library_pdf_path_arg(path_raw)
     elif not sha1:
@@ -7070,9 +7135,12 @@ def batch_update_library_meta(body: BatchUpdateLibraryMetaBody):
 
     paths: list[Path] = []
     for pdf_name in pdf_names:
-        if Path(pdf_name).name != pdf_name:
-            raise HTTPException(400, f"invalid pdf_name: {pdf_name}")
-        paths.append((_pdf_dir() / pdf_name).expanduser())
+        try:
+            paths.append(_resolve_library_pdf_name_arg(pdf_name))
+        except HTTPException as exc:
+            if exc.status_code == 400:
+                raise HTTPException(400, f"invalid pdf_name: {pdf_name}") from exc
+            raise
 
     auto_backup = _dangerous_auto_snapshot(
         "library_meta_batch_update",
@@ -7124,9 +7192,12 @@ def regenerate_library_meta_suggestions(body: RegenerateLibrarySuggestionsBody):
 
     paths: list[Path] = []
     for pdf_name in pdf_names:
-        if Path(pdf_name).name != pdf_name:
-            raise HTTPException(400, f"invalid pdf_name: {pdf_name}")
-        paths.append((_pdf_dir() / pdf_name).expanduser())
+        try:
+            paths.append(_resolve_library_pdf_name_arg(pdf_name))
+        except HTTPException as exc:
+            if exc.status_code == 400:
+                raise HTTPException(400, f"invalid pdf_name: {pdf_name}") from exc
+            raise
 
     payloads = _library_store().regenerate_paper_suggestions(
         sha1s=sha1s,
@@ -7162,9 +7233,7 @@ def apply_library_meta_suggestions(body: LibrarySuggestionActionBody):
     resolved_path: Path | None = None
 
     if pdf_name:
-        if Path(pdf_name).name != pdf_name:
-            raise HTTPException(400, "invalid pdf_name")
-        resolved_path = (_pdf_dir() / pdf_name).expanduser()
+        resolved_path = _resolve_library_pdf_name_arg(pdf_name)
     elif path_raw:
         resolved_path = _resolve_library_pdf_path_arg(path_raw)
     elif not sha1:
@@ -7203,13 +7272,8 @@ def apply_library_meta_suggestions(body: LibrarySuggestionActionBody):
 @router.post("/file/guide_source")
 def resolve_library_guide_source(body: GuideSourceBody):
     pdf_name = str(body.pdf_name or "").strip()
-    if (not pdf_name) or (Path(pdf_name).name != pdf_name):
-        raise HTTPException(400, "invalid pdf_name")
-    pdf_d = _pdf_dir()
     md_d = _md_dir()
-    pdf_path = (pdf_d / pdf_name).expanduser()
-    if (not _path_exists(pdf_path)) or (not _path_is_file(pdf_path)):
-        raise HTTPException(404, "pdf not found")
+    pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
 
     _md_folder, md_main, md_exists = _resolve_md_output_paths(md_d, pdf_path)
     if (not md_exists) or (not _path_is_file(md_main)):

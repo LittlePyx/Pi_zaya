@@ -293,6 +293,8 @@ export const S = {
   settings_maintenance_backup_cleanup_failed: 'Failed to clean backups',
 
   // Sidebar / AppSider
+  brand_name: 'π-zaya',
+  brand_home_title: 'Your literature research assistant',
   brand_subtitle: 'Research Desk',
   conversation_count: '{n} conversations',
   new_project: 'New Project',
@@ -1140,7 +1142,7 @@ export const S = {
   lib_quality_center_status_attention: 'Needs attention',
   lib_quality_center_summary_ready: 'The library is ready for Q&A; {ready}/{total} papers look usable.',
   lib_quality_center_summary_running: 'Library maintenance is running in the background. You can keep working.',
-  lib_quality_center_summary_review: '{review} papers need attention, {blocked} sources are unavailable, and {cases} regression cases need review.',
+  lib_quality_center_summary_review: '{review} papers need attention, {blocked} sources are unavailable, {cases} regression cases need review, and {domains} workflow checks need review.',
   lib_quality_center_action_none: 'No action needed',
   lib_quality_center_action_monitor: 'View progress',
   lib_quality_center_action_repair: 'Review {n} priority papers',

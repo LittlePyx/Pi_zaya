@@ -16,7 +16,8 @@ _YEAR_BACKREF_LINE_RE = re.compile(
 )
 _REF_SECTION_STOP_RE = re.compile(
     r"^(?:Acknowledg(?:e)?ments?|Author contributions?|Competing interests?|"
-    r"Additional information|Supplementary information|Correspondence and requests|"
+    r"Additional information|Supplementary information|Supplementary materials?|"
+    r"Supplemental information|Supplemental materials?|Correspondence and requests|"
     r"Data availability|Code availability|Ethics declarations?)$",
     re.IGNORECASE,
 )

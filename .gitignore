@@ -16,6 +16,7 @@ __pycache__/
 # Local DB / prefs (per-user, should not be shared)
 chat.sqlite3*
 library.sqlite3
+user_issues.sqlite3*
 tmp_*.sqlite3
 user_prefs.json
 db/
@@ -47,8 +48,12 @@ tmp_*
 /reconvert_all_*/
 test_output_*/
 web/test-results/
+web/web/
 workspace.code-workspace
 image/
+docs/ad_assets/
+tools/ffmpeg-release-essentials.zip
+tools/ffmpeg_essentials/
 
 # OS
 .env

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 
 from api.routers import app as app_router
-from api.routers import auth, chat, generate, library, maintenance, references, settings
+from api.routers import auth, chat, generate, library, maintenance, references, settings, user_issues
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
 
 app = FastAPI(title="Pi-zaya API")
@@ -71,3 +71,4 @@ app.include_router(library.router)
 app.include_router(maintenance.router)
 app.include_router(references.router)
 app.include_router(settings.router)
+app.include_router(user_issues.router)

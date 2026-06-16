@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from .post_processing import postprocess_markdown
+from .post_references import _is_post_references_resume_heading_line
 from .quality_acceptance import summarize_conversion_quality
 from .quality_compare import compare_markdown_quality
 from .reference_markdown import fix_references_format, normalize_references_page_text
@@ -83,6 +84,10 @@ PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
 SOURCE_PAGE_COVERAGE_THRESHOLD = 0.66
 SOURCE_PAGE_MIN_RARE_TOKENS = 60
+SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD = 0.32
+PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS = 1200
+PAGE_ALIGNMENT_BEAM_SIZE = 300
+PAGE_ALIGNMENT_BEAM_PER_MATCH = 80
 PAGE_ALIGNMENT_STOP_WORDS = {
     "the", "of", "and", "in", "to", "for", "with", "on", "by", "from", "that", "this",
     "these", "those", "using", "used", "into", "such", "which", "were", "their", "have",
@@ -154,6 +159,14 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "reason": "One or more source PDF pages have too little text represented in Markdown.",
         "strategies": ["recover_missing_source_pages"],
     },
+    "source_page_marker_alignment": {
+        "label": "Realign Markdown page anchors from the source PDF",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "The source PDF page starts do not line up with the Markdown page anchors.",
+        "strategies": ["realign_page_markers_from_pdf", "recover_missing_source_pages"],
+    },
     "reference_index_truncated": {
         "label": "Rebuild the reference section from the source PDF text layer",
         "safe": True,
@@ -224,6 +237,22 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "action": "autofix",
         "scope": "markdown",
         "strategies": ["normalize_heading_levels"],
+    },
+    "collapsed_heading_hierarchy": {
+        "label": "Promote collapsed review-paper headings for better navigation",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "A review-style paper has many section headings collapsed under H3, which weakens reader navigation and retrieval heading paths.",
+        "strategies": ["promote_collapsed_review_headings"],
+    },
+    "stray_inline_math": {
+        "label": "Clean stray inline math markup",
+        "safe": True,
+        "action": "autofix",
+        "scope": "markdown",
+        "reason": "Prose contains bare LaTeX or OCR math leftovers that should be normalized as inline math.",
+        "strategies": ["postprocess_markdown", "promote_collapsed_review_headings"],
     },
 }
 
@@ -539,6 +568,84 @@ def _dedupe_codes(codes: list[str]) -> list[str]:
     return out
 
 
+def _collapsed_heading_hierarchy_likely(text: str, metrics: dict[str, Any], quality: dict[str, Any]) -> bool:
+    if str((quality or {}).get("document_type") or "").strip().lower() != "review":
+        return False
+    heading_count = int(metrics.get("heading_count") or 0)
+    h2_count = int(metrics.get("h2_count") or 0)
+    h3_plus_count = int(metrics.get("h3_plus_count") or 0)
+    if heading_count < 10 or h3_plus_count < 8:
+        return False
+    if h2_count >= 8:
+        return False
+    if h3_plus_count < max(8, h2_count * 2):
+        return False
+    # Require at least a few topical H3 headings. This avoids flagging papers
+    # that only use H3 for appendices, captions, or small front-matter blocks.
+    topical = 0
+    for line in str(text or "").splitlines():
+        match = re.match(r"^###\s+(.+?)\s*$", line)
+        if not match:
+            continue
+        title = str(match.group(1) or "").strip()
+        if _review_heading_promotable(title):
+            topical += 1
+        if topical >= 4:
+            return True
+    return False
+
+
+_STRAY_INLINE_LATEX_RE = re.compile(
+    r"\\(?:alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|chi|psi|omega|"
+    r"Theta|Sigma|hat|mathbf|boldsymbol)"
+    r"(?:\s*(?:[_^]\{[^{}\n]{1,60}\}|[_^][A-Za-z0-9]))?"
+    r"(?:\s*(?:[<>=]|\\leq|\\geq|\\neq|\\approx|\\in|\\notin)\s*"
+    r"(?:[-+]?\d+(?:\.\d+)?|[A-Za-z](?:[_^]\{[^{}\n]{1,60}\}|[_^][A-Za-z0-9])?|"
+    r"\\[A-Za-z]+(?:\{[^{}\n]{1,60}\})?|\[[^\]\n]{1,80}\]))+",
+)
+_STRAY_INLINE_CITATION_DOLLAR_RE = re.compile(
+    r"\[\s*\d{1,4}(?:\s*[,;\u2013-]\s*\d{1,4})*\s*\]\$\s*(?=(?:and|or|the|this|that|these|those|[A-Z]))"
+)
+_STRAY_INLINE_CDOT_RE = re.compile(r"\bloss\s*\(\s*c(?:dot|[.\u00b7\u22c5])\s*\)", re.IGNORECASE)
+_STRAY_INLINE_UNCLOSED_SENTENCE_RE = re.compile(
+    r"\$(\\(?:alpha|beta|gamma|delta|epsilon|theta|lambda|mu|nu|pi|rho|sigma|tau|phi|chi|psi|omega|"
+    r"Theta|Sigma|hat|mathbf|boldsymbol)[^$\n]{1,180}?)([.?!])(?=\s+[A-Z])"
+)
+
+
+def _stray_inline_math_likely(text: str) -> bool:
+    if not text or ("\\" not in text and "$" not in text and "cdot" not in text):
+        return False
+    in_fence = False
+    in_math = False
+    in_refs = False
+    for line in str(text or "").splitlines():
+        st = line.strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            continue
+        if st == "$$":
+            in_math = not in_math
+            continue
+        if REFERENCES_HEADING_RE.match(st):
+            in_refs = True
+            continue
+        if in_fence or in_math or in_refs:
+            continue
+        if re.match(r"^#{1,6}\s+", st) or re.match(r"^\s*!\[[^\]]*\]\([^)]+\)", st):
+            continue
+        if (
+            _STRAY_INLINE_CITATION_DOLLAR_RE.search(line)
+            or _STRAY_INLINE_CDOT_RE.search(line)
+            or _STRAY_INLINE_UNCLOSED_SENTENCE_RE.search(line)
+        ):
+            return True
+        probe = re.sub(r"\$[^$\n]*\$", " ", line)
+        if _STRAY_INLINE_LATEX_RE.search(probe):
+            return True
+    return False
+
+
 def _issue_codes_from_context(
     md_path: Path,
     text: str,
@@ -557,10 +664,16 @@ def _issue_codes_from_context(
         codes = [code for code in codes if code not in {"missing_abstract", "weak_structure"}]
     if int(quality.get("missing_source_page_count") or 0) > 0:
         codes.append("missing_source_pages")
+    if int(quality.get("source_page_anchor_issue_count") or 0) > 0:
+        codes.append("source_page_marker_alignment")
     if bool(quality.get("reference_index_truncated")):
         codes.append("reference_index_truncated")
     if bool(quality.get("references_before_body")):
         codes.append("references_before_body")
+    if _collapsed_heading_hierarchy_likely(text, metrics, quality):
+        codes.append("collapsed_heading_hierarchy")
+    if _stray_inline_math_likely(text):
+        codes.append("stray_inline_math")
     return _dedupe_codes(codes)
 
 
@@ -1279,6 +1392,27 @@ def _rare_source_tokens(text: str) -> set[str]:
     }
 
 
+def _page_marker_occurrences(text: str) -> list[dict[str, int]]:
+    matches = list(PAGE_MARKER_RE.finditer(str(text or "")))
+    out: list[dict[str, int]] = []
+    for idx, match in enumerate(matches):
+        try:
+            page_no = int(match.group(1))
+        except Exception:
+            continue
+        segment_end = int(matches[idx + 1].start()) if idx + 1 < len(matches) else len(str(text or ""))
+        out.append(
+            {
+                "page": int(page_no),
+                "start": int(match.start()),
+                "end": int(match.end()),
+                "segment_start": int(match.end()),
+                "segment_end": int(segment_end),
+            }
+        )
+    return out
+
+
 def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str, Any]:
     if fitz is None or pdf_path is None:
         return {
@@ -1317,6 +1451,35 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
         for match in PAGE_MARKER_RE.finditer(str(text or ""))
         if str(match.group(1) or "").isdigit()
     }
+    marker_segments: dict[int, tuple[int, int]] = {}
+    for item in _page_marker_occurrences(text):
+        page_no = int(item.get("page") or 0)
+        if page_no > 0 and page_no not in marker_segments:
+            marker_segments[page_no] = (
+                int(item.get("segment_start") or 0),
+                int(item.get("segment_end") or 0),
+            )
+    inferred_offsets: dict[int, int] = {}
+    try:
+        inferred_offsets = _page_marker_offsets_from_pdf_text(str(text or ""), path, snap_to_line_start=False)
+    except Exception:
+        inferred_offsets = {}
+
+    def local_segment_for_page(page_no: int) -> str:
+        if page_no in marker_segments:
+            start, end = marker_segments[page_no]
+            return str(text or "")[max(0, start) : max(0, end)]
+        known = sorted((int(page), int(offset)) for page, offset in inferred_offsets.items() if int(page) > 0)
+        previous = [(page, offset) for page, offset in known if page < page_no]
+        following = [(page, offset) for page, offset in known if page > page_no]
+        if not previous or not following:
+            return ""
+        start = previous[-1][1]
+        end = following[0][1]
+        if end <= start:
+            return ""
+        return str(text or "")[max(0, start) : max(0, end)]
+
     low_pages: list[dict[str, Any]] = []
     min_coverage = 1.0
     assessed = 0
@@ -1341,17 +1504,29 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                 continue
             assessed += 1
             coverage = len(page_tokens.intersection(md_tokens)) / max(1, len(page_tokens))
+            local_segment = local_segment_for_page(page_no)
+            local_coverage: float | None = None
+            if local_segment:
+                local_tokens = _rare_source_tokens(local_segment)
+                local_coverage = len(page_tokens.intersection(local_tokens)) / max(1, len(page_tokens))
             min_coverage = min(min_coverage, coverage)
-            if page_no in marker_pages:
+            local_low_without_inferred_anchor = (
+                local_coverage is not None
+                and local_coverage < SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD
+                and page_no not in set(inferred_offsets)
+            )
+            if page_no in marker_pages and not local_low_without_inferred_anchor:
                 continue
-            if coverage >= SOURCE_PAGE_COVERAGE_THRESHOLD:
+            if coverage >= SOURCE_PAGE_COVERAGE_THRESHOLD and not local_low_without_inferred_anchor:
                 continue
             low_pages.append(
                 {
                     "page": int(page_no),
                     "coverage": round(float(coverage), 4),
+                    "local_coverage": round(float(local_coverage), 4) if local_coverage is not None else None,
                     "source_token_count": int(len(page_tokens)),
-                    "reason": "missing_page_anchor_and_low_text_overlap",
+                    "has_page_marker": bool(page_no in marker_pages),
+                    "reason": "low_local_page_overlap" if local_low_without_inferred_anchor else "low_text_overlap",
                 }
             )
     finally:
@@ -1364,6 +1539,112 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
         "missing_source_page_count": int(len(low_pages)),
         "missing_source_pages": low_pages[:20],
         "source_page_coverage_threshold": SOURCE_PAGE_COVERAGE_THRESHOLD,
+    }
+
+
+def _source_page_anchor_alignment_quality(text: str, pdf_path: Path | None) -> dict[str, Any]:
+    empty = {
+        "source_page_anchor_issue_count": 0,
+        "missing_source_page_marker_count": 0,
+        "misaligned_source_page_marker_count": 0,
+        "source_page_anchor_issues": [],
+        "source_page_anchor_alignment_threshold": PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS,
+    }
+    if fitz is None or pdf_path is None:
+        return empty
+    path = Path(pdf_path).expanduser()
+    try:
+        if not path.exists() or not path.is_file():
+            return empty
+    except Exception:
+        return empty
+    occurrences = _page_marker_occurrences(text)
+    if not occurrences:
+        return empty
+
+    marker_offsets: dict[int, int] = {}
+    marker_segments: dict[int, tuple[int, int]] = {}
+    for item in occurrences:
+        page_no = int(item.get("page") or 0)
+        if page_no <= 0 or page_no in marker_offsets:
+            continue
+        marker_offsets[page_no] = int(item.get("start") or 0)
+        marker_segments[page_no] = (
+            int(item.get("segment_start") or 0),
+            int(item.get("segment_end") or 0),
+        )
+
+    inferred = _page_marker_offsets_from_pdf_text(text, path, snap_to_line_start=False)
+    inferred_pages = {int(page) for page in inferred if int(page) > 0}
+    marker_pages = set(marker_offsets)
+
+    issues: list[dict[str, Any]] = []
+    for page_no in sorted(page for page in inferred_pages - marker_pages if page > 1):
+        issues.append(
+            {
+                "page": int(page_no),
+                "reason": "source_page_text_present_without_anchor",
+                "inferred_offset": int(inferred.get(page_no) or 0),
+            }
+        )
+
+    try:
+        doc = fitz.open(str(path))
+    except Exception:
+        doc = None
+    if doc is not None:
+        try:
+            for page_no, (segment_start, segment_end) in sorted(marker_segments.items()):
+                if page_no <= 0 or page_no > len(doc):
+                    continue
+                try:
+                    page_text = str(doc.load_page(page_no - 1).get_text("text") or "")
+                except Exception:
+                    page_text = ""
+                page_tokens = _rare_source_tokens(page_text)
+                if len(page_tokens) < SOURCE_PAGE_MIN_RARE_TOKENS:
+                    continue
+                segment = str(text or "")[max(0, segment_start) : max(0, segment_end)]
+                segment_tokens = _rare_source_tokens(segment)
+                coverage = len(page_tokens.intersection(segment_tokens)) / max(1, len(page_tokens))
+                inferred_offset = inferred.get(page_no)
+                marker_offset = marker_offsets.get(page_no)
+                inferred_far = (
+                    inferred_offset is None
+                    or marker_offset is None
+                    or abs(int(marker_offset) - int(inferred_offset)) > PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS
+                )
+                if coverage < SOURCE_PAGE_SEGMENT_COVERAGE_THRESHOLD and inferred_far:
+                    issues.append(
+                        {
+                            "page": int(page_no),
+                            "reason": "page_anchor_segment_low_source_overlap",
+                            "segment_coverage": round(float(coverage), 4),
+                        }
+                    )
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[int, str]] = set()
+    for item in issues:
+        page_no = int(item.get("page") or 0)
+        reason = str(item.get("reason") or "")
+        key = (page_no, reason)
+        if page_no <= 0 or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    missing_count = sum(1 for item in deduped if str(item.get("reason") or "") == "source_page_text_present_without_anchor")
+    return {
+        "source_page_anchor_issue_count": int(len(deduped)),
+        "missing_source_page_marker_count": int(missing_count),
+        "misaligned_source_page_marker_count": int(len(deduped) - missing_count),
+        "source_page_anchor_issues": deduped[:20],
+        "source_page_anchor_alignment_threshold": PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS,
     }
 
 
@@ -1398,6 +1679,7 @@ def _source_quality_view(
     source_text_loss = False if bool(profile.get("abstract_not_applicable")) else _source_text_loss_likely(text, metrics, pdf_stats, ref_layout)
     page_quality = _page_alignment_quality(metrics, pdf_stats)
     page_coverage = _source_page_coverage_quality(text, pdf_path if pdf_path and bool(pdf_stats.get("available")) else None)
+    page_anchor_quality = _source_page_anchor_alignment_quality(text, pdf_path if pdf_path and bool(pdf_stats.get("available")) else None)
     return {
         **profile,
         "source_pdf_path": str((pdf_stats or {}).get("path") or (pdf_path or "")),
@@ -1406,6 +1688,7 @@ def _source_quality_view(
         "pdf_text_chars": int(pdf_stats.get("text_chars") or 0),
         **page_quality,
         **page_coverage,
+        **page_anchor_quality,
         **ref_layout,
         "abstract_autofix_likely": abstract_autofix_likely,
         "source_text_loss": bool(source_text_loss),
@@ -1524,6 +1807,71 @@ def _normalize_heading_level_jumps(md: str) -> tuple[str, bool]:
     if str(md or "").endswith("\n"):
         fixed += "\n"
     return fixed, changed and fixed != str(md or "")
+
+
+_REVIEW_PROMOTABLE_HEADING_RE = re.compile(
+    r"\b(?:"
+    r"problem|statement|classical|spatial|domain|filter(?:ing)?|variational|regularization|"
+    r"non[-\s]?local|sparse|representation|low[-\s]?rank|minimization|transform|technique|"
+    r"adaptive|bm3d|cnn|mlp|deep\s+learning|experiments?|metrics?|comparison|methods?|models?|"
+    r"performance|conclusions?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _review_heading_promotable(title: str) -> bool:
+    text = re.sub(r"\s+", " ", str(title or "")).strip()
+    if len(text) < 3 or len(text) > 110:
+        return False
+    if REFERENCES_HEADING_RE.match(f"## {text}") or re.match(r"^(?:abstract|keywords?)$", text, re.IGNORECASE):
+        return False
+    if CAPTION_LINE_RE.match(text):
+        return False
+    if re.search(r"[=\\^_{}]|^\(?\d{1,3}\)?\s*$", text):
+        return False
+    if re.search(r"[.!?]\s+\S", text):
+        return False
+    return bool(_REVIEW_PROMOTABLE_HEADING_RE.search(text))
+
+
+def _promote_collapsed_review_headings(md: str) -> tuple[str, bool]:
+    text = str(md or "")
+    lines = text.splitlines()
+    h2_count = sum(1 for line in lines if re.match(r"^##\s+\S", line))
+    h3_count = sum(1 for line in lines if re.match(r"^###\s+\S", line))
+    if h3_count < 8 or h2_count >= 8 or h3_count < max(8, h2_count * 2):
+        return text, False
+
+    out: list[str] = []
+    in_fence = False
+    in_math = False
+    changed = False
+    for line in lines:
+        stripped = str(line or "").strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if stripped == "$$":
+            in_math = not in_math
+            out.append(line)
+            continue
+        if in_fence or in_math:
+            out.append(line)
+            continue
+
+        match = re.match(r"^(###)(\s+)(.+?)\s*$", line)
+        if match and _review_heading_promotable(match.group(3)):
+            out.append(f"##{match.group(2)}{match.group(3).strip()}")
+            changed = True
+            continue
+        out.append(line)
+
+    fixed = "\n".join(out)
+    if text.endswith("\n"):
+        fixed += "\n"
+    return fixed, changed and fixed != text
 
 
 def _regression_reasons(base_text: str, candidate_text: str) -> list[str]:
@@ -1678,7 +2026,99 @@ def _line_start_for_offset(text: str, offset: int) -> int:
     return str(text or "").rfind("\n", 0, pos) + 1
 
 
-def _page_marker_offsets_from_pdf_text(md_text: str, pdf_path: Path) -> dict[int, int]:
+def _page_alignment_md_grams(md_tokens: list[tuple[str, int]], width: int) -> dict[tuple[str, ...], list[int]]:
+    md_grams: dict[tuple[str, ...], list[int]] = {}
+    for idx in range(0, len(md_tokens) - width + 1):
+        gram = tuple(tok for tok, _ in md_tokens[idx : idx + width])
+        bucket = md_grams.setdefault(gram, [])
+        if len(bucket) < 30:
+            bucket.append(idx)
+    return md_grams
+
+
+def _page_alignment_page_candidates(
+    page_tokens: list[tuple[str, int]],
+    md_grams: dict[tuple[str, ...], list[int]],
+    width: int,
+) -> list[tuple[int, int, int]]:
+    by_md_index: dict[int, tuple[int, int]] = {}
+    for gram, rare, page_token_start in _page_alignment_candidates(page_tokens, width):
+        for md_token_index in md_grams.get(gram, []):
+            if md_token_index < 10:
+                continue
+            old = by_md_index.get(md_token_index)
+            if old is None or rare > old[0] or (rare == old[0] and page_token_start < old[1]):
+                by_md_index[md_token_index] = (rare, page_token_start)
+    choices = [(idx, rare, start) for idx, (rare, start) in by_md_index.items()]
+    choices.sort(key=lambda item: (int(item[0]), int(item[2]), -int(item[1])))
+    return choices[:160]
+
+
+def _select_page_alignment_offsets(
+    md_tokens: list[tuple[str, int]],
+    page_tokens_by_index: list[list[tuple[str, int]]],
+    width: int,
+) -> dict[int, int]:
+    if len(md_tokens) < width:
+        return {1: 0}
+    md_grams = _page_alignment_md_grams(md_tokens, width)
+    page_candidates = [
+        []
+        if page_index == 0
+        else _page_alignment_page_candidates(page_tokens, md_grams, width)
+        for page_index, page_tokens in enumerate(page_tokens_by_index)
+    ]
+
+    # State: matched pages, quality score, last Markdown token index, selected (page_no, token_index) pairs.
+    states: list[tuple[int, float, int, tuple[tuple[int, int], ...]]] = [(0, 0.0, -1, tuple())]
+    for page_no in range(2, len(page_tokens_by_index) + 1):
+        new_states = list(states)
+        for matched, quality, last_token_index, offsets in states:
+            for md_token_index, rare, page_token_start in page_candidates[page_no - 1]:
+                if md_token_index <= last_token_index:
+                    continue
+                score = quality + float(rare * 4.0) - float(page_token_start) * 0.4
+                new_states.append(
+                    (
+                        matched + 1,
+                        score,
+                        int(md_token_index),
+                        offsets + ((int(page_no), int(md_token_index)),),
+                    )
+                )
+        if len(new_states) > PAGE_ALIGNMENT_BEAM_SIZE:
+            new_states.sort(key=lambda item: (int(item[0]), float(item[1]), -int(item[2])), reverse=True)
+            kept: list[tuple[int, float, int, tuple[tuple[int, int], ...]]] = []
+            buckets: dict[int, int] = {}
+            for state in new_states:
+                matched = int(state[0])
+                count = buckets.get(matched, 0)
+                if len(kept) >= PAGE_ALIGNMENT_BEAM_SIZE:
+                    break
+                if count >= PAGE_ALIGNMENT_BEAM_PER_MATCH:
+                    continue
+                kept.append(state)
+                buckets[matched] = count + 1
+            states = kept
+        else:
+            states = new_states
+
+    best = max(states, key=lambda item: (int(item[0]), float(item[1]), -int(item[2])), default=states[0])
+    offsets: dict[int, int] = {1: 0}
+    for page_no, md_token_index in best[3]:
+        try:
+            offsets[int(page_no)] = int(md_tokens[int(md_token_index)][1])
+        except Exception:
+            continue
+    return offsets
+
+
+def _page_marker_offsets_from_pdf_text(
+    md_text: str,
+    pdf_path: Path,
+    *,
+    snap_to_line_start: bool = True,
+) -> dict[int, int]:
     if fitz is None:
         return {}
     path = Path(pdf_path).expanduser()
@@ -1693,7 +2133,6 @@ def _page_marker_offsets_from_pdf_text(md_text: str, pdf_path: Path) -> dict[int
         return {}
 
     offsets: dict[int, int] = {1: 0}
-    previous_token_index = -1
     pdf_page_count = 0
     try:
         doc = fitz.open(str(path))
@@ -1711,44 +2150,11 @@ def _page_marker_offsets_from_pdf_text(md_text: str, pdf_path: Path) -> dict[int
 
         best_offsets: dict[int, int] = {1: 0}
         for width in PAGE_ALIGNMENT_NGRAMS:
-            if len(md_tokens) < width:
-                continue
-            md_grams: dict[tuple[str, ...], list[int]] = {}
-            for idx in range(0, len(md_tokens) - width + 1):
-                gram = tuple(tok for tok, _ in md_tokens[idx : idx + width])
-                bucket = md_grams.setdefault(gram, [])
-                if len(bucket) < 30:
-                    bucket.append(idx)
-
-            current_offsets: dict[int, int] = {1: 0}
-            previous_token_index = -1
-            for page_index, page_tokens in enumerate(page_tokens_by_index):
-                choices: list[tuple[int, int, int]] = []
-                for gram, rare, page_token_start in _page_alignment_candidates(page_tokens, width):
-                    for md_token_index in md_grams.get(gram, []):
-                        if md_token_index <= previous_token_index:
-                            continue
-                        choices.append((md_token_index, -rare, page_token_start))
-                if not choices:
-                    continue
-                choices.sort()
-                md_token_index = int(choices[0][0])
-                if page_index > 0 and md_token_index < 10:
-                    continue
-                previous_token_index = md_token_index
-                page_no = page_index + 1
-                if page_no > 1:
-                    current_offsets[page_no] = _line_start_for_offset(md_text, int(md_tokens[md_token_index][1]))
+            current_offsets = _select_page_alignment_offsets(md_tokens, page_tokens_by_index, width)
 
             if len(current_offsets) > len(best_offsets):
                 best_offsets = current_offsets
-            matched_later = len([p for p in current_offsets if p > 1])
-            required_good = 1 if pdf_page_count <= 2 else max(2, int((pdf_page_count - 1) * 0.55))
-            if matched_later >= required_good:
-                offsets = current_offsets
-                break
-        else:
-            offsets = best_offsets
+        offsets = best_offsets
     finally:
         try:
             doc.close()
@@ -1760,6 +2166,11 @@ def _page_marker_offsets_from_pdf_text(md_text: str, pdf_path: Path) -> dict[int
         return {1: 0}
     if pdf_page_count >= 6 and matched_later_pages < 2:
         return {1: 0}
+    if snap_to_line_start:
+        offsets = {
+            int(page_no): _line_start_for_offset(md_text, int(offset))
+            for page_no, offset in offsets.items()
+        }
     return offsets
 
 
@@ -1785,6 +2196,82 @@ def _recover_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_
     return fixed, fixed != text
 
 
+def _insert_page_marker_at_offset(md_text: str, offset: int, page_no: int) -> str:
+    text = str(md_text or "")
+    pos = max(0, min(len(text), int(offset)))
+    marker = f"<!-- kb_page: {int(page_no)} -->"
+    left = text[:pos]
+    right = text[pos:]
+    insert = marker
+    if left and not left.endswith("\n\n"):
+        insert = ("\n" if left.endswith("\n") else "\n\n") + insert
+    if right and not right.startswith("\n\n"):
+        insert = insert + ("\n" if right.startswith("\n") else "\n\n")
+    if not left and right and not right.startswith("\n"):
+        insert += "\n\n"
+    return left + insert + right
+
+
+def _page_marker_insert_offset(md_text: str, offset: int) -> int:
+    text = str(md_text or "")
+    pos = max(0, min(len(text), int(offset)))
+    line_start = _line_start_for_offset(text, pos)
+    line_end = text.find("\n", pos)
+    if line_end < 0:
+        line_end = len(text)
+    line = text[line_start:line_end]
+    if re.match(r"\s*\[\s*\d{1,4}\s*]\s+", line):
+        return int(line_start)
+    return int(pos)
+
+
+def _realign_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_path: Path | str | None = None) -> tuple[str, bool]:
+    text = str(md_text or "")
+    if not PAGE_MARKER_RE.search(text):
+        return text, False
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if not pdf_path:
+        return text, False
+    markerless = PAGE_MARKER_RE.sub("", text)
+    offsets = _page_marker_offsets_from_pdf_text(markerless, pdf_path, snap_to_line_start=False)
+    matched_later = len([page for page in offsets if int(page) > 1])
+    if matched_later <= 0:
+        return text, False
+    pdf_page_count = 0
+    if fitz is not None:
+        try:
+            doc = fitz.open(str(pdf_path))
+            try:
+                pdf_page_count = len(doc)
+            finally:
+                doc.close()
+        except Exception:
+            pdf_page_count = 0
+    if pdf_page_count >= 6:
+        required = max(2, int((pdf_page_count - 1) * 0.45))
+        if matched_later < required:
+            return text, False
+
+    cleaned_offsets: dict[int, int] = {}
+    last_offset = -1
+    for page_no, offset in sorted(offsets.items(), key=lambda item: (int(item[0]), int(item[1]))):
+        page = int(page_no)
+        pos = _page_marker_insert_offset(markerless, int(offset))
+        if page <= 0 or pos < last_offset:
+            continue
+        if page > 1 and pos == last_offset:
+            continue
+        cleaned_offsets[page] = pos
+        last_offset = pos
+    if len(cleaned_offsets) <= 1:
+        return text, False
+
+    fixed = markerless
+    for page_no, offset in sorted(cleaned_offsets.items(), key=lambda item: int(item[1]), reverse=True):
+        fixed = _insert_page_marker_at_offset(fixed, int(offset), int(page_no))
+    return fixed, fixed != text
+
+
 def _clean_pdf_page_block_text(raw: str) -> str:
     lines = [line.strip() for line in str(raw or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")]
     lines = [line for line in lines if line]
@@ -1806,6 +2293,55 @@ def _clean_pdf_page_block_text(raw: str) -> str:
 
 def _pdf_page_has_references_heading_text(text: str) -> bool:
     return bool(re.search(r"(?mi)^\s*(?:references|bibliography)\s*$", str(text or "")))
+
+
+PDF_REFERENCE_START_LINE_RE = re.compile(r"(?m)^\s*(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})[.)])\s+\S")
+
+
+def _pdf_page_reference_start_numbers(text: str) -> list[int]:
+    numbers: list[int] = []
+    for match in PDF_REFERENCE_START_LINE_RE.finditer(str(text or "")):
+        try:
+            n = int(match.group(1) or match.group(2))
+        except Exception:
+            continue
+        if n > 0:
+            numbers.append(n)
+    return numbers
+
+
+def _pdf_page_has_reference_block_text(text: str) -> bool:
+    numbers = _pdf_page_reference_start_numbers(text)
+    if len(numbers) < 3:
+        return False
+    increasing_pairs = sum(1 for left, right in zip(numbers, numbers[1:]) if int(right) > int(left))
+    return increasing_pairs >= max(1, len(numbers) - 2)
+
+
+def _trim_pdf_page_text_to_first_reference(text: str) -> str:
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = raw.split("\n")
+    for idx, line in enumerate(lines):
+        if PDF_REFERENCE_START_LINE_RE.match(line or ""):
+            return "\n".join(lines[idx:]).strip()
+    return raw.strip()
+
+
+def _drop_pdf_reference_running_lines(text: str) -> str:
+    lines: list[str] = []
+    for raw in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = str(raw or "").strip()
+        if not line:
+            lines.append(raw)
+            continue
+        if re.fullmatch(r"Research\s+Article", line, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^Vol\.\s+\d+\b.*\b(?:Optica|Optics?|Photonics?)\b", line, flags=re.IGNORECASE):
+            continue
+        if re.fullmatch(r"\d{1,4}", line):
+            continue
+        lines.append(raw)
+    return "\n".join(lines).strip()
 
 
 def _merge_pdf_page_paragraphs(parts: list[str]) -> list[str]:
@@ -1898,6 +2434,13 @@ def _insertion_offset_for_missing_page(text: str, page_no: int) -> int:
             continue
     ref_match = re.search(r"(?mi)^#{1,6}\s+References\s*$", str(text or ""))
     ref_offset = int(ref_match.start()) if ref_match else -1
+    body_next_offsets = [
+        line_start
+        for page, _offset, line_start in markers
+        if page > page_no and line_start >= 0 and (ref_offset < 0 or line_start < ref_offset)
+    ]
+    if body_next_offsets:
+        return min(body_next_offsets)
     if ref_offset >= 0:
         reference_pages = [page for page, offset, _line_start in markers if offset >= ref_offset]
         first_reference_page = min(reference_pages) if reference_pages else 0
@@ -1958,6 +2501,9 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
             if _pdf_page_has_references_heading_text(page_text):
                 start_index = page_index
                 break
+            if _pdf_page_has_reference_block_text(page_text):
+                start_index = page_index
+                break
         if start_index < 0:
             return "", 0
         for page_index in range(start_index, len(doc)):
@@ -1965,6 +2511,15 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
                 page_text = str(doc.load_page(page_index).get_text("text") or "").strip()
             except Exception:
                 page_text = ""
+            if not page_text:
+                continue
+            has_heading = _pdf_page_has_references_heading_text(page_text)
+            has_reference_block = _pdf_page_has_reference_block_text(page_text)
+            if page_index > start_index and not has_heading and not has_reference_block:
+                break
+            if not has_heading:
+                page_text = _trim_pdf_page_text_to_first_reference(page_text)
+            page_text = _drop_pdf_reference_running_lines(page_text)
             if page_text:
                 page_texts.append((page_index + 1, page_text))
     finally:
@@ -2005,7 +2560,67 @@ def _replace_references_section(md: str, references_md: str) -> str:
         return text
     if ref_idx < 0:
         return (text.rstrip() + "\n\n" + refs).strip()
-    return "\n".join([*lines[:ref_idx], *refs.splitlines()]).strip()
+
+    start_idx = ref_idx
+    stray_start = ref_idx
+    stray_count = 0
+    idx = ref_idx - 1
+    while idx >= 0 and ref_idx - idx <= 12:
+        st = (lines[idx] or "").strip()
+        if not st:
+            idx -= 1
+            continue
+        if _looks_markdown_reference_payload_line(st):
+            stray_start = idx
+            stray_count += 1
+            idx -= 1
+            continue
+        break
+    if stray_count > 0:
+        start_idx = stray_start
+
+    tail_idx = len(lines)
+    ref_signal = 0
+    non_ref_run = 0
+    non_ref_start = -1
+    for idx in range(ref_idx + 1, len(lines)):
+        st = (lines[idx] or "").strip()
+        if not st:
+            continue
+        if REFERENCES_HEADING_RE.match(st):
+            continue
+        if _looks_markdown_reference_payload_line(st):
+            ref_signal += 1
+            non_ref_run = 0
+            non_ref_start = -1
+            continue
+        if ref_signal >= 1 and _is_post_references_resume_heading_line(st):
+            tail_idx = idx
+            break
+        if ref_signal >= 3 and _post_reference_body_heading_line(st):
+            tail_idx = non_ref_start if non_ref_start >= 0 else idx
+            break
+        if ref_signal >= 8:
+            if non_ref_run == 0:
+                non_ref_start = idx
+            non_ref_run += 1
+            if non_ref_run >= 8 and non_ref_start >= 0:
+                tail_idx = non_ref_start
+                break
+    tail_lines = lines[tail_idx:] if tail_idx < len(lines) else []
+    if tail_lines and _post_reference_tail_should_precede_references(tail_lines):
+        clean_tail = _clean_post_reference_body_tail(tail_lines)
+        refs_for_tail = _drop_leading_duplicate_reference_page_marker(
+            refs,
+            _last_page_marker_in_lines([*lines[:start_idx], *clean_tail]),
+        )
+        parts = [*lines[:start_idx], *clean_tail, "", *refs_for_tail.splitlines()]
+        return "\n".join(parts).strip()
+
+    parts = [*lines[:start_idx], *refs.splitlines()]
+    if tail_idx < len(lines):
+        parts.extend(["", *tail_lines])
+    return "\n".join(parts).strip()
 
 
 def _last_page_marker_before_references(md: str) -> int:
@@ -2023,11 +2638,121 @@ def _last_page_marker_before_references(md: str) -> int:
     return last_page
 
 
+def _last_page_marker_in_lines(lines: list[str]) -> int:
+    last_page = 0
+    for line in list(lines or []):
+        for match in PAGE_MARKER_RE.finditer(str(line or "")):
+            try:
+                last_page = int(match.group(1))
+            except Exception:
+                continue
+    return last_page
+
+
+def _clean_post_reference_body_tail(lines: list[str]) -> list[str]:
+    raw = [str(line or "") for line in list(lines or [])]
+
+    def next_nonempty(start: int) -> str:
+        for candidate in raw[start + 1 :]:
+            if str(candidate or "").strip():
+                return str(candidate or "").strip()
+        return ""
+
+    out: list[str] = []
+    for idx, line in enumerate(raw):
+        st = line.strip()
+        if _looks_markdown_reference_payload_line(st):
+            continue
+        if PAGE_MARKER_RE.fullmatch(st) and _looks_markdown_reference_payload_line(next_nonempty(idx)):
+            continue
+        out.append(line)
+
+    while out and not out[0].strip():
+        out.pop(0)
+    while out and not out[-1].strip():
+        out.pop()
+    compact: list[str] = []
+    blank_run = 0
+    for line in out:
+        if not line.strip():
+            blank_run += 1
+            if blank_run > 2:
+                continue
+        else:
+            blank_run = 0
+        compact.append(line)
+    return compact
+
+
 def _drop_leading_duplicate_reference_page_marker(references_md: str, page_no: int) -> str:
     if page_no <= 0:
         return str(references_md or "")
     pattern = rf"(?im)^(#{{1,6}}\s+References\s*)\n\s*<!--\s*kb_page:\s*{int(page_no)}\s*-->\s*\n*"
     return re.sub(pattern, r"\1\n\n", str(references_md or "").strip(), count=1)
+
+
+def _looks_markdown_reference_payload_line(line: str) -> bool:
+    st = str(line or "").strip()
+    if not st or PAGE_MARKER_RE.fullmatch(st):
+        return False
+    match = re.match(r"^\s*(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})[.)])\s+(.+)$", st)
+    if not match:
+        return False
+    try:
+        n = int(match.group(1) or match.group(2) or 0)
+    except Exception:
+        return False
+    if n <= 0 or 1800 <= n <= 2099:
+        return False
+    body = str(match.group(3) or "").strip()
+    if len(body) < 20:
+        return False
+    if re.match(
+        r"^(?:abstract|introduction|background|related\s+work|method(?:s|ology)?|"
+        r"experiment(?:s|al)?|results?|discussion|conclusions?|funding|"
+        r"acknowledg(?:e)?ments?|appendix|supplementary|supplemental)\b",
+        body,
+        re.IGNORECASE,
+    ):
+        return False
+    return bool(
+        re.search(r"\b(?:18|19|20)\d{2}\b", body)
+        or re.search(r"\b(?:doi\s*:|10\.\d{4,9}/|arxiv\s*:)", body, re.IGNORECASE)
+        or re.search(
+            r"\b(?:journal|proceedings?|proc\.?|opt\.|phys\.|nat\.|nature|science|"
+            r"ieee|acm|appl\.|express|letters?|review|commun\.|photonics)\b",
+            body,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _post_reference_body_heading_line(line: str) -> bool:
+    st = str(line or "").strip()
+    if not st:
+        return False
+    st = re.sub(r"^#{1,6}\s+", "", st).strip()
+    return bool(
+        re.match(
+            r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:conclusions?|method(?:s|ology)?|discussion|"
+            r"funding|acknowledg(?:e)?ments?)\b",
+            st,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _post_reference_tail_should_precede_references(lines: list[str]) -> bool:
+    sample = "\n".join(str(line or "") for line in list(lines or [])[:30])
+    if re.search(r"\b(?:supplementary|supplemental|appendix|appendices)\b", sample, re.IGNORECASE):
+        return False
+    return bool(
+        re.search(
+            r"(?mi)^\s*(?:#{1,6}\s+)?(?:\d+(?:\.\d+)*\.?\s+)?(?:conclusions?|method(?:s|ology)?|"
+            r"discussion|funding|acknowledg(?:e)?ments?)\b",
+            sample,
+        )
+    )
 
 
 def _backfill_references_from_pdf_text(md_text: str, md_path: Path, source_pdf_path: Path | str | None = None) -> tuple[str, bool]:
@@ -2091,6 +2816,11 @@ def repair_markdown_text(
                 if changed:
                     applied.append("ensure_page_anchor")
 
+        if "realign_page_markers_from_pdf" in active_strategy_names:
+            text, changed = _realign_page_markers_from_pdf_text(text, path, source_pdf_path)
+            if changed:
+                applied.append("realign_page_markers_from_pdf")
+
         if "normalize_page_markers" in active_strategy_names:
             text, changed = _normalize_page_marker_sequence(text)
             if changed:
@@ -2152,6 +2882,11 @@ def repair_markdown_text(
                 text = postprocessed
                 applied.append("postprocess_markdown")
 
+        if "promote_collapsed_review_headings" in active_strategy_names:
+            text, changed = _promote_collapsed_review_headings(text)
+            if changed:
+                applied.append("promote_collapsed_review_headings")
+
         # Post-processing can remove leading comments when legacy files are oddly shaped;
         # preserve at least one stable reader anchor for quality-center repair.
         text, changed = _ensure_page_anchor(text)
@@ -2176,6 +2911,8 @@ def repair_markdown_text(
                 candidate, changed = _recover_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "ensure_page_anchor":
                 candidate, changed = _ensure_page_anchor(fallback_text)
+            elif label == "realign_page_markers_from_pdf":
+                candidate, changed = _realign_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "normalize_page_markers":
                 candidate, changed = _normalize_page_marker_sequence(fallback_text)
             elif label == "figure_metadata_captions":
@@ -2192,6 +2929,8 @@ def repair_markdown_text(
                 candidate, changed = _normalize_markdown_tables_only(fallback_text)
             elif label == "normalize_heading_levels":
                 candidate, changed = _normalize_heading_level_jumps(fallback_text)
+            elif label == "promote_collapsed_review_headings":
+                candidate, changed = _promote_collapsed_review_headings(fallback_text)
             elif label == "recover_missing_source_pages":
                 candidate, changed = _recover_missing_source_pages_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "pdf_reference_backfill":
