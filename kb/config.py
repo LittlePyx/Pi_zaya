@@ -74,6 +74,10 @@ class Settings:
     timeout_s: float
     max_retries: int
     user_issues_db_path: Path = field(default_factory=lambda: Path("user_issues.sqlite3"))
+    user_issues_remote_enabled: bool = field(default=False)
+    user_issues_remote_url: str = field(default="")
+    user_issues_remote_token: str | None = field(default=None, repr=False)
+    user_issues_ingest_token: str | None = field(default=None, repr=False)
     # Whether auto-routing is active (both text *and* vision keys are set).
     auto_route: bool = field(default=False)
     vision_uses_text_fallback: bool = field(default=False)
@@ -189,6 +193,15 @@ def load_settings() -> Settings:
     chat_db_path = Path(_env("KB_CHAT_DB", str(here / "chat.sqlite3"))).expanduser().resolve()
     library_db_path = Path(_env("KB_LIBRARY_DB", str(here / "library.sqlite3"))).expanduser().resolve()
     user_issues_db_path = Path(_env("KB_USER_ISSUES_DB", str(here / "user_issues.sqlite3"))).expanduser().resolve()
+    user_issues_remote_enabled = str(_env("KB_USER_ISSUES_REMOTE_ENABLED", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    user_issues_remote_url = str(_env("KB_USER_ISSUES_REMOTE_URL", "") or "").strip()
+    user_issues_remote_token = _clean_env_key(_env("KB_USER_ISSUES_REMOTE_TOKEN") or "")
+    user_issues_ingest_token = _clean_env_key(_env("KB_USER_ISSUES_INGEST_TOKEN") or "")
 
     timeout_s = float(_env("KB_LLM_TIMEOUT_S", _env("DEEPSEEK_TIMEOUT_S", "60")))
     max_retries = int(_env("KB_LLM_MAX_RETRIES", _env("DEEPSEEK_MAX_RETRIES", "2")))
@@ -256,6 +269,10 @@ def load_settings() -> Settings:
         chat_db_path=chat_db_path,
         library_db_path=library_db_path,
         user_issues_db_path=user_issues_db_path,
+        user_issues_remote_enabled=user_issues_remote_enabled,
+        user_issues_remote_url=user_issues_remote_url,
+        user_issues_remote_token=user_issues_remote_token,
+        user_issues_ingest_token=user_issues_ingest_token,
         timeout_s=timeout_s,
         max_retries=max_retries,
         auto_route=auto_route,

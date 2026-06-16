@@ -334,6 +334,32 @@ def _production_readiness_payload(s) -> dict:
     items.append(_check_file_parent("chat_db", "Chat database", getattr(s, "chat_db_path", "")))
     items.append(_check_file_parent("library_db", "Library database", getattr(s, "library_db_path", "")))
     items.append(_check_file_parent("user_issues_db", "User issues database", getattr(s, "user_issues_db_path", "")))
+    remote_issue_enabled = bool(getattr(s, "user_issues_remote_enabled", False))
+    remote_issue_url = str(getattr(s, "user_issues_remote_url", "") or "").strip()
+    remote_issue_token = str(getattr(s, "user_issues_remote_token", "") or "").strip()
+    if remote_issue_enabled and not remote_issue_url:
+        items.append(_readiness_item(
+            "user_issues_remote",
+            severity="warning",
+            label="Remote quality telemetry",
+            detail="Enabled but KB_USER_ISSUES_REMOTE_URL is not configured.",
+            action="set_user_issues_remote_url",
+        ))
+    elif remote_issue_enabled and not remote_issue_token:
+        items.append(_readiness_item(
+            "user_issues_remote",
+            severity="warning",
+            label="Remote quality telemetry",
+            detail="Enabled without KB_USER_ISSUES_REMOTE_TOKEN; use a token for public collectors.",
+            action="set_user_issues_remote_token",
+        ))
+    elif remote_issue_enabled:
+        items.append(_readiness_item(
+            "user_issues_remote",
+            severity="ok",
+            label="Remote quality telemetry",
+            detail="Enabled",
+        ))
 
     auth_required = bool(getattr(s, "auth_required", False))
     production = bool(getattr(s, "production", False))

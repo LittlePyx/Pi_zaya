@@ -56,6 +56,13 @@ Set `KB_STARTUP_STRICT=1` in deployment scripts when startup should stop immedia
 
 Use GitHub Releases as the stable update source. Set `KB_APP_VERSION` to the shipped release tag, for example `v1.2.0`; the app checks `/api/app/update-check` quietly on a browser-side cooldown, the backend caches GitHub's latest release for `KB_UPDATE_CHECK_TTL_S`, and the Settings UI only shows the cached result unless the user explicitly checks again. For offline or private-network deployments, set `KB_UPDATE_CHECK_ENABLED=0`.
 
+Optional remote quality telemetry:
+
+- On your collector deployment, set `KB_USER_ISSUES_INGEST_TOKEN=<secret>` and expose `POST /api/user-issues/ingest`.
+- On user deployments that should send quality data back, set `KB_USER_ISSUES_REMOTE_ENABLED=1`, `KB_USER_ISSUES_REMOTE_URL=https://your-host/api/user-issues/ingest`, and `KB_USER_ISSUES_REMOTE_TOKEN=<secret>`.
+- Set `KB_USER_ISSUES_CLIENT_ID=<stable-id>` only when you need per-install aggregation; it is hashed before upload.
+- The reporter keeps the local `user_issues.sqlite3` behavior, sends in the background, and redacts local paths, email addresses, tokens, and sensitive path/key fields before upload.
+
 ## 3. Start
 
 Single-service local production mode:

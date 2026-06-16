@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+from kb.user_issue_remote import report_user_issue_remote
+
 
 def _clean_text(value: Any, *, limit: int = 2000) -> str:
     if value is None:
@@ -140,6 +142,7 @@ class UserIssueStore:
         context: Mapping[str, Any] | None = None,
         payload: Mapping[str, Any] | None = None,
         fingerprint: str = "",
+        forward_remote: bool = True,
     ) -> dict[str, Any]:
         now = time.time()
         clean_source = _clean_text(source or "frontend", limit=120) or "frontend"
@@ -198,7 +201,13 @@ class UserIssueStore:
                 """,
                 (issue_id, now, clean_route, clean_user_agent, context_json, payload_json),
             )
-            return _row_to_issue(row)
+            issue = _row_to_issue(row)
+        if bool(forward_remote):
+            try:
+                report_user_issue_remote(issue)
+            except Exception:
+                pass
+        return issue
 
     def list_issues(self, *, limit: int = 100, status: str = "open") -> list[dict[str, Any]]:
         clean_status = _clean_text(status, limit=40).lower()
