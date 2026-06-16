@@ -22,9 +22,7 @@ from api.reference_card_copy import (
 )
 from api.reference_card_payload import build_ref_card_ui_payload as _build_ref_card_ui_payload
 from api.reference_card_locale import (
-    _prefer_zh_ref_card_locale,
     _prompt_strongly_prefers_english,
-    _ref_card_user_locale,
     _refs_card_locale_pref,
     _refs_card_ui_locale_pref,
 )
@@ -81,6 +79,7 @@ from kb.evidence_text import pick_readable_evidence_text as _pick_readable_evide
 from kb.file_naming import citation_meta_display_pdf_name
 from kb.library_store import LibraryStore
 from kb.llm import DeepSeekChat
+from kb.answer_contract import _prefer_zh_locale
 from kb.reference_query_family import (
     extract_multi_paper_topic as _shared_extract_multi_paper_topic,
     prompt_explicitly_requests_multi_paper_list as _shared_prompt_explicitly_requests_multi_paper_list,
@@ -115,6 +114,35 @@ from ui.refs_renderer import (
     _openalex_work_by_doi,
     fetch_crossref_meta,
 )
+
+
+def _ref_card_user_locale(prompt: str = "", *fallback_texts: str) -> str:
+    pref = _refs_card_locale_pref()
+    if pref in {"zh", "en"}:
+        return pref
+
+    prompt_text = str(prompt or "").strip()
+    if prompt_text:
+        if _prefer_zh_locale(prompt_text):
+            return "zh"
+        if _prompt_strongly_prefers_english(prompt_text):
+            return "en"
+
+    ui_pref = _refs_card_ui_locale_pref()
+    if ui_pref in {"zh", "en"}:
+        return ui_pref
+
+    fallback_parts = [str(text or "").strip() for text in fallback_texts if str(text or "").strip()]
+    if fallback_parts:
+        return "zh" if _prefer_zh_locale(*fallback_parts) else "en"
+    return "en"
+
+
+def _prefer_zh_ref_card_locale(*texts: str) -> bool:
+    prompt = str(texts[0] or "") if texts else ""
+    fallback_texts = tuple(str(text or "") for text in texts[1:]) if len(texts) >= 2 else ()
+    return _ref_card_user_locale(prompt, *fallback_texts) == "zh"
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
