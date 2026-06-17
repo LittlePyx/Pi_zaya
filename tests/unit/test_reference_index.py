@@ -1154,6 +1154,113 @@ def test_build_reference_index_incremental_reuses_recent_unresolved_crossref_att
     assert int(out.get("refs_missing_doi") or 0) == 1
 
 
+def test_build_reference_index_incremental_hydrates_recent_unresolved_from_crossref_cache(tmp_path, monkeypatch):
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "demo.en.md"
+    raw_ref = (
+        "[1] Johannes L Schonberger and Jan-Michael Frahm. Structure-from-motion revisited. "
+        "In Proceedings of the IEEE conference on computer vision and pattern recognition, pages 4104-4113, 2016."
+    )
+    md_path.write_text("# Demo\n\n## References\n" + raw_ref + "\n", encoding="utf-8")
+
+    src_key = ref_index._norm_source_key(md_path.resolve())
+    prev = {
+        "version": 1,
+        "updated_at": 0,
+        "doc_count": 1,
+        "next_cursor": 0,
+        "docs": {
+            src_key: {
+                "path": str(md_path.resolve()),
+                "name": md_path.name,
+                "stem": md_path.stem.lower(),
+                "sha1": ref_index.compute_file_sha1(md_path),
+                "source_doi": "",
+                "crossref_enriched": False,
+                "crossref_last_attempt_at": time.time(),
+                "crossref_unresolved_promising": 1,
+                "crossref_sparse_promising": 0,
+                "crossref_retry_ttl_s": 24 * 60 * 60,
+                "index_status": "ready",
+                "quality_gate": {"status": "ready", "indexable": True, "action": "none"},
+                "refs": {
+                    "1": {
+                        "num": 1,
+                        "raw": raw_ref,
+                        "doi": "",
+                        "doi_url": "",
+                        "title": "",
+                        "authors": "",
+                        "venue": "",
+                        "year": "",
+                        "volume": "",
+                        "issue": "",
+                        "pages": "",
+                        "crossref_ok": False,
+                        "match_method": "",
+                    }
+                },
+            }
+        },
+    }
+    (db_dir / "references_index.json").write_text(json.dumps(prev, ensure_ascii=False, indent=2), encoding="utf-8")
+    ref_key = citation_meta.normalize_title_for_match(raw_ref)[:260]
+    (db_dir / "crossref_cache.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "doi": {},
+                "bib": {
+                    ref_key: {
+                        "title": "Structure-from-Motion Revisited",
+                        "authors": "Schonberger J, Frahm J",
+                        "venue": "IEEE Conference on Computer Vision and Pattern Recognition",
+                        "year": "2016",
+                        "pages": "4104-4113",
+                        "doi": "10.1109/CVPR.2016.445",
+                    }
+                },
+                "title": {},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_lookup(*args, **kwargs):
+        raise AssertionError("cache hydration must not perform network lookup")
+
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: True)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+    monkeypatch.setattr(ref_index, "_lookup_crossref_meta_for_entry", fail_lookup)
+
+    out = ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=True,
+        enable_title_lookup=True,
+        quality_gate=True,
+    )
+
+    assert int(out.get("docs_updated") or 0) == 1
+    assert int(out.get("docs_cache_hydrated") or 0) == 1
+    assert int(out.get("refs_cache_hydrated") or 0) == 1
+    assert int(out.get("crossref_network_attempts") or 0) == 0
+    assert int(out.get("refs_metadata_ready") or 0) == 1
+    assert int(out.get("refs_metadata_status_crossref_enriched") or 0) == 1
+    assert int(out.get("refs_action_retry_or_source_repair") or 0) == 0
+    data = ref_index.load_reference_index(db_dir)
+    doc = next(iter((data.get("docs") or {}).values()))
+    ref = (doc.get("refs") or {}).get("1") or {}
+    assert str(ref.get("doi") or "").lower() == "10.1109/cvpr.2016.445"
+    assert str(ref.get("title") or "") == "Structure-from-Motion Revisited"
+    assert ref.get("metadata_ready") is True
+
+
 def test_build_reference_index_incremental_reuses_sparse_but_resolved_doc(tmp_path, monkeypatch):
     src_root = tmp_path / "src"
     db_dir = tmp_path / "db"

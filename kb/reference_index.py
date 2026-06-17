@@ -2403,6 +2403,125 @@ def _lookup_crossref_meta_for_entry(
     return meta, doi_hint
 
 
+def _cached_crossref_meta_for_record(
+    rec: Mapping[str, Any],
+    cache: dict,
+    *,
+    enable_title_lookup: bool,
+    stats: dict[str, int] | None = None,
+) -> tuple[dict | None, str, str]:
+    if not isinstance(rec, Mapping) or not isinstance(cache, dict):
+        return None, "", ""
+
+    raw = str(rec.get("raw") or rec.get("cite_fmt") or "").strip()
+    doi_hint = _clean_doi_for_url(str(rec.get("doi") or rec.get("doi_url") or ""))
+    if not doi_hint and raw:
+        doi_hint = _clean_doi_for_url(extract_first_doi(raw))
+
+    doi_cache = cache.get("doi") if isinstance(cache.get("doi"), dict) else {}
+    bib_cache = cache.get("bib") if isinstance(cache.get("bib"), dict) else {}
+    title_cache = cache.get("title") if isinstance(cache.get("title"), dict) else {}
+
+    if doi_hint:
+        cached = doi_cache.get(doi_hint.lower())
+        if _is_crossref_meta_cache_hit(cached):
+            _stat_inc(stats, "crossref_cache_hits")
+            _stat_inc(stats, "doi_cache_hits")
+            return dict(cached), doi_hint, "doi"
+
+    if raw:
+        ref_key = normalize_title_for_match(raw)[:260]
+        cached = bib_cache.get(ref_key) if ref_key else None
+        if _is_crossref_meta_cache_hit(cached):
+            _stat_inc(stats, "crossref_cache_hits")
+            _stat_inc(stats, "bib_cache_hits")
+            return dict(cached), doi_hint, "bibliographic"
+
+    if raw and enable_title_lookup:
+        title_hint = _extract_query_title(raw)
+        title_key = normalize_title_for_match(title_hint)[:260]
+        if title_key and len(title_key) >= 8 and _should_try_title_lookup(raw, title_hint):
+            cached = title_cache.get(title_key)
+            if _is_crossref_meta_cache_hit(cached):
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "title_cache_hits")
+                return dict(cached), doi_hint, "title"
+
+    return None, doi_hint, ""
+
+
+def _hydrate_reference_record_from_crossref_cache(
+    rec: Mapping[str, Any],
+    cache: dict,
+    *,
+    enable_title_lookup: bool,
+    stats: dict[str, int] | None = None,
+) -> tuple[dict, bool]:
+    out = dict(rec) if isinstance(rec, Mapping) else {}
+    if not out:
+        return out, False
+
+    meta, doi_hint, method = _cached_crossref_meta_for_record(
+        out,
+        cache,
+        enable_title_lookup=bool(enable_title_lookup),
+        stats=stats,
+    )
+    if not isinstance(meta, dict) or not meta:
+        return out, False
+
+    supplement = dict(meta)
+    if doi_hint and not str(supplement.get("doi") or "").strip():
+        supplement["doi"] = doi_hint
+    supp_method = str(supplement.get("match_method") or "").strip()
+    if not supp_method:
+        supplement["match_method"] = method
+    elif method and method not in supp_method:
+        supplement["match_method"] = f"{supp_method}+{method}"
+
+    merged = _merge_reference_meta(out, supplement)
+    if not isinstance(merged, dict):
+        merged = dict(out)
+    doi = _clean_doi_for_url(str(merged.get("doi") or doi_hint or ""))
+    if doi:
+        merged["doi"] = doi
+        merged["doi_url"] = str(merged.get("doi_url") or _doi_url(doi)).strip()
+    match_method = str(merged.get("match_method") or "").strip()
+    merged["crossref_ok"] = bool(_reference_match_method_has_external_resolution(match_method, doi))
+    merged.update(classify_reference_metadata(merged, enable_title_lookup=bool(enable_title_lookup)))
+    changed = merged != out
+    if changed:
+        _stat_inc(stats, "refs_cache_hydrated")
+    return merged, bool(changed)
+
+
+def _hydrate_doc_refs_from_crossref_cache(
+    refs: dict[str, dict] | None,
+    cache: dict,
+    *,
+    enable_title_lookup: bool,
+    stats: dict[str, int] | None = None,
+) -> tuple[dict[str, dict], int]:
+    if not isinstance(refs, dict):
+        return {}, 0
+    out: dict[str, dict] = {}
+    changed = 0
+    for key, value in refs.items():
+        if isinstance(value, Mapping):
+            hydrated, did_change = _hydrate_reference_record_from_crossref_cache(
+                value,
+                cache,
+                enable_title_lookup=bool(enable_title_lookup),
+                stats=stats,
+            )
+            out[str(key)] = hydrated
+            if did_change:
+                changed += 1
+        else:
+            out[str(key)] = value
+    return out, int(changed)
+
+
 def _prefetch_doi_meta_parallel(
     ref_map: dict[int, str],
     cache: dict,
@@ -3011,11 +3130,27 @@ def build_reference_index(
                     or (not prev_crossref_retry_due)
                 )
             ):
-                docs_out[src_key] = prev_doc
-                docs_reused += 1
+                kept_doc = dict(prev_doc)
+                kept_refs, hydrated_count = _hydrate_doc_refs_from_crossref_cache(
+                    prev_refs_obj,
+                    cache,
+                    enable_title_lookup=bool(enable_title_lookup),
+                    stats=crossref_stats,
+                )
+                if int(hydrated_count) > 0:
+                    kept_doc["refs"] = kept_refs
+                    unresolved_now, sparse_now = _assess_doc_crossref_enrichment(kept_refs)
+                    kept_doc["crossref_enriched"] = bool(_doc_crossref_enriched(kept_refs))
+                    kept_doc["crossref_unresolved_promising"] = int(unresolved_now)
+                    kept_doc["crossref_sparse_promising"] = int(sparse_now)
+                    docs_updated += 1
+                    _stat_inc(crossref_stats, "docs_cache_hydrated")
+                else:
+                    docs_reused += 1
+                docs_out[src_key] = kept_doc
                 if prev_needs_rebuild_for_enrich and (not prev_crossref_retry_due):
                     _stat_inc(crossref_stats, "docs_retry_suppressed")
-                _record_ref_stats(prev_refs_obj)
+                _record_ref_stats(kept_doc.get("refs"))
                 _emit_progress("doc_done", docs_done=doc_i, current=p.name)
                 continue
 
@@ -3531,9 +3666,24 @@ def build_reference_index(
                     kept_doc["crossref_unresolved_promising"] = int(prev_unresolved)
                     kept_doc["crossref_sparse_promising"] = int(prev_sparse)
                     kept_doc["crossref_retry_ttl_s"] = int(_reference_sync_retry_ttl_s())
+                kept_refs, hydrated_count = _hydrate_doc_refs_from_crossref_cache(
+                    prev_doc.get("refs") if isinstance(prev_doc.get("refs"), dict) else None,
+                    cache,
+                    enable_title_lookup=bool(enable_title_lookup),
+                    stats=crossref_stats,
+                )
+                if int(hydrated_count) > 0:
+                    kept_doc["refs"] = kept_refs
+                    unresolved_now, sparse_now = _assess_doc_crossref_enrichment(kept_refs)
+                    kept_doc["crossref_enriched"] = bool(_doc_crossref_enriched(kept_refs))
+                    kept_doc["crossref_unresolved_promising"] = int(unresolved_now)
+                    kept_doc["crossref_sparse_promising"] = int(sparse_now)
+                    docs_updated += 1
+                    _stat_inc(crossref_stats, "docs_cache_hydrated")
+                else:
+                    docs_reused += 1
                 docs_out[src_key] = kept_doc
-                docs_reused += 1
-                _record_ref_stats(prev_doc.get("refs"))
+                _record_ref_stats(kept_doc.get("refs"))
                 _emit_progress("doc_done", docs_done=doc_i, current=p.name)
                 continue
     

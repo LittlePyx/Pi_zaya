@@ -27,8 +27,11 @@ from api.upload_limits import ensure_pdf_upload, max_pdf_upload_bytes, read_uplo
 from kb.file_naming import (
     build_display_pdf_filename,
     build_storage_base_name,
+    fit_storage_base_name,
     merge_citation_meta_file_labels,
     merge_citation_meta_name_fields,
+    safe_storage_base_len,
+    sanitize_filename_component,
 )
 from kb.task_runtime import (
     _bg_enqueue,
@@ -4516,8 +4519,161 @@ def _recent_pdf_paths(pdf_dir: Path, limit: int) -> list[Path]:
     return [p for _, p in pairs[:limit]]
 
 
-def _suggest_dest_for_base(*, pdf_dir: Path, current_pdf: Path, base_name: str, max_suffix: int = 200) -> Path:
-    base = str(base_name or "").strip() or current_pdf.stem
+def _same_path(a: Path | str, b: Path | str) -> bool:
+    try:
+        return Path(a).resolve(strict=False) == Path(b).resolve(strict=False)
+    except Exception:
+        return str(Path(a)) == str(Path(b))
+
+
+def _safe_move_path(src: Path, dst: Path) -> bool:
+    if _same_path(src, dst):
+        return True
+    src_os = _to_os_path(src)
+    dst_os = _to_os_path(dst)
+    try:
+        os.makedirs(os.path.dirname(dst_os), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        os.replace(src_os, dst_os)
+        return True
+    except Exception:
+        pass
+    try:
+        Path(src).rename(dst)
+        return True
+    except Exception:
+        pass
+    try:
+        shutil.move(src_os, dst_os)
+        return True
+    except Exception:
+        return False
+
+
+def _safe_move_file(src: Path, dst: Path) -> bool:
+    if _same_path(src, dst):
+        return True
+    src_os = _to_os_path(src)
+    dst_os = _to_os_path(dst)
+    try:
+        os.makedirs(os.path.dirname(dst_os), exist_ok=True)
+    except Exception:
+        pass
+    try:
+        if os.path.exists(dst_os):
+            os.remove(dst_os)
+    except Exception:
+        pass
+    try:
+        os.replace(src_os, dst_os)
+        return True
+    except Exception:
+        pass
+    try:
+        with open(src_os, "rb") as fr, open(dst_os, "wb") as fw:
+            shutil.copyfileobj(fr, fw, length=1024 * 1024)
+        try:
+            os.remove(src_os)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def _copy_file_no_overwrite(src: str, dst: str) -> str:
+    if os.path.exists(dst):
+        return dst
+    return shutil.copy2(src, dst)
+
+
+def _merge_dir_no_overwrite(src_dir: Path, dst_dir: Path) -> bool:
+    src_os = _to_os_path(src_dir)
+    dst_os = _to_os_path(dst_dir)
+    try:
+        shutil.copytree(src_os, dst_os, dirs_exist_ok=True, copy_function=_copy_file_no_overwrite)
+    except Exception:
+        return False
+    try:
+        shutil.rmtree(src_os, ignore_errors=True)
+    except Exception:
+        pass
+    return True
+
+
+_MD_RENAME_IGNORED_MAIN_NAMES = {"assets_manifest.md", "quality_report.md"}
+
+
+def _pick_md_main_candidate(folder: Path, old_stem: str, new_stem: str) -> Path | None:
+    if not _path_is_dir(folder):
+        return None
+    preferred = [folder / f"{old_stem}.en.md", folder / "output.md"]
+    for p in preferred:
+        if _path_is_file(p):
+            return p
+
+    en_cands: list[Path] = []
+    any_cands: list[Path] = []
+    try:
+        with os.scandir(_to_os_path(folder)) as it:
+            for entry in it:
+                try:
+                    if not entry.is_file():
+                        continue
+                except Exception:
+                    continue
+                name = str(entry.name or "")
+                low = name.lower()
+                if not low.endswith(".md"):
+                    continue
+                if low in _MD_RENAME_IGNORED_MAIN_NAMES:
+                    continue
+                if low == f"{new_stem}.en.md".lower():
+                    continue
+                path = Path(folder) / name
+                any_cands.append(path)
+                if low.endswith(".en.md"):
+                    en_cands.append(path)
+    except Exception:
+        return None
+    if en_cands:
+        return sorted(en_cands, key=lambda x: x.name.lower())[0]
+    if any_cands:
+        return sorted(any_cands, key=lambda x: x.name.lower())[0]
+    return None
+
+
+def _normalize_rename_base_name(*, base_name: str, pdf_dir: Path, md_dir: Path) -> str:
+    raw = str(base_name or "").strip()
+    name = raw.replace("\\", "/").rsplit("/", 1)[-1].strip() or raw
+    if name.lower().endswith(".pdf"):
+        name = name[:-4]
+    base = sanitize_filename_component(name)
+    if not base:
+        return "paper"
+    try:
+        safe_len = safe_storage_base_len(pdf_dir=pdf_dir, md_out_root=md_dir, default_base_max=88)
+        base = fit_storage_base_name(base, max_len=safe_len)
+    except Exception:
+        base = sanitize_filename_component(base) or "paper"
+    return base or "paper"
+
+
+def _suggest_dest_for_base(
+    *,
+    pdf_dir: Path,
+    current_pdf: Path,
+    base_name: str,
+    md_dir: Path | None = None,
+    max_suffix: int = 200,
+) -> Path:
+    base = _normalize_rename_base_name(
+        base_name=str(base_name or current_pdf.stem),
+        pdf_dir=pdf_dir,
+        md_dir=Path(md_dir) if md_dir is not None else _md_dir(),
+    )
     cand = pdf_dir / f"{base}.pdf"
     try:
         if cand.resolve() == current_pdf.resolve():
@@ -4546,31 +4702,40 @@ def _sync_md_after_pdf_rename_basic(*, md_root: Path, src_pdf: Path, dest_pdf: P
     try:
         old_dir = (Path(md_root) / src_pdf.stem).expanduser()
         new_dir = (Path(md_root) / dest_pdf.stem).expanduser()
-        target_dir = new_dir
+        target_dir: Path | None = None
 
-        if old_dir.exists() and old_dir.is_dir() and (str(old_dir) != str(new_dir)):
-            if (not new_dir.exists()):
-                try:
-                    old_dir.rename(new_dir)
-                except Exception as exc:
-                    return {"ok": False, "msg": f"md folder rename failed: {exc}"}
-            else:
-                target_dir = new_dir
-        elif old_dir.exists() and old_dir.is_dir():
+        old_exists = _path_is_dir(old_dir)
+        new_exists = _path_is_dir(new_dir)
+        if old_exists and new_exists and _same_path(old_dir, new_dir):
             target_dir = old_dir
-        elif new_dir.exists() and new_dir.is_dir():
+        elif old_exists and (not new_exists):
+            if not _safe_move_path(old_dir, new_dir):
+                if not _merge_dir_no_overwrite(old_dir, new_dir):
+                    return {"ok": False, "msg": f"md folder move failed: {old_dir.name} -> {new_dir.name}"}
+            target_dir = new_dir
+        elif old_exists and new_exists:
+            if not _merge_dir_no_overwrite(old_dir, new_dir):
+                return {"ok": False, "msg": f"md folder merge failed: {old_dir.name} -> {new_dir.name}"}
+            target_dir = new_dir
+        elif new_exists:
             target_dir = new_dir
         else:
             return {"ok": True, "msg": "no md folder"}
 
-        old_main = target_dir / f"{src_pdf.stem}.en.md"
+        if (target_dir is None) or (not _path_is_dir(target_dir)):
+            return {"ok": False, "msg": "md target folder missing after sync"}
+
         new_main = target_dir / f"{dest_pdf.stem}.en.md"
-        if old_main.exists() and old_main.is_file() and (str(old_main) != str(new_main)) and (not new_main.exists()):
-            try:
-                old_main.rename(new_main)
-            except Exception as exc:
-                return {"ok": False, "msg": f"md main rename failed: {exc}"}
-        return {"ok": True, "msg": "md synced"}
+        if _path_is_file(new_main):
+            return {"ok": True, "msg": f"md synced: {target_dir.name}"}
+
+        cand = _pick_md_main_candidate(target_dir, src_pdf.stem, dest_pdf.stem)
+        if cand is not None:
+            if _safe_move_file(cand, new_main):
+                return {"ok": True, "msg": f"md main renamed: {cand.name} -> {new_main.name}"}
+            return {"ok": False, "msg": f"md main rename failed: {cand.name} -> {new_main.name}"}
+
+        return {"ok": True, "msg": f"md folder synced: {target_dir.name}"}
     except Exception as exc:
         return {"ok": False, "msg": str(exc)}
 
@@ -4600,7 +4765,7 @@ def _build_rename_suggestion_item(*, pdf_path: Path, pdf_dir: Path, md_dir: Path
         pdf_dir=pdf_dir,
         md_out_root=md_dir,
     )
-    dest = _suggest_dest_for_base(pdf_dir=pdf_dir, current_pdf=pdf_path, base_name=base_name)
+    dest = _suggest_dest_for_base(pdf_dir=pdf_dir, current_pdf=pdf_path, base_name=base_name, md_dir=md_dir)
     display_full_name = build_display_pdf_filename(
         venue=venue,
         year=year,
@@ -4698,7 +4863,7 @@ def save_pdf_to_library(*, file_name: str, data: bytes, base_name: str = "", fas
         title = str(getattr(sug, "title", "") or "").strip() or fallback_title
 
         if explicit_base:
-            base = explicit_base
+            base = _normalize_rename_base_name(base_name=explicit_base, pdf_dir=pdf_d, md_dir=md_d)
         else:
             base = build_storage_base_name(
                 venue=venue,
@@ -4769,7 +4934,7 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
     title = str(getattr(sug, "title", "") or "").strip() or fallback_title
 
     if explicit_base:
-        base = explicit_base
+        base = _normalize_rename_base_name(base_name=explicit_base, pdf_dir=pdf_d, md_dir=md_d)
     else:
         base = build_storage_base_name(
             venue=venue,
@@ -4778,13 +4943,27 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
             pdf_dir=pdf_d,
             md_out_root=md_d,
         )
-    cand_pdf = _next_pdf_dest_path(pdf_d, base)
-    dest_pdf = cand_pdf if cand_pdf.resolve() != src_pdf else src_pdf
-    if (not dest_pdf.exists()) and (dest_pdf.resolve() != src_pdf):
-        try:
-            src_pdf.rename(dest_pdf)
-        except Exception:
-            dest_pdf = src_pdf
+    dest_pdf = _suggest_dest_for_base(pdf_dir=pdf_d, current_pdf=src_pdf, base_name=base, md_dir=md_d)
+    renamed = not _same_path(dest_pdf, src_pdf)
+    if renamed:
+        if dest_pdf.exists():
+            return {
+                "ok": False,
+                "error": "destination already exists",
+                "path": str(src_pdf),
+                "name": src_pdf.name,
+                "suggested_name": dest_pdf.name,
+                "renamed": False,
+            }
+        if not _safe_move_path(src_pdf, dest_pdf):
+            return {
+                "ok": False,
+                "error": "pdf rename failed",
+                "path": str(src_pdf),
+                "name": src_pdf.name,
+                "suggested_name": dest_pdf.name,
+                "renamed": False,
+            }
 
     display_full_name = build_display_pdf_filename(
         venue=venue,
@@ -4803,6 +4982,27 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
         year=year,
         title=title,
     )
+    md_sync = {"ok": True, "msg": "skipped"}
+    if bool(also_md) and renamed:
+        had_md_before = bool(_path_is_dir(md_d / src_pdf.stem))
+        md_sync = _sync_md_after_pdf_rename_basic(md_root=md_d, src_pdf=src_pdf, dest_pdf=dest_pdf)
+        if not bool(md_sync.get("ok")):
+            rollback_pdf = _safe_move_path(dest_pdf, src_pdf)
+            rollback_md = {"ok": True, "msg": "skipped"}
+            if had_md_before:
+                rollback_md = _sync_md_after_pdf_rename_basic(md_root=md_d, src_pdf=dest_pdf, dest_pdf=src_pdf)
+            return {
+                "ok": False,
+                "error": str(md_sync.get("msg") or "md sync failed"),
+                "path": str(src_pdf if rollback_pdf else dest_pdf),
+                "name": (src_pdf if rollback_pdf else dest_pdf).name,
+                "sha1": sha1,
+                "citation_meta": citation_meta,
+                "renamed": False,
+                "md_sync": md_sync,
+                "rollback": {"pdf": bool(rollback_pdf), "md": rollback_md},
+            }
+
     if sha1:
         lib_store.upsert(sha1, dest_pdf, citation_meta=citation_meta)
     else:
@@ -4812,17 +5012,13 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
         except Exception:
             pass
 
-    md_sync = {"ok": True, "msg": "skipped"}
-    if bool(also_md) and (str(dest_pdf) != str(src_pdf)):
-        md_sync = _sync_md_after_pdf_rename_basic(md_root=md_d, src_pdf=src_pdf, dest_pdf=dest_pdf)
-
     return {
         "ok": True,
         "path": str(dest_pdf),
         "name": dest_pdf.name,
         "sha1": sha1,
         "citation_meta": citation_meta,
-        "renamed": str(dest_pdf) != str(src_pdf),
+        "renamed": bool(renamed),
         "md_sync": md_sync,
     }
 

@@ -14,13 +14,26 @@ KB_NAME_VENUE_KEY = "_kb_name_venue"
 KB_NAME_YEAR_KEY = "_kb_name_year"
 KB_NAME_TITLE_KEY = "_kb_name_title"
 
+_WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
 
 def sanitize_filename_component(text: str) -> str:
     s = (text or "").strip()
     s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"[\x00-\x1f]+", "", s)
     s = re.sub(r'[<>:"/\\\\|?*]+', "-", s)
     s = s.replace("\u0000", "").strip()
-    return s.strip(" .-_")
+    s = s.strip(" .-_")
+    if s.upper() in _WINDOWS_RESERVED_NAMES:
+        s = f"{s}-paper"
+    return s
 
 
 def _trim_left_on_boundary(text: str, budget: int) -> str:

@@ -2583,6 +2583,123 @@ def test_apply_rename_suggestions_route_runs_selected(monkeypatch, tmp_path: Pat
     assert ("b.pdf", "", False, True) in called
 
 
+def test_auto_rename_saved_pdf_keeps_current_normalized_name(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf = pdf_dir / "CVPR-2024-Vision Paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    class FakeStore:
+        def __init__(self):
+            self.upserts = []
+
+        def upsert(self, sha1, path, citation_meta=None):
+            self.upserts.append((sha1, Path(path).name, dict(citation_meta or {})))
+
+    fake_store = FakeStore()
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: fake_store)
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="CVPR", year="2024", title="Vision Paper", crossref_meta={}),
+    )
+
+    result = library_router.auto_rename_saved_pdf_in_library(pdf_path=pdf, use_llm=False, also_md=True)
+
+    assert result["ok"] is True
+    assert result["renamed"] is False
+    assert result["name"] == "CVPR-2024-Vision Paper.pdf"
+    assert not (pdf_dir / "CVPR-2024-Vision Paper-2.pdf").exists()
+    assert fake_store.upserts[-1][1] == "CVPR-2024-Vision Paper.pdf"
+
+
+def test_auto_rename_saved_pdf_rolls_back_when_md_sync_fails(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    pdf = pdf_dir / "old.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    (md_dir / "old").mkdir(parents=True, exist_ok=True)
+
+    class FakeStore:
+        def upsert(self, *args, **kwargs):
+            raise AssertionError("store should not be updated after failed rename")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="Nature", year="2024", title="New Paper", crossref_meta={}),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_sync_md_after_pdf_rename_basic",
+        lambda **kwargs: {"ok": False, "msg": "forced md failure"},
+    )
+
+    result = library_router.auto_rename_saved_pdf_in_library(pdf_path=pdf, use_llm=False, also_md=True)
+
+    assert result["ok"] is False
+    assert result["renamed"] is False
+    assert result["rollback"]["pdf"] is True
+    assert pdf.exists()
+    assert not (pdf_dir / "Nature-2024-New Paper.pdf").exists()
+
+
+def test_sync_md_after_pdf_rename_merges_existing_target_folder(tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    old_folder = md_dir / "old"
+    new_folder = md_dir / "new"
+    old_folder.mkdir(parents=True, exist_ok=True)
+    new_folder.mkdir(parents=True, exist_ok=True)
+    (old_folder / "old.en.md").write_text("# old\n", encoding="utf-8")
+    (new_folder / "assets_manifest.md").write_text("asset\n", encoding="utf-8")
+
+    result = library_router._sync_md_after_pdf_rename_basic(
+        md_root=md_dir,
+        src_pdf=tmp_path / "old.pdf",
+        dest_pdf=tmp_path / "new.pdf",
+    )
+
+    assert result["ok"] is True
+    assert not old_folder.exists()
+    assert (new_folder / "new.en.md").read_text(encoding="utf-8") == "# old\n"
+    assert (new_folder / "assets_manifest.md").exists()
+
+
+def test_rename_destination_preserves_dots_inside_base_name(tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    current_pdf = pdf_dir / "old.pdf"
+    current_pdf.write_bytes(b"%PDF-1.4 test")
+
+    dest = library_router._suggest_dest_for_base(
+        pdf_dir=pdf_dir,
+        current_pdf=current_pdf,
+        base_name="Long...Title.v2",
+        md_dir=md_dir,
+    )
+
+    assert dest.name == "Long...Title.v2.pdf"
+
+
 def test_upload_inspect_route_returns_suggestion(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
