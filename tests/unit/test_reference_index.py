@@ -1326,6 +1326,9 @@ def test_build_reference_index_incremental_reuses_sparse_but_resolved_doc(tmp_pa
 
     assert int(out.get("docs_reused") or 0) == 1
     assert int(out.get("docs_updated") or 0) == 0
+    assert int(out.get("refs_metadata_ready") or 0) == 0
+    assert int(out.get("refs_metadata_user_ready") or 0) == 1
+    assert int(out.get("refs_action_auto_backfill") or 0) == 1
 
 
 def test_prefer_previous_doc_refs_when_new_is_worse():

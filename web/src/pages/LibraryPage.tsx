@@ -1058,7 +1058,7 @@ export default function LibraryPage() {
       + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
       + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
       + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
-    const metadataReady = Math.max(statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
+    const metadataReady = Math.max(numericStat(refSyncStats, 'refs_metadata_user_ready'), statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
     const network = numericStat(refSyncStats, 'crossref_network_attempts')
     const elapsed = numericStat(refSyncStats, 'elapsed_s')
     return [
@@ -1069,7 +1069,7 @@ export default function LibraryPage() {
     ]
   }, [S, refSyncStats, store.refSync?.docsDone, store.refSync?.docsTotal])
   const refSyncQueueItems = useMemo<WorkbenchMetricItem[]>(() => {
-    const onlineReady = numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
+    const onlineReady = Math.max(numericStat(refSyncStats, 'refs_crossref_ok'), numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched'))
     const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
       || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
         + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))
@@ -1091,8 +1091,8 @@ export default function LibraryPage() {
         + numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
         + numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
         + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
-      const metadataReady = Math.max(statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
-      const onlineReady = numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched')
+      const metadataReady = Math.max(numericStat(refSyncStats, 'refs_metadata_user_ready'), statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
+      const onlineReady = Math.max(numericStat(refSyncStats, 'refs_crossref_ok'), numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched'))
       const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
         || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
           + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))

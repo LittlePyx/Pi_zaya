@@ -242,6 +242,8 @@ export type ReferenceSyncStatKey =
   | 'docs_indexed'
   | 'refs_total'
   | 'refs_metadata_ready'
+  | 'refs_metadata_user_ready'
+  | 'refs_crossref_ok'
   | 'refs_metadata_status_complete'
   | 'refs_metadata_status_crossref_enriched'
   | 'refs_metadata_status_doi_sparse_refreshable'

@@ -2992,6 +2992,7 @@ def build_reference_index(
     refs_with_authors = 0
     refs_with_venue = 0
     refs_metadata_ready = 0
+    refs_metadata_user_ready = 0
     refs_unresolved = 0
     refs_crossref_ok = 0
     refs_source_map_ok = 0
@@ -3019,6 +3020,7 @@ def build_reference_index(
                     "docs_done": int(max(0, docs_done)),
                     "docs_total": int(max(0, total_docs)),
                     "refs_total": int(max(0, refs_total)),
+                    "refs_metadata_user_ready": int(max(0, refs_metadata_user_ready)),
                     "refs_with_doi": int(max(0, refs_with_doi)),
                     "refs_crossref_ok": int(max(0, refs_crossref_ok)),
                     "refs_source_map_ok": int(max(0, refs_source_map_ok)),
@@ -3030,7 +3032,7 @@ def build_reference_index(
 
     def _record_ref_stats(refs: Any) -> None:
         nonlocal refs_total, refs_with_doi, refs_with_title, refs_with_authors, refs_with_venue
-        nonlocal refs_metadata_ready, refs_unresolved, refs_crossref_ok, refs_source_map_ok
+        nonlocal refs_metadata_ready, refs_metadata_user_ready, refs_unresolved, refs_crossref_ok, refs_source_map_ok
         if not isinstance(refs, dict):
             return
         refs_total += len(refs)
@@ -3064,6 +3066,7 @@ def build_reference_index(
             status = str(classification.get("metadata_status") or rv.get("metadata_status") or "").strip()
             reason = str(classification.get("missing_reason") or rv.get("missing_reason") or "").strip()
             action = str(classification.get("metadata_action") or rv.get("metadata_action") or "").strip()
+            user_ready = bool(metadata_ready or crossref_ok or action == "auto_backfill")
             if status in REFERENCE_METADATA_STATUS_CODES:
                 _stat_inc(crossref_stats, f"refs_metadata_status_{status}")
             if reason in REFERENCE_MISSING_REASON_CODES:
@@ -3072,6 +3075,8 @@ def build_reference_index(
                 _stat_inc(crossref_stats, f"refs_action_{action}")
             if action in {"retry", "source_repair"}:
                 _stat_inc(crossref_stats, "refs_action_retry_or_source_repair")
+            if user_ready:
+                refs_metadata_user_ready += 1
 
     _emit_progress("prepare", docs_done=0, current="")
     if (not bool(quality_gate)) and int(doc_prepare_workers) > 1 and total_docs > 1:
@@ -3727,6 +3732,7 @@ def build_reference_index(
         "refs_with_authors": int(refs_with_authors),
         "refs_with_venue": int(refs_with_venue),
         "refs_metadata_ready": int(refs_metadata_ready),
+        "refs_metadata_user_ready": int(refs_metadata_user_ready),
         "refs_missing_doi": int(metadata_missing_doi),
         "refs_missing_title": int(metadata_missing_title),
         "refs_missing_authors": int(metadata_missing_authors),
