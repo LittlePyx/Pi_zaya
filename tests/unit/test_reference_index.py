@@ -56,6 +56,37 @@ def test_assess_source_reference_alignment_allows_doi_only_rows_when_local_entri
     assert ref_index._assess_source_reference_alignment(ref_map, rows) is True
 
 
+def test_assess_source_reference_alignment_rejects_sparse_structured_tail_offset():
+    ref_map = {
+        1: "[1] R. H. Webb, Confocal optical microscopy. Rep. Prog. Phys. 59, 427-471 (1996).",
+        2: "[2] D. Huang et al. Optical coherence tomography. Science 254, 1178-1181 (1991).",
+        3: "[3] W. K. Pratt, J. Kane, and H. C. Andrews, Hadamard transform image coding. Proc. IEEE 57, 58-68 (1969).",
+        4: "[4] J. A. Decker, Jr., Hadamard-Transform Image Scanning. App",
+    }
+    rows = [
+        {"doi": "10.1088/0034-4885/59/3/003", "author": "Webb", "venue": "Rep. Prog. Phys.", "year": "1996", "volume": "59", "pages": "427", "text": "Webb Rep. Prog. Phys. 1996 59 427 10.1088/0034-4885/59/3/003"},
+        {"doi": "10.1126/science.1957169", "author": "Huang", "venue": "Science", "year": "1991", "volume": "254", "pages": "1178", "text": "Huang Science 1991 254 1178 10.1126/science.1957169"},
+        {"doi": "10.1364/AO.9.001392", "author": "Decker", "venue": "Appl. Opt.", "year": "1970", "volume": "9", "pages": "1392", "text": "Decker Appl. Opt. 1970 9 1392 10.1364/AO.9.001392"},
+        {"doi": "10.1364/OL.18.001745", "author": "Gourlay", "venue": "Opt. Lett.", "year": "1993", "volume": "18", "pages": "1745", "text": "Gourlay Opt. Lett. 1993 18 1745 10.1364/OL.18.001745"},
+    ]
+
+    assert ref_index._assess_source_reference_alignment(ref_map, rows) is False
+
+
+def test_match_source_reference_uses_structured_fields_when_numbering_is_offset():
+    rows = [
+        {"doi": "10.1364/AO.45.002965", "author": "Gehm", "venue": "Appl. Opt.", "year": "2006", "volume": "45", "pages": "2965", "text": "Gehm Appl. Opt. 2006 45 2965 10.1364/AO.45.002965"},
+        {"doi": "10.1364/AO.46.000365", "author": "Cull", "venue": "Appl. Opt.", "year": "2007", "volume": "46", "pages": "365", "text": "Cull Appl. Opt. 2007 46 365 10.1364/AO.46.000365"},
+        {"doi": "10.1364/OE.15.005742", "author": "Fernandez", "venue": "Opt. Express", "year": "2007", "volume": "15", "pages": "5742", "text": "Fernandez Opt. Express 2007 15 5742 10.1364/OE.15.005742"},
+    ]
+    raw = "[12] E. Cull, M. Gehm, D. Brady, C. Hsieh, O. Momtahan, and A. filtering for miniature spectrometers, Appl. Opt. 46, 365-374"
+
+    matched = ref_index._match_source_reference(raw, rows)
+
+    assert matched is not None
+    assert matched["doi"] == "10.1364/AO.46.000365"
+
+
 def test_reference_metadata_classification_splits_actionable_reasons():
     complete = ref_index.classify_reference_metadata(
         {
@@ -96,6 +127,19 @@ def test_reference_metadata_classification_splits_actionable_reasons():
     assert source_mapped["metadata_status"] == "crossref_enriched"
     assert source_mapped["metadata_ready"] is True
     assert source_mapped["metadata_action"] == "none"
+
+    source_structured_without_title = ref_index.classify_reference_metadata(
+        {
+            "raw": "[30] Schechner Y Y, Nayar S K and Belhumeur P N 2001 Multiplexed illumination Proc. CVPR IEEE 2",
+            "authors": "Schechner Y Y",
+            "venue": "Proc. CVPR IEEE",
+            "year": "2003",
+            "match_method": "source_work_reference_order_exact",
+        }
+    )
+    assert source_structured_without_title["metadata_status"] == "crossref_enriched"
+    assert source_structured_without_title["metadata_ready"] is True
+    assert source_structured_without_title["metadata_action"] == "none"
 
     sparse = ref_index.classify_reference_metadata(
         {
@@ -173,6 +217,28 @@ def test_reference_metadata_classification_splits_actionable_reasons():
     assert book["missing_reason"] == "no_doi_expected"
     assert book["metadata_action"] == "non_article_ok"
 
+    publisher_book_without_year = ref_index.classify_reference_metadata(
+        {
+            "raw": "[31] Novotny, L. & Hecht, B. Principles of Nano-Optics. 2nd edn. (Cambridge: Cambridge University Press).",
+            "title": "Principles of Nano-Optics",
+            "authors": "Novotny, L. & Hecht, B",
+            "venue": "Cambridge University Press",
+        }
+    )
+    assert publisher_book_without_year["metadata_status"] == "non_article_source_ok"
+    assert publisher_book_without_year["metadata_ready"] is True
+
+    report_without_venue = ref_index.classify_reference_metadata(
+        {
+            "raw": "[17] R Ng, M Levoy, M Bredif, G Duval, M Horowitz, and P Hanrahan. Light field photography with a hand-held plenoptic camera, 2005.",
+            "title": "Light field photography with a hand-held plenoptic camera",
+            "authors": "R Ng, M Levoy, M Bredif, G Duval, M Horowitz, and P Hanrahan",
+            "year": "2005",
+        }
+    )
+    assert report_without_venue["metadata_status"] == "non_article_source_ok"
+    assert report_without_venue["metadata_ready"] is True
+
     truncated = ref_index.classify_reference_metadata(
         {"raw": "[5] Smith J. Incomplete reference ...", "parse_confidence": 0.40}
     )
@@ -191,6 +257,25 @@ def test_reference_metadata_classification_splits_actionable_reasons():
 
     low_confidence = ref_index.classify_reference_metadata({"raw": "[6] Bad OCR source 2020.", "parse_confidence": 0.45})
     assert low_confidence["metadata_status"] == "low_confidence_match"
+
+
+def test_fallback_meta_extracts_multi_author_publisher_book():
+    meta = ref_index._fallback_meta_from_raw_reference(
+        "[52] C. S. Burrus, R. A. Gopinath, H. Guo, Introduction to Wavelets and Wavelet Transforms: A Primer (Prentice-Hall, 1997)."
+    )
+
+    assert meta["authors"] == "C. S. Burrus, R. A. Gopinath, H. Guo"
+    assert meta["title"] == "Introduction to Wavelets and Wavelet Transforms: A Primer"
+    assert meta["venue"] == "Prentice-Hall, 1997"
+    assert meta["year"] == "1997"
+
+
+def test_title_lookup_allows_quoted_title_without_venue():
+    raw = '[39] J. A. Decker, Jr., "Hadamard-Transform Image Scanning," App'
+    title = ref_index._extract_query_title(raw)
+
+    assert title == "Hadamard-Transform Image Scanning"
+    assert ref_index._should_try_title_lookup(raw, title) is True
 
 
 def test_lookup_reference_meta_falls_back_to_openalex(monkeypatch):
@@ -987,6 +1072,30 @@ def test_infer_source_doi_from_doc_hints_respects_fresh_negative_cache(monkeypat
     )
 
     assert doi == ""
+
+
+def test_infer_source_doi_from_doc_hints_retries_stale_negative_cache(monkeypatch, tmp_path):
+    md_path = tmp_path / "DemoVenue-2024-Demo Paper.en.md"
+    md_path.write_text("# Demo Paper\n", encoding="utf-8")
+    k = f"{ref_index.normalize_title_for_match('Demo Paper')[:220]}|2024|{ref_index.normalize_title_for_match('DemoVenue')[:120]}"
+    stale = ref_index._crossref_cache_miss("source_work_not_found")
+    stale["lookup_version"] = int(ref_index.REFERENCE_LOOKUP_VERSION) - 1
+    cache = {"source_work": {k: stale}}
+
+    monkeypatch.setattr(
+        ref_index,
+        "fetch_best_crossref_meta",
+        lambda **kwargs: {"doi": "10.1000/source", "title": "Demo Paper"},
+    )
+
+    doi = ref_index._infer_source_doi_from_doc_hints(
+        md_path,
+        "# Demo Paper\n",
+        cache,
+        crossref_enabled=True,
+    )
+
+    assert doi == "10.1000/source"
 
 
 def test_load_source_reference_rows_retries_stale_empty_cache(monkeypatch):

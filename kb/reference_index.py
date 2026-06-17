@@ -30,7 +30,7 @@ from kb.store import compute_file_sha1
 INDEX_FILE_NAME = "references_index.json"
 CROSSREF_CACHE_FILE_NAME = "crossref_cache.json"
 REFERENCE_CATALOG_FILE_NAME = "reference_catalog.json"
-REFERENCE_LOOKUP_VERSION = 9
+REFERENCE_LOOKUP_VERSION = 12
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -56,11 +56,13 @@ _REFERENCE_TRUNCATION_HINT_RE = re.compile(
 )
 _REFERENCE_TITLE_SIGNAL_RE = re.compile(
     r"\b("
-    r"algorithm|algorithms|application|applications|architecture|camera|compressed|compressive|"
-    r"communication|communications|computational|detection|fields|holography|image|imaging|"
-    r"information|learning|measurement|measurements|microscopy|network|networks|neural|"
+    r"adaptive|algorithm|algorithms|application|applications|architecture|benchmark|camera|"
+    r"compressed|compressive|communication|communications|computational|dataset|denoising|"
+    r"detection|detector|detectors|fields|histogram|holography|image|imaging|information|"
+    r"learning|mathematical|measurement|measurements|method|methods|microscopy|network|networks|neural|"
     r"optical|photon|photonic|photons|principle|principles|quantum|radiance|reconstruction|"
-    r"recovery|sensing|signal|snapshot|spectral|splatting|stereo|theory|uncertainty|video"
+    r"recovery|sciences|sensing|signal|snapshot|spectral|splatting|stereo|texture|theory|"
+    r"transform|transforms|uncertainty|video|wavelet|wavelets"
     r")\b",
     re.IGNORECASE,
 )
@@ -744,7 +746,7 @@ def _looks_reference_author_segment(seg: str) -> bool:
     if low.startswith(("in ", "in:", "proceedings", "journal of", "abstracts of")):
         return False
     words = re.findall(r"[A-Za-z][A-Za-z'\-]*", t)
-    if len(words) < 2 or len(words) > 48:
+    if len(words) < 2 or len(words) > 80:
         return False
     comma_n = t.count(",")
     and_n = len(re.findall(r"\b(?:and|et al)\b|&", t, flags=re.IGNORECASE))
@@ -769,6 +771,8 @@ def _looks_reference_author_segment(seg: str) -> bool:
 def _reference_title_looks_author_noise(title: str) -> bool:
     t = str(title or "").strip()
     if not t:
+        return False
+    if ":" in t:
         return False
     title_signal = bool(_REFERENCE_TITLE_SIGNAL_RE.search(t))
     if _looks_reference_author_segment(t):
@@ -808,7 +812,7 @@ def _reference_authors_look_noisy(authors: str, *, raw_title: str = "") -> bool:
     if title and len(title) >= 8 and title.lower() in a.lower() and len(a) >= len(title) + 16:
         return True
     words = [w for w in re.split(r"\s+", a) if w]
-    if len(a) > 360 or len(words) > 48:
+    if len(a) > 520 or len(words) > 80:
         return True
     if _REFERENCE_TITLE_SIGNAL_RE.search(a):
         lower_words = sum(1 for w in words if w[:1].islower())
@@ -855,6 +859,13 @@ def _split_comma_reference_author_title_venue(text: str) -> tuple[str, str, str]
         title_part = rest
         tail = ""
         split = re.search(r",\s*(?=(?:in:?\s+)?(?:\*|[A-Z]))", rest)
+        if not split:
+            split = re.search(
+                r",\s*(?=(?:physica|nat\.?|nature|sci\.?|science|opt\.?|j\.?|journal|"
+                r"ieee|acm|proc\.?|proceedings)\b)",
+                rest,
+                flags=re.IGNORECASE,
+            )
         if split:
             title_part = rest[: split.start()]
             tail = rest[split.end() :].strip(" .;:,")
@@ -944,6 +955,46 @@ def _fallback_meta_from_raw_reference(raw: str) -> dict[str, str]:
             out["venue"] = _extract_venue_from_reference_tail(". ".join(segs[1:]))
             out["match_method"] = "raw_meta"
             return {k: v for k, v in out.items() if str(v or "").strip()}
+
+    mpub = re.match(r"(?P<head>.+?)\s*\((?P<publisher>[^()]{3,160})\)\.?\s*$", s)
+    if mpub:
+        head = str(mpub.group("head") or "").strip(" .;:,")
+        publisher = str(mpub.group("publisher") or "").strip(" .;:,")
+        publisherish = bool(
+            re.search(
+                r"\b(?:press|publisher|elsevier|springer|wiley|cambridge|academic|"
+                r"prentice(?:-hall)?|american\s+mathematical\s+society|voss|kluwer|plenum)\b",
+                publisher,
+                flags=re.IGNORECASE,
+            )
+        )
+        if publisherish:
+            candidates: list[tuple[str, str]] = []
+            head_parts = [p.strip(" .;:,") for p in head.rsplit(",", 1)]
+            if len(head_parts) == 2:
+                candidates.append((head_parts[0], head_parts[1]))
+            surname_initial = re.match(
+                r"^(?P<authors>[A-Z][A-Za-z'\-]+,\s*(?:[A-Z]\.\s*){1,4}"
+                r"(?:\s*(?:&|and)\s*[A-Z][A-Za-z'\-]+,\s*(?:[A-Z]\.\s*){1,4})*)"
+                r"\s+(?P<title>.+)$",
+                head,
+            )
+            if surname_initial:
+                candidates.append(
+                    (
+                        str(surname_initial.group("authors") or ""),
+                        str(surname_initial.group("title") or ""),
+                    )
+                )
+            for authors_raw, title_raw in candidates:
+                authors = _clean_raw_reference_authors(authors_raw)
+                title = _clean_reference_title_text(title_raw)
+                if authors and _is_plausible_reference_title(title):
+                    out["authors"] = authors
+                    out["title"] = title[:260]
+                    out["venue"] = publisher[:180]
+                    out["match_method"] = "raw_meta"
+                    return {k: v for k, v in out.items() if str(v or "").strip()}
 
     segs = _reference_sentence_segments(s)
     if len(segs) <= 1:
@@ -1281,6 +1332,12 @@ def _should_try_title_lookup(entry: str, title_hint: str) -> bool:
     has_venue_shape = bool(_TITLE_LOOKUP_VENUE_TOKEN_RE.search(raw))
     has_title_sentence = bool(re.search(r"\.\s+[^.]{8,260}(?:\.\s+|,\s+[A-Z])", raw))
     has_quoted_title = bool(_QUOTED_TITLE_RE.search(raw))
+    title_only_ok = bool(_TITLE_ONLY_NON_ARTICLE_RE.search(" ".join([raw, title])))
+    has_year = bool(_extract_reference_year_hint(raw))
+    if has_quoted_title and has_author_shape and len(title_words) >= 2:
+        return True
+    if (has_title_sentence or title_only_ok) and has_author_shape and has_year:
+        return True
     return bool((has_title_sentence or has_quoted_title) and has_author_shape and has_venue_shape)
 
 
@@ -1568,7 +1625,8 @@ _NON_ARTICLE_SOURCE_RE = re.compile(
     r"protocol|protocols\.io|standard|iso|technical\s+report|report|white\s+paper|"
     r"manual|thesis|dissertation|patent|preprint|arxiv|bioRxiv|medRxiv|zenodo|figshare|"
     r"institution|university|publisher|press|repository|springer|wiley|academic|plenum|"
-    r"mcgraw(?:-hill)?|artech|kluwer"
+    r"mcgraw(?:-hill)?|artech|kluwer|elsevier|american\s+mathematical\s+society|"
+    r"prentice(?:-hall)?|voss"
     r")\b",
     flags=re.IGNORECASE,
 )
@@ -1582,8 +1640,20 @@ _NO_DOI_EXPECTED_RE = re.compile(
     r"protocol|standard|technical\s+report|report|white\s+paper|manual|thesis|"
     r"dissertation|patent|repository|publisher|press|handbook|textbook|url|"
     r"available\s+at|accessed\s+(?:on|at)|web\s*site|website|springer|wiley|academic|"
-    r"plenum|mcgraw(?:-hill)?|artech|kluwer"
+    r"plenum|mcgraw(?:-hill)?|artech|kluwer|elsevier|american\s+mathematical\s+society|"
+    r"prentice(?:-hall)?|voss"
     r")\b|https?://(?!doi\.org)",
+    flags=re.IGNORECASE,
+)
+_PUBLISHER_SOURCE_RE = re.compile(
+    r"\b(?:press|publisher|elsevier|springer(?:-verlag)?|wiley|academic|cambridge|"
+    r"american\s+mathematical\s+society|prentice(?:-hall)?|voss|kluwer|plenum|"
+    r"mcgraw(?:-hill)?|artech)\b",
+    flags=re.IGNORECASE,
+)
+_TITLE_ONLY_NON_ARTICLE_RE = re.compile(
+    r"\b(?:technical\s+report|report|preprint|arxiv|dataset|data\s+set|software|"
+    r"toolbox|benchmark|challenge|plenoptic\s+camera)\b",
     flags=re.IGNORECASE,
 )
 
@@ -1698,8 +1768,10 @@ def classify_reference_metadata(
     has_venue = _reference_has_usable_venue(venue)
     has_year = _reference_has_usable_year(year)
     text_for_kind = " ".join([raw, title, venue, match_method])
-    non_article_signal = bool(_NON_ARTICLE_SOURCE_RE.search(text_for_kind))
-    no_doi_expected_signal = bool(_NO_DOI_EXPECTED_RE.search(text_for_kind))
+    publisher_signal = bool(_PUBLISHER_SOURCE_RE.search(text_for_kind))
+    title_only_ok_signal = bool(_TITLE_ONLY_NON_ARTICLE_RE.search(text_for_kind))
+    non_article_signal = bool(_NON_ARTICLE_SOURCE_RE.search(text_for_kind) or publisher_signal or title_only_ok_signal)
+    no_doi_expected_signal = bool(_NO_DOI_EXPECTED_RE.search(text_for_kind) or publisher_signal or title_only_ok_signal)
     web_source_signal = bool(_WEB_SOURCE_RE.search(text_for_kind))
     external_metadata = _reference_has_external_metadata(data, match_method, doi)
 
@@ -1721,7 +1793,14 @@ def classify_reference_metadata(
     ready = False
 
     core_complete = bool(doi and has_title and has_authors and has_venue and has_year)
-    external_ready = bool(external_metadata and has_title and has_year and (has_authors or has_venue))
+    external_ready = bool(
+        external_metadata
+        and has_year
+        and (
+            (has_title and (has_authors or has_venue))
+            or (has_authors and has_venue)
+        )
+    )
     if core_complete:
         status = "crossref_enriched" if external_metadata else "complete"
         reason = ""
@@ -1747,12 +1826,23 @@ def classify_reference_metadata(
             status = "doi_sparse_refreshable"
             reason = "doi_sparse_refreshable"
             action = "auto_backfill"
-        elif non_article_signal and has_title and has_year and (has_venue or no_doi_expected_signal):
+        elif (
+            non_article_signal
+            and has_title
+            and (has_year or publisher_signal or title_only_ok_signal)
+            and (has_venue or has_authors or no_doi_expected_signal)
+        ):
             status = "non_article_source_ok"
             reason = "no_doi_expected" if (not doi and no_doi_expected_signal) else "non_article_source_ok"
             action = "non_article_ok"
             ready = True
-        elif (not doi) and no_doi_expected_signal and has_title and has_year:
+        elif (
+            (not doi)
+            and no_doi_expected_signal
+            and has_title
+            and (has_year or publisher_signal or title_only_ok_signal)
+            and (has_authors or has_venue or web_source_signal or title_only_ok_signal)
+        ):
             status = "no_doi_expected"
             reason = "no_doi_expected"
             action = "non_article_ok"
@@ -2014,11 +2104,12 @@ def _infer_source_doi_from_doc_hints(
             _stat_inc(stats, "crossref_negative_hits")
             _stat_inc(stats, "source_work_negative_hits")
             return ""
-        cached_doi = _clean_doi_for_url(str(cached_value or ""))
-        if cached_doi:
-            _stat_inc(stats, "crossref_cache_hits")
-            _stat_inc(stats, "source_work_cache_hits")
-            return cached_doi
+        if not _is_crossref_cache_miss(cached_value):
+            cached_doi = _clean_doi_for_url(str(cached_value or ""))
+            if cached_doi:
+                _stat_inc(stats, "crossref_cache_hits")
+                _stat_inc(stats, "source_work_cache_hits")
+                return cached_doi
 
     if not crossref_enabled:
         return ""
@@ -2229,6 +2320,92 @@ def _similarity(a: str, b: str) -> float:
     return min(1.0, (0.68 * seq) + (0.32 * jac))
 
 
+def _normalized_phrase_in_text(phrase: str, text_norm: str) -> bool:
+    phrase_norm = normalize_title_for_match(phrase)
+    if not phrase_norm or not text_norm:
+        return False
+    if phrase_norm in text_norm:
+        return True
+    toks = [t for t in phrase_norm.split() if len(t) >= 2]
+    if not toks:
+        return False
+    text_tokens = set(text_norm.split())
+    return bool(len(toks) >= 2 and all(t in text_tokens for t in toks))
+
+
+def _reference_contains_number(text: str, value: str) -> bool:
+    v = str(value or "").strip()
+    if not v or not re.fullmatch(r"\d{1,8}", v):
+        return False
+    return bool(re.search(rf"(?<!\d){re.escape(v)}(?!\d)", str(text or "")))
+
+
+def _reference_contains_nearby_number(text: str, value: str, *, max_delta: int = 3) -> bool:
+    v = str(value or "").strip()
+    if not v or not re.fullmatch(r"\d{3,8}", v):
+        return False
+    try:
+        want = int(v)
+    except Exception:
+        return False
+    for m in re.finditer(r"(?<!\d)(\d{3,8})(?!\d)", str(text or "")):
+        try:
+            got = int(m.group(1))
+        except Exception:
+            continue
+        if abs(got - want) <= int(max_delta):
+            return True
+    return False
+
+
+def _source_reference_row_field_score(local_entry: str, row: dict[str, str]) -> float:
+    raw = _strip_reference_number(str(local_entry or "").strip())
+    if (not raw) or (not isinstance(row, dict)):
+        return 0.0
+    raw_norm = normalize_title_for_match(raw)
+    if not raw_norm:
+        return 0.0
+
+    score = 0.0
+    title = str(row.get("title") or "").strip()
+    if title:
+        title_sim = _similarity(raw, title)
+        if _normalized_phrase_in_text(title, raw_norm):
+            score += 0.34
+        elif title_sim >= 0.62:
+            score += min(0.30, title_sim * 0.38)
+
+    cand_author = str(row.get("author") or "").strip()
+    cand_author_norm = normalize_title_for_match(cand_author)
+    cand_author_tokens = [t for t in cand_author_norm.split() if len(t) >= 3]
+    if cand_author_tokens and any(re.search(rf"\b{re.escape(t)}\b", raw_norm) for t in cand_author_tokens[:3]):
+        score += 0.24
+
+    venue = str(row.get("venue") or "").strip()
+    if venue and _normalized_phrase_in_text(venue, raw_norm):
+        score += 0.20
+
+    cand_year = str(row.get("year") or "").strip()
+    local_year = _extract_reference_year_hint(raw)
+    if cand_year and local_year and cand_year == local_year:
+        score += 0.18
+
+    pages = str(row.get("pages") or "").strip()
+    if pages and _reference_contains_number(raw, pages):
+        score += 0.20
+    elif pages and _reference_contains_nearby_number(raw, pages, max_delta=3):
+        score += 0.14
+
+    volume = str(row.get("volume") or "").strip()
+    if volume and _reference_contains_number(raw, volume):
+        score += 0.08
+
+    if str(row.get("doi") or "").strip() and score >= 0.20:
+        score += 0.04
+
+    return max(0.0, min(1.0, score))
+
+
 def _score_source_reference_row(
     local_entry: str,
     row: dict[str, str],
@@ -2254,8 +2431,8 @@ def _score_source_reference_row(
     if not cand_text:
         return -1.0
 
-    sc = _similarity(raw, cand_text)
-    local_year = extract_year_hint(raw)
+    sc = max(_similarity(raw, cand_text), _source_reference_row_field_score(raw, row))
+    local_year = _extract_reference_year_hint(raw)
     cand_year = str(row.get("year") or "").strip()
     if local_year:
         if cand_year == local_year:
@@ -2291,6 +2468,19 @@ def _source_reference_row_has_alignment_signal(local_entry: str, row: dict[str, 
     local_doi = _clean_doi_for_url(extract_first_doi(raw)).lower()
     row_doi = _clean_doi_for_url(str(row.get("doi") or "")).lower()
     if local_doi and row_doi:
+        return True
+    structured_fields = [
+        str(row.get("title") or "").strip(),
+        str(row.get("author") or "").strip(),
+        str(row.get("venue") or "").strip(),
+        str(row.get("year") or "").strip(),
+        str(row.get("volume") or "").strip(),
+        str(row.get("pages") or "").strip(),
+    ]
+    structured_count = sum(1 for x in structured_fields if x)
+    if row_doi and structured_count >= 2:
+        return True
+    if structured_count >= 3 and (str(row.get("author") or "").strip() or str(row.get("title") or "").strip()):
         return True
 
     fields = [
@@ -2358,6 +2548,31 @@ def _assess_source_reference_alignment(ref_map: dict[int, str], rows: list[dict[
 
     if len(scores) < 3:
         return True
+
+    tail_scores: list[float] = []
+    for n in nums[-min(6, len(nums)) :]:
+        row = rows[int(n) - 1]
+        if not _source_reference_row_has_alignment_signal(str(ref_map.get(int(n)) or ""), row):
+            continue
+        sc = _score_source_reference_row(
+            str(ref_map.get(int(n)) or ""),
+            row,
+            penalize_mismatch=True,
+            year_match_bonus=0.14,
+            year_near_bonus=0.05,
+            year_mismatch_penalty=0.08,
+            author_match_bonus=0.10,
+            author_mismatch_penalty=0.04,
+            doi_bonus=0.03,
+        )
+        if sc >= 0.0:
+            tail_scores.append(sc)
+    if len(tail_scores) >= 3:
+        tail_low_n = sum(1 for sc in tail_scores if sc < 0.45)
+        tail_avg = sum(tail_scores) / max(1, len(tail_scores))
+        early_strong = any(sc >= 0.66 for sc in scores)
+        if early_strong and tail_low_n >= 3 and tail_avg < 0.38:
+            return False
 
     strong_n = sum(1 for sc in scores if sc >= 0.66)
     ok_n = sum(1 for sc in scores if sc >= 0.56)
