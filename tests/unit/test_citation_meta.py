@@ -72,3 +72,54 @@ def test_fetch_best_openalex_meta_uses_title_year_author_gate(monkeypatch):
     assert isinstance(out, dict)
     assert str(out.get("doi") or "") == "10.1103/PhysRevA.52.R3429"
     assert str(out.get("match_method") or "") == "openalex_title"
+
+
+def test_clean_reference_query_expands_markdown_venue_aliases():
+    raw = "[1] P. Kilcullen, T. Ozaki, J. Liang, *Nat. Commun.* **2022**, *13*, 7879."
+
+    out = citation_meta._clean_reference_for_query(raw)
+
+    assert "Nature Communications" in out
+    assert "*" not in out
+    assert "[1]" not in out
+    assert citation_meta.extract_first_author_family_hint(citation_meta._reference_hint_text(raw)) == "kilcullen"
+
+
+def test_fetch_best_crossref_for_reference_accepts_compact_bibliographic_match(monkeypatch):
+    raw = "[1] P. Kilcullen, T. Ozaki, J. Liang, *Nat. Commun.* **2022**, *13*, 7879."
+
+    monkeypatch.setattr(
+        citation_meta,
+        "_crossref_search_bibliographic_raw",
+        lambda *_args, **_kwargs: [
+            {
+                "title": ["Unrelated single-pixel paper"],
+                "container-title": ["Optics Express"],
+                "issued": {"date-parts": [[2022]]},
+                "author": [{"family": "Example", "given": "A."}],
+                "volume": "30",
+                "page": "1-8",
+                "DOI": "10.1000/wrong",
+            },
+            {
+                "title": ["Compressed ultrahigh-speed single-pixel imaging by swept aggregate patterns"],
+                "container-title": ["Nature Communications"],
+                "issued": {"date-parts": [[2022]]},
+                "author": [
+                    {"family": "Kilcullen", "given": "Peter"},
+                    {"family": "Ozaki", "given": "T."},
+                    {"family": "Liang", "given": "Jinyang"},
+                ],
+                "volume": "13",
+                "page": "7879",
+                "DOI": "10.1038/s41467-022-35585-8",
+            },
+        ],
+    )
+
+    out = citation_meta.fetch_best_crossref_for_reference(reference_text=raw)
+
+    assert isinstance(out, dict)
+    assert out["doi"] == "10.1038/s41467-022-35585-8"
+    assert out["match_method"] == "bibliographic_compact"
+    assert float(out["structured_match_score"]) >= 0.78

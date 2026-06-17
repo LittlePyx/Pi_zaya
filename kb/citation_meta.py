@@ -24,6 +24,33 @@ _REF_BAD_PATTERNS = (
     "acknowledg",
     "grant no",
 )
+_VENUE_QUERY_ALIASES: tuple[tuple[str, str], ...] = (
+    (r"\bNat\.\s*Commun\.?\b", "Nature Communications"),
+    (r"\bNat\.\s*Photonics\b", "Nature Photonics"),
+    (r"\bNat\.\s*Methods\b", "Nature Methods"),
+    (r"\bNat\.\s*Phys\.?\b", "Nature Physics"),
+    (r"\bNat\.\s*Biomed\.\s*Eng\.?\b", "Nature Biomedical Engineering"),
+    (r"\bSci\.\s*Adv\.?\b", "Science Advances"),
+    (r"\bLight\s+Sci\.\s*Appl\.?\b", "Light Science Applications"),
+    (r"\bPhys\.\s*Rev\.\s*A\b", "Physical Review A"),
+    (r"\bPhys\.\s*Rev\.\s*Lett\.?\b", "Physical Review Letters"),
+    (r"\bOpt\.\s*Express\b", "Optics Express"),
+    (r"\bOpt\.\s*Lett\.?\b", "Optics Letters"),
+    (r"\bOpt\.\s*Laser\s+Eng\.?\b", "Optics and Lasers in Engineering"),
+    (r"\bOpt\.\s*Laser\s+Technol\.?\b", "Optics and Laser Technology"),
+    (r"\bAppl\.\s*Phys\.\s*Lett\.?\b", "Applied Physics Letters"),
+    (r"\bPhotonics\s+Res\.?\b", "Photonics Research"),
+    (r"\bLaser\s+Photonics\s+Rev\.?\b", "Laser and Photonics Reviews"),
+    (r"\bIEEE\s+Trans\.\s*Inform\.\s*Theory\b", "IEEE Transactions on Information Theory"),
+    (r"\bIEEE\s+Trans\.\s*Inf\.\s*Theory\b", "IEEE Transactions on Information Theory"),
+    (r"\bIEEE\s+Signal\s+Proc\.\s*Mag\.?\b", "IEEE Signal Processing Magazine"),
+    (r"\bIEEE\s+Signal\s+Process\.\s*Mag\.?\b", "IEEE Signal Processing Magazine"),
+    (r"\bIEEE\s+Trans\.\s*Pattern\s+Anal\.\s*Mach\.\s*Intell\.?\b", "IEEE Transactions on Pattern Analysis and Machine Intelligence"),
+    (r"\bIEEE\s+Trans\.\s*Comput\.\s*Imag\.?\b", "IEEE Transactions on Computational Imaging"),
+    (r"\bJ\.\s*Lightwave\s+Technol\.?\b", "Journal of Lightwave Technology"),
+    (r"\bJ\.\s*Opt\.\s*Soc\.\s*Am\.\s*A\b", "Journal of the Optical Society of America A"),
+    (r"\bAppl\.\s*Optics\b", "Applied Optics"),
+)
 
 
 def normalize_title_for_match(title: str) -> str:
@@ -110,8 +137,40 @@ def extract_first_author_family_hint(text: str) -> str:
     return best.lower() if len(best) >= 2 else ""
 
 
+def _strip_reference_query_markup(text: str) -> str:
+    s = str(text or "")
+    if not s:
+        return ""
+    s = re.sub(r"<!--\s*kb_page:\s*\d+\s*-->", " ", s, flags=re.IGNORECASE)
+    s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+    s = re.sub(r"\*([^*]+)\*", r"\1", s)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    s = s.replace("\u2013", "-").replace("\u2014", "-").replace("\u2212", "-")
+    s = s.replace("\u9225?", "-").replace("\u922d?", "-")
+    return s
+
+
+def _expand_reference_venue_aliases(text: str) -> str:
+    s = str(text or "")
+    if not s:
+        return ""
+    for pattern, replacement in _VENUE_QUERY_ALIASES:
+        s = re.sub(pattern, replacement, s, flags=re.IGNORECASE)
+    return s
+
+
+def _reference_hint_text(text: str) -> str:
+    s = _REF_LEAD_RE.sub("", (text or "").strip())
+    s = _strip_reference_query_markup(s)
+    s = _expand_reference_venue_aliases(s)
+    return _WS_RE.sub(" ", s).strip()
+
+
 def _clean_reference_for_query(text: str) -> str:
     s = _REF_LEAD_RE.sub("", (text or "").strip())
+    s = _strip_reference_query_markup(s)
+    s = _expand_reference_venue_aliases(s)
+    s = re.sub(r"[,;:(){}\[\]]", " ", s)
     s = re.sub(r"\s{2,}", " ", s)
     # Remove very noisy tails.
     s = re.sub(r"(?:\bwww\.[^\s]+|\bhttps?://[^\s]+)", " ", s, flags=re.IGNORECASE)
@@ -196,7 +255,7 @@ def _meta_from_item(item: dict[str, Any], *, fallback_title: str = "") -> dict[s
         "year": _extract_year(item),
         "volume": str(item.get("volume") or "").strip(),
         "issue": str(item.get("issue") or "").strip(),
-        "pages": str(item.get("page") or "").strip(),
+        "pages": str(item.get("page") or item.get("article-number") or "").strip(),
         "doi": str(item.get("DOI") or "").strip(),
     }
 
@@ -226,6 +285,64 @@ def _text_similarity(a: str, b: str) -> float:
     tb = set(nb.split())
     jac = (len(ta & tb) / len(ta | tb)) if (ta and tb) else 0.0
     return min(1.0, (0.64 * seq) + (0.36 * jac))
+
+
+def _token_set(text: str) -> set[str]:
+    return set(normalize_title_for_match(text).split())
+
+
+def _page_tokens(text: str) -> set[str]:
+    out: set[str] = set()
+    for token in re.findall(r"[A-Za-z]?\d{1,8}[A-Za-z]?", str(text or "")):
+        t = token.strip().lower()
+        if t:
+            out.add(t)
+    return out
+
+
+def _structured_biblio_score(
+    raw: str,
+    item: dict[str, Any],
+    meta: dict[str, Any],
+    *,
+    year_hint: str,
+    author_hint: str,
+) -> tuple[float, bool, bool]:
+    raw_clean = _clean_reference_for_query(raw)
+    raw_tokens = _token_set(raw_clean)
+    y = str(meta.get("year") or "").strip()
+    y_match = bool(year_hint and y and (year_hint == y))
+    author_match = False
+    if author_hint:
+        author_match = author_hint in _author_family_set(item)
+    venue = str(meta.get("venue") or "").strip()
+    venue_sim = _venue_similarity(raw_clean, venue) if venue else 0.0
+    venue_match = bool(venue_sim >= 0.88)
+
+    volume = normalize_title_for_match(str(meta.get("volume") or ""))
+    volume_match = bool(volume and volume in raw_tokens)
+    page_match = False
+    for token in _page_tokens(str(meta.get("pages") or "")):
+        if token in raw_tokens:
+            page_match = True
+            break
+
+    score = 0.0
+    if y_match:
+        score += 0.24
+    if author_match:
+        score += 0.22
+    if venue_match:
+        score += 0.20
+    elif venue_sim >= 0.72:
+        score += 0.10
+    if volume_match:
+        score += 0.12
+    if page_match:
+        score += 0.18
+    if str(meta.get("doi") or "").strip():
+        score += 0.04
+    return min(1.0, score), y_match, author_match
 
 
 def _author_family_set(item: dict[str, Any]) -> set[str]:
@@ -374,10 +491,11 @@ def fetch_best_openalex_meta(
     if len(q) < 8:
         return None
 
+    hint_text = _reference_hint_text(reference_text)
     year_hint = str(expected_year or "").strip()
     if not _YEAR_RE.fullmatch(year_hint):
-        year_hint = extract_year_hint(raw)
-    author_hint = extract_first_author_family_hint(raw)
+        year_hint = extract_year_hint(hint_text or raw)
+    author_hint = extract_first_author_family_hint(hint_text or raw)
     venue_hint = str(expected_venue or "").strip()
 
     items = _openalex_search_title_raw(q, 8)
@@ -539,11 +657,12 @@ def _crossref_search_bibliographic_raw(reference_text: str, rows: int) -> list[d
     params = {
         "query.bibliographic": q,
         "rows": int(max(1, min(7, rows))),
+        "select": "author,published-print,published-online,issued,created,container-title,publisher,volume,issue,page,article-number,DOI,title",
     }
     headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
     url = "https://api.crossref.org/works"
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=2.8)
+        resp = requests.get(url, params=params, headers=headers, timeout=6.5)
         if resp.status_code != 200:
             return []
         data = resp.json()
@@ -716,9 +835,10 @@ def fetch_best_crossref_for_reference(
     if not raw or len(raw) < 8:
         return None
 
-    year_hint = extract_year_hint(raw)
-    author_hint = extract_first_author_family_hint(raw)
-    doi_hint = extract_first_doi(raw)
+    hint_text = _reference_hint_text(reference_text)
+    year_hint = extract_year_hint(hint_text or raw)
+    author_hint = extract_first_author_family_hint(hint_text or raw)
+    doi_hint = extract_first_doi(hint_text or reference_text or raw)
     if doi_hint:
         by_doi = fetch_best_crossref_meta(
             query_title="",
@@ -741,6 +861,7 @@ def fetch_best_crossref_for_reference(
     best_meta: dict[str, Any] | None = None
     best_score = -1.0
     best_text_sim = 0.0
+    best_structured_score = 0.0
     best_year_match = False
     best_author_match = False
 
@@ -748,6 +869,13 @@ def fetch_best_crossref_for_reference(
         meta = _meta_from_item(it, fallback_title="")
         cand_txt = _candidate_biblio_text(it)
         t_sim = _text_similarity(raw, cand_txt)
+        structured_score, structured_year_match, structured_author_match = _structured_biblio_score(
+            raw,
+            it,
+            meta,
+            year_hint=year_hint,
+            author_hint=author_hint,
+        )
         y = str(meta.get("year") or "").strip()
         y_match = bool(year_hint and y and (year_hint == y))
         y_near = False
@@ -776,17 +904,26 @@ def fetch_best_crossref_for_reference(
         if str(meta.get("doi") or "").strip():
             score += 0.03
 
-        score = max(0.0, min(1.0, score))
-        if score > best_score:
+        score = max(0.0, min(1.0, max(score, structured_score)))
+        if (
+            score > best_score
+            or (
+                abs(score - best_score) <= 1e-9
+                and structured_score > best_structured_score
+            )
+        ):
             best_score = score
             best_meta = meta
             best_text_sim = t_sim
-            best_year_match = y_match
-            best_author_match = author_match
+            best_structured_score = structured_score
+            best_year_match = bool(y_match or structured_year_match)
+            best_author_match = bool(author_match or structured_author_match)
 
     if not best_meta:
         return None
     if best_score < float(min_score):
+        return None
+    if best_text_sim < 0.42 and best_structured_score < 0.78:
         return None
     if year_hint and (not best_year_match) and best_score < 0.72:
         return None
@@ -794,7 +931,9 @@ def fetch_best_crossref_for_reference(
         return None
 
     out = dict(best_meta)
-    out["match_method"] = "bibliographic"
+    out["match_method"] = "bibliographic_compact" if best_structured_score >= 0.78 and best_text_sim < 0.62 else "bibliographic"
     out["title_similarity"] = round(best_text_sim, 4)
     out["match_score"] = round(best_score, 4)
+    if best_structured_score:
+        out["structured_match_score"] = round(best_structured_score, 4)
     return out

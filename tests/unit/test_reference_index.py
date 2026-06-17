@@ -200,6 +200,43 @@ def test_lookup_reference_meta_falls_back_to_openalex(monkeypatch):
     assert ref_index._is_crossref_meta_cache_hit(next(iter((cache.get("openalex_title") or {}).values())))
 
 
+def test_raw_reference_fallback_splits_nature_inline_author_title():
+    raw = (
+        "[2] Stantchev, R. I., Yu, X., Blu, T. & Pickwell-MacPherson, E. "
+        "Real-time terahertz imaging with a single-pixel detector. "
+        "*Nat. Commun.* **11**, 2535 (2020)."
+    )
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["authors"] == "Stantchev, R. I., Yu, X., Blu, T. & Pickwell-MacPherson, E"
+    assert out["title"] == "Real-time terahertz imaging with a single-pixel detector"
+    assert out["venue"] == "Nat. Commun"
+    assert out["year"] == "2020"
+
+
+def test_raw_reference_fallback_keeps_signal_processing_magazine_together():
+    raw = (
+        "[9] Duarte, M. F. et al. Single-pixel imaging via compressive sampling. "
+        "*IEEE Signal Process. Mag.* **25**, 83-91 (2008)."
+    )
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["title"] == "Single-pixel imaging via compressive sampling"
+    assert out["venue"] == "IEEE Signal Process. Mag"
+    assert out["year"] == "2008"
+
+
+def test_raw_reference_fallback_does_not_make_fake_title_for_compact_titleless_refs():
+    raw = "[3] D. L. Donoho, *IEEE Trans. Inf. Theory* **2006**, *52*, 1289."
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["year"] == "2006"
+    assert "title" not in out
+
+
 def test_reference_title_quality_allows_short_technical_titles():
     assert ref_index._reference_has_usable_title("Compressed sensing") is True
     assert ref_index._reference_has_usable_title(
