@@ -21,6 +21,12 @@ _REF_SECTION_STOP_RE = re.compile(
     r"Data availability|Code availability|Ethics declarations?)$",
     re.IGNORECASE,
 )
+_POST_REFERENCE_BODY_SECTION_RE = re.compile(
+    r"^(?:\d+(?:\.\d+)*\.?\s+)?(?:abstract|introduction|background|related\s+work|"
+    r"method(?:s|ology)?|materials?|experiment(?:s|al)?|results?|discussion|"
+    r"conclusions?|appendix|supplementary|supplemental)\b",
+    re.IGNORECASE,
+)
 _STANDALONE_REF_NUMBER_RE = re.compile(r"^\[?(\d{1,4})\]?[.)]\s*$")
 _INLINE_REF_START_RE = re.compile(r"^(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+(.+)$")
 _MID_REF_START_RE = re.compile(r"(?<!\S)(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+([A-Z][^.]{10,})")
@@ -238,6 +244,8 @@ def normalize_references_page_text(page_text: str) -> str:
             continue
         if _REF_SECTION_STOP_RE.match(line) and reference_start_seen >= 2:
             break
+        if _POST_REFERENCE_BODY_SECTION_RE.match(line) and reference_start_seen >= 3:
+            break
         if re.fullmatch(r"\d{1,4}", line):
             continue
         if (
@@ -315,19 +323,36 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
     current_ref = []
     ref_num = 1
     current_ref_number: int | None = None
+    pending_page_markers: list[str] = []
     in_code_block = False
     in_display_math = False
+
+    def emit_pending_page_markers() -> None:
+        nonlocal pending_page_markers
+        if pending_page_markers:
+            formatted.extend(pending_page_markers)
+            pending_page_markers = []
 
     for idx, (_, line) in enumerate(ref_lines):
         stripped = line.strip()
 
         if re.match(r"^<!--\s*kb_page:\s*\d+\s*-->$", stripped, re.IGNORECASE):
+            next_nonempty = ""
+            for _, candidate in ref_lines[idx + 1 :]:
+                candidate_text = str(candidate or "").strip()
+                if candidate_text:
+                    next_nonempty = candidate_text
+                    break
+            if current_ref and _should_keep_reference_open_on_blank(current_ref, next_nonempty):
+                pending_page_markers.append(stripped)
+                continue
             if current_ref:
                 ref_text = _join_reference_fragments(current_ref)
                 if ref_text:
                     out_num = int(current_ref_number or ref_num)
                     formatted.append(format_single_reference(ref_text, out_num))
                     ref_num = out_num + 1
+                    emit_pending_page_markers()
                 current_ref = []
                 current_ref_number = None
             formatted.append(stripped)
@@ -348,6 +373,7 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                     out_num = int(current_ref_number or ref_num)
                     formatted.append(format_single_reference(ref_text, out_num))
                     ref_num = out_num + 1
+                    emit_pending_page_markers()
                 current_ref = []
                 current_ref_number = None
             continue
@@ -397,6 +423,7 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                     out_num = int(current_ref_number or ref_num)
                     formatted.append(format_single_reference(ref_text, out_num))
                     ref_num = out_num + 1
+                    emit_pending_page_markers()
                 current_ref = []
                 current_ref_number = None
 
@@ -411,6 +438,7 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                     out_num = int(current_ref_number or ref_num)
                     formatted.append(format_single_reference(ref_text, out_num))
                     ref_num = out_num + 1
+                    emit_pending_page_markers()
                 current_ref = []
                 current_ref_number = None
 
@@ -434,6 +462,7 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                     out_num = int(current_ref_number or ref_num)
                     formatted.append(format_single_reference(ref_text, out_num))
                     ref_num = out_num + 1
+                    emit_pending_page_markers()
                 current_ref_number = None
                 raw_num = mid_ref_match.group(1) or mid_ref_match.group(2)
                 current_ref_number = int(raw_num)
@@ -446,6 +475,8 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
         if ref_text:
             out_num = int(current_ref_number or ref_num)
             formatted.append(format_single_reference(ref_text, out_num))
+            emit_pending_page_markers()
+    emit_pending_page_markers()
 
     return formatted
 

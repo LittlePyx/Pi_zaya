@@ -774,7 +774,7 @@ def _page_looks_like_references_content(page) -> bool:
     if comma_lines < 10:
         return False
 
-    ref_line_pat = re.compile(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,3}\.\s+[A-Z])")
+    ref_line_pat = re.compile(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}[.)]\s*$|\d{1,4}[.)]\s+[A-Z])")
     ref_like_lines = [i for i, ln in enumerate(lines) if ref_line_pat.match(ln)]
     if len(ref_like_lines) < max(6, int(len(lines) * 0.18)):
         # Dense references can still be wrapped strangely; keep a permissive fallback below.
@@ -794,7 +794,19 @@ def _page_looks_like_references_content(page) -> bool:
                     flags=re.IGNORECASE,
                 )
             )
-            if len(words) >= 8 and stop_n >= 2 and not ref_line_pat.match(ln):
+            looks_like_reference_continuation = bool(
+                re.search(r"\b(?:18|19|20)\d{2}\b|10\.\d{4,9}/|doi|https?://|www\.", ln, flags=re.IGNORECASE)
+                or (
+                    "," in ln
+                    and re.search(
+                        r"\b(?:journal|proceedings?|proc\.?|ieee|acm|spie|optics?|photonics?|phys\.|"
+                        r"nature|science|letters?|review|commun\.|express)\b",
+                        ln,
+                        flags=re.IGNORECASE,
+                    )
+                )
+            )
+            if len(words) >= 8 and stop_n >= 2 and not ref_line_pat.match(ln) and not looks_like_reference_continuation:
                 bodyish_before += 1
         if bodyish_before >= 5:
             return False

@@ -225,6 +225,7 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
             rows.append((n, text))
     if len(rows) < 8:
         return False
+    bad_short = 0
     for _, text in sorted(rows):
         body = re.sub(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}[.)])\s*", "", text).strip(" .;:,")
         if not body:
@@ -234,7 +235,167 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
         if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
             return True
+        if len(body) <= 90 and len(words) >= 4:
+            bad_short += 1
+    if bad_short >= 2:
+        return True
     return False
+
+
+PDF_REFERENCE_START_LINE_RE = re.compile(r"^\s*(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})[.)])\s+\S")
+PDF_REFERENCE_STANDALONE_NUMBER_RE = re.compile(r"^\s*\[?(\d{1,4})\]?[.)]\s*$")
+PDF_REFERENCES_HEADING_TEXT_RE = re.compile(
+    r"^\s*(?:references?|bibliography|references?\s+and\s+links|literature\s+cited)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _pdf_is_plausible_reference_number(value: str | int | None) -> bool:
+    try:
+        n = int(str(value or "").strip())
+    except Exception:
+        return False
+    if n <= 0:
+        return False
+    if 1800 <= n <= 2099:
+        return False
+    return n <= 999
+
+
+def _pdf_reference_window_has_signal(lines: list[str], idx: int) -> bool:
+    window = " ".join(str(line or "").strip() for line in lines[idx : idx + 6])
+    window = re.sub(r"\s+", " ", window).strip()
+    if not window:
+        return False
+    if re.search(r"\b(?:18|19|20)\d{2}\b|https?://|www\.|\bdoi\s*:|10\.\d{4,9}/|arxiv", window, re.IGNORECASE):
+        return True
+    if re.search(
+        r"\b(?:journal|proceedings?|proc\.?|conference|ieee|acm|spie|springer|wiley|"
+        r"elsevier|opt\.|optics?|photonics?|phys\.|nature|science|letters?|review|"
+        r"commun\.|express|trans\.|vol\.|pp\.)\b",
+        window,
+        re.IGNORECASE,
+    ):
+        return True
+    first = re.sub(r"\s+", " ", str(lines[idx] or "")).strip()
+    if PDF_REFERENCE_STANDALONE_NUMBER_RE.match(first) and idx + 1 < len(lines):
+        first = re.sub(r"\s+", " ", str(lines[idx + 1] or "")).strip()
+    return bool(
+        first.count(",") >= 2
+        and re.match(r"^[A-Z][A-Za-z'\-]{1,40}(?:\s+[A-Z]\.?)?(?:,|\s)", first)
+    )
+
+
+def _pdf_page_reference_start_numbers(text: str) -> list[int]:
+    lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    numbers: list[int] = []
+    for idx, raw in enumerate(lines):
+        line = str(raw or "").strip()
+        if not line:
+            continue
+        match = PDF_REFERENCE_START_LINE_RE.match(line)
+        if match and _pdf_is_plausible_reference_number(match.group(1) or match.group(2)):
+            if _pdf_reference_window_has_signal(lines, idx):
+                numbers.append(int(match.group(1) or match.group(2)))
+            continue
+        standalone = PDF_REFERENCE_STANDALONE_NUMBER_RE.match(line)
+        if standalone and _pdf_is_plausible_reference_number(standalone.group(1)):
+            if _pdf_reference_window_has_signal(lines, idx):
+                numbers.append(int(standalone.group(1)))
+    return numbers
+
+
+def _pdf_page_has_references_heading_text(text: str) -> bool:
+    return any(PDF_REFERENCES_HEADING_TEXT_RE.match(str(line or "").strip()) for line in str(text or "").splitlines())
+
+
+def _pdf_page_has_reference_block_text(text: str) -> bool:
+    numbers = _pdf_page_reference_start_numbers(text)
+    if len(numbers) < 3:
+        return False
+    increasing_pairs = sum(1 for left, right in zip(numbers, numbers[1:]) if int(right) > int(left))
+    return increasing_pairs >= max(1, len(numbers) - 2)
+
+
+def _trim_pdf_page_text_to_first_reference(text: str) -> str:
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = raw.split("\n")
+    for idx, line in enumerate(lines):
+        stripped = str(line or "").strip()
+        match = PDF_REFERENCE_START_LINE_RE.match(stripped)
+        standalone = PDF_REFERENCE_STANDALONE_NUMBER_RE.match(stripped)
+        raw_num = (match.group(1) or match.group(2)) if match else (standalone.group(1) if standalone else None)
+        if raw_num and _pdf_is_plausible_reference_number(raw_num) and _pdf_reference_window_has_signal(lines, idx):
+            return "\n".join(lines[idx:]).strip()
+    return raw.strip()
+
+
+def _drop_pdf_reference_running_lines(text: str) -> str:
+    out: list[str] = []
+    raw_lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for idx, raw in enumerate(raw_lines):
+        line = str(raw or "").strip()
+        prev_line = str(raw_lines[idx - 1] or "").strip() if idx > 0 else ""
+        next_line = str(raw_lines[idx + 1] or "").strip() if idx + 1 < len(raw_lines) else ""
+        if not line:
+            out.append(raw)
+            continue
+        if re.fullmatch(r"Research\s+Article", line, flags=re.IGNORECASE):
+            continue
+        if re.fullmatch(r"(?:TOPICAL\s+REVIEW|FRONTIERS\s+OF\s+PHYSICS)", line, flags=re.IGNORECASE):
+            continue
+        if re.fullmatch(r"\d{4,6}-\d{1,3}", line):
+            continue
+        if re.fullmatch(r".+\bet\s+al\.,\s+Front\.\s+Phys\.\s+\d.+", line, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^Vol\.\s+\d+\b.*\b(?:Optica|Optics?|Photonics?)\b", line, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^#\d+\b", line):
+            continue
+        if re.fullmatch(r"https?://doi\.org/\S+", line, flags=re.IGNORECASE) and (
+            re.match(r"^#\d+\b", prev_line) or re.match(r"^Journal\s+©\s+\d{4}", next_line, flags=re.IGNORECASE)
+        ):
+            continue
+        if re.fullmatch(r"Journal\s+©\s+\d{4}", line, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^Received\s+\d{1,2}\s+\w+\s+\d{4}\b", line, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^\(?C\)?\s+\d{4}\s+OSA\b", line, flags=re.IGNORECASE):
+            continue
+        if re.match(r"^\d{1,2}\s+\w+\s+\d{4}\s*/\s*Vol\.", line, flags=re.IGNORECASE):
+            continue
+        if re.fullmatch(r"\d{1,4}", line):
+            continue
+        out.append(raw)
+    return "\n".join(out).strip()
+
+
+def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: dict[int, str]) -> bool:
+    before_nums = sorted(
+        int(k)
+        for k, v in (before_map if isinstance(before_map, dict) else {}).items()
+        if str(v or "").strip() and str(k).isdigit() and int(k) > 0
+    )
+    recovered_nums = sorted(
+        int(k)
+        for k, v in (recovered_map if isinstance(recovered_map, dict) else {}).items()
+        if str(v or "").strip() and str(k).isdigit() and int(k) > 0
+    )
+    if len(before_nums) < 12 or len(recovered_nums) < 8:
+        return False
+    if len(recovered_nums) >= len(before_nums):
+        return False
+    if (len(recovered_nums) / max(1, len(before_nums))) < 0.45:
+        return False
+    if len(before_nums) < int(len(recovered_nums) * 1.35):
+        return False
+    if _reference_map_missing_numbers(recovered_map):
+        return False
+    if min(recovered_nums) != 1 or max(recovered_nums) < len(recovered_nums) * 0.85:
+        return False
+    recovered_max = max(recovered_nums)
+    tail_nums = [n for n in before_nums if n > recovered_max]
+    return len(tail_nums) >= max(5, int(len(before_nums) * 0.20))
 
 
 class PDFConverter:
@@ -1065,6 +1226,7 @@ class PDFConverter:
             total_pages = int(len(doc))
         except Exception:
             total_pages = 0
+        in_references = False
         for page_index in range(max(0, total_pages)):
             try:
                 page = doc.load_page(page_index)
@@ -1074,36 +1236,47 @@ class PDFConverter:
                 except Exception:
                     continue
             try:
-                is_references_page = bool(
-                    _page_has_references_heading(page) or _page_looks_like_references_content(page)
-                )
-            except Exception:
-                is_references_page = False
-            if not is_references_page:
-                continue
-            try:
                 page_text = str(page.get_text("text") or "").strip()
             except Exception:
                 page_text = ""
+            if not page_text:
+                continue
+            try:
+                has_heading = bool(_pdf_page_has_references_heading_text(page_text) or _page_has_references_heading(page))
+            except Exception:
+                has_heading = _pdf_page_has_references_heading_text(page_text)
+            reference_start_count = len(_pdf_page_reference_start_numbers(page_text))
+            has_reference_block = bool(
+                _pdf_page_has_reference_block_text(page_text)
+                or (has_heading and reference_start_count >= self._reference_recovery_min_entries())
+            )
+            if not in_references:
+                if not has_reference_block:
+                    continue
+                in_references = True
+                if not has_heading:
+                    page_text = _trim_pdf_page_text_to_first_reference(page_text)
+            elif not has_heading and not has_reference_block:
+                break
+            page_text = _drop_pdf_reference_running_lines(page_text)
             if page_text:
                 page_texts.append((page_index + 1, page_text))
         if not page_texts:
             return "", 0
-        out_lines: list[str] = ["## References"]
+        raw_lines: list[str] = ["## References"]
         for page_no, page_text in page_texts:
             normalized = normalize_references_page_text(page_text)
             if not self._references_heading_level(normalized.splitlines()[0] if normalized.splitlines() else ""):
                 normalized = "## References\n\n" + normalized.lstrip()
             normalized = re.sub(r"(?im)^#{1,6}\s+References\b.*$", "## References", normalized.strip(), count=1)
-            page_formatted = fix_references_format(normalized).strip()
-            body_lines = page_formatted.splitlines()
+            body_lines = normalized.splitlines()
             if body_lines and self._references_heading_level(body_lines[0]):
                 body_lines = body_lines[1:]
             body_lines = [line for line in body_lines if str(line or "").strip()]
             if not body_lines:
                 continue
-            out_lines.extend(["", f"<!-- kb_page: {int(page_no)} -->", *body_lines])
-        formatted = "\n".join(out_lines)
+            raw_lines.extend(["", f"<!-- kb_page: {int(page_no)} -->", *body_lines])
+        formatted = fix_references_format("\n".join(raw_lines)).strip()
         entry_count = reference_markdown_entry_count(formatted)
         if entry_count < self._reference_recovery_min_entries():
             return "", entry_count
@@ -1120,23 +1293,28 @@ class PDFConverter:
         min_entries = self._reference_recovery_min_entries()
         truncated = before_count >= min_entries and before_extracted < max(min_entries, int(before_count * 0.55))
         gapped = bool(before_missing)
-        if before_count >= min_entries and not truncated and not gapped and not short_truncated:
-            return md, {}
         references_md, recovered_count = self._extract_pdf_reference_markdown(doc)
         if not references_md or recovered_count < min_entries:
             return md, {}
         recovered_map = extract_references_map_from_md(references_md)
         recovered_missing = set(_reference_map_missing_numbers(recovered_map))
         fills_existing_gap = bool(before_missing and len(recovered_missing) < len(before_missing))
-        if recovered_count < before_extracted and not fills_existing_gap:
+        inflated_tail = _reference_map_has_inflated_tail(before_map, recovered_map)
+        if before_count >= min_entries and not truncated and not gapped and not short_truncated and not inflated_tail:
             return md, {}
-        if recovered_count == before_extracted and not (fills_existing_gap or short_truncated):
+        if recovered_count < before_extracted and not (fills_existing_gap or inflated_tail):
             return md, {}
-        if truncated and recovered_count < before_count:
+        if recovered_count == before_extracted and not (fills_existing_gap or short_truncated or inflated_tail):
+            return md, {}
+        if truncated and recovered_count < before_count and not inflated_tail:
             return md, {}
         if gapped and not fills_existing_gap:
             return md, {}
-        fixed = self._replace_or_append_references_section(md, references_md, force_replace=truncated or gapped or short_truncated)
+        fixed = self._replace_or_append_references_section(
+            md,
+            references_md,
+            force_replace=truncated or gapped or short_truncated or inflated_tail,
+        )
         changed = fixed != str(md or "")
         if changed:
             print(
@@ -1151,7 +1329,11 @@ class PDFConverter:
             "issue_codes_before": (
                 ["missing_references"]
                 if before_count <= 0
-                else (["reference_index_truncated"] if (truncated or gapped or short_truncated) else [])
+                else (
+                    ["reference_index_inflated"]
+                    if inflated_tail
+                    else (["reference_index_truncated"] if (truncated or gapped or short_truncated) else [])
+                )
             ),
             "issue_codes_after": [],
             "remaining_issue_codes": [],

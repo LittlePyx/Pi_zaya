@@ -440,6 +440,140 @@ def test_recover_references_replaces_short_truncated_entries_from_pdf_text_layer
     assert "\n[10] Wu, D. et al.\n" not in f"\n{fixed}\n"
 
 
+def test_extract_pdf_reference_markdown_keeps_continuation_pages_and_stops_at_body(tmp_path):
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+
+    class _Page:
+        rect = SimpleNamespace(height=800.0)
+
+        def __init__(self, text: str):
+            self._text = text
+
+        def get_text(self, mode: str):
+            if mode == "text":
+                return self._text
+            if mode == "dict":
+                return {"blocks": []}
+            return ""
+
+    class _Doc:
+        def __init__(self):
+            self.pages = [
+                _Page(
+                    "\n".join(
+                        [
+                            "Title and abstract text.",
+                            "References and links",
+                            "1. ALPHA, A. First source. Journal of Tests 1, 1-2 (2001).",
+                            "2. BETA, B. Second source. Journal of Tests 2, 3-4 (2002).",
+                            "3. GAMMA, G. Third source begins. Journal of Tests 3,",
+                        ]
+                    )
+                ),
+                _Page(
+                    "\n".join(
+                        [
+                            "5-6 (2003).",
+                            "4.",
+                            "DELTA, D., EPSILON, E., and ZETA, F. Fourth source. Journal of Tests 4, 7-8 (2004).",
+                            "5. ETA, H. Fifth source. Proceedings of Tests 5, 9-10 (2005).",
+                            "6. THETA, I. Sixth source. IEEE Tests 6, 11-12 (2006).",
+                            "1. Introduction",
+                            "This resumed body text must not be emitted as a reference.",
+                        ]
+                    )
+                ),
+                _Page("2. Method\nRegular body text with a numbered heading."),
+            ]
+
+        def __len__(self):
+            return len(self.pages)
+
+        def load_page(self, page_index: int):
+            return self.pages[page_index]
+
+    references_md, entry_count = converter._extract_pdf_reference_markdown(_Doc())
+
+    assert entry_count == 6
+    assert "[3] GAMMA, G. Third source begins. Journal of Tests 3, 5-6 (2003)." in references_md
+    assert "[4] DELTA, D., EPSILON, E., and ZETA, F. Fourth source." in references_md
+    assert "This resumed body text must not be emitted" not in references_md
+
+
+def test_recover_references_replaces_inflated_tail_from_pdf_text_layer(tmp_path):
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+
+    class _Page:
+        rect = SimpleNamespace(height=800.0)
+
+        def get_text(self, mode: str):
+            if mode == "text":
+                return "\n".join(
+                    [
+                        "References and links",
+                        *[
+                            f"{idx}. REF{idx}, A. Recovered source {idx}. Journal of Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+                            for idx in range(1, 11)
+                        ],
+                        "1. Introduction",
+                        "Body text after references.",
+                    ]
+                )
+            if mode == "dict":
+                return {"blocks": []}
+            return ""
+
+    class _Doc:
+        def __len__(self):
+            return 1
+
+        def load_page(self, page_index: int):
+            assert page_index == 0
+            return _Page()
+
+    inflated = "\n".join(
+        [
+            "# Demo Paper",
+            "## References",
+            *[
+                f"[{idx}] REF{idx}, A. Existing source {idx}. Journal of Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+                for idx in range(1, 11)
+            ],
+            *[
+                f"[{idx}] EXTRA{idx}, X. Inflated source {idx}. Journal of Hallucinated Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+                for idx in range(11, 19)
+            ],
+        ]
+    )
+
+    fixed, repair = converter._recover_references_from_pdf_if_needed(inflated, _Doc())
+
+    assert repair["changed"] is True
+    assert repair["issue_codes_before"] == ["reference_index_inflated"]
+    assert "[10] REF10, A. Recovered source 10." in fixed
+    assert "Inflated source" not in fixed
+
+
 def test_convert_pipeline_missing_file(output_dir):
     """Test error handling for missing file."""
     cfg = ConvertConfig(
