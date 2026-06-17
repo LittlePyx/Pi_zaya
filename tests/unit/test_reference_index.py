@@ -237,6 +237,60 @@ def test_raw_reference_fallback_does_not_make_fake_title_for_compact_titleless_r
     assert "title" not in out
 
 
+def test_raw_reference_fallback_splits_comma_style_title_and_venue():
+    raw = (
+        "[20] A. Gallivanoni, I. Rech, and M. Ghioni, Progress in quenching circuits "
+        "for single photon avalanche diodes, *IEEE Trans. Nucl. Sci.* 57, 3815 (2010)"
+    )
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["authors"] == "A. Gallivanoni, I. Rech, and M. Ghioni"
+    assert out["title"] == "Progress in quenching circuits for single photon avalanche diodes"
+    assert out["venue"] == "IEEE Trans. Nucl. Sci"
+    assert out["year"] == "2010"
+
+
+def test_raw_reference_fallback_extracts_conference_venue_from_comma_style_in_clause():
+    raw = (
+        "[78] Z. Deng, L. Ling, Y. Deng, C. Han, L. Yu, G. Cao, and Y. Wang, "
+        "A novel visible light communication system prototype based on SiPM receiver, "
+        "in: *Proceedings of the 4th International Conference on Telecommunications and Communication Engineering*, 2019"
+    )
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["title"] == "A novel visible light communication system prototype based on SiPM receiver"
+    assert out["venue"] == "Proceedings of the 4th International Conference on Telecommunications and Communication Engineering"
+    assert out["year"] == "2019"
+
+
+def test_raw_reference_fallback_extracts_single_author_and_in_venue():
+    raw = (
+        "[60] D. Fukuda, Single-photon measurement techniques with a superconducting transition edge sensor, "
+        "in: *IEICE Transactions on Electronics* 2019, E102. C, pp 230-234"
+    )
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["authors"] == "D. Fukuda"
+    assert out["title"] == "Single-photon measurement techniques with a superconducting transition edge sensor"
+    assert out["venue"] == "IEICE Transactions on Electronics"
+    assert out["year"] == "2019"
+
+
+def test_raw_reference_fallback_keeps_period_style_before_comma_fallback():
+    raw = (
+        "[10] Yang Fu, Sifei Liu, Amey Kulkarni, Jan Kautz, Alexei A. Efros, and Xiaolong Wang. "
+        "Colmap-free 3d gaussian splatting, 2024."
+    )
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["authors"] == "Yang Fu, Sifei Liu, Amey Kulkarni, Jan Kautz, Alexei A. Efros, and Xiaolong Wang"
+    assert out["title"] == "Colmap-free 3d gaussian splatting, 2024"
+
+
 def test_reference_title_quality_allows_short_technical_titles():
     assert ref_index._reference_has_usable_title("Compressed sensing") is True
     assert ref_index._reference_has_usable_title(

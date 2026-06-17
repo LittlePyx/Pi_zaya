@@ -85,6 +85,45 @@ def test_clean_reference_query_expands_markdown_venue_aliases():
     assert citation_meta.extract_first_author_family_hint(citation_meta._reference_hint_text(raw)) == "kilcullen"
 
 
+def test_crossref_title_search_uses_valid_work_list_select(monkeypatch):
+    captured: dict = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "message": {
+                    "items": [
+                        {
+                            "title": ["Demo title"],
+                            "container-title": ["Demo Journal"],
+                            "issued": {"date-parts": [[2024]]},
+                            "article-number": "42",
+                            "DOI": "10.1000/demo",
+                        }
+                    ]
+                }
+            }
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = dict(params or {})
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    citation_meta._crossref_search_title_raw.cache_clear()
+    monkeypatch.setattr(citation_meta.requests, "get", fake_get)
+
+    out = citation_meta._crossref_search_title_raw("Demo title", 1)
+
+    select = str((captured.get("params") or {}).get("select") or "")
+    assert out and out[0]["DOI"] == "10.1000/demo"
+    assert "institution" not in select
+    assert "article-number" in select
+
+
 def test_fetch_best_crossref_for_reference_accepts_compact_bibliographic_match(monkeypatch):
     raw = "[1] P. Kilcullen, T. Ozaki, J. Liang, *Nat. Commun.* **2022**, *13*, 7879."
 

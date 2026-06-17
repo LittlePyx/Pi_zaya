@@ -30,7 +30,7 @@ from kb.store import compute_file_sha1
 INDEX_FILE_NAME = "references_index.json"
 CROSSREF_CACHE_FILE_NAME = "crossref_cache.json"
 REFERENCE_CATALOG_FILE_NAME = "reference_catalog.json"
-REFERENCE_LOOKUP_VERSION = 3
+REFERENCE_LOOKUP_VERSION = 4
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -71,10 +71,12 @@ _REFERENCE_PERIOD_ABBREVIATIONS = (
     "adv",
     "biomed",
     "conf",
+    "condens",
     "commun",
     "comput",
     "ed",
     "eds",
+    "electron",
     "eng",
     "express",
     "fig",
@@ -84,19 +86,25 @@ _REFERENCE_PERIOD_ABBREVIATIONS = (
     "lett",
     "mag",
     "math",
+    "matter",
     "nat",
     "no",
+    "nucl",
     "opt",
     "phys",
     "process",
     "proc",
     "rev",
     "sci",
+    "sel",
+    "selected",
     "sig",
     "soc",
     "suppl",
     "technol",
     "theory",
+    "top",
+    "topics",
     "trans",
     "vol",
 )
@@ -634,6 +642,15 @@ def _clean_reference_markup_text(text: str) -> str:
     return re.sub(r"\s{2,}", " ", s).strip()
 
 
+def _clean_reference_title_text(text: str) -> str:
+    s = _clean_reference_markup_text(text).strip(" .;:,")
+    if not s:
+        return ""
+    s = re.sub(r"\s*,?\s*\((?:18|19|20)\d{2}\)\s*$", "", s).strip(" .;:,")
+    s = re.sub(r"\s*,\s*(?:18|19|20)\d{2}\s*$", "", s).strip(" .;:,")
+    return s[:260]
+
+
 def _looks_like_compact_titleless_reference(text: str) -> bool:
     t = _strip_reference_number(_clean_reference_markup_text(text))
     t = re.sub(r"https?://\S+", " ", t, flags=re.IGNORECASE)
@@ -748,6 +765,50 @@ def _split_inline_reference_author_title(seg: str) -> tuple[str, str]:
     return best
 
 
+def _split_comma_reference_author_title_venue(text: str) -> tuple[str, str, str]:
+    t = _strip_reference_number(_clean_reference_markup_text(text)).strip(" .;:,")
+    if not t or "," not in t:
+        return "", "", ""
+    best: tuple[str, str, str] = ("", "", "")
+    for m in re.finditer(r",", t):
+        authors_part = t[: m.start()].strip(" .;:,")
+        rest = t[m.end() :].strip(" .;:,")
+        if not authors_part or not rest:
+            continue
+        if _REFERENCE_TITLE_SIGNAL_RE.search(authors_part):
+            continue
+        if re.match(r"^(?:and|&)\s+[A-Z]", rest):
+            continue
+        authors = _clean_raw_reference_authors(authors_part)
+        if not authors and _looks_single_reference_author_segment(authors_part):
+            authors = authors_part[:320]
+        if not authors:
+            continue
+        title_part = rest
+        tail = ""
+        split = re.search(r",\s*(?=(?:in:?\s+)?(?:\*|[A-Z]))", rest)
+        if split:
+            title_part = rest[: split.start()]
+            tail = rest[split.end() :].strip(" .;:,")
+        title = _clean_reference_title_text(title_part)
+        if not _is_plausible_reference_title(title):
+            continue
+        venue = _extract_venue_from_reference_tail(tail)
+        return authors, title, venue
+    return best
+
+
+def _looks_single_reference_author_segment(seg: str) -> bool:
+    t = _strip_reference_number(_clean_reference_markup_text(seg)).strip(" .;:,")
+    if not t or _REFERENCE_TITLE_SIGNAL_RE.search(t) or _YEAR_ANY_RE.search(t):
+        return False
+    words = re.findall(r"[A-Za-z][A-Za-z'\-]*", t)
+    if not (2 <= len(words) <= 5):
+        return False
+    cap_n = sum(1 for w in words if w[:1].isupper())
+    return bool(cap_n == len(words))
+
+
 def _extract_venue_from_reference_tail(tail: str) -> str:
     s = _clean_reference_markup_text(str(tail or "")).strip(" .;:,")
     if not s:
@@ -759,7 +820,13 @@ def _extract_venue_from_reference_tail(tail: str) -> str:
     if not s:
         return ""
     first_sentence = (_reference_sentence_segments(s) or [s])[0].strip(" .;:,")
-    first_sentence = re.sub(r"^in:\s*", "", first_sentence, flags=re.IGNORECASE).strip(" .;:,")
+    first_sentence = re.sub(r"^in:?\s+", "", first_sentence, flags=re.IGNORECASE).strip(" .;:,")
+    first_sentence = re.sub(
+        r"^(?:18|19|20)\d{2}\s+(?=(?:IEEE|ACM|Proceedings|Proc|International|Conference|Journal|Trans|IEICE)\b)",
+        "",
+        first_sentence,
+        flags=re.IGNORECASE,
+    ).strip(" .;:,")
     comma_parts = [p.strip(" .;:,") for p in first_sentence.split(",") if p.strip(" .;:,")]
     cand = comma_parts[0] if comma_parts else first_sentence
     cand = _clean_reference_markup_text(cand).strip(" .;:,")
@@ -811,6 +878,17 @@ def _fallback_meta_from_raw_reference(raw: str) -> dict[str, str]:
             return {k: v for k, v in out.items() if str(v or "").strip()}
 
     segs = _reference_sentence_segments(s)
+    if len(segs) <= 1:
+        comma_authors, comma_title, comma_venue = _split_comma_reference_author_title_venue(s)
+        if comma_title:
+            if comma_authors:
+                out["authors"] = comma_authors
+            out["title"] = comma_title
+            if comma_venue:
+                out["venue"] = comma_venue
+            out["match_method"] = "raw_meta"
+            return {k: v for k, v in out.items() if str(v or "").strip()}
+
     if segs:
         authors, title = _split_inline_reference_author_title(segs[0])
         if authors and title:
@@ -819,12 +897,25 @@ def _fallback_meta_from_raw_reference(raw: str) -> dict[str, str]:
             out["venue"] = _extract_venue_from_reference_tail(". ".join(segs[1:]))
             out["match_method"] = "raw_meta"
             return {k: v for k, v in out.items() if str(v or "").strip()}
-    if len(segs) >= 2 and _looks_reference_author_segment(segs[0]):
+    if len(segs) >= 2 and (_looks_reference_author_segment(segs[0]) or _looks_single_reference_author_segment(segs[0])):
         title = segs[1].strip(" .;:,")
         if _is_plausible_reference_title(title):
             out["authors"] = _clean_raw_reference_authors(segs[0])
+            if not out["authors"] and _looks_single_reference_author_segment(segs[0]):
+                out["authors"] = _strip_reference_number(_clean_reference_markup_text(segs[0])).strip(" .;:,")
             out["title"] = title[:260]
             out["venue"] = _extract_venue_from_reference_tail(". ".join(segs[2:]))
+            out["match_method"] = "raw_meta"
+            return {k: v for k, v in out.items() if str(v or "").strip()}
+
+    if len(segs) > 1:
+        comma_authors, comma_title, comma_venue = _split_comma_reference_author_title_venue(s)
+        if comma_title:
+            if comma_authors:
+                out["authors"] = comma_authors
+            out["title"] = comma_title
+            if comma_venue:
+                out["venue"] = comma_venue
             out["match_method"] = "raw_meta"
             return {k: v for k, v in out.items() if str(v or "").strip()}
 
@@ -908,7 +999,7 @@ def _extract_query_title(entry: str) -> str:
             return cand_q[:260]
 
     def _looks_author_segment(seg: str) -> bool:
-        return _looks_reference_author_segment(seg)
+        return _looks_reference_author_segment(seg) or _looks_single_reference_author_segment(seg)
 
     def _looks_venue_segment(seg: str) -> bool:
         t = str(seg or "").strip().lower()
@@ -939,6 +1030,10 @@ def _extract_query_title(entry: str) -> str:
         cand0 = protected_segs[1].strip(" .;:,")
         if cand0 and (not _looks_author_segment(cand0)) and (not _looks_venue_segment(cand0)):
             return cand0[:260]
+
+    _, comma_title, _ = _split_comma_reference_author_title_venue(s)
+    if comma_title:
+        return comma_title[:260]
 
     # Heuristic 1: title often lies between first and second period.
     m_title = re.search(r"^[^.]{4,260}\.\s*([^.]{8,260})\.", s)
@@ -3486,6 +3581,32 @@ def build_reference_index(
                     crossref_enabled=crossref_active_source,
                     stats=crossref_stats,
                 )
+                if crossref_enabled and (not crossref_budget_exhausted):
+                    if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
+                        crossref_budget_exhausted = True
+            if int(doi_prefetch_workers) > 1 and source_ref_rows:
+                crossref_active_prefetch = bool(
+                    crossref_enabled and ((time.monotonic() - crossref_start_ts) <= float(max(5.0, crossref_time_budget_s)))
+                )
+                if crossref_active_prefetch:
+                    doc_crossref_attempted = True
+                    doc_crossref_attempt_ts = doc_crossref_attempt_ts or time.time()
+                source_doi_ref_map: dict[int, str] = {}
+                for i_row, row in enumerate(source_ref_rows, start=1):
+                    if not isinstance(row, dict):
+                        continue
+                    doi_row = _clean_doi_for_url(str(row.get("doi") or ""))
+                    if doi_row:
+                        source_doi_ref_map[int(i_row)] = doi_row
+                if source_doi_ref_map:
+                    _prefetch_doi_meta_parallel(
+                        source_doi_ref_map,
+                        cache,
+                        crossref_enabled=crossref_active_prefetch,
+                        max_workers=int(max(1, doi_prefetch_workers)),
+                        max_prefetch=int(max(10, int(doi_prefetch_workers) * 80)),
+                        stats=crossref_stats,
+                    )
                 if crossref_enabled and (not crossref_budget_exhausted):
                     if (time.monotonic() - crossref_start_ts) > float(max(5.0, crossref_time_budget_s)):
                         crossref_budget_exhausted = True

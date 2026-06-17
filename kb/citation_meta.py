@@ -43,12 +43,16 @@ _VENUE_QUERY_ALIASES: tuple[tuple[str, str], ...] = (
     (r"\bLaser\s+Photonics\s+Rev\.?\b", "Laser and Photonics Reviews"),
     (r"\bIEEE\s+Trans\.\s*Inform\.\s*Theory\b", "IEEE Transactions on Information Theory"),
     (r"\bIEEE\s+Trans\.\s*Inf\.\s*Theory\b", "IEEE Transactions on Information Theory"),
+    (r"\bIEEE\s+Trans\.\s*Nucl\.\s*Sci\.?\b", "IEEE Transactions on Nuclear Science"),
     (r"\bIEEE\s+Signal\s+Proc\.\s*Mag\.?\b", "IEEE Signal Processing Magazine"),
     (r"\bIEEE\s+Signal\s+Process\.\s*Mag\.?\b", "IEEE Signal Processing Magazine"),
+    (r"\bIEEE\s+J\.\s*Sel\.\s*Top\.\s*Signal\s+Process\.?\b", "IEEE Journal of Selected Topics in Signal Processing"),
+    (r"\bIEEE\s+J\.\s*Selected\s+Topics\s+Quantum\s+Electron\.?\b", "IEEE Journal of Selected Topics in Quantum Electronics"),
     (r"\bIEEE\s+Trans\.\s*Pattern\s+Anal\.\s*Mach\.\s*Intell\.?\b", "IEEE Transactions on Pattern Analysis and Machine Intelligence"),
     (r"\bIEEE\s+Trans\.\s*Comput\.\s*Imag\.?\b", "IEEE Transactions on Computational Imaging"),
     (r"\bJ\.\s*Lightwave\s+Technol\.?\b", "Journal of Lightwave Technology"),
     (r"\bJ\.\s*Opt\.\s*Soc\.\s*Am\.\s*A\b", "Journal of the Optical Society of America A"),
+    (r"\bJ\.\s*Phys\.:\s*Condens\.\s*Matter\b", "Journal of Physics: Condensed Matter"),
     (r"\bAppl\.\s*Optics\b", "Applied Optics"),
 )
 
@@ -627,12 +631,12 @@ def _crossref_search_title_raw(title: str, rows: int) -> list[dict[str, Any]]:
     params = {
         "query.title": q,
         "rows": int(max(1, min(8, rows))),
-        "select": "author,published-print,published-online,issued,created,container-title,publisher,institution,volume,issue,page,DOI,title",
+        "select": "author,published-print,published-online,issued,created,container-title,publisher,volume,issue,page,article-number,DOI,title",
     }
     headers = {"User-Agent": "Pi-zaya-KB/1.0 (Research Assistant)"}
     url = "https://api.crossref.org/works"
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=3.0)
+        resp = requests.get(url, params=params, headers=headers, timeout=6.5)
         if resp.status_code != 200:
             return []
         data = resp.json()
