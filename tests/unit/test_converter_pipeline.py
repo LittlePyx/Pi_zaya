@@ -380,6 +380,66 @@ def test_recover_references_replaces_gapped_index_from_pdf_text_layer(tmp_path, 
     assert "Broken reference" not in fixed
 
 
+def test_recover_references_replaces_short_truncated_entries_from_pdf_text_layer(tmp_path, monkeypatch):
+    import kb.converter.pipeline as pipeline_module
+
+    cfg = ConvertConfig(
+        pdf_path=tmp_path / "dummy.pdf",
+        out_dir=tmp_path,
+        translate_zh=False,
+        start_page=0,
+        end_page=-1,
+        skip_existing=False,
+        keep_debug=False,
+        llm=None,
+    )
+    converter = PDFConverter(cfg)
+
+    class _RefPage:
+        def get_text(self, mode: str):
+            assert mode == "text"
+            return "\n".join(
+                [
+                    "References",
+                    *[
+                        f"{idx}. REF{idx}, A. Recovered reference {idx}. Journal of Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+                        for idx in range(1, 10)
+                    ],
+                    "10. Wu, D. et al. Final recovered source data record. Zenodo, 2021.",
+                ]
+            )
+
+    class _Doc:
+        def __len__(self):
+            return 1
+
+        def load_page(self, page_index: int):
+            assert page_index == 0
+            return _RefPage()
+
+    monkeypatch.setattr(pipeline_module, "_page_has_references_heading", lambda page: True)
+    monkeypatch.setattr(pipeline_module, "_page_looks_like_references_content", lambda page: False)
+
+    broken = "\n".join(
+        [
+            "# Demo Paper",
+            "## References",
+            *[
+                f"[{idx}] REF{idx}, A. Broken reference {idx}. Journal of Tests {idx}, {idx}-{idx + 1} (20{idx:02d})."
+                for idx in range(1, 10)
+            ],
+            "[10] Wu, D. et al.",
+        ]
+    )
+
+    fixed, repair = converter._recover_references_from_pdf_if_needed(broken, _Doc())
+
+    assert repair["changed"] is True
+    assert "reference_index_truncated" in repair["issue_codes_before"]
+    assert "[10] Wu, D. et al. Final recovered source data record. Zenodo, 2021." in fixed
+    assert "\n[10] Wu, D. et al.\n" not in f"\n{fixed}\n"
+
+
 def test_convert_pipeline_missing_file(output_dir):
     """Test error handling for missing file."""
     cfg = ConvertConfig(

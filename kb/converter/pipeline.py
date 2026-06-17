@@ -213,6 +213,30 @@ def _reference_map_missing_numbers(ref_map: dict[int, str]) -> list[int]:
     return sorted(int(n) for n in (set(range(first, last + 1)) - refs))
 
 
+def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
+    rows: list[tuple[int, str]] = []
+    for raw_key, raw_value in (ref_map if isinstance(ref_map, dict) else {}).items():
+        try:
+            n = int(raw_key)
+        except Exception:
+            continue
+        text = re.sub(r"\s+", " ", str(raw_value or "")).strip()
+        if n > 0 and text:
+            rows.append((n, text))
+    if len(rows) < 8:
+        return False
+    for _, text in sorted(rows):
+        body = re.sub(r"^\s*(?:\[\s*\d{1,4}\s*\]|\d{1,4}[.)])\s*", "", text).strip(" .;:,")
+        if not body:
+            continue
+        if re.search(r"\b(?:18|19|20)\d{2}\b|https?://|www\.|\bdoi\s*:|10\.\d{4,9}/", body, flags=re.IGNORECASE):
+            continue
+        words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
+        if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
+            return True
+    return False
+
+
 class PDFConverter:
     def __init__(self, cfg: ConvertConfig):
         self.cfg = cfg
@@ -1092,10 +1116,11 @@ class PDFConverter:
         before_map = extract_references_map_from_md(md)
         before_extracted = len(before_map)
         before_missing = set(_reference_map_missing_numbers(before_map))
+        short_truncated = bool(_reference_map_has_short_truncated_entries(before_map))
         min_entries = self._reference_recovery_min_entries()
         truncated = before_count >= min_entries and before_extracted < max(min_entries, int(before_count * 0.55))
         gapped = bool(before_missing)
-        if before_count >= min_entries and not truncated and not gapped:
+        if before_count >= min_entries and not truncated and not gapped and not short_truncated:
             return md, {}
         references_md, recovered_count = self._extract_pdf_reference_markdown(doc)
         if not references_md or recovered_count < min_entries:
@@ -1103,13 +1128,15 @@ class PDFConverter:
         recovered_map = extract_references_map_from_md(references_md)
         recovered_missing = set(_reference_map_missing_numbers(recovered_map))
         fills_existing_gap = bool(before_missing and len(recovered_missing) < len(before_missing))
-        if recovered_count <= before_extracted and not fills_existing_gap:
+        if recovered_count < before_extracted and not fills_existing_gap:
+            return md, {}
+        if recovered_count == before_extracted and not (fills_existing_gap or short_truncated):
             return md, {}
         if truncated and recovered_count < before_count:
             return md, {}
         if gapped and not fills_existing_gap:
             return md, {}
-        fixed = self._replace_or_append_references_section(md, references_md, force_replace=truncated or gapped)
+        fixed = self._replace_or_append_references_section(md, references_md, force_replace=truncated or gapped or short_truncated)
         changed = fixed != str(md or "")
         if changed:
             print(
@@ -1124,7 +1151,7 @@ class PDFConverter:
             "issue_codes_before": (
                 ["missing_references"]
                 if before_count <= 0
-                else (["reference_index_truncated"] if (truncated or gapped) else [])
+                else (["reference_index_truncated"] if (truncated or gapped or short_truncated) else [])
             ),
             "issue_codes_after": [],
             "remaining_issue_codes": [],

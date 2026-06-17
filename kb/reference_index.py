@@ -30,7 +30,7 @@ from kb.store import compute_file_sha1
 INDEX_FILE_NAME = "references_index.json"
 CROSSREF_CACHE_FILE_NAME = "crossref_cache.json"
 REFERENCE_CATALOG_FILE_NAME = "reference_catalog.json"
-REFERENCE_LOOKUP_VERSION = 4
+REFERENCE_LOOKUP_VERSION = 9
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -51,7 +51,7 @@ _SOURCE_DOI_RE = re.compile(r"\bdoi\s*:?\s*(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b"
 _QUOTED_TITLE_RE = re.compile(r"[\"“”]([^\"“”]{8,260})[\"“”]")
 _YEAR_ANY_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 _REFERENCE_TRUNCATION_HINT_RE = re.compile(
-    r"(?:\.\.\.|…|\b(?:incomplete|partially visible|not fully visible|unreadable|illegible)\b)",
+    r"(?:\.\.\.|…|\b(?:incomplete\s+(?:reference|entry|visible|text|line)|partially visible|not fully visible|unreadable|illegible)\b)",
     re.IGNORECASE,
 )
 _REFERENCE_TITLE_SIGNAL_RE = re.compile(
@@ -646,9 +646,27 @@ def _clean_reference_title_text(text: str) -> str:
     s = _clean_reference_markup_text(text).strip(" .;:,")
     if not s:
         return ""
+    s = re.sub(r"\s*\([^()]{0,90},\s*(?:18|19|20)\d{2}\)\s*$", "", s).strip(" .;:,")
     s = re.sub(r"\s*,?\s*\((?:18|19|20)\d{2}\)\s*$", "", s).strip(" .;:,")
     s = re.sub(r"\s*,\s*(?:18|19|20)\d{2}\s*$", "", s).strip(" .;:,")
     return s[:260]
+
+
+def _extract_reference_year_hint(text: str) -> str:
+    year = extract_year_hint(str(text or ""))
+    if year:
+        return year
+    raw = str(text or "")
+
+    def _fix_ocr_year(match: re.Match[str]) -> str:
+        value = str(match.group(0) or "")
+        return value.translate(str.maketrans({"S": "5", "s": "5", "O": "0", "o": "0", "I": "1", "l": "1"}))
+
+    for m in re.finditer(r"\b(?:18|19|20)[0-9SsoOIl]{2}\b", raw):
+        fixed = _fix_ocr_year(m)
+        if re.fullmatch(r"(?:18|19|20)\d{2}", fixed):
+            return fixed
+    return ""
 
 
 def _looks_like_compact_titleless_reference(text: str) -> bool:
@@ -676,6 +694,33 @@ def _looks_like_compact_titleless_reference(text: str) -> bool:
     comma_n = t.count(",")
     initial_n = len(re.findall(r"\b[A-Z]\.", t))
     return bool(comma_n >= 2 or initial_n >= 2)
+
+
+def _looks_like_venue_volume_fragment(text: str) -> bool:
+    t = _strip_reference_number(_clean_reference_markup_text(text))
+    t = re.sub(r"https?://\S+", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bdoi\s*:?\s*10\.\S+", " ", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s{2,}", " ", t).strip(" .;:,")
+    if not t or len(t) < 8 or len(t) > 180:
+        return False
+    words = [w for w in re.split(r"\s+", t) if w]
+    if len(words) > 18:
+        return False
+    venue_match = _COMPACT_REFERENCE_VENUE_RE.search(t)
+    if not venue_match:
+        return False
+    signal_scope = t[: venue_match.start()].strip(" .;:,")
+    if signal_scope and _REFERENCE_TITLE_SIGNAL_RE.search(signal_scope):
+        return False
+    has_year = bool(_YEAR_ANY_RE.search(t))
+    has_volume_page = bool(
+        re.search(r"\b\d{1,4}\s*\(\s*\d{1,4}\s*\)\s*[:,]\s*[A-Za-z]?\d{1,8}[A-Za-z0-9\-]*", t)
+        or re.search(r"\b\d{1,4}\s*,\s*[A-Za-z]?\d{1,8}[A-Za-z0-9\-]*", t)
+        or re.search(r"\b\d{1,4}\s+[A-Za-z]?\d{2,8}[A-Za-z0-9\-]*\s*\((?:18|19|20)\d{2}\)", t)
+        or re.search(r"\b(?:18|19|20)\d{2}\s+\d{1,4}\s+[A-Za-z]?\d{2,8}[A-Za-z0-9\-]*", t)
+        or re.search(r"\b(?:pp|pages?)\.?\s*\d", t, flags=re.IGNORECASE)
+    )
+    return bool(has_year and has_volume_page)
 
 
 def _reference_sentence_segments(text: str) -> list[str]:
@@ -745,8 +790,31 @@ def _clean_raw_reference_authors(text: str) -> str:
     s = re.sub(r"\b(?:19|20)\d{2}\b", "", s)
     s = re.sub(r"\s+", " ", s).strip(" .;:,")
     if not _looks_reference_author_segment(s):
+        if _looks_single_reference_author_segment(s):
+            return s[:320]
+        if re.search(r"\bet\s+al\.?$", s, flags=re.IGNORECASE) and re.search(r"[A-Za-z\u00C0-\u024F]", s):
+            return s[:320]
         return ""
     return s[:320]
+
+
+def _reference_authors_look_noisy(authors: str, *, raw_title: str = "") -> bool:
+    a = _clean_reference_markup_text(str(authors or "")).strip(" .;:,")
+    if not a:
+        return False
+    if _looks_like_venue_volume_fragment(a):
+        return True
+    title = _clean_reference_markup_text(str(raw_title or "")).strip(" .;:,")
+    if title and len(title) >= 8 and title.lower() in a.lower() and len(a) >= len(title) + 16:
+        return True
+    words = [w for w in re.split(r"\s+", a) if w]
+    if len(a) > 360 or len(words) > 48:
+        return True
+    if _REFERENCE_TITLE_SIGNAL_RE.search(a):
+        lower_words = sum(1 for w in words if w[:1].islower())
+        if len(words) >= 12 and lower_words >= 4:
+            return True
+    return False
 
 
 def _split_inline_reference_author_title(seg: str) -> tuple[str, str]:
@@ -848,7 +916,7 @@ def _fallback_meta_from_raw_reference(raw: str) -> dict[str, str]:
         return {}
 
     out: dict[str, str] = {}
-    year = extract_year_hint(s)
+    year = _extract_reference_year_hint(s)
     if year:
         out["year"] = year
 
@@ -897,8 +965,17 @@ def _fallback_meta_from_raw_reference(raw: str) -> dict[str, str]:
             out["venue"] = _extract_venue_from_reference_tail(". ".join(segs[1:]))
             out["match_method"] = "raw_meta"
             return {k: v for k, v in out.items() if str(v or "").strip()}
+    if len(segs) >= 2 and re.search(r"\bet\s+al\.?$", segs[0], flags=re.IGNORECASE):
+        authors = _clean_raw_reference_authors(segs[0])
+        title = _clean_reference_title_text(segs[1])
+        if authors and _is_plausible_reference_title(title):
+            out["authors"] = authors
+            out["title"] = title[:260]
+            out["venue"] = _extract_venue_from_reference_tail(". ".join(segs[2:]))
+            out["match_method"] = "raw_meta"
+            return {k: v for k, v in out.items() if str(v or "").strip()}
     if len(segs) >= 2 and (_looks_reference_author_segment(segs[0]) or _looks_single_reference_author_segment(segs[0])):
-        title = segs[1].strip(" .;:,")
+        title = _clean_reference_title_text(segs[1])
         if _is_plausible_reference_title(title):
             out["authors"] = _clean_raw_reference_authors(segs[0])
             if not out["authors"] and _looks_single_reference_author_segment(segs[0]):
@@ -936,7 +1013,7 @@ def _merge_raw_reference_meta(meta: dict | None, raw_meta: dict[str, str]) -> di
     merged = dict(meta) if isinstance(meta, dict) else {}
     changed = False
 
-    for key in ("authors", "venue", "year", "volume", "issue", "pages", "doi"):
+    for key in ("year", "volume", "issue", "pages", "doi"):
         value = str(raw_meta.get(key) or "").strip()
         if value and not str(merged.get(key) or "").strip():
             merged[key] = value
@@ -944,11 +1021,27 @@ def _merge_raw_reference_meta(meta: dict | None, raw_meta: dict[str, str]) -> di
 
     raw_title = str(raw_meta.get("title") or "").strip()
     cur_title = str(merged.get("title") or "").strip()
+    raw_authors = str(raw_meta.get("authors") or "").strip()
+    cur_authors = str(merged.get("authors") or "").strip()
+    if raw_authors and (
+        not cur_authors
+        or _reference_authors_look_noisy(cur_authors, raw_title=cur_title or raw_title)
+    ):
+        merged["authors"] = raw_authors
+        changed = True
+
+    raw_venue = str(raw_meta.get("venue") or "").strip()
+    cur_venue = str(merged.get("venue") or "").strip()
+    if raw_venue and (not cur_venue or _should_replace_venue_with_external(cur_venue, raw_venue)):
+        merged["venue"] = raw_venue
+        changed = True
+
     changed_title = False
     if raw_title:
         should_replace = (
             not cur_title
             or _reference_title_looks_author_noise(cur_title)
+            or _looks_like_venue_volume_fragment(cur_title)
             or (not _is_plausible_reference_title(cur_title))
         )
         if should_replace:
@@ -1005,6 +1098,8 @@ def _extract_query_title(entry: str) -> str:
         t = str(seg or "").strip().lower()
         if not t:
             return False
+        if _looks_like_venue_volume_fragment(seg):
+            return True
         starts = (
             "in proceedings of",
             "proceedings of",
@@ -1026,6 +1121,10 @@ def _extract_query_title(entry: str) -> str:
         return False
 
     protected_segs = _reference_sentence_segments(s)
+    if protected_segs:
+        inline_authors, inline_title = _split_inline_reference_author_title(protected_segs[0])
+        if inline_authors and inline_title:
+            return inline_title[:260]
     if len(protected_segs) >= 2 and _looks_author_segment(protected_segs[0]):
         cand0 = protected_segs[1].strip(" .;:,")
         if cand0 and (not _looks_author_segment(cand0)) and (not _looks_venue_segment(cand0)):
@@ -1121,6 +1220,8 @@ def _is_plausible_reference_title(text: str) -> bool:
     if not t:
         return False
     if _looks_like_compact_titleless_reference(t):
+        return False
+    if _looks_like_venue_volume_fragment(t):
         return False
     words = [w for w in re.split(r"\s+", t) if w]
     if len(t) < 8 or len(t) > 260:
@@ -1245,6 +1346,7 @@ def _merge_reference_meta(base: dict | None, supplement: dict | None) -> dict | 
                 (len(cur) >= 200)
                 or (len(cur_words) >= 28)
                 or _reference_title_looks_author_noise(cur)
+                or _looks_like_venue_volume_fragment(cur)
                 or (not _is_plausible_reference_title(cur))
             )
             if cur_noisy and _is_plausible_reference_title(new):
@@ -1346,11 +1448,11 @@ def _doc_ref_quality_tuple(refs: dict[str, dict] | None) -> tuple[int, int, int,
             doi_n += 1
         if cross_ok:
             cross_n += 1
-        if str(rec.get("authors") or "").strip():
+        if _reference_has_usable_authors(str(rec.get("authors") or "")):
             authors_n += 1
-        if str(rec.get("title") or "").strip():
+        if _reference_has_usable_title(str(rec.get("title") or "")):
             title_n += 1
-        if str(rec.get("venue") or "").strip():
+        if _reference_has_usable_venue(str(rec.get("venue") or "")):
             venue_n += 1
         if str(rec.get("pages") or "").strip():
             pages_n += 1
@@ -1362,6 +1464,18 @@ def _doc_ref_quality_tuple(refs: dict[str, dict] | None) -> tuple[int, int, int,
 
 def _prefer_previous_doc_refs(prev_refs: dict[str, dict] | None, new_refs: dict[str, dict] | None) -> bool:
     return bool(_doc_ref_quality_tuple(prev_refs) > _doc_ref_quality_tuple(new_refs))
+
+
+def _doc_refs_have_parser_generated_metadata(refs: dict[str, dict] | None) -> bool:
+    if not isinstance(refs, dict):
+        return False
+    for rec in refs.values():
+        if not isinstance(rec, dict):
+            continue
+        tokens = {p.strip().lower() for p in str(rec.get("match_method") or "").split("+") if p.strip()}
+        if tokens.intersection({"raw_meta", "raw_title"}):
+            return True
+    return False
 
 
 def _reference_refs_missing_numbers(refs: dict[str, dict] | None) -> list[int]:
@@ -1453,15 +1567,22 @@ _NON_ARTICLE_SOURCE_RE = re.compile(
     r"book|chapter|edited\s+volume|monograph|dataset|data\s+set|software|code|github|"
     r"protocol|protocols\.io|standard|iso|technical\s+report|report|white\s+paper|"
     r"manual|thesis|dissertation|patent|preprint|arxiv|bioRxiv|medRxiv|zenodo|figshare|"
-    r"institution|university|publisher|press|repository"
+    r"institution|university|publisher|press|repository|springer|wiley|academic|plenum|"
+    r"mcgraw(?:-hill)?|artech|kluwer"
     r")\b",
+    flags=re.IGNORECASE,
+)
+_WEB_SOURCE_RE = re.compile(
+    r"\b(?:https?://(?!(?:dx\.)?doi\.org)|www\.|available\s+at|accessed\s+(?:on|at)|web\s*site|website)\b",
     flags=re.IGNORECASE,
 )
 _NO_DOI_EXPECTED_RE = re.compile(
     r"\b("
     r"arxiv|preprint|book|chapter|monograph|dataset|data\s+set|software|code|github|"
     r"protocol|standard|technical\s+report|report|white\s+paper|manual|thesis|"
-    r"dissertation|patent|repository|url|available\s+at"
+    r"dissertation|patent|repository|publisher|press|handbook|textbook|url|"
+    r"available\s+at|accessed\s+(?:on|at)|web\s*site|website|springer|wiley|academic|"
+    r"plenum|mcgraw(?:-hill)?|artech|kluwer"
     r")\b|https?://(?!doi\.org)",
     flags=re.IGNORECASE,
 )
@@ -1479,6 +1600,8 @@ def _reference_has_usable_title(title: str) -> bool:
     if not t:
         return False
     if _looks_like_compact_titleless_reference(t):
+        return False
+    if _looks_like_venue_volume_fragment(t):
         return False
     if re.fullmatch(r"references?\s*\d*", t, flags=re.IGNORECASE):
         return False
@@ -1499,6 +1622,8 @@ def _reference_has_usable_authors(authors: str) -> bool:
     a = str(authors or "").strip()
     if not a:
         return False
+    if _reference_authors_look_noisy(a):
+        return False
     low = a.lower().strip(" .;:,[]()")
     if not low or "unknown author" in low or low in {"unknown", "et al", "et al."}:
         return False
@@ -1516,6 +1641,26 @@ def _reference_has_usable_venue(venue: str) -> bool:
 
 def _reference_has_usable_year(year: str) -> bool:
     return bool(re.fullmatch(r"(?:18|19|20)\d{2}", str(year or "").strip()))
+
+
+def _reference_looks_source_truncated(raw: str) -> bool:
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return False
+    body = _strip_reference_number(text).strip()
+    if not body:
+        return False
+    if re.search(r"\bvol\.?\s*$", body, flags=re.IGNORECASE):
+        return True
+    if len(body) <= 90 and not _extract_reference_year_hint(body):
+        if re.search(r"\b(?:app|appl|proc|conf|journal|trans)\.?\s*$", body, flags=re.IGNORECASE):
+            return True
+        if body.count('"') % 2 == 1 or body.count("“") != body.count("”"):
+            return True
+    if len(body) <= 160 and not _extract_reference_year_hint(body):
+        if re.search(r"[“\"].{8,140}$", body) and not re.search(r"[”\"]\s*(?:,|\bin\b|\w)", body):
+            return True
+    return False
 
 
 def _reference_has_external_metadata(rec: Mapping[str, Any], match_method: str, doi: str) -> bool:
@@ -1555,6 +1700,7 @@ def classify_reference_metadata(
     text_for_kind = " ".join([raw, title, venue, match_method])
     non_article_signal = bool(_NON_ARTICLE_SOURCE_RE.search(text_for_kind))
     no_doi_expected_signal = bool(_NO_DOI_EXPECTED_RE.search(text_for_kind))
+    web_source_signal = bool(_WEB_SOURCE_RE.search(text_for_kind))
     external_metadata = _reference_has_external_metadata(data, match_method, doi)
 
     missing_fields: list[str] = []
@@ -1587,8 +1733,13 @@ def classify_reference_metadata(
         action = "none"
         ready = True
     else:
-        truncated = bool(_REFERENCE_TRUNCATION_HINT_RE.search(raw) or parse_confidence < 0.32)
-        if truncated:
+        truncated = bool(_REFERENCE_TRUNCATION_HINT_RE.search(raw) or parse_confidence < 0.32 or _reference_looks_source_truncated(raw))
+        if (not doi) and web_source_signal:
+            status = "no_doi_expected"
+            reason = "no_doi_expected"
+            action = "non_article_ok"
+            ready = True
+        elif truncated:
             status = "truncated_reference"
             reason = "truncated_reference"
             action = "source_repair"
@@ -1606,7 +1757,7 @@ def classify_reference_metadata(
             reason = "no_doi_expected"
             action = "non_article_ok"
             ready = True
-        elif has_title and has_authors and has_venue and has_year:
+        elif has_title and has_venue and has_year:
             status = "bibliographic_ready"
             reason = ""
             action = "none"
@@ -3326,15 +3477,16 @@ def build_reference_index(
             title = str(rv.get("title") or "").strip()
             authors = str(rv.get("authors") or "").strip()
             venue = str(rv.get("venue") or "").strip()
+            raw = str(rv.get("raw") or rv.get("cite_fmt") or "").strip()
             mm = str(rv.get("match_method") or "").strip()
             crossref_ok = bool(rv.get("crossref_ok") or _reference_match_method_has_external_resolution(mm, doi))
             if doi:
                 refs_with_doi += 1
-            if title:
+            if _reference_has_usable_title(title):
                 refs_with_title += 1
-            if authors:
+            if _reference_has_usable_authors(authors):
                 refs_with_authors += 1
-            if venue:
+            if _reference_has_usable_venue(venue):
                 refs_with_venue += 1
             metadata_ready = bool(classification.get("metadata_ready"))
             if metadata_ready:
@@ -3357,6 +3509,8 @@ def build_reference_index(
                 _stat_inc(crossref_stats, f"refs_action_{action}")
             if action in {"retry", "source_repair"}:
                 _stat_inc(crossref_stats, "refs_action_retry_or_source_repair")
+            if action == "non_article_ok" and _WEB_SOURCE_RE.search(" ".join([raw, title, venue, mm])):
+                _stat_inc(crossref_stats, "refs_web_source_ok")
             if user_ready:
                 refs_metadata_user_ready += 1
 
@@ -3979,6 +4133,7 @@ def build_reference_index(
                 and str(prev_doc.get("sha1") or "") == str(sha1 or "")
                 and isinstance(prev_doc.get("refs"), dict)
                 and (not prev_needs_rebuild_for_catalog)
+                and (not (prev_lookup_stale and _doc_refs_have_parser_generated_metadata(prev_doc.get("refs"))))
                 and _prefer_previous_doc_refs(prev_doc.get("refs"), refs_obj)
             ):
                 kept_doc = dict(prev_doc)
@@ -4073,5 +4228,6 @@ def build_reference_index(
         out_stats[f"refs_missing_reason_{code}"] = 0
     for action in ("none", "auto_backfill", "retry", "source_repair", "non_article_ok", "retry_or_source_repair"):
         out_stats[f"refs_action_{action}"] = 0
+    out_stats["refs_web_source_ok"] = 0
     out_stats.update({k: int(v) for k, v in crossref_stats.items()})
     return out_stats

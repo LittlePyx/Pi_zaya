@@ -120,6 +120,16 @@ def test_reference_metadata_classification_splits_actionable_reasons():
     assert bibliographic_ready["metadata_ready"] is True
     assert bibliographic_ready["metadata_action"] == "none"
 
+    bibliographic_without_authors = ref_index.classify_reference_metadata(
+        {
+            "raw": "[8] E. Candès. Stable Signal Recovery from Incomplete and Inaccurate Measurements. Commun. Pure Appl. Math. 59, 1207-1223 (2006).",
+            "title": "Stable Signal Recovery from Incomplete and Inaccurate Measurements",
+            "venue": "Commun. Pure Appl. Math.",
+            "year": "2006",
+        }
+    )
+    assert bibliographic_without_authors["metadata_status"] == "bibliographic_ready"
+
     retryable = ref_index.classify_reference_metadata(
         {
             "raw": "[3] Smith J, Doe A. Snapshot compressive imaging with learned priors. 2020.",
@@ -140,14 +150,44 @@ def test_reference_metadata_classification_splits_actionable_reasons():
             "year": "2023",
         }
     )
-    assert no_doi["metadata_status"] == "non_article_source_ok"
+    assert no_doi["metadata_status"] == "no_doi_expected"
     assert no_doi["missing_reason"] == "no_doi_expected"
     assert no_doi["metadata_action"] == "non_article_ok"
+
+    url_only = ref_index.classify_reference_metadata(
+        {"raw": "[7] https://raytrix.de/.", "parse_confidence": 0.20}
+    )
+    assert url_only["metadata_status"] == "no_doi_expected"
+    assert url_only["metadata_action"] == "non_article_ok"
+    assert url_only["metadata_ready"] is True
+
+    book = ref_index.classify_reference_metadata(
+        {
+            "raw": "[9] S. Haykin, Communication Systems (Wiley, 2001).",
+            "title": "Communication Systems",
+            "authors": "S. Haykin",
+            "year": "2001",
+        }
+    )
+    assert book["metadata_status"] == "non_article_source_ok"
+    assert book["missing_reason"] == "no_doi_expected"
+    assert book["metadata_action"] == "non_article_ok"
 
     truncated = ref_index.classify_reference_metadata(
         {"raw": "[5] Smith J. Incomplete reference ...", "parse_confidence": 0.40}
     )
     assert truncated["metadata_status"] == "truncated_reference"
+
+    source_truncated = ref_index.classify_reference_metadata(
+        {
+            "raw": "[15] D. J. Brady and M. E. Gehm, “Compressive imaging spectrometry,” in Z. ur Rahman, S. E. Reichenbach, and M. A. Neifeld, eds., vol.",
+            "title": "Compressive imaging spectrometry",
+            "authors": "D. J. Brady and M. E. Gehm",
+            "venue": "Proc. SPIE",
+        }
+    )
+    assert source_truncated["metadata_status"] == "truncated_reference"
+    assert source_truncated["metadata_action"] == "source_repair"
 
     low_confidence = ref_index.classify_reference_metadata({"raw": "[6] Bad OCR source 2020.", "parse_confidence": 0.45})
     assert low_confidence["metadata_status"] == "low_confidence_match"
@@ -215,6 +255,41 @@ def test_raw_reference_fallback_splits_nature_inline_author_title():
     assert out["year"] == "2020"
 
 
+def test_raw_reference_fallback_splits_accented_et_al_author_title():
+    raw = (
+        "[25] Küppers, M. et al. Confocal interferometric scattering microscopy reveals "
+        "3D nanoscopic structure and dynamics in live cells. Nat. Commun. 14, 1962 (2023)."
+    )
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["authors"] == "Küppers, M. et al"
+    assert out["title"] == "Confocal interferometric scattering microscopy reveals 3D nanoscopic structure and dynamics in live cells"
+    assert out["venue"] == "Nat. Commun"
+    assert out["year"] == "2023"
+
+
+def test_raw_reference_meta_replaces_venue_fragment_title_and_noisy_authors():
+    raw = (
+        "[2] Stantchev, R. I., Yu, X., Blu, T. & Pickwell-MacPherson, E. "
+        "Real-time terahertz imaging with a single-pixel detector. "
+        "*Nat. Commun.* **11**, 2535 (2020)."
+    )
+    stale = {
+        "title": "Nat. Commun. 11, 2535 (2020)",
+        "authors": "Stantchev, R. I., Yu, X., Blu, T. & Pickwell-MacPherson, E. Real-time terahertz imaging with a single-pixel detector",
+        "year": "2020",
+    }
+
+    merged = ref_index._merge_raw_reference_meta(stale, ref_index._fallback_meta_from_raw_reference(raw))
+
+    assert merged["title"] == "Real-time terahertz imaging with a single-pixel detector"
+    assert merged["authors"] == "Stantchev, R. I., Yu, X., Blu, T. & Pickwell-MacPherson, E"
+    assert merged["venue"] == "Nat. Commun"
+    assert ref_index._reference_has_usable_title("Nat. Commun. 11, 2535 (2020)") is False
+    assert ref_index._extract_query_title(raw) == "Real-time terahertz imaging with a single-pixel detector"
+
+
 def test_raw_reference_fallback_keeps_signal_processing_magazine_together():
     raw = (
         "[9] Duarte, M. F. et al. Single-pixel imaging via compressive sampling. "
@@ -226,6 +301,26 @@ def test_raw_reference_fallback_keeps_signal_processing_magazine_together():
     assert out["title"] == "Single-pixel imaging via compressive sampling"
     assert out["venue"] == "IEEE Signal Process. Mag"
     assert out["year"] == "2008"
+
+
+def test_raw_reference_fallback_handles_initial_only_single_author():
+    raw = '[1] M. J. E. Golay, "Multi-slit spectrometry," J. Opt. Soc. Am. 39, 437-444 (1949).'
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["authors"] == "M. J. E. Golay"
+    assert out["title"] == "Multi-slit spectrometry"
+    assert out["venue"] == "J. Opt. Soc. Am"
+    assert out["year"] == "1949"
+
+
+def test_raw_reference_fallback_recovers_ocr_year_digits():
+    raw = '[4] BRUNSWIK, E., & KAMIYA, J. Ecological cue-validity of "proximity" and of other gestalt factors. Amer. J. Psychol., 19S3, 66, 20-32.'
+
+    out = ref_index._fallback_meta_from_raw_reference(raw)
+
+    assert out["title"] == "Ecological cue-validity of \"proximity\" and of other gestalt factors"
+    assert out["year"] == "1953"
 
 
 def test_raw_reference_fallback_does_not_make_fake_title_for_compact_titleless_refs():
@@ -288,7 +383,8 @@ def test_raw_reference_fallback_keeps_period_style_before_comma_fallback():
     out = ref_index._fallback_meta_from_raw_reference(raw)
 
     assert out["authors"] == "Yang Fu, Sifei Liu, Amey Kulkarni, Jan Kautz, Alexei A. Efros, and Xiaolong Wang"
-    assert out["title"] == "Colmap-free 3d gaussian splatting, 2024"
+    assert out["title"] == "Colmap-free 3d gaussian splatting"
+    assert out["year"] == "2024"
 
 
 def test_reference_title_quality_allows_short_technical_titles():
@@ -461,6 +557,7 @@ def test_build_reference_index_keeps_non_article_entries_from_reference_section(
             "compressive holography\", Zenodo.\n"
             "[3] Wu, D. et al. Step-by-step protocol for data acquisition and reconstruction of holographic images "
             "in high-throughput single-pixel holography, Protocol Exchange.\n"
+            "[4] Raytrix GmbH. Raytrix light field cameras. https://raytrix.de/.\n"
         ),
         encoding="utf-8",
     )
@@ -468,7 +565,7 @@ def test_build_reference_index_keeps_non_article_entries_from_reference_section(
     monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **kwargs: False)
     monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
 
-    ref_index.build_reference_index(
+    stats = ref_index.build_reference_index(
         src_root=src_root,
         db_dir=db_dir,
         incremental=False,
@@ -478,9 +575,11 @@ def test_build_reference_index_keeps_non_article_entries_from_reference_section(
     data = ref_index.load_reference_index(db_dir)
     doc = next(iter((data.get("docs") or {}).values()))
     refs = doc.get("refs") or {}
-    assert sorted(int(k) for k in refs.keys()) == [1, 2, 3]
+    assert sorted(int(k) for k in refs.keys()) == [1, 2, 3, 4]
     assert "Zenodo" in str((refs.get("2") or {}).get("raw") or "")
     assert "Protocol Exchange" in str((refs.get("3") or {}).get("raw") or "")
+    assert (refs.get("4") or {}).get("metadata_status") == "no_doi_expected"
+    assert int(stats.get("refs_web_source_ok") or 0) == 1
 
 
 def test_build_reference_index_rebuilds_incremental_doc_when_refs_lag_catalog(tmp_path, monkeypatch):

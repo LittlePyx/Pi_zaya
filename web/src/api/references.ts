@@ -262,6 +262,7 @@ export type ReferenceSyncStatKey =
   | 'refs_action_source_repair'
   | 'refs_action_non_article_ok'
   | 'refs_action_retry_or_source_repair'
+  | 'refs_web_source_ok'
   | 'crossref_network_attempts'
   | 'elapsed_s'
 

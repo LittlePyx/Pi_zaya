@@ -1071,6 +1071,7 @@ export default function LibraryPage() {
   }, [S, refSyncStats, store.refSync?.docsDone, store.refSync?.docsTotal])
   const refSyncQueueItems = useMemo<WorkbenchMetricItem[]>(() => {
     const onlineReady = Math.max(numericStat(refSyncStats, 'refs_crossref_ok'), numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched'))
+    const webSource = numericStat(refSyncStats, 'refs_web_source_ok')
     const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
       || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
         + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))
@@ -1079,6 +1080,7 @@ export default function LibraryPage() {
         + numericStat(refSyncStats, 'refs_missing_reason_low_confidence_match'))
     return [
       { key: 'online_ready', label: S.lib_refsync_metric_online_ready, value: onlineReady, tone: onlineReady > 0 ? 'good' : 'info' },
+      { key: 'web_source', label: S.lib_refsync_metric_web_source, value: webSource, tone: webSource > 0 ? 'good' : 'info' },
       { key: 'non_article', label: S.lib_refsync_metric_non_article, value: nonArticle, tone: nonArticle > 0 ? 'good' : 'info' },
       { key: 'manual_repair', label: S.lib_refsync_metric_manual_repair, value: manualRepair, tone: manualRepair > 0 ? 'warn' : 'good' },
     ]
@@ -1095,6 +1097,7 @@ export default function LibraryPage() {
         + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected')
       const metadataReady = Math.max(numericStat(refSyncStats, 'refs_metadata_user_ready'), statusReady, numericStat(refSyncStats, 'refs_metadata_ready'))
       const onlineReady = Math.max(numericStat(refSyncStats, 'refs_crossref_ok'), numericStat(refSyncStats, 'refs_metadata_status_crossref_enriched'))
+      const webSource = numericStat(refSyncStats, 'refs_web_source_ok')
       const nonArticle = numericStat(refSyncStats, 'refs_action_non_article_ok')
         || (numericStat(refSyncStats, 'refs_metadata_status_non_article_source_ok')
           + numericStat(refSyncStats, 'refs_metadata_status_no_doi_expected'))
@@ -1105,6 +1108,7 @@ export default function LibraryPage() {
         .replace('{ready}', String(metadataReady))
         .replace('{refsTotal}', String(refsTotal))
         .replace('{onlineReady}', String(onlineReady))
+        .replace('{webSource}', String(webSource))
         .replace('{nonArticle}', String(nonArticle))
         .replace('{manualRepair}', String(manualRepair))
     }
